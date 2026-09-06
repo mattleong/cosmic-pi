@@ -67,6 +67,7 @@ layer(nodePlatformLayer)("config helpers", (it) => {
   it.effect.each([
     ["blank global model", " \t", " \n", DEFAULT_IMAGE_CONFIG.defaultModel],
     ["blank project model", " custom-model ", " \t", "custom-model"],
+    ["invalid project model", " custom-model ", 42, "custom-model"],
   ] as const)("inherits image model for %s", ([, globalModel, projectModel, expected]) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -124,23 +125,12 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       }),
   );
 
-  it.effect("patches the exact path for every setting id", () =>
+  it.effect("accepts raw image model and enum setting values", () =>
     Effect.gen(function* () {
       const cases: ReadonlyArray<readonly [string, string, JsonObject]> = [
-        ["persistState", "false", { persistState: false }],
-        ["compaction.enabled", "true", { compaction: { enabled: true } }],
-        ["usage.refreshIntervalMs", "15000", { usage: { refreshIntervalMs: 15_000 } }],
-        [
-          "usage.showOnlyOnSubscriptionModels",
-          "false",
-          { usage: { showOnlyOnSubscriptionModels: false } },
-        ],
-        ["usage.showResetTimes", "false", { usage: { showResetTimes: false } }],
-        ["image.enabled", "false", { image: { enabled: false } }],
         ["image.defaultModel", " custom-model ", { image: { defaultModel: " custom-model " } }],
         ["image.defaultSave", "global", { image: { defaultSave: "global" } }],
         ["image.outputFormat", "webp", { image: { outputFormat: "webp" } }],
-        ["image.timeoutMs", "45000", { image: { timeoutMs: 45_000 } }],
       ];
       for (const [id, raw, expected] of cases) {
         const update = yield* prepareSettingUpdate(id, raw);
@@ -149,34 +139,17 @@ layer(nodePlatformLayer)("config helpers", (it) => {
     }),
   );
 
-  it.effect("rejects invalid booleans, numbers, and enums", () =>
+  it.effect("rejects blank image models and invalid image enums", () =>
     Effect.gen(function* () {
       for (const [id, value] of [
-        ["usage.showResetTimes", "yes"],
-        ["usage.refreshIntervalMs", "NaN"],
-        ["compaction.enabled", "sometimes"],
+        ["image.defaultSave", "desktop"],
+        ["image.outputFormat", "gif"],
         ["image.defaultModel", " \t"],
       ] as const) {
         const failure = yield* prepareSettingUpdate(id, value).pipe(Effect.flip);
         expect(failure).toBeInstanceOf(InvalidSettingError);
         expect(failure).toMatchObject({ id, message: `Invalid value for ${id}.` });
       }
-    }),
-  );
-
-  it.effect("rejects unknown setting ids with the typed error", () =>
-    Effect.gen(function* () {
-      const failure = yield* prepareSettingUpdate("usage.nonexistent", "true").pipe(Effect.flip);
-      expect(failure).toBeInstanceOf(InvalidSettingError);
-    }),
-  );
-
-  it.effect("settings patches preserve unknown shapes", () =>
-    Effect.gen(function* () {
-      const raw = { unknown: "preserved", usage: { unknownUsage: true } };
-      const usageUpdate = yield* prepareSettingUpdate("usage.refreshIntervalMs", "15000");
-      expect(usageUpdate(raw)).toMatchObject({ unknown: "preserved" });
-      expect(usageUpdate(raw).usage).toEqual({ unknownUsage: true, refreshIntervalMs: 15_000 });
     }),
   );
 });

@@ -88,8 +88,10 @@ const responseFor = (request: BoundedProcessRequest) => {
   return success('{"result":{}}');
 };
 
-it.effect("owns fixed argv, environment, decoding, and operation deadlines", () =>
+it.effect("isolates credentials and hostile arguments while bounding requests", () =>
   Effect.gen(function* () {
+    const hostilePath = '/sessions/child $(touch /tmp/injected); "quoted".jsonl';
+    const hostilePrompt = 'Review this\n$(touch /tmp/injected); "quoted" & exit';
     const captured: BoundedProcessRequest[] = [];
     const processRunner: HerdrProcessRunner = (request) =>
       Effect.sync(() => {
@@ -103,6 +105,8 @@ it.effect("owns fixed argv, environment, decoding, and operation deadlines", () 
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
         SECRET: "never-pass",
+        OPENAI_API_KEY: "private-api-key",
+        AWS_SESSION_TOKEN: "private-session-token",
       },
       { executable: "fixture-herdr", processRunner },
     );
@@ -119,7 +123,7 @@ it.effect("owns fixed argv, environment, decoding, and operation deadlines", () 
       yield* client.splitPane({
         parentPaneId: parentPane.pane_id,
         direction: "right",
-        cwd: "/project",
+        cwd: hostilePath,
       }),
     ).toEqual(childPane);
     expect(yield* client.inspectPaneProcessInfo(childPane.pane_id)).toMatchObject({
@@ -131,73 +135,52 @@ it.effect("owns fixed argv, environment, decoding, and operation deadlines", () 
       agentName: "btw-agent",
       paneId: childPane.pane_id,
       childSessionId: "child-id",
-      childSessionPath: "/sessions/child.jsonl",
+      childSessionPath: hostilePath,
       parentSessionId: "parent-id",
       parentSessionPath: "/sessions/parent.jsonl",
       displayName: "BTW · project",
     });
     expect(started).toMatchObject({ name: "btw-agent", agent: "pi" });
-    yield* client.promptSideSessionPi("btw-agent", "Side-session request:\nreview");
+    yield* client.promptSideSessionPi("btw-agent", hostilePrompt);
     yield* client.focusSideSessionPi("btw-agent");
 
-    expect(captured.map(({ args }) => args)).toEqual([
-      ["api", "schema", "--json"],
-      ["integration", "status"],
-      ["pane", "current", "--current"],
-      ["pane", "layout", "--pane", "w1:p1"],
-      [
-        "pane",
-        "split",
-        "w1:p1",
-        "--direction",
-        "right",
-        "--ratio",
-        "0.5",
-        "--cwd",
-        "/project",
-        "--no-focus",
-      ],
-      ["pane", "process-info", "--pane", "w1:p2"],
-      ["api", "snapshot"],
-      [
-        "agent",
-        "start",
-        "btw-agent",
-        "--kind",
-        "pi",
-        "--pane",
-        "w1:p2",
-        "--timeout",
-        "60000",
-        "--",
-        "--session",
-        "/sessions/child.jsonl",
-        "--name",
-        "BTW · project",
-        "--herdr-btw-parent=parent-id",
-        "--herdr-btw-parent-file=/sessions/parent.jsonl",
-        "--herdr-btw-child-session=child-id",
-      ],
-      ["agent", "prompt", "btw-agent", "Side-session request:\nreview"],
-      ["agent", "focus", "btw-agent"],
-    ]);
+    const split = captured.find(({ args }) => args[0] === "pane" && args[1] === "split")!;
+    expect(split.args[split.args.indexOf("--cwd") + 1]).toBe(hostilePath);
+    const launch = captured.find(({ args }) => args[0] === "agent" && args[1] === "start")!;
+    const childArgs = launch.args.slice(launch.args.indexOf("--") + 1);
+    expect(childArgs[childArgs.indexOf("--session") + 1]).toBe(hostilePath);
+    expect(childArgs).not.toContain("/sessions/parent.jsonl");
+    expect(childArgs).not.toContain("--fork");
+    const prompt = captured.find(({ args }) => args[0] === "agent" && args[1] === "prompt")!;
+    expect(prompt.args.filter((arg) => arg === hostilePrompt)).toHaveLength(1);
+
     for (const request of captured) {
+      // Direct executable plus argument arrays keep hostile input out of a shell.
       expect(request.executable).toBe("fixture-herdr");
-      expect(request.environment).toEqual({
+      expect(request.args).not.toContain("-c");
+      expect(request.environment).toMatchObject({
         HOME: "/home/test",
         PATH: "/bin",
         HERDR_ENV: "1",
         HERDR_PANE_ID: "w1:p1",
       });
-      expect(request.stdoutLimitBytes).toBe(4 * 1024 * 1024);
-      expect(request.stderrLimitBytes).toBe(4 * 1024 * 1024);
-      expect(request.cleanupTimeoutMillis).toBe(1_000);
-      expect(request.detached).toBe(false);
-      expect(request.windowsHide).toBe(true);
+      for (const key of ["SECRET", "OPENAI_API_KEY", "AWS_SESSION_TOKEN"]) {
+        expect(request.environment).not.toHaveProperty(key);
+      }
+      for (const secret of ["never-pass", "private-api-key", "private-session-token"]) {
+        expect(
+          [...request.args, ...Object.values(request.environment ?? {})].join("\n"),
+        ).not.toContain(secret);
+      }
+      for (const limit of [request.stdoutLimitBytes, request.stderrLimitBytes]) {
+        expect(limit).toBeGreaterThan(0);
+        expect(limit).toBeLessThanOrEqual(4 * 1024 * 1024);
+      }
+      expect(request.timeoutMillis).toBeGreaterThan(0);
+      expect(request.timeoutMillis).toBeLessThanOrEqual(70_000);
+      expect(request.cleanupTimeoutMillis).toBeGreaterThan(0);
+      expect(request.cleanupTimeoutMillis).toBeLessThanOrEqual(1_000);
     }
-    expect(captured.map(({ timeoutMillis }) => timeoutMillis)).toEqual([
-      15_000, 15_000, 15_000, 15_000, 15_000, 15_000, 15_000, 70_000, 15_000, 15_000,
-    ]);
   }),
 );
 

@@ -259,41 +259,30 @@ export class CodePreviewSyntaxService extends Context.Service<
           ),
         );
         return yield* loadCurrentGeneration.pipe(
-          Effect.matchEffect({
-            onFailure: () =>
-              modify((current) => {
-                if (current.generation !== decision.generation)
-                  return Effect.succeed([undefined, current] as const);
-                const pending = new Set(current.pendingLanguages);
-                pending.delete(language);
-                return Effect.succeed([
-                  undefined,
-                  {
-                    ...current,
-                    pendingLanguages: pending,
-                    statusVersion: current.statusVersion + 1,
-                  },
-                ] as const);
-              }),
-            onSuccess: () =>
-              modify((current) => {
-                if (current.generation !== decision.generation)
-                  return Effect.succeed([undefined, current] as const);
-                const pending = new Set(current.pendingLanguages);
-                pending.delete(language);
-                const loaded = new Set(current.loadedLanguages);
-                loaded.add(language);
-                return Effect.succeed([
-                  undefined,
-                  {
-                    ...current,
-                    loadedLanguages: loaded,
-                    pendingLanguages: pending,
-                    statusVersion: current.statusVersion + 1,
-                  },
-                ] as const);
-              }),
+          Effect.match({
+            onFailure: () => false,
+            onSuccess: () => true,
           }),
+          Effect.flatMap((succeeded) =>
+            modify((current) => {
+              if (current.generation !== decision.generation)
+                return Effect.succeed([undefined, current] as const);
+              const pending = new Set(current.pendingLanguages);
+              pending.delete(language);
+              const loaded = succeeded
+                ? new Set(current.loadedLanguages).add(language)
+                : current.loadedLanguages;
+              return Effect.succeed([
+                undefined,
+                {
+                  ...current,
+                  loadedLanguages: loaded,
+                  pendingLanguages: pending,
+                  statusVersion: current.statusVersion + 1,
+                },
+              ] as const);
+            }),
+          ),
         );
       });
 

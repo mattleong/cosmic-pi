@@ -58,7 +58,10 @@ const makeRuntime = (
     );
   });
 
-const lateSession = (dispose: () => void): AgentSession =>
+const lateSession = (
+  dispose: () => void,
+  abort: () => Promise<void> = () => Promise.resolve(),
+): AgentSession =>
   agentSessionFixture({
     sessionFile: undefined,
     messages: [],
@@ -69,7 +72,7 @@ const lateSession = (dispose: () => void): AgentSession =>
     prompt: () => Promise.resolve(),
     steer: () => Promise.resolve(),
     followUp: () => Promise.resolve(),
-    abort: vi.fn(() => Promise.resolve()),
+    abort: vi.fn(abort),
     dispose: vi.fn(dispose),
   });
 
@@ -350,55 +353,19 @@ describe("advisor Effect clock boundaries", () => {
 
   it.effect("awaits AgentSession abort settlement and still disposes exactly once", () =>
     Effect.gen(function* () {
-      const scope = yield* Effect.scope;
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
       const abortGate = yield* Deferred.make<void>();
-      const session = agentSessionFixture({
-        sessionFile: undefined,
-        messages: [],
-        isStreaming: false,
-        getActiveToolNames: () => [],
-        getToolDefinition: () => undefined,
-        subscribe: () => () => undefined,
-        prompt: () => Promise.resolve(),
-        steer: () => Promise.resolve(),
-        followUp: () => Promise.resolve(),
-        abort: vi.fn(() => runPromise(Deferred.await(abortGate))),
-        dispose: vi.fn(),
-      });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const runtime = new AdvisorRuntime(
-        makeTestChildFactory({
-          createChildModel: () =>
-            Promise.resolve({
-              modelRuntime: {} as never,
-              model: { provider: "p", id: "m" } as never,
-              thinkingLevel: "medium" as const,
-            }),
-          createTools: () => Promise.resolve([]),
-          createSession: () => Promise.resolve({ session, extensionsResult: {} as never }),
-        }),
-        standaloneAdvisorExecutor,
-        scope,
-        { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
-        (yield* SynchronizedRef.make(undefined)) as never,
-        yield* Semaphore.make(1),
+      const session = lateSession(
+        () => undefined,
+        () => runPromise(Deferred.await(abortGate)),
       );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      yield* runtime
-        .startEffect({
-          ctx: { cwd: process.cwd(), modelRegistry: {} as never },
-          config: {
-            configPath: "/tmp/config",
-            enabled: true,
-            provider: "p",
-            model: "m",
-            setupDismissed: true,
-            configured: true,
-          },
-          seed: "seed",
-        })
-        .pipe(provideBuiltLayer(advisorPlatformLayer));
+      const runtime = yield* makeRuntime({
+        createChildModel: childModel,
+        createTools: () => Promise.resolve([]),
+        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        createSession: () => Promise.resolve({ session, extensionsResult: {} as never }),
+      });
+      yield* runtime.startEffect(runtimeOptions()).pipe(provideBuiltLayer(advisorPlatformLayer));
       let completed = false;
       const abort = yield* runtime.abortEffect().pipe(
         Effect.ensuring(
@@ -421,61 +388,25 @@ describe("advisor Effect clock boundaries", () => {
 
   it.effect("bounds a stuck AgentSession abort and requires a clean re-prime", () =>
     Effect.gen(function* () {
-      const scope = yield* Effect.scope;
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-      const makeSession = (abort: () => Promise<void>) =>
-        agentSessionFixture({
-          sessionFile: undefined,
-          messages: [],
-          isStreaming: false,
-          getActiveToolNames: () => [],
-          getToolDefinition: () => undefined,
-          subscribe: () => () => undefined,
-          prompt: () => Promise.resolve(),
-          steer: () => Promise.resolve(),
-          followUp: () => Promise.resolve(),
-          abort: vi.fn(abort),
-          dispose: vi.fn(),
-        });
       const stuckAbort = yield* Deferred.make<void>();
-      const stuck = makeSession(() => runPromise(Deferred.await(stuckAbort)));
-      const fresh = makeSession(() => Promise.resolve());
-      const sessions = [stuck, fresh];
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const runtime = new AdvisorRuntime(
-        makeTestChildFactory({
-          createChildModel: () =>
-            Promise.resolve({
-              modelRuntime: {} as never,
-              model: { provider: "p", id: "m" } as never,
-              thinkingLevel: "medium" as const,
-            }),
-          createTools: () => Promise.resolve([]),
-          createSession: () =>
-            Promise.resolve({
-              session: sessions.shift()!,
-              extensionsResult: {} as never,
-            }),
-        }),
-        standaloneAdvisorExecutor,
-        scope,
-        { offer: () => "accepted", shutdown: Effect.void, awaitShutdown: Effect.void },
-        (yield* SynchronizedRef.make(undefined)) as never,
-        yield* Semaphore.make(1),
+      const stuck = lateSession(
+        () => undefined,
+        () => runPromise(Deferred.await(stuckAbort)),
       );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const options = {
-        ctx: { cwd: process.cwd(), modelRegistry: {} as never },
-        config: {
-          configPath: "/tmp/config",
-          enabled: true,
-          provider: "p",
-          model: "m",
-          setupDismissed: true,
-          configured: true,
-        },
-        seed: "seed",
-      };
+      const fresh = lateSession(() => undefined);
+      const sessions = [stuck, fresh];
+      const runtime = yield* makeRuntime({
+        createChildModel: childModel,
+        createTools: () => Promise.resolve([]),
+        createSession: () =>
+          Promise.resolve({
+            session: sessions.shift()!,
+            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+            extensionsResult: {} as never,
+          }),
+      });
+      const options = runtimeOptions();
       yield* runtime.startEffect(options).pipe(provideBuiltLayer(advisorPlatformLayer));
       let completed = false;
       const abort = yield* runtime.abortEffect().pipe(

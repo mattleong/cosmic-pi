@@ -77,6 +77,41 @@ const resultOutput = <Details, Content>(tool: CapturedTool, details: Details, co
   );
 
 describe("ask_user tool", () => {
+  it("ignores notes without reading them and rejects string fallback content", () => {
+    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
+    const hostileNote = Object.defineProperty({}, "note", {
+      get() {
+        throw new Error("hostile note");
+      },
+    });
+    for (const note of [{ note: 123 }, { note: "hidden note" }, hostileNote]) {
+      const answer = Object.defineProperties(
+        { key: "route", kind: "custom", text: "Scenic" },
+        Object.getOwnPropertyDescriptors(note),
+      );
+      const rendered = resultOutput(tool, { outcome: "submitted", answers: [answer] }, []);
+      expect(rendered).toContain("Scenic");
+      expect(rendered).not.toContain("hidden note");
+    }
+    expect(resultOutput(tool, null, "string fallback")).not.toContain("string fallback");
+  });
+
+  it("isolates throwing content parts from valid siblings", () => {
+    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
+    const hostile = Object.defineProperty({ type: "text" }, "text", {
+      get() {
+        throw new Error("hostile text");
+      },
+    });
+    const rendered = resultOutput(tool, null, [
+      { type: "text", text: "before" },
+      hostile,
+      { type: "text", text: "after" },
+    ]);
+    expect(rendered).toContain("before");
+    expect(rendered).toContain("after");
+  });
+
   it("executes the callback and renders valid submitted, custom, cancelled, and emoji data", () => {
     const outcome: AskUserOutcome = {
       outcome: "submitted",

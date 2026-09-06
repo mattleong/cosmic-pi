@@ -107,6 +107,7 @@ describe("ListDetailShell motions", () => {
     shell.syncLayout(120);
     shell.select(0, ["a"]);
     shell.enterPane();
+    shell.visibleWindow(50, 18);
     shell.detailWindow(lines(30), 11);
 
     const result = shell.applyMotion("half-page-up", { rowCount: 1, hasSelection: true });
@@ -138,8 +139,18 @@ describe("ListDetailShell motions", () => {
     shell.enterPane();
     shell.detailWindow(lines(30), 6);
     shell.resetDetailWindow();
-    shell.applyMotion("up", { rowCount: 1, hasSelection: true });
+    expect(shell.applyMotion("up", { rowCount: 1, hasSelection: true })).toMatchObject({
+      scrolledDetail: true,
+      movedSelection: false,
+      state: { detailScroll: 0 },
+    });
     expect(shell.state.detailScroll).toBe(0);
+    shell.applyMotion("back", { rowCount: 1, hasSelection: true });
+    expect(shell.applyMotion("up", { rowCount: 1, hasSelection: true })).toMatchObject({
+      movedSelection: true,
+      scrolledDetail: false,
+      state: { selected: 0 },
+    });
   });
 });
 

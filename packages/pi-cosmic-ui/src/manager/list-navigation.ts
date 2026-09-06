@@ -48,24 +48,11 @@ export const nextListMotionIndex = (
   wrapSingleRow = false,
 ): number => {
   const last = Math.max(0, length - 1);
-  switch (motion) {
-    case "up":
-      return wrapSingleRow
-        ? (current - 1 + length) % length
-        : Math.max(0, Math.min(last, current - 1));
-    case "down":
-      return wrapSingleRow ? (current + 1) % length : Math.max(0, Math.min(last, current + 1));
-    case "half-page-up":
-      return Math.max(0, Math.min(last, current - steps.half));
-    case "half-page-down":
-      return Math.max(0, Math.min(last, current + steps.half));
-    case "full-page-up":
-      return Math.max(0, Math.min(last, current - steps.page));
-    case "full-page-down":
-      return Math.max(0, Math.min(last, current + steps.page));
-    case "first":
-      return 0;
-    case "last":
-      return last;
+  if (isMovementMotion(motion)) {
+    const next = current + movementOffset(motion, steps);
+    if (wrapSingleRow && motion === "up") return (next + length) % length;
+    if (wrapSingleRow && motion === "down") return next % length;
+    return Math.max(0, Math.min(last, next));
   }
+  return motion === "first" ? 0 : last;
 };

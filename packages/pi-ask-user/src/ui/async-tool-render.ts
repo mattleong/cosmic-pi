@@ -1,33 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
-import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
+import {
+  answerLine,
+  decodeCallTitles,
+  fallbackText,
+  outcomeProjection,
+  projection,
+} from "./tool-render-projection.ts";
 
-const Answer = Schema.Union([
-  Schema.Struct({
-    key: Schema.String,
-    kind: Schema.Literal("choices"),
-    labels: Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_CHOICES)),
-    note: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    key: Schema.String,
-    kind: Schema.Literal("custom"),
-    text: Schema.String,
-    note: Schema.optional(Schema.String),
-  }),
-]);
-const Outcome = Schema.Union([
-  Schema.Struct({ outcome: Schema.Literal("cancelled") }),
-  Schema.Struct({
-    outcome: Schema.Literal("submitted"),
-    answers: Schema.Array(Answer).check(Schema.isMaxLength(MAX_QUESTIONS)),
-  }),
-]);
+const Outcome = outcomeProjection({ note: Schema.optional(Schema.String) });
 const Snapshot = Schema.Struct({
   requestId: Schema.String,
   deliveryId: Schema.String,
@@ -36,17 +21,6 @@ const Snapshot = Schema.Struct({
   outcome: Schema.optional(Outcome),
 });
 
-// Replay data can contain malformed fields or throwing getters.
-const projection = <S extends Schema.ConstraintDecoder<unknown>>(schema: S) => {
-  const decode = Schema.decodeUnknownOption(schema);
-  return <Input>(input: Input): S["Type"] | undefined => {
-    try {
-      return Option.getOrUndefined(decode(input));
-    } catch {
-      return undefined;
-    }
-  };
-};
 const envelope = projection(
   Schema.Struct({
     details: Schema.optional(Schema.Unknown),
@@ -67,46 +41,18 @@ const notification = projection(
     outcome: Outcome,
   }),
 );
-const titles = projection(
-  Schema.Struct({
-    questions: Schema.Array(Schema.Struct({ title: Schema.String })).check(
-      Schema.isMaxLength(MAX_QUESTIONS),
-    ),
-  }),
-);
 const control = projection(
   Schema.Struct({
     action: Schema.Literals(["status", "await", "cancel"]),
     requestId: Schema.optional(Schema.String),
   }),
 );
-const parts = projection(Schema.Array(Schema.Unknown));
-const textPart = projection(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }));
-
-const stringContent = projection(Schema.String);
-
-function fallback<Content>(content: Content): string {
-  const text = stringContent(content);
-  if (text !== undefined) return stripTerminalControls(text);
-  return (parts(content) ?? [])
-    .flatMap((part) => {
-      const text = textPart(part);
-      return text ? [stripTerminalControls(text.text)] : [];
-    })
-    .join("\n");
-}
+const fallback = <Content>(content: Content): string => fallbackText(content, true);
 
 function outcomeLines(outcome: typeof Outcome.Type | undefined, theme: Theme): string[] {
   if (outcome?.outcome !== "submitted") return [];
   return outcome.answers.flatMap((answer) => {
-    const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-    const lines = [
-      toolStatusLine(
-        theme,
-        "success",
-        `${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`,
-      ),
-    ];
+    const lines = [answerLine(answer, theme)];
     if (answer.note) lines.push(theme.fg("muted", `Note: ${stripTerminalControls(answer.note)}`));
     return lines;
   });
@@ -140,7 +86,7 @@ export function renderAsyncCall<Input>(
   isControl = false,
 ): Text {
   const call = control(input);
-  const questions = titles(input)?.questions;
+  const questions = decodeCallTitles(input)?.questions;
   const title = isControl
     ? {
         status: "Questionnaire status",

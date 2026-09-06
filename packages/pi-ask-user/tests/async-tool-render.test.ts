@@ -32,6 +32,50 @@ const result = <Details, Content>(details: Details, expanded = false, content?: 
   output(renderAsyncResult({ details, content }, { expanded, isPartial: false }, theme));
 
 describe("async questionnaire replay rendering", () => {
+  it("rejects malformed or hostile notes but accepts string fallback content", () => {
+    const hostileNote = Object.defineProperty({}, "note", {
+      get() {
+        throw new Error("hostile note");
+      },
+    });
+    for (const note of [{ note: 123 }, hostileNote]) {
+      const answer = Object.defineProperties(
+        { key: "route", kind: "custom", text: "Scenic" },
+        Object.getOwnPropertyDescriptors(note),
+      );
+      const details = { ...snapshot, outcome: { outcome: "submitted", answers: [answer] } };
+      for (const rendered of [
+        result(details, false, "string fallback"),
+        output(
+          renderAsyncMessage(
+            { details: { ...details, generation: "generation" }, content: "string fallback" },
+            { expanded: false, outputPad: 0 },
+            theme,
+          ),
+        ),
+      ]) {
+        expect(rendered).toContain("string fallback");
+        expect(rendered).not.toContain("Scenic");
+      }
+    }
+  });
+
+  it("isolates throwing content parts from valid siblings", () => {
+    const hostile = Object.defineProperty({ type: "text" }, "text", {
+      get() {
+        throw new Error("hostile text");
+      },
+    });
+    const content = [{ type: "text", text: "before" }, hostile, { type: "text", text: "after" }];
+    for (const rendered of [
+      result(null, false, content),
+      output(renderAsyncMessage({ content }, { expanded: false, outputPad: 0 }, theme)),
+    ]) {
+      expect(rendered).toContain("before");
+      expect(rendered).toContain("after");
+    }
+  });
+
   it("projects answers and notes without exposing delivery metadata until expanded", () => {
     for (const rendered of [
       result(snapshot),

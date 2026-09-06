@@ -1,69 +1,21 @@
 // Pi tool execution and synchronous rendering are host boundaries.
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import { withCodePreviewShell } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
+import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.ts";
 import {
-  AskUserParameters,
-  MAX_CHOICES,
-  MAX_QUESTIONS,
-  type AskUserRequest,
-} from "../questionnaire/schema.ts";
+  answerLine,
+  decodeCallTitles,
+  fallbackText,
+  outcomeProjection,
+  projection,
+} from "../ui/tool-render-projection.ts";
 
-const CallTitlesProjection = Schema.Struct({
-  questions: Schema.Array(Schema.Struct({ title: Schema.String })).check(
-    Schema.isMaxLength(MAX_QUESTIONS),
-  ),
-});
-
-const RenderAnswerProjection = Schema.Union([
-  Schema.Struct({
-    key: Schema.String,
-    kind: Schema.Literal("choices"),
-    labels: Schema.Array(Schema.String).check(Schema.isMaxLength(MAX_CHOICES)),
-  }),
-  Schema.Struct({
-    key: Schema.String,
-    kind: Schema.Literal("custom"),
-    text: Schema.String,
-  }),
-]);
-
-const OutcomeDetailsProjection = Schema.Union([
-  Schema.Struct({ outcome: Schema.Literal("cancelled") }),
-  Schema.Struct({
-    outcome: Schema.Literal("submitted"),
-    answers: Schema.Array(RenderAnswerProjection).check(Schema.isMaxLength(MAX_QUESTIONS)),
-  }),
-]);
-
-const ContentProjection = Schema.Array(Schema.Unknown);
-const TextContentPartProjection = Schema.Struct({
-  type: Schema.Literal("text"),
-  text: Schema.String,
-});
-
-/** Decodes untrusted replay data; hostile unknown getters and mismatches yield undefined. */
-const projection = <S extends Schema.ConstraintDecoder<unknown>>(schema: S) => {
-  const decode = Schema.decodeUnknownOption(schema);
-  return <Input>(input: Input): S["Type"] | undefined => {
-    try {
-      return Option.getOrUndefined(decode(input));
-    } catch {
-      return undefined;
-    }
-  };
-};
-
-const decodeCallTitles = projection(CallTitlesProjection);
-const decodeOutcomeDetails = projection(OutcomeDetailsProjection);
-const decodeContent = projection(ContentProjection);
-const decodeTextContentPart = projection(TextContentPartProjection);
+const decodeOutcomeDetails = projection(outcomeProjection({}));
 
 export function registerAskUserTool(
   pi: ExtensionAPI,
@@ -110,24 +62,10 @@ export function registerAskUserTool(
       if (details?.outcome === "cancelled")
         return new Text(toolStatusLine(theme, "warning", "Questionnaire cancelled"), 0, 0);
       if (details?.outcome === "submitted") {
-        const lines = details.answers.map((answer) => {
-          const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;
-          return toolStatusLine(
-            theme,
-            "success",
-            `${stripTerminalControls(answer.key)}: ${stripTerminalControls(value)}`,
-          );
-        });
+        const lines = details.answers.map((answer) => answerLine(answer, theme));
         return new Text(lines.join("\n"), 0, 0);
       }
-      const content = decodeContent(result.content) ?? [];
-      const text = content
-        .flatMap((part) => {
-          const textPart = decodeTextContentPart(part);
-          return textPart ? [stripTerminalControls(textPart.text)] : [];
-        })
-        .join("\n");
-      return new Text(text, 0, 0);
+      return new Text(fallbackText(result.content), 0, 0);
     },
   });
   pi.registerTool(withCodePreviewShell(tool));

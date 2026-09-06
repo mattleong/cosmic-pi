@@ -14,6 +14,7 @@ import {
   type FullScreenResolution,
   type PageSteps,
 } from "./keymap.ts";
+import { isMovementMotion, movementOffset } from "./list-navigation.ts";
 
 export type ListDetailPane = "list" | "detail";
 
@@ -160,6 +161,11 @@ export const listDetailMotion = (
     );
   const select = (index: number): ListDetailMotionResult =>
     update({ selected: clampListIndex(index, context.rowCount) }, { movedSelection: true });
+  if (isMovementMotion(motion)) {
+    return browsingDetail
+      ? scroll(-movementOffset(motion, context.detailSteps))
+      : select(state.selected + movementOffset(motion, context.listSteps));
+  }
   switch (motion) {
     case "cancel":
       return browsingDetail
@@ -181,26 +187,6 @@ export const listDetailMotion = (
             { resetChord: true },
           )
         : { _tag: "Ignored" };
-    case "up":
-      return browsingDetail ? scroll(1) : select(state.selected - 1);
-    case "down":
-      return browsingDetail ? scroll(-1) : select(state.selected + 1);
-    case "half-page-up":
-      return browsingDetail
-        ? scroll(context.detailSteps.half)
-        : select(state.selected - context.listSteps.half);
-    case "half-page-down":
-      return browsingDetail
-        ? scroll(-context.detailSteps.half)
-        : select(state.selected + context.listSteps.half);
-    case "full-page-up":
-      return browsingDetail
-        ? scroll(context.detailSteps.page)
-        : select(state.selected - context.listSteps.page);
-    case "full-page-down":
-      return browsingDetail
-        ? scroll(-context.detailSteps.page)
-        : select(state.selected + context.listSteps.page);
     case "first":
       return browsingDetail ? scroll(context.detailMaxScroll) : select(0);
     case "last":
