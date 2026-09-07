@@ -135,6 +135,40 @@ describe("activity presentation", () => {
     deliveries[2]!(logs(45));
     expect(visibleLogs()).toEqual(scrolled);
   });
+  it("uses tree arrows before pane navigation and restores list navigation when selection disappears", () => {
+    const parent = row("parent");
+    const child = { ...row("child"), parent: { providerId: "agents", itemId: "parent" } };
+    let rows = [parent, child];
+    let loads = 0;
+    const component = new ActivityComponent({
+      snapshot: () => rows,
+      theme: { fg: (_color, text) => text },
+      height: () => 16,
+      close: () => undefined,
+      requestRender: () => undefined,
+      loadDetail: () => {
+        loads++;
+      },
+    });
+    component.render(120);
+    component.handleInput("\u001b[D");
+    expect(component.presentation.collapsed.has(parent.key)).toBe(true);
+    component.handleInput("\u001b[C");
+    expect(component.presentation.collapsed.has(parent.key)).toBe(false);
+    expect(component.shell.state.pane).toBe("list");
+    expect(loads).toBe(0);
+    component.handleInput("l");
+    expect(component.shell.state.pane).toBe("detail");
+    expect(loads).toBe(1);
+    component.handleInput("h");
+    expect(component.shell.state.pane).toBe("list");
+    component.handleInput("j");
+    expect(component.shell.state.selectedId).toBe(child.key);
+    component.handleInput("l");
+    rows = [];
+    component.render(120);
+    expect(component.shell.state.pane).toBe("list");
+  });
   it("can reopen an explicitly collapsed branch after it becomes finished history", () => {
     let rows: ActivityRow[] = [
       row("parent"),

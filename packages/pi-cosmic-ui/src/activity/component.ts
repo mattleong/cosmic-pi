@@ -1,12 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "../manager/chrome.ts";
 import { filterReservedKeyLabel } from "../manager/key-labels.ts";
 import type {
   FullScreenKeymapOptions,
   FullScreenSelectionKeybindingId,
 } from "../manager/keymap.ts";
-import { listDetailMotionFromAction } from "../manager/list-detail.ts";
+import {
+  detailWindowPositionLabel,
+  listDetailMotionFromAction,
+  padListDetailRow,
+  stackedListHeight,
+  wideListDetailGeometry,
+} from "../manager/list-detail.ts";
 import {
   ListDetailShell,
   framedFill,
@@ -58,6 +64,7 @@ export interface ActivityComponentOptions {
 export class ActivityComponent {
   readonly shell: ListDetailShell;
   readonly presentation: ActivityPresentation;
+  private alternateHelp = false;
   private actionPage = 0;
   private detailRequestSequence = 0;
   private preserveDetailPosition = false;
@@ -145,6 +152,23 @@ export class ActivityComponent {
       return;
     }
     const { entries, selected } = this.selected();
+    this.shell.ensureSelectionPane(!!selected);
+    if (this.shell.state.pane === "list" && selected?.children) {
+      const back = matchesKey(data, "h") || matchesKey(data, Key.left);
+      const forward = matchesKey(data, "l") || matchesKey(data, Key.right);
+      if (back || (forward && !selected.expanded)) {
+        if (back) {
+          this.presentation.collapsed.add(selected.row.key);
+          this.presentation.expandedHistory.delete(selected.row.key);
+        } else {
+          this.presentation.collapsed.delete(selected.row.key);
+          if (selected.history) this.presentation.expandedHistory.add(selected.row.key);
+        }
+        this.shell.resetDetailScroll();
+        this.options.requestRender();
+        return;
+      }
+    }
     const result = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
@@ -205,6 +229,7 @@ export class ActivityComponent {
       this.shell.enterPane();
       if (this.shell.state.pane === "detail") this.loadDetails(selected.row);
     } else {
+      if (result.action === "help") this.alternateHelp = !this.alternateHelp;
       const motion = listDetailMotionFromAction(result.action);
       if (motion) {
         const wasDetail = this.shell.state.pane === "detail";
@@ -243,7 +268,8 @@ export class ActivityComponent {
     );
     this.displayed = selected ? { row: selected.row, actionPage: this.actionPage } : undefined;
     const tier = this.shell.syncLayout(width);
-    const height = Math.max(1, this.options.height());
+    this.shell.ensureSelectionPane(!!selected);
+    const height = Math.max(0, this.options.height());
     const inner = Math.max(0, width - 2);
     const frame = listDetailFrame(this.options.theme);
     const urgent = needsYou(this.options.snapshot());
@@ -265,24 +291,35 @@ export class ActivityComponent {
     const confirm = hint("tui.select.confirm", "Enter");
     const cancel = hint("tui.select.cancel", "Esc");
     const movement = `${hint("tui.select.up", "↑")}/${hint("tui.select.down", "↓")}`;
+    const listFocused = this.shell.state.pane === "list";
+    const navigation = listFocused
+      ? `${movement}/j/k Move · h/l Collapse/expand · ${confirm} Inspect`
+      : `j/k Scroll · h/${cancel} Back`;
+    const actions = selected?.row.actions?.length ? "1-9 Actions · a More actions" : undefined;
     const bottom = renderResponsiveManagerFooter(
       inner,
       this.confirmation
         ? [[`${confirm} confirm`, `${cancel} cancel`]]
-        : [
-            [
-              `${movement} navigate`,
-              `${confirm} details`,
-              "c collapse",
-              "f focus",
-              "n needs you",
-              "1-9 action",
-              "r refresh",
-              `${cancel} back`,
+        : this.alternateHelp
+          ? [
+              [
+                "C-u/d Half-page · PgUp/PgDn Page · gg/G Ends",
+                "c Collapse · f Focus · n Needs you",
+                actions,
+                `r Refresh · ? Back · ${cancel}/q Close`,
+              ],
+              ["c Collapse · f Focus · n Needs you", "a More actions", `? Back · ${cancel}/q`],
+              ["c · f · n · a · r", `? Back · ${cancel}/q`],
+            ]
+          : [
+              [
+                navigation,
+                actions,
+                `f Focus · n Needs you · r Refresh · ? More · ${cancel}/q Close`,
+              ],
+              [navigation, actions, `? More · ${cancel}/q`],
+              [listFocused ? `j/k · ${confirm} Inspect` : `j/k · h Back`, `? More · ${cancel}/q`],
             ],
-            ["c collapse", "f focus", "n needs you", "1-9 action"],
-            [`${confirm} details`, `${cancel} back`],
-          ],
     );
     const focus = this.options.snapshot().find((row) => row.key === this.presentation.focus);
     const breadcrumb = focus
@@ -293,7 +330,14 @@ export class ActivityComponent {
     return framedScreen(frame, {
       width,
       height,
-      top: ` Activity${breadcrumb ? ` › ${breadcrumb}` : ""}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
+      top: this.options.theme.fg(
+        "accent",
+        truncateToWidth(
+          ` /activity · ${this.options.snapshot().length} items${breadcrumb ? ` › ${breadcrumb}` : ""}${attention ? ` · ${attention}` : ""}${startup ? ` ${startup}` : ""} `,
+          inner,
+          "",
+        ),
+      ),
       bottom,
       body: (bodyHeight) => {
         if (this.confirmation)
@@ -304,25 +348,27 @@ export class ActivityComponent {
             inner,
           );
         const listHeight =
-          tier === "stacked" ? Math.max(1, Math.floor((bodyHeight - 1) / 2)) : bodyHeight;
-        const detailWidth =
-          tier === "wide" ? Math.max(1, inner - Math.floor(inner * 0.45) - 1) : Math.max(1, inner);
-        const listWidth = tier === "wide" ? inner - detailWidth - 1 : inner;
-        const showNeedsYou = urgent.length > 0 && listHeight > 1;
+          tier === "stacked"
+            ? Math.min(bodyHeight, stackedListHeight(bodyHeight, entries.length))
+            : bodyHeight;
+        const { listWidth, detailWidth } =
+          tier === "wide"
+            ? wideListDetailGeometry(width, 38, 0.42)
+            : { listWidth: inner, detailWidth: Math.max(1, inner) };
+        const showHeading = listHeight > 1;
+        const showNeedsYou = urgent.length > 0 && listHeight > 2;
         const window = this.shell.visibleWindow(
           entries.length,
-          listHeight - (showNeedsYou ? 1 : 0),
+          listHeight - Number(showHeading) - Number(showNeedsYou),
         );
         const list = entries.slice(window.start, window.end).map((entry) => {
-          const prefix = `${entry.row.key === selected?.row.key ? ">" : " "}${entry.history ? "H " : ""}`;
-          const content = `${prefix}${activityRowLine(entry, Math.max(0, listWidth - prefix.length), this.options.now?.(), this.options.theme)}`;
-          const line = `${content}${" ".repeat(Math.max(0, listWidth - visibleWidth(content)))}`;
-          if (entry.row.key !== selected?.row.key || !this.options.theme.bg) return line;
-          // Width truncation emits full resets; restart selection background after each one.
-          return line
-            .split("\u001b[0m")
-            .map((part) => this.options.theme.bg?.("selectedBg", part) ?? part)
-            .join("\u001b[0m");
+          const isSelected = entry.row.key === selected?.row.key;
+          const prefix = `${isSelected ? "> " : "  "}${entry.history ? "H " : ""}`;
+          const content = `${prefix}${activityRowLine(entry, Math.max(0, listWidth - prefix.length), this.options.now?.(), isSelected ? undefined : this.options.theme)}`;
+          return padListDetailRow(
+            isSelected ? this.options.theme.fg("accent", content) : content,
+            listWidth,
+          );
         });
         if (!list.length) list.push("No activity");
         if (showNeedsYou)
@@ -332,6 +378,20 @@ export class ActivityComponent {
               `Needs you [n]: ${activityOwnerLabel(this.options.snapshot(), urgent[0]!, Math.max(0, listWidth - 15 - (urgent.length > 1 ? ` +${urgent.length - 1}`.length : 0)))}${urgent.length > 1 ? ` +${urgent.length - 1}` : ""}`,
             ),
           );
+        if (showHeading) {
+          const start = window.start + 1;
+          const end = Math.min(window.end, entries.length);
+          const heading = entries.length
+            ? `Activity · ${start}–${end} of ${entries.length}${start > 1 ? " · ↑ more" : ""}${end < entries.length ? " · ↓ more" : ""}`
+            : "Activity · none";
+          list.unshift(
+            this.options.theme.fg(
+              listFocused ? "accent" : "muted",
+              `${listFocused ? "› " : ""}${heading}`,
+            ),
+          );
+        }
+        while (list.length < listHeight) list.push("");
         const row = selected?.row;
         const sameItem =
           row &&
@@ -349,7 +409,7 @@ export class ActivityComponent {
             : "";
         const detailText = row
           ? [
-              activityOwnerLabel(this.options.snapshot(), row),
+              this.options.theme.fg("accent", activityOwnerLabel(this.options.snapshot(), row)),
               `${activityType(row)}${row.kind === "agent" && row.profile ? ` · ${row.profile}` : ""} · ${activityStatus(row)} · ${activityElapsed(row, now)}`,
               truncateToWidth(stale, detailWidth, "…"),
               row.summary ?? "",
@@ -376,6 +436,9 @@ export class ActivityComponent {
         const detailRows = showFreshness
           ? [
               this.options.theme.fg("dim", truncateToWidth(freshness, detailWidth, "…")),
+              ...(details.overflow
+                ? [this.options.theme.fg("dim", detailWindowPositionLabel(details.overflow))]
+                : []),
               ...details.visible,
             ]
           : details.visible;
