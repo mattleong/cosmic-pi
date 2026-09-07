@@ -13,7 +13,7 @@ import {
   selectScopedDocument,
 } from "pi-cosmic-core";
 import { normalizeConfig } from "./options.ts";
-import { FiniteNumberSchema, type BackgroundTaskConfig } from "./schema.ts";
+import type { BackgroundTaskConfig } from "./schema.ts";
 
 const CONFIG_BASENAME = "pi-background-task.json";
 
@@ -32,12 +32,12 @@ function decodeConfig<ValueInput>(value: ValueInput): Partial<BackgroundTaskConf
     value,
     {
       enabled: Schema.Boolean,
-      maxRunning: FiniteNumberSchema,
-      maxRetained: FiniteNumberSchema,
-      logBufferBytesPerTask: FiniteNumberSchema,
-      totalLogBufferBytes: FiniteNumberSchema,
-      stopGraceMs: FiniteNumberSchema,
-      maxWaitSeconds: FiniteNumberSchema,
+      maxRunning: Schema.Finite,
+      maxRetained: Schema.Finite,
+      logBufferBytesPerTask: Schema.Finite,
+      totalLogBufferBytes: Schema.Finite,
+      stopGraceMs: Schema.Finite,
+      maxWaitSeconds: Schema.Finite,
       showFooterStatus: Schema.Boolean,
       shellPath: Schema.String,
     },

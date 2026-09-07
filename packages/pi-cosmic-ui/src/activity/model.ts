@@ -14,6 +14,32 @@ export const COMPLETED_BRANCH_LIMIT = 128;
 export const COMPLETED_TOTAL_LIMIT = 1024;
 export const HISTORY_ROOT_LIMIT = 100;
 
+/** Missing owners and every path entering a cycle become roots. Package-private. */
+export function resolveActivityOwnership(byKey: ReadonlyMap<string, ActivityRow>) {
+  const parents = new Map<string, string>();
+  const roots = new Map<string, string>();
+  for (const row of byKey.values()) {
+    const seen = new Set<string>();
+    let cursor = row;
+    while (cursor.parent && !seen.has(cursor.key)) {
+      seen.add(cursor.key);
+      const owner = byKey.get(activityKey(cursor.parent.providerId, cursor.parent.itemId));
+      if (!owner) break;
+      cursor = owner;
+    }
+    const cycle =
+      seen.has(cursor.key) &&
+      cursor.parent !== undefined &&
+      byKey.has(activityKey(cursor.parent.providerId, cursor.parent.itemId));
+    roots.set(row.key, cycle ? row.key : cursor.key);
+    if (!cycle && row.parent) {
+      const parent = activityKey(row.parent.providerId, row.parent.itemId);
+      if (byKey.has(parent)) parents.set(row.key, parent);
+    }
+  }
+  return { parents, roots };
+}
+
 /** Retain completed summaries, but not their expired actions. Never prune live rows or their ancestors. */
 export function retainActivity(
   previous: readonly ActivityRow[],
@@ -25,27 +51,7 @@ export function retainActivity(
     if (!next.has(row.key) && isFinished(row))
       next.set(row.key, { ...row, actions: [], awaited: false });
   const rows = [...next.values()];
-  const parents = new Map<string, string>();
-  const roots = new Map<string, string>();
-  for (const row of rows) {
-    const seen = new Set<string>();
-    let cursor = row;
-    while (cursor.parent && !seen.has(cursor.key)) {
-      seen.add(cursor.key);
-      const owner = next.get(activityKey(cursor.parent.providerId, cursor.parent.itemId));
-      if (!owner) break;
-      cursor = owner;
-    }
-    const cycle =
-      seen.has(cursor.key) &&
-      cursor.parent !== undefined &&
-      next.has(activityKey(cursor.parent.providerId, cursor.parent.itemId));
-    roots.set(row.key, cycle ? row.key : cursor.key);
-    if (!cycle && row.parent) {
-      const parent = activityKey(row.parent.providerId, row.parent.itemId);
-      if (next.has(parent)) parents.set(row.key, parent);
-    }
-  }
+  const { parents, roots } = resolveActivityOwnership(next);
   const protectedKeys = new Set<string>();
   for (const row of rows.filter((value) => !isFinished(value) || value.awaited)) {
     let key: string | undefined = row.key;

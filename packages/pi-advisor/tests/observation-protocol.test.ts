@@ -58,10 +58,10 @@ describe("observation protocol", () => {
       },
     );
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The accessor is deliberately invalid observation input; ingestion must reject it without calling its getter.
     expect(() => buffer.ingest(1, accessor as never)).toThrow(/observation/i);
     expect(getterCalls).toBe(0);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The hostile proxy is deliberately invalid observation input; ingestion must reject its descriptor trap.
     expect(() => buffer.ingest(1, hostile as never)).toThrow(/observation/i);
   });
 

@@ -1,11 +1,11 @@
-import type { Model, ProviderHeaders } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
-import { JsonHttpClient } from "pi-cosmic-core";
+import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
 import type { OpenAICompactionJsonObject } from "../compaction/protocol.ts";
 
 const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
@@ -91,23 +91,6 @@ type Registry = Pick<
   "getApiKeyAndHeaders"
 >;
 
-function mergeRequestHeaders(
-  ...sources: ReadonlyArray<Readonly<ProviderHeaders> | undefined>
-): Record<string, string> {
-  const resolved = new Map<string, { readonly name: string; readonly value: string }>();
-  for (const source of sources) {
-    if (!source) continue;
-    for (const [name, value] of Object.entries(source)) {
-      const normalized = name.toLowerCase();
-      if (value === null) resolved.delete(normalized);
-      else resolved.set(normalized, { name, value });
-    }
-  }
-  return Object.fromEntries(
-    Array.from(resolved.values(), ({ name, value }) => [name, value] as const),
-  );
-}
-
 function hasAuthorization(headers: Readonly<Record<string, string>>): boolean {
   return Object.entries(headers).some(
     ([name, value]) => name.toLowerCase() === "authorization" && value.trim().length > 0,
@@ -135,7 +118,7 @@ export class OpenAICompactionClient extends Context.Service<
           );
           if (!auth.ok)
             return yield* boundaryError("auth", "OpenAI authentication was unavailable.");
-          const headers = mergeRequestHeaders(
+          const headers = mergeHeaders(
             request.model.headers,
             auth.apiKey ? { authorization: `Bearer ${auth.apiKey}` } : undefined,
             auth.headers,

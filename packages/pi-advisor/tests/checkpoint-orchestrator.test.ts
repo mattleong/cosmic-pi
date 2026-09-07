@@ -146,7 +146,7 @@ it.effect("cancels inline when layer finalization runs after executor deactivati
     let forks = 0;
     let activeCancels = 0;
     let finalizations = 0;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The executor wrapper forwards the same Effect and only records finalizer completion.
     const executor = {
       ...standaloneAdvisorExecutor,
       fork: (<A, E>(effect: Effect.Effect<A, E, never>) => {

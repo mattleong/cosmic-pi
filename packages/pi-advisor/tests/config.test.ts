@@ -1,4 +1,12 @@
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import { JsonDocumentStore } from "pi-cosmic-core";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { describe, expect, test } from "vitest";
+import { writeAdvisorConfigPatchEffect } from "../src/config/store.ts";
 import {
   DEFAULT_ADVISOR_CONFIG,
   normalizeAdvisorConfig,
@@ -100,6 +108,43 @@ describe("Advisor config", () => {
       setupDismissed: true,
     });
   });
+
+  it.effect(
+    "supports legacy document updates but rejects atomic publication without modifyObject",
+    () =>
+      Effect.gen(function* () {
+        const path = "/config/advisor.json";
+        const documents = makeInMemoryDocuments({ [path]: { future: { keep: true } } });
+        const legacy = JsonDocumentStore.of({
+          exists: documents.service.exists,
+          readObject: documents.service.readObject,
+          writeObject: documents.service.writeObject,
+          updateObject: documents.service.updateObject,
+        });
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(JsonDocumentStore, legacy),
+          Path.layer,
+          FileSystem.layerNoop({
+            exists: () => Effect.succeed(true),
+            makeDirectory: () => Effect.void,
+          }),
+        );
+        const next = yield* writeAdvisorConfigPatchEffect({ enabled: true }, path).pipe(
+          Effect.provide(dependencies),
+        );
+        expect(next.enabled).toBe(true);
+        expect(documents.documents.get(path)).toEqual({ future: { keep: true }, enabled: true });
+        let published = false;
+        const error = yield* writeAdvisorConfigPatchEffect({ enabled: false }, path, () =>
+          Effect.sync(() => {
+            published = true;
+          }),
+        ).pipe(Effect.provide(dependencies), Effect.flip);
+        expect(error._tag).toBe("AdvisorConfigError");
+        expect(published).toBe(false);
+        expect(documents.documents.get(path)?.enabled).toBe(true);
+      }),
+  );
 
   test("clearing model fields removes them", () => {
     expect(

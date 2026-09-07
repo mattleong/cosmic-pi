@@ -99,14 +99,14 @@ export function controllableRuntimeService(
       if (!instance) return Effect.succeed(fallback);
       return Effect.tryPromise({ try: () => operation(instance), catch: toModelError });
     });
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: These driver mocks return the Promises constructed in newInstance; checkpoint is called only after start.
   const service: AdvisorRuntimeServiceContract = {
     activeToolNames: () => options.activeToolNames ?? ["read", "grep", "find", "ls"],
     start: (startOptions) =>
       Effect.suspend(() => {
         const instance = newInstance();
         current = instance;
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The start mock returns the Promise<void> constructed in newInstance.
         return Effect.tryPromise({
           try: () => instance.driver.start(startOptions) as Promise<void>,
           catch: toModelError,

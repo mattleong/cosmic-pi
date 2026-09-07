@@ -276,27 +276,17 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     observed,
     Effect.sleep(Math.max(1, request.timeoutMillis)).pipe(Effect.as({ _tag: "Timeout" as const })),
   );
-  if (outcome._tag === "Completed") {
-    const cleanupConfirmed = request.sweepProcessTreeOnExit
-      ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
-      : true;
-    const processExit = effectProcessExit(outcome.exit);
-    return {
-      code: processExit.code,
-      signal: processExit.signal,
-      stdout: decodeOutput(stdout),
-      stderr: decodeOutput(stderr),
-      overflowed: false,
-      timedOut: false,
-      cleanupUnconfirmed: !cleanupConfirmed,
-      dispatched: true,
-    } satisfies BoundedProcessResult;
-  }
-
-  const cleanupConfirmed = yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis);
+  const cleanupConfirmed =
+    outcome._tag === "Completed"
+      ? request.sweepProcessTreeOnExit
+        ? yield* sweepExitedProcessTree(handle, cleanupTimeoutMillis)
+        : true
+      : yield* confirmEffectProcessClose(handle, cleanupTimeoutMillis);
+  const processExit =
+    outcome._tag === "Completed" ? effectProcessExit(outcome.exit) : { code: null, signal: null };
   return {
-    code: null,
-    signal: null,
+    code: processExit.code,
+    signal: processExit.signal,
     stdout: decodeOutput(stdout),
     stderr: decodeOutput(stderr),
     overflowed: outcome._tag === "Overflow",

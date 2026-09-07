@@ -1,7 +1,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import { decodeTolerantFields, type JsonObject } from "pi-cosmic-core";
 import { nodeJoin } from "../boundary/node.ts";
 import { snapshotDataRecord } from "../domain/safe-data.ts";
@@ -27,7 +26,6 @@ export const ADVISOR_RECENT_CONTEXT_CHARS = 120_000;
 export const ADVISOR_THINKING_LEVEL: ModelThinkingLevel = "medium";
 export const ADVISOR_FAST_MODE = false;
 
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
 const REMOVED_CONFIG_FIELDS = [
   "mode",
   "reviewPolicy",
@@ -79,10 +77,7 @@ export function patchAdvisorConfig<RawInput>(raw: RawInput, patch: AdvisorConfig
 }
 
 function safeDataRecord<ValueInput>(value: ValueInput): JsonObject {
-  const snapshot = snapshotDataRecord(value);
-  if (snapshot === undefined) return {};
-  const decoded = Schema.decodeUnknownOption(JsonObjectSchema)(snapshot);
-  return decoded._tag === "Some" ? decoded.value : {};
+  return snapshotDataRecord(value) ?? {};
 }
 
 function setOptionalBoolean(target: JsonObject, key: string, value: boolean | undefined) {

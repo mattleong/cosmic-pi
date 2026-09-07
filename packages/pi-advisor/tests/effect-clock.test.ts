@@ -38,7 +38,7 @@ const makeRuntime = (
 ): Effect.Effect<AdvisorRuntime, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The runtime accepts the child Ref only through its lifecycle methods; this fixture starts with no child.
     return new AdvisorRuntime(
       makeTestChildFactory(overrides),
       standaloneAdvisorExecutor,
@@ -211,7 +211,7 @@ describe("advisor Effect clock boundaries", () => {
             Deferred.doneUnsafe(createStarted, Effect.void);
             return runPromise(Deferred.await(lateCreate));
           }
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          // SAFETY: Child creation ignores extension discovery metadata; no extensions are installed in this fixture.
           return Promise.resolve({ session: replacement, extensionsResult: {} as never });
         },
       });
@@ -231,7 +231,7 @@ describe("advisor Effect clock boundaries", () => {
       expect(runtime.childSession).toBe(replacement);
       expect(first.dispose).not.toHaveBeenCalled();
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Late-child cleanup uses only session disposal, not extension discovery metadata.
       yield* Deferred.succeed(lateCreate, { session: first, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(first.dispose).toHaveBeenCalledOnce();
@@ -276,7 +276,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(session.dispose).not.toHaveBeenCalled();
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Late-child cleanup uses only session disposal, not extension discovery metadata.
       yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(session.abort).not.toHaveBeenCalled();
@@ -319,7 +319,7 @@ describe("advisor Effect clock boundaries", () => {
       expect((yield* Fiber.join(startup)).message).toContain("startup timed out");
       yield* runtime.disposeEffect().pipe(provideBuiltLayer(advisorPlatformLayer));
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Late-child cleanup uses only session disposal, not extension discovery metadata.
       yield* Deferred.succeed(lateCreate, { session, extensionsResult: {} as never });
       yield* Deferred.await(lateDisposed);
       expect(session.abort).not.toHaveBeenCalled();
@@ -338,7 +338,7 @@ describe("advisor Effect clock boundaries", () => {
       const runtime = yield* makeRuntime({
         createChildModel: childModel,
         createTools: () => Promise.resolve([]),
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: Child creation ignores extension discovery metadata; no extensions are installed in this fixture.
         createSession: () => Promise.resolve({ session, extensionsResult: {} as never }),
       });
       yield* runtime.startEffect(runtimeOptions()).pipe(provideBuiltLayer(advisorPlatformLayer));
@@ -378,7 +378,7 @@ describe("advisor Effect clock boundaries", () => {
         createSession: () =>
           Promise.resolve({
             session: sessions.shift()!,
-            // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+            // SAFETY: Child creation ignores extension discovery metadata; no extensions are installed in this fixture.
             extensionsResult: {} as never,
           }),
       });
@@ -417,8 +417,7 @@ describe("advisor Effect clock boundaries", () => {
       yield* runtime.reprimeEffect("fresh").pipe(provideBuiltLayer(advisorPlatformLayer));
       expect(runtime.childSession).toBe(fresh);
       const interruptedFreshAbort = yield* Deferred.make<void>();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (fresh.abort as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      vi.mocked(fresh.abort).mockImplementationOnce(() =>
         runPromise(Deferred.await(interruptedFreshAbort)),
       );
       const interruptedAbort = yield* runtime

@@ -47,20 +47,15 @@ export const resolvePiModelSelector = (
   const trimmed = selector.trim();
   const lowered = trimmed.toLowerCase();
   const slash = trimmed.indexOf("/");
-  if (slash > 0 && slash < trimmed.length - 1) {
-    const exact = available.filter((model) => canonicalPiModelId(model) === trimmed);
-    const matched =
-      exact.length > 0
-        ? exact
-        : available.filter((model) => canonicalPiModelId(model).toLowerCase() === lowered);
-    if (matched.length === 1 && matched[0]) return { kind: "resolved", ...matched[0] };
-    if (matched.length > 1)
-      return { kind: "ambiguous", candidates: matched.map(canonicalPiModelId).sort() };
-    return { kind: "unknown", nearMatches: nearMatchesFor(trimmed, available) };
-  }
-  const exact = available.filter((model) => model.id === trimmed);
+  const comparisonKey =
+    slash > 0 && slash < trimmed.length - 1
+      ? canonicalPiModelId
+      : (model: PiCatalogModel) => model.id;
+  const exact = available.filter((model) => comparisonKey(model) === trimmed);
   const matched =
-    exact.length > 0 ? exact : available.filter((model) => model.id.toLowerCase() === lowered);
+    exact.length > 0
+      ? exact
+      : available.filter((model) => comparisonKey(model).toLowerCase() === lowered);
   if (matched.length === 1 && matched[0]) return { kind: "resolved", ...matched[0] };
   if (matched.length > 1)
     return { kind: "ambiguous", candidates: matched.map(canonicalPiModelId).sort() };

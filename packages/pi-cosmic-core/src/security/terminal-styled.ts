@@ -272,7 +272,7 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
       if (code >= 0x40 && code <= 0x7e) {
         if (character === "m" && !state.csiInvalid) emitSgr(state.csi);
         state.mode = "text";
-      } else if (code === 0x1b || isTerminalStringIntroducer(code) || code === 0x9b) {
+      } else if (code === 0x1b || TERMINAL_STRING_INTRODUCERS.has(code) || code === 0x9b) {
         state.mode = "text";
         processText(character, code);
       } else if (state.csi.length < MAX_SAFE_SGR_PARAMETER_LENGTH) state.csi += character;
@@ -281,9 +281,6 @@ export function sanitizeTerminalStyledFragments<Channel extends string>(
     return { channel: fragment.channel, text: output, reopenSgr };
   });
 }
-
-const isTerminalStringIntroducer = (code: number): boolean =>
-  code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f;
 
 /**
  * Remove terminal controls except bounded, allowlisted SGR colors/styles.

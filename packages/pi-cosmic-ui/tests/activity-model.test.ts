@@ -231,6 +231,34 @@ describe("activity ownership", () => {
     expect(retained.filter((value) => value.status === "done").length).toBeLessThanOrEqual(1024);
     expect(retained.filter((value) => value.status === "running")).toHaveLength(12);
   });
+  it("protects existing ancestors below a missing owner during retention", () => {
+    const owner = row("owner", "done", "missing");
+    const branch = row("branch", "done", "owner");
+    const live = row("live", "running", "branch");
+    const history = Array.from({ length: 120 }, (_, index) => row(`history-${index}`, "done"));
+    const retained = retainActivity([owner, branch, ...history], [live]);
+    expect(activityPath(retained, live.key).map((entry) => entry.id)).toEqual([
+      "owner",
+      "branch",
+      "live",
+    ]);
+    expect(retained.filter((entry) => entry.id.startsWith("history-"))).toHaveLength(100);
+  });
+  it("retains live descendants entering a cycle as independent roots", () => {
+    const cycle = [row("a", "done", "b"), row("b", "done", "a")];
+    const live = row("live", "running", "a");
+    const descendant = row("descendant", "running", "live");
+    const history = Array.from({ length: 100 }, (_, index) => row(`history-${index}`, "done"));
+    const retained = retainActivity([...cycle, ...history], [live, descendant]);
+    expect(retained.some((entry) => entry.id === "a" || entry.id === "b")).toBe(false);
+    expect(activityPath(retained, live.key)).toEqual([
+      retained.find((entry) => entry.key === live.key),
+    ]);
+    expect(activityPath([...cycle, live, descendant], descendant.key)).toEqual([descendant]);
+    expect(retained.filter((entry) => entry.status === "running").map((entry) => entry.id)).toEqual(
+      ["live", "descendant"],
+    );
+  });
   it("bounds finished root history and preserves retained history descendants", () => {
     const previous = Array.from({ length: 120 }, (_, index) => row(String(index), "done"));
     expect(retainActivity(previous, [])).toHaveLength(100);

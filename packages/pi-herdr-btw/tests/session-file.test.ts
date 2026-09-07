@@ -5,7 +5,6 @@ import { afterAll, describe, expect } from "vitest";
 import {
   compareSessionFileIdentity,
   createBlankChildSessionFile,
-  createChildSessionId,
   probeSessionHeader,
 } from "../src/boundary/session-file.ts";
 
@@ -203,14 +202,4 @@ describe("createBlankChildSessionFile", () => {
       ).toEqual({ _tag: "invalid" });
     }),
   );
-});
-
-describe("createChildSessionId", () => {
-  it("generates distinct Pi-compatible session IDs", () => {
-    const first = createChildSessionId();
-    const second = createChildSessionId();
-    expect(first).not.toBe(second);
-    for (const id of [first, second])
-      expect(id).toMatch(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u);
-  });
 });

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   acknowledgeAdvisorFindings,
+  advisorFindingId,
+  isValidAdvisorFindingRecord,
   emptyAdvisorFindingLifecycle,
   MAX_FINDING_LIFECYCLE_RECORDS,
   reconcileAdvisorFindings,
@@ -47,6 +49,38 @@ const finding: AdvisorFinding = {
 };
 
 describe("advisor finding lifecycle", () => {
+  test("rejects invalid numeric fields, turn order, and mismatched IDs", () => {
+    const lifecycle = lifecycleDriver();
+    lifecycle.reconcile([finding], 1);
+    const record = lifecycle.snapshot()[0]!;
+    for (const field of ["generation", "firstSeenTurn", "lastSeenTurn"] as const) {
+      for (const value of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        const invalid = { ...record, [field]: value };
+        if (field === "generation") invalid.id = advisorFindingId(record.key, value);
+        expect(isValidAdvisorFindingRecord(invalid)).toBe(false);
+        expect(restoreAdvisorFindingLifecycle([invalid]).records).toEqual([]);
+      }
+    }
+    expect(isValidAdvisorFindingRecord({ ...record, lastSeenTurn: 0 })).toBe(false);
+    expect(isValidAdvisorFindingRecord({ ...record, generation: 1 })).toBe(false);
+    expect(isValidAdvisorFindingRecord({ ...record, firstSeenTurn: 0 })).toBe(true);
+    expect(isValidAdvisorFindingRecord({ ...record, lastSeenTurn: Number.MAX_SAFE_INTEGER })).toBe(
+      true,
+    );
+  });
+
+  test("restores valid records among invalid inputs without accepting non-JSON extras", () => {
+    const lifecycle = lifecycleDriver();
+    lifecycle.reconcile([finding], 1);
+    const record = lifecycle.snapshot()[0]!;
+    const valid = { ...record, future: { nested: [true, null, "value"] } };
+    const invalid = [undefined, () => undefined, NaN, Infinity, 1n, Symbol("extra")].map(
+      (extra) => ({ ...record, extra }),
+    );
+    for (const value of invalid) expect(isValidAdvisorFindingRecord(value)).toBe(false);
+    expect(restoreAdvisorFindingLifecycle([...invalid, valid]).records).toEqual([valid]);
+  });
+
   test("keeps stable IDs and acknowledges only after delivery", () => {
     const lifecycle = lifecycleDriver();
     const first = lifecycle.reconcile([finding], 1);

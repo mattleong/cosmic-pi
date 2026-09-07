@@ -16,7 +16,7 @@ import type {
 import { agentSessionFixture } from "../support/agent-session.ts";
 import { tick } from "../support/async.ts";
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+// SAFETY: Session events only offer to this ingress; draining and shutdown belong to the untested mailbox owner.
 const makeIngress = <A>(offered: A[]): SynchronousIngress<A> =>
   ({
     offer: (value: A) => {
@@ -51,9 +51,9 @@ const makeCheckpoint = (epoch: number): ActiveCheckpointFinalization => ({
 describe("Advisor session event epoch ownership", () => {
   it("balances an accepted source event after a child rollover", () => {
     const offered: AdvisorChildEvent[] = [];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The stale-event path compares child identity without calling any session methods.
     const source = makeChild(1, {} as AgentSession, offered);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The successor supplies identity only; this test does not invoke its session.
     const successor = makeChild(2, {} as AgentSession);
     let epoch = 1;
     let activeChild: ActiveAdvisorChild | undefined = source;
@@ -69,7 +69,7 @@ describe("Advisor session event epoch ownership", () => {
       recordUsage: vi.fn(),
     });
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The text-delta observer reads event type and delta only; provider message metadata is omitted.
     events.observeChildEvent(source, {
       type: "message_update",
       assistantMessageEvent: { type: "text_delta", delta: "queued" },

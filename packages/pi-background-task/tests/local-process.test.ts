@@ -302,7 +302,7 @@ describe("local process boundary", () => {
     });
   });
 
-  it.effect("captures stdout, stderr, and exit", () =>
+  it.live("captures stdout, stderr, and exit", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -326,7 +326,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("returns only exit code and signal data after a successful spawn", () =>
+  it.live("returns only exit code and signal data after a successful spawn", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -340,7 +340,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("rejects a missing working directory", () =>
+  it.live("rejects a missing working directory", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -356,7 +356,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("redacts the command when Effect reports a spawn failure", () =>
+  it.live("redacts the command when Effect reports a spawn failure", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -377,7 +377,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("bounds ingress when a producer outruns log consumption", () =>
+  it.live("bounds ingress when a producer outruns log consumption", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -392,7 +392,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("keeps a chunk whole when it fits in the remaining byte budget", () =>
+  it.live("keeps a chunk whole when it fits in the remaining byte budget", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -419,7 +419,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("keeps queued output within the configured byte budget", () =>
+  it.live("keeps queued output within the configured byte budget", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -447,7 +447,7 @@ describe("local process boundary", () => {
     ),
   );
 
-  it.effect("settles after killing descendants that retain inherited pipes", () =>
+  it.live("settles after killing descendants that retain inherited pipes", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;
@@ -492,7 +492,7 @@ describe("local process boundary", () => {
     }),
   );
 
-  it.effect("force-terminates a running process", () =>
+  it.live("force-terminates a running process", () =>
     withLocalProcess(
       Effect.gen(function* () {
         const processes = yield* LocalProcess;

@@ -77,7 +77,7 @@ export function renderWithShiki(
   const language = normalizePreviewLanguageAlias(lang);
   const key = `${snapshot.theme}\0${language}\0${code.length}\0${hashString(code)}`;
   const cached = renderCache.get(key);
-  if (cached && isExactShikiCacheHit(cached, code)) {
+  if (cached && cached.source === code) {
     renderCache.delete(key);
     renderCache.set(key, cached);
     return cached.value;
@@ -133,13 +133,6 @@ export function getShikiStatus(): ShikiStatus {
     cacheLimit: codePreviewPerformanceConfig.cacheLimit,
     maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
   };
-}
-
-export function isExactShikiCacheHit(
-  cached: { readonly source: string } | undefined,
-  source: string,
-): boolean {
-  return cached?.source === source;
 }
 
 export function shouldSkipHighlight(text: string): boolean {

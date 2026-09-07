@@ -83,12 +83,6 @@ export const makeBackgroundTaskCodeModeHost = (
       deactivate();
       const sessionId = activation.sessionId;
       if (sessionId === undefined) return;
-      let owner:
-        | {
-            readonly activation: BackgroundTaskCodeModeActivation;
-            readonly capability: BackgroundTaskCodeModeCapability;
-          }
-        | undefined;
       const capability: BackgroundTaskCodeModeCapability = Object.freeze({
         version: BACKGROUND_TASK_CODE_MODE_VERSION,
         sessionId,
@@ -99,7 +93,7 @@ export const makeBackgroundTaskCodeModeHost = (
           maxOutputBytes: number,
         ) => {
           if (
-            current !== owner ||
+            current?.capability !== capability ||
             !invokeHostCallback(activation.tokenCurrent, false) ||
             !invokeHostCallback(activation.toolActive, false)
           ) {
@@ -140,8 +134,7 @@ export const makeBackgroundTaskCodeModeHost = (
           );
         },
       });
-      owner = Object.freeze({ activation, capability });
-      current = owner;
+      current = Object.freeze({ activation, capability });
     },
     deactivate,
     dispose: () => {

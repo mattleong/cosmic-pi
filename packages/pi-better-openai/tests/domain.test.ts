@@ -1,7 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -123,15 +125,21 @@ describe("OpenAI configuration and credentials", () => {
   });
 
   it.effect("interrupts a pending model-registry credential lookup", () => {
-    const pending = Effect.runPromise(Deferred.await(Deferred.makeUnsafe<string | undefined>()));
+    const pending = Deferred.makeUnsafe<string | undefined>();
     const store = documents();
     const ctx = context();
-    ctx.modelRegistry.getApiKeyForProvider = () => pending;
     return Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Deferred.succeed(pending, undefined));
+      const started = yield* Deferred.make<void>();
+      ctx.modelRegistry.getApiKeyForProvider = () => {
+        Deferred.doneUnsafe(started, Effect.void);
+        return Effect.runPromise(Deferred.await(pending));
+      };
       const fiber = yield* getCodexCredentials("/auth.json", ctx).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
-      expect(true).toBe(true);
+      const exit = yield* Fiber.await(fiber);
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     }).pipe(Effect.scoped, provideBuiltLayer(store.layer));
   });
 

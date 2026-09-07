@@ -84,10 +84,10 @@ export function editWithExternalEditor(
   signal: AbortSignal,
 ): Promise<string | undefined> {
   if (signal.aborted) return Promise.resolve(undefined);
-  const program = Effect.scoped(
-    Effect.flatMap(Layer.build(externalEditorLayer), (services) =>
-      Effect.provide(editWithExternalEditorEffect(tui, configuredCommand, value), services),
-    ),
+  const program = Effect.provide(
+    editWithExternalEditorEffect(tui, configuredCommand, value),
+    externalEditorLayer,
+    { local: true },
   );
   return Effect.runPromiseExit(program, { signal }).then((exit) => {
     if (Exit.isSuccess(exit)) return exit.value;

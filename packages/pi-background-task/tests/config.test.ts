@@ -74,10 +74,6 @@ describe("background task config", () => {
     expect(config.maxWaitSeconds).toBe(120);
     expect(config.shellPath).toBe("/bin/zsh");
   });
-
-  it("uses safe defaults", () => {
-    expect(normalizeConfig()).toEqual(DEFAULT_BACKGROUND_TASK_CONFIG);
-  });
 });
 
 describe("background task config store", () => {

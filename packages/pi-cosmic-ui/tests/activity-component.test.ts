@@ -1,23 +1,10 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import { ActivityComponent } from "../src/activity/component.ts";
-import {
-  activityKey,
-  registerActivityProvider,
-  type ActivityEvents,
-} from "../src/activity/protocol.ts";
-import {
-  ActivityService,
-  type ActivityActionRequest,
-  type ActivityError,
-} from "../src/activity/service.ts";
+import { activityKey } from "../src/activity/protocol.ts";
+import type { ActivityActionRequest } from "../src/activity/service.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { makeActivityHost } from "../src/boundary/host-activity.ts";
-import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 const row = (id: string): ActivityRow => ({
   id,
   key: activityKey("agents", id),
@@ -28,22 +15,6 @@ const row = (id: string): ActivityRow => ({
   generation: 1,
   providerId: "agents",
 });
-const events = (): ActivityEvents => {
-  const handlers = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
-  return {
-    on(name, handler) {
-      const listeners = handlers.get(name) ?? new Set();
-      listeners.add(handler);
-      handlers.set(name, listeners);
-      return () => {
-        listeners.delete(handler);
-      };
-    },
-    emit(name, value) {
-      for (const handler of handlers.get(name) ?? []) handler(value);
-    },
-  };
-};
 describe("activity presentation", () => {
   it("hides the widget after activity ends but keeps startup and awaited work visible", () => {
     const finished: ActivityRow[] = [
@@ -426,56 +397,4 @@ describe("activity presentation", () => {
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   });
-  it.effect(
-    "acknowledges providers only after a live widget factory installs and revokes on teardown",
-    () =>
-      Effect.gen(function* () {
-        const bus = events();
-        const pending: Array<Effect.Effect<void, ActivityError>> = [];
-        const host = makeActivityHost(extensionApiFixture({ events: bus }), (work) => {
-          pending.push(work);
-        });
-        let service: typeof ActivityService.Service | undefined;
-        service = yield* ActivityService.make({
-          publish: (rows) => {
-            if (service) host.publish(service, rows);
-          },
-          connect: host.bind,
-        });
-        let widget: Parameters<ExtensionContext["ui"]["setWidget"]>[1];
-        const ctx = extensionContextFixture({
-          mode: "tui",
-          sessionManager: { getSessionId: () => "session" },
-          ui: {
-            setWidget: (_key: string, value: typeof widget) => {
-              widget = value;
-            },
-          },
-        });
-        const availability: boolean[] = [];
-        const provider = registerActivityProvider(bus, {
-          sessionId: "session",
-          providerId: "agents",
-          snapshot: () => [row("a")],
-          invoke: () => Promise.resolve(),
-          onAvailability: (value) => {
-            availability.push(value);
-          },
-        });
-        host.activate(ctx, service);
-        expect(provider.isAvailable()).toBe(false);
-        if (!Predicate.isFunction(widget)) throw new Error("Widget was not installed");
-        // SAFETY: The widget factory only uses requestRender; it does not read theme values.
-        widget(
-          { requestRender() {} } as Parameters<typeof widget>[0],
-          {} as Parameters<typeof widget>[1],
-        );
-        while (pending.length) yield* pending.shift()!;
-        expect(provider.isAvailable()).toBe(true);
-        host.deactivate();
-        expect(provider.isAvailable()).toBe(false);
-        expect(availability).toEqual([true, false]);
-        provider.dispose();
-      }),
-  );
 });

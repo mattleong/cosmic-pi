@@ -53,7 +53,7 @@ const executePromise = <ParamsInput>(
 ) => {
   const tool = tools.find((candidate) => candidate.name === name);
   if (!tool) return Promise.reject(new Error(`missing ${name}`));
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: The selected read-only tool validates params at execution and does not use the omitted host context.
   return tool.execute("call", params as never, undefined, undefined, {} as never);
 };
 
@@ -166,7 +166,7 @@ describe("package-owned Advisor tools", () => {
           .then(() => symlink(outside, root, "dir")),
       );
       const read = tools.find((tool) => tool.name === "read");
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Read validates the path and supplied filesystem; this test never uses other host context capabilities.
       yield* Effect.promise(() =>
         expect(
           read?.execute("call", { path: "secret.txt" }, undefined, undefined, {} as never),
@@ -329,7 +329,7 @@ describe("package-owned Advisor tools", () => {
       const read = tools.find((tool) => tool.name === "read");
       const controller = new AbortController();
       controller.abort();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Read checks the aborted signal before accessing any host context capabilities.
       yield* Effect.promise(() =>
         expect(
           read?.execute("call", { path: "README.md" }, controller.signal, undefined, {} as never),

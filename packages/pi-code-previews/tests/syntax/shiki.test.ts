@@ -20,7 +20,7 @@ import {
   syntaxProjection,
 } from "../../src/syntax/projection";
 import { CodePreviewSyntaxService } from "../../src/syntax/service";
-import { getShikiStatus, isExactShikiCacheHit, renderWithShiki } from "../../src/syntax/render";
+import { getShikiStatus, renderWithShiki } from "../../src/syntax/render";
 
 const highlighter = (dispose: () => void) => {
   const fixture = {
@@ -70,13 +70,6 @@ const renderInSyntaxSession = (marker: string, rendered: () => void) => {
 };
 
 describe("session syntax service", () => {
-  it.effect("treats hashes as indexes and exact source as identity", () =>
-    Effect.sync(() => {
-      const cached = { source: "first" };
-      assert.equal(isExactShikiCacheHit(cached, "first"), true);
-      assert.equal(isExactShikiCacheHit(cached, "hash-collision"), false);
-    }),
-  );
   it.effect("shares initialization and captures a redacted resource span", () => {
     const captured = makeCapturedTracer();
     let created = 0;

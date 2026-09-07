@@ -17,7 +17,6 @@ import {
 } from "pi-cosmic-core";
 import { createCosmicFooterClient } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
-import type { ResolvedConfig } from "./config/schema.ts";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
   makeXaiApplicationLayer,
@@ -26,13 +25,12 @@ import {
   type XaiSessionInput,
 } from "./layer.ts";
 import { xaiUsageFooterPrimitive } from "./ui/primitives.ts";
-import { XaiBoundaryError, XaiUsageService } from "./usage/controller.ts";
+import { XaiUsageService } from "./usage/controller.ts";
 import { formatDebug } from "./usage/debug.ts";
 import {
   makeProjection,
   resetProjection,
   synchronizeProjectionContext,
-  type XaiProjection,
 } from "./usage/projection.ts";
 
 const XAI_STATUS_COMMAND = "xai-usage";
@@ -45,15 +43,6 @@ const defaultDependencies: BetterXaiExtensionDependencies = {
   startupEffect: () => XaiUsageService.use(() => Effect.void),
 };
 
-function requiredConfig(projection: MutableRef.MutableRef<XaiProjection>): ResolvedConfig {
-  const config = MutableRef.get(projection).config;
-  if (config) return config;
-  throw new XaiBoundaryError({
-    operation: "config",
-    message: "Better xAI session has not started.",
-  });
-}
-
 export function registerBetterXaiApplication(
   pi: ExtensionAPI,
   dependencies: BetterXaiExtensionDependencies = defaultDependencies,
@@ -62,7 +51,7 @@ export function registerBetterXaiApplication(
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-xai");
 
-  const config = (_ctx: ExtensionContext) => requiredConfig(projection);
+  const config = () => MutableRef.get(projection).config;
   const setStatus = makeSetStatusSafely("better-xai");
   let usageVisible = true;
   const isUsageVisible = () => {

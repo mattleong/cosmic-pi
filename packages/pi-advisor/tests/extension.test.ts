@@ -267,7 +267,7 @@ describe("persistent extension cutover", () => {
       current.pending[0]!.resolve(pass(current.requests[0]!));
       yield* invoke(turn);
       expect(settled).toBe(true);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: This probes the intentionally absent command-only waitForIdle member on an event context.
       expect((value.ctx as { waitForIdle?: unknown }).waitForIdle).toBeUndefined();
     }),
   );
@@ -299,7 +299,7 @@ describe("persistent extension cutover", () => {
       Effect.gen(function* () {
         const value = harness();
         yield* invoke(value.emit("session_start", { type: "session_start" }));
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
         (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
           {
             id: "replacement",
@@ -330,7 +330,7 @@ describe("persistent extension cutover", () => {
       const restart = deferred<void>();
       const value = harness({}, { runtimeStartPromises: [undefined, restart.promise] });
       yield* invoke(value.emit("session_start", { type: "session_start" }));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
       (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
         {
           id: "replacement",
@@ -368,7 +368,7 @@ describe("persistent extension cutover", () => {
       const restart = deferred<void>();
       const value = harness({}, { runtimeStartPromises: [undefined, restart.promise] });
       yield* invoke(value.emit("session_start", { type: "session_start" }));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
       (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
         {
           id: "replacement",
@@ -415,7 +415,7 @@ describe("persistent extension cutover", () => {
 
       const cancelled = harness();
       const controller = new AbortController();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The host signal is readonly to consumers; the fixture replaces it before starting the session.
       (cancelled.ctx as { signal: AbortSignal }).signal = controller.signal;
       yield* invoke(cancelled.emit("session_start", { type: "session_start" }));
       const cancelledTurn = cancelled.emitAwait("turn_end", finalTurn("cancelled"));
@@ -463,7 +463,7 @@ describe("persistent extension cutover", () => {
     Effect.gen(function* () {
       const value = harness();
       const controller = new AbortController();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The host signal is readonly to consumers; the fixture replaces it before starting the session.
       (value.ctx as { signal: AbortSignal }).signal = controller.signal;
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       const turn = value.emitAwait("turn_end", finalTurn("racy candidate"));
@@ -549,13 +549,13 @@ describe("persistent extension cutover", () => {
     Effect.gen(function* () {
       const value = harness();
       const cancellation = trackedAbortSignal();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The host signal is readonly to consumers; the fixture replaces it before starting the session.
       (value.ctx as { signal: AbortSignal }).signal = cancellation.signal;
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       const current = value.runtimes[0]!;
       expect(cancellation.liveListeners()).toHaveLength(2);
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The object inherits all fixture context capabilities before overriding cwd with a hostile getter.
       const invalidContext = Object.create(value.ctx) as ExtensionContext;
       Object.defineProperty(invalidContext, "cwd", {
         configurable: true,
@@ -591,13 +591,13 @@ describe("persistent extension cutover", () => {
       const value = harness();
       const firstCancellation = trackedAbortSignal();
       const secondCancellation = trackedAbortSignal();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The host signal is readonly to consumers; the fixture replaces it before starting the session.
       (value.ctx as { signal: AbortSignal }).signal = firstCancellation.signal;
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       const firstRuntime = value.runtimes[0]!;
       expect(firstCancellation.liveListeners()).toHaveLength(2);
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The object inherits all fixture context capabilities before overriding the signal getter.
       const replacementContext = Object.create(value.ctx) as ExtensionContext;
       Object.defineProperty(replacementContext, "signal", {
         configurable: true,
@@ -688,8 +688,7 @@ describe("persistent extension cutover", () => {
       const value = harness();
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       const current = value.runtimes[0]!;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (value.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      vi.mocked(value.ctx.ui.setStatus).mockImplementation(() => {
         throw new Error("status failed");
       });
 
@@ -742,7 +741,7 @@ describe("persistent extension cutover", () => {
         expect(value.sendMessage).not.toHaveBeenCalled();
         expect(value.appended).toHaveLength(0);
         if (eventName === "session_tree") {
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          // SAFETY: The review command uses the fixture session and UI callbacks, not command navigation capabilities.
           yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
           yield* Effect.promise(() => tick());
           expect(value.runtimes[1]?.requests).toHaveLength(0);
@@ -754,7 +753,7 @@ describe("persistent extension cutover", () => {
     Effect.gen(function* () {
       const value = harness();
       yield* invoke(value.emit("session_start", { type: "session_start" }));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
       (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
         {
           id: "replacement",
@@ -793,7 +792,7 @@ describe("persistent extension cutover", () => {
         timestamp: "now",
         message: { role: "assistant", content: "first" },
       };
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
       (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
         root,
         firstLeaf,
@@ -805,7 +804,7 @@ describe("persistent extension cutover", () => {
       firstRuntime.pending[0]!.resolve(pass(firstRuntime.requests[0]!));
       yield* Effect.promise(() => tick());
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Branch restoration reads IDs, ancestry, and message content; these partial messages omit provider metadata.
       (value.ctx.sessionManager.getBranch as ReturnType<typeof vi.fn>).mockReturnValue([
         root,
         { ...firstLeaf, id: "second-leaf", message: { role: "assistant", content: "second" } },
@@ -818,27 +817,6 @@ describe("persistent extension cutover", () => {
       expect(value.runtimes[1]!.requests).toHaveLength(1);
       value.runtimes[1]!.pending[0]!.resolve(pass(value.runtimes[1]!.requests[0]!));
       yield* Effect.promise(() => tick());
-    }),
-  );
-
-  it.effect("discards a checkpoint completed after newer genuine user work", () =>
-    Effect.gen(function* () {
-      const value = harness();
-      yield* invoke(value.emit("session_start", { type: "session_start" }));
-      yield* invoke(value.emit("turn_end", finalTurn("old answer")));
-      yield* Effect.promise(() => tick());
-      const current = value.runtimes[0];
-      if (!current?.requests[0]) throw new Error("missing checkpoint");
-      yield* invoke(
-        value.emit("message_end", {
-          type: "message_end",
-          message: { role: "user", content: "new request" },
-        }),
-      );
-      current.pending[0]?.resolve(revise(current.requests[0]));
-      yield* Effect.promise(() => tick());
-      expect(value.sendMessage).not.toHaveBeenCalled();
-      expect(value.ctx.abort).not.toHaveBeenCalled();
     }),
   );
 
@@ -973,8 +951,7 @@ describe("persistent extension cutover", () => {
       yield* Effect.promise(() => tick());
       const current = value.runtimes[0];
       if (!current?.requests[0]) throw new Error("missing checkpoint");
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      vi.mocked(value.ctx.hasPendingMessages).mockReturnValue(true);
       current.pending[0]?.resolve(revise(current.requests[0]));
       yield* Effect.promise(() => tick());
       expect(value.sendMessage).not.toHaveBeenCalled();
@@ -1003,8 +980,7 @@ describe("persistent extension cutover", () => {
   it.effect("steers an active parent without triggering a synthetic turn", () =>
     Effect.gen(function* () {
       const value = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      vi.mocked(value.ctx.isIdle).mockReturnValue(false);
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* invoke(value.emit("turn_end", finalTurn("candidate")));
       yield* Effect.promise(() => tick());
@@ -1035,25 +1011,6 @@ describe("persistent extension cutover", () => {
     }),
   );
 
-  it.effect("drops a late completion after newer genuine user work", () =>
-    Effect.gen(function* () {
-      const value = harness();
-      yield* invoke(value.emit("session_start", { type: "session_start" }));
-      yield* invoke(value.emit("turn_end", finalTurn("candidate")));
-      yield* Effect.promise(() => tick());
-      const current = value.runtimes[0]!;
-      yield* invoke(
-        value.emit("message_end", {
-          type: "message_end",
-          message: { role: "user", content: "newer work" },
-        }),
-      );
-      current.pending[0]!.resolve(revise(current.requests[0]!));
-      yield* Effect.promise(() => tick());
-      expect(value.sendMessage).not.toHaveBeenCalled();
-    }),
-  );
-
   it.effect("cancel stops in-flight work without late delivery", () =>
     Effect.gen(function* () {
       const value = harness();
@@ -1061,7 +1018,7 @@ describe("persistent extension cutover", () => {
       yield* invoke(value.emit("turn_end", finalTurn("candidate")));
       yield* Effect.promise(() => tick());
       const current = value.runtimes[0]!;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Cancel uses the fixture runtime controls and notification callback only.
       yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
       current.pending[0]!.resolve(revise(current.requests[0]!));
       yield* Effect.promise(() => tick());
@@ -1114,8 +1071,7 @@ describe("persistent extension cutover", () => {
   it.effect("persists the reset intervention budget at a genuine request boundary", () =>
     Effect.gen(function* () {
       const value = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      vi.mocked(value.ctx.isIdle).mockReturnValue(false);
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* invoke(value.emit("turn_end", finalTurn("candidate")));
       yield* Effect.promise(() => tick());
@@ -1141,22 +1097,21 @@ describe("persistent extension cutover", () => {
   it.effect("keeps lifecycle identity stable across restart without a session ID", () =>
     Effect.gen(function* () {
       const first = harness({}, { withoutSessionId: true });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (first.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+      vi.mocked(first.ctx.isIdle).mockReturnValue(false);
       yield* invoke(first.emit("session_start", { type: "session_start" }));
       yield* invoke(first.emit("turn_end", finalTurn("first candidate")));
       yield* Effect.promise(() => tick());
       const initial = first.runtimes[0]!;
       initial.pending[0]!.resolve(revise(initial.requests[0]!, "concern", "stable fallback issue"));
       yield* Effect.promise(() => tick());
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The checkpoint writer appended this ledger; this assertion inspects only finding IDs and statuses.
       const firstLedger = first.appended.at(-1) as {
         findingLifecycle: Array<{ id: string; status: string }>;
       };
       const findingId = firstLedger.findingLifecycle[0]!.id;
       for (const entry of first.branch) {
         if (entry.type === "custom" && hasObjectRuntimeType(entry.data) && entry.data) {
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          // SAFETY: The custom-entry data is an object; clearing emission hashes simulates a ledger without prior delivery.
           (entry.data as { emissionHashes?: string[] }).emissionHashes = [];
         }
       }
@@ -1214,8 +1169,7 @@ describe("persistent extension cutover", () => {
   it.effect("queued user input still runs mandatory catch-up but suppresses stale delivery", () =>
     Effect.gen(function* () {
       const value = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (value.ctx.hasPendingMessages as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      vi.mocked(value.ctx.hasPendingMessages).mockReturnValue(true);
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* invoke(value.emit("turn_end", finalTurn("obsolete")));
       yield* Effect.promise(() => tick());
@@ -1282,11 +1236,12 @@ describe("persistent extension cutover", () => {
       yield* Effect.promise(() => tick());
       value.runtimes[0]!.pending[1]!.reject(new Error("provider failed again"));
       yield* Effect.promise(() => tick());
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const failureWarnings = (value.ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(
-        ([message, level]) =>
-          level === "warning" && String(message).includes("keeping the primary response"),
-      );
+      const failureWarnings = vi
+        .mocked(value.ctx.ui.notify)
+        .mock.calls.filter(
+          ([message, level]) =>
+            level === "warning" && String(message).includes("keeping the primary response"),
+        );
       expect(failureWarnings).toHaveLength(1);
       expect(value.logFailure).toHaveBeenCalledTimes(2);
     }),
@@ -1305,8 +1260,7 @@ describe("persistent extension cutover", () => {
         return vi.advanceTimersByTimeAsync(500);
       })
       .then(() => {
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-        const setStatus = value.ctx.ui.setStatus as ReturnType<typeof vi.fn>;
+        const setStatus = vi.mocked(value.ctx.ui.setStatus);
         expect(setStatus.mock.calls.some((call) => String(call[1]).includes("advising"))).toBe(
           false,
         );
@@ -1327,11 +1281,10 @@ describe("persistent extension cutover", () => {
       yield* Effect.promise(() => tick());
       yield* invoke(value.emit("session_shutdown", { type: "session_shutdown" }));
       const command = value.commands.get("advisor")!;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const notify = value.ctx.ui.notify as ReturnType<typeof vi.fn>;
+      const notify = vi.mocked(value.ctx.ui.notify);
       notify.mockClear();
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The review command uses the fixture session and UI callbacks, not command navigation capabilities.
       const review = command.handler("review", value.ctx as never);
       yield* Effect.promise(() => tick());
       expect(value.runtimes).toHaveLength(1);

@@ -6,10 +6,10 @@ import {
   cloneProfileCandidates as cloneCandidates,
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
+  normalizeDeclaredProfileRoute,
   PROFILE_NATIVE_MODEL_DEFAULTS,
   profileCandidateValidationIssues,
   supportsSubagentFastMode,
-  type DeclaredProfileCandidate,
   type DeclaredProfileRoute,
   type ProfileCandidate,
   type ProfileCandidateValidationIssueCode,
@@ -68,16 +68,6 @@ export const runtimeEfforts = (
     ? supportedModelEfforts.filter((effort) => supportedByRuntime.includes(effort))
     : supportedByRuntime;
 };
-
-// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-const candidatesFromDeclaration = (
-  declared: DeclaredProfileRoute,
-): ReadonlyArray<ProfileCandidate> =>
-  declared === "disabled"
-    ? []
-    : Array.isArray(declared)
-      ? cloneCandidates(declared)
-      : [cloneCandidate(declared as DeclaredProfileCandidate)];
 
 const decodedAt = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
   scope === "global" ? inspection.global : inspection.project;
@@ -170,7 +160,7 @@ export function loadProfileRouteDraft(
       ? { kind: "reset", candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates) }
       : globalReferenceDraft(inspection, profile);
   if (declared === "disabled") return { kind: "disabled", candidates: [] };
-  return { kind: "explicit", candidates: candidatesFromDeclaration(declared) };
+  return { kind: "explicit", candidates: normalizeDeclaredProfileRoute(declared).candidates };
 }
 
 export const resetGlobalDraft = (profile: ProfileId): ProfileRouteDraft => ({
@@ -240,11 +230,10 @@ export const moveRouteCandidate = (
     target >= draft.candidates.length
   )
     return draft;
-  const candidates = cloneCandidates(draft.candidates);
-  const current = candidates[index];
-  const other = candidates[target];
+  const current = draft.candidates[index];
+  const other = draft.candidates[target];
   if (!current || !other) return draft;
-  const reordered = [...candidates];
+  const reordered = [...draft.candidates];
   reordered[index] = other;
   reordered[target] = current;
   return explicitDraft(reordered);
@@ -259,7 +248,7 @@ export const duplicateRouteCandidate = (
   if (!candidate) return draft;
   return explicitDraft([
     ...draft.candidates.slice(0, index + 1),
-    cloneCandidate(candidate),
+    candidate,
     ...draft.candidates.slice(index + 1),
   ]);
 };

@@ -10,13 +10,10 @@ import {
 import { makeDirectoryModelPreference } from "../src/config/schema.ts";
 
 describe("directory model host capture", () => {
-  it("accepts bounded model fields while ignoring unrelated host metadata", () => {
+  it("captures model fields and contains malformed or hostile host values", () => {
     expect(
       captureSelectedModel({ provider: "openai-codex", id: "gpt-5.6-sol", reasoning: true }),
     ).toEqual({ provider: "openai-codex", id: "gpt-5.6-sol" });
-  });
-
-  it("rejects malformed fields and contains hostile getters", () => {
     expect(captureSelectedModel({ provider: 42, id: "model" })).toBeUndefined();
     const hostile = Object.defineProperty({}, "provider", {
       enumerable: true,

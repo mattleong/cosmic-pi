@@ -302,6 +302,26 @@ describe("checkpoint ledger", () => {
     expect(parsed?.findingLifecycle).toEqual([valid]);
   });
 
+  test("drops invalid lifecycle numbers and non-JSON extras before writing", () => {
+    const valid = findingRecord(1);
+    const records = [
+      { ...valid, generation: -1, id: advisorFindingId(valid.key, -1) },
+      { ...valid, firstSeenTurn: 0.5 },
+      { ...valid, lastSeenTurn: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, lastSeenTurn: 0 },
+      { ...valid, extra: () => undefined },
+      { ...valid, extra: { nested: undefined } },
+      { ...valid, extra: { nested: [true, null] } },
+    ];
+    const ledger = createCheckpointLedger({
+      fingerprint: "a".repeat(64),
+      anchorId: "anchor",
+      findingLifecycle: records,
+    });
+    expect(ledger.findingLifecycle).toEqual([valid]);
+    expect(parseLedger(ledger)?.findingLifecycle).toEqual([valid]);
+  });
+
   test("normalizes routing values and caps bounded lifecycle state", () => {
     const ledger = createCheckpointLedger({
       fingerprint: "a".repeat(64),

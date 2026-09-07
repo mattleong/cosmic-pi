@@ -161,18 +161,17 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
   }
 };
 
-const query = <A extends QuestionnaireRelay>(
+export const queryQuestionnaireRelay = (
   events: QuestionnaireEvents,
   sessionId: string,
-  event: string,
-): A | undefined => {
-  let found: A | undefined;
+): QuestionnaireRelay | undefined => {
+  let found: QuestionnaireRelay | undefined;
   let accepting = true;
   try {
-    events.emit(event, {
+    events.emit(QUESTIONNAIRE_RELAY_QUERY, {
       version: 1,
       sessionId,
-      respond: (value: A) => {
+      respond: (value: QuestionnaireRelay) => {
         if (
           accepting &&
           value?.version === 1 &&
@@ -188,11 +187,6 @@ const query = <A extends QuestionnaireRelay>(
   accepting = false;
   return found;
 };
-export const queryQuestionnaireRelay = (
-  events: QuestionnaireEvents,
-  sessionId: string,
-): QuestionnaireRelay | undefined =>
-  query<QuestionnaireRelay>(events, sessionId, QUESTIONNAIRE_RELAY_QUERY);
 export const queryQuestionnaireCapability = (
   events: QuestionnaireEvents,
   sessionId: string,

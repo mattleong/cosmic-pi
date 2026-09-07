@@ -1,4 +1,3 @@
-import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import {
   ModelRuntime,
@@ -8,6 +7,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { mergeHeaders } from "pi-cosmic-core";
 import { snapshotData } from "../domain/safe-data.ts";
 import { ADVISOR_THINKING_LEVEL, type ResolvedAdvisorConfig } from "../config/options.ts";
 
@@ -42,22 +42,6 @@ const ParentAuthWireSchema = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
 ]);
 
-function resolveTransferredHeaders(
-  ...sources: ReadonlyArray<Readonly<ProviderHeaders> | undefined>
-): Record<string, string> {
-  const resolved = new Map<string, { readonly name: string; readonly value: string }>();
-  for (const source of sources) {
-    if (!source) continue;
-    for (const [name, value] of Object.entries(source)) {
-      const normalized = name.toLowerCase();
-      if (value === null) resolved.delete(normalized);
-      else resolved.set(normalized, { name, value });
-    }
-  }
-  return Object.fromEntries(
-    Array.from(resolved.values(), ({ name, value }) => [name, value] as const),
-  );
-}
 export interface AdvisorUsageTelemetry {
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -124,7 +108,7 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
         registeredProviderId === providerId && parentAuth.headers
           ? {
               ...provider,
-              headers: resolveTransferredHeaders(provider.headers, parentAuth.headers),
+              headers: mergeHeaders(provider.headers, parentAuth.headers),
             }
           : provider,
       );
@@ -133,7 +117,7 @@ export const createAdvisorChildModelEffect = Effect.fn("AdvisorClient.createChil
     if (!selectedProviderRegistered && (selectedProvider || parentAuth.headers)) {
       modelRuntime.registerProvider(providerId, {
         ...selectedProvider,
-        headers: resolveTransferredHeaders(selectedProvider?.headers, parentAuth.headers),
+        headers: mergeHeaders(selectedProvider?.headers, parentAuth.headers),
       });
     }
   });

@@ -28,7 +28,7 @@ import { XaiUsageService } from "../usage/controller.ts";
 export function registerSettingsController(
   pi: ExtensionAPI,
   options: {
-    config(ctx: ExtensionContext): ResolvedConfig;
+    config(ctx: ExtensionContext): ResolvedConfig | undefined;
     updateFooter(ctx: ExtensionContext): void;
     formatDebugStatus(ctx: ExtensionContext): string;
     captureSignal(ctx: ExtensionContext): CapturedHostSignal;
@@ -36,6 +36,7 @@ export function registerSettingsController(
   },
 ): void {
   const { config, updateFooter, formatDebugStatus, captureSignal, run } = options;
+  const readConfig = (ctx: ExtensionContext) => invokeHostCallback(() => config(ctx), undefined);
   const completeHostFeedback = (
     ctx: ExtensionContext,
     message: string,
@@ -55,12 +56,10 @@ export function registerSettingsController(
     const descriptor = SETTINGS_OPTION_DESCRIPTORS.find((entry) => entry.id === id);
     /** Current persisted projection value; undefined when the projection is unavailable. */
     const persistedValue = (): string | undefined => {
-      if (!descriptor) return undefined;
-      try {
-        return descriptor.currentValue(config(ctx));
-      } catch {
-        return undefined;
-      }
+      const cfg = readConfig(ctx);
+      return descriptor && cfg
+        ? invokeHostCallback(() => descriptor.currentValue(cfg), undefined)
+        : undefined;
     };
     // Snapshot before the write so an optimistic display can still be rolled back when the
     // projection becomes unavailable while the update is in flight.
@@ -96,12 +95,8 @@ export function registerSettingsController(
     const capturedSignal = captureSignal(ctx);
     if (capturedSignal._tag === "Unavailable")
       return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
-    let cfg: ResolvedConfig;
-    try {
-      cfg = config(ctx);
-    } catch {
-      return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
-    }
+    const cfg = readConfig(ctx);
+    if (!cfg) return completeHostFeedback(ctx, "Better xAI settings are unavailable.", "warning");
     const items = settingsItemsFromDescriptors(SETTINGS_OPTION_DESCRIPTORS, cfg);
     const pickerGenerations = settingsRowGenerations();
     return openSettingsSurfaceAtHostBoundary(
@@ -159,12 +154,8 @@ export function registerSettingsController(
     handler: (args, ctx) => {
       const dispatch = dispatchSettingsCommand(args, SETTINGS_OPTION_DESCRIPTORS);
       const showHelp = () => {
-        let cfg: ResolvedConfig | undefined;
-        try {
-          cfg = config(ctx);
-        } catch {
-          // Help remains useful before the session runtime has published its config.
-        }
+        // Help remains useful before the session runtime has published its config.
+        const cfg = readConfig(ctx);
         const lines = [
           "Better xAI settings",
           ...SETTINGS_OPTION_DESCRIPTORS.map((descriptor) => {

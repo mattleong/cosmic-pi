@@ -10,7 +10,6 @@ import {
   normalizeBackgroundTaskCodeModeCapability,
   normalizeBackgroundTaskCodeModeQuery,
 } from "../src/code-mode/protocol.ts";
-import { BACKGROUND_TASK_ACTIONS } from "../src/tools/schema.ts";
 
 const snapshot = {
   id: "task-1",
@@ -55,7 +54,7 @@ describe("Background Tasks Code Mode protocol", () => {
     }),
   );
 
-  it.effect("decodes every exact v1 input and output branch at its bounds", () =>
+  it.effect("accepts input fields at their bounds", () =>
     Effect.gen(function* () {
       const input = yield* decodeInput({
         action: "wait",
@@ -71,50 +70,6 @@ describe("Background Tasks Code Mode protocol", () => {
         force: false,
       });
       expect(input).toMatchObject({ action: "wait", afterCursor: Number.MAX_SAFE_INTEGER });
-
-      const decodedInputActions: string[] = [];
-      for (const action of BACKGROUND_TASK_ACTIONS) {
-        decodedInputActions.push((yield* decodeInput({ action })).action);
-      }
-      expect(decodedInputActions).toEqual(BACKGROUND_TASK_ACTIONS);
-
-      const outputs: ReadonlyArray<unknown> = [
-        { action: "start", text: "started", snapshot },
-        { action: "list", text: "listed", tasks: [snapshot] },
-        { action: "status", text: "status", snapshot },
-        {
-          action: "logs",
-          text: "logs",
-          logs: {
-            id: snapshot.id,
-            nextCursor: 2,
-            earliestAvailableCursor: 1,
-            droppedBytes: 0,
-            state: snapshot.state,
-          },
-        },
-        {
-          action: "wait",
-          text: "waited",
-          wait: {
-            id: snapshot.id,
-            outcome: "matched",
-            snapshot,
-            nextCursor: 2,
-            earliestAvailableCursor: 1,
-            droppedBytes: 0,
-            matchCursor: 2,
-          },
-        },
-        { action: "stop", text: "stopped", snapshot },
-        { action: "stop_all", text: "stopped all", tasks: [snapshot] },
-        { action: "clear", text: "cleared", removed: Number.MAX_SAFE_INTEGER },
-      ];
-      const decodedActions: string[] = [];
-      for (const output of outputs) {
-        decodedActions.push((yield* decodeOutput(output)).action);
-      }
-      expect(decodedActions).toEqual(BACKGROUND_TASK_ACTIONS);
     }),
   );
 

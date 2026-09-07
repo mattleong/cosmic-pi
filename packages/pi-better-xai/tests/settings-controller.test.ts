@@ -63,7 +63,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   let command: RegisteredCommand | undefined;
   let component: Component | undefined;
   let currentConfig = initialConfig();
-  let configAvailable = true;
+  let configAvailability: "available" | "throws" | "undefined" = "available";
   const requestRender = vi.fn();
   const updateFooter = vi.fn();
   const notify = vi.fn();
@@ -108,8 +108,8 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
 
   registerSettingsController(pi, {
     config: () => {
-      if (!configAvailable) throw new Error("projection unavailable");
-      return currentConfig;
+      if (configAvailability === "throws") throw new Error("projection unavailable");
+      return configAvailability === "available" ? currentConfig : undefined;
     },
     updateFooter,
     formatDebugStatus: () => "diagnostics",
@@ -140,8 +140,8 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
       usage: { ...currentConfig.usage, refreshIntervalMs },
     };
   };
-  const makeConfigUnavailable = () => {
-    configAvailable = false;
+  const makeConfigUnavailable = (mode: "throws" | "undefined" = "throws") => {
+    configAvailability = mode;
   };
 
   return {
@@ -152,7 +152,6 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     setRefreshInterval,
     notify,
     requestRender,
-    runImpl,
     updateFooter,
   };
 }
@@ -216,9 +215,9 @@ describe("Better xAI settings controller", () => {
     }),
   );
 
-  it.effect(
-    "warns on runtime rejection and uses the pre-edit fallback after a throwing notification",
-    () =>
+  it.effect.each(["throws", "undefined"] as const)(
+    "warns and restores the pre-edit value when config %s after runtime rejection",
+    (mode) =>
       Effect.gen(function* () {
         const write = deferred<StubRunResult>();
         const h = settingsHarness([() => write.promise]);
@@ -230,7 +229,7 @@ describe("Better xAI settings controller", () => {
 
         component.handleInput?.(input.enter);
         expect(renderedRow(component, "Usage refresh")).toContain("120000");
-        h.makeConfigUnavailable();
+        h.makeConfigUnavailable(mode);
         write.reject(new Error("runtime unavailable"));
         yield* Effect.promise(() =>
           vi.waitFor(() => {
@@ -247,16 +246,29 @@ describe("Better xAI settings controller", () => {
       }),
   );
 
-  it.effect("keeps pure command branches outside the runtime", () =>
+  it.effect("provides help, diagnostics, and validation feedback without session config", () =>
     Effect.gen(function* () {
       const h = settingsHarness([]);
 
+      h.makeConfigUnavailable("undefined");
       yield* Effect.promise(() => h.invoke("help"));
+      expect(h.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("usage.refreshIntervalMs"),
+        "info",
+      );
       yield* Effect.promise(() => h.invoke("diagnostics"));
+      expect(h.notify).toHaveBeenLastCalledWith("diagnostics", "info");
       yield* Effect.promise(() => h.invoke("unknown true"));
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("unknown"), "error");
       yield* Effect.promise(() => h.invoke("usage.refreshIntervalMs"));
-
-      expect(h.runImpl).not.toHaveBeenCalled();
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
+      yield* Effect.promise(() => h.invoke("usage.showResetTimes invalid"));
+      expect(h.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("usage.showResetTimes"),
+        "error",
+      );
+      yield* Effect.promise(() => h.invoke(""));
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
     }),
   );
 });

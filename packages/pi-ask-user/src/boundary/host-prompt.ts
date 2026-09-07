@@ -2,19 +2,19 @@ import * as Effect from "effect/Effect";
 
 /** Pi coalesces nested prompts into one start/end pair, not one pair per dialog. */
 export const makeAskUserPromptGate = () => {
-  let prompt: "idle" | "own" | "other" = "idle";
+  let promptActive = false;
   let own = false;
   const waiting = new Set<() => void>();
-  const canOpen = () => prompt === "idle" && !own;
+  const canOpen = () => !promptActive && !own;
   const wake = () => {
     if (canOpen()) for (const resume of waiting) resume();
   };
   return {
     started: () => {
-      prompt = own ? "own" : "other";
+      promptActive = true;
     },
     ended: () => {
-      prompt = "idle";
+      promptActive = false;
       wake();
     },
     canOpen,

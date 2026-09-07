@@ -11,28 +11,7 @@ type PreviewWindowPlan =
   | { kind: "head"; shown: number; hidden: number }
   | { kind: "split"; head: number; tail: number; shown: number; hidden: number };
 
-export function selectPreviewLines<T>(
-  lines: T[],
-  limit: number,
-): { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number } {
-  return collectPreviewEntries(lines, limit);
-}
-
-const PREVIEW_SPLIT_MIN_LIMIT = 8;
-
-function previewSplitCounts(limit: number) {
-  const head = Math.ceil(limit * 0.65);
-  return { head, tail: Math.max(1, limit - head - 1) };
-}
-
-function previewWindowPlan(total: number, limit: number): PreviewWindowPlan {
-  if (total <= limit || limit <= 0) return { kind: "all", shown: total, hidden: 0 };
-  if (limit < PREVIEW_SPLIT_MIN_LIMIT) return { kind: "head", shown: limit, hidden: total - limit };
-  const { head, tail } = previewSplitCounts(limit);
-  return { kind: "split", head, tail, shown: head + tail, hidden: total - head - tail };
-}
-
-function collectPreviewEntries<T>(lines: T[], limit: number) {
+export function selectPreviewLines<T>(lines: T[], limit: number) {
   const total = lines.length;
   const plan = previewWindowPlan(total, limit);
   const entries: Array<PreviewLineEntry<T>> = [];
@@ -60,6 +39,20 @@ function collectPreviewEntries<T>(lines: T[], limit: number) {
     }
   }
   return { entries, shown: plan.shown, hidden: plan.hidden };
+}
+
+const PREVIEW_SPLIT_MIN_LIMIT = 8;
+
+function previewSplitCounts(limit: number) {
+  const head = Math.ceil(limit * 0.65);
+  return { head, tail: Math.max(1, limit - head - 1) };
+}
+
+function previewWindowPlan(total: number, limit: number): PreviewWindowPlan {
+  if (total <= limit || limit <= 0) return { kind: "all", shown: total, hidden: 0 };
+  if (limit < PREVIEW_SPLIT_MIN_LIMIT) return { kind: "head", shown: limit, hidden: total - limit };
+  const { head, tail } = previewSplitCounts(limit);
+  return { kind: "split", head, tail, shown: head + tail, hidden: total - head - tail };
 }
 
 export function selectPreviewTextLines(text: string, limit: number) {

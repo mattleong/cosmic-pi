@@ -12,6 +12,7 @@ import {
   SUBAGENT_CONFIG_VERSION,
 } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
+import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
 import {
   isLocalPiProfileCandidate,
@@ -26,6 +27,52 @@ import {
 } from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
+
+describe("Pi catalog selector classification", () => {
+  const catalog = [
+    { provider: "p", id: "Model" },
+    { provider: "p", id: "model" },
+  ];
+  it("prefers exact spelling and reports case-insensitive collisions", () => {
+    expect(resolvePiModelSelector("p/Model", catalog)).toMatchObject({
+      kind: "resolved",
+      id: "Model",
+    });
+    expect(resolvePiModelSelector("Model", catalog)).toMatchObject({
+      kind: "resolved",
+      id: "Model",
+    });
+    for (const selector of ["MODEL", "P/MODEL"])
+      expect(resolvePiModelSelector(selector, catalog)).toEqual({
+        kind: "ambiguous",
+        candidates: ["p/Model", "p/model"],
+      });
+  });
+  it("does not hide duplicate catalog entries", () => {
+    for (const selector of ["Model", "p/Model"])
+      expect(resolvePiModelSelector(selector, [catalog[0]!, catalog[0]!])).toEqual({
+        kind: "ambiguous",
+        candidates: ["p/Model", "p/Model"],
+      });
+  });
+  it("returns bounded sorted near matches without resolving a substring", () => {
+    const models = Array.from({ length: 10 }, (_, index) => ({
+      provider: "p",
+      id: `model-${9 - index}`,
+    }));
+    expect(resolvePiModelSelector("model", models)).toEqual({
+      kind: "unknown",
+      nearMatches: models
+        .map(({ provider, id }) => `${provider}/${id}`)
+        .sort()
+        .slice(0, 6),
+    });
+    expect(resolvePiModelSelector("unrelated", models)).toEqual({
+      kind: "unknown",
+      nearMatches: [],
+    });
+  });
+});
 
 const document = <Value extends object>(value?: Value): Schema.MutableJsonObject => {
   // SAFETY: Call sites provide JSON-shaped test fixtures; the schema below owns their decode.

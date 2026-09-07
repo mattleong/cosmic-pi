@@ -21,7 +21,7 @@ import {
   type HostCallbackBoundaryContract,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import { createSettingsListSurface } from "../manager/settings-surface.ts";
+import { createSettingsListSurface, settingsRowGenerations } from "../manager/settings-surface.ts";
 import { decodeUnknownOrUndefined } from "../schema/decode.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
@@ -125,7 +125,7 @@ export function registerSettingsCommand(
       const abort = snapshotHostAbortSignal(options.callbacks, () => ctx.signal);
       const signal = abort?.signal;
       const cfg = options.config();
-      const generations = new Map<string, number>();
+      const generations = settingsRowGenerations();
       const items: SettingItem[] = [
         {
           id: "enabled",
@@ -177,26 +177,25 @@ export function registerSettingsCommand(
                 onChange: (id, value, list) => {
                   const change = decodeCosmicUiSettingChange(id, value);
                   if (!change) return;
-                  const generation = (generations.get(id) ?? 0) + 1;
-                  generations.set(id, generation);
+                  const generation = generations.begin(id);
                   const settle = (failed: boolean) => {
-                    if (generations.get(id) !== generation) return;
+                    if (!generations.isCurrent(id, generation)) return;
                     const authoritative = hostQuery<string | undefined>(
                       () => projectedSettingValue(options.config(), id),
                       undefined,
                     );
-                    if (authoritative !== undefined && generations.get(id) === generation)
+                    if (authoritative !== undefined && generations.isCurrent(id, generation))
                       options.callbacks.invoke(
                         "request-render",
                         () => {
-                          if (generations.get(id) !== generation) return;
+                          if (!generations.isCurrent(id, generation)) return;
                           list.updateValue(id, authoritative);
                           options.update(ctx);
                           tui.requestRender();
                         },
                         undefined,
                       );
-                    if (failed && generations.get(id) === generation)
+                    if (failed && generations.isCurrent(id, generation))
                       notify("Unable to update Cosmic UI configuration.", "error");
                   };
                   const update = CosmicUiService.use((service) =>

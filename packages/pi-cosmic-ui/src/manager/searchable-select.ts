@@ -7,11 +7,10 @@ import {
   type SelectItem,
   SelectList,
   truncateToWidth,
-  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "./chrome.ts";
-import { padListDetailRow } from "./list-detail.ts";
+import { framedFill, framedScreen, listDetailFrame } from "./list-detail-shell.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import {
   FULL_SCREEN_NAVIGATION_SHORTCUTS,
@@ -112,9 +111,9 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.input.focused = value && this.searchMode;
   }
 
-  private resolveListHeight(extraReservedRows = 0): number {
+  private resolveListHeight(): number {
     const height = this.options.getHeight();
-    return Math.max(1, height < 10 ? height - 3 : height - 10 - extraReservedRows);
+    return Math.max(1, height < 10 ? height - 3 : height - 10);
   }
 
   private resizeList(height: number): void {
@@ -153,12 +152,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const preferredIndex = this.selectedIdentity
       ? this.filtered.findIndex((choice) => choice.value === this.selectedIdentity)
       : -1;
-    const currentIndex =
-      preferredIndex < 0 && this.selectedIdentity === undefined && this.options.current
-        ? this.filtered.findIndex((choice) => choice.value === this.options.current)
-        : -1;
-    const selectedIndex = preferredIndex >= 0 ? preferredIndex : currentIndex;
-    if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
+    if (preferredIndex >= 0) list.setSelectedIndex(preferredIndex);
     return list;
   }
 
@@ -307,11 +301,15 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const theme = this.options.theme;
     const inner = safeWidth - 2;
     const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
-    const top = `${theme.fg("borderAccent", "╭")}${title}${theme.fg(
-      "borderAccent",
-      `${"─".repeat(Math.max(0, inner - visibleWidth(title)))}╮`,
-    )}`;
-    if (height === 1) return [truncateToWidth(top, safeWidth, "")];
+    const frame = listDetailFrame(theme);
+    if (height === 1)
+      return framedScreen(frame, {
+        width: safeWidth,
+        height,
+        top: title,
+        bottom: "",
+        body: () => [],
+      });
     const activeNotice = this.feedback ?? this.options.notice;
     const body: string[] = [];
     if (height < 10) {
@@ -372,23 +370,13 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       body.push(...header, ...this.list.render(inner).slice(0, desiredListHeight));
     }
 
-    const footer = this.footer(inner);
-    const bottom = `${theme.fg("borderAccent", "╰")}${theme.fg(
-      "borderAccent",
-      "─".repeat(Math.max(0, inner - visibleWidth(footer))),
-    )}${footer}${theme.fg("borderAccent", "╯")}`;
-    const bodyHeight = Math.max(0, height - 2);
-    const framed = body
-      .slice(0, bodyHeight)
-      .map(
-        (line) =>
-          `${theme.fg("borderAccent", "│")}${padListDetailRow(line, inner)}${theme.fg("borderAccent", "│")}`,
-      );
-    while (framed.length < bodyHeight)
-      framed.push(
-        `${theme.fg("borderAccent", "│")}${" ".repeat(inner)}${theme.fg("borderAccent", "│")}`,
-      );
-    return [truncateToWidth(top, safeWidth, ""), ...framed, truncateToWidth(bottom, safeWidth, "")];
+    return framedScreen(frame, {
+      width: safeWidth,
+      height,
+      top: title,
+      bottom: this.footer(inner),
+      body: (bodyHeight) => framedFill(frame, body, bodyHeight, inner),
+    });
   }
 
   invalidate(): void {

@@ -42,7 +42,7 @@ const PaneSchema = Schema.Struct({
   agent_session: Schema.optional(Schema.NullOr(SessionInfoSchema)),
 });
 const ProtocolSchema = Schema.Struct({
-  protocol: Schema.Number.check(Schema.isInt()),
+  protocol: Schema.Int,
 });
 const PaneEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({ pane: PaneSchema }),
@@ -53,8 +53,8 @@ const LayoutEnvelopeSchema = Schema.Struct({
       workspace_id: BoundedId,
       tab_id: BoundedId,
       area: Schema.Struct({
-        width: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
-        height: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+        width: Schema.Int.check(Schema.isGreaterThan(0)),
+        height: Schema.Int.check(Schema.isGreaterThan(0)),
       }),
     }),
   }),
@@ -65,7 +65,7 @@ const AgentEnvelopeSchema = Schema.Struct({
 const SnapshotEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({
     snapshot: Schema.Struct({
-      protocol: Schema.Number.check(Schema.isInt()),
+      protocol: Schema.Int,
       agents: Schema.Array(PaneSchema).check(Schema.isMaxLength(4_096)),
     }),
   }),
@@ -74,16 +74,14 @@ const PaneProcessInfoEnvelopeSchema = Schema.Struct({
   result: Schema.Struct({
     process_info: Schema.Struct({
       pane_id: BoundedId,
-      shell_pid: Schema.optional(
-        Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
-      ),
+      shell_pid: Schema.optional(Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0)))),
       foreground_process_group_id: Schema.optional(
-        Schema.NullOr(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
+        Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
       ),
       foreground_processes: Schema.optional(
         Schema.Array(
           Schema.Struct({
-            pid: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)),
+            pid: Schema.Int.check(Schema.isGreaterThan(0)),
             name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
           }),
         ),

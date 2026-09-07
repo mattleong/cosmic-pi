@@ -183,7 +183,7 @@ describe("Advisor local review cards", () => {
       },
       { id: "3", type: "custom", customType: ADVISOR_REVIEW_CARD_TYPE, data: second },
     ];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: Card lookup reads only sessionManager.getBranch; no other host capabilities are used.
     const ctx = { sessionManager: { getBranch: () => branch } } as never;
     expect(latestOpenAdvisorReviewCardAtHostBoundary(ctx)).toEqual(second);
     branch.push({

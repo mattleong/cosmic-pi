@@ -1,22 +1,21 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { ImageOutputFormatSchema } from "../config/schema.ts";
 import type { ExtractedImageResult, ImageAction, ImageInput, ImageOutputFormat } from "./types.ts";
 
-const ImageGenerationItemFields = {
+const ImageGenerationItemSchema = Schema.Struct({
   type: Schema.Literal("image_generation_call"),
   id: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   revised_prompt: Schema.optional(Schema.String),
   result: Schema.optional(Schema.String),
   b64_json: Schema.optional(Schema.String),
-};
-const ImageGenerationItemSchema = Schema.Struct(ImageGenerationItemFields);
+});
 const CompletedEventSchema = Schema.Struct({
   type: Schema.Literal("response.output_item.done"),
   item: ImageGenerationItemSchema,
 });
-const ItemEventSchema = Schema.Struct(ImageGenerationItemFields);
 const PartialEventSchema = Schema.Struct({
   type: Schema.optional(Schema.String),
   partial_image_b64: Schema.optional(Schema.String),
@@ -81,7 +80,7 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
     return normalizeImageItem(event.item, fallbackMimeType, fallbackId);
   }
   if (discriminant.type === "image_generation_call") {
-    const item = yield* Schema.decodeUnknownEffect(ItemEventSchema)(value);
+    const item = yield* Schema.decodeUnknownEffect(ImageGenerationItemSchema)(value);
     return normalizeImageItem(item, fallbackMimeType, fallbackId);
   }
   if (discriminant.type === "response.failed") {
@@ -139,7 +138,7 @@ export const ImageRequestSchema = Schema.Struct({
   tools: Schema.Array(
     Schema.Struct({
       type: Schema.Literal("image_generation"),
-      output_format: Schema.Literals(["png", "jpeg", "webp"]),
+      output_format: ImageOutputFormatSchema,
       action: Schema.optional(Schema.Literals(["generate", "edit"])),
     }),
   ),
@@ -159,10 +158,9 @@ export function buildImageRequest(values: {
   readonly outputFormat: ImageOutputFormat;
   readonly images: readonly ImageInput[];
 }): ImageRequest {
-  const content: Array<
-    | { readonly type: "input_text"; readonly text: string }
-    | { readonly type: "input_image"; readonly detail: "auto"; readonly image_url: string }
-  > = [{ type: "input_text", text: values.prompt }];
+  const content: Array<typeof InputContentSchema.Type> = [
+    { type: "input_text", text: values.prompt },
+  ];
   for (const image of values.images) {
     content.push({
       type: "input_image",

@@ -79,7 +79,7 @@ export interface LocalProcessContract {
   ) => Effect.Effect<LocalProcessHandle, LocalProcessError, Scope.Scope>;
 }
 
-const processError = <ErrorInput>(operation: string, _error: ErrorInput) =>
+const processError = (operation: string) =>
   new LocalProcessError({
     operation,
     reason:
@@ -159,8 +159,8 @@ export const terminateWindowsTree = (
         ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
         { stdio: "ignore", windowsHide: true },
       );
-    } catch (error) {
-      resume(Effect.fail(processError("terminate", error)));
+    } catch {
+      resume(Effect.fail(processError("terminate")));
       return Effect.void;
     }
     // Keep acquisition and listener/finalizer handoff in this synchronous callback.
@@ -194,22 +194,20 @@ export const terminateWindowsTree = (
       settled = true;
       const detached = removeListeners();
       if (!detached) cleanup();
-      resume(
-        result === 0 && detached ? Effect.void : Effect.fail(processError("terminate", result)),
-      );
+      resume(result === 0 && detached ? Effect.void : Effect.fail(processError("terminate")));
     };
     try {
       killer.on("exit", settle);
       killer.on("error", settle);
-    } catch (error) {
+    } catch {
       cleanup();
-      resume(Effect.fail(processError("terminate", error)));
+      resume(Effect.fail(processError("terminate")));
     }
     return Effect.sync(cleanup);
   }).pipe(
     Effect.timeoutOrElse({
       duration: "2 seconds",
-      orElse: () => Effect.fail(processError("terminate", "taskkill timed out")),
+      orElse: () => Effect.fail(processError("terminate")),
     }),
   );
 
@@ -249,7 +247,6 @@ export const makeWindowsTreeTermination = (
   });
 
 const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
-  if (process.platform === "win32") return terminateWindowsTree(pid).pipe(Effect.ignore);
   return Effect.sync(() => {
     try {
       process.kill(-pid, "SIGKILL");
@@ -265,7 +262,7 @@ const verifyCwd = (
 ) =>
   Effect.tryPromise({
     try: () => inspect(cwd),
-    catch: (error) => processError("inspect working directory", error),
+    catch: () => processError("inspect working directory"),
   }).pipe(
     Effect.flatMap((info) =>
       info.isDirectory()
@@ -306,9 +303,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
     killSignal: "SIGTERM",
     forceKillAfter: 1_000,
   });
-  const child = yield* spawner
-    .spawn(command)
-    .pipe(Effect.mapError((error) => processError("spawn", error)));
+  const child = yield* spawner.spawn(command).pipe(Effect.mapError(() => processError("spawn")));
   const pid = Number(child.pid);
   const windowsTermination =
     process.platform === "win32" ? yield* makeWindowsTreeTermination(pid) : undefined;
@@ -394,19 +389,19 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
   const forceTermination = windowsTermination
     ? windowsTermination("force")
     : child.isRunning.pipe(
-        Effect.catch(() => Effect.succeed(true)),
+        Effect.orElseSucceed(() => true),
         Effect.flatMap((running) =>
           running
             ? child.kill({ killSignal: "SIGKILL" }).pipe(
                 Effect.timeoutOrElse({
                   duration: "2 seconds",
-                  orElse: () => Effect.fail(processError("terminate", "cleanup timed out")),
+                  orElse: () => Effect.fail(processError("terminate")),
                 }),
               )
             : terminateLingeringGroup(pid),
         ),
         Effect.mapError((error) =>
-          error instanceof LocalProcessError ? error : processError("terminate", error),
+          error instanceof LocalProcessError ? error : processError("terminate"),
         ),
       );
   const terminate = (mode: "graceful" | "force") =>
@@ -414,10 +409,7 @@ const acquireProcess = Effect.fn("LocalProcess.acquire")(function* (
       ? forceTermination
       : windowsTermination
         ? windowsTermination("graceful")
-        : Effect.try({
-            try: () => dispatchGracefulTermination(pid),
-            catch: (error) => processError("terminate", error),
-          });
+        : Effect.sync(() => dispatchGracefulTermination(pid));
 
   const output = Stream.fromQueue(outputQueue).pipe(
     Stream.mapEffect((event) =>

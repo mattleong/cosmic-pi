@@ -23,6 +23,7 @@ export {
   type SubscriptionRefresh,
   type SubscriptionRefreshOptions,
 } from "./src/coordination/subscription-refresh.ts";
+export { mergeHeaders } from "./src/http/headers.ts";
 export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory } from "./src/platform/agent-directory.ts";
 export { SafeFile, type SafeFileResult, type SafeFileContract } from "./src/platform/safe-file.ts";

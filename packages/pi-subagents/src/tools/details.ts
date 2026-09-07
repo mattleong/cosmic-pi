@@ -508,12 +508,13 @@ const projectActionFailures = (
   });
 };
 
-const semanticCandidate = <Candidate, Details>(
-  candidates: ReadonlyArray<Candidate>,
+const semanticCandidate = <Stage, Candidate, Details>(
+  stages: ReadonlyArray<Stage>,
+  project: (stage: Stage) => Candidate,
   decode: (candidate: Candidate) => Details | undefined,
 ): Details => {
-  for (const candidate of candidates) {
-    const decoded = decode(candidate);
+  for (const stage of stages) {
+    const decoded = decode(project(stage));
     if (decoded !== undefined) return decoded;
   }
   throw new Error("Unable to construct bounded persisted subagent details.");
@@ -540,11 +541,8 @@ const startDetailsCandidate = (
 /** Makes strict version-2 start details. Start details never persist run cards. */
 export const makeStartDetails = (input: StartDetailsInput): SubagentStartDetails =>
   semanticCandidate(
-    [
-      startDetailsCandidate(input, "full"),
-      startDetailsCandidate(input, "compact"),
-      startDetailsCandidate(input, "minimal"),
-    ],
+    DENSITY_ORDER,
+    (density) => startDetailsCandidate(input, density),
     (value) => {
       const decoded = decodeStartAwaitCardDetails(value);
       return decoded?.action === "start" ? decoded : undefined;
@@ -601,12 +599,8 @@ const awaitCandidate = (
 /** Makes strict version-2 await details with semantic fitting stages. */
 export const makeAwaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails =>
   semanticCandidate(
-    [
-      awaitCandidate(input, "full", true),
-      awaitCandidate(input, "full", false),
-      awaitCandidate(input, "compact", false),
-      awaitCandidate(input, "minimal", false),
-    ],
+    ["reports", ...DENSITY_ORDER] as const,
+    (stage) => awaitCandidate(input, stage === "reports" ? "full" : stage, stage === "reports"),
     (value) => {
       const decoded = decodeStartAwaitCardDetails(value);
       return decoded?.action === "await" ? decoded : undefined;
@@ -662,17 +656,14 @@ export const makeCompactToolDetails = (
 ): CompactSubagentToolDetails => {
   if (input.action === "models")
     return semanticCandidate(
-      DENSITY_ORDER.map((density) => modelDetailsCandidate(input, density)),
+      DENSITY_ORDER,
+      (density) => modelDetailsCandidate(input, density),
       decodeCompactToolDetails,
     );
-  const withReports = input.action === "status";
   return semanticCandidate(
-    [
-      runDetailsCandidate(input, "full", withReports),
-      runDetailsCandidate(input, "full", false),
-      runDetailsCandidate(input, "compact", false),
-      runDetailsCandidate(input, "minimal", false),
-    ],
+    input.action === "status" ? (["reports", ...DENSITY_ORDER] as const) : DENSITY_ORDER,
+    (stage) =>
+      runDetailsCandidate(input, stage === "reports" ? "full" : stage, stage === "reports"),
     decodeCompactToolDetails,
   );
 };

@@ -13,31 +13,20 @@ import {
 
 const borrowOutput = (result: BackgroundTaskCommandResult): BackgroundTaskCodeModeOutput => {
   const details = result.details;
-  switch (details.action) {
-    case "start":
-    case "status":
-    case "stop":
-      return { action: details.action, text: result.text, snapshot: details.snapshot };
-    case "list":
-    case "stop_all":
-      return { action: details.action, text: result.text, tasks: details.tasks };
-    case "logs":
-      return {
-        action: details.action,
-        text: result.text,
-        logs: {
-          id: details.logs.id,
-          nextCursor: details.logs.nextCursor,
-          earliestAvailableCursor: details.logs.earliestAvailableCursor,
-          droppedBytes: details.logs.droppedBytes,
-          state: details.logs.state,
-        },
-      };
-    case "wait":
-      return { action: details.action, text: result.text, wait: details.wait };
-    case "clear":
-      return { action: details.action, text: result.text, removed: details.removed };
+  if (details.action === "logs") {
+    return {
+      action: details.action,
+      text: result.text,
+      logs: {
+        id: details.logs.id,
+        nextCursor: details.logs.nextCursor,
+        earliestAvailableCursor: details.logs.earliestAvailableCursor,
+        droppedBytes: details.logs.droppedBytes,
+        state: details.logs.state,
+      },
+    };
   }
+  return { text: result.text, ...details };
 };
 
 /**

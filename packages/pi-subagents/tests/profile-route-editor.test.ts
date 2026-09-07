@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
-import { isNativeProfileModelSelector, type ProfileCandidate } from "../src/profiles/model.ts";
+import {
+  isNativeProfileModelSelector,
+  type DeclaredProfileRoute,
+  type ProfileCandidate,
+} from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   addRouteCandidate,
@@ -39,9 +43,7 @@ const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): Pr
 
 interface InspectionDocumentSeed {
   readonly version: number;
-  readonly profiles?: Readonly<
-    Record<string, ProfileCandidate | ReadonlyArray<ProfileCandidate> | "disabled">
-  >;
+  readonly profiles?: Readonly<Record<string, DeclaredProfileRoute>>;
 }
 
 const inspection = (
@@ -118,6 +120,27 @@ describe("ordered profile-route editor state", () => {
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
     expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
+  });
+
+  it("normalizes omitted retention defaults without mutating the declaration", () => {
+    const declared = {
+      host: "local",
+      runtime: "pi",
+      model: "parent",
+      effort: "default",
+      context: "fresh",
+      writeIntent: "read-only",
+    } as const;
+    const value = inspection({ version: 4, profiles: { worker: declared } });
+    const before = structuredClone(value.global.file);
+    const draft = loadProfileRouteDraft(
+      value,
+      { kind: "profile-set", set: { scope: "global", name: "default" } },
+      "worker",
+    );
+    expect(draft.candidates[0]).toMatchObject({ ...declared, closeOnReport: true });
+    expect(value.global.file).toEqual(before);
+    expect(declared).not.toHaveProperty("closeOnReport");
   });
 
   it("loads session overrides as explicit routes and resets to the active base", () => {
@@ -290,6 +313,17 @@ describe("ordered profile-route editor state", () => {
     draft = removeRouteCandidate(removeRouteCandidate(draft, 2), 1);
     draft = removeRouteCandidate(draft, 0);
     expect(draft).toEqual({ kind: "disabled", candidates: [] });
+  });
+
+  it("leaves input routes unchanged and clones duplicated candidates independently", () => {
+    const original: ProfileRouteDraft = { kind: "explicit", candidates: threeRoute };
+    const before = structuredClone(original);
+    const moved = moveRouteCandidate(original, 0, "down");
+    const duplicated = duplicateRouteCandidate(moved, 0)!;
+    expect(original).toEqual(before);
+    expect(duplicated.candidates[0]).toEqual(duplicated.candidates[1]);
+    expect(duplicated.candidates[0]).not.toBe(duplicated.candidates[1]);
+    for (const entry of duplicated.candidates) expect(original.candidates).not.toContain(entry);
   });
 
   it("enforces the 32-candidate bound for add and duplicate", () => {

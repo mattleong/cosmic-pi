@@ -261,20 +261,6 @@ const linkedAgentSessionIdentity = (
   return compareSessionFileIdentity(session.value, childSessionPath);
 };
 
-/** Matches stable Herdr metadata to the recorded child filesystem identity. */
-const hasLinkedAgentSessionIdentity = (
-  agent: HerdrPane,
-  childSessionId: string,
-  childSessionPath: string,
-  compareSessionFileIdentity: SessionFileIdentityComparator,
-): boolean =>
-  linkedAgentSessionIdentity(
-    agent,
-    childSessionId,
-    childSessionPath,
-    compareSessionFileIdentity,
-  ) === "same";
-
 /** A recorded name or non-distinct child identity remains conflicting. */
 export const isLinkedAgentConflictCandidate = (
   agent: HerdrPane,
@@ -305,9 +291,9 @@ export const isExactLinkedAgent = (
   agent.name === agentName &&
   agent.terminal_id === terminalId &&
   agent.agent === "pi" &&
-  hasLinkedAgentSessionIdentity(
+  linkedAgentSessionIdentity(
     agent,
     childSessionId,
     childSessionPath,
     compareSessionFileIdentity,
-  );
+  ) === "same";

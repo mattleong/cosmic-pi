@@ -206,7 +206,7 @@ const createManualCard = (
   result: (request: AdvisorCheckpointRequest) => AdvisorCheckpoint,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The review command uses the session and UI capabilities supplied by this partial command context.
     yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
     yield* Effect.promise(() => tick());
     value.pending.at(-1)!.resolve(result(value.requests.at(-1)!));
@@ -223,8 +223,7 @@ const settleRecovery = (
   beforeSettlement: () => void = () => undefined,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    vi.mocked(value.ctx.isIdle).mockReturnValue(false);
     yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 2 }));
     yield* invoke(
       value.emit("message_update", {
@@ -251,8 +250,7 @@ const settleRecovery = (
         toolResults: [],
       }),
     );
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    (value.ctx.isIdle as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    vi.mocked(value.ctx.isIdle).mockReturnValue(true);
     yield* invoke(value.emit("agent_settled", { type: "agent_settled" }));
     yield* Effect.promise(() => tick());
   });
@@ -386,7 +384,7 @@ describe("Advisor extension product behavior", () => {
       expect(value.sent).toHaveLength(1);
       expect(value.sent[0]).toMatchObject({ customType: "pi-advisor-guidance-v1", display: false });
       expect(serializedSnapshot(value.sent[0])).not.toContain("direct evidence");
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Usage reads the captured session state and the fixture notification callback only.
       yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
       expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
         expect.stringContaining("Responses/reviews/cards: 0 / 1 / 1\nCorrections: 1"),
@@ -419,14 +417,14 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* settleAutomatic(value, pass);
       yield* createManualCard(value, (request) => finding(request, "concern", "manual-one"));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Fix uses the fixture session state and message delivery callbacks, not the omitted command navigation API.
       yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
       expect(value.sent).toHaveLength(1);
       expect(value.entries.at(-1)).toMatchObject({
         customType: ADVISOR_REVIEW_ACTION_TYPE,
         data: { action: "fix" },
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Usage reads the captured session state and the fixture notification callback only.
       yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
       expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
         expect.stringContaining("Responses/reviews/cards: 0 / 2 / 1\nCorrections: 1"),
@@ -435,10 +433,10 @@ describe("Advisor extension product behavior", () => {
 
       yield* createManualCard(value, suggestion);
       const before = value.sent.length;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Dismiss uses the fixture session state and custom-entry callback only.
       yield* invoke(value.commands.get("advisor")!.handler("dismiss", value.ctx as never));
       expect(value.sent).toHaveLength(before);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The selected review action was appended by the owned action encoder; this assertion reads its action field.
       expect(
         [...value.entries]
           .reverse()
@@ -460,7 +458,7 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       const turn = value.emit("turn_end", finalTurn());
       yield* Effect.promise(() => tick());
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The settings command uses the fixture UI selection and notification callbacks.
       yield* invoke(value.commands.get("advisor")!.handler("", value.ctx as never));
       expect(value.ctx.ui.select).toHaveBeenLastCalledWith(expect.any(String), [
         "Change model",
@@ -481,7 +479,7 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* invoke(value.emit("turn_end", progressTurn()));
       const before = value.entries.length;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Cancel uses the fixture runtime controls and notification callback only.
       yield* invoke(value.commands.get("advisor")!.handler("cancel", value.ctx as never));
       expect(value.entries).toHaveLength(before);
     }),
@@ -548,7 +546,7 @@ describe("Advisor extension product behavior", () => {
       });
 
       yield* invoke(value.emit("turn_start", { type: "turn_start", turnIndex: 3 }));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The review command uses the session and UI capabilities supplied by this partial command context.
       yield* invoke(value.commands.get("advisor")!.handler("review", value.ctx as never));
       yield* Effect.promise(() => tick());
       expect(value.requests.at(-1)?.observations).toContain("advisor_intervention");
@@ -633,7 +631,7 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* settleAutomatic(value, pass);
       yield* createManualCard(value, (request) => finding(request, "concern"));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Fix uses the fixture session state and message delivery callbacks, not the omitted command navigation API.
       yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
       expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
         false,
@@ -642,7 +640,7 @@ describe("Advisor extension product behavior", () => {
         expect.stringContaining("card remains open"),
         "error",
       );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Usage reads the captured session state and the fixture notification callback only.
       yield* invoke(value.commands.get("advisor")!.handler("usage", value.ctx as never));
       expect(value.ctx.ui.notify).toHaveBeenLastCalledWith(
         expect.stringContaining("Corrections: 0"),
@@ -657,7 +655,7 @@ describe("Advisor extension product behavior", () => {
       yield* invoke(value.emit("session_start", { type: "session_start" }));
       yield* settleAutomatic(value, pass);
       yield* createManualCard(value, (request) => finding(request, "concern"));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Fix uses the fixture session state and message delivery callbacks, not the omitted command navigation API.
       yield* invoke(value.commands.get("advisor")!.handler("fix", value.ctx as never));
       expect(value.sent).toHaveLength(1);
       expect(value.entries.some((entry) => entry.customType === ADVISOR_REVIEW_ACTION_TYPE)).toBe(
@@ -683,7 +681,7 @@ describe("Advisor extension product behavior", () => {
         }),
       );
       expect(value.sent).toHaveLength(0);
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The settings command uses the fixture UI selection and notification callbacks.
       yield* invoke(value.commands.get("advisor")!.handler("", value.ctx as never));
       expect(value.ctx.ui.select).toHaveBeenLastCalledWith(
         expect.stringContaining("issue shown"),

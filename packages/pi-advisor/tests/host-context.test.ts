@@ -26,7 +26,7 @@ const makeAbortSignal = (
 ): TestAbortSignal => {
   let addCount = 0;
   let removeCount = 0;
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: Listener registration reads only aborted and the add/remove listener methods supplied here.
   const signal = {
     get aborted() {
       return options.aborted ?? false;
@@ -47,7 +47,7 @@ const makeAbortSignal = (
   };
 };
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+// SAFETY: Session capture reads only cwd, modelRegistry, signal, and isProjectTrusted from this partial context.
 const safeContext = (): ExtensionContext =>
   Object.defineProperties(
     {},
@@ -70,7 +70,7 @@ describe("advisor host-context boundary", () => {
       projectTrustCall: 0,
     };
     const modelRegistry = { marker: "captured-registry" };
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: Session capture reads only aborted; listener registration is not exercised by this signal fixture.
     const signal = {
       get aborted() {
         reads.aborted += 1;
@@ -78,7 +78,7 @@ describe("advisor host-context boundary", () => {
       },
     } as AbortSignal;
     let ctx!: ExtensionContext;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: Session capture reads only the four context getters instrumented here.
     ctx = Object.defineProperties(
       {},
       {
@@ -143,7 +143,7 @@ describe("advisor host-context boundary", () => {
     });
     const second = makeAbortSignal();
     let signalReads = 0;
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+    // SAFETY: The object retains the safe context capabilities while replacing only its signal getter.
     const ctx = Object.defineProperties(safeContext(), {
       signal: {
         configurable: true,
@@ -206,7 +206,6 @@ describe("advisor host-context boundary", () => {
 
   it("redacts failures from every hostile session-input getter", () => {
     const secret = "host-session-secret";
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const cases: ReadonlyArray<{
       readonly name: string;
       readonly make: () => ExtensionContext;

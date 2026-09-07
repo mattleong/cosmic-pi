@@ -128,6 +128,7 @@ const harness = (
     readonly modelReadFailure?: boolean;
     readonly setModelDenied?: boolean;
     readonly setModelSettlement?: Promise<void>;
+    readonly onSetModel?: () => void;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -151,20 +152,20 @@ const harness = (
     const notify = vi.fn();
     let ctx!: ExtensionContext;
     const delayedThinkingEvents: unknown[] = [];
-    const setModel = vi.fn(
-      (next: Model): Promise<boolean> =>
-        Promise.resolve(options.setModelSettlement).then(() => {
-          if (options.setModelDenied) return false;
-          const previousModel = activeModel;
-          activeModel = next;
-          return Promise.resolve(
-            handlers.get("model_select")?.(
-              { type: "model_select", model: next, previousModel, source: "set" },
-              ctx,
-            ),
-          ).then(() => true);
-        }),
-    );
+    const setModel = vi.fn((next: Model): Promise<boolean> => {
+      options.onSetModel?.();
+      return Promise.resolve(options.setModelSettlement).then(() => {
+        if (options.setModelDenied) return false;
+        const previousModel = activeModel;
+        activeModel = next;
+        return Promise.resolve(
+          handlers.get("model_select")?.(
+            { type: "model_select", model: next, previousModel, source: "set" },
+            ctx,
+          ),
+        ).then(() => true);
+      });
+    });
     const setThinkingLevel = vi.fn((level: typeof thinkingLevel) => {
       const previousLevel = thinkingLevel;
       thinkingLevel = level;
@@ -297,15 +298,14 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     const settlement = Deferred.makeUnsafe<void>();
     const settlementPromise = Effect.runPromise(Deferred.await(settlement));
     return Effect.gen(function* () {
-      const h = yield* harness({ setModelSettlement: settlementPromise });
+      const admitted = yield* Deferred.make<void>();
+      const h = yield* harness({
+        setModelSettlement: settlementPromise,
+        onSetModel: () => Deferred.doneUnsafe(admitted, Effect.void),
+      });
       yield* h.seedRememberedPreference();
-
       const first = yield* h.start().pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(h.setModel).toHaveBeenCalledTimes(1);
-        }),
-      );
+      yield* Deferred.await(admitted);
       const successorSettled = yield* Deferred.make<void>();
       const successor = yield* h
         .start("new")
@@ -313,7 +313,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
           Effect.ensuring(Deferred.succeed(successorSettled, undefined)),
           Effect.forkScoped({ startImmediately: true }),
         );
-      yield* Effect.promise(() => Promise.resolve());
+      yield* Effect.yieldNow;
 
       expect(yield* Deferred.isDone(successorSettled)).toBe(false);
       expect(h.setModel).toHaveBeenCalledTimes(1);
@@ -324,7 +324,10 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setModel).toHaveBeenCalledTimes(1);
       expect(h.thinking()).toBe("high");
       expect(h.notify).not.toHaveBeenCalled();
-    });
+    }).pipe(
+      // Release the host call before scoped fibers and harness shutdown are finalized.
+      Effect.ensuring(Deferred.succeed(settlement, undefined)),
+    );
   });
 
   it.effect("leaves explicit CLI preferences and resumed session choices alone", () =>
@@ -413,36 +416,29 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     Effect.gen(function* () {
       for (const reason of ["resume", "fork", "reload"] as const) {
         const h = yield* harness({ sessionReadFailure: "both" });
+        yield* h.seedRememberedPreference();
+        const saved = yield* readPreference(h.agentDirectory, h.cwd);
         yield* h.start(reason);
+        expect(h.model()).toEqual(h.initial);
+        expect(h.thinking()).toBe("low");
+        expect(yield* readPreference(h.agentDirectory, h.cwd)).toEqual(saved);
         expect(h.getEntries).not.toHaveBeenCalled();
         expect(h.getLeafId).not.toHaveBeenCalled();
         expect(h.setModel).not.toHaveBeenCalled();
 
-        h.select(h.remembered, "high");
+        h.select(h.alternate, "medium");
         yield* h.emit("model_select", {
           type: "model_select",
-          model: h.remembered,
+          model: h.alternate,
           previousModel: h.initial,
           source: "set",
         });
         expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
-          provider: h.remembered.provider,
-          model: h.remembered.id,
-          thinkingLevel: "high",
+          provider: h.alternate.provider,
+          model: h.alternate.id,
+          thinkingLevel: "medium",
         });
         expect(h.notify).not.toHaveBeenCalled();
-        yield* h.shutdown();
-      }
-    }),
-  );
-
-  it.effect("preserves resume, fork, and reload event models", () =>
-    Effect.gen(function* () {
-      for (const reason of ["resume", "fork", "reload"] as const) {
-        const h = yield* harness();
-        yield* h.seedRememberedPreference();
-        yield* h.start(reason);
-        expect(h.setModel).not.toHaveBeenCalled();
         yield* h.shutdown();
       }
     }),

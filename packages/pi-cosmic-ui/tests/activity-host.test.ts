@@ -195,6 +195,32 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
 }
 
 describe("activity host lifecycle", () => {
+  it.effect("acknowledges a mounted valid widget and immediately revokes on teardown", () =>
+    Effect.gen(function* () {
+      const fixture = harness("deferred");
+      const service = yield* fixture.service();
+      const availability: boolean[] = [];
+      const provider = registerActivityProvider(fixture.bus, {
+        sessionId: "session",
+        providerId: "agents",
+        snapshot: () => [item()],
+        invoke: () => Promise.resolve(),
+        onAvailability: (value) => {
+          availability.push(value);
+        },
+      });
+      fixture.host.activate(fixture.ctx, service);
+      yield* fixture.drain();
+      expect(provider.isAvailable()).toBe(false);
+      fixture.mountWidget();
+      yield* fixture.drain();
+      expect(provider.isAvailable()).toBe(true);
+      fixture.host.deactivate();
+      expect(provider.isAvailable()).toBe(false);
+      expect(availability).toEqual([true, false]);
+      provider.dispose();
+    }),
+  );
   it.effect("renders launch metadata without rows and withdraws it on invalidation or revoke", () =>
     Effect.gen(function* () {
       const fixture = harness();

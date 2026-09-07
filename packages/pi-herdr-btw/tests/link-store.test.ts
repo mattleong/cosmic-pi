@@ -53,34 +53,28 @@ interface MutableOwner {
 
 const harness = (options: HarnessOptions = {}) => {
   const entries = [...(options.initialEntries ?? [])];
-  const operations: string[] = [];
   let currentOwner: MutableOwner = { ...OWNER };
   let currentProbe: SessionHeaderProbe =
     options.initialProbe ?? ({ _tag: "valid", header: { id: OWNER.sessionId } } as const);
   let throwing = options.initialThrow;
   const getSessionId = vi.fn(() => {
-    operations.push("sessionId");
     if (throwing === "sessionId") throw new Error("session-id-secret");
     return currentOwner.sessionId;
   });
   const getSessionFile = vi.fn(() => {
-    operations.push("sessionFile");
     if (throwing === "sessionFile") throw new Error("session-file-secret");
     return currentOwner.sessionPath;
   });
   const probeSessionHeader = vi.fn((path: string) => {
-    operations.push("probe");
     if (throwing === "probe") throw new Error("probe-secret");
     expect(path).toBe(OWNER.sessionPath);
     return currentProbe;
   });
   const getEntries = vi.fn(() => {
-    operations.push("entries");
     if (throwing === "entries") throw new Error("entries-secret");
     return entries;
   });
   const appendEntry = vi.fn((customType: string, data: HerdrBtwLink) => {
-    operations.push("append");
     if (throwing === "append") throw new Error("append-secret");
     entries.push({ type: "custom", customType, data });
     if (throwing === "appendAfterMutation") throw new Error("append-secret");
@@ -101,7 +95,6 @@ const harness = (options: HarnessOptions = {}) => {
     getEntries,
     getSessionFile,
     getSessionId,
-    operations,
     probeSessionHeader,
     setOwner: (owner: MutableOwner) => {
       currentOwner = { ...currentOwner, ...owner };
@@ -129,14 +122,25 @@ describe("host reusable-link store", () => {
     expect(h.store.restore()).toEqual({ _tag: "restored", link: LINK });
   });
 
-  it("revalidates live owner fields and the parent header immediately before reads and appends", () => {
-    const restore = harness();
-    expect(restore.store.restore()).toEqual({ _tag: "none" });
-    expect(restore.operations).toEqual(["sessionId", "sessionFile", "probe", "entries"]);
+  it("revalidates owner and header changes after successful restore and record", () => {
+    for (const change of ["sessionId", "sessionPath", "header"] as const) {
+      const h = harness();
+      expect(h.store.restore()).toEqual({ _tag: "none" });
+      expect(h.store.record(RECORD)).toBe("recorded");
+      expect(h.store.restore()).toEqual({ _tag: "restored", link: LINK });
+      h.appendEntry.mockClear();
 
-    const record = harness();
-    expect(record.store.record(RECORD)).toBe("recorded");
-    expect(record.operations).toEqual(["sessionId", "sessionFile", "probe", "append"]);
+      if (change === "header") h.setProbe({ _tag: "valid", header: { id: "replacement-session" } });
+      else if (change === "sessionId") h.setOwner({ sessionId: "replacement-session" });
+      else h.setOwner({ sessionPath: "/sessions/replacement.jsonl" });
+
+      expect(h.store.restore()).toEqual({ _tag: "malformed" });
+      expect(h.store.record(RECORD)).toBe("refused");
+      expect(h.appendEntry).not.toHaveBeenCalled();
+      expect(h.entries).toEqual([
+        { type: "custom", customType: HERDR_BTW_LINK_ENTRY_TYPE, data: LINK },
+      ]);
+    }
   });
 
   it("ignores an inherited ancestor link", () => {

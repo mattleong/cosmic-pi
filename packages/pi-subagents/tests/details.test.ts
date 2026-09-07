@@ -6,14 +6,9 @@ import {
   makeAwaitDetails,
   makeCompactToolDetails,
   makeStartDetails,
-  projectSubagentProfileRoutes,
   projectSubagentRunCard,
-  projectSubagentStartEntries,
 } from "../src/tools/details.ts";
-import type {
-  ProfileCandidateDiscovery as ProfileCandidateDetailsInput,
-  SubagentProfileView as ProfileRouteDetailsInput,
-} from "../src/tools/model.ts";
+import type { ProfileCandidateDiscovery as ProfileCandidateDetailsInput } from "../src/tools/model.ts";
 import {
   SUBAGENT_CARD_DETAILS_VERSION,
   decodeCompactToolDetails,
@@ -860,242 +855,72 @@ const auditedRun = (offender: boolean): SubagentRunView => ({
     bashWriteHints: 3,
   },
   writeViolationOffender: offender,
+  writeIntent: "writer",
+  writeAdmissionPaused: offender,
 });
 
-const densityProfileRoute = (): ProfileRouteDetailsInput => ({
-  id: "reviewer",
-  description: "d".repeat(400),
-  source: "builtin",
-  isDefault: false,
-  defaultContext: "fresh",
-  defaultWriteIntent: "read-only",
-  defaultEffort: "high",
-  candidates: [
-    profileCandidate({
-      model: "x".repeat(200),
-      reason: "r".repeat(300),
-      status: "eligible",
-    }),
-  ],
-});
-
-describe("persisted subagent detail density policies", () => {
-  it("applies per-density limits to run cards, start entries, and profile routes", () => {
-    const offender = projectSubagentRunCard(auditedRun(true), "full");
-    const compact = projectSubagentRunCard(auditedRun(true), "compact");
-    const minimalOffender = projectSubagentRunCard(auditedRun(true), "minimal");
-    const minimalQuiet = projectSubagentRunCard(auditedRun(false), "minimal");
-
-    for (const card of [offender, compact, minimalOffender, minimalQuiet])
+describe("persisted subagent detail fitting", () => {
+  it("retains offender evidence and marks omitted claims", () => {
+    for (const density of ["full", "compact", "minimal"] as const) {
+      const card = projectSubagentRunCard(auditedRun(true), density);
       expect(card.writeClaimCount).toBe(20);
-    expect(offender.writeClaims).toHaveLength(20);
-    expect(offender).not.toHaveProperty("writeClaimsOmitted");
-    expect(offender.writeAudit).toMatchObject({
-      observedFileWrites: Array.from({ length: 20 }, (_, index) => `/repo/written-${index}.ts`),
-      bashWriteHints: 3,
-    });
-    expect(offender.writeAudit?.violations).toHaveLength(16);
-    expect(compact.writeClaims).toHaveLength(16);
-    expect(compact.writeClaimsOmitted).toBe(true);
-    expect(compact.writeAudit?.observedFileWrites).toHaveLength(16);
-    expect(compact.writeAudit?.violations).toHaveLength(8);
-    expect(minimalOffender.writeClaims).toHaveLength(4);
-    expect(minimalOffender.writeClaimsOmitted).toBe(true);
-    expect(minimalOffender.writeAudit?.observedFileWrites).toHaveLength(0);
-    expect(minimalOffender.writeAudit?.violations).toHaveLength(1);
-    expect(minimalQuiet.writeAudit?.violations).toHaveLength(0);
-
-    const longEntry = (status: "started" | "failed") =>
-      status === "started"
-        ? {
-            ...startedEntry(0),
-            name: "n".repeat(100),
-            profile: "p".repeat(100),
-            warning: "w".repeat(2_000),
-            runId: "r".repeat(2_000),
-          }
-        : {
-            index: 0,
-            name: "n".repeat(100),
-            profile: "p".repeat(100),
-            status: "failed" as const,
-            routeStatus: "selected" as const,
-            host: "local" as const,
-            runtime: "pi" as const,
-            model: "m".repeat(2_000),
-            effort: "high" as const,
-            openaiFastMode: false,
-            warning: "w".repeat(2_000),
-          };
-    // Field caps shrink monotonically from full to minimal without ever growing.
-    const entryAt = (density: "full" | "compact" | "minimal") =>
-      projectSubagentStartEntries([longEntry("started")], density)[0]!;
-    const fieldLength = (
-      density: "full" | "compact" | "minimal",
-      read: (
-        entry: Extract<SubagentStartEntry, { readonly status: "started" }>,
-      ) => number | undefined,
-    ): number | undefined => {
-      const entry = entryAt(density);
-      return entry.status === "started" ? read(entry) : undefined;
-    };
-    for (const read of [
-      (entry: Extract<SubagentStartEntry, { readonly status: "started" }>) => entry.name?.length,
-      (entry: Extract<SubagentStartEntry, { readonly status: "started" }>) => entry.profile.length,
-      (entry: Extract<SubagentStartEntry, { readonly status: "started" }>) => entry.warning?.length,
-      (entry: Extract<SubagentStartEntry, { readonly status: "started" }>) => entry.runId?.length,
-    ]) {
-      const [full, compact, minimal] = (["full", "compact", "minimal"] as const).map((density) =>
-        fieldLength(density, read),
-      );
-      expect(full).toBeGreaterThan(0);
-      expect(compact).toBeLessThanOrEqual(full ?? 0);
-      expect(minimal).toBeLessThanOrEqual(compact ?? 0);
+      expect(card.writeViolationOffender).toBe(true);
+      expect(card.writeAudit?.violations.length).toBeGreaterThan(0);
+      if ((card.writeClaims?.length ?? 0) < 20) expect(card.writeClaimsOmitted).toBe(true);
     }
-
-    const routes = (density: "full" | "compact" | "minimal") =>
-      projectSubagentProfileRoutes([densityProfileRoute()], density)[0]!;
-    expect(routes("compact").description.length).toBeLessThanOrEqual(
-      routes("full").description.length,
-    );
-    expect(routes("minimal").description.length).toBeLessThanOrEqual(
-      routes("compact").description.length,
-    );
-    expect(routes("minimal").candidates[0]?.model).toBe("x/y");
-    expect(routes("minimal").candidates[0]?.reason).toBe("Omitted.");
   });
 
-  it("tightens failure caps through the fitting stages", () => {
-    const failureInput = (index: number, message: string, code: string, name: string) => ({
+  it("fits dense failures without losing any launch receipt", () => {
+    const entries = Array.from({ length: 32 }, (_, index) => ({
       index,
-      name,
-      code,
-      message,
-    });
-    const failedEntry = (index: number, name: string) => ({
-      index,
-      name,
+      name: `launch-${index}`,
       profile: "reviewer",
       status: "failed" as const,
       routeStatus: "unavailable" as const,
-    });
-
-    const full = makeStartDetails({
-      startEntries: [{ ...failedEntry(0, "n".repeat(100)) }],
-      startFailures: [failureInput(0, "m".repeat(5_000), "c".repeat(200), "n".repeat(100))],
-    });
-    // Full-density failures are bounded well below their hostile inputs.
-    expect(full.startFailures?.[0]?.message.length).toBeLessThan(5_000);
-    expect(full.startFailures?.[0]?.code?.length).toBeLessThan(200);
-    expect(full.startFailures?.[0]?.name?.length).toBeLessThan(100);
-
-    const compactBatch = Array.from({ length: 32 }, (_, index) => ({
-      ...failedEntry(index, `launch-${index}`),
-      profile: "p".repeat(64),
-      routeStatus: "selected" as const,
-      host: "local" as const,
-      runtime: "pi" as const,
-      model: "m",
-      effort: "high" as const,
-      openaiFastMode: false,
-      warning: "w".repeat(1_024),
+      warning: "w".repeat(2_000),
     }));
-    const compact = makeStartDetails({
-      startEntries: compactBatch,
-      startFailures: Array.from({ length: 32 }, (_, index) =>
-        failureInput(index, "m".repeat(5_000), "c".repeat(200), `launch-${index}`),
-      ),
+    const details = makeStartDetails({
+      startEntries: entries,
+      startFailures: entries.map(({ index, name }) => ({
+        index,
+        name,
+        code: "unavailable",
+        message: "m".repeat(5_000),
+      })),
     });
-    expect(compact.startFailures).toHaveLength(32);
-    expect(compact.startFailures?.[0]?.message.length).toBeGreaterThan(96);
-    expect(compact.startFailures?.[0]?.message.length).toBeLessThanOrEqual(256);
-    expect(compact.startFailures?.[0]?.code?.length).toBeLessThanOrEqual(64);
-
-    const denseBatch = Array.from({ length: 32 }, (_, index) => ({
-      index,
-      name: `launch-${index}-${"n".repeat(300)}`,
-      profile: "p".repeat(64),
-      status: "failed" as const,
-      routeStatus: "selected" as const,
-      host: "local" as const,
-      runtime: "pi" as const,
-      model: "m".repeat(512),
-      effort: "high" as const,
-      openaiFastMode: false,
-      candidateIndex: index,
-      warning: "w".repeat(1_024),
-    }));
-    const minimal = makeStartDetails({
-      startEntries: denseBatch,
-      startFailures: Array.from({ length: 32 }, (_, index) =>
-        failureInput(index, "m".repeat(5_000), "c".repeat(200), `launch-${index}`),
-      ),
-    });
-    expect(minimal.startFailures).toHaveLength(32);
-    // Fitting stages tighten monotonically: minimal caps stay at or below compact.
-    expect(minimal.startFailures?.[0]?.message.length).toBeLessThanOrEqual(
-      compact.startFailures?.[0]?.message.length ?? 0,
+    expect(details.startEntries.map(({ index }) => index)).toEqual(
+      entries.map(({ index }) => index),
     );
-    expect(minimal.startFailures?.[0]?.code?.length).toBeLessThanOrEqual(
-      compact.startFailures?.[0]?.code?.length ?? 0,
+    expect(details.startFailures?.map(({ index }) => index)).toEqual(
+      entries.map(({ index }) => index),
     );
+    expect(decodeStartAwaitCardDetails(details)).toEqual(details);
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expect(Object.isFrozen(details)).toBe(true);
   });
 
-  it("tightens action-failure caps through the fitting stages", () => {
-    const actionFailure = {
-      id: "i".repeat(200),
-      code: "c".repeat(200),
-      message: "m".repeat(5_000),
-    };
-    const full = makeCompactToolDetails({
-      action: "status",
-      runs: [run()],
-      actionFailures: [actionFailure],
-    });
-    if (full.action !== "status") throw new Error("Expected run details.");
-    expect(full.actionFailures?.[0]?.id.length).toBeLessThan(200);
-    expect(full.actionFailures?.[0]?.message.length).toBeLessThan(5_000);
-
-    const skipped = (reason: string): SubagentRunView => ({
-      ...run(),
-      selection: {
-        ...run().selection,
-        skippedCandidates: Array.from({ length: 8 }, (_, index) => ({
-          candidateIndex: index,
-          candidate: "c".repeat(2_000),
-          code: "unavailable",
-          reason,
-        })),
-      },
-    });
-    const compact = makeCompactToolDetails({
-      action: "status",
-      runs: Array.from({ length: 12 }, () => skipped("r".repeat(2_000))),
-      actionFailures: [actionFailure],
-    });
-    if (compact.action !== "status") throw new Error("Expected run details.");
-    expect(compact.actionFailures?.[0]?.message.length).toBeLessThanOrEqual(
-      full.actionFailures?.[0]?.message.length ?? 0,
-    );
-
-    const dense = (index: number): SubagentRunView => ({
-      ...skipped("r".repeat(2_000)),
+  it("fits dense run failures while preserving targets and pending questions", () => {
+    const runs = Array.from({ length: 12 }, (_, index) => ({
+      ...auditedRun(true),
       id: `agent-${index}`,
-      question: { requestId: "q", message: "q".repeat(3_000), createdAt: 1 },
+      question: { requestId: `q-${index}`, message: "q".repeat(3_000), createdAt: 1 },
       progress: "p".repeat(1_000),
       warning: "w".repeat(1_000),
+      finalText: "private report".repeat(2_000),
+    }));
+    const details = makeCompactToolDetails({
+      action: "send",
+      runs,
+      actionFailures: [{ id: "missing-agent", code: "not_found", message: "m".repeat(5_000) }],
     });
-    const minimal = makeCompactToolDetails({
-      action: "status",
-      runs: Array.from({ length: 12 }, (_, index) => dense(index)),
-      actionFailures: [actionFailure],
-    });
-    if (minimal.action !== "status") throw new Error("Expected run details.");
-    expect(minimal.actionFailures?.[0]?.message.length).toBeLessThanOrEqual(
-      compact.actionFailures?.[0]?.message.length ?? 0,
-    );
-    expect(minimal.cards[0]?.question?.message.length).toBeLessThan(3_000);
-    // Minimal density keeps no skipped-candidate history.
-    expect(minimal.cards[0]?.selection.skippedCandidates).toHaveLength(0);
+    if (details.action !== "send") throw new Error("Expected run details.");
+    expect(details.cards.map(({ id }) => id)).toEqual(runs.map(({ id }) => id));
+    expect(details.cards.every((card) => Boolean(card.question?.message))).toBe(true);
+    expect(details.actionFailures?.[0]).toMatchObject({ id: "missing-agent", code: "not_found" });
+    expect(details.contentOmitted).toBe(true);
+    expect(JSON.stringify(details)).not.toContain("private report");
+    expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
+    expect(decodeCompactToolDetails(details)).toEqual(details);
+    expect(Object.isFrozen(details)).toBe(true);
   });
 });

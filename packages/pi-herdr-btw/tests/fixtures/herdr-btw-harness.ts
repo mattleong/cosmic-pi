@@ -5,6 +5,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   HerdrClient,
   type HerdrClientContract,
+  type HerdrPane,
   type HerdrSplitPaneInput,
   type HerdrStartSideSessionInput,
 } from "../../src/boundary/herdr-client.ts";
@@ -98,23 +99,7 @@ const CHILD_FILE = "/sessions/child.jsonl";
 const CWD = "/project";
 
 /** One Herdr snapshot agent with optional identity overrides. */
-export interface HerdrBtwSnapshotAgent {
-  readonly pane_id: string;
-  readonly terminal_id: string;
-  readonly workspace_id: string;
-  readonly tab_id: string;
-  readonly agent?: string;
-  readonly name?: string;
-  readonly agent_session?:
-    | {
-        readonly source: string;
-        readonly agent: string;
-        readonly kind: "id" | "path";
-        readonly value: string;
-      }
-    | null
-    | undefined;
-}
+export type HerdrBtwSnapshotAgent = HerdrPane;
 
 /** Comparator for scenarios where one or two paths are lexically distinct aliases of one file. */
 export const aliasIdentity =
@@ -209,24 +194,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
         () =>
           options.liveAgentSnapshots?.[snapshotReads++] ??
           options.liveAgents ??
-          (startedAgentName === undefined
-            ? []
-            : [
-                {
-                  pane_id: btwPane.pane_id,
-                  terminal_id: btwPane.terminal_id,
-                  workspace_id: btwPane.workspace_id,
-                  tab_id: "w1:t1",
-                  agent: "pi",
-                  name: startedAgentName,
-                  agent_session: {
-                    source: "herdr:pi",
-                    agent: "pi",
-                    kind: "path" as const,
-                    value: options.startedSession ?? createdChildFile,
-                  },
-                },
-              ]),
+          (startedAgentName === undefined ? [] : [startedAgentSnapshot(startedAgentName)]),
       ),
     resolveCallingPane: () => run("resolve calling pane", undefined, () => parentPane),
     inspectPaneLayout: (paneId) =>

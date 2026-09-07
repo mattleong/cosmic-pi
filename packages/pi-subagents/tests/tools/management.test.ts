@@ -1,6 +1,8 @@
 // Promise assertions are test-runner boundaries.
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
@@ -435,6 +437,95 @@ describe("subagent tool", () => {
       expect(text).toContain("Guidance delivered to 1 subagent: agent-1.");
       expect(text).toContain(
         "Started the next assignment on 1 retained subagent: agent-r1; subagent_await now targets the new report generation.",
+      );
+    },
+  );
+
+  effectTest("preserves target order when mixed results finish in reverse order", function* () {
+    const ids = ["success-1", "failure-1", "success-2", "failure-2"];
+    const gates = yield* Effect.forEach(ids, () => Deferred.make<void>());
+    const completed: string[] = [];
+    const service = subagentServiceDouble({
+      send: (id) =>
+        Effect.gen(function* () {
+          const index = ids.indexOf(id);
+          if (index < ids.length - 1) yield* Deferred.await(gates[index + 1]!);
+          completed.push(id);
+          yield* Deferred.succeed(gates[index]!, undefined);
+          return yield* id.startsWith("failure")
+            ? Effect.fail(new InvalidSubagentRequestError({ code: "unavailable", message: id }))
+            : Effect.succeed(view({ id }));
+        }),
+    });
+    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_send"), {
+      runIds: ids,
+      message: "Continue",
+    });
+    expect(completed).toEqual([...ids].reverse());
+    expect(result?.details).toMatchObject({
+      cards: [{ id: "success-1" }, { id: "success-2" }],
+      actionFailures: [
+        { id: "failure-1", code: "unavailable", message: "failure-1" },
+        { id: "failure-2", code: "unavailable", message: "failure-2" },
+      ],
+    });
+  });
+
+  effectTest("propagates defects instead of reporting them as target failures", function* () {
+    const service = subagentServiceDouble({
+      send: () => Effect.die(new Error("broken invariant")),
+    });
+    const tool = captureSubagentTools(service).get("subagent_send")!;
+    yield* step(() =>
+      expect(
+        tool.execute(
+          "test",
+          { runIds: ["agent-1"], message: "Continue" },
+          undefined,
+          undefined,
+          context,
+        ),
+      ).rejects.toThrow("broken invariant"),
+    );
+  });
+
+  effectTest(
+    "interrupts an in-flight batch rather than manufacturing action failures",
+    function* () {
+      let entered = false;
+      let finalized = false;
+      const service = subagentServiceDouble({
+        send: () =>
+          Effect.sync(() => {
+            entered = true;
+          }).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Effect.sync(() => {
+                finalized = true;
+              }),
+            ),
+          ),
+      });
+      const signal = new AbortController();
+      const tool = captureSubagentTools(service).get("subagent_send")!;
+      const promise = tool.execute(
+        "test",
+        { runIds: ["agent-1"], message: "Continue" },
+        signal.signal,
+        undefined,
+        context,
+      );
+      const settled = Promise.allSettled([promise]);
+      yield* Effect.gen(function* () {
+        yield* yieldUntil(() => entered).pipe(Effect.orDie);
+        signal.abort();
+        expect((yield* step(() => settled))[0]?.status).toBe("rejected");
+        expect(finalized).toBe(true);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => signal.abort()).pipe(Effect.andThen(step(() => settled))),
+        ),
       );
     },
   );

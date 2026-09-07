@@ -206,6 +206,12 @@ it.effect("maps transport failure without exposing its URL or cause", () =>
 
 it.effect("encodes JSON request bodies through their schema", () =>
   Effect.gen(function* () {
+    const client = HttpClient.make((request) => {
+      expect(request.body._tag).toBe("Uint8Array");
+      if (request.body._tag === "Uint8Array")
+        expect(new TextDecoder().decode(request.body.body)).toBe('{"value":"42"}');
+      return Effect.succeed(HttpClientResponse.fromWeb(request, new Response('{"ok":true}')));
+    });
     const response = yield* JsonHttpClient.use((http) =>
       http.requestJson(
         {
@@ -213,15 +219,12 @@ it.effect("encodes JSON request bodies through their schema", () =>
           method: "POST",
           responseSchema: Schema.Struct({ ok: Schema.Boolean }),
         },
-        Schema.Struct({ value: Schema.Number }),
+        Schema.Struct({ value: Schema.NumberFromString }),
         { value: 42 },
       ),
     ).pipe(
       provideBuiltLayer(
-        jsonHttpTestLayer((input) => {
-          expect(input.encodedJsonBody).toEqual({ value: 42 });
-          return Effect.succeed(jsonHttpRawResponse(200, '{"ok":true}'));
-        }),
+        JsonHttpClient.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, client))),
       ),
     );
     expect(response).toEqual({ _tag: "Accepted", status: 200, body: { ok: true } });

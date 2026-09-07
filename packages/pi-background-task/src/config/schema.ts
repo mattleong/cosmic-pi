@@ -1,5 +1,3 @@
-import * as Schema from "effect/Schema";
-
 export interface BackgroundTaskConfig {
   readonly enabled: boolean;
   readonly maxRunning: number;
@@ -22,5 +20,3 @@ export const DEFAULT_BACKGROUND_TASK_CONFIG: BackgroundTaskConfig = {
   maxWaitSeconds: 30,
   showFooterStatus: true,
 };
-
-export const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());

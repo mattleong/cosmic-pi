@@ -19,7 +19,6 @@ export interface CodeModeRenderDetails {
   readonly truncated: boolean;
 }
 
-const NonNegativeIntegerSchema = Schema.Natural;
 const CallEntryInputSchema = Schema.Struct({
   status: Schema.Literals(["queued", "running", "completed", "error", "cancelled"]),
   tool: Schema.optional(Schema.Unknown),
@@ -35,16 +34,16 @@ const RenderDetailsInputSchema = Schema.Struct({
   truncated: Schema.optional(Schema.Unknown),
 });
 const CallCountsInputSchema = Schema.Struct({
-  total: NonNegativeIntegerSchema,
-  queued: NonNegativeIntegerSchema,
-  running: NonNegativeIntegerSchema,
-  succeeded: NonNegativeIntegerSchema,
-  failed: NonNegativeIntegerSchema,
-  cancelled: NonNegativeIntegerSchema,
+  total: Schema.Natural,
+  queued: Schema.Natural,
+  running: Schema.Natural,
+  succeeded: Schema.Natural,
+  failed: Schema.Natural,
+  cancelled: Schema.Natural,
 });
 
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
-  decodeOption(NonNegativeIntegerSchema, value);
+  decodeOption(Schema.Natural, value);
 
 const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => {
   const entry = decodeOption(CallEntryInputSchema, value);

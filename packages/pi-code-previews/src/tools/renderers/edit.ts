@@ -19,7 +19,7 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
-import { diffPreviewCacheKey, previewArgsKey } from "./shared/preview-cache-key";
+import { diffPreviewCacheKey } from "./shared/preview-cache-key";
 import {
   appendDiffPreviewFooters,
   createDiffPreviewText,
@@ -35,12 +35,11 @@ export function createEditPreviewTool(cwd: string) {
       const path = getPathArg(args);
       const operations = getEditPreviewOperations(args);
       const operationsSource = editOperationsSource(operations);
-      const argsKey = previewArgsKey("edit-args", operationsSource, path);
       if (
-        renderContext.state.editArgsKey !== argsKey ||
+        renderContext.state.editArgsPath !== path ||
         renderContext.state.editArgsExactSource !== operationsSource
       ) {
-        renderContext.state.editArgsKey = argsKey;
+        renderContext.state.editArgsPath = path;
         renderContext.state.editArgsExactSource = operationsSource;
         renderContext.state.editSummaryText = undefined;
         renderContext.state.editCallPreviewKey = undefined;
@@ -137,14 +136,12 @@ export function createEditPreviewTool(cwd: string) {
       updateEditHeader(renderContext, cwd, theme);
       if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
       const render = () =>
-        renderEditDiffPreview(
-          diff,
-          lang,
-          limit,
-          summary.totalLines,
-          theme,
-          renderContext.invalidate,
-        );
+        createDiffPreviewText(diff, lang, theme, limit, {
+          totalLines: summary.totalLines,
+          hiddenLineNoun: "diff lines",
+          skipHighlightLabel: "Syntax highlighting skipped for large diff",
+          invalidate: renderContext.invalidate,
+        });
       const previewKey = diffPreviewCacheKey(
         "edit-result",
         diff,
@@ -165,22 +162,6 @@ export function createEditPreviewTool(cwd: string) {
         renderContext.invalidate,
       );
     },
-  });
-}
-
-function renderEditDiffPreview(
-  diff: string,
-  lang: string | undefined,
-  limit: number,
-  totalLines: number,
-  theme: Theme,
-  invalidate?: () => void,
-): FullWidthDiffText {
-  return createDiffPreviewText(diff, lang, theme, limit, {
-    totalLines,
-    hiddenLineNoun: "diff lines",
-    skipHighlightLabel: "Syntax highlighting skipped for large diff",
-    invalidate,
   });
 }
 

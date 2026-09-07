@@ -153,6 +153,40 @@ describe("progress containment", () => {
     expect(details.counts).toMatchObject({ total: 42, running: 1, failed: 1, succeeded: 40 });
   });
 
+  it("keeps only the latest noncompleted rows when they exceed the display bound", () => {
+    const statuses = ["queued", "running", "error", "cancelled"] as const;
+    const problems: CodeModeCallEntry[] = Array.from({ length: 40 }, (_, index) => ({
+      tool: `problem-${index}`,
+      status: statuses[index % statuses.length] ?? "error",
+    }));
+    const calls: CodeModeCallEntry[] = [
+      ...problems,
+      { tool: "latest-success", status: "completed" },
+    ];
+    const details = callEntryDetails(calls);
+    expect(details.toolCalls).toEqual(problems.slice(-MAX_PROGRESS_ENTRIES));
+    for (const row of details.toolCalls) expect(calls).not.toContain(row);
+    expect(details.counts).toMatchObject({ total: 41, succeeded: 1 });
+  });
+
+  it("fills around interleaved problem rows with recent successes in chronological order", () => {
+    const calls: CodeModeCallEntry[] = Array.from({ length: 40 }, (_, index) => ({
+      tool: `call-${index}`,
+      status:
+        index === 0 ? "error" : index === 20 ? "queued" : index === 38 ? "cancelled" : "completed",
+    }));
+    const details = callEntryDetails(calls);
+    expect(details.toolCalls).toEqual([calls[0], ...calls.slice(9)]);
+    for (const row of details.toolCalls) expect(calls).not.toContain(row);
+    expect(details.counts).toMatchObject({
+      total: 40,
+      succeeded: 37,
+      failed: 1,
+      queued: 1,
+      cancelled: 1,
+    });
+  });
+
   it("retains the legacy total only when rows are hidden", () => {
     const few: CodeModeCallEntry[] = [{ tool: "pi.read", status: "completed" }];
     const fewDetails = callEntryDetails(few);

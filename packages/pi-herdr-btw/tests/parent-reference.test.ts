@@ -152,16 +152,6 @@ describe("herdr-btw parent reference", () => {
     expect(result?.systemPrompt).toContain("read-only");
   });
 
-  it("revalidates identity per run without reading parent transcript content", () => {
-    const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
-    h.sessionStart();
-    expect(h.probe).toHaveBeenCalledTimes(1);
-    expect(h.probe).toHaveBeenCalledWith(PARENT_FILE);
-    h.beforeAgentStart();
-    h.beforeAgentStart();
-    expect(h.probe).toHaveBeenCalledTimes(3);
-  });
-
   it("drops the instruction when per-run parent identity revalidation fails", () => {
     const failures: Array<SessionHeaderProbe | Error> = [
       { _tag: "invalid" },

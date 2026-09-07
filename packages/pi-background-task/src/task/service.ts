@@ -402,7 +402,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           Stream.runForEach((event) =>
             appendOutput(id, event.stream, event.text, event.droppedBytes),
           ),
-          Effect.catchCause(() => Effect.void),
+          Effect.ignoreCause,
           Effect.forkScoped({ startImmediately: true }),
         );
         if (request.timeoutSeconds !== undefined) {
@@ -522,12 +522,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               });
             }
             const id = `task-${nextId}`;
-            if (id.length > BACKGROUND_TASK_FIELD_BOUNDS.maxIdChars) {
-              return yield* new BackgroundTaskCapacityError({
-                limit: Number.MAX_SAFE_INTEGER,
-                message: "Background task identity capacity reached.",
-              });
-            }
             nextId += 1;
             const startedAt = yield* Clock.currentTimeMillis;
             const created: TaskRecord = {

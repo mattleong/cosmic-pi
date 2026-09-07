@@ -366,8 +366,5 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
   return {
     start,
     control,
-    hasPending: Ref.get(state).pipe(
-      Effect.map((entries) => entries.some((entry) => entry.snapshot.status === "pending")),
-    ),
   };
 });

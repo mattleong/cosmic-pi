@@ -141,8 +141,10 @@ describe("ask_user tool", () => {
     );
 
     expect(call).toContain(title);
-    expect(submitted).toContain("choice: Safe");
-    expect(submitted).toContain("other: A custom answer");
+    expect(submitted).toContain("choice");
+    expect(submitted).toContain("Safe");
+    expect(submitted).toContain("other");
+    expect(submitted).toContain("A custom answer");
     expect(resultOutput(tool, { outcome: "cancelled", answers: [] }, [])).toContain("cancelled");
     return tool
       .execute("call", request, signal, undefined, opaqueHostFixture({}))

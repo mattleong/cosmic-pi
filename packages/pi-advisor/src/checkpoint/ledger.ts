@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { snapshotData, snapshotDataRecord } from "../domain/safe-data.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
+  AdvisorFindingRecordSchema,
   isValidAdvisorFindingRecord,
   MAX_FINDING_LIFECYCLE_RECORDS,
   type AdvisorFindingRecord,
@@ -39,16 +40,6 @@ const ReviewSummaryWireSchema = Schema.Struct({
   }),
 });
 const NonNegativeIntSchema = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
-const FindingLifecycleWireSchema = Schema.Struct({
-  id: Schema.String.check(Schema.isPattern(/^af_[a-f\d]{32}$/)),
-  key: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/)),
-  generation: NonNegativeIntSchema,
-  category: Schema.Literals(["intent", "correctness", "completeness", "evidence"]),
-  severity: Schema.Literals(["concern", "blocker"]),
-  status: Schema.Literals(["open", "acknowledged", "resolved", "superseded"]),
-  firstSeenTurn: NonNegativeIntSchema,
-  lastSeenTurn: NonNegativeIntSchema,
-});
 const InterventionBudgetWireSchema = Schema.Struct({
   delivered: NonNegativeIntSchema,
   correctionUsed: Schema.Boolean,
@@ -85,7 +76,7 @@ export const AdvisorCheckpointLedgerWireSchema = Schema.Struct({
     interventionBudget: Schema.optional(InterventionBudgetWireSchema),
   }),
   findingLifecycle: Schema.optional(
-    Schema.Array(FindingLifecycleWireSchema).check(
+    Schema.Array(AdvisorFindingRecordSchema).check(
       Schema.isMaxLength(MAX_FINDING_LIFECYCLE_RECORDS),
     ),
   ),
@@ -250,18 +241,8 @@ function parseReviewSummary<ValueInput>(
 function sanitizeFindingLifecycle(values: readonly unknown[]): AdvisorFindingRecord[] {
   return values.slice(-MAX_FINDING_LIFECYCLE_RECORDS).flatMap((value): AdvisorFindingRecord[] => {
     if (!isValidAdvisorFindingRecord(value)) return [];
-    return [
-      {
-        id: value.id,
-        key: value.key,
-        generation: value.generation,
-        category: value.category,
-        severity: value.severity,
-        status: value.status,
-        firstSeenTurn: value.firstSeenTurn,
-        lastSeenTurn: value.lastSeenTurn,
-      },
-    ];
+    const decoded = Schema.decodeOption(AdvisorFindingRecordSchema)(value);
+    return Option.isSome(decoded) ? [decoded.value] : [];
   });
 }
 

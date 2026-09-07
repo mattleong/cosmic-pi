@@ -19,10 +19,12 @@ import {
   type BetterXaiExtensionDependencies,
 } from "../src/application.ts";
 import betterXai from "../src/extension.ts";
+import * as usageRequests from "../src/usage/request.ts";
 import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 type Handler = ExtensionHandler<any, any>;
@@ -133,31 +135,24 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     }),
   );
 
-  it.effect("uses status fallback instead of a custom footer when Cosmic UI is inactive", () =>
+  it.effect("restores status fallback when Cosmic UI releases footer ownership", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const h = yield* harness();
-      yield* fs.writeFileString(
-        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
-        "{}\n",
+      vi.spyOn(usageRequests, "requestXaiUsage").mockReturnValue(
+        Effect.succeed({
+          snapshot: {
+            capturedAt: 0,
+            weeklyUsedPercent: 25,
+            weeklyLeftPercent: 75,
+            weeklyResetInSeconds: null,
+            monthlyUsed: 10,
+            monthlyLimit: 100,
+            monthlyLeftPercent: 90,
+            monthlyResetInSeconds: null,
+            onDemandCap: null,
+            onDemandUsed: null,
+          },
+        }),
       );
-      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
-        if (name === COSMIC_UI_HOST_QUERY) {
-          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
-        }
-      });
-
-      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-
-      expect(h.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
-    }),
-  );
-
-  it.effect("re-queries and yields status ownership when Cosmic UI becomes active", () =>
-    Effect.gen(function* () {
       const h = yield* harness();
       let active = false;
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
@@ -167,26 +162,31 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         }
       });
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", expect.any(String));
+      const fallback = h.setStatus.mock.lastCall?.[1];
+      expect(fallback).not.toBe("");
       const stateListener = vi
         .mocked(h.pi.events.on)
         .mock.calls.find(([name]) => name === COSMIC_UI_HOST_STATE)?.[1];
-      expect(stateListener).toBeDefined();
-      const queriesBefore = vi
-        .mocked(h.pi.events.emit)
-        .mock.calls.filter(([name]) => name === COSMIC_UI_HOST_QUERY).length;
 
       active = true;
       stateListener?.({
         version: COSMIC_UI_PROTOCOL_VERSION,
-        active: true,
+        active,
         ready: true,
         hidden: [],
       });
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", undefined);
 
-      const queriesAfter = vi
-        .mocked(h.pi.events.emit)
-        .mock.calls.filter(([name]) => name === COSMIC_UI_HOST_QUERY).length;
-      expect(queriesAfter).toBe(queriesBefore + 1);
+      active = false;
+      stateListener?.({
+        version: COSMIC_UI_PROTOCOL_VERSION,
+        active,
+        ready: true,
+        hidden: [],
+      });
+      expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", fallback);
       expect(h.setFooter).not.toHaveBeenCalled();
       yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
@@ -194,13 +194,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
   it.effect("removes Cosmic contributions when usage is hidden", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const h = yield* harness();
-      yield* fs.writeFileString(
-        path.join(h.cwd, ".pi", "extensions", "pi-better-xai.json"),
-        "{}\n",
-      );
       vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
         if (name === COSMIC_UI_HOST_QUERY) {
           // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.

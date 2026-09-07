@@ -64,8 +64,7 @@ function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
   key: K,
   value: string,
 ): CodePreviewSettings[K] | undefined {
-  const current = settings;
-  const currentValue = current[key];
+  const currentValue = settings[key];
   let candidate: unknown = value;
   if (key === "tools") {
     const tools = parseCodePreviewTools(value);

@@ -521,7 +521,6 @@ describe("early-path clamp wiring", () => {
         expect(settled._tag, name).toBe(testCase.returned === true ? "returned" : "thrown");
         const text = settled._tag === "returned" ? textOf(settled.result) : settled.message;
         expect(text, name).toBe(expected);
-        expect(utf8ByteLength(text), name).toBe(utf8ByteLength(expected));
         expect(text, name).not.toContain("�");
         expect(runtimeCalls, name).toBe(testCase.calls ?? 0);
         if (settled._tag === "returned") expect(settled.result.details.cancelled).toBe(true);
@@ -531,21 +530,36 @@ describe("early-path clamp wiring", () => {
 });
 
 describe("host limits", () => {
-  it.effect("wires all runtime limit options from the current configuration", () =>
+  it.effect("enforces maxToolCalls before dispatching an excess nested call", () =>
     Effect.gen(function* () {
-      let observedLimits: unknown;
+      const calls: FakeCall[] = [];
       const execute = makeHarness({
-        config: { timeoutMs: 123, maxToolCalls: 4, maxOutputBytes: 567 },
-        executeCodeMode: (options) => {
-          observedLimits = options.limits;
-          return Effect.succeed({ ok: true, value: "ok" });
-        },
+        config: { maxToolCalls: 4 },
+        definitions: fakeDefinitions({ read: () => Promise.resolve("ok") }, calls),
       });
-      const result = yield* Effect.promise(() =>
-        execute("call-limits", { code: "return 1;" }, undefined, undefined, ctx),
+      yield* Effect.promise(() =>
+        expect(
+          execute(
+            "call-limits",
+            {
+              code: `
+                for (let index = 0; index < 5; index += 1) {
+                  await tools.pi.read({ path: String(index) });
+                }
+              `,
+            },
+            undefined,
+            undefined,
+            ctx,
+          ),
+        ).rejects.toThrow(/\[ToolCallLimitExceeded\]/),
       );
-      expect(textOf(result)).toBe("ok");
-      expect(observedLimits).toEqual({ timeoutMs: 123, maxToolCalls: 4, maxOutputBytes: 567 });
+      expect(calls.map((call) => call.input)).toEqual([
+        { path: "0" },
+        { path: "1" },
+        { path: "2" },
+        { path: "3" },
+      ]);
     }),
   );
 

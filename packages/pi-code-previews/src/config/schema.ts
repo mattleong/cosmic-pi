@@ -58,9 +58,7 @@ export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;
 export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
 
-const codePreviewSettingKeys = (): readonly (keyof CodePreviewSettings)[] => {
+export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(
   // SAFETY: The authoritative struct fields and CodePreviewSettings are derived from the same schema.
-  return Object.keys(CodePreviewSettingsSchema.fields) as readonly (keyof CodePreviewSettings)[];
-};
-
-export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(codePreviewSettingKeys());
+  Object.keys(CodePreviewSettingsSchema.fields) as (keyof CodePreviewSettings)[],
+);

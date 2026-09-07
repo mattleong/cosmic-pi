@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import {
   InvalidSettingError,
   makeUsageRefreshController,
@@ -29,11 +28,6 @@ import {
   isXaiSubscriptionModel,
   type XaiProjection,
 } from "./projection.ts";
-
-export class XaiBoundaryError extends Schema.TaggedError<XaiBoundaryError>()("XaiBoundaryError", {
-  operation: Schema.String,
-  message: Schema.String,
-}) {}
 
 interface XaiUsageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;

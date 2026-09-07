@@ -1,6 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
-import { expectTypeOf } from "vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,50 +7,13 @@ import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
 import { provideBuiltLayer } from "../index.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
-import {
-  JsonDocumentStore,
-  type JsonDocumentModification,
-  type JsonObject,
-} from "../src/platform/json-document.ts";
 import { JsonHttpClient } from "../src/platform/json-http.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
-import {
-  makeUsageRefreshController,
-  type UsageControllerConfig,
-  type UsageControllerStore,
-} from "../src/usage-controller.ts";
+import { makeUsageRefreshController, type UsageControllerConfig } from "../src/usage-controller.ts";
 import { initialUsageProjection } from "../src/usage-projection.ts";
 
 type TestConfig = UsageControllerConfig;
 type TestProjection = ReturnType<typeof initialUsageProjection<TestConfig, never>>;
-
-type UnscopedResolved = { readonly value: string };
-type UnscopedStoreError = { readonly _tag: "UnscopedStoreError" };
-interface ExpectedUnscopedStore {
-  readonly resolveConfig: (
-    cwd: string,
-    agentDir: string,
-    projectTrusted?: boolean,
-  ) => Effect.Effect<UnscopedResolved, UnscopedStoreError, JsonDocumentStore | Path.Path>;
-  readonly readRawConfig: (
-    path: string,
-  ) => Effect.Effect<JsonObject, UnscopedStoreError, JsonDocumentStore>;
-  readonly resolveCommittedConfig: (
-    current: UnscopedResolved,
-    committed: JsonObject,
-    globalFallback: JsonObject | undefined,
-  ) => UnscopedResolved;
-  readonly modifyConfig: <A, AfterCommitR = never>(
-    path: string,
-    modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-  ) => Effect.Effect<A, UnscopedStoreError, JsonDocumentStore | AfterCommitR>;
-}
-
-it("keeps the exported store structural for unscoped resolved values", () => {
-  expectTypeOf<
-    UsageControllerStore<UnscopedResolved, UnscopedStoreError>
-  >().toEqualTypeOf<ExpectedUnscopedStore>();
-});
 
 it.effect(
   "captures dependencies for an escaped refresh and defaults project trust to false",

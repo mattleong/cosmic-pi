@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
-import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Ref from "effect/Ref";
 
 export interface AdvisorResourceStateService {
   readonly replaceChild: <A, E, R>(
@@ -13,9 +13,9 @@ export interface AdvisorResourceStateService {
 /** Effect-owned resource authority. Resource handles never enter AdvisorApplicationState. */
 export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateService> =>
   Effect.gen(function* () {
-    const state = yield* SynchronizedRef.make<Effect.Effect<void> | undefined>(undefined);
+    const state = yield* Ref.make<Effect.Effect<void> | undefined>(undefined);
     const lifecycleLock = yield* Semaphore.make(1);
-    const detachChild = SynchronizedRef.getAndSet(state, undefined);
+    const detachChild = Ref.getAndSet(state, undefined);
     const stopChildEffect = lifecycleLock.withPermits(1)(
       Effect.uninterruptible(
         Effect.gen(function* () {
@@ -32,7 +32,7 @@ export const makeAdvisorResourceState = (): Effect.Effect<AdvisorResourceStateSe
             // Replacement stays fail-open if the previous finalizer defects.
             if (current) yield* current.pipe(Effect.ignoreCause);
             const value = yield* restore(acquire);
-            yield* SynchronizedRef.set(
+            yield* Ref.set(
               state,
               Effect.suspend(() => release(value)),
             );

@@ -3,8 +3,7 @@ import {
   activityAttentionCounts,
   type ActivityAttentionCounts,
 } from "./attention.ts";
-import { activityKey } from "./protocol.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
+import { isFinished, resolveActivityOwnership, type ActivityRow } from "./model.ts";
 
 export interface ActivityTreeRow {
   readonly row: ActivityRow;
@@ -27,29 +26,9 @@ export interface ActivityTreeOptions {
   readonly hideHistory?: boolean;
 }
 
-/** Missing owners and cyclic ownership are roots, never inferred from timing or titles. */
-function activityParents(rows: readonly ActivityRow[]): ReadonlyMap<string, string> {
-  const byKey = new Map(rows.map((row) => [row.key, row]));
-  const parents = new Map<string, string>();
-  for (const row of rows) {
-    if (!row.parent) continue;
-    const parent = activityKey(row.parent.providerId, row.parent.itemId);
-    if (!byKey.has(parent)) continue;
-    const seen = new Set([row.key]);
-    let cursor: string | undefined = parent;
-    while (cursor && !seen.has(cursor)) {
-      seen.add(cursor);
-      const owner: ActivityRow["parent"] = byKey.get(cursor)?.parent;
-      cursor = owner ? activityKey(owner.providerId, owner.itemId) : undefined;
-    }
-    if (!cursor) parents.set(row.key, parent);
-  }
-  return parents;
-}
-
 export function activityPath(rows: readonly ActivityRow[], key: string): readonly ActivityRow[] {
   const byKey = new Map(rows.map((row) => [row.key, row]));
-  const parents = activityParents(rows);
+  const { parents } = resolveActivityOwnership(byKey);
   const path: ActivityRow[] = [];
   let cursor = byKey.get(key);
   while (cursor) {
@@ -65,7 +44,7 @@ export function activityTree(
   options: ActivityTreeOptions = {},
 ): readonly ActivityTreeRow[] {
   const byKey = new Map(rows.map((row) => [row.key, row]));
-  const parents = activityParents(rows);
+  const { parents } = resolveActivityOwnership(byKey);
   const children = new Map<string, ActivityRow[]>();
   for (const row of rows) {
     const parent = parents.get(row.key);

@@ -23,8 +23,7 @@ export const BACKGROUND_TASK_CODE_MODE_BOUNDS = Object.freeze({
   maxSnapshots: 600,
 });
 
-const PositiveFinite = Schema.Number.check(
-  Schema.isFinite(),
+const PositiveFinite = Schema.Finite.check(
   Schema.isGreaterThanOrEqualTo(BACKGROUND_TASK_CODE_MODE_BOUNDS.minTimeoutSeconds),
 );
 const NonNegativeInteger = Schema.Natural;
@@ -124,8 +123,7 @@ export const BackgroundTaskCodeModeInputSchema = Schema.Struct({
     ),
   ),
   waitSeconds: Schema.optionalKey(
-    Schema.Number.check(
-      Schema.isFinite(),
+    Schema.Finite.check(
       Schema.isBetween({
         minimum: 0,
         maximum: BACKGROUND_TASK_CODE_MODE_BOUNDS.maxWaitSeconds,

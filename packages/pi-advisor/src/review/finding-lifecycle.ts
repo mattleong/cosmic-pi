@@ -1,4 +1,4 @@
-import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 import { createHash } from "node:crypto";
 import {
@@ -7,24 +7,26 @@ import {
   ADVISOR_SEVERITIES,
   advisorSeverityRank,
   type AdvisorFinding,
-  type AdvisorFindingCategory,
-  type AdvisorFindingStatus,
-  type AdvisorSeverity,
 } from "./schema.ts";
 import { canonicalAdvisorFindingFingerprint } from "./schema.ts";
 import { isJsonObject } from "pi-cosmic-core";
 
 export const MAX_FINDING_LIFECYCLE_RECORDS = 64;
-export interface AdvisorFindingRecord {
-  id: string;
-  key: string;
-  generation: number;
-  category: AdvisorFindingCategory;
-  severity: AdvisorSeverity;
-  status: AdvisorFindingStatus;
-  firstSeenTurn: number;
-  lastSeenTurn: number;
-}
+const NonNegativeIntSchema = Schema.Finite.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0));
+export const AdvisorFindingRecordSchema = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^af_[a-f\d]{32}$/)),
+  key: Schema.String.check(Schema.isPattern(/^[a-f\d]{64}$/)),
+  generation: NonNegativeIntSchema,
+  category: Schema.Literals(ADVISOR_FINDING_CATEGORIES),
+  severity: Schema.Literals(ADVISOR_SEVERITIES),
+  status: Schema.Literals(ADVISOR_FINDING_STATUSES),
+  firstSeenTurn: NonNegativeIntSchema,
+  lastSeenTurn: NonNegativeIntSchema,
+}).check(
+  Schema.makeFilter((record) => record.lastSeenTurn >= record.firstSeenTurn),
+  Schema.makeFilter((record) => record.id === advisorFindingId(record.key, record.generation)),
+);
+export type AdvisorFindingRecord = Schema.Schema.Type<typeof AdvisorFindingRecordSchema>;
 export interface AdvisorFindingLifecycleState {
   readonly records: readonly AdvisorFindingRecord[];
 }
@@ -125,32 +127,7 @@ function trimRecords(records: AdvisorFindingRecord[]): AdvisorFindingRecord[] {
 export function isValidAdvisorFindingRecord<ValueInput>(
   value: ValueInput,
 ): value is ValueInput & AdvisorFindingRecord {
-  if (!isJsonObject(value)) return false;
-  return (
-    Predicate.isString(value.id) &&
-    /^af_[a-f\d]{32}$/.test(value.id) &&
-    Predicate.isString(value.key) &&
-    /^[a-f\d]{64}$/.test(value.key) &&
-    Predicate.isNumber(value.generation) &&
-    Number.isSafeInteger(value.generation) &&
-    value.generation >= 0 &&
-    isOneOf(value.category, ADVISOR_FINDING_CATEGORIES) &&
-    isOneOf(value.severity, ADVISOR_SEVERITIES) &&
-    isOneOf(value.status, ADVISOR_FINDING_STATUSES) &&
-    Predicate.isNumber(value.firstSeenTurn) &&
-    Number.isSafeInteger(value.firstSeenTurn) &&
-    value.firstSeenTurn >= 0 &&
-    Predicate.isNumber(value.lastSeenTurn) &&
-    Number.isSafeInteger(value.lastSeenTurn) &&
-    value.lastSeenTurn >= value.firstSeenTurn &&
-    value.id === advisorFindingId(value.key, value.generation)
-  );
-}
-function isOneOf<const Values extends readonly unknown[], ValueInput>(
-  value: ValueInput,
-  values: Values,
-): value is ValueInput & Values[number] {
-  return values.includes(value);
+  return isJsonObject(value) && Schema.is(AdvisorFindingRecordSchema)(value);
 }
 function isTerminal(record: AdvisorFindingRecord): boolean {
   return record.status === "resolved" || record.status === "superseded";

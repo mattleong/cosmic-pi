@@ -91,14 +91,10 @@ export const writeAdvisorConfigPatchEffect = Effect.fn("AdvisorConfig.patch")(fu
       path,
       message: "Unable to commit Advisor configuration state atomically.",
     });
-  let next: JsonObject | undefined;
-  yield* documents
-    .updateObject(path, (raw) => {
-      next = patchAdvisorConfig(raw, patch);
-      return next;
-    })
+  const next = yield* documents
+    .updateObject(path, (raw) => patchAdvisorConfig(raw, patch))
     .pipe(Effect.mapError(mapConfigError("update", path)));
-  return normalizeAdvisorConfig(next ?? {}, path);
+  return normalizeAdvisorConfig(next, path);
 });
 
 export class AdvisorConfigStoreError extends Schema.TaggedError<AdvisorConfigStoreError>()(

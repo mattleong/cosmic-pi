@@ -15,9 +15,6 @@ export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuth
 type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
 type Model = NonNullable<ExtensionContext["model"]>;
 
-/** Synchronous Pi-renderer boundary. Host failures fail closed and never escape rendering. */
-export { isUsingOAuthAtHostBoundary } from "pi-cosmic-core";
-
 /** Named Pi boundary for the model registry's Promise-returning credential lookup. */
 export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth>()(
   "pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth",

@@ -57,13 +57,9 @@ export class DirectoryModelStore extends Context.Service<DirectoryModelStore>()(
         identity: DirectoryIdentity,
         preference: DirectoryModelPreference,
       ) {
-        const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(
-          preference,
-        ).pipe(Effect.mapError(storeError));
-        yield* documents
-          .writeObject(identity.preferencePath, document)
-          .pipe(Effect.mapError(storeError));
-      });
+        const document = yield* Schema.encodeEffect(DirectoryModelPreferenceSchema)(preference);
+        yield* documents.writeObject(identity.preferencePath, document);
+      }, Effect.mapError(storeError));
 
       return { identify, read, write };
     }),

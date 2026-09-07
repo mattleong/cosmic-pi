@@ -17,14 +17,48 @@ const snapshot = {
 };
 
 describe("Background Tasks Code Mode output projection", () => {
-  it("refuses before schema decoding when the current allowance is too small", () => {
+  it("round-trips command results while omitting raw log events", () => {
+    const logs = {
+      id: snapshot.id,
+      nextCursor: 2,
+      earliestAvailableCursor: 1,
+      droppedBytes: 0,
+      state: snapshot.state,
+    };
+    const details: BackgroundTaskCommandResult["details"][] = [
+      ...(["start", "status", "stop"] as const).map((action) => ({ action, snapshot })),
+      ...(["list", "stop_all"] as const).map((action) => ({ action, tasks: [snapshot] })),
+      { action: "logs", logs: { ...logs, events: [] } },
+      {
+        action: "wait",
+        wait: {
+          id: snapshot.id,
+          nextCursor: 2,
+          earliestAvailableCursor: 1,
+          droppedBytes: 0,
+          outcome: "matched",
+          snapshot,
+          matchCursor: 2,
+        },
+      },
+      { action: "clear", removed: 3 },
+    ];
+    for (const item of details) {
+      const result = { text: item.action, details: item };
+      const expected = item.action === "logs" ? { action: item.action, logs } : item;
+      expect(projectBackgroundTaskCodeModeOutput(result, 4_096)).toEqual({
+        _tag: "Accepted",
+        output: { text: result.text, ...expected },
+      });
+    }
+  });
+
+  it("refuses output exceeding the current allowance", () => {
     const result: BackgroundTaskCommandResult = {
       text: "No background tasks.",
       details: { action: "list", tasks: [] },
     };
     expect(projectBackgroundTaskCodeModeOutput(result, 0)).toEqual({ _tag: "Refused" });
-    // Exact sizing accepts any output that genuinely fits; the old fixed-slack estimator
-    // conservatively refused the ~768-byte boundary window (approved Round-1 delta).
     expect(projectBackgroundTaskCodeModeOutput(result, 128)).toEqual({
       _tag: "Accepted",
       output: { action: "list", text: "No background tasks.", tasks: [] },
@@ -156,7 +190,7 @@ describe("Background Tasks Code Mode output projection", () => {
     },
   );
 
-  it("counts lone surrogates as JSON escapes before decoding", () => {
+  it("counts lone surrogates as JSON escapes against the allowance", () => {
     const result: BackgroundTaskCommandResult = {
       text: "bg-1 running",
       details: {
@@ -167,7 +201,7 @@ describe("Background Tasks Code Mode output projection", () => {
     expect(projectBackgroundTaskCodeModeOutput(result, 4_000)).toEqual({ _tag: "Refused" });
   });
 
-  it("refuses oversized snapshot fields before decoding", () => {
+  it("refuses oversized snapshot fields even with a sufficient byte allowance", () => {
     const result: BackgroundTaskCommandResult = {
       text: "bg-1 running",
       details: {
@@ -178,7 +212,7 @@ describe("Background Tasks Code Mode output projection", () => {
     expect(projectBackgroundTaskCodeModeOutput(result, 1_000_000)).toEqual({ _tag: "Refused" });
   });
 
-  it("refuses large text without allocating a detached schema result", () => {
+  it("refuses text exceeding the byte allowance", () => {
     const result: BackgroundTaskCommandResult = {
       text: "x".repeat(8_000),
       details: { action: "status", snapshot },

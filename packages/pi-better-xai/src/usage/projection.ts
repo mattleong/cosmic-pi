@@ -2,12 +2,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import {
   initialUsageProjection,
+  isUsingOAuthAtHostBoundary,
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
   synchronizeUsageProjectionContext,
   type UsageProjectionBase,
 } from "pi-cosmic-core";
-import { isUsingOAuthAtHostBoundary } from "../boundary/model-registry-auth.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import type { UsageSnapshot } from "./format.ts";
 

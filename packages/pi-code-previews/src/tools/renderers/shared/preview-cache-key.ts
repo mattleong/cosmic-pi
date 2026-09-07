@@ -59,10 +59,6 @@ export function writeCallPreviewCacheKey(
   ].join("\0");
 }
 
-export function previewArgsKey(kind: string, source: string, path: string): string {
-  return [kind, path, source.length, hashString(source)].join("\0");
-}
-
 function shikiStatusCacheKey(): string {
   const shikiStatus = getShikiStatus();
   return [
@@ -74,8 +70,7 @@ function shikiStatusCacheKey(): string {
 }
 
 function themeCacheKey(theme: Theme): string {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-  const namedTheme = (theme as Theme & { name?: string }).name ?? "";
+  const namedTheme = theme.name ?? "";
   if ((!hasObjectRuntimeType(theme) && !Predicate.isFunction(theme)) || theme === null)
     return namedTheme;
   let id = themeCacheIds.get(theme);

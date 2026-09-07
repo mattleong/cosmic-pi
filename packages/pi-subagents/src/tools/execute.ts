@@ -69,35 +69,25 @@ export interface SubagentToolRuntime {
   ) => Promise<A>;
 }
 
-const matchActionOutcome = (id: string) =>
-  Effect.match({
-    onFailure: (error: SubagentError) => ({
-      failure: {
-        id,
-        message: error.message,
-        code: subagentErrorCode(error),
-      } satisfies SubagentActionFailure,
-    }),
-    onSuccess: (run: SubagentRunView) => ({ run }),
-  });
-
-type ActionOutcome =
-  | { readonly run: SubagentRunView }
-  | { readonly failure: SubagentActionFailure };
-
-const splitOutcomes = (outcomes: ReadonlyArray<ActionOutcome>) => ({
-  runs: outcomes.flatMap((outcome) => ("run" in outcome ? [outcome.run] : [])),
-  actionFailures: outcomes.flatMap((outcome) => ("failure" in outcome ? [outcome.failure] : [])),
-});
-
-/** Runs one outcome-producing operation per target and splits the batch results. */
-const forEachOutcome = (
+/** Partitions typed failures and runs in target order; defects and interruption propagate. */
+const forEachOutcome = <R>(
   ids: ReadonlyArray<string>,
-  operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError>,
+  operation: (id: string) => Effect.Effect<SubagentRunView, SubagentError, R>,
 ) =>
-  Effect.forEach(ids, (id) => operation(id).pipe(matchActionOutcome(id)), { concurrency: 8 }).pipe(
-    Effect.map(splitOutcomes),
-  );
+  Effect.partition(
+    ids,
+    (id) =>
+      operation(id).pipe(
+        Effect.mapError(
+          (error): SubagentActionFailure => ({
+            id,
+            message: error.message,
+            code: subagentErrorCode(error),
+          }),
+        ),
+      ),
+    { concurrency: 8 },
+  ).pipe(Effect.map(([actionFailures, runs]) => ({ runs, actionFailures })));
 
 const requiredField = (
   value: string,
@@ -311,44 +301,39 @@ export const executeSubagentActionEffect = (
         const profileService = yield* SubagentProfileService;
         const policySnapshot = yield* profileService.capture;
         yield* authorize(ids);
-        return yield* Effect.forEach(
-          ids,
-          (id) => {
-            let handedOff = false;
-            const operation = Effect.acquireUseRelease(
-              service.claimRetryContinuation(id),
-              (claim) =>
-                resolveProfileRetry(pi, claim, ctx, environment).pipe(
-                  Effect.map((request) => ({
-                    ...request,
-                    parentRunId: claim.source.parentRunId,
-                    nestingPolicy: policySnapshot.effectiveConfig.nesting,
-                    nestingPolicyRevision: policySnapshot.revision,
-                  })),
-                  Effect.catch((error) => {
-                    const finalize =
-                      subagentErrorCode(error) === "retry_route_exhausted"
-                        ? service.exhaustRetryClaim(id, claim.claimToken)
-                        : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
-                          ? service.blockRetryClaim(id, claim.claimToken)
-                          : Effect.void;
-                    return finalize.pipe(Effect.andThen(Effect.fail(error)));
-                  }),
-                  Effect.flatMap((request) =>
-                    Effect.uninterruptibleMask((restore) =>
-                      Effect.sync(() => {
-                        handedOff = true;
-                      }).pipe(Effect.andThen(restore(service.startRetrySessionOwned(request)))),
-                    ),
+        return yield* forEachOutcome(ids, (id) => {
+          let handedOff = false;
+          const operation = Effect.acquireUseRelease(
+            service.claimRetryContinuation(id),
+            (claim) =>
+              resolveProfileRetry(pi, claim, ctx, environment).pipe(
+                Effect.map((request) => ({
+                  ...request,
+                  parentRunId: claim.source.parentRunId,
+                  nestingPolicy: policySnapshot.effectiveConfig.nesting,
+                  nestingPolicyRevision: policySnapshot.revision,
+                })),
+                Effect.catch((error) => {
+                  const finalize =
+                    subagentErrorCode(error) === "retry_route_exhausted"
+                      ? service.exhaustRetryClaim(id, claim.claimToken)
+                      : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
+                        ? service.blockRetryClaim(id, claim.claimToken)
+                        : Effect.void;
+                  return finalize.pipe(Effect.andThen(Effect.fail(error)));
+                }),
+                Effect.flatMap((request) =>
+                  Effect.uninterruptibleMask((restore) =>
+                    Effect.sync(() => {
+                      handedOff = true;
+                    }).pipe(Effect.andThen(restore(service.startRetrySessionOwned(request)))),
                   ),
                 ),
-              (claim) =>
-                handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken),
-            );
-            return operation.pipe(matchActionOutcome(id));
-          },
-          { concurrency: 8 },
-        ).pipe(Effect.map(splitOutcomes));
+              ),
+            (claim) => (handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken)),
+          );
+          return operation;
+        });
       }
       case "interrupt":
       case "resume":

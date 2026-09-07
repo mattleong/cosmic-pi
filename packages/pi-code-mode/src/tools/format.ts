@@ -176,21 +176,15 @@ const boundedCallEntries = (
   calls: ReadonlyArray<CodeModeCallEntry>,
 ): ReadonlyArray<CodeModeCallEntry> => {
   if (calls.length <= MAX_PROGRESS_ENTRIES) return calls.map((call) => ({ ...call }));
-  const important = calls
-    .map((call, index) => ({ call, index }))
-    .filter(({ call }) => call.status !== "completed");
-  const keptImportant = important.slice(-MAX_PROGRESS_ENTRIES);
-  const remaining = Math.max(0, MAX_PROGRESS_ENTRIES - keptImportant.length);
-  const keptSuccesses =
-    remaining === 0
-      ? []
-      : calls
-          .map((call, index) => ({ call, index }))
-          .filter(({ call }) => call.status === "completed")
-          .slice(-remaining);
-  return [...keptImportant, ...keptSuccesses]
-    .sort((left, right) => left.index - right.index)
-    .map(({ call }) => ({ ...call }));
+  const selected = new Set(
+    calls
+      .flatMap((call, index) => (call.status === "completed" ? [] : [index]))
+      .slice(-MAX_PROGRESS_ENTRIES),
+  );
+  for (let index = calls.length - 1; selected.size < MAX_PROGRESS_ENTRIES; index -= 1) {
+    selected.add(index);
+  }
+  return calls.filter((_, index) => selected.has(index)).map((call) => ({ ...call }));
 };
 
 /** Bounded display rows plus exact counts for accurate hidden-row projection. */

@@ -16,11 +16,9 @@ export interface CodeModeOutputField {
   readonly body: string;
 }
 
-const boundedTerminalText = (text: string): string =>
-  truncateDisplay(stripTerminalControls(text), MAX_OUTPUT_DISPLAY_LENGTH);
-
 /** Safe plain fallback used for text results, malformed/truncated JSON, and hostile details. */
-export const codeModeOutputText = (text: string): string => boundedTerminalText(text);
+export const codeModeOutputText = (text: string): string =>
+  truncateDisplay(stripTerminalControls(text), MAX_OUTPUT_DISPLAY_LENGTH);
 
 const splitStructuredOutput = (
   text: string,
@@ -82,6 +80,6 @@ export function projectStructuredCodeModeOutput(
     fields.push({ label, body: stripTerminalControls(field) });
   }
   if (split.logs !== undefined)
-    fields.push({ label: "Logs", body: boundedTerminalText(split.logs) });
+    fields.push({ label: "Logs", body: codeModeOutputText(split.logs) });
   return fields;
 }

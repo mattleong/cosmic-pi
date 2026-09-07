@@ -58,7 +58,7 @@ const promiseLatch = <T>() => {
   return {
     promise: Effect.runPromise(Deferred.await(value)),
     resolve: (next?: T) => {
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: Void deferreds may resolve without an argument; value-bearing deferreds supply their T at every call.
       Deferred.doneUnsafe(value, Effect.succeed(next as T));
     },
   };
@@ -73,7 +73,7 @@ afterEach(() =>
 const makeTestRuntime = (overrides: TestChildFactoryOverrides) => {
   const scope = Scope.makeUnsafe();
   let runtime!: TestRuntime;
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: The runtime child Ref starts empty and is accessed only by the runtime lifecycle methods.
   runtime = new AdvisorRuntime(
     makeTestChildFactory(overrides),
     standaloneAdvisorExecutor,
@@ -188,7 +188,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
                 stopReason,
               };
         messages.push(analysis);
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The event observer reads message role, content, and stopReason; provider metadata is not needed here.
         listener?.({ type: "message_end", message: analysis } as never);
         if (queuedFinalPrompt) {
           const finalPrompt = queuedFinalPrompt;
@@ -211,7 +211,7 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
             stopReason: "stop",
           };
           messages.push(assistant);
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          // SAFETY: The event observer reads message role, content, and stopReason; provider metadata is not needed here.
           listener?.({ type: "message_end", message: assistant } as never);
         }
         streaming = false;
@@ -231,19 +231,18 @@ function harness(stopReason: "stop" | "aborted" | "error" = "stop", pauseBeforeA
     abort: vi.fn(() => Promise.resolve(undefined)),
     dispose: vi.fn(),
   };
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
   const runtime = makeTestRuntime({
     createChildModel: vi.fn(() => Promise.resolve(testChildModel())),
     createSession: vi.fn((next) => {
       options = next;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The child factory uses this supplied session; extension discovery metadata is never read.
       return Promise.resolve({
         session: agentSessionFixture(session),
         extensionsResult: {} as never,
       });
     }),
   });
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: emit deliberately forwards partial child events so runtime event validation can be exercised.
   return {
     runtime,
     session,
@@ -268,7 +267,7 @@ function start(
     seed?: string;
   } = {},
 ): Promise<void> {
-  // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+  // SAFETY: The injected child-model factory does not query the model registry in this runtime context.
   return runtime.start({
     ctx: { cwd: process.cwd(), modelRegistry: {} as never },
     config: resolvedAdvisorConfig({ configPath: "/tmp/config", ...overrides }),
@@ -311,10 +310,7 @@ describe("AdvisorRuntime", () => {
         }),
       );
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const firstPrompt = String(
-        (value.session.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] ?? "",
-      );
+      const firstPrompt = String(vi.mocked(value.session.prompt).mock.calls[0]?.[0] ?? "");
       expect(firstPrompt).toContain("START-");
       expect(firstPrompt).toContain("-END");
     }),
@@ -325,14 +321,14 @@ describe("AdvisorRuntime", () => {
     () =>
       Effect.gen(function* () {
         const value = harness();
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: Extra config keys deliberately simulate untrusted persisted tool settings that runtime startup must ignore.
         const injectedConfig = {
           ...resolvedAdvisorConfig({ configPath: "/tmp/config" }),
           tools: ["all", "bash", "write", "provider-tool"],
           command: "touch injected",
           customTools: [{ name: "edit" }],
         } as ResolvedAdvisorConfig;
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The injected child-model factory does not query the model registry in this runtime context.
         yield* Effect.promise(() =>
           value.runtime.start({
             ctx: {
@@ -350,7 +346,7 @@ describe("AdvisorRuntime", () => {
 
         const options = value.getOptions();
         const firstRegistry = options?.resourceLoader?.getExtensions();
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The fake extension is inserted only to verify registry snapshot isolation; no extension is executed.
         firstRegistry?.extensions.push({ path: "injected-extension" } as never);
         expect(options?.resourceLoader?.getExtensions().extensions).toEqual([]);
         expect(options?.tools).toEqual(ADVISOR_TOOL_NAMES);
@@ -401,7 +397,7 @@ describe("AdvisorRuntime", () => {
       value.session.followUp.mockImplementation((text: string) => {
         streamingDuringFollowUp = value.session.isStreaming;
         value.actions.push("followUp");
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The fixture owns a mutable message array; this simulates the session appending its follow-up message.
         const messages = value.session.messages as unknown[];
         messages.push({ role: "user", content: [{ type: "text", text }] });
         const id = /checkpointId "([^"]+)"/.exec(text)?.[1] ?? "sync";
@@ -575,7 +571,7 @@ describe("AdvisorRuntime", () => {
   it.effect("fails closed and finalizes an unsafe child exactly once", () =>
     Effect.gen(function* () {
       const { runtime, session, unsubscribe } = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The mock deliberately returns a forbidden tool outside the read-only union to test fail-closed startup.
       (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
       yield* Effect.promise(() => expect(start(runtime)).rejects.toThrow("safety check failed"));
       yield* Effect.promise(() => runtime.dispose());
@@ -622,8 +618,7 @@ describe("AdvisorRuntime", () => {
   it.effect("owns the child before fallible event subscription acquisition", () =>
     Effect.gen(function* () {
       const { runtime, session } = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (session.subscribe as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      vi.mocked(session.subscribe).mockImplementation(() => {
         throw new Error("subscribe failed");
       });
       yield* Effect.promise(() => expect(start(runtime)).rejects.toThrow(/subscription/i));
@@ -638,10 +633,9 @@ describe("AdvisorRuntime", () => {
   it.effect("persistent child rejection and abort failure still dispose exactly once", () =>
     Effect.gen(function* () {
       const { runtime, session, unsubscribe } = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The host sessionFile is readonly to consumers; this fixture injects a forbidden persistent file before startup.
       (session as { sessionFile: string | undefined }).sessionFile = "/tmp/forbidden.jsonl";
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      (session.abort as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("abort failed"));
+      vi.mocked(session.abort).mockRejectedValue(new Error("abort failed"));
       yield* Effect.promise(() => expect(start(runtime)).rejects.toThrow(/persistent file/i));
       yield* Effect.promise(() => runtime.dispose());
       expect(session.abort).toHaveBeenCalledTimes(1);
@@ -654,7 +648,7 @@ describe("AdvisorRuntime", () => {
   it.effect("throwing diagnostics cannot skip unsafe-tool cleanup", () =>
     Effect.gen(function* () {
       const { runtime, session } = harness();
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The mock deliberately returns a forbidden tool outside the read-only union to test fail-closed startup.
       (session.getActiveToolNames as ReturnType<typeof vi.fn>).mockReturnValue(["read", "bash"]);
       yield* Effect.promise(() =>
         expect(
@@ -686,11 +680,10 @@ describe("AdvisorRuntime", () => {
       const session = defaultAgentSession({
         subscribe: vi.fn(() => unsubscribe),
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The injected session factory ignores extension discovery metadata; this test exercises model-acquisition cancellation.
       const layer = runtimeServiceTestLayer({
         createChildModel: vi.fn(() => {
           modelCalls += 1;
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           return modelCalls === 1 ? firstModel : Promise.resolve(testChildModel());
         }),
         createTools: vi.fn(() => Promise.resolve([])),
@@ -699,7 +692,6 @@ describe("AdvisorRuntime", () => {
       const managed = ManagedRuntime.make(layer);
       return yield* Effect.gen(function* () {
         const service = yield* Effect.promise(() => managed.runPromise(AdvisorRuntimeService));
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         const options = testRuntimeOptions();
         const first = managed.runPromise(service.start(options));
         yield* Effect.promise(() => vi.waitFor(() => expect(modelCalls).toBe(1)));
@@ -707,7 +699,6 @@ describe("AdvisorRuntime", () => {
         expect(service.activeToolNames()).toEqual([]);
         expect(session.dispose).not.toHaveBeenCalled();
 
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         resolveFirst(testChildModel());
         yield* Effect.promise(() => expect(first).rejects.toThrow(/stale/i));
         expect(service.activeToolNames()).toEqual([]);
@@ -740,7 +731,7 @@ describe("AdvisorRuntime", () => {
         );
         const restartedSession = makeSession();
         const sessions = [firstSession, restartedSession];
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+        // SAFETY: The injected session factory uses only the supplied session and ignores extension discovery metadata.
         const layer = runtimeServiceTestLayer({
           createChildModel: vi.fn(() => Promise.resolve(testChildModel())),
           createTools: vi.fn(() => Promise.resolve([])),
@@ -754,7 +745,6 @@ describe("AdvisorRuntime", () => {
         const managed = ManagedRuntime.make(layer);
         return yield* Effect.gen(function* () {
           const service = yield* Effect.promise(() => managed.runPromise(AdvisorRuntimeService));
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           const options = testRuntimeOptions();
           if (restartCause === "fatal safety rejection")
             yield* Effect.promise(() =>
@@ -784,7 +774,7 @@ describe("AdvisorRuntime", () => {
           yield* Effect.promise(() =>
             vi.waitFor(() => expect(restartedSession.prompt).toHaveBeenCalledOnce()),
           );
-          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          // SAFETY: The text-delta observer reads event type and delta only; provider message metadata is omitted.
           emitters.at(-1)?.({
             type: "message_update",
             assistantMessageEvent: {
@@ -813,14 +803,13 @@ describe("AdvisorRuntime", () => {
       const oldSession = makeSession(() => oldAbortGate);
       const latestSession = makeSession(() => Promise.resolve(undefined));
       const sessions = [oldSession, latestSession];
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The injected session factory uses only the supplied session and ignores extension discovery metadata.
       const createSession = vi.fn(() =>
         Promise.resolve({
           session: sessions.shift() ?? latestSession,
           extensionsResult: {} as never,
         }),
       );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const layer = runtimeServiceTestLayer({
         createChildModel: vi.fn(() => Promise.resolve(testChildModel())),
         createTools: vi.fn(() => Promise.resolve([])),
@@ -829,7 +818,6 @@ describe("AdvisorRuntime", () => {
       const managed = ManagedRuntime.make(layer);
       return yield* Effect.gen(function* () {
         const service = yield* Effect.promise(() => managed.runPromise(AdvisorRuntimeService));
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
         const options = testRuntimeOptions();
         yield* Effect.promise(() => managed.runPromise(service.start(options)));
 
@@ -964,7 +952,7 @@ describe("AdvisorRuntime", () => {
   it.effect("ManagedRuntime disposal alone releases the active child exactly once", () =>
     Effect.gen(function* () {
       const session = defaultAgentSession({});
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      // SAFETY: The injected session factory uses only the supplied session and ignores extension discovery metadata.
       const layer = runtimeServiceTestLayer({
         createChildModel: vi.fn(() => Promise.resolve(testChildModel())),
         createTools: vi.fn(() => Promise.resolve([])),
@@ -972,7 +960,6 @@ describe("AdvisorRuntime", () => {
       });
       const managed = ManagedRuntime.make(layer);
       const service = yield* Effect.promise(() => managed.runPromise(AdvisorRuntimeService));
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* Effect.promise(() => managed.runPromise(service.start(testRuntimeOptions())));
 
       yield* Effect.promise(() => managed.dispose());
