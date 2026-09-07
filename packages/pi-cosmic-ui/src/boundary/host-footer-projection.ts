@@ -15,19 +15,16 @@ export interface FooterModelView {
   readonly id: string;
   readonly provider: string;
   readonly reasoning: boolean;
-  readonly contextWindow: number;
 }
 
 export interface FooterProjectedModel {
   readonly id: string;
   readonly provider: string;
   readonly reasoning: boolean;
-  readonly contextWindow: number;
 }
 
 export interface FooterHostProjection {
   readonly model: FooterProjectedModel | undefined;
-  readonly contextUsage: FooterContextUsage;
   readonly cwd: string;
   readonly branch: string | null;
   readonly sessionName: string | undefined;
@@ -55,16 +52,13 @@ export const materializeModel = (
     () => {
       const source = ctx.model;
       if (!source) return undefined;
-      const contextWindow = decodeHostCount(source.contextWindow);
-      return contextWindow === undefined
-        ? undefined
-        : Object.freeze({
-            source,
-            id: source.id,
-            provider: source.provider,
-            reasoning: source.reasoning,
-            contextWindow,
-          });
+      if (decodeHostCount(source.contextWindow) === undefined) return undefined;
+      return Object.freeze({
+        source,
+        id: source.id,
+        provider: source.provider,
+        reasoning: source.reasoning,
+      });
     },
     undefined,
   );
@@ -94,9 +88,8 @@ export const materializeFooterHostProjection = (options: {
   readonly footerData: ReadonlyFooterDataProvider;
   readonly callbacks: HostCallbackBoundaryContract;
   readonly model: FooterModelView | undefined;
-  readonly contextUsage: FooterContextUsage;
 }): FooterHostProjection => {
-  const { pi, ctx, footerData, callbacks, model, contextUsage } = options;
+  const { pi, ctx, footerData, callbacks, model } = options;
   // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
   const extensionStatuses = hostQuery(
     callbacks,
@@ -113,10 +106,8 @@ export const materializeFooterHostProjection = (options: {
           id: model.id,
           provider: model.provider,
           reasoning: model.reasoning,
-          contextWindow: model.contextWindow,
         })
       : undefined,
-    contextUsage,
     cwd: ctx ? hostQuery(callbacks, () => ctx.sessionManager.getCwd(), "?") : "?",
     branch: hostQuery<string | null>(callbacks, () => footerData.getGitBranch(), null),
     sessionName: ctx

@@ -15,7 +15,6 @@ export interface WorkingOwnerHost {
 
 interface WorkingRunOwner {
   readonly token: number;
-  readonly generation: number;
 }
 
 export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
@@ -23,47 +22,27 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
   let workingRunGeneration = 0;
   let activeAgentOwner: WorkingRunOwner | undefined;
   let promptOwner: WorkingRunOwner | undefined;
-  let releasedOwner: WorkingRunOwner | undefined;
-
-  const sameWorkingOwner = (
-    left: WorkingRunOwner | undefined,
-    right: WorkingRunOwner | undefined,
-  ): boolean =>
-    left !== undefined &&
-    right !== undefined &&
-    left.token === right.token &&
-    left.generation === right.generation;
-
-  const admitWorkingTimer = (
-    operation: (timer: WorkingTimerServiceContract) => Effect.Effect<void>,
-    expectedToken?: number,
-  ): number | undefined => {
-    const activation = workingTimer;
-    if (
-      activation === undefined ||
-      (expectedToken !== undefined && activation.token !== expectedToken) ||
-      !host.isCurrent(activation.token)
-    )
-      return undefined;
-    const fiber = host.fork(
-      Effect.suspend(() =>
-        workingTimer === activation && host.isCurrent(activation.token)
-          ? operation(activation.timer)
-          : Effect.void,
-      ),
-    );
-    return fiber === undefined ? undefined : activation.token;
-  };
 
   const admitWhen = (
     condition: () => boolean,
     operation: (timer: WorkingTimerServiceContract) => Effect.Effect<void>,
-    expectedToken?: number,
-  ): number | undefined =>
-    admitWorkingTimer(
-      (timer) => Effect.suspend(() => (condition() ? operation(timer) : Effect.void)),
-      expectedToken,
+    expectedToken: number,
+  ): void => {
+    const activation = workingTimer;
+    if (
+      activation === undefined ||
+      activation.token !== expectedToken ||
+      !host.isCurrent(activation.token)
+    )
+      return;
+    host.fork(
+      Effect.suspend(() =>
+        workingTimer === activation && host.isCurrent(activation.token) && condition()
+          ? operation(activation.timer)
+          : Effect.void,
+      ),
     );
+  };
 
   return {
     /** Runtime activation: registers the current session's timer token. */
@@ -90,7 +69,7 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
       const owner = activeAgentOwner;
       if (!owner) return;
       admitWhen(
-        () => sameWorkingOwner(activeAgentOwner, owner),
+        () => activeAgentOwner === owner,
         (timer) => timer.pauseOutput,
         owner.token,
       );
@@ -100,11 +79,12 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
       const activation = workingTimer;
       if (!activation || !host.isCurrent(activation.token)) return;
       if (activeAgentOwner?.token === activation.token) return;
-      const owner = { token: activation.token, generation: ++workingRunGeneration };
+      workingRunGeneration += 1;
+      const owner = { token: activation.token };
       activeAgentOwner = owner;
       promptOwner = undefined;
       admitWhen(
-        () => sameWorkingOwner(activeAgentOwner, owner),
+        () => activeAgentOwner === owner,
         (timer) => timer.start,
         owner.token,
       );
@@ -114,7 +94,7 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
       const owner = activeAgentOwner;
       if (!owner) return;
       activeAgentOwner = undefined;
-      if (sameWorkingOwner(promptOwner, owner)) promptOwner = undefined;
+      if (promptOwner === owner) promptOwner = undefined;
       const settledGeneration = ++workingRunGeneration;
       admitWhen(
         () => activeAgentOwner === undefined && workingRunGeneration === settledGeneration,
@@ -132,33 +112,22 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
       if (!owner || promptOwner !== undefined) return;
       promptOwner = owner;
       admitWhen(
-        () => sameWorkingOwner(activeAgentOwner, owner),
+        () => activeAgentOwner === owner,
         (timer) => timer.waitForUser,
         owner.token,
       );
     },
-    /**
-     * `ui_prompt_end` head: releases the prompt owner and reports whether the run still
-     * owns it. The matched owner is stored so it crosses the caller's context update
-     * exactly as the original local did.
-     */
-    releasePrompt(): boolean {
+    /** Releases the prompt and captures its run for resuming after the context update. */
+    releasePrompt(): (() => void) | undefined {
       const owner = promptOwner;
       promptOwner = undefined;
-      const matched = owner !== undefined && sameWorkingOwner(activeAgentOwner, owner);
-      releasedOwner = matched ? owner : undefined;
-      return matched;
-    },
-    /** `ui_prompt_end` tail after the caller's context update. */
-    resumeAfterPrompt(): void {
-      const owner = releasedOwner;
-      releasedOwner = undefined;
-      if (!owner) return;
-      admitWhen(
-        () => sameWorkingOwner(activeAgentOwner, owner) && promptOwner === undefined,
-        (timer) => timer.resumeFromUser,
-        owner.token,
-      );
+      if (!owner || activeAgentOwner !== owner) return undefined;
+      return () =>
+        admitWhen(
+          () => activeAgentOwner === owner && promptOwner === undefined,
+          (timer) => timer.resumeFromUser,
+          owner.token,
+        );
     },
     /** `message_update` tail: synchronous bounded accumulator ingress. */
     noteOutputCharacters(characters: number): void {
@@ -166,7 +135,7 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
       if (
         activation === undefined ||
         activation.token !== activeAgentOwner?.token ||
-        sameWorkingOwner(promptOwner, activeAgentOwner) ||
+        (promptOwner !== undefined && promptOwner === activeAgentOwner) ||
         !host.isCurrent(activation.token)
       )
         return;
@@ -174,5 +143,3 @@ export const makeWorkingRunOwnerState = (host: WorkingOwnerHost) => {
     },
   };
 };
-
-export type WorkingRunOwnerState = ReturnType<typeof makeWorkingRunOwnerState>;

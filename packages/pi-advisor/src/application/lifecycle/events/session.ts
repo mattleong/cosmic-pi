@@ -1,3 +1,4 @@
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import {
@@ -92,7 +93,7 @@ export const makeSessionLifecycle = (d: EventsDeps) => {
               return d.persistCommandConfig(patch, onboardingConfigPath).pipe(
                 Effect.catch(() =>
                   Effect.sync(() => {
-                    d.notifyBestEffort(ctx, "Could not save Advisor setup.", "warning");
+                    notifyAtHostBoundary(ctx, "Could not save Advisor setup.", "warning");
                   }),
                 ),
                 Effect.asVoid,

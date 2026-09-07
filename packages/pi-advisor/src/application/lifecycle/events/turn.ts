@@ -1,3 +1,4 @@
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import type {
   AgentSettledEvent,
   ExtensionContext,
@@ -11,7 +12,12 @@ import { inspectAssistantMessage, inspectUserMessage } from "../../../domain/can
 import { incrementBounded } from "../../../domain/metrics.ts";
 import { completeAdvisorPrimaryTurn } from "../../../review/routing.ts";
 import { settleAdvisorPendingRecovery } from "../../state.ts";
-import { parentHasPendingMessages, parentIsIdle, parentSignalAborted } from "../parent-session.ts";
+import {
+  parentHasPendingMessages,
+  parentIsIdle,
+  parentSignalAborted,
+  readParentAnchor,
+} from "../parent-session.ts";
 import type { EventsDeps } from "./types.ts";
 
 export const makeTurnEventHandlers = (d: EventsDeps) => {
@@ -38,7 +44,7 @@ export const makeTurnEventHandlers = (d: EventsDeps) => {
         accepted = next !== state;
         return next;
       });
-      if (accepted) d.persistLedger(d.parentAnchor(ctx));
+      if (accepted) d.persistLedger(readParentAnchor(ctx));
       return accepted;
     };
     const abortCapture = captureAdvisorAbortInputAtHostBoundary(ctx);
@@ -73,13 +79,13 @@ export const makeTurnEventHandlers = (d: EventsDeps) => {
         requestSequence: d.getState().requestSequence,
       });
       if (!published.appended)
-        d.notifyBestEffort(
+        notifyAtHostBoundary(
           ctx,
           "Advisor recovered the agent but could not show its review card.",
           "warning",
         );
     } else
-      d.notifyBestEffort(
+      notifyAtHostBoundary(
         ctx,
         outcome === "card-only"
           ? "Advisor showed the recovery issue locally but could not restart the agent."

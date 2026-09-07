@@ -94,7 +94,6 @@ describe("advisor tool trajectory state", () => {
     toolName = "read",
   ): { state: ToolState; signal?: ToolTrajectorySignal | undefined } =>
     endAdvisorToolTrajectory(startAdvisorToolTrajectory(state, id), {
-      parentTurnId: 7,
       toolCallId: id,
       toolName,
       args,
@@ -156,7 +155,6 @@ describe("advisor tool trajectory state", () => {
   test("recognizes novel successful terminal evidence only after a confirmed loop", () => {
     let state = emptyAdvisorToolTrajectoryDetector();
     const input = {
-      parentTurnId: 7,
       toolCallId: "novel",
       toolName: "read",
       args: { path: "new" },
@@ -179,7 +177,6 @@ describe("advisor tool trajectory state", () => {
     state = startAdvisorToolTrajectory(state, "concurrent");
     state = startAdvisorToolTrajectory(state, "3");
     const looped = endAdvisorToolTrajectory(state, {
-      parentTurnId: 7,
       toolCallId: "3",
       toolName: "read",
       args: { path: "a" },
@@ -190,7 +187,6 @@ describe("advisor tool trajectory state", () => {
     expect(looped.signal).toMatchObject({ abortSafe: false });
     expect(advisorActiveToolCount(state)).toBe(1);
     state = endAdvisorToolTrajectory(state, {
-      parentTurnId: 7,
       toolCallId: "concurrent",
       toolName: "grep",
       args: { pattern: "x" },

@@ -15,7 +15,6 @@ const REPEATED_TOOL_THRESHOLD = 3;
 const OSCILLATION_WINDOW = 6;
 
 export const LONG_TURN_REVIEW_MS = 90_000;
-export const MAX_TRAJECTORY_EVIDENCE_CHARS = 6_000;
 
 export type TrajectoryChannel = "thinking" | "text";
 
@@ -32,7 +31,6 @@ export type ToolLoopKind =
 
 export interface ToolTrajectorySignal {
   kind: ToolLoopKind;
-  parentTurnId: number;
   confidence: "strong";
   reason: string;
   evidence: string;
@@ -40,7 +38,6 @@ export interface ToolTrajectorySignal {
 }
 
 export interface ToolTrajectoryEndInput {
-  parentTurnId: number;
   toolCallId: string;
   toolName: string;
   args: unknown;
@@ -207,7 +204,6 @@ export const endAdvisorToolTrajectory = (
         state: next,
         signal: {
           kind,
-          parentTurnId: input.parentTurnId,
           confidence: "strong",
           reason,
           evidence: `${event.toolName} call=${event.call.slice(0, 20)} outcome=${event.outcomeClass}`,

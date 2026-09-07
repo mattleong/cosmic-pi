@@ -25,6 +25,33 @@ const jwtPayload = (value: JwtFixturePayload) => {
 };
 const jwt = (teamId: string) => jwtPayload({ team_id: teamId });
 
+const pausedRefresh = (
+  access: string,
+  refresh: string,
+  response: { readonly access_token: string; readonly refresh_token?: string },
+) =>
+  Effect.gen(function* () {
+    const authPath = "/agent/auth.json";
+    const documents = makeInMemoryDocuments({
+      [authPath]: { xai: { type: "oauth", access, refresh, expires: 1 } },
+    });
+    const refreshStarted = yield* Deferred.make<void>();
+    const releaseRefresh = yield* Deferred.make<void>();
+    const http = jsonHttpTestLayer(() =>
+      Deferred.succeed(refreshStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseRefresh)),
+        Effect.as(jsonHttpRawResponse(200, JSON.stringify({ ...response, expires_in: 3_600 }))),
+      ),
+    );
+    return {
+      authPath,
+      documents,
+      refreshStarted,
+      releaseRefresh,
+      layer: Layer.mergeAll(documents.layer, registryLayer(), http),
+    };
+  });
+
 // Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
 // runtime values (tagged errors, redacted credentials) for secret fragments.
 describe("xAI authentication", () => {
@@ -140,39 +167,17 @@ describe("xAI authentication", () => {
     }).pipe(provideBuiltLayer(layer));
   });
 
-  it.effect("preserves fields added while an OAuth refresh request is in flight", () => {
-    const authPath = "/agent/auth.json";
-    const documents = makeInMemoryDocuments({
-      [authPath]: {
-        xai: {
-          type: "oauth",
-          access: "expiring-access-secret",
-          refresh: "refresh-secret",
-          expires: 1,
-        },
-      },
-    });
-    return Effect.gen(function* () {
-      const refreshStarted = yield* Deferred.make<void>();
-      const releaseRefresh = yield* Deferred.make<void>();
-      const http = jsonHttpTestLayer(() =>
-        Deferred.succeed(refreshStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseRefresh)),
-          Effect.as(
-            jsonHttpRawResponse(
-              200,
-              JSON.stringify({ access_token: "refreshed-access-secret", expires_in: 3_600 }),
-            ),
-          ),
-        ),
-      );
-      const layer = Layer.mergeAll(documents.layer, registryLayer(), http);
-      const fiber = yield* getXaiCredentials(authPath).pipe(
-        provideBuiltLayer(layer),
+  it.effect("preserves fields added while an OAuth refresh request is in flight", () =>
+    Effect.gen(function* () {
+      const h = yield* pausedRefresh("expiring-access-secret", "refresh-secret", {
+        access_token: "refreshed-access-secret",
+      });
+      const fiber = yield* getXaiCredentials(h.authPath).pipe(
+        provideBuiltLayer(h.layer),
         Effect.forkScoped,
       );
-      yield* Deferred.await(refreshStarted);
-      yield* documents.service.updateObject(authPath, (document) => ({
+      yield* Deferred.await(h.refreshStarted);
+      yield* h.documents.service.updateObject(h.authPath, (document) => ({
         ...document,
         concurrentRootField: "preserved",
         xai: {
@@ -183,11 +188,17 @@ describe("xAI authentication", () => {
           concurrentEntryField: "preserved",
         },
       }));
-      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Deferred.succeed(h.releaseRefresh, undefined);
       const credentials = yield* Fiber.join(fiber);
 
       expect(credentials).toBeDefined();
-      expect(documents.documents.get(authPath)).toMatchObject({
+      if (credentials !== undefined) {
+        expect(Redacted.value(credentials.accessToken)).toBe("refreshed-access-secret");
+        expect(credentials.refreshToken).toBeDefined();
+        if (credentials.refreshToken !== undefined)
+          expect(Redacted.value(credentials.refreshToken)).toBe("refresh-secret");
+      }
+      expect(h.documents.documents.get(h.authPath)).toMatchObject({
         concurrentRootField: "preserved",
         xai: {
           concurrentEntryField: "preserved",
@@ -195,11 +206,10 @@ describe("xAI authentication", () => {
           refresh: "refresh-secret",
         },
       });
-    });
-  });
+    }),
+  );
 
   it.effect("keeps a new login that lands while an OAuth refresh request is paused", () => {
-    const authPath = "/agent/auth.json";
     const capturedAccess = "captured-access-secret";
     const capturedRefresh = "captured-refresh-secret";
     const staleAccess = "stale-refreshed-access-secret";
@@ -207,50 +217,21 @@ describe("xAI authentication", () => {
     const loginAccess = "new-login-access-secret";
     const loginRefresh = "new-login-refresh-secret";
     const loginExpires = 7_200_000;
-    const documents = makeInMemoryDocuments({
-      [authPath]: {
-        xai: {
-          type: "oauth",
-          access: capturedAccess,
-          refresh: capturedRefresh,
-          expires: 1,
-        },
-      },
-    });
     const logger = makeCapturedLogger();
     const tracer = makeCapturedTracer();
 
     return Effect.gen(function* () {
-      const refreshStarted = yield* Deferred.make<void>();
-      const releaseRefresh = yield* Deferred.make<void>();
-      const http = jsonHttpTestLayer(() =>
-        Deferred.succeed(refreshStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseRefresh)),
-          Effect.as(
-            jsonHttpRawResponse(
-              200,
-              JSON.stringify({
-                access_token: staleAccess,
-                refresh_token: staleRefresh,
-                expires_in: 3_600,
-              }),
-            ),
-          ),
-        ),
-      );
-      const layer = Layer.mergeAll(
-        documents.layer,
-        registryLayer(),
-        http,
-        logger.layer,
-        tracer.layer,
-      );
-      const fiber = yield* getXaiCredentials(authPath).pipe(
+      const h = yield* pausedRefresh(capturedAccess, capturedRefresh, {
+        access_token: staleAccess,
+        refresh_token: staleRefresh,
+      });
+      const layer = Layer.mergeAll(h.layer, logger.layer, tracer.layer);
+      const fiber = yield* getXaiCredentials(h.authPath).pipe(
         provideBuiltLayer(layer),
         Effect.forkScoped,
       );
-      yield* Deferred.await(refreshStarted);
-      yield* documents.service.updateObject(authPath, (document) => ({
+      yield* Deferred.await(h.refreshStarted);
+      yield* h.documents.service.updateObject(h.authPath, (document) => ({
         ...document,
         xai: {
           type: "oauth",
@@ -259,7 +240,7 @@ describe("xAI authentication", () => {
           expires: loginExpires,
         },
       }));
-      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Deferred.succeed(h.releaseRefresh, undefined);
       const credentials = yield* Fiber.join(fiber);
 
       expect(credentials).toBeDefined();
@@ -270,7 +251,7 @@ describe("xAI authentication", () => {
           expect(Redacted.value(credentials.refreshToken)).toBe(loginRefresh);
         expect(credentials.expires).toBe(loginExpires);
       }
-      expect(documents.documents.get(authPath)?.xai).toEqual({
+      expect(h.documents.documents.get(h.authPath)?.xai).toEqual({
         type: "oauth",
         access: loginAccess,
         refresh: loginRefresh,

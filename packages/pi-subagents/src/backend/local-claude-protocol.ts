@@ -244,6 +244,74 @@ const usageFromNative = (usage: Schema.Schema.Type<typeof Usage> | undefined): S
   };
 };
 
+const userProtocolEvent = (event: typeof User.Type): ClaudeProtocolEvent => {
+  const toolResults = Predicate.isString(event.message.content)
+    ? []
+    : event.message.content.flatMap((part) => {
+        const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);
+        return decoded._tag === "Some"
+          ? [{ id: decoded.value.tool_use_id, isError: decoded.value.is_error === true }]
+          : [];
+      });
+  const text = textFromContent(event.message.content);
+  return {
+    type: "user",
+    text,
+    toolResults,
+    contentKind: Predicate.isString(event.message.content) ? "text" : "blocks",
+    textLength: text.length,
+    ...(event.uuid && { uuid: event.uuid }),
+    ...(event.session_id && { sessionId: event.session_id }),
+    ...(event.parent_tool_use_id && { parentToolUseId: event.parent_tool_use_id }),
+    ...(event.origin && { originKind: event.origin.kind }),
+    ...(event.origin?.subkind && { originSubkind: event.origin.subkind }),
+    isSynthetic: event.isSynthetic === true,
+    isReplay: event.isReplay === true,
+    isMeta: event.isMeta === true,
+    isCompactSummary: event.isCompactSummary === true,
+  };
+};
+
+const assistantProtocolEvent = (event: typeof Assistant.Type): ClaudeProtocolEvent => {
+  const tools = event.message.content.flatMap((part) => {
+    const decoded = Schema.decodeUnknownOption(ToolUsePart)(part);
+    return decoded._tag === "Some"
+      ? [{ id: decoded.value.id, name: decoded.value.name, input: decoded.value.input }]
+      : [];
+  });
+  const text = textFromContent(event.message.content).trim();
+  return {
+    type: "assistant",
+    ...(text && { text }),
+    ...(event.message.id && { messageId: event.message.id }),
+    ...(event.parent_tool_use_id && { parentToolUseId: event.parent_tool_use_id }),
+    tools,
+    usage: usageFromNative(event.message.usage),
+  };
+};
+
+const resultProtocolEvent = (event: typeof Result.Type): ClaudeProtocolEvent => {
+  const diagnostic =
+    event.result?.trim() ||
+    event.errors
+      ?.map((error) => error.trim())
+      .filter(Boolean)
+      .join("\n");
+  return {
+    type: "result",
+    isError: event.is_error === true,
+    ...(event.subtype && { subtype: event.subtype }),
+    ...(event.stop_reason && { stopReason: event.stop_reason }),
+    ...(event.session_id && { sessionId: event.session_id }),
+    ...(event.user_message_uuid && { userMessageUuid: event.user_message_uuid }),
+    ...(event.origin && { originKind: event.origin.kind }),
+    ...(event.origin?.subkind && { originSubkind: event.origin.subkind }),
+    ...(event.usage && { usage: usageFromNative(event.usage) }),
+    ...(event.total_cost_usd !== undefined && { totalCostUsd: event.total_cost_usd }),
+    ...(diagnostic && { diagnostic }),
+  };
+};
+
 export const decodeClaudeProtocolEvent = <ValueInput>(
   value: ValueInput,
 ): Effect.Effect<ClaudeProtocolEvent, Schema.SchemaError> =>
@@ -267,120 +335,18 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
       }
       case "user": {
         const event = yield* Schema.decodeUnknownEffect(User)(value);
-        const toolResults = Predicate.isString(event.message.content)
-          ? []
-          : event.message.content.flatMap((part) => {
-              const decoded = Schema.decodeUnknownOption(ToolResultPart)(part);
-              return decoded._tag === "Some"
-                ? [{ id: decoded.value.tool_use_id, isError: decoded.value.is_error === true }]
-                : [];
-            });
-        const protocolEvent: ClaudeProtocolEvent = (() => {
-          const text = textFromContent(event.message.content);
-          const baseResult = {
-            type: "user" as const,
-            text,
-            toolResults,
-            contentKind: Predicate.isString(event.message.content)
-              ? ("text" as const)
-              : ("blocks" as const),
-            textLength: text.length,
-          };
-          const withUuid = event.uuid ? { ...baseResult, uuid: event.uuid } : baseResult;
-          const withSessionId = event.session_id
-            ? { ...withUuid, sessionId: event.session_id }
-            : withUuid;
-          const withParentToolUseId = event.parent_tool_use_id
-            ? { ...withSessionId, parentToolUseId: event.parent_tool_use_id }
-            : withSessionId;
-          const withOriginKind = event.origin
-            ? { ...withParentToolUseId, originKind: event.origin.kind }
-            : withParentToolUseId;
-          const withOriginSubkind = event.origin?.subkind
-            ? { ...withOriginKind, originSubkind: event.origin.subkind }
-            : withOriginKind;
-          const withReplayMetadata = {
-            ...withOriginSubkind,
-            isSynthetic: event.isSynthetic === true,
-            isReplay: event.isReplay === true,
-            isMeta: event.isMeta === true,
-            isCompactSummary: event.isCompactSummary === true,
-          };
-          return withReplayMetadata;
-        })();
-        return protocolEvent;
+        return userProtocolEvent(event);
       }
       case "assistant": {
         const event = yield* Schema.decodeUnknownEffect(Assistant)(value);
-        const tools = event.message.content.flatMap((part) => {
-          const decoded = Schema.decodeUnknownOption(ToolUsePart)(part);
-          return decoded._tag === "Some"
-            ? [{ id: decoded.value.id, name: decoded.value.name, input: decoded.value.input }]
-            : [];
-        });
-        const text = textFromContent(event.message.content).trim();
-        const protocolEvent: ClaudeProtocolEvent = (() => {
-          const baseResult = { type: "assistant" as const };
-          const withText = text ? { ...baseResult, text } : baseResult;
-          const withMessageId = event.message.id
-            ? { ...withText, messageId: event.message.id }
-            : withText;
-          const withParentToolUseId = event.parent_tool_use_id
-            ? { ...withMessageId, parentToolUseId: event.parent_tool_use_id }
-            : withMessageId;
-          const withToolsAndUsage = {
-            ...withParentToolUseId,
-            tools,
-            usage: usageFromNative(event.message.usage),
-          };
-          return withToolsAndUsage;
-        })();
-        return protocolEvent;
+        return assistantProtocolEvent(event);
       }
       case "stream_event":
         yield* Schema.decodeUnknownEffect(StreamEvent)(value);
         return { type: "activity" };
       case "result": {
         const event = yield* Schema.decodeUnknownEffect(Result)(value);
-        const diagnostic =
-          event.result?.trim() ||
-          event.errors
-            ?.map((error) => error.trim())
-            .filter(Boolean)
-            .join("\n");
-        const protocolEvent: ClaudeProtocolEvent = (() => {
-          const baseResult = { type: "result" as const, isError: event.is_error === true };
-          const withSubtype = event.subtype
-            ? { ...baseResult, subtype: event.subtype }
-            : baseResult;
-          const withStopReason = event.stop_reason
-            ? { ...withSubtype, stopReason: event.stop_reason }
-            : withSubtype;
-          const withSessionId = event.session_id
-            ? { ...withStopReason, sessionId: event.session_id }
-            : withStopReason;
-          const withUserMessageUuid = event.user_message_uuid
-            ? { ...withSessionId, userMessageUuid: event.user_message_uuid }
-            : withSessionId;
-          const withOriginKind = event.origin
-            ? { ...withUserMessageUuid, originKind: event.origin.kind }
-            : withUserMessageUuid;
-          const withOriginSubkind = event.origin?.subkind
-            ? { ...withOriginKind, originSubkind: event.origin.subkind }
-            : withOriginKind;
-          const withUsage = event.usage
-            ? { ...withOriginSubkind, usage: usageFromNative(event.usage) }
-            : withOriginSubkind;
-          const withTotalCostUsd =
-            event.total_cost_usd === undefined
-              ? withUsage
-              : { ...withUsage, totalCostUsd: event.total_cost_usd };
-          const withDiagnostic = diagnostic
-            ? { ...withTotalCostUsd, diagnostic }
-            : withTotalCostUsd;
-          return withDiagnostic;
-        })();
-        return protocolEvent;
+        return resultProtocolEvent(event);
       }
       case "control_response": {
         const event = yield* Schema.decodeUnknownEffect(ControlResponse)(value);
@@ -390,17 +356,13 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           return { type: "ignored" } as const;
         }
         const success = event.response?.subtype === "success";
-        const protocolEvent: ClaudeProtocolEvent = (() => {
-          const baseResult = { type: "control_response" as const, requestId, success };
-          const withDiagnostic = event.response?.error
-            ? { ...baseResult, diagnostic: event.response.error }
-            : baseResult;
-          const withResponse =
-            event.response?.response === undefined
-              ? withDiagnostic
-              : { ...withDiagnostic, response: event.response.response };
-          return withResponse;
-        })();
+        const protocolEvent: ClaudeProtocolEvent = {
+          type: "control_response",
+          requestId,
+          success,
+          ...(event.response?.error && { diagnostic: event.response.error }),
+          ...(event.response?.response !== undefined && { response: event.response.response }),
+        };
         return protocolEvent;
       }
       default:
@@ -414,30 +376,10 @@ export const decodeClaudeInitializeControlResponse = <ValueInput>(value: ValueIn
 export const decodeClaudeMcpStatusControlResponse = <ValueInput>(value: ValueInput) =>
   Schema.decodeUnknownEffect(McpStatusControlResponse)(value);
 
-export interface ClaudeUserFrame {
-  readonly type: "user";
-  readonly uuid?: string | undefined;
-  readonly message: { readonly role: "user"; readonly content: string };
-  readonly shouldQuery?: boolean | undefined;
-}
-
-export interface ClaudeInitializeFrame {
-  readonly type: "control_request";
-  readonly request_id: string;
-  readonly request: { readonly subtype: "initialize" };
-}
-
-export interface ClaudeMcpStatusFrame {
-  readonly type: "control_request";
-  readonly request_id: string;
-  readonly request: { readonly subtype: "mcp_status" };
-}
-
-export interface ClaudeInterruptFrame {
-  readonly type: "control_request";
-  readonly request_id: string;
-  readonly request: { readonly subtype: "interrupt"; readonly cancel_queued: true };
-}
+export type ClaudeUserFrame = ReturnType<typeof claudeUserFrame>;
+export type ClaudeInitializeFrame = ReturnType<typeof claudeInitializeFrame>;
+export type ClaudeMcpStatusFrame = ReturnType<typeof claudeMcpStatusFrame>;
+export type ClaudeInterruptFrame = ReturnType<typeof claudeInterruptFrame>;
 
 export type ClaudeControlRequestFrame =
   | ClaudeInitializeFrame
@@ -447,37 +389,31 @@ export type ClaudeControlRequestFrame =
 export const claudeUserFrame = (
   message: string,
   options: { readonly shouldQuery?: boolean | undefined; readonly uuid?: string | undefined } = {},
-): ClaudeUserFrame => {
-  const frame: ClaudeUserFrame = (() => {
-    const baseResult = { type: "user" as const };
-    const withUuid = options.uuid ? { ...baseResult, uuid: options.uuid } : baseResult;
-    const withMessage = {
-      ...withUuid,
-      message: { role: "user" as const, content: message },
-    };
-    const withShouldQuery =
-      options.shouldQuery === undefined
-        ? withMessage
-        : { ...withMessage, shouldQuery: options.shouldQuery };
-    return withShouldQuery;
-  })();
-  return frame;
-};
+) =>
+  ({
+    type: "user",
+    ...(options.uuid && { uuid: options.uuid }),
+    message: { role: "user", content: message },
+    ...(options.shouldQuery !== undefined && { shouldQuery: options.shouldQuery }),
+  }) as const;
 
-export const claudeInitializeFrame = (requestId: string): ClaudeInitializeFrame => ({
-  type: "control_request",
-  request_id: requestId,
-  request: { subtype: "initialize" },
-});
+export const claudeInitializeFrame = (requestId: string) =>
+  ({
+    type: "control_request",
+    request_id: requestId,
+    request: { subtype: "initialize" },
+  }) as const;
 
-export const claudeMcpStatusFrame = (requestId: string): ClaudeMcpStatusFrame => ({
-  type: "control_request",
-  request_id: requestId,
-  request: { subtype: "mcp_status" },
-});
+export const claudeMcpStatusFrame = (requestId: string) =>
+  ({
+    type: "control_request",
+    request_id: requestId,
+    request: { subtype: "mcp_status" },
+  }) as const;
 
-export const claudeInterruptFrame = (requestId: string): ClaudeInterruptFrame => ({
-  type: "control_request",
-  request_id: requestId,
-  request: { subtype: "interrupt", cancel_queued: true },
-});
+export const claudeInterruptFrame = (requestId: string) =>
+  ({
+    type: "control_request",
+    request_id: requestId,
+    request: { subtype: "interrupt", cancel_queued: true },
+  }) as const;

@@ -437,7 +437,7 @@ describe("session profile overrides", () => {
   );
 
   it.effect(
-    "supports temporary disable, clear-all, no-op revisions, and stale-write rejection",
+    "supports temporary disable, baseline restoration, no-op revisions, and stale-write rejection",
     () =>
       Effect.gen(function* () {
         const service = yield* makeSubagentProfileService(baseConfig());
@@ -479,7 +479,10 @@ describe("session profile overrides", () => {
         });
         expect(unchanged.revision).toBe(disabled.revision);
 
-        const cleared = yield* service.clearSessionProfiles(unchanged.revision);
+        const cleared = yield* service.patchSessionProfile({
+          profile: "reviewer",
+          expectedRevision: unchanged.revision,
+        });
         expect(cleared.revision).toBe(2);
         expect(cleared.overrides).toEqual({});
         expect(cleared.effectiveConfig.profileSources.reviewer).toBe("project");
@@ -531,7 +534,10 @@ describe("session profile overrides", () => {
           route: route("openai/after-replace"),
           expectedRevision: replaced.revision,
         });
-        const cleared = yield* service.clearSessionProfiles(edited.revision);
+        const cleared = yield* service.patchSessionProfile({
+          profile: "reviewer",
+          expectedRevision: edited.revision,
+        });
         expect(cleared.effectiveConfig.profiles.reviewer.candidates[0]?.model).toBe(
           "openai/replacement",
         );
@@ -552,7 +558,7 @@ describe("session profile overrides", () => {
       }),
   );
 
-  it.effect("linearizes a whole-set replace racing a clear", () =>
+  it.effect("linearizes a whole-set replace racing a route reset", () =>
     Effect.gen(function* () {
       const service = yield* makeSubagentProfileService(baseConfig());
       const initial = yield* service.capture;
@@ -571,7 +577,12 @@ describe("session profile overrides", () => {
               profileSources: sparse.baseline.profileSources,
             }),
           ),
-          Effect.exit(service.clearSessionProfiles(sparse.revision)),
+          Effect.exit(
+            service.patchSessionProfile({
+              profile: "reviewer",
+              expectedRevision: sparse.revision,
+            }),
+          ),
         ],
         { concurrency: "unbounded" },
       );

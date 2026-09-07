@@ -53,12 +53,14 @@ function decodeConfigFile(value: JsonObject): Partial<CodeModeConfig> {
   return decodeTolerantFields(value, CODE_MODE_FIELD_SCHEMAS, { path: "config" }).value;
 }
 
-interface ResolvedCodeModeDocuments extends ScopedConfigMetadata {
-  readonly config: CodeModeConfig;
-  readonly provenance: CodeModeProvenance;
-  readonly globalValues: Partial<CodeModeConfig>;
-  readonly projectValues: Partial<CodeModeConfig>;
-}
+const resolveValues = (
+  global: Partial<CodeModeConfig> | undefined,
+  project: Partial<CodeModeConfig> | undefined,
+) => ({
+  ...resolveCodeModeConfig(global, project),
+  globalValues: global ?? {},
+  projectValues: project ?? {},
+});
 
 const store = makeScopedConfigStore({
   errorFactory: mapDocumentError,
@@ -72,16 +74,7 @@ const store = makeScopedConfigStore({
     metadata: ScopedConfigMetadata,
     project: Partial<CodeModeConfig> | undefined,
     global: Partial<CodeModeConfig> | undefined,
-  ): ResolvedCodeModeDocuments => {
-    const resolution = resolveCodeModeConfig(global, project);
-    return {
-      ...metadata,
-      config: resolution.config,
-      provenance: resolution.provenance,
-      globalValues: global ?? {},
-      projectValues: project ?? {},
-    };
-  },
+  ) => ({ ...metadata, ...resolveValues(global, project) }),
 });
 
 /** Immutable, plain-data resolved configuration published after every persisted change. */
@@ -115,7 +108,10 @@ export interface CodeModeConfigStoreContract {
   ) => Effect.Effect<CodeModeState, CodeModeSettingsError>;
 }
 
-const toState = (resolved: ResolvedCodeModeDocuments, projectTrusted: boolean): CodeModeState => ({
+const toState = (
+  resolved: ReturnType<typeof resolveValues>,
+  projectTrusted: boolean,
+): CodeModeState => ({
   projectTrusted,
   available: projectTrusted && resolved.config.enabled,
   config: resolved.config,
@@ -136,14 +132,6 @@ const requireDescriptor = (id: string) => {
       )
     : Effect.succeed(descriptor);
 };
-
-/** Pre-commit snapshot of the scope that is not being committed. */
-interface OtherScopeDocument {
-  readonly exists: boolean;
-  readonly raw: JsonObject | undefined;
-}
-
-const ABSENT_OTHER_SCOPE: OtherScopeDocument = { exists: false, raw: undefined };
 
 export class CodeModeConfigStore extends Context.Service<
   CodeModeConfigStore,
@@ -167,9 +155,10 @@ export class CodeModeConfigStore extends Context.Service<
         const initial = yield* provideDependencies(
           store.resolveConfig(options.cwd, agentDirectory, options.projectTrusted),
         );
+        const { globalConfigPath, projectConfigPath } = initial;
         const projection = yield* makeFrozenProjection(
-          initial,
-          (resolved: ResolvedCodeModeDocuments) => toState(resolved, options.projectTrusted),
+          toState(initial, options.projectTrusted),
+          (state) => state,
           options.publish,
         );
         const settingUpdates = yield* Semaphore.make(1);
@@ -184,46 +173,17 @@ export class CodeModeConfigStore extends Context.Service<
               )
             : Effect.void;
 
-        /**
-         * Best-effort pre-commit read of the other scope's raw document. An unreadable
-         * document degrades to its previously known existence with no values, matching the
-         * tolerant read policy of `resolveConfig`; it never blocks a settings write.
-         */
-        const readOtherScope = (
-          otherPath: string,
-          existedBefore: boolean,
-        ): Effect.Effect<OtherScopeDocument> =>
-          documents.readObject(otherPath).pipe(
-            Effect.map(
-              (raw): OtherScopeDocument =>
-                raw === undefined ? ABSENT_OTHER_SCOPE : { exists: true, raw },
-            ),
-            Effect.catch(() =>
-              Effect.logWarning("Unable to read a Code Mode configuration document.").pipe(
-                Effect.map((): OtherScopeDocument => ({ exists: existedBefore, raw: undefined })),
+        /** An unreadable other scope contributes no values and never blocks a write. */
+        const readOtherScope = (otherPath: string): Effect.Effect<JsonObject | undefined> =>
+          documents
+            .readObject(otherPath)
+            .pipe(
+              Effect.catch(() =>
+                Effect.logWarning("Unable to read a Code Mode configuration document.").pipe(
+                  Effect.as(undefined),
+                ),
               ),
-            ),
-          );
-
-        /**
-         * Resolves the committed document plus the pre-commit other-scope snapshot without
-         * post-commit I/O. Only the observed other-scope existence is patched here; the core
-         * store owns committed-scope existence and preferred-path selection.
-         */
-        const resolveCommittedDocuments = (
-          current: ResolvedCodeModeDocuments,
-          scope: CodeModeSettingScope,
-          committed: JsonObject,
-          other: OtherScopeDocument,
-        ): ResolvedCodeModeDocuments =>
-          store.resolveCommittedConfig(
-            scope === "project"
-              ? { ...current, globalConfigExists: other.exists }
-              : { ...current, projectConfigExists: other.exists },
-            committed,
-            other.raw,
-            scope,
-          );
+            );
 
         /**
          * One serialized settings commit. The committed JSON document and the authoritative
@@ -240,20 +200,25 @@ export class CodeModeConfigStore extends Context.Service<
         ): Effect.Effect<CodeModeState, CodeModeSettingsError> =>
           settingUpdates.withPermit(
             Effect.gen(function* () {
-              const current = yield* projection.getState;
-              const targetPath =
-                scope === "project" ? current.projectConfigPath : current.globalConfigPath;
+              const targetPath = scope === "project" ? projectConfigPath : globalConfigPath;
               const other =
                 scope === "project"
-                  ? yield* readOtherScope(current.globalConfigPath, current.globalConfigExists)
+                  ? yield* readOtherScope(globalConfigPath)
                   : options.projectTrusted
-                    ? yield* readOtherScope(current.projectConfigPath, current.projectConfigExists)
-                    : ABSENT_OTHER_SCOPE;
+                    ? yield* readOtherScope(projectConfigPath)
+                    : undefined;
+              const fallback = other === undefined ? undefined : decodeConfigFile(other);
               const publication = yield* Deferred.make<CodeModeState, ProjectionError>();
               yield* provideDependencies(
                 store.modifyConfig(targetPath, (document) => {
                   const committed = mutate(document);
-                  const next = resolveCommittedDocuments(current, scope, committed, other);
+                  const values = decodeConfigFile(committed);
+                  const next = toState(
+                    scope === "project"
+                      ? resolveValues(fallback, values)
+                      : resolveValues(values, fallback),
+                    options.projectTrusted,
+                  );
                   return {
                     value: undefined,
                     document: committed,

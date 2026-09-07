@@ -146,48 +146,30 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("focuses exact ID metadata for the recorded child", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgents: [
-          liveChildAgent({
-            agent_session: {
-              source: "herdr:pi",
-              agent: "pi",
-              kind: "id",
-              value: CHILD_ID,
-            },
-          }),
-        ],
-      });
+  for (const [name, kind, value, options] of [
+    ["exact ID metadata", "id", CHILD_ID, {}],
+    [
+      "a path alias",
+      "path",
+      CHILD_ALIAS,
+      { compareSessionFileIdentity: aliasIdentity([CHILD_FILE, CHILD_ALIAS]) },
+    ],
+  ] as const) {
+    it.effect(`focuses ${name} with the recorded child identity`, () =>
+      Effect.gen(function* () {
+        const test = fixture({
+          initialLinks: [LINK],
+          liveAgents: [
+            liveChildAgent({ agent_session: { source: "herdr:pi", agent: "pi", kind, value } }),
+          ],
+          ...options,
+        });
 
-      expect(yield* test.open()).toMatchObject({ mode: "focused", paneId: "w1:p2" });
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-    }),
-  );
-
-  it.effect("focuses a path alias with the recorded filesystem identity", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgents: [
-          liveChildAgent({
-            agent_session: {
-              source: "herdr:pi",
-              agent: "pi",
-              kind: "path",
-              value: CHILD_ALIAS,
-            },
-          }),
-        ],
-        compareSessionFileIdentity: aliasIdentity([CHILD_FILE, CHILD_ALIAS]),
-      });
-
-      expect(yield* test.open()).toMatchObject({ mode: "focused", paneId: "w1:p2" });
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-    }),
-  );
+        expect(yield* test.open()).toMatchObject({ mode: "focused", paneId: "w1:p2" });
+        expect(operationNames(test.calls)).not.toContain("split BTW pane");
+      }),
+    );
+  }
 
   it.effect("validates the child file before focusing a live agent", () =>
     Effect.gen(function* () {
@@ -204,36 +186,22 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("treats matching child ID metadata as a conflict despite another name", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
+  const unavailablePath = "/sessions/missing-child.jsonl";
+  for (const [name, options] of [
+    [
+      "matching child ID metadata under another name",
+      {
         liveAgents: [
           liveChildAgent({
             name: "another-agent",
-            agent_session: {
-              source: "herdr:pi",
-              agent: "pi",
-              kind: "id",
-              value: CHILD_ID,
-            },
+            agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: CHILD_ID },
           }),
         ],
-      });
-      const result = yield* Effect.result(test.open());
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure.code).toBe("herdr_btw_live_agent_ambiguous");
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-    }),
-  );
-
-  it.effect("treats unavailable path identity as a conflict, never as distinct", () =>
-    Effect.gen(function* () {
-      const unavailablePath = "/sessions/missing-child.jsonl";
-      const test = fixture({
-        initialLinks: [LINK],
+      },
+    ],
+    [
+      "unavailable path identity",
+      {
         liveAgents: [
           liveChildAgent({
             name: "another-agent",
@@ -251,60 +219,42 @@ describe("herdr-btw reuse workflow", () => {
             : leftPath === rightPath
               ? "same"
               : "distinct",
-      });
-      const result = yield* Effect.result(test.open());
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure.code).toBe("herdr_btw_live_agent_ambiguous");
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-    }),
-  );
-
-  it.effect("fails closed when multiple live agents claim the child session", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgents: [liveChildAgent(), liveChildAgent({ pane_id: "w1:p9", name: "other" })],
-      });
-      const result = yield* Effect.result(test.open());
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_live_agent_ambiguous",
-          outcome: "confirmed",
-        });
-      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-      expect(operationNames(test.calls)).not.toContain("split BTW pane");
-    }),
-  );
-
-  it.effect("requires exact name, terminal, Pi, and child identity before focus", () =>
-    Effect.gen(function* () {
-      for (const live of [
-        liveChildAgent({ name: "someone-elses-agent" }),
-        liveChildAgent({ terminal_id: "term-other" }),
-        liveChildAgent({ agent: "claude" }),
-        liveChildAgent({
-          agent_session: {
-            source: "herdr:pi",
-            agent: "pi",
-            kind: "path",
-            value: NEW_CHILD_FILE,
-          },
-        }),
-        liveChildAgent({ agent_session: undefined }),
-      ]) {
-        const test = fixture({ initialLinks: [LINK], liveAgents: [live] });
+      },
+    ],
+    [
+      "multiple agents claiming the child",
+      { liveAgents: [liveChildAgent(), liveChildAgent({ pane_id: "w1:p9", name: "other" })] },
+    ],
+    ["another name", { liveAgents: [liveChildAgent({ name: "someone-elses-agent" })] }],
+    ["another terminal", { liveAgents: [liveChildAgent({ terminal_id: "term-other" })] }],
+    ["a non-Pi agent", { liveAgents: [liveChildAgent({ agent: "claude" })] }],
+    [
+      "another child path",
+      {
+        liveAgents: [
+          liveChildAgent({
+            agent_session: { source: "herdr:pi", agent: "pi", kind: "path", value: NEW_CHILD_FILE },
+          }),
+        ],
+      },
+    ],
+    ["missing session metadata", { liveAgents: [liveChildAgent({ agent_session: undefined })] }],
+  ] satisfies Array<[string, HerdrBtwFixtureOptions]>) {
+    it.effect(`refuses focus or duplicate startup for ${name}`, () =>
+      Effect.gen(function* () {
+        const test = fixture({ initialLinks: [LINK], ...options });
         const result = yield* Effect.result(test.open());
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure")
-          expect(result.failure.code).toBe("herdr_btw_live_agent_ambiguous");
+          expect(result.failure).toMatchObject({
+            code: "herdr_btw_live_agent_ambiguous",
+            outcome: "confirmed",
+          });
         expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
         expect(operationNames(test.calls)).not.toContain("split BTW pane");
-      }
-    }),
-  );
+      }),
+    );
+  }
 
   it.effect("resumes a closed child with the semantic launch identity", () =>
     Effect.gen(function* () {
@@ -331,88 +281,41 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("takes a second snapshot immediately before resume startup", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgentSnapshots: [[], [liveChildAgent()]],
-      });
-      const result = yield* Effect.result(withReadiness(test.open()));
+  for (const [name, live] of [
+    ["the exact live child", liveChildAgent()],
+    [
+      "matching child ID metadata under another name",
+      liveChildAgent({
+        name: "another-agent",
+        agent_session: { source: "herdr:pi", agent: "pi", kind: "id", value: CHILD_ID },
+      }),
+    ],
+    [
+      "the recorded name with wrong session metadata",
+      liveChildAgent({
+        agent_session: { source: "herdr:pi", agent: "pi", kind: "path", value: NEW_CHILD_FILE },
+      }),
+    ],
+  ] as const) {
+    it.effect(`the second pre-start snapshot rejects ${name}`, () =>
+      Effect.gen(function* () {
+        const test = fixture({ initialLinks: [LINK], liveAgentSnapshots: [[], [live]] });
+        const result = yield* Effect.result(withReadiness(test.open()));
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.code).toBe("herdr_btw_live_agent_race");
-        expect(result.failure.paneId).toBe("w1:p2");
-      }
-      expect(
-        operationNames(test.calls).filter((name) => name === "inspect live agents"),
-      ).toHaveLength(2);
-      expect(operationNames(test.calls)).not.toContain("start side-session Pi");
-    }),
-  );
-
-  it.effect("treats matching child ID metadata as a pre-start conflict", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgentSnapshots: [
-          [],
-          [
-            liveChildAgent({
-              name: "another-agent",
-              agent_session: {
-                source: "herdr:pi",
-                agent: "pi",
-                kind: "id",
-                value: CHILD_ID,
-              },
-            }),
-          ],
-        ],
-      });
-      const result = yield* Effect.result(withReadiness(test.open()));
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_live_agent_race",
-          outcome: "confirmed",
-          paneId: "w1:p2",
-        });
-      expect(operationNames(test.calls)).not.toContain("start side-session Pi");
-    }),
-  );
-
-  it.effect("treats the recorded name as a pre-start conflict with wrong session metadata", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgentSnapshots: [
-          [],
-          [
-            liveChildAgent({
-              agent_session: {
-                source: "herdr:pi",
-                agent: "pi",
-                kind: "path",
-                value: NEW_CHILD_FILE,
-              },
-            }),
-          ],
-        ],
-      });
-      const result = yield* Effect.result(withReadiness(test.open()));
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_live_agent_race",
-          outcome: "confirmed",
-          paneId: "w1:p2",
-        });
-      expect(operationNames(test.calls)).not.toContain("start side-session Pi");
-    }),
-  );
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure).toMatchObject({
+            code: "herdr_btw_live_agent_race",
+            outcome: "confirmed",
+            paneId: "w1:p2",
+          });
+        expect(
+          operationNames(test.calls).filter((name) => name === "inspect live agents"),
+        ).toHaveLength(2);
+        expect(operationNames(test.calls)).not.toContain("start side-session Pi");
+      }),
+    );
+  }
 
   it.effect("rejects a linked child that aliases its parent before Herdr inspection", () =>
     Effect.gen(function* () {
@@ -558,51 +461,34 @@ describe("herdr-btw reuse workflow", () => {
     }),
   );
 
-  it.effect("reports a refused link record as a confirmed retained-pane failure", () =>
-    Effect.gen(function* () {
-      const test = fixture({ recordResult: "refused" });
-      const result = yield* Effect.result(withReadiness(test.openNew()));
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_link_record_refused",
-          outcome: "confirmed",
-          paneId: "w1:p2",
-        });
-        expect(result.failure.message).toContain("was not recorded");
-      }
-      expect(test.recordAttempts).toHaveLength(1);
-      expect(test.restoreCount()).toBe(0);
-      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
-      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-    }),
-  );
-
-  it.effect("does not reread or retry after an uncertain link append", () =>
-    Effect.gen(function* () {
-      const test = fixture({ recordResult: "uncertain" });
-      const result = yield* Effect.result(withReadiness(test.openNew("do not deliver")));
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_link_record_outcome_uncertain",
-          outcome: "uncertain",
-          paneId: "w1:p2",
-        });
-        expect(result.failure.message).toContain("Pane w1:p2 was retained");
-      }
-      expect(test.recordAttempts).toHaveLength(1);
-      expect(test.restoreCount()).toBe(0);
-      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
-      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-    }),
-  );
+  for (const [recordResult, code, outcome, message] of [
+    ["refused", "herdr_btw_link_record_refused", "confirmed", "was not recorded"],
+    [
+      "uncertain",
+      "herdr_btw_link_record_outcome_uncertain",
+      "uncertain",
+      "Pane w1:p2 was retained",
+    ],
+  ] as const) {
+    it.effect(`does not reread, retry or hand off after a ${recordResult} link record`, () =>
+      Effect.gen(function* () {
+        const test = fixture({ recordResult });
+        const result = yield* Effect.result(withReadiness(test.openNew("do not deliver")));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure).toMatchObject({ code, outcome, paneId: "w1:p2" });
+          expect(result.failure.message).toContain(message);
+        }
+        expect(test.recordAttempts).toHaveLength(1);
+        expect(test.restoreCount()).toBe(0);
+        expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
+        expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
+        expect(
+          operationNames(test.calls).filter((name) => name === "start side-session Pi"),
+        ).toHaveLength(1);
+      }),
+    );
+  }
 
   it.effect("serializes concurrent commands so only one launch occurs", () =>
     Effect.gen(function* () {

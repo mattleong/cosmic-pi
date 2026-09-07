@@ -1,6 +1,7 @@
 /** Child runtime start/stop/replace controls. */
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import {
   sessionEntryToContextMessages,
   type ExtensionContext,
@@ -16,6 +17,7 @@ import {
 } from "../../checkpoint/ledger.ts";
 import { createAdvisorEmissionGuardState } from "../../review/emission-guard.ts";
 import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
+import { recordUsageMetrics } from "../../domain/metrics.ts";
 import * as Scope from "effect/Scope";
 import { makeAdvisorReviewQueue, type AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import {
@@ -30,12 +32,13 @@ import { emptyAdvisorRoutingState, sanitizeAdvisorRoutingState } from "../../rev
 import type { AdvisorUsageTelemetry } from "../../runtime/client.ts";
 import type { AdvisorRuntimeServiceContract } from "../../runtime/runtime.ts";
 import { AdvisorExtensionError, extensionError } from "../controller.ts";
-import type { AdvisorApplicationState } from "../state.ts";
-import type { HostNotify, SessionIdentity, StateRead, StateWrite } from "./deps.ts";
+import type { StateRead, StateWrite } from "./deps.ts";
+import { readParentAnchor } from "./parent-session.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
-export interface RuntimeDeps extends StateRead, StateWrite, HostNotify, SessionIdentity {
+export interface RuntimeDeps extends StateRead, StateWrite {
   readonly refs: SessionRefs;
+  readonly fingerprint: () => string;
   readonly advanceDomainCounter: (key: "epoch" | "parentTurnId") => number;
   readonly clearPersistentTrajectory: () => void;
   readonly clearPendingRecovery: () => void;
@@ -54,10 +57,6 @@ export interface RuntimeDeps extends StateRead, StateWrite, HostNotify, SessionI
   readonly queueScope: Scope.Scope;
   readonly seedFromMessages: (messages: readonly unknown[]) => string;
   readonly activeSeed: (ctx: ExtensionContext) => string;
-  readonly recordUsage: (
-    target: AdvisorApplicationState["metrics"],
-    usage: AdvisorUsageTelemetry,
-  ) => AdvisorApplicationState["metrics"];
 }
 
 export const makeRuntimeControls = (d: RuntimeDeps) => {
@@ -184,7 +183,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
             if (startEpoch !== d.getState().epoch) return;
             d.updateApplicationState((state) => ({
               ...state,
-              metrics: d.recordUsage(state.metrics, usage),
+              metrics: recordUsageMetrics(state.metrics, usage),
             }));
           },
           onDiagnostic: (message: string) => {
@@ -199,7 +198,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
                 reportedDiagnostics: [...state.reportedDiagnostics, message],
               };
             });
-            if (accepted) d.notifyBestEffort(ctx, message, "warning");
+            if (accepted) notifyAtHostBoundary(ctx, message, "warning");
           },
         };
         const startOptions =
@@ -241,7 +240,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
           yield* releaseNextOwnedEffect();
           return undefined;
         }
-        refs.runtimeCursor = { anchor: d.parentAnchor(ctx), fingerprint: d.fingerprint() };
+        refs.runtimeCursor = { anchor: readParentAnchor(ctx), fingerprint: d.fingerprint() };
         refs.queue = nextQueue;
         nextQueue = undefined;
         nextRuntime = undefined;
@@ -261,7 +260,7 @@ export const makeRuntimeControls = (d: RuntimeDeps) => {
                   ...state,
                   reportedFailures: [...state.reportedFailures, kind],
                 }));
-                d.notifyBestEffort(
+                notifyAtHostBoundary(
                   ctx,
                   `Advisor ${kind} failure; primary work remains unaffected.`,
                   "warning",

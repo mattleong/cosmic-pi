@@ -34,7 +34,7 @@ import {
 import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { diffPreviewCacheKey, writeCallPreviewCacheKey } from "./shared/preview-cache-key";
 import { renderContentPreview } from "./shared/content-preview";
-import { createDiffPreviewText, diffPreviewLineLimit } from "./shared/diff-preview";
+import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
 
 export function createWritePreviewTool(cwd: string) {
   const originalWrite = createWriteToolDefinition(cwd);
@@ -255,11 +255,11 @@ function renderWriteDiffPreview(
     codePreviewSettings.writeCollapsedLines,
   );
   const header = `${theme.fg("success", "✓ Write applied")} ${theme.fg("muted", describeDiffContract(summary))}${diffSummarySeparator(theme)}${theme.fg("success", `+${summary.additions}`)} ${theme.fg("error", `-${summary.removals}`)}\n`;
-  return createDiffPreviewText(diff, lang, theme, limit, {
+  const preview = formatDiffPreview(diff, lang, theme, limit, {
     totalLines: summary.totalLines,
     hiddenLineNoun: "diff lines",
     skipHighlightLabel: "Syntax highlighting skipped for large diff",
-    decorate: (body) => header + body,
     invalidate,
   });
+  return new FullWidthDiffText(header + preview, theme);
 }

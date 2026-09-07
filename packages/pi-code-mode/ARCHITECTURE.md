@@ -49,8 +49,9 @@ its private persistence state but never stats, reads, or writes it. Availability
 `projectTrusted && config.enabled`.
 
 The published `CodeModeState` contains the resolved config, scoped values, provenance, trust, and
-availability. Scope paths, existence metadata, and pre-commit documents stay inside the store's
-persistence workflow.
+availability. The store captures fixed scope paths at acquisition and projects only this state.
+Startup uses the shared scoped resolver and seeding policy; existence metadata is not retained.
+Startup and commits share the same pure values resolver.
 
 `CodeModeConfigStore` serializes writes with one semaphore. Before commit it captures the other
 scope's document. The committed document then resolves to the next state without post-commit I/O.
@@ -144,6 +145,7 @@ through `admitFailure`, so repeated caught overruns cannot create free diagnosti
 
 Progress starts immediately. Queued admission and decoded running labels publish synchronously;
 status-only changes coalesce to a 16 ms host frame, and settlement flushes the latest snapshot.
+One ordered Map retains up to 256 rows without evicting active calls; exact counts remain separate.
 Rows never contain nested output. Selection prioritizes active, failed, cancelled, and recent rows
 within 32 visible slots, while exact counts include hidden calls and drive the hidden-row marker.
 New details retain `totalToolCalls` when rows are hidden so older renderers keep the marker; exact

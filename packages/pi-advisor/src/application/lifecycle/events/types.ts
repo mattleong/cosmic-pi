@@ -2,13 +2,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import type { ResolvedAdvisorConfig } from "../../../config/options.ts";
 import type { ConfigStoreContract } from "../../../config/store.ts";
-import type { AdvisorCheckpointHandle, ParentAnchor } from "../../controller.ts";
+import type { AdvisorCheckpointHandle } from "../../controller.ts";
 import type { AdvisorActiveTrajectoryState } from "../../state.ts";
 import type {
   CheckpointOrchestration,
   CheckpointRequestOptions,
   HostApi,
-  HostNotify,
   InterventionIngress,
   LedgerPersistence,
   RuntimeControls,
@@ -22,7 +21,6 @@ export interface EventsDeps
     HostApi,
     StateRead,
     StateWrite,
-    HostNotify,
     LedgerPersistence,
     RuntimeControls,
     CheckpointOrchestration,
@@ -53,7 +51,6 @@ export interface EventsDeps
     handle: AdvisorCheckpointHandle,
     ctx: ExtensionContext,
   ) => Effect.Effect<void>;
-  readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
   readonly configStore: ConfigStoreContract;
   readonly persistCommandConfig: (
     patch: Parameters<ConfigStoreContract["patch"]>[0],

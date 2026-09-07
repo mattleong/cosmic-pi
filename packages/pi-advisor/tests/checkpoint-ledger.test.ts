@@ -18,6 +18,9 @@ import {
   summarizeAdvisorReview,
 } from "../src/checkpoint/ledger.ts";
 
+const checkpointLedger = (overrides: Partial<Parameters<typeof createCheckpointLedger>[0]> = {}) =>
+  createCheckpointLedger({ fingerprint: "a".repeat(64), anchorId: "anchor", ...overrides });
+
 function entry<DataInput>(id: string, parentId: string | null, data?: DataInput): SessionEntry {
   return data
     ? {
@@ -103,7 +106,7 @@ describe("checkpoint ledger", () => {
       fastMode: true,
       thinkingLevel: "medium",
     });
-    const ledger = createCheckpointLedger({
+    const ledger = checkpointLedger({
       fingerprint,
       anchorId: "a",
       reviewSummary: reviewSummary(),
@@ -187,11 +190,7 @@ describe("checkpoint ledger", () => {
         },
       ],
     });
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-      reviewSummary: summary,
-    });
+    const ledger = checkpointLedger({ reviewSummary: summary });
     const durable = JSON.stringify(ledger);
 
     expect(durable).not.toMatch(/7fd9c6|b3af10|secret\/file|sk-abcdefghijklmnop|abc\.def\.ghi/);
@@ -220,11 +219,7 @@ describe("checkpoint ledger", () => {
   });
 
   test("rejects model-authored strings and malformed categorical counts", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-      reviewSummary: reviewSummary(),
-    });
+    const ledger = checkpointLedger({ reviewSummary: reviewSummary() });
     expect(parseLedger({ ...ledger, stateSummary: "copied transcript" })).toEqual(ledger);
     expect(
       parseLedger({
@@ -244,10 +239,7 @@ describe("checkpoint ledger", () => {
   });
 
   test("ignores excess root and routing fields but rejects excess review fields", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-    });
+    const ledger = checkpointLedger();
     expect(
       parseLedger({ ...ledger, future: true, routing: { ...ledger.routing, future: true } }),
     ).toEqual(ledger);
@@ -267,9 +259,7 @@ describe("checkpoint ledger", () => {
   });
 
   test("defaults the legacy v3 completed-turn field while tolerating unknown root fields", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
+    const ledger = checkpointLedger({
       cancellationLatched: true,
       immunityUntilCompletedTurn: 4,
     });
@@ -285,10 +275,7 @@ describe("checkpoint ledger", () => {
   });
 
   test("keeps valid records from mixed lifecycle input and normalizes their wire fields", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-    });
+    const ledger = checkpointLedger();
     const valid = findingRecord(1);
     const parsed = parseLedger({
       ...ledger,
@@ -313,20 +300,13 @@ describe("checkpoint ledger", () => {
       { ...valid, extra: { nested: undefined } },
       { ...valid, extra: { nested: [true, null] } },
     ];
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-      findingLifecycle: records,
-    });
+    const ledger = checkpointLedger({ findingLifecycle: records });
     expect(ledger.findingLifecycle).toEqual([valid]);
     expect(parseLedger(ledger)?.findingLifecycle).toEqual([valid]);
   });
 
   test("normalizes routing values and caps bounded lifecycle state", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-    });
+    const ledger = checkpointLedger();
     const lifecycle = Array.from({ length: MAX_FINDING_LIFECYCLE_RECORDS + 3 }, (_, index) =>
       findingRecord(index),
     );
@@ -351,9 +331,7 @@ describe("checkpoint ledger", () => {
     expect(parsed?.findingLifecycle).toHaveLength(MAX_FINDING_LIFECYCLE_RECORDS);
     expect(parsed?.findingLifecycle?.[0]).toEqual(lifecycle[3]);
     expect(
-      createCheckpointLedger({
-        fingerprint: "a".repeat(64),
-        anchorId: "anchor",
+      checkpointLedger({
         completedPrimaryTurns: -2,
         immunityUntilCompletedTurn: 4.9,
       }).routing,
@@ -365,10 +343,7 @@ describe("checkpoint ledger", () => {
   });
 
   test("rejects lifecycle records whose ID does not match key and generation", () => {
-    const ledger = createCheckpointLedger({
-      fingerprint: "a".repeat(64),
-      anchorId: "anchor",
-    });
+    const ledger = checkpointLedger();
     const parsed = parseLedger({
       ...ledger,
       findingLifecycle: [
@@ -389,7 +364,7 @@ describe("checkpoint ledger", () => {
 
   test("ignores stale branches, fingerprints and malformed versions", () => {
     const fingerprint = "a".repeat(64);
-    const ledger = createCheckpointLedger({ fingerprint, anchorId: "abandoned" });
+    const ledger = checkpointLedger({ fingerprint, anchorId: "abandoned" });
     expect(
       restoreCheckpointLedger([entry("active", null), entry("l", "active", ledger)], fingerprint),
     ).toBeUndefined();

@@ -1,16 +1,13 @@
 import * as Effect from "effect/Effect";
 import type * as Path from "effect/Path";
-import type {
-  JsonDocumentModification,
-  JsonObject,
+import {
+  type JsonDocumentModification,
+  type JsonObject,
   JsonDocumentStore,
 } from "../platform/json-document.ts";
 import {
-  modifyJsonObject,
   readConfigOrWarn,
   readOptionalJsonObject,
-  readRawJsonObject,
-  writeJsonObject,
   type ConfigDocumentErrorFactory,
 } from "./document-ops.ts";
 import {
@@ -116,7 +113,12 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   );
 
   const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)((path: string) =>
-    readRawJsonObject(path, errorFactory),
+    JsonDocumentStore.use((documents) =>
+      documents.readObject(path).pipe(
+        Effect.mapError(errorFactory("read", path)),
+        Effect.map((value) => value ?? {}),
+      ),
+    ),
   );
 
   const readConfig = Effect.fn(`${spanPrefix}.readConfig`)((path: string) =>
@@ -124,14 +126,28 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
   );
 
   const writeConfig = Effect.fn(`${spanPrefix}.writeConfig`)((path: string, config: JsonObject) =>
-    writeJsonObject(path, config, errorFactory),
+    JsonDocumentStore.use((documents) =>
+      documents.writeObject(path, config).pipe(Effect.mapError(errorFactory("write", path))),
+    ),
   );
 
   const modifyConfig = Effect.fn(`${spanPrefix}.modifyConfig`)(
     <A, AfterCommitR>(
       path: string,
       modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-    ) => modifyJsonObject(path, modify, errorFactory),
+    ) =>
+      JsonDocumentStore.use((documents) => {
+        const modifyObject = documents.modifyObject;
+        if (modifyObject === undefined) {
+          return Effect.fail(errorFactory("write", path)());
+        }
+        return modifyObject(path, (document) =>
+          Effect.try({
+            try: () => modify(document),
+            catch: errorFactory("write", path),
+          }),
+        ).pipe(Effect.mapError(errorFactory("write", path)));
+      }),
   );
 
   const warning = `Unable to read a ${options.label} configuration document.`;

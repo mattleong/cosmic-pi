@@ -1,4 +1,5 @@
 import { defaultQuestion } from "./support/questionnaire.ts";
+import { controlled, makeTuiHost as asyncUi } from "./support/host.ts";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -21,8 +22,6 @@ import type {
   AsyncQuestionnaireSnapshot,
   AsyncQuestionnaireResult,
 } from "../src/questionnaire/async-model.ts";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
-import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 
 type Handler = ExtensionHandler<any, any>;
 interface CapturedTool {
@@ -51,19 +50,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
-interface PromiseGate<A> {
-  readonly promise: Promise<A>;
-  readonly resolve: (value: A | PromiseLike<A>) => void;
-}
-
-const controlled = <A = void>() =>
-  // SAFETY: Every supported Node version implements Promise.withResolvers; ES2023 libs omit it.
-  (
-    Promise as PromiseConstructor & {
-      withResolvers<A>(): PromiseGate<A>;
-    }
-  ).withResolvers<A>();
 
 const harness = (
   loadPreviewSettings: (
@@ -128,71 +114,6 @@ const harness = (
 
 const request: AskUserRequest = {
   questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
-};
-
-const asyncUi = () => {
-  let component: Component | undefined;
-  let mounted: (() => void) | undefined;
-  const done = vi.fn();
-  const tui = {
-    requestRender: vi.fn(),
-    showOverlay: () => ({ hide: vi.fn() }),
-    stop: vi.fn(),
-    start: vi.fn(),
-  };
-  let customCalls = 0;
-  const ui = {
-    notify: vi.fn(),
-    setStatus: vi.fn(),
-    custom: (
-      factory: (
-        tui: TUI,
-        theme: Theme,
-        keys: KeybindingsManager,
-        done: (outcome: AskUserOutcome) => void,
-      ) => Component,
-      options: { onHandle: (handle: OverlayHandle) => void },
-    ) => {
-      customCalls++;
-      const completed = controlled<AskUserOutcome>();
-      // SAFETY: The fake supplies the TUI/theme/keybinding members used by the dialog boundary.
-      const opaque = <A>(value: A): never => value as never;
-      component = factory(
-        opaque(tui),
-        opaque({
-          fg: (_c: string, text: string) => text,
-          bg: (_c: string, text: string) => text,
-          bold: (text: string) => text,
-        }),
-        opaque({
-          matches: (data: string, key: string) =>
-            (data === "\r" && key === "tui.select.confirm") ||
-            (data === "external" && key === "app.editor.external"),
-        }),
-        (outcome) => {
-          done(outcome);
-          completed.resolve(outcome);
-        },
-      );
-      mounted = () =>
-        options.onHandle(opaque({ hide: vi.fn(), setHidden: vi.fn(), focus: vi.fn() }));
-      return completed.promise;
-    },
-  };
-  return {
-    ui,
-    done,
-    tui,
-    get customCalls() {
-      return customCalls;
-    },
-    get mounted() {
-      return mounted;
-    },
-    get component() {
-      return component;
-    },
-  };
 };
 
 const asyncRequest: AskUserAsyncRequest = {
@@ -319,8 +240,8 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const control = h.tools.get("ask_user_async_control")!;
         const signal = new AbortController();
         const opening = start.execute("call", asyncRequest, signal.signal, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
-        ui.mounted!();
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
+        ui.mount!();
         const receipt = yield* Effect.promise(() => opening);
         expect(receipt.details).toMatchObject({ status: "pending" });
         if (!("requestId" in receipt.details)) throw new Error("Missing async receipt");
@@ -373,8 +294,8 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         const opening = h.tools
           .get("ask_user_async")!
           .execute("open", asyncRequest, undefined, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
-        ui.mounted!();
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
+        ui.mount!();
         yield* Effect.promise(() => opening);
         ui.component!.handleInput?.("1");
         ui.component!.handleInput?.("\r");
@@ -427,11 +348,11 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
           start.execute("busy", asyncRequest, undefined, undefined, h.ctx),
         ).rejects.toMatchObject({ reason: "busy" }),
       );
-      expect(ui.mounted).toBeUndefined();
+      expect(ui.mount).toBeUndefined();
       yield* Effect.promise(() => h.emit("ui_prompt_end"));
       const pending = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
-      yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
-      ui.mounted!();
+      yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
+      ui.mount!();
       yield* Effect.promise(() => pending);
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
@@ -460,8 +381,8 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* Effect.promise(() => h.emit("session_start"));
         const start = h.tools.get("ask_user_async")!;
         const opening = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mounted).toBeDefined()));
-        ui.mounted!();
+        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
+        ui.mount!();
         yield* Effect.promise(() => opening);
         const oldComponent = ui.component!;
         oldComponent.handleInput?.("n");
@@ -493,7 +414,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
           .get("ask_user_async")!
           .execute("next", asyncRequest, undefined, undefined, h.ctx);
         yield* Effect.promise(() => vi.waitFor(() => expect(ui.customCalls).toBe(2)));
-        ui.mounted!();
+        ui.mount!();
         yield* Effect.promise(() => next);
         yield* Effect.promise(() => h.emit("session_shutdown"));
         yield* Effect.promise(() => h.emit("session_shutdown"));

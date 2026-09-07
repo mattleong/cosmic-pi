@@ -10,6 +10,7 @@ import {
   type SubagentConfigStoreContract,
   subagentConfigStoreLayer,
 } from "../src/config/store.ts";
+import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 
@@ -384,9 +385,10 @@ describe("SubagentConfigStore v6", () => {
       yield* step(() =>
         expect(
           withStore((store) =>
-            store.createProfileSet(paths.cwd, paths.agentDirectory, {
+            store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
               scope: "global",
               profileSet: "new-set",
+              profiles: BUILTIN_PROFILE_ROUTES,
               expectedExists: false,
               projectTrusted: true,
             }),
@@ -667,9 +669,10 @@ describe("SubagentConfigStore v6", () => {
       const paths = yield* step(fixture);
       yield* step(() =>
         withStore((store) =>
-          store.createProfileSet(paths.cwd, paths.agentDirectory, {
+          store.createProfileSetFromSnapshot(paths.cwd, paths.agentDirectory, {
             scope: "global",
             profileSet: "alpha",
+            profiles: BUILTIN_PROFILE_ROUTES,
             expectedExists: false,
             projectTrusted: true,
           }),

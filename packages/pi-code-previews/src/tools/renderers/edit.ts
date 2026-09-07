@@ -20,12 +20,7 @@ import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey } from "./shared/preview-cache-key";
-import {
-  appendDiffPreviewFooters,
-  createDiffPreviewText,
-  diffPreviewLineLimit,
-  renderDiffPreviewBody,
-} from "./shared/diff-preview";
+import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
 
 export function createEditPreviewTool(cwd: string) {
   const originalEdit = createEditToolDefinition(cwd);
@@ -136,12 +131,15 @@ export function createEditPreviewTool(cwd: string) {
       updateEditHeader(renderContext, cwd, theme);
       if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
       const render = () =>
-        createDiffPreviewText(diff, lang, theme, limit, {
-          totalLines: summary.totalLines,
-          hiddenLineNoun: "diff lines",
-          skipHighlightLabel: "Syntax highlighting skipped for large diff",
-          invalidate: renderContext.invalidate,
-        });
+        new FullWidthDiffText(
+          formatDiffPreview(diff, lang, theme, limit, {
+            totalLines: summary.totalLines,
+            hiddenLineNoun: "diff lines",
+            skipHighlightLabel: "Syntax highlighting skipped for large diff",
+            invalidate: renderContext.invalidate,
+          }),
+          theme,
+        );
       const previewKey = diffPreviewCacheKey(
         "edit-result",
         diff,
@@ -205,19 +203,11 @@ function renderEditCallPreview(
       expanded || codePreviewSettings.editCollapsedLines === "all"
         ? summary.totalLines
         : (perOperationLimit ?? codePreviewSettings.editCollapsedLines);
-    const { body, syntaxHighlightSkipped } = renderDiffPreviewBody(
-      diff,
-      lang,
-      theme,
-      limit,
-      invalidate,
-    );
-    const rendered = appendDiffPreviewFooters(body, theme, {
+    const rendered = formatDiffPreview(diff, lang, theme, limit, {
       totalLines: summary.totalLines,
-      limit,
       hiddenLineNoun: "proposed diff lines",
-      syntaxHighlightSkipped,
       skipHighlightLabel: "Syntax highlighting skipped for large proposed diff",
+      invalidate,
     });
     if (operations.length > 1)
       sections.push(theme.fg("muted", `Proposed edit ${index + 1}/${operations.length}`));

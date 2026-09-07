@@ -14,7 +14,12 @@ import {
   type FullScreenResolution,
   type PageSteps,
 } from "./keymap.ts";
-import { isMovementMotion, movementOffset } from "./list-navigation.ts";
+import {
+  isListMotion,
+  isMovementMotion,
+  movementOffset,
+  type ListMotion,
+} from "./list-navigation.ts";
 
 export type ListDetailPane = "list" | "detail";
 
@@ -64,42 +69,19 @@ export const browsingListDetail = (
   layout: ManagerLayoutTier,
 ): boolean => pane === "detail" || (layout === "narrow" && details);
 
-export type ListDetailMotion =
-  | "cancel"
-  | "quit"
-  | "back"
-  | "forward"
-  | "up"
-  | "down"
-  | "half-page-up"
-  | "half-page-down"
-  | "full-page-up"
-  | "full-page-down"
-  | "first"
-  | "last";
+export type ListDetailMotion = ListMotion | "cancel" | "quit" | "back" | "forward";
 
 /** Maps resolved keymap actions onto the closed shared motion vocabulary. */
 export const listDetailMotionFromAction = (
   action: FullScreenAction,
-): ListDetailMotion | undefined => {
-  switch (action) {
-    case "cancel":
-    case "quit":
-    case "back":
-    case "forward":
-    case "up":
-    case "down":
-    case "half-page-up":
-    case "half-page-down":
-    case "full-page-up":
-    case "full-page-down":
-    case "first":
-    case "last":
-      return action;
-    default:
-      return undefined;
-  }
-};
+): ListDetailMotion | undefined =>
+  isListMotion(action) ||
+  action === "cancel" ||
+  action === "quit" ||
+  action === "back" ||
+  action === "forward"
+    ? action
+    : undefined;
 
 export interface ListDetailMotionState {
   readonly pane: ListDetailPane;

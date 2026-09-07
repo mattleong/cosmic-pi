@@ -128,24 +128,13 @@ interface HerdrCommandRequest {
   readonly confirmedRejectionCodes?: ReadonlyArray<string> | undefined;
 }
 
-interface HerdrCommandOutput {
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-type HerdrCommandRunner = (
-  request: HerdrCommandRequest,
-) => Effect.Effect<HerdrCommandOutput, HerdrBtwError>;
+type HerdrCommandRunner = (request: HerdrCommandRequest) => Effect.Effect<string, HerdrBtwError>;
 
 export type HerdrProcessRunner = typeof runBoundedProcessNode;
 
 export interface HerdrClientOptions {
-  /** Test seam only. Production always runs the fixed `herdr` executable. */
-  readonly executable?: string | undefined;
   /** Test seam for deterministic process lifecycle and transport outcomes. */
   readonly processRunner?: HerdrProcessRunner | undefined;
-  /** Test seam only. Production retains the fixed four-MiB bound per output stream. */
-  readonly maximumOutputBytes?: number | undefined;
 }
 
 const operationCode = (operation: string, suffix: string): string =>
@@ -244,20 +233,14 @@ const makeHerdrCommandRunner = (
 ): HerdrCommandRunner => {
   const environment = selectHerdrEnvironment(sourceEnvironment);
   const processRunner = options.processRunner ?? runBoundedProcessNode;
-  const executable = options.executable ?? HERDR_EXECUTABLE;
-  const configuredMaximum = options.maximumOutputBytes ?? MAX_OUTPUT_BYTES;
-  const maximumOutputBytes =
-    Number.isFinite(configuredMaximum) && configuredMaximum > 0
-      ? Math.min(Math.floor(configuredMaximum), MAX_OUTPUT_BYTES)
-      : MAX_OUTPUT_BYTES;
 
   return (request) =>
     processRunner({
-      executable,
+      executable: HERDR_EXECUTABLE,
       args: [...request.args],
       environment,
-      stdoutLimitBytes: maximumOutputBytes,
-      stderrLimitBytes: maximumOutputBytes,
+      stdoutLimitBytes: MAX_OUTPUT_BYTES,
+      stderrLimitBytes: MAX_OUTPUT_BYTES,
       timeoutMillis: request.timeoutMillis ?? COMMAND_TIMEOUT_MILLIS,
       cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
       detached: false,
@@ -274,7 +257,7 @@ const makeHerdrCommandRunner = (
             : output.stderr || output.stdout;
           return Effect.fail(herdrCommandExitFailure(request, detail));
         }
-        return Effect.succeed({ stdout: output.stdout, stderr: output.stderr });
+        return Effect.succeed(output.stdout);
       }),
     );
 };
@@ -317,7 +300,7 @@ export const makeHerdrClient = (
 ) => {
   const run = makeHerdrCommandRunner(sourceEnvironment, options);
   const decoded = <A>(request: HerdrCommandRequest, schema: Schema.Decoder<A>) =>
-    run(request).pipe(Effect.flatMap((output) => decodeJson(schema, output.stdout, request)));
+    run(request).pipe(Effect.flatMap((stdout) => decodeJson(schema, stdout, request)));
 
   return {
     inspectProtocol: Effect.fn("HerdrClient.inspectProtocol")(() =>
@@ -336,10 +319,8 @@ export const makeHerdrClient = (
         operation: "inspect Pi integration",
         mutation: false,
       }).pipe(
-        Effect.map((output) => {
-          const piIntegration = output.stdout
-            .split(/\r?\n/gu)
-            .find((line) => line.startsWith("pi:"));
+        Effect.map((stdout) => {
+          const piIntegration = stdout.split(/\r?\n/gu).find((line) => line.startsWith("pi:"));
           return (
             piIntegration !== undefined && /^pi: current \(v\d+\) \(.+\)$/u.test(piIntegration)
           );

@@ -1,6 +1,6 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import { summarizeDiff } from "../src/diff/summary";
-import { createSimpleDiff, createStructuredDiff } from "../src/diff/structured";
+import { createSimpleDiff } from "../src/diff/structured";
 import {
   benchLog,
   benchTable,
@@ -29,13 +29,6 @@ for (const benchCase of cases) {
   const precomputedDiff = createSimpleDiff(benchCase.before, benchCase.after);
 
   results.push(
-    runBench(benchCase.name, "createStructuredDiff", caseSize(benchCase), () => {
-      const hunks = createStructuredDiff(benchCase.before, benchCase.after);
-      sink += hunks.length;
-    }),
-  );
-
-  results.push(
     runBench(benchCase.name, "createSimpleDiff", caseSize(benchCase), () => {
       sink += createSimpleDiff(benchCase.before, benchCase.after).length;
     }),
@@ -61,8 +54,7 @@ for (const benchCase of cases) {
 }
 
 printLayerSummary(results);
-benchLog("createStructuredDiff measures diff package line diffing plus context compaction.");
-benchLog("createSimpleDiff includes formatting the structured hunks into renderable diff text.");
+benchLog("createSimpleDiff measures line diffing, context compaction, and diff text formatting.");
 benchLog("summarizeDiff isolates the full-diff scan that edit/write result headers perform.");
 benchLog("");
 printResults(results);

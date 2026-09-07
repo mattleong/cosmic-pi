@@ -496,10 +496,6 @@ describe("AdvisorRuntime", () => {
         });
         yield* Effect.promise(() => vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce()));
         expect(onUsage).toHaveBeenCalledWith({
-          cacheReadTokens: 2,
-          cacheWriteTokens: 3,
-          inputTokens: 5,
-          outputTokens: 7,
           totalTokens: 17,
           cost: 0.25,
         });
@@ -517,26 +513,25 @@ describe("AdvisorRuntime", () => {
           throw new Error("getter executed");
         },
       });
+      for (const usage of [
+        { input: Number.NaN, output: Number.POSITIVE_INFINITY, totalTokens: -1 },
+        { cacheRead: -1, totalTokens: 17 },
+        { cacheWrite: -1, totalTokens: 17 },
+        { input: -1, totalTokens: 17 },
+        { output: -1, totalTokens: 17 },
+      ]) {
+        value.emit({
+          type: "message_end",
+          message: { role: "assistant", content: [], stopReason: "stop", usage },
+        });
+      }
       value.emit({
         type: "message_end",
         message: { role: "assistant", content: [], stopReason: "stop", usage: hostileUsage },
       });
-      value.emit({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [],
-          stopReason: "stop",
-          usage: { input: Number.NaN, output: Number.POSITIVE_INFINITY, totalTokens: -1 },
-        },
-      });
       yield* Effect.promise(() => vi.waitFor(() => expect(onUsage).toHaveBeenCalledOnce()));
       expect(onUsage).toHaveBeenCalledWith({
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
         cost: 0,
-        inputTokens: 0,
-        outputTokens: 0,
         totalTokens: 0,
       });
     }),

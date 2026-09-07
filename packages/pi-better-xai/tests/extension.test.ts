@@ -87,6 +87,9 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
 
     if (dependencies) registerBetterXaiApplication(pi, dependencies);
     else betterXai(pi);
+    yield* Effect.addFinalizer(() =>
+      invoke(handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)),
+    );
     return { handlers, commands, ctx, cwd, notify, setStatus, setFooter, pi };
   });
 
@@ -131,7 +134,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       h.notify.mockClear();
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -188,7 +190,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       });
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", fallback);
       expect(h.setFooter).not.toHaveBeenCalled();
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -210,7 +211,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       );
       expect(h.setFooter).not.toHaveBeenCalled();
       expect(h.setStatus).not.toHaveBeenCalledWith("better-xai", expect.any(String));
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -244,7 +244,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       expect(cwdReads).toBe(1);
       expect(signalReads).toBe(1);
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -300,7 +299,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
       expect(() => h.handlers.get("model_select")?.({}, h.ctx)).not.toThrow();
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -323,7 +321,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       yield* invoke(command);
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -411,7 +408,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
       expect(renderResult).toEqual(expect.any(Array));
       expect(h.notify).not.toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -443,7 +439,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 
@@ -485,7 +480,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       h.notify.mockClear();
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-      yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
     }),
   );
 

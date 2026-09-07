@@ -31,7 +31,7 @@ export interface SessionRefs {
   lastCandidate: LastCandidate | undefined;
   trajectorySequence: number;
   activeTrajectoryResource: ActiveTrajectoryResource | undefined;
-  activeToolCalls: Map<string, { toolName: string; args: unknown }>;
+  activeToolCalls: Map<string, { args: unknown }>;
   latestStateSummary: string;
   latestDurableSummary: AdvisorDurableReviewSummary;
   activeChildStart: Deferred.Deferred<void> | undefined;

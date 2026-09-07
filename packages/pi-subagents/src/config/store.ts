@@ -72,10 +72,6 @@ export interface SubagentDefaultProfileSetPatch extends SubagentConfigPatchBase 
   readonly defaultProfileSet?: string | undefined;
 }
 
-export interface SubagentCreateProfileSetPatch extends SubagentConfigPatchBase {
-  readonly profileSet: string;
-}
-
 export interface SubagentCreateProfileSetFromSnapshotPatch extends SubagentConfigPatchBase {
   readonly profileSet: string;
   /** One coherent, complete session snapshot. Every route is persisted explicitly. */
@@ -127,11 +123,6 @@ export interface SubagentConfigStoreContract {
     cwd: string,
     agentDirectory: string,
     patch: SubagentDefaultProfileSetPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly createProfileSet: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentCreateProfileSetPatch,
   ) => Effect.Effect<void, SubagentConfigStoreError>;
   readonly createProfileSetFromSnapshot: (
     cwd: string,
@@ -400,23 +391,6 @@ const applyDefaultProfileSetPatch = (
     return mutationError(path, "The selected profile set contains an invalid profile route.");
   next.defaultProfileSet = patch.defaultProfileSet;
   return next;
-};
-
-const applyCreateProfileSet = (
-  current: JsonObject,
-  patch: SubagentCreateProfileSetPatch,
-  path: string,
-): JsonObject | SubagentConfigStoreError => {
-  if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
-  const upgraded = upgradeDocument(current, path);
-  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
-  const sets = { ...currentProfileSets(upgraded) };
-  if (own(sets, patch.profileSet))
-    return mutationError(path, "A profile set with that name exists.");
-  if (Object.keys(sets).length >= MAX_PROFILE_SETS)
-    return mutationError(path, `A document may contain at most ${MAX_PROFILE_SETS} profile sets.`);
-  sets[patch.profileSet] = { profiles: {} };
-  return { ...upgraded, profileSets: sets };
 };
 
 interface OwnDataValue {
@@ -749,8 +723,6 @@ export const subagentConfigStoreLayer = Layer.effect(
           applyDefaultProfileSetPatch,
           patch.defaultProfileSet === undefined,
         ),
-      createProfileSet: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSet),
       createProfileSetFromSnapshot: (cwd, agentDirectory, patch) =>
         patchDocument(cwd, agentDirectory, patch, applyCreateProfileSetFromSnapshot),
       copyProfileSet: (cwd, agentDirectory, patch) =>

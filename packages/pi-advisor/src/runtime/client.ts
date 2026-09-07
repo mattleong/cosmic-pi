@@ -43,11 +43,7 @@ const ParentAuthWireSchema = Schema.Union([
 ]);
 
 export interface AdvisorUsageTelemetry {
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
   cost: number;
-  inputTokens: number;
-  outputTokens: number;
   totalTokens: number;
 }
 export interface AdvisorChildModel {

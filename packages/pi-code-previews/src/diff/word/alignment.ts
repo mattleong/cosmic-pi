@@ -50,42 +50,12 @@ export function prefixAlignedPairs(
   afterLength: number,
   scoreAt: PairScoreAt,
 ): Array<[number, number]> {
-  const columns = afterLength + 1;
-  const dp = new Float64Array((beforeLength + 1) * columns);
-
-  for (let i = 1; i <= beforeLength; i++) {
-    const rowOffset = i * columns;
-    const previousRowOffset = rowOffset - columns;
-    for (let j = 1; j <= afterLength; j++) {
-      const pairScore = scoreAt(i - 1, j - 1);
-      const pair = Number.isFinite(pairScore)
-        ? dp[previousRowOffset + j - 1]! + pairScore
-        : pairScore;
-      dp[rowOffset + j] = Math.max(dp[previousRowOffset + j]!, dp[rowOffset + j - 1]!, pair);
-    }
-  }
-
-  const pairs: Array<[number, number]> = [];
-  let i = beforeLength;
-  let j = afterLength;
-  while (i > 0 && j > 0) {
-    const rowOffset = i * columns;
-    const previousRowOffset = rowOffset - columns;
-    const pairScore = scoreAt(i - 1, j - 1);
-    const pair = Number.isFinite(pairScore)
-      ? dp[previousRowOffset + j - 1]! + pairScore
-      : pairScore;
-    if (Number.isFinite(pairScore) && sameAlignmentScore(dp[rowOffset + j]!, pair)) {
-      pairs.push([i - 1, j - 1]);
-      i--;
-      j--;
-    } else if (dp[previousRowOffset + j]! >= dp[rowOffset + j - 1]!) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-  return pairs.toReversed();
+  // Reversing both axes preserves the prefix walk's end-first tie-breaking.
+  return suffixAlignedPairs(beforeLength, afterLength, (i, j) =>
+    scoreAt(beforeLength - 1 - i, afterLength - 1 - j),
+  )
+    .map(([i, j]): [number, number] => [beforeLength - 1 - i, afterLength - 1 - j])
+    .toReversed();
 }
 
 export function suffixAlignmentScore(

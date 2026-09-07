@@ -1,7 +1,6 @@
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Number from "effect/Number";
 import * as Schema from "effect/Schema";
-import type * as Types from "effect/Types";
 import {
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
@@ -17,10 +16,7 @@ import {
   DEFAULT_USAGE_CONFIG,
   ImageOutputFormatSchema,
   ImageSaveModeSchema,
-  type ConfigFile,
-  type ImageConfig,
   type ResolvedConfig,
-  type UsageConfig,
 } from "./schema.ts";
 
 export class OpenAIConfigError extends Schema.TaggedError<OpenAIConfigError>()(
@@ -34,7 +30,7 @@ const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const FiniteNumberSchema = Schema.Number.check(Schema.isFinite());
 
 /** Tolerant field-level wire decode: one malformed field never discards valid siblings. */
-function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
+function decodeConfig<ValueInput>(value: ValueInput) {
   const root = decodeTolerantFields(
     value,
     {
@@ -47,7 +43,6 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
     },
     { path: "config" },
   ).value;
-  // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   const usage = decodeTolerantFields(
     root.usage,
     {
@@ -56,43 +51,40 @@ function decodeConfig<ValueInput>(value: ValueInput): ConfigFile {
       showResetTimes: Schema.Boolean,
     },
     { path: "usage" },
-  ).value as UsageConfig;
+  ).value;
   const compaction = decodeTolerantFields(
     root.compaction,
     { enabled: Schema.Boolean },
     { path: "compaction" },
   ).value;
-  const imageFields = decodeTolerantFields(
+  const image = decodeTolerantFields(
     root.image,
     {
       enabled: Schema.Boolean,
-      defaultModel: Schema.String,
+      defaultModel: Schema.Trim.check(Schema.isNonEmpty()),
       defaultSave: ImageSaveModeSchema,
       outputFormat: ImageOutputFormatSchema,
       timeoutMs: FiniteNumberSchema,
     },
     { path: "image" },
   ).value;
-  const defaultModel = imageFields.defaultModel?.trim();
-  const image: ImageConfig = {
-    ...imageFields,
-    ...(defaultModel ? { defaultModel } : { defaultModel: undefined }),
+  return {
+    ...(root.persistState !== undefined && { persistState: root.persistState }),
+    ...(root.active !== undefined && { active: root.active }),
+    ...(root.desiredActive !== undefined && { desiredActive: root.desiredActive }),
+    ...(Object.keys(usage).length > 0 && { usage }),
+    ...(compaction.enabled !== undefined && { compaction }),
+    ...(Object.keys(image).length > 0 && { image }),
   };
-  const decoded: Types.Mutable<ConfigFile> = {};
-  if (root.persistState !== undefined) decoded.persistState = root.persistState;
-  if (root.active !== undefined) decoded.active = root.active;
-  if (root.desiredActive !== undefined) decoded.desiredActive = root.desiredActive;
-  if (Object.keys(usage).length > 0) decoded.usage = usage;
-  if (compaction.enabled !== undefined) decoded.compaction = { enabled: compaction.enabled };
-  if (Object.values(image).some((field) => field !== undefined)) decoded.image = image;
-  return decoded;
 }
 
 function resolveConfigFiles(
   metadata: ScopedConfigMetadata,
-  project: ConfigFile | undefined,
-  global: ConfigFile | undefined,
+  project: ReturnType<typeof decodeConfig> | undefined,
+  global: ReturnType<typeof decodeConfig> | undefined,
 ): ResolvedConfig {
+  const usage = { ...DEFAULT_USAGE_CONFIG, ...global?.usage, ...project?.usage };
+  const image = { ...DEFAULT_IMAGE_CONFIG, ...global?.image, ...project?.image };
   const desiredActive =
     project?.desiredActive ??
     project?.active ??
@@ -106,45 +98,16 @@ function resolveConfigFiles(
       project?.persistState ?? global?.persistState ?? DEFAULT_CONFIG.persistState ?? true,
     desiredActive,
     usage: {
-      refreshIntervalMs: Number.clamp(
-        project?.usage?.refreshIntervalMs ??
-          global?.usage?.refreshIntervalMs ??
-          DEFAULT_USAGE_CONFIG.refreshIntervalMs,
-        { minimum: 15_000, maximum: 10 * 60_000 },
-      ),
-      showOnlyOnSubscriptionModels:
-        project?.usage?.showOnlyOnSubscriptionModels ??
-        global?.usage?.showOnlyOnSubscriptionModels ??
-        DEFAULT_USAGE_CONFIG.showOnlyOnSubscriptionModels,
-      showResetTimes:
-        project?.usage?.showResetTimes ??
-        global?.usage?.showResetTimes ??
-        DEFAULT_USAGE_CONFIG.showResetTimes,
+      ...usage,
+      refreshIntervalMs: Number.clamp(usage.refreshIntervalMs, {
+        minimum: 15_000,
+        maximum: 10 * 60_000,
+      }),
     },
-    compaction: {
-      enabled:
-        project?.compaction?.enabled ??
-        global?.compaction?.enabled ??
-        DEFAULT_COMPACTION_CONFIG.enabled,
-    },
+    compaction: { ...DEFAULT_COMPACTION_CONFIG, ...global?.compaction, ...project?.compaction },
     image: {
-      enabled: project?.image?.enabled ?? global?.image?.enabled ?? DEFAULT_IMAGE_CONFIG.enabled,
-      defaultModel:
-        project?.image?.defaultModel ??
-        global?.image?.defaultModel ??
-        DEFAULT_IMAGE_CONFIG.defaultModel,
-      defaultSave:
-        project?.image?.defaultSave ??
-        global?.image?.defaultSave ??
-        DEFAULT_IMAGE_CONFIG.defaultSave,
-      outputFormat:
-        project?.image?.outputFormat ??
-        global?.image?.outputFormat ??
-        DEFAULT_IMAGE_CONFIG.outputFormat,
-      timeoutMs: Number.clamp(
-        project?.image?.timeoutMs ?? global?.image?.timeoutMs ?? DEFAULT_IMAGE_CONFIG.timeoutMs,
-        { minimum: 30_000, maximum: 5 * 60_000 },
-      ),
+      ...image,
+      timeoutMs: Number.clamp(image.timeoutMs, { minimum: 30_000, maximum: 5 * 60_000 }),
     },
   };
 }

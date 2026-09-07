@@ -2,7 +2,7 @@
 import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { nodeFsPromises, nodePath, nodeSpawn as spawn } from "./node-builtins.ts";
+import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
   getPackageDir,
@@ -12,11 +12,8 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
 import type * as Scope from "effect/Scope";
@@ -26,10 +23,9 @@ import {
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
 import type { RuntimeApiKey } from "../run/model.ts";
-import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
+import { acquireProcessTransport, type ProcessTransportRuntime } from "./process-transport.ts";
+export { releaseChildProcess, type ChildProcessReleaseOperations } from "./process-transport.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
-import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
-import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import type {
   LocalPiContact,
   LocalPiParentControl,
@@ -40,11 +36,6 @@ import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 const { mkdir, rm, rmdir, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 
-const MAX_RPC_LINE_BYTES = 4 * 1024 * 1024;
-const MAX_RPC_QUEUED_BYTES = 8 * 1024 * 1024;
-const MAX_STDERR_BYTES = 128 * 1024;
-const EVENT_CAPACITY = 512;
-const TRANSPORT_WRITE_TIMEOUT = "10 seconds";
 const RUNTIME_API_KEY_ENV = "PI_SUBAGENT_RUNTIME_API_KEY";
 const RUNTIME_API_PROVIDER_ENV = "PI_SUBAGENT_RUNTIME_API_PROVIDER";
 const BLOCKED_ENV_KEYS = new Set([
@@ -174,63 +165,6 @@ export const requestCooperativeAbort = (
     Effect.catch(() => Effect.void),
   );
 
-export interface ChildProcessReleaseOperations {
-  readonly platform: NodeJS.Platform;
-  readonly requestAbort: Effect.Effect<void>;
-  readonly terminate: (mode: "graceful" | "force") => Effect.Effect<void, SubagentProcessError>;
-  readonly awaitExit: Effect.Effect<unknown>;
-}
-
-const cleanupUnconfirmed = () =>
-  processError(
-    "confirm subagent process cleanup",
-    new Error("Process exit was not confirmed after forced termination."),
-    "cleanup_unconfirmed",
-  );
-
-export const releaseChildProcess = (
-  operations: ChildProcessReleaseOperations,
-): Effect.Effect<void, SubagentProcessError> => {
-  /** True when the process exit was observed within the bounded wait. */
-  const waitForExit = operations.awaitExit.pipe(
-    Effect.interruptible,
-    Effect.as(true),
-    Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
-  );
-  return operations.requestAbort.pipe(
-    Effect.andThen(Effect.sleep("100 millis")),
-    Effect.andThen(Effect.exit(operations.terminate("graceful"))),
-    Effect.flatMap((gracefulAttempt) =>
-      waitForExit.pipe(
-        Effect.flatMap((gracefulExit) => {
-          if (gracefulExit) {
-            if (operations.platform === "win32")
-              return Exit.isSuccess(gracefulAttempt)
-                ? Effect.void
-                : Effect.fail(cleanupUnconfirmed());
-            return Effect.sleep("100 millis").pipe(
-              // POSIX descendants remain owned by the detached process group after
-              // the leader exits, so complete a force sweep before releasing ownership.
-              Effect.andThen(operations.terminate("force")),
-            );
-          }
-          return Effect.exit(operations.terminate("force")).pipe(
-            Effect.flatMap((forceAttempt) =>
-              waitForExit.pipe(
-                Effect.flatMap((forcedExit) =>
-                  Exit.isSuccess(forceAttempt) && forcedExit
-                    ? Effect.void
-                    : Effect.fail(cleanupUnconfirmed()),
-                ),
-              ),
-            ),
-          );
-        }),
-      ),
-    ),
-  );
-};
-
 function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   return {
     ...Object.fromEntries(
@@ -302,6 +236,7 @@ const encodeRpcCommandFrame = (command: RpcCommand): string => `${JSON.stringify
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   agentDirectory: string,
   request: ChildLaunchRequest,
+  runtime?: ProcessTransportRuntime,
 ) {
   const runDir = subagentRunDirectory(agentDirectory, request.parentSessionId, request.runId);
   yield* Effect.tryPromise({
@@ -321,9 +256,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         })
       : undefined;
 
-  const events = yield* Queue.dropping<ChildWireEvent, Cause.Done>(EVENT_CAPACITY);
-  const ready = yield* Deferred.make<void, SubagentProcessError>();
-  const exited = yield* Deferred.make<Extract<ChildWireEvent, { readonly type: "exit" }>>();
   // Pi's published CLI bundles dependencies absent from the unbundled dist/cli.js.
   const cliEntry = join(getPackageDir(), "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools);
@@ -353,224 +285,54 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         : ["--session-dir", runDir]),
   ];
   const args = [cliEntry, ...cliArgs];
-  let stderr = "";
-  let settled = false;
-  let spawned = false;
-  let cleaned = false;
-  let eventQueueOverflowed = false;
-  let transportBacklogOverflowed = false;
-  let stdinError: Error | undefined;
-
-  return yield* Effect.uninterruptible(
-    Effect.gen(function* () {
-      const child = yield* Effect.try({
-        try: () =>
-          spawn(process.execPath, args, {
-            cwd: request.cwd,
-            detached: process.platform !== "win32",
-            env: sanitizedEnvironment(request),
-            stdio: ["pipe", "pipe", "pipe", "ipc"],
-            windowsHide: true,
-          }),
-        catch: (error) => processError("spawn", error),
-      });
-
-      const transportRoom = makeByteBoundedQueueRoom(events, MAX_RPC_QUEUED_BYTES, () => {
-        transportBacklogOverflowed = true;
-        stderr = `${stderr}\nSubagent RPC event backlog exceeded ${MAX_RPC_QUEUED_BYTES} bytes.`;
-        Queue.offerUnsafe(events, {
-          type: "protocol_error",
-          message: "Subagent RPC event backlog exceeded its byte budget.",
+  const { attachment: ipc, ...transport } = yield* acquireProcessTransport(
+    {
+      spawn: (spawn) =>
+        spawn(process.execPath, args, {
+          cwd: request.cwd,
+          detached: process.platform !== "win32",
+          env: sanitizedEnvironment(request),
+          stdio: ["pipe", "pipe", "pipe", "ipc"],
+          windowsHide: true,
+        }),
+      platform: process.platform,
+      label: "Subagent RPC",
+      error: processError,
+      message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
+      encode: encodeRpcCommandFrame,
+      // Pi reports parser overflow to its backend; unlike native CLIs it does not kill here.
+      terminateOnParserOverflow: false,
+      synchronousWriteFailure: "not_sent",
+      requestAbort: requestCooperativeAbort,
+      attach: (child, offer) => {
+        const ipc = attachLocalPiParentIpc(child, {
+          onContact: (contact) => offer({ type: "parent_contact", value: contact }),
+          onProtocolError: (message) => offer({ type: "protocol_error", message }),
+          onDisconnect: () => {},
         });
-        void terminateProcessTree(child, "force").catch(() => {});
-      });
-      const offer = (event: ChildWireEvent, bytes = 0) => {
-        if (transportRoom.offer(event, bytes)) return;
-        if (transportBacklogOverflowed || eventQueueOverflowed) return;
-        eventQueueOverflowed = true;
-        stderr = `${stderr}\nSubagent event queue exceeded ${EVENT_CAPACITY} pending events.`;
-        void terminateProcessTree(child, "force").catch(() => {});
-      };
-      const onLine = (line: string) => {
-        const bytes = Buffer.byteLength(line, "utf8") + 1;
-        const decoded = decodeUnknownJsonOption(line);
-        if (Option.isSome(decoded)) offer({ type: "rpc_message", value: decoded.value }, bytes);
-        else
-          offer({ type: "protocol_error", message: "Subagent emitted malformed RPC JSON." }, bytes);
-      };
-      const detachStdout = child.stdout
-        ? attachBoundedLineParser(child.stdout, {
-            maxLineBytes: MAX_RPC_LINE_BYTES,
-            maxQueuedBytes: MAX_RPC_QUEUED_BYTES,
-            onLine,
-            onOverflow: () =>
-              offer({
-                type: "protocol_error",
-                message: "Subagent RPC input exceeded its bounded parser budget.",
-              }),
-          })
-        : () => {};
-      const onStderr = (chunk: Buffer) => {
-        stderr = `${stderr}${chunk.toString("utf8")}`;
-        if (Buffer.byteLength(stderr, "utf8") > MAX_STDERR_BYTES)
-          stderr = Buffer.from(stderr, "utf8").subarray(-MAX_STDERR_BYTES).toString("utf8");
-      };
-      const onStdoutError = (error: Error) => {
-        onStderr(Buffer.from(`\nSubagent stdout error: ${error.message}\n`, "utf8"));
-        offer({ type: "protocol_error", message: "Subagent RPC output stream failed." });
-      };
-      const onStderrError = (error: Error) => {
-        onStderr(Buffer.from(`\nSubagent stderr error: ${error.message}\n`, "utf8"));
-        offer({ type: "protocol_error", message: "Subagent diagnostic stream failed." });
-      };
-      const onStdinError = (error: Error) => {
-        stdinError = error;
-      };
-      const onSpawn = () => {
-        spawned = true;
-        Deferred.doneUnsafe(ready, Effect.void);
-      };
-      const ipc = attachLocalPiParentIpc(child, {
-        onContact: (contact) => offer({ type: "parent_contact", value: contact }),
-        onProtocolError: (message) => offer({ type: "protocol_error", message }),
-        onDisconnect: () => {},
-      });
-      const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
-        if (settled) return;
-        settled = true;
-        const event: Extract<ChildWireEvent, { readonly type: "exit" }> = {
-          type: "exit",
-          exitCode,
-          ...(signal && { signal }),
-          stderr,
-        };
-        Queue.endUnsafe(events);
-        Deferred.doneUnsafe(exited, Effect.succeed(event));
-      };
-      const onError = (error: Error) => {
-        Deferred.doneUnsafe(ready, Effect.fail(processError("spawn", error)));
-        if (!spawned) finish(null, null);
-      };
-      const onClose = (code: number | null, signal: NodeJS.Signals | null) => finish(code, signal);
-      const cleanup = () => {
-        if (cleaned) return;
-        cleaned = true;
-        detachStdout();
-        child.stdout?.off("error", onStdoutError);
-        child.stderr?.off("data", onStderr);
-        child.stderr?.off("error", onStderrError);
-        child.stdin?.off("error", onStdinError);
-        child.off("spawn", onSpawn);
-        ipc.detach();
-        child.off("error", onError);
-        child.off("close", onClose);
-        child.stdin?.destroy();
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      };
-
-      child.stdout?.on("error", onStdoutError);
-      child.stderr?.on("data", onStderr);
-      child.stderr?.on("error", onStderrError);
-      child.stdin?.on("error", onStdinError);
-      child.once("spawn", onSpawn);
-      child.once("error", onError);
-      child.once("close", onClose);
-      yield* Deferred.await(ready).pipe(Effect.onError(() => Effect.sync(cleanup)));
-      const pid = child.pid;
-      if (!pid) {
-        cleanup();
-        return yield* processError("spawn", "Subagent process did not expose a pid.");
-      }
-
-      const withWriteTimeout = (
-        effect: Effect.Effect<void, SubagentProcessError>,
-        operation: string,
-      ) =>
-        effect.pipe(
-          Effect.timeoutOrElse({
-            duration: TRANSPORT_WRITE_TIMEOUT,
-            orElse: () =>
-              Effect.fail(
-                processError(
-                  operation,
-                  `Subagent transport write exceeded ${TRANSPORT_WRITE_TIMEOUT}; the frame may already have been accepted.`,
-                  "transport_outcome_uncertain",
-                ),
-              ),
-          }),
-        );
-      const send = (command: RpcCommand) =>
-        withWriteTimeout(
-          Effect.callback<void, SubagentProcessError>((resume) => {
-            const stdin = child.stdin;
-            if (!stdin || stdin.destroyed || stdinError) {
-              resume(
-                Effect.fail(
-                  processError(
-                    "send RPC command to",
-                    stdinError ?? "Subagent RPC input is closed.",
-                    "transport_not_sent",
-                  ),
-                ),
-              );
-              return;
-            }
-            let encoded: string;
-            try {
-              encoded = encodeRpcCommandFrame(command);
-              stdin.write(encoded, (error) =>
-                resume(
-                  error
-                    ? Effect.fail(
-                        processError("send RPC command to", error, "transport_outcome_uncertain"),
-                      )
-                    : Effect.void,
-                ),
-              );
-            } catch (error) {
-              resume(
-                Effect.fail(processError("encode RPC command for", error, "transport_not_sent")),
-              );
-            }
-          }),
-          "send RPC command to",
-        );
-      const terminate = (mode: "graceful" | "force") =>
-        terminateProcessTreeEffect(child, mode).pipe(
-          Effect.mapError((error) => processError("terminate", error)),
-        );
-      const releaseActive = releaseChildProcess({
-        platform: process.platform,
-        requestAbort: requestCooperativeAbort(send),
-        terminate,
-        awaitExit: Deferred.await(exited),
-      });
-      const release = releaseActive.pipe(Effect.ensuring(Effect.sync(cleanup)));
-
-      return {
-        pid,
-        events,
-        acknowledge: transportRoom.acknowledge,
-        awaitExit: Deferred.await(exited),
-        send,
-        sendContactControl: ipc.sendControl,
-        terminate,
-        release,
-      };
-    }),
+        return { value: ipc, detach: ipc.detach };
+      },
+    },
+    runtime,
   );
+  return { ...transport, sendContactControl: ipc.sendControl };
 });
 
 export class ChildProcess extends Context.Service<ChildProcess, ChildProcessContract>()(
   "pi-subagents/boundary/child-process/ChildProcess",
 ) {
-  static readonly layer = (options: { readonly agentDirectory?: string } = {}) => {
+  static readonly layer = (
+    options: {
+      readonly agentDirectory?: string;
+      readonly transportRuntime?: ProcessTransportRuntime;
+    } = {},
+  ) => {
     const agentDirectory = options.agentDirectory ?? getAgentDir();
     return Layer.succeed(this, {
       spawn: (request) =>
-        Effect.acquireRelease(acquireChild(agentDirectory, request), (handle) =>
-          handle.release.pipe(Effect.orDie),
+        Effect.acquireRelease(
+          acquireChild(agentDirectory, request, options.transportRuntime),
+          (handle) => handle.release.pipe(Effect.orDie),
         ).pipe(Effect.map(({ release: _release, ...handle }) => handle)),
       reclaimRunState: (request) => reclaimChildRunState(agentDirectory, request),
     });

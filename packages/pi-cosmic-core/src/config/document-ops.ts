@@ -1,9 +1,5 @@
 import * as Effect from "effect/Effect";
-import {
-  JsonDocumentStore,
-  type JsonDocumentModification,
-  type JsonObject,
-} from "../platform/json-document.ts";
+import { JsonDocumentStore, type JsonObject } from "../platform/json-document.ts";
 
 export type ConfigDocumentErrorFactory<E> = (operation: string, path: string) => () => E;
 
@@ -21,18 +17,6 @@ export const makeConfigDocumentErrorFactory =
   () =>
     new Ctor({ operation, path, message: `Unable to ${operation} ${label} configuration.` });
 
-/** Read a JSON object document, treating a missing file as `{}`. */
-export const readRawJsonObject = <E>(
-  path: string,
-  mapError: ConfigDocumentErrorFactory<E>,
-): Effect.Effect<JsonObject, E, JsonDocumentStore> =>
-  JsonDocumentStore.use((documents) =>
-    documents.readObject(path).pipe(
-      Effect.mapError(mapError("read", path)),
-      Effect.map((value) => value ?? {}),
-    ),
-  );
-
 /** Read and decode a JSON object document, returning undefined when absent. */
 export const readOptionalJsonObject = <A, E>(
   path: string,
@@ -45,38 +29,6 @@ export const readOptionalJsonObject = <A, E>(
       Effect.map((raw) => (raw === undefined ? undefined : decode(raw))),
     ),
   );
-
-/** Overwrite a JSON object document. */
-export const writeJsonObject = <E>(
-  path: string,
-  config: JsonObject,
-  mapError: ConfigDocumentErrorFactory<E>,
-): Effect.Effect<void, E, JsonDocumentStore> =>
-  JsonDocumentStore.use((documents) =>
-    documents.writeObject(path, config).pipe(Effect.mapError(mapError("write", path))),
-  );
-
-/**
- * Atomically modify a JSON object through the document store's rename commit region.
- * Fails with the mapped write error when the store lacks modifyObject support.
- */
-export const modifyJsonObject = <A, AfterCommitR, E>(
-  path: string,
-  modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-  mapError: ConfigDocumentErrorFactory<E>,
-): Effect.Effect<A, E, JsonDocumentStore | AfterCommitR> =>
-  JsonDocumentStore.use((documents) => {
-    const modifyObject = documents.modifyObject;
-    if (modifyObject === undefined) {
-      return Effect.fail(mapError("write", path)());
-    }
-    return modifyObject(path, (document) =>
-      Effect.try({
-        try: () => modify(document),
-        catch: mapError("write", path),
-      }),
-    ).pipe(Effect.mapError(mapError("write", path)));
-  });
 
 /** Best-effort optional decode used while resolving layered project/global config. */
 export const readConfigOrWarn = <A, E>(

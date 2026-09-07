@@ -67,57 +67,36 @@ function parseIsoToSecondsFromNow(value: string | undefined, now: number): numbe
   return Math.max(0, (DateTime.toEpochMillis(parsed.value) - now) / 1000);
 }
 
-export function parseMonthlyBilling(
-  payload: MonthlyBillingBody,
-  now: number,
-): Pick<
-  UsageSnapshot,
-  "monthlyUsed" | "monthlyLimit" | "monthlyLeftPercent" | "monthlyResetInSeconds" | "onDemandCap"
-> {
-  const monthlyUsed = payload.config.used?.val ?? null;
-  const monthlyLimit = payload.config.monthlyLimit?.val ?? null;
-  const onDemandCap = payload.config.onDemandCap?.val ?? null;
-  const monthlyUsedPercent =
-    monthlyUsed !== null && monthlyLimit !== null && monthlyLimit > 0
-      ? clampPercent((monthlyUsed / monthlyLimit) * 100)
-      : null;
-  return {
-    monthlyUsed,
-    monthlyLimit,
-    monthlyLeftPercent: usedToLeftPercent(monthlyUsedPercent),
-    monthlyResetInSeconds: parseIsoToSecondsFromNow(payload.config.billingPeriodEnd, now),
-    onDemandCap,
-  };
-}
-
-export function parseWeeklyBilling(
-  payload: WeeklyBillingBody | undefined,
-  now: number,
-): Pick<
-  UsageSnapshot,
-  "weeklyUsedPercent" | "weeklyLeftPercent" | "weeklyResetInSeconds" | "onDemandUsed"
-> {
-  const config = payload?.config;
-  // A decodable payload without creditUsagePercent is "unknown", not "0 used":
-  // rendering 0 would claim certainty ("100% left") the provider never reported.
-  const weeklyUsedPercent = config?.creditUsagePercent ?? null;
-  const resetIso = config?.billingPeriodEnd ?? config?.currentPeriod?.end;
-  return {
-    weeklyUsedPercent,
-    weeklyLeftPercent: usedToLeftPercent(weeklyUsedPercent),
-    weeklyResetInSeconds: parseIsoToSecondsFromNow(resetIso, now),
-    onDemandUsed: config?.onDemandUsed?.val ?? null,
-  };
-}
-
 export function parseUsageSnapshot(
   monthlyPayload: MonthlyBillingBody,
   weeklyPayload: WeeklyBillingBody | null | undefined,
   now: number,
 ): UsageSnapshot {
-  const monthly = parseMonthlyBilling(monthlyPayload, now);
-  const weekly = parseWeeklyBilling(weeklyPayload ?? undefined, now);
-  return { capturedAt: now, ...weekly, ...monthly };
+  const monthly = monthlyPayload.config;
+  const weekly = weeklyPayload?.config;
+  const monthlyUsed = monthly.used?.val ?? null;
+  const monthlyLimit = monthly.monthlyLimit?.val ?? null;
+  const monthlyUsedPercent =
+    monthlyUsed !== null && monthlyLimit !== null && monthlyLimit > 0
+      ? clampPercent((monthlyUsed / monthlyLimit) * 100)
+      : null;
+  // Missing usage is unknown, not a reported zero (100% left).
+  const weeklyUsedPercent = weekly?.creditUsagePercent ?? null;
+  return {
+    capturedAt: now,
+    weeklyUsedPercent,
+    weeklyLeftPercent: usedToLeftPercent(weeklyUsedPercent),
+    weeklyResetInSeconds: parseIsoToSecondsFromNow(
+      weekly?.billingPeriodEnd ?? weekly?.currentPeriod?.end,
+      now,
+    ),
+    monthlyUsed,
+    monthlyLimit,
+    monthlyLeftPercent: usedToLeftPercent(monthlyUsedPercent),
+    monthlyResetInSeconds: parseIsoToSecondsFromNow(monthly.billingPeriodEnd, now),
+    onDemandCap: monthly.onDemandCap?.val ?? null,
+    onDemandUsed: weekly?.onDemandUsed?.val ?? null,
+  };
 }
 
 export function formatUsageSnapshot(

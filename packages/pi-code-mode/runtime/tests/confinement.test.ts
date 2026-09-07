@@ -96,12 +96,10 @@ describe("regex confinement: hostile patterns are refused fast", () => {
 
   it.live("the polynomial-backtracking audit repro /a*a*a*a*a*a*b/ is rejected, not executed", () =>
     Effect.gen(function* () {
-      // Six independent unbounded quantifiers backtrack polynomially: on a 44-character
-      // subject this pattern stalls native matching for ~half a second, far past a small
-      // timeoutMs, and no cooperative deadline can interrupt it. The conservative screen
-      // must refuse the pattern itself, deterministically, before any native match runs.
+      // Six unbounded quantifiers can stall native matching for ~half a second on 44 characters.
+      // A cooperative deadline cannot interrupt that work; the static screen must refuse it.
       const error = yield* timed(
-        () => failure(`return /a*a*a*a*a*a*b/.test("a".repeat(44))`, { timeoutMs: 10 }),
+        () => failure(`return /a*a*a*a*a*a*b/.test("a".repeat(44))`),
         1_000,
       );
       expect(error.kind).toBe("UnsupportedSyntax");
@@ -209,14 +207,11 @@ describe("regex confinement: hostile patterns are refused fast", () => {
 
   it.live("the ambiguous-alternation audit repro is rejected statically, never matched", () =>
     Effect.gen(function* () {
-      // Twelve anchored (a|aa) groups multiply a 2^12 choice factor into every attempt:
-      // admitted, this takes ~400ms of native backtracking. The 100ms budget includes source
-      // setup while remaining below that native match cost. The screen must reject the pattern
-      // itself, deterministically before any native match runs, because both branches can start
-      // on the same character.
+      // Twelve anchored (a|aa) groups can backtrack for ~400ms. The static screen must refuse
+      // the pattern before matching because both branches can start on the same character.
       const groups = "(a|aa)".repeat(12);
       const error = yield* timed(
-        () => failure(`return /^${groups}b$/.test("${"a".repeat(24)}")`, { timeoutMs: 100 }),
+        () => failure(`return /^${groups}b$/.test("${"a".repeat(24)}")`),
         1_000,
       );
       expect(error.kind).toBe("UnsupportedSyntax");
@@ -315,10 +310,10 @@ describe("regex confinement: hostile patterns are refused fast", () => {
   it.live("the repeated modifier-group ambiguous-alternation family is rejected statically", () =>
     Effect.gen(function* () {
       // Twelve (?i:a|aa) groups are the (a|aa)(a|aa)...b audit family behind a modifier
-      // prefix: admitted, this backtracks for hundreds of milliseconds at timeoutMs=10.
+      // prefix: admitted, this backtracks for hundreds of milliseconds.
       const groups = "(?i:a|aa)".repeat(12);
       const error = yield* timed(
-        () => failure(`return /^${groups}b$/.test("${"a".repeat(24)}")`, { timeoutMs: 10 }),
+        () => failure(`return /^${groups}b$/.test("${"a".repeat(24)}")`),
         1_000,
       );
       expect(error.kind).toBe("UnsupportedSyntax");

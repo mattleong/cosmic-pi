@@ -53,21 +53,10 @@ type RefreshValue<Snapshot, Patch> =
   | { readonly _tag: "Skipped" }
   | { readonly _tag: "Disabled"; readonly notify: boolean }
   | { readonly _tag: "Hidden"; readonly notify: boolean }
-  | { readonly _tag: "Missing"; readonly notify: boolean; readonly fetchedAt: number }
-  | {
-      readonly _tag: "Failure";
+  | (UsageFetchOutcome<Snapshot, Patch> & {
       readonly notify: boolean;
       readonly fetchedAt: number;
-      readonly message: string;
-      readonly patch?: Patch;
-    }
-  | {
-      readonly _tag: "Success";
-      readonly notify: boolean;
-      readonly fetchedAt: number;
-      readonly snapshot: Snapshot;
-      readonly patch: Patch;
-    };
+    });
 
 /** Scoped configuration store operations used by the shared controller. */
 export interface UsageControllerStore<Resolved, E> {
@@ -310,24 +299,7 @@ export const makeUsageRefreshController = <
           )
             return { _tag: "Skipped" } as const;
           const outcome = yield* options.fetchOutcome({ ctx, cfg, authPath });
-          if (outcome._tag === "Missing")
-            return { _tag: "Missing", notify, fetchedAt: now } as const;
-          if (outcome._tag === "Failure") {
-            const failure: RefreshValue<Snapshot, Partial<P>> = {
-              _tag: "Failure",
-              notify,
-              fetchedAt: now,
-              message: outcome.message,
-            };
-            return outcome.patch ? { ...failure, patch: outcome.patch } : failure;
-          }
-          return {
-            _tag: "Success",
-            notify,
-            fetchedAt: now,
-            snapshot: outcome.snapshot,
-            patch: outcome.patch,
-          } as const;
+          return { ...outcome, notify, fetchedAt: now };
         }),
       commit: (value) =>
         Effect.gen(function* () {

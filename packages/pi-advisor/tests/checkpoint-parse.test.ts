@@ -91,6 +91,30 @@ const checkpoint = (overrides: Partial<CheckpointFixture> = {}): CheckpointFixtu
   ...overrides,
 });
 
+function oversizedReview(): CheckpointFixture {
+  const findings = Array.from({ length: MAX_ADVISOR_FINDINGS }, (_, index) =>
+    finding({
+      fingerprint: `finding-${index}`.padEnd(MAX_ADVISOR_FINGERPRINT_CHARS, "f"),
+      issue: "i".repeat(MAX_ADVISOR_ISSUE_CHARS),
+      evidence: "e".repeat(MAX_ADVISOR_EVIDENCE_CHARS),
+      recommendation: "r".repeat(MAX_ADVISOR_RECOMMENDATION_CHARS),
+    }),
+  );
+  const suggestions = Array.from({ length: MAX_ADVISOR_SUGGESTIONS }, (_, index) =>
+    suggestion({
+      fingerprint: `suggestion-${index}`.padEnd(MAX_ADVISOR_FINGERPRINT_CHARS, "s"),
+      suggestion: "s".repeat(MAX_ADVISOR_SUGGESTION_CHARS),
+      rationale: "r".repeat(MAX_ADVISOR_RATIONALE_CHARS),
+    }),
+  );
+  return checkpoint({
+    verdict: "revise",
+    summary: "m".repeat(MAX_ADVISOR_SUMMARY_CHARS),
+    suggestions,
+    findings,
+  });
+}
+
 const rawCheckpoint = (overrides: Partial<CheckpointFixture> = {}): string =>
   JSON.stringify(checkpoint(overrides));
 
@@ -270,27 +294,7 @@ describe("checkpoint response Schema", () => {
   });
 
   test("enforces the embedded review gate before trimming or lane checks", () => {
-    const findings = Array.from({ length: MAX_ADVISOR_FINDINGS }, (_, index) =>
-      finding({
-        fingerprint: `finding-${index}`.padEnd(MAX_ADVISOR_FINGERPRINT_CHARS, "f"),
-        issue: "i".repeat(MAX_ADVISOR_ISSUE_CHARS),
-        evidence: "e".repeat(MAX_ADVISOR_EVIDENCE_CHARS),
-        recommendation: "r".repeat(MAX_ADVISOR_RECOMMENDATION_CHARS),
-      }),
-    );
-    const suggestions = Array.from({ length: MAX_ADVISOR_SUGGESTIONS }, (_, index) =>
-      suggestion({
-        fingerprint: `suggestion-${index}`.padEnd(MAX_ADVISOR_FINGERPRINT_CHARS, "s"),
-        suggestion: "s".repeat(MAX_ADVISOR_SUGGESTION_CHARS),
-        rationale: "r".repeat(MAX_ADVISOR_RATIONALE_CHARS),
-      }),
-    );
-    const value = checkpoint({
-      verdict: "revise",
-      summary: "m".repeat(MAX_ADVISOR_SUMMARY_CHARS),
-      suggestions,
-      findings,
-    });
+    const value = oversizedReview();
     const embeddedLength = JSON.stringify(reviewOnly(value)).length;
     const raw = JSON.stringify(value);
     expect(embeddedLength).toBeGreaterThan(MAX_ADVISOR_REVIEW_CHARS);
@@ -298,66 +302,37 @@ describe("checkpoint response Schema", () => {
     expectResetRequiredResponseFormat(raw);
   });
 
+  test("rejects an oversized raw summary", () => {
+    expectOrdinaryResponseFormat(
+      rawCheckpoint({ summary: "x".repeat(MAX_ADVISOR_SUMMARY_CHARS + 1) }),
+    );
+  });
+
   test.each([
-    ["summary", () => checkpoint({ summary: "x".repeat(MAX_ADVISOR_SUMMARY_CHARS + 1) })],
-    [
-      "suggestion fingerprint",
-      () =>
-        checkpoint({
-          verdict: "suggest",
-          suggestions: [suggestion({ fingerprint: "x".repeat(MAX_ADVISOR_FINGERPRINT_CHARS + 1) })],
-        }),
-    ],
-    [
-      "suggestion",
-      () =>
-        checkpoint({
-          verdict: "suggest",
-          suggestions: [suggestion({ suggestion: "x".repeat(MAX_ADVISOR_SUGGESTION_CHARS + 1) })],
-        }),
-    ],
-    [
-      "rationale",
-      () =>
-        checkpoint({
-          verdict: "suggest",
-          suggestions: [suggestion({ rationale: "x".repeat(MAX_ADVISOR_RATIONALE_CHARS + 1) })],
-        }),
-    ],
-    [
-      "finding fingerprint",
-      () =>
-        checkpoint({
-          verdict: "revise",
-          findings: [finding({ fingerprint: "x".repeat(MAX_ADVISOR_FINGERPRINT_CHARS + 1) })],
-        }),
-    ],
-    [
-      "issue",
-      () =>
-        checkpoint({
-          verdict: "revise",
-          findings: [finding({ issue: "x".repeat(MAX_ADVISOR_ISSUE_CHARS + 1) })],
-        }),
-    ],
-    [
-      "evidence",
-      () =>
-        checkpoint({
-          verdict: "revise",
-          findings: [finding({ evidence: "x".repeat(MAX_ADVISOR_EVIDENCE_CHARS + 1) })],
-        }),
-    ],
-    [
-      "recommendation",
-      () =>
-        checkpoint({
-          verdict: "revise",
-          findings: [finding({ recommendation: "x".repeat(MAX_ADVISOR_RECOMMENDATION_CHARS + 1) })],
-        }),
-    ],
-  ])("rejects an oversized raw %s", (_label, makeValue) => {
-    expectOrdinaryResponseFormat(JSON.stringify(makeValue()));
+    ["fingerprint", MAX_ADVISOR_FINGERPRINT_CHARS],
+    ["suggestion", MAX_ADVISOR_SUGGESTION_CHARS],
+    ["rationale", MAX_ADVISOR_RATIONALE_CHARS],
+  ])("rejects an oversized raw suggestion %s", (field, bound) => {
+    expectOrdinaryResponseFormat(
+      rawCheckpoint({
+        verdict: "suggest",
+        suggestions: [suggestion({ [field]: "x".repeat(bound + 1) })],
+      }),
+    );
+  });
+
+  test.each([
+    ["fingerprint", MAX_ADVISOR_FINGERPRINT_CHARS],
+    ["issue", MAX_ADVISOR_ISSUE_CHARS],
+    ["evidence", MAX_ADVISOR_EVIDENCE_CHARS],
+    ["recommendation", MAX_ADVISOR_RECOMMENDATION_CHARS],
+  ])("rejects an oversized raw finding %s", (field, bound) => {
+    expectOrdinaryResponseFormat(
+      rawCheckpoint({
+        verdict: "revise",
+        findings: [finding({ [field]: "x".repeat(bound + 1) })],
+      }),
+    );
   });
 
   test("applies string bounds before trimming", () => {
@@ -441,29 +416,10 @@ describe("checkpoint response Schema", () => {
 
 describe("checkpoint decode failures", () => {
   test("uses reset-required only for the four recovery categories", () => {
-    const oversizedReview = checkpoint({
-      verdict: "revise",
-      summary: "m".repeat(MAX_ADVISOR_SUMMARY_CHARS),
-      suggestions: Array.from({ length: MAX_ADVISOR_SUGGESTIONS }, (_, index) =>
-        suggestion({
-          fingerprint: `suggestion-${index}`,
-          suggestion: "s".repeat(MAX_ADVISOR_SUGGESTION_CHARS),
-          rationale: "r".repeat(MAX_ADVISOR_RATIONALE_CHARS),
-        }),
-      ),
-      findings: Array.from({ length: MAX_ADVISOR_FINDINGS }, (_, index) =>
-        finding({
-          fingerprint: `finding-${index}`,
-          issue: "i".repeat(MAX_ADVISOR_ISSUE_CHARS),
-          evidence: "e".repeat(MAX_ADVISOR_EVIDENCE_CHARS),
-          recommendation: "r".repeat(MAX_ADVISOR_RECOMMENDATION_CHARS),
-        }),
-      ),
-    });
     for (const raw of [
       "x".repeat(MAX_ADVISOR_CHECKPOINT_CHARS + 1),
       "malformed checkpoint JSON",
-      JSON.stringify(oversizedReview),
+      JSON.stringify(oversizedReview()),
       rawCheckpoint({ stateSummary: "x".repeat(MAX_ADVISOR_STATE_SUMMARY_CHARS + 1) }),
     ]) {
       expectResetRequiredResponseFormat(raw);

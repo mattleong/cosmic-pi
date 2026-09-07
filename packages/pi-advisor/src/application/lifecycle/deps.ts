@@ -30,15 +30,6 @@ export interface StateWrite {
   ) => void;
 }
 
-/** Best-effort host notification used by every fail-open path. */
-export interface HostNotify {
-  readonly notifyBestEffort: (
-    ctx: Pick<ExtensionContext, "ui">,
-    message: string,
-    level: "info" | "warning" | "error",
-  ) => void;
-}
-
 /** Ledger persistence shared by event and checkpoint flows. */
 export interface LedgerPersistence {
   readonly persistCurrentLedger: (ctx: ExtensionContext) => void;
@@ -71,12 +62,6 @@ export interface CheckpointRequestOptions {
   requiresEnabled: boolean;
   trajectoryId?: number;
   abortOnBlocker?: boolean;
-}
-
-/** Ledger identity inputs shared by checkpoint and runtime controls. */
-export interface SessionIdentity {
-  readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
-  readonly fingerprint: () => string;
 }
 
 /** Intervention evidence ingest and receipt recording shared by events and delivery. */

@@ -6,73 +6,34 @@ import type {
 } from "./model.ts";
 import { utf8ByteLength, utf8Tail } from "./utf8.ts";
 
-/** Compact the shared store once the dead prefix outweighs the live events. */
+/** Compact the store once the dead prefix outweighs the live events. */
 const COMPACTION_MIN_DEAD_EVENTS = 32;
 
 /**
  * Retained log events for one task.
  *
- * Versions share one append-only backing store addressed by a live [start, end)
- * range, so appends and trims are amortized O(1) instead of copying every
- * retained event per chunk. `events` stays an immutable snapshot: the store is
- * never mutated at an index an existing version can observe.
+ * The service mutates this buffer under its registry semaphore. An offset-backed
+ * store makes appends and trims amortized O(1). Consumers retain only cached,
+ * detached `events` slices; existing events are never modified.
  */
 export class LogBuffer {
   private snapshot: ReadonlyArray<BackgroundLogEvent> | undefined;
-  private readonly store: BackgroundLogEvent[];
-  private readonly start: number;
-  private readonly end: number;
-  readonly bytes: number;
-  readonly droppedBytes: number;
-  readonly nextCursor: number;
-
-  private constructor(
-    store: BackgroundLogEvent[],
-    start: number,
-    end: number,
-    bytes: number,
-    droppedBytes: number,
-    nextCursor: number,
-  ) {
-    this.store = store;
-    this.start = start;
-    this.end = end;
-    this.bytes = bytes;
-    this.droppedBytes = droppedBytes;
-    this.nextCursor = nextCursor;
-  }
+  private store: BackgroundLogEvent[] = [];
+  private start = 0;
+  bytes = 0;
+  droppedBytes = 0;
+  nextCursor = 1;
 
   static empty(): LogBuffer {
-    return new LogBuffer([], 0, 0, 0, 0, 1);
-  }
-
-  private static make(
-    store: BackgroundLogEvent[],
-    start: number,
-    end: number,
-    bytes: number,
-    droppedBytes: number,
-    nextCursor: number,
-  ): LogBuffer {
-    if (start > COMPACTION_MIN_DEAD_EVENTS && start * 2 > end) {
-      return new LogBuffer(
-        store.slice(start, end),
-        0,
-        end - start,
-        bytes,
-        droppedBytes,
-        nextCursor,
-      );
-    }
-    return new LogBuffer(store, start, end, bytes, droppedBytes, nextCursor);
+    return new LogBuffer();
   }
 
   get events(): ReadonlyArray<BackgroundLogEvent> {
-    return (this.snapshot ??= this.store.slice(this.start, this.end));
+    return (this.snapshot ??= this.store.slice(this.start));
   }
 
   get oldestEvent(): BackgroundLogEvent | undefined {
-    return this.start < this.end ? this.store[this.start] : undefined;
+    return this.store[this.start];
   }
 
   append(
@@ -85,14 +46,9 @@ export class LogBuffer {
     if (!text) return this;
     const originalBytes = utf8ByteLength(text);
     const tail = utf8Tail(text, maxBytes);
-    // Only the newest version may extend the shared store; an append onto an
-    // older version copies its live range so existing snapshots stay intact.
-    const reusable = this.end === this.store.length;
-    const store = reusable ? this.store : this.store.slice(this.start, this.end);
-    let start = reusable ? this.start : 0;
-    let end = reusable ? this.end : this.end - this.start;
     if (tail.text) {
-      store.push({
+      this.snapshot = undefined;
+      this.store.push({
         cursor: this.nextCursor,
         stream,
         text: tail.text,
@@ -100,43 +56,31 @@ export class LogBuffer {
         bytes: tail.bytes,
         ...((droppedBefore || tail.bytes < originalBytes) && { droppedBefore: true }),
       });
-      end += 1;
     }
-    let bytes = this.bytes + tail.bytes;
-    let droppedBytes = this.droppedBytes + originalBytes - tail.bytes;
-    while (start < end && bytes > maxBytes) {
-      const removed = store[start];
-      if (!removed) break;
-      bytes -= removed.bytes;
-      droppedBytes += removed.bytes;
-      start += 1;
-    }
-    return LogBuffer.make(store, start, end, bytes, droppedBytes, this.nextCursor + 1);
+    this.bytes += tail.bytes;
+    this.droppedBytes += originalBytes - tail.bytes;
+    this.nextCursor += 1;
+    while (this.bytes > maxBytes && this.oldestEvent) this.dropOldest();
+    return this;
   }
 
   addDropped(droppedBytes: number): LogBuffer {
-    if (droppedBytes <= 0) return this;
-    return LogBuffer.make(
-      this.store,
-      this.start,
-      this.end,
-      this.bytes,
-      this.droppedBytes + droppedBytes,
-      this.nextCursor,
-    );
+    if (droppedBytes > 0) this.droppedBytes += droppedBytes;
+    return this;
   }
 
   dropOldest(): LogBuffer {
     const first = this.oldestEvent;
     if (!first) return this;
-    return LogBuffer.make(
-      this.store,
-      this.start + 1,
-      this.end,
-      this.bytes - first.bytes,
-      this.droppedBytes + first.bytes,
-      this.nextCursor,
-    );
+    this.snapshot = undefined;
+    this.start += 1;
+    this.bytes -= first.bytes;
+    this.droppedBytes += first.bytes;
+    if (this.start > COMPACTION_MIN_DEAD_EVENTS && this.start * 2 > this.store.length) {
+      this.store = this.store.slice(this.start);
+      this.start = 0;
+    }
+    return this;
   }
 }
 

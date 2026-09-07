@@ -3,7 +3,7 @@ import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -186,23 +186,16 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   const withTurnControl = turnControl.withPermits(1);
   const responses = new Map<string, PendingRpcResponse>();
   const ipcAcks = new Map<string, Deferred.Deferred<void, SubagentError>>();
-  const rawEventOwners = new Map<BackendEvent, ChildWireEvent>();
   let nextRpcId = 1;
   let nextIpcAckId = 1;
   let assignmentEpoch = 0;
 
   const acknowledgeRaw = (event: ChildWireEvent) => child.acknowledge?.(event);
-  const acknowledge = (event: BackendEvent) => {
-    const raw = rawEventOwners.get(event);
-    if (!raw) return;
-    rawEventOwners.delete(event);
-    acknowledgeRaw(raw);
-  };
-  const acknowledgeAll = () => {
-    for (const raw of rawEventOwners.values()) acknowledgeRaw(raw);
-    rawEventOwners.clear();
-  };
-
+  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+    events,
+    acknowledgeRaw,
+    "local-Pi",
+  );
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       acknowledgeAll();
@@ -286,27 +279,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       awaitEarlyResponse: true,
     });
 
-  const offerEvent = (raw: ChildWireEvent, event: BackendEvent) =>
-    Effect.suspend(() => {
-      rawEventOwners.set(event, raw);
-      const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
-        // A dropped settlement/report degrades until process exit; make the loss
-        // diagnosable instead of acknowledging it silently.
-        Effect.logWarning(
-          `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
-        ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))), Effect.asVoid);
-      return Queue.offer(events, event).pipe(
-        // A delivered offer settles inline; every other exit (ended queue, failure, defect,
-        // interruption of a suspended offer) takes the same diagnostic path.
-        Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),
-        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : dropDiagnostic(event))),
-        Effect.asVoid,
-      );
-    });
-
   const consumeChildEvent = (event: ChildWireEvent): Effect.Effect<void> => {
     if (event.type === "protocol_error")
-      return offerEvent(event, { type: "protocol_error", message: event.message });
+      return offer({ type: "protocol_error", message: event.message }, event);
     if (event.type === "parent_contact") {
       const contact = event.value;
       if (
@@ -376,7 +351,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             return { type: "proxy_cancel", requestId: contact.requestId };
         }
       })();
-      return offerEvent(event, normalized);
+      return offer(normalized, event);
     }
     if (event.type === "exit")
       return Effect.sync(() => {
@@ -395,10 +370,13 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               `Subagent RPC response command did not match ${pending.command}.`,
             );
             Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
-            return offerEvent(event, {
-              type: "protocol_error",
-              message: "Subagent returned a mismatched RPC response command.",
-            });
+            return offer(
+              {
+                type: "protocol_error",
+                message: "Subagent returned a mismatched RPC response command.",
+              },
+              event,
+            );
           }
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
           acknowledgeRaw(event);
@@ -418,17 +396,20 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
         const eventAssignmentEpoch = assignmentEpoch;
         return normalizeRpcEvent(event.value, eventAssignmentEpoch).pipe(
           Effect.flatMap((normalized) => {
-            if (normalized) return offerEvent(event, normalized);
+            if (normalized) return offer(normalized, event);
             acknowledgeRaw(event);
             return Effect.void;
           }),
         );
       }),
       Effect.catch(() =>
-        offerEvent(event, {
-          type: "protocol_error",
-          message: "Subagent emitted an invalid protocol event.",
-        }),
+        offer(
+          {
+            type: "protocol_error",
+            message: "Subagent emitted an invalid protocol event.",
+          },
+          event,
+        ),
       ),
     );
   };

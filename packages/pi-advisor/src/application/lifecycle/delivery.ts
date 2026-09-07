@@ -1,4 +1,5 @@
 /** Review delivery transaction for one advisor session. */
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   abortAdvisorParentAtHostBoundary,
@@ -40,7 +41,7 @@ import { incrementBounded } from "../../domain/metrics.ts";
 import type { AdvisorCheckpoint } from "../../runtime/runtime.ts";
 import type { ReviewPhase, ReviewSource } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
-import type { HostApi, HostNotify, InterventionIngress, StateWrite } from "./deps.ts";
+import type { HostApi, InterventionIngress, StateWrite } from "./deps.ts";
 import { parentIsIdle, parentSignalAborted } from "./parent-session.ts";
 
 export type DeliverFn = (
@@ -54,7 +55,7 @@ export type DeliverFn = (
   trajectoryId?: number,
 ) => AdvisorRoute;
 
-export interface DeliveryDeps extends HostApi, StateWrite, HostNotify, InterventionIngress {
+export interface DeliveryDeps extends HostApi, StateWrite, InterventionIngress {
   readonly getState: () => AdvisorApplicationState;
 }
 
@@ -110,7 +111,7 @@ export const makeDeliver =
       const suggestion = review.suggestions[0];
       if (!suggestion) {
         if (explicitlyRequested)
-          d.notifyBestEffort(ctx, "Advisor found no useful suggestion.", "info");
+          notifyAtHostBoundary(ctx, "Advisor found no useful suggestion.", "info");
         return suppress();
       }
       if (deliveryCancelled()) return discardAtDeliveryBoundary();
@@ -124,7 +125,7 @@ export const makeDeliver =
         ? { ...sendAdvisorAdvice(d.pi, perspectiveReview), guidanceSent: false }
         : sendAdvisorPerspective(d.pi, perspectiveReview);
       if (!published.appended) {
-        d.notifyBestEffort(ctx, "Advisor could not show its suggestion card.", "warning");
+        notifyAtHostBoundary(ctx, "Advisor could not show its suggestion card.", "warning");
         return suppress();
       }
       if (automaticPerspective)
@@ -147,7 +148,7 @@ export const makeDeliver =
           requestSequence: d.getState().requestSequence,
         });
       else if (automaticPerspective)
-        d.notifyBestEffort(
+        notifyAtHostBoundary(
           ctx,
           "Advisor showed a suggestion locally but could not steer the active agent.",
           "warning",
@@ -156,11 +157,11 @@ export const makeDeliver =
     }
     if (review.verdict === "pass") {
       d.updateMetrics((metrics) => ({ ...metrics, lastAction: "pass" }));
-      if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no issues.", "info");
+      if (explicitlyRequested) notifyAtHostBoundary(ctx, "Advisor found no issues.", "info");
       return "silent";
     }
     const gated = gateAdvisorFindings(review.findings);
-    const lifecycle = reconcileAdvisorFindings(d.getState().findingLifecycle, gated.actionable, {
+    const lifecycle = reconcileAdvisorFindings(d.getState().findingLifecycle, gated, {
       scope,
       completedTurn: d.getState().routing.completedPrimaryTurns,
       complete: phase === "final",
@@ -176,7 +177,7 @@ export const makeDeliver =
       findingDedupe: filtered.state,
     }));
     if (filtered.findings.length === 0) {
-      if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no new issues.", "info");
+      if (explicitlyRequested) notifyAtHostBoundary(ctx, "Advisor found no new issues.", "info");
       return suppress();
     }
     const filteredReview = { ...review, findings: filtered.findings };
@@ -194,7 +195,7 @@ export const makeDeliver =
     const emission = emissionResult.decision;
     if (!emission.accepted) {
       rollbackUndelivered();
-      if (explicitlyRequested) d.notifyBestEffort(ctx, "Advisor found no new issues.", "info");
+      if (explicitlyRequested) notifyAtHostBoundary(ctx, "Advisor found no new issues.", "info");
       return suppress(emission.reason === "pass" ? "pass" : "suppressed");
     }
     const { severity } = emission;
@@ -309,9 +310,9 @@ export const makeDeliver =
           commitBudget,
         );
       if (!published.appended)
-        d.notifyBestEffort(ctx, "Advisor could not show its review card.", "warning");
+        notifyAtHostBoundary(ctx, "Advisor could not show its review card.", "warning");
       if (!published.guidanceSent)
-        d.notifyBestEffort(
+        notifyAtHostBoundary(
           ctx,
           published.appended
             ? "Advisor showed the issue locally but could not send correction guidance."
@@ -326,7 +327,7 @@ export const makeDeliver =
     } else if (route === "push-direct") {
       if (!publishLocalCard()) {
         rollbackUndelivered(emission);
-        d.notifyBestEffort(ctx, "Advisor could not show its review card.", "warning");
+        notifyAtHostBoundary(ctx, "Advisor could not show its review card.", "warning");
         return suppress();
       }
       d.updateMetrics((metrics) => ({ ...metrics, lastAction: "advice" }));
@@ -388,7 +389,7 @@ export const makeDeliver =
         const published = publishCorrection("guidance", false);
         if (!published.appended && !published.guidanceSent) {
           rollbackUndelivered(emission);
-          d.notifyBestEffort(ctx, abortResult.error.message, "warning");
+          notifyAtHostBoundary(ctx, abortResult.error.message, "warning");
           return suppress();
         }
         if (published.guidanceSent)
@@ -400,7 +401,7 @@ export const makeDeliver =
           ...metrics,
           lastAction: published.guidanceSent ? "guidance" : "advice",
         }));
-        d.notifyBestEffort(ctx, abortResult.error.message, "warning");
+        notifyAtHostBoundary(ctx, abortResult.error.message, "warning");
         return published.guidanceSent ? "steer-live" : "push-direct";
       }
     }

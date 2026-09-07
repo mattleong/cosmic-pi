@@ -14,37 +14,46 @@ import { provideBuiltLayer } from "../index.ts";
 function documentLayer(initial: Readonly<Record<string, string>>) {
   const files = new Map(Object.entries(initial));
   let sequence = 0;
-  const fileSystem = FileSystem.layerNoop({
-    chmod: () => Effect.void,
-    exists: (path) => Effect.succeed(files.has(String(path))),
-    makeDirectory: () => Effect.void,
-    makeTempFile: () =>
-      Effect.sync(() => {
-        const path = `/tmp/document-${sequence++}/value.json`;
-        files.set(path, "");
-        return path;
-      }),
-    readFileString: (path) =>
-      Effect.yieldNow.pipe(Effect.andThen(Effect.sync(() => files.get(String(path)) ?? ""))),
-    remove: (path) =>
-      Effect.sync(() => {
-        const owned = String(path);
-        for (const candidate of files.keys()) {
-          if (candidate === owned || candidate.startsWith(`${owned}/`)) files.delete(candidate);
-        }
-      }),
-    rename: (from, to) =>
-      Effect.sync(() => {
-        const value = files.get(String(from));
-        if (value !== undefined) files.set(String(to), value);
-        files.delete(String(from));
-      }),
-    writeFileString: (path, value) => Effect.sync(() => void files.set(String(path), value)),
-  });
+  const fileSystem = {
+    ...FileSystem.makeNoop({
+      chmod: () => Effect.void,
+      exists: (path) => Effect.succeed(files.has(String(path))),
+      makeDirectory: () => Effect.void,
+      makeTempFile: () =>
+        Effect.sync(() => {
+          const path = `/tmp/document-${sequence++}/value.json`;
+          files.set(path, "");
+          return path;
+        }),
+      readFileString: (path) =>
+        Effect.yieldNow.pipe(Effect.andThen(Effect.sync(() => files.get(String(path)) ?? ""))),
+      remove: (path) =>
+        Effect.sync(() => {
+          const owned = String(path);
+          for (const candidate of files.keys()) {
+            if (candidate === owned || candidate.startsWith(`${owned}/`)) files.delete(candidate);
+          }
+        }),
+      rename: (from, to) =>
+        Effect.sync(() => {
+          const value = files.get(String(from));
+          if (value !== undefined) files.set(String(to), value);
+          files.delete(String(from));
+        }),
+      writeFileString: (path, value) => Effect.sync(() => void files.set(String(path), value)),
+    }),
+  };
   return {
     files,
+    fileSystem,
     layer: JsonDocumentStore.layer.pipe(
-      Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(FileSystem.FileSystem, fileSystem),
+          Path.layer,
+          ProcessCoordinator.layer,
+        ),
+      ),
     ),
   };
 }
@@ -139,29 +148,24 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
 });
 
 it.effect("does not clean up a temporary path when exclusive acquisition fails", () => {
+  const harness = documentLayer({});
   let removals = 0;
-  const fileSystem = FileSystem.layerNoop({
-    makeDirectory: () => Effect.void,
-    makeTempFile: () =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "AlreadyExists",
-          module: "FileSystem",
-          method: "makeTempFile",
-        }),
-      ),
-    remove: () => Effect.sync(() => void removals++),
-  });
-  const layer = JsonDocumentStore.layer.pipe(
-    Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-  );
+  harness.fileSystem.makeTempFile = () =>
+    Effect.fail(
+      PlatformError.systemError({
+        _tag: "AlreadyExists",
+        module: "FileSystem",
+        method: "makeTempFile",
+      }),
+    );
+  harness.fileSystem.remove = () => Effect.sync(() => void removals++);
   return Effect.gen(function* () {
     const store = yield* JsonDocumentStore;
     const result = yield* Effect.result(store.writeObject("/config.json", { enabled: true }));
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("write");
     expect(removals).toBe(0);
-  }).pipe(provideBuiltLayer(layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect(
@@ -169,34 +173,16 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const writeStarted = yield* Deferred.make<void>();
-      const files = new Map<string, string>([["/config.json", "old"]]);
+      const harness = documentLayer({ "/config.json": '{"enabled":false}' });
       let renames = 0;
       let afterCommits = 0;
-      const fileSystem = FileSystem.layerNoop({
-        chmod: () => Effect.void,
-        makeDirectory: () => Effect.void,
-        makeTempFile: () =>
-          Effect.sync(() => {
-            files.set("/tmp/owned/value.json", "");
-            return "/tmp/owned/value.json";
-          }),
-        remove: (path) =>
-          Effect.sync(() => {
-            const owned = String(path);
-            for (const candidate of files.keys()) {
-              if (candidate === owned || candidate.startsWith(`${owned}/`)) files.delete(candidate);
-            }
-          }),
-        rename: () => Effect.sync(() => void renames++),
-        writeFileString: (path, value) =>
-          Effect.sync(() => void files.set(String(path), value)).pipe(
-            Effect.andThen(Deferred.succeed(writeStarted, undefined)),
-            Effect.andThen(Effect.never),
-          ),
-      });
-      const layer = JsonDocumentStore.layer.pipe(
-        Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-      );
+      const writeFileString = harness.fileSystem.writeFileString;
+      harness.fileSystem.rename = () => Effect.sync(() => void renames++);
+      harness.fileSystem.writeFileString = (path, value) =>
+        writeFileString(path, value).pipe(
+          Effect.andThen(Deferred.succeed(writeStarted, undefined)),
+          Effect.andThen(Effect.never),
+        );
       const writer = yield* JsonDocumentStore.use((store) => {
         const modifyObject = store.modifyObject;
         return modifyObject === undefined
@@ -208,48 +194,29 @@ it.effect(
                 afterCommit: Effect.sync(() => void afterCommits++),
               }),
             );
-      }).pipe(provideBuiltLayer(layer), Effect.forkScoped);
+      }).pipe(provideBuiltLayer(harness.layer), Effect.forkScoped);
       yield* Deferred.await(writeStarted);
       yield* Fiber.interrupt(writer);
-      expect(files.get("/config.json")).toBe("old");
-      expect([...files.keys()]).toEqual(["/config.json"]);
+      expect(harness.files.get("/config.json")).toBe('{"enabled":false}');
+      expect([...harness.files.keys()]).toEqual(["/config.json"]);
       expect(renames).toBe(0);
       expect(afterCommits).toBe(0);
     }).pipe(Effect.scoped),
 );
 
 it.effect("does not run an after-commit hook when temporary writing fails", () => {
-  const files = new Map<string, string>([["/config.json", "old"]]);
+  const harness = documentLayer({ "/config.json": '{"enabled":false}' });
   let afterCommits = 0;
   let renames = 0;
-  const fileSystem = FileSystem.layerNoop({
-    chmod: () => Effect.void,
-    makeDirectory: () => Effect.void,
-    makeTempFile: () =>
-      Effect.sync(() => {
-        files.set("/tmp/owned/value.json", "");
-        return "/tmp/owned/value.json";
+  harness.fileSystem.rename = () => Effect.sync(() => void renames++);
+  harness.fileSystem.writeFileString = () =>
+    Effect.fail(
+      PlatformError.systemError({
+        _tag: "BadResource",
+        module: "FileSystem",
+        method: "writeFileString",
       }),
-    remove: (path) =>
-      Effect.sync(() => {
-        const owned = String(path);
-        for (const candidate of files.keys()) {
-          if (candidate === owned || candidate.startsWith(`${owned}/`)) files.delete(candidate);
-        }
-      }),
-    rename: () => Effect.sync(() => void renames++),
-    writeFileString: () =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "BadResource",
-          module: "FileSystem",
-          method: "writeFileString",
-        }),
-      ),
-  });
-  const layer = JsonDocumentStore.layer.pipe(
-    Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-  );
+    );
   return Effect.gen(function* () {
     const result = yield* Effect.result(
       JsonDocumentStore.use((store) => {
@@ -267,49 +234,24 @@ it.effect("does not run an after-commit hook when temporary writing fails", () =
     );
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("write");
-    expect(files.get("/config.json")).toBe("old");
+    expect(harness.files.get("/config.json")).toBe('{"enabled":false}');
     expect(renames).toBe(0);
     expect(afterCommits).toBe(0);
-  }).pipe(provideBuiltLayer(layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect("commits the document and hook exactly once before honoring interruption", () =>
   Effect.gen(function* () {
     const renameStarted = yield* Deferred.make<void>();
     const releaseRename = yield* Deferred.make<void>();
-    const files = new Map<string, string>([["/config.json", "old"]]);
+    const harness = documentLayer({ "/config.json": '{"enabled":false}' });
     let afterCommits = 0;
-    const fileSystem = FileSystem.layerNoop({
-      chmod: () => Effect.void,
-      makeDirectory: () => Effect.void,
-      makeTempFile: () =>
-        Effect.sync(() => {
-          files.set("/tmp/owned/value.json", "");
-          return "/tmp/owned/value.json";
-        }),
-      remove: (path) =>
-        Effect.sync(() => {
-          const owned = String(path);
-          for (const candidate of files.keys()) {
-            if (candidate === owned || candidate.startsWith(`${owned}/`)) files.delete(candidate);
-          }
-        }),
-      rename: (from, to) =>
-        Deferred.succeed(renameStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseRename)),
-          Effect.andThen(
-            Effect.sync(() => {
-              const value = files.get(String(from));
-              if (value !== undefined) files.set(String(to), value);
-              files.delete(String(from));
-            }),
-          ),
-        ),
-      writeFileString: (path, value) => Effect.sync(() => void files.set(String(path), value)),
-    });
-    const layer = JsonDocumentStore.layer.pipe(
-      Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-    );
+    const rename = harness.fileSystem.rename;
+    harness.fileSystem.rename = (from, to) =>
+      Deferred.succeed(renameStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(releaseRename)),
+        Effect.andThen(rename(from, to)),
+      );
     const writer = yield* JsonDocumentStore.use((store) => {
       const modifyObject = store.modifyObject;
       return modifyObject === undefined
@@ -321,95 +263,61 @@ it.effect("commits the document and hook exactly once before honoring interrupti
               afterCommit: Effect.sync(() => void afterCommits++),
             }),
           );
-    }).pipe(provideBuiltLayer(layer), Effect.forkScoped);
+    }).pipe(provideBuiltLayer(harness.layer), Effect.forkScoped);
     yield* Deferred.await(renameStarted);
     const interruption = yield* Fiber.interrupt(writer).pipe(Effect.forkScoped);
     yield* Effect.yieldNow;
-    expect(files.get("/config.json")).toBe("old");
+    expect(harness.files.get("/config.json")).toBe('{"enabled":false}');
     yield* Deferred.succeed(releaseRename, undefined);
     yield* Fiber.join(interruption);
-    expect(files.get("/config.json")).toContain('"enabled": true');
-    expect([...files.keys()]).toEqual(["/config.json"]);
+    expect(harness.files.get("/config.json")).toContain('"enabled": true');
+    expect([...harness.files.keys()]).toEqual(["/config.json"]);
     expect(afterCommits).toBe(1);
   }).pipe(Effect.scoped),
 );
 
 it.effect("treats rename as the final fallible commit and ignores cleanup defects", () => {
-  const files = new Map<string, string>();
+  const harness = documentLayer({});
   const chmodPaths: string[] = [];
   let cleanupAttempts = 0;
-  const fileSystem = FileSystem.layerNoop({
-    chmod: (path) =>
-      Effect.sync(() => {
-        chmodPaths.push(String(path));
-      }),
-    makeDirectory: () => Effect.void,
-    makeTempFile: () =>
-      Effect.sync(() => {
-        files.set("/tmp/owned/value.json", "");
-        return "/tmp/owned/value.json";
-      }),
-    remove: () =>
-      Effect.sync(() => void cleanupAttempts++).pipe(
-        Effect.andThen(Effect.die("expected cleanup defect")),
-      ),
-    rename: (from, to) =>
-      Effect.sync(() => {
-        const value = files.get(String(from));
-        if (value !== undefined) files.set(String(to), value);
-        files.delete(String(from));
-      }),
-    writeFileString: (path, value) => Effect.sync(() => void files.set(String(path), value)),
-  });
-  const layer = JsonDocumentStore.layer.pipe(
-    Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-  );
+  harness.fileSystem.chmod = (path) => Effect.sync(() => void chmodPaths.push(String(path)));
+  harness.fileSystem.remove = () =>
+    Effect.sync(() => void cleanupAttempts++).pipe(
+      Effect.andThen(Effect.die("expected cleanup defect")),
+    );
   return Effect.gen(function* () {
     const result = yield* Effect.exit(
       JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
     );
     expect(result._tag).toBe("Success");
-    expect(files.get("/config.json")).toContain('"enabled": true');
-    expect(chmodPaths).toEqual(["/tmp/owned/value.json"]);
+    expect(harness.files.get("/config.json")).toContain('"enabled": true');
+    expect(chmodPaths).toEqual(["/tmp/document-0/value.json"]);
     expect(cleanupAttempts).toBe(1);
-  }).pipe(provideBuiltLayer(layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });
 
 it.effect("preserves a rename failure when best-effort cleanup also defects", () => {
-  const files = new Map<string, string>([["/config.json", "old"]]);
+  const harness = documentLayer({ "/config.json": "old" });
   let cleanupAttempts = 0;
-  const fileSystem = FileSystem.layerNoop({
-    chmod: () => Effect.void,
-    makeDirectory: () => Effect.void,
-    makeTempFile: () =>
-      Effect.sync(() => {
-        files.set("/tmp/owned/value.json", "");
-        return "/tmp/owned/value.json";
+  harness.fileSystem.remove = () =>
+    Effect.sync(() => void cleanupAttempts++).pipe(
+      Effect.andThen(Effect.die("expected cleanup defect")),
+    );
+  harness.fileSystem.rename = () =>
+    Effect.fail(
+      PlatformError.systemError({
+        _tag: "AlreadyExists",
+        module: "FileSystem",
+        method: "rename",
       }),
-    remove: () =>
-      Effect.sync(() => void cleanupAttempts++).pipe(
-        Effect.andThen(Effect.die("expected cleanup defect")),
-      ),
-    rename: () =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "AlreadyExists",
-          module: "FileSystem",
-          method: "rename",
-        }),
-      ),
-    writeFileString: (path, value) => Effect.sync(() => void files.set(String(path), value)),
-  });
-  const layer = JsonDocumentStore.layer.pipe(
-    Layer.provide(Layer.mergeAll(fileSystem, Path.layer, ProcessCoordinator.layer)),
-  );
+    );
   return Effect.gen(function* () {
     const result = yield* Effect.result(
       JsonDocumentStore.use((store) => store.writeObject("/config.json", { enabled: true })),
     );
     expect(result._tag).toBe("Failure");
     if (result._tag === "Failure") expect(result.failure.operation).toBe("rename");
-    expect(files.get("/config.json")).toBe("old");
+    expect(harness.files.get("/config.json")).toBe("old");
     expect(cleanupAttempts).toBe(1);
-  }).pipe(provideBuiltLayer(layer));
+  }).pipe(provideBuiltLayer(harness.layer));
 });

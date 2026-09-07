@@ -77,55 +77,13 @@ describe("OpenAI image resources", () => {
     }).pipe(provideBuiltLayer(nodePlatformLayer)),
   );
 
-  it.effect("maps a temporary handle close defect before publication", () =>
-    Effect.gen(function* () {
-      const realFs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
-      const directory = path.join(root, "images");
-      let closeAttempted = false;
-      let linkCalls = 0;
-      const hostileFs: typeof realFs = Object.assign({}, realFs, {
-        open: (...args: Parameters<typeof realFs.open>) =>
-          Effect.gen(function* () {
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                closeAttempted = true;
-              }).pipe(Effect.andThen(Effect.die("temporary-close-defect"))),
-            );
-            return yield* realFs.open(...args);
-          }),
-        link: (...args: Parameters<typeof realFs.link>) =>
-          Effect.sync(() => {
-            linkCalls++;
-          }).pipe(Effect.andThen(realFs.link(...args))),
-      });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp });
-
-      const result = yield* output
-        .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
-        .pipe(Effect.result);
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("OpenAIImageError");
-        if (result.failure._tag === "OpenAIImageError") {
-          expect(result.failure.operation).toBe("save");
-          expect(result.failure.message).toBe("Unable to close image temporary file.");
-        }
-      }
-      expect(closeAttempted).toBe(true);
-      expect(linkCalls).toBe(0);
-      expect(yield* realFs.readDirectory(directory)).toEqual([]);
-    }).pipe(provideBuiltLayer(nodePlatformLayer)),
-  );
-
-  it.effect("preserves typed write and sync failures when closing the handle defects", () =>
+  it.effect("maps close defects without replacing typed write or sync failures", () =>
     Effect.gen(function* () {
       const realFs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
       const failureCases = [
+        { stage: "close", message: "Unable to close image temporary file." },
         { stage: "write", message: "Unable to save generated image." },
         { stage: "sync", message: "Unable to sync generated image." },
       ] as const;
@@ -133,14 +91,14 @@ describe("OpenAI image resources", () => {
       for (const failureCase of failureCases) {
         const directory = path.join(root, `images-${failureCase.stage}`);
         const missing = path.join(root, `missing-${failureCase.stage}`);
-        let closeAttempted = false;
+        let closeAttempts = 0;
         let linkCalls = 0;
         const hostileFs: typeof realFs = Object.assign({}, realFs, {
           open: (...args: Parameters<typeof realFs.open>) =>
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
-                  closeAttempted = true;
+                  closeAttempts++;
                 }).pipe(Effect.andThen(Effect.die("temporary-close-defect"))),
               );
               const file = yield* realFs.open(...args);
@@ -179,7 +137,7 @@ describe("OpenAI image resources", () => {
             expect(result.failure.message).toBe(failureCase.message);
           }
         }
-        expect(closeAttempted).toBe(true);
+        expect(closeAttempts).toBe(1);
         expect(linkCalls).toBe(0);
         expect(yield* realFs.readDirectory(directory)).toEqual([]);
       }

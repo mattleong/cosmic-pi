@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as MutableRef from "effect/MutableRef";
+import type * as MutableRef from "effect/MutableRef";
 import {
   initialUsageProjection,
   isUsingOAuthAtHostBoundary,
@@ -61,12 +61,4 @@ export function synchronizeProjectionContext(
       statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
     };
   });
-}
-
-export function visibleStatusLine(
-  projection: MutableRef.MutableRef<XaiProjection>,
-): string | undefined {
-  const state = MutableRef.get(projection);
-  if (!state.config || !state.eligible) return undefined;
-  return state.statusLine;
 }

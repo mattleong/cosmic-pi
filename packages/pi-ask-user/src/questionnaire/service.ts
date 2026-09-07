@@ -2,15 +2,13 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import { makeAsyncQuestionnaires, type AsyncDelivery } from "./async-service.ts";
-import type { AsyncQuestionnaireSnapshot, AsyncQuestionnaireResult } from "./async-model.ts";
-import type { AskUserAsyncRequest, AskUserAsyncControl } from "./schema.ts";
-import type { AskUserAsyncError } from "./errors.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { makeQuestionnaireQueue } from "./queue.ts";
-import type { AskUserRequest } from "./schema.ts";
-import { AskUserHostError, AskUserValidationError } from "./errors.ts";
+import type { AskUserRequest, AskUserAsyncControl } from "./schema.ts";
+import type { AskUserHostError, AskUserAsyncError } from "./errors.ts";
+import type { AsyncQuestionnaireResult } from "./async-model.ts";
 import type { QuestionnaireOwner } from "./protocol.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
@@ -45,6 +43,9 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   const queue = yield* makeQuestionnaireQueue;
   const counter = yield* Ref.make(0);
   const async = yield* makeAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
+  const controlAsync: (
+    input: AskUserAsyncControl,
+  ) => Effect.Effect<AsyncQuestionnaireResult, AskUserAsyncError> = async.control;
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     owner?: QuestionnaireOwner,
@@ -100,36 +101,13 @@ const makeService = Effect.fn("AskUserService.make")(function* (
     ask: (request: AskUserRequest) => askRequest(request),
     askOwned: (request: AskUserRequest, owner: QuestionnaireOwner) => askRequest(request, owner),
     startAsync: async.start,
-    controlAsync: async.control,
+    controlAsync,
   };
 });
 
 export class AskUserService extends Context.Service<
   AskUserService,
-  {
-    readonly ask: (
-      request: AskUserRequest,
-    ) => Effect.Effect<
-      AskUserOutcome,
-      AskUserValidationError | AskUserHostError | AskUserAsyncError
-    >;
-    readonly askOwned: (
-      request: AskUserRequest,
-      owner: QuestionnaireOwner,
-    ) => Effect.Effect<
-      AskUserOutcome,
-      AskUserValidationError | AskUserHostError | AskUserAsyncError
-    >;
-    readonly startAsync: (
-      request: AskUserAsyncRequest,
-    ) => Effect.Effect<
-      AsyncQuestionnaireSnapshot,
-      AskUserValidationError | AskUserHostError | AskUserAsyncError
-    >;
-    readonly controlAsync: (
-      input: AskUserAsyncControl,
-    ) => Effect.Effect<AsyncQuestionnaireResult, AskUserAsyncError>;
-  }
+  Readonly<Effect.Success<ReturnType<typeof makeService>>>
 >()("pi-ask-user/questionnaire/service/AskUserService") {
   static layer(
     host: AskUserHost,

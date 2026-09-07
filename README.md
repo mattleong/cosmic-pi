@@ -9,6 +9,7 @@ A pnpm workspace for Pi extensions.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
 - [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool and full-screen `/tasks` manager.
+- [`pi-code-mode`](packages/pi-code-mode) runs confined JavaScript over Pi built-ins and session background tasks.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted previews for pi's built-in tool calls.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.
 - [`pi-directory-models`](packages/pi-directory-models) — per-directory model and thinking-level preferences for fresh Pi sessions.
@@ -30,6 +31,7 @@ pi install npm:pi-ask-user
 pi install npm:pi-better-openai
 pi install npm:pi-better-xai
 pi install npm:pi-background-task
+pi install npm:pi-code-mode
 pi install npm:pi-code-previews
 pi install npm:pi-cosmic-ui
 pi install npm:pi-directory-models
@@ -61,6 +63,7 @@ Run a command for one package with a filter:
 pnpm --filter pi-advisor test
 pnpm --filter pi-ask-user test
 pnpm --filter pi-better-openai test
+pnpm --filter pi-code-mode test
 pnpm --filter pi-code-previews test
 pnpm --filter pi-cosmic-ui test
 pnpm --filter pi-directory-models test
@@ -74,6 +77,7 @@ pnpm --filter pi-subagents test
 pi -e ./packages/pi-advisor
 pi -e ./packages/pi-ask-user
 pi -e ./packages/pi-better-openai
+pi -e ./packages/pi-code-mode
 pi -e ./packages/pi-code-previews
 pi -e ./packages/pi-cosmic-ui
 pi -e ./packages/pi-directory-models

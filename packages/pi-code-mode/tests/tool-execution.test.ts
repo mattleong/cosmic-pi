@@ -166,7 +166,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
     options.retainFailureDetails === undefined
       ? execute
       : { ...execute, retainFailureDetails: options.retainFailureDetails };
-  return makeCodeModeToolExecute(environment);
+  const run = makeCodeModeToolExecute(environment);
+  return (id: string, code: string, signal?: AbortSignal, onUpdate?: Parameters<typeof run>[3]) =>
+    run(id, { code }, signal, onUpdate, ctx);
 };
 
 const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>
@@ -183,13 +185,7 @@ describe("guest catalog", () => {
       const execute = makeHarness({ definitions });
       yield* Effect.promise(() =>
         expect(
-          execute(
-            "call-empty-edit",
-            { code: "return await tools.pi.edit({ path: 'x', edits: [] });" },
-            undefined,
-            undefined,
-            ctx,
-          ),
+          execute("call-empty-edit", "return await tools.pi.edit({ path: 'x', edits: [] });"),
         ).rejects.toThrow(/\[InvalidToolInput\]/),
       );
       expect(calls).toHaveLength(0);
@@ -217,8 +213,7 @@ describe("guest catalog", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-invalid-numeric-inputs",
-          {
-            code: `
+          `
               const rejected = [];
               const attempts = [${attempts}];
               for (const [label, attempt] of attempts) {
@@ -230,10 +225,6 @@ describe("guest catalog", () => {
               }
               return rejected;
             `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       expect(guestJson(textOf(result))).toEqual(invalidNumericCalls);
@@ -273,16 +264,11 @@ describe("guest catalog", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-valid-numeric-inputs",
-          {
-            code: `
+          `
               const values = [];
               ${body}
               return values;
             `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       expect(guestJson(textOf(result))).toEqual(validNumericCalls.map(({ name }) => name));
@@ -308,8 +294,7 @@ describe("guest catalog", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-all-tools",
-          {
-            code: `
+          `
               const values = [];
               values.push(await tools.pi.read({ path: "a" }));
               values.push(await tools.pi.bash({ command: "true" }));
@@ -323,10 +308,6 @@ describe("guest catalog", () => {
               values.push(await tools.pi.ls({}));
               return values.join(",");
             `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       expect(textOf(result)).toBe("read,bash,edit,write,grep,find,ls");
@@ -342,10 +323,7 @@ describe("guest catalog", () => {
       const result = yield* Effect.promise(() =>
         windows(
           "call-powershell",
-          { code: `return await tools.pi.powershell({ command: "Write-Output ok" });` },
-          undefined,
-          undefined,
-          ctx,
+          `return await tools.pi.powershell({ command: "Write-Output ok" });`,
         ),
       );
       expect(textOf(result)).toBe("powershell-ok");
@@ -356,10 +334,7 @@ describe("guest catalog", () => {
         expect(
           nonWindows(
             "call-no-powershell",
-            { code: `return await tools.pi.powershell({ command: "Write-Output nope" });` },
-            undefined,
-            undefined,
-            ctx,
+            `return await tools.pi.powershell({ command: "Write-Output nope" });`,
           ),
         ).rejects.toThrow(/Unknown tool.*pi\.powershell/s),
       );
@@ -385,8 +360,7 @@ describe("guest catalog", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-background",
-          {
-            code: `
+          `
               const started = await tools.session.backgroundTask({
                 action: "start",
                 command: "dev-server",
@@ -394,10 +368,6 @@ describe("guest catalog", () => {
               });
               return { id: started.snapshot.id, state: started.snapshot.state };
             `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       expect(guestJson(textOf(result))).toEqual({ id: "bg-1", state: "running" });
@@ -424,10 +394,7 @@ describe("guest catalog", () => {
         expect(
           execute(
             "call-invalid-background",
-            { code: `return await tools.session.backgroundTask({ action: "invalid" });` },
-            undefined,
-            undefined,
-            ctx,
+            `return await tools.session.backgroundTask({ action: "invalid" });`,
           ),
         ).rejects.toThrow(/InvalidToolInput/),
       );
@@ -504,13 +471,7 @@ describe("early-path clamp wiring", () => {
         const controller = new AbortController();
         if (testCase.abort === true) controller.abort();
         const settled = yield* Effect.promise(() =>
-          execute(
-            `call-${name}`,
-            { code: testCase.source ?? code },
-            controller.signal,
-            undefined,
-            ctx,
-          ).then(
+          execute(`call-${name}`, testCase.source ?? code, controller.signal).then(
             (result) => ({ _tag: "returned" as const, result }),
             (error) => ({
               _tag: "thrown" as const,
@@ -541,16 +502,11 @@ describe("host limits", () => {
         expect(
           execute(
             "call-limits",
-            {
-              code: `
+            `
                 for (let index = 0; index < 5; index += 1) {
                   await tools.pi.read({ path: String(index) });
                 }
               `,
-            },
-            undefined,
-            undefined,
-            ctx,
           ),
         ).rejects.toThrow(/\[ToolCallLimitExceeded\]/),
       );
@@ -570,13 +526,7 @@ describe("host limits", () => {
       const execute = makeHarness({ config: { timeoutMs: 50 }, definitions });
       yield* Effect.promise(() =>
         expect(
-          execute(
-            "call-timeout",
-            { code: "return await tools.pi.read({ path: 'hang' });" },
-            undefined,
-            undefined,
-            ctx,
-          ),
+          execute("call-timeout", "return await tools.pi.read({ path: 'hang' });"),
         ).rejects.toThrow(/\[TimeoutExceeded\].*50ms/s),
       );
       expect(calls).toHaveLength(1);
@@ -597,13 +547,7 @@ describe("final model-visible byte bound", () => {
         [40, "class Oops {}\nreturn 1;", "thrown"],
       ] as const) {
         const settled = yield* Effect.promise(() =>
-          makeHarness({ config: { maxOutputBytes: budget } })(
-            "call-final-bound",
-            { code },
-            undefined,
-            undefined,
-            ctx,
-          ).then(
+          makeHarness({ config: { maxOutputBytes: budget } })("call-final-bound", code).then(
             (result) => ({ _tag: "returned" as const, text: textOf(result) }),
             (error) => ({
               _tag: "thrown" as const,
@@ -637,8 +581,7 @@ describe("cumulative nested output budget", () => {
           config: { maxCumulativeChildOutputBytes: 80 },
         })(
           "call-background-budget",
-          {
-            code: `
+          `
               try {
                 await tools.session.backgroundTask({ action: "status", id: "bg-1" });
                 return "unexpected";
@@ -646,10 +589,6 @@ describe("cumulative nested output budget", () => {
                 return { message: error.message, length: error.message.length };
               }
             `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       // SAFETY: The guest program above constructs this exact JSON object.
@@ -677,7 +616,7 @@ describe("cumulative nested output budget", () => {
           makeHarness({
             config: { maxCumulativeChildOutputBytes: limit },
             definitions,
-          })(`call-budget-${limit}`, { code }, undefined, undefined, ctx),
+          })(`call-budget-${limit}`, code),
         );
         expect(guestJson(textOf(result))).toEqual(expected);
       }
@@ -703,12 +642,8 @@ describe("cancellation", () => {
       const controller = new AbortController();
       const pending = execute(
         "call-background-abort",
-        {
-          code: `return await tools.session.backgroundTask({ action: "wait", id: "bg-1", until: "exit" });`,
-        },
+        `return await tools.session.backgroundTask({ action: "wait", id: "bg-1", until: "exit" });`,
         controller.signal,
-        undefined,
-        ctx,
       );
       yield* Deferred.await(started);
       controller.abort();
@@ -730,10 +665,8 @@ describe("cancellation", () => {
       const controller = new AbortController();
       const pending = execute(
         "call-abort",
-        { code: "return await tools.pi.read({ path: 'hang' });" },
+        "return await tools.pi.read({ path: 'hang' });",
         controller.signal,
-        undefined,
-        ctx,
       );
       yield* Deferred.await(started);
       controller.abort();
@@ -774,16 +707,10 @@ describe("progress", () => {
         });
       const execute = makeHarness({ executeCodeMode });
       const result = yield* Effect.promise(() =>
-        execute(
-          "call-never-started",
-          { code: "return 'done';" },
-          undefined,
-          (partial) => {
-            Reflect.set(partial.details.counts ?? {}, "total", -1);
-            Reflect.set(partial.details.toolCalls[0] ?? {}, "tool", "hostile-update");
-          },
-          ctx,
-        ),
+        execute("call-never-started", "return 'done';", undefined, (partial) => {
+          Reflect.set(partial.details.counts ?? {}, "total", -1);
+          Reflect.set(partial.details.toolCalls[0] ?? {}, "tool", "hostile-update");
+        }),
       );
       expect(result.details.counts).toMatchObject({
         total: 257,
@@ -844,7 +771,7 @@ describe("progress", () => {
         executeCodeMode,
       });
       const result = yield* Effect.promise(() =>
-        execute("call-settled-retention", { code: "return 'done';" }, undefined, undefined, ctx),
+        execute("call-settled-retention", "return 'done';"),
       );
 
       expect(result.details.counts).toEqual({
@@ -925,7 +852,7 @@ describe("progress", () => {
         executeCodeMode,
       });
       const result = yield* Effect.promise(() =>
-        execute("call-active-retention", { code: "return 'done';" }, undefined, undefined, ctx),
+        execute("call-active-retention", "return 'done';"),
       );
 
       expect(result.details.counts).toEqual({
@@ -953,12 +880,11 @@ describe("progress", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-progress",
-          { code: "return await tools.pi.read({ path: 'a' });" },
+          "return await tools.pi.read({ path: 'a' });",
           undefined,
           (partial) => {
             updates.push({ text: textOf(partial), details: partial.details });
           },
-          ctx,
         ),
       );
       expect(textOf(result)).toBe(secret);
@@ -980,37 +906,75 @@ describe("progress", () => {
     }),
   );
 
-  it.effect(
-    "falls back to legacy start/end hooks when a reload-cached runtime emits no lifecycle events",
-    () =>
-      Effect.gen(function* () {
-        const definitions = fakeDefinitions({ read: () => Promise.resolve("legacy-data") });
-        const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-          options,
-        ) => {
-          const { onToolCallLifecycle: _ignored, ...legacyOptions } = options;
-          return CodeMode.execute(legacyOptions);
-        };
-        const execute = makeHarness({ definitions, executeCodeMode });
-        const result = yield* Effect.promise(() =>
-          execute(
-            "call-legacy-runtime",
-            { code: "return await tools.pi.read({ path: 'legacy.txt' });" },
-            undefined,
-            undefined,
-            ctx,
-          ),
-        );
-        expect(textOf(result)).toBe("legacy-data");
-        expect(result.details.counts).toMatchObject({ total: 1, succeeded: 1 });
-        expect(result.details.toolCalls).toEqual([
+  it.effect("retains recent calls beyond the cap with a reload-cached legacy runtime", () =>
+    Effect.gen(function* () {
+      const definitions = fakeDefinitions({ read: () => Promise.resolve("legacy-data") });
+      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
+        options,
+      ) => {
+        const { onToolCallLifecycle: _ignored, ...legacyOptions } = options;
+        return CodeMode.execute(legacyOptions);
+      };
+      const execute = makeHarness({ definitions, executeCodeMode, config: { maxToolCalls: 300 } });
+      const result = yield* Effect.promise(() =>
+        execute(
+          "call-legacy-runtime",
+          "for (let index = 0; index < 299; index++) await tools.pi.read({ path: 'legacy-' + index }); return await tools.pi.read({ path: 'legacy-299' });",
+        ),
+      );
+      expect(textOf(result)).toBe("legacy-data");
+      expect(result.details.counts).toMatchObject({ total: 300, succeeded: 300, running: 0 });
+      expect(result.details.toolCalls).toEqual(
+        Array.from({ length: MAX_PROGRESS_ENTRIES }, (_, offset) =>
           expect.objectContaining({
             tool: "pi.read",
             status: "completed",
-            activity: expect.stringMatching(/\S/),
+            activity: expect.stringContaining(`legacy-${300 - MAX_PROGRESS_ENTRIES + offset}`),
           }),
-        ]);
-      }),
+        ),
+      );
+    }),
+  );
+  it.effect("counts legacy calls hidden by active rows and cancels the retained survivors", () =>
+    Effect.gen(function* () {
+      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
+        options,
+      ) =>
+        Effect.gen(function* () {
+          for (let index = 0; index < 300; index++) {
+            yield* (
+              options.onToolCallStart?.({ index, name: `legacy-${index}`, input: {} }) ??
+                Effect.void
+            );
+          }
+          for (let index = 1; index < 300; index++) {
+            yield* (
+              options.onToolCallEnd?.({
+                index,
+                outcome: index === 1 || index === 299 ? "failure" : "success",
+                durationMs: 1,
+              }) ?? Effect.void
+            );
+          }
+          return { ok: true as const, value: "done" };
+        });
+      const execute = makeHarness({ executeCodeMode, config: { maxToolCalls: 300 } });
+      const result = yield* Effect.promise(() => execute("legacy-active-cap", "return 'done';"));
+      expect(result.details.counts).toEqual({
+        total: 300,
+        queued: 0,
+        running: 0,
+        succeeded: 297,
+        failed: 2,
+        cancelled: 1,
+      });
+      expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
+      expect(result.details.toolCalls[0]).toMatchObject({ tool: "legacy-0", status: "cancelled" });
+      expect(result.details.toolCalls.at(-1)).toMatchObject({
+        tool: "legacy-255",
+        status: "completed",
+      });
+    }),
   );
 });
 
@@ -1027,8 +991,7 @@ describe("diagnostics and errors", () => {
       const result = yield* Effect.promise(() =>
         execute(
           "call-bounded-error",
-          {
-            code: `
+          `
           try {
             await tools.pi.bash({ command: "false" });
             return "unexpected";
@@ -1036,10 +999,6 @@ describe("diagnostics and errors", () => {
             return { message: error.message, length: error.message.length };
           }
         `,
-          },
-          undefined,
-          undefined,
-          ctx,
         ),
       );
       // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
@@ -1062,13 +1021,7 @@ describe("diagnostics and errors", () => {
       });
       yield* Effect.promise(() =>
         expect(
-          execute(
-            "call-retained-failure",
-            { code: `return await tools.pi.read({ path: "missing" });` },
-            undefined,
-            undefined,
-            ctx,
-          ),
+          execute("call-retained-failure", `return await tools.pi.read({ path: "missing" });`),
         ).rejects.toThrow(/ToolFailure/),
       );
       expect(retained).toHaveLength(1);

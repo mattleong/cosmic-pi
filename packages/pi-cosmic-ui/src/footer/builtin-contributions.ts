@@ -27,16 +27,6 @@ const DEFAULT_STATUS_ORDER = 1020;
 
 export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
 
-interface MutableBuiltinTextContribution {
-  kind: "text";
-  id: string;
-  region: CosmicFooterTextContribution["region"];
-  text: string;
-  align?: "left" | "right";
-  priority: number;
-  order: number;
-}
-
 export function builtinContributions(
   host: FooterHostProjection,
   totals: FooterTotals,
@@ -45,14 +35,8 @@ export function builtinContributions(
   homeDirectory: string | undefined,
   statusPlacements: FooterStatusPlacements,
 ): CosmicFooterTextContribution[] {
-  const { model, contextUsage, branch, sessionName, subscription } = host;
+  const { model, branch, sessionName, subscription } = host;
   const location = abbreviateHomePath(host.cwd, homeDirectory);
-  const contextWindow = contextUsage?.contextWindow ?? model?.contextWindow ?? 0;
-  const percent = contextUsage?.percent;
-  const contextText =
-    percent === null || percent === undefined
-      ? `?/${formatTokens(contextWindow)}`
-      : `${percent.toFixed(1)}%/${formatTokens(contextWindow)}`;
 
   let modelText = model?.id ?? "no-model";
   const thinking = host.thinking;
@@ -96,7 +80,8 @@ export function builtinContributions(
       kind: "text",
       id: "context",
       region: "metrics",
-      text: contextText,
+      // The component renders context usage; this marker controls visibility and decorations.
+      text: "",
       priority: 100,
       order: 0,
     },
@@ -192,7 +177,7 @@ export function builtinContributions(
     });
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);
-    const contribution: MutableBuiltinTextContribution = {
+    const contribution: CosmicFooterTextContribution = {
       kind: "text",
       id: `extension.${status.id}`,
       region: placement?.region ?? DEFAULT_STATUS_REGION,

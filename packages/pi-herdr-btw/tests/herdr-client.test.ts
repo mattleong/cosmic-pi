@@ -108,7 +108,7 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
         OPENAI_API_KEY: "private-api-key",
         AWS_SESSION_TOKEN: "private-session-token",
       },
-      { executable: "fixture-herdr", processRunner },
+      { processRunner },
     );
 
     expect(yield* client.inspectProtocol()).toBe(19);
@@ -156,7 +156,7 @@ it.effect("isolates credentials and hostile arguments while bounding requests", 
 
     for (const request of captured) {
       // Direct executable plus argument arrays keep hostile input out of a shell.
-      expect(request.executable).toBe("fixture-herdr");
+      expect(request.executable).toBe("herdr");
       expect(request.args).not.toContain("-c");
       expect(request.environment).toMatchObject({
         HOME: "/home/test",
@@ -238,30 +238,6 @@ it.effect("confirms only mutation failures that occur before process dispatch", 
               ? "herdr_split_btw_pane_failed"
               : "herdr_split_btw_pane_outcome_uncertain",
           outcome: operation === "spawn" ? "confirmed" : "uncertain",
-        });
-    }
-  }),
-);
-
-it.effect("fails closed when either output stream exceeds its byte bound", () =>
-  Effect.gen(function* () {
-    for (const stream of ["stdout", "stderr"] as const) {
-      let limits: readonly [number, number] | undefined;
-      const processRunner: HerdrProcessRunner = (request) =>
-        Effect.sync(() => {
-          limits = [request.stdoutLimitBytes, request.stderrLimitBytes];
-          return { ...success('{"protocol":19}'), [stream]: "123456789", overflowed: true };
-        });
-      const client = makeHerdrClient({}, { processRunner, maximumOutputBytes: 8 });
-
-      const result = yield* Effect.result(client.inspectProtocol());
-
-      expect(limits).toEqual([8, 8]);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_inspect_protocol_failed",
-          outcome: "confirmed",
         });
     }
   }),

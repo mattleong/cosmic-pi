@@ -72,7 +72,6 @@ const MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES = 16 * 1_024 * 1_024;
 type MutableCallCounts = { -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key] };
 
 interface MutableCallEntry {
-  id: number;
   tool: string;
   status: CodeModeCallEntry["status"];
   /** Bounded human-readable label derived from the decoded input; never nested output. */
@@ -80,11 +79,9 @@ interface MutableCallEntry {
   durationMs?: number;
 }
 
-const snapshotCalls = (calls: ReadonlyArray<MutableCallEntry>): ReadonlyArray<CodeModeCallEntry> =>
-  calls.map(({ tool, status, activity, durationMs }) => {
-    const base = { tool, status, activity };
-    return durationMs === undefined ? base : { ...base, durationMs };
-  });
+const snapshotCalls = (
+  calls: ReadonlyMap<number, MutableCallEntry>,
+): ReadonlyArray<CodeModeCallEntry> => Array.from(calls.values(), (call) => ({ ...call }));
 
 const emptyCounts = (): MutableCallCounts => ({
   total: 0,
@@ -112,11 +109,11 @@ const transitionCall = (
 };
 
 const settlePendingAsCancelled = (
-  calls: ReadonlyArray<MutableCallEntry>,
+  calls: ReadonlyMap<number, MutableCallEntry>,
   counts: MutableCallCounts,
 ): boolean => {
   let changed = false;
-  for (const call of calls) {
+  for (const call of calls.values()) {
     if (call.status === "queued" || call.status === "running") {
       transitionCall(call, "cancelled", counts);
       changed = true;
@@ -159,27 +156,27 @@ export const makeCodeModeToolExecute =
       }
       const { config } = state;
 
-      const calls: MutableCallEntry[] = [];
-      const callById = new Map<number, MutableCallEntry>();
+      const calls = new Map<number, MutableCallEntry>();
       // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
       // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
-      // negative execution-local IDs remain disjoint from modern non-negative lifecycle IDs.
+      // indices are unique within an execution; their negative IDs stay disjoint from modern
+      // non-negative lifecycle IDs, so settled entries can retain the same map key.
       const counts = emptyCounts();
       const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
       const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
       const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
-      const trackQueued = (entry: MutableCallEntry): boolean => {
+      const trackQueued = (id: number, entry: MutableCallEntry): boolean => {
         if (counts.total > config.maxToolCalls) return false;
-        if (calls.length >= MAX_TRACKED_CALL_ENTRIES) {
-          const evictedIndex = calls.findIndex(
-            (call) => call.status !== "queued" && call.status !== "running",
-          );
-          if (evictedIndex < 0) return false;
-          const [evicted] = calls.splice(evictedIndex, 1);
-          if (evicted !== undefined) callById.delete(evicted.id);
+        if (calls.size >= MAX_TRACKED_CALL_ENTRIES) {
+          for (const [key, call] of calls) {
+            if (call.status !== "queued" && call.status !== "running") {
+              calls.delete(key);
+              break;
+            }
+          }
+          if (calls.size >= MAX_TRACKED_CALL_ENTRIES) return false;
         }
-        calls.push(entry);
-        callById.set(entry.id, entry);
+        calls.set(id, entry);
         return true;
       };
       const aborted = () => signal?.aborted === true;
@@ -225,14 +222,13 @@ export const makeCodeModeToolExecute =
                 counts.total += 1;
                 counts.queued += 1;
                 const entry: MutableCallEntry = {
-                  id: event.id,
                   tool: event.name,
                   status: "queued",
                   activity: describeNestedActivity(event.name, undefined),
                 };
-                if (!trackQueued(entry)) return;
+                if (!trackQueued(event.id, entry)) return;
               } else {
-                const entry = callById.get(event.id);
+                const entry = calls.get(event.id);
                 const nextStatus =
                   event.status === "running"
                     ? "running"
@@ -263,17 +259,16 @@ export const makeCodeModeToolExecute =
           onToolCallStart: ({ index, lifecycleId, name, input }) =>
             Effect.sync(() => {
               const id = lifecycleId ?? -(index + 1);
-              let current = callById.get(id);
+              let current = calls.get(id);
               if (current === undefined && lifecycleId === undefined) {
                 counts.total += 1;
                 counts.running += 1;
                 current = {
-                  id,
                   tool: name,
                   status: "running",
                   activity: describeNestedActivity(name, input),
                 };
-                trackQueued(current);
+                trackQueued(id, current);
               } else if (current !== undefined) {
                 transitionCall(current, "running", counts);
                 current.activity = describeNestedActivity(name, input);
@@ -288,12 +283,11 @@ export const makeCodeModeToolExecute =
               // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
               if (lifecycleId !== undefined) return;
               const id = -(index + 1);
-              const current = callById.get(id);
+              const current = calls.get(id);
               const nextStatus = outcome === "success" ? "completed" : "error";
               if (current !== undefined) {
                 transitionCall(current, nextStatus, counts);
                 current.durationMs = durationMs;
-                callById.delete(id);
               } else {
                 // The legacy call was counted but its row exceeded the bounded host-side cap.
                 counts.running -= 1;

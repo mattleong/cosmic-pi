@@ -1,6 +1,7 @@
 /** Checkpoint request and catch-up wait controls. */
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { notifyAtHostBoundary } from "pi-cosmic-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   captureAdvisorAbortInputAtHostBoundary,
@@ -8,12 +9,14 @@ import {
   type AdvisorHostContextError,
 } from "../../boundary/host-context.ts";
 import { ADVISOR_OPERATION_TIMEOUT_MS } from "../../config/options.ts";
+import { recordReviewDurationMetrics } from "../../domain/metrics.ts";
 import { classifyFailure } from "../../domain/runtime-error-classifier.ts";
 import type { FailureLoggerContract } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { summarizeAdvisorReview } from "../../checkpoint/ledger.ts";
 import { applyBlockerVerification, isVerificationCandidate } from "../../review/finding-gates.ts";
 import {
+  ADVISOR_CATCH_UP_TIMEOUT_MS,
   awaitAdvisorCatchUpEffect,
   type AdvisorCheckpointHandle,
   type CheckpointSettlement,
@@ -23,16 +26,20 @@ import type { AdvisorApplicationState } from "../state.ts";
 import type {
   CheckpointOrchestration,
   CheckpointRequestOptions,
-  HostNotify,
   LedgerPersistence,
   RuntimeControls,
-  SessionIdentity,
   StateRead,
   StateWrite,
 } from "./deps.ts";
 import type { DeliverFn } from "./delivery.ts";
 import type { SessionRefs } from "./session-refs.ts";
-import { parentHasPendingMessages, parentSignalAborted } from "./parent-session.ts";
+import {
+  branchContainsAnchor,
+  parentHasPendingMessages,
+  parentSignalAborted,
+  readLifecycleScope,
+  readParentAnchor,
+} from "./parent-session.ts";
 
 export type CheckpointRefs = Pick<
   SessionRefs,
@@ -40,26 +47,13 @@ export type CheckpointRefs = Pick<
 >;
 
 export interface CheckpointDeps
-  extends
-    StateRead,
-    StateWrite,
-    HostNotify,
-    LedgerPersistence,
-    RuntimeControls,
-    CheckpointOrchestration,
-    SessionIdentity {
+  extends StateRead, StateWrite, LedgerPersistence, RuntimeControls, CheckpointOrchestration {
   readonly refs: CheckpointRefs;
+  readonly fingerprint: () => string;
   readonly setAdvisorStatus: (ctx: ExtensionContext, text?: string) => void;
   readonly failureLogger: FailureLoggerContract;
   readonly now: () => number;
   readonly deliver: DeliverFn;
-  readonly lifecycleScope: (ctx: ExtensionContext) => string;
-  readonly branchContains: (ctx: ExtensionContext, anchor: ParentAnchor) => boolean;
-  readonly recordReviewDuration: (
-    target: AdvisorApplicationState["metrics"],
-    startedAt: number,
-  ) => AdvisorApplicationState["metrics"];
-  readonly catchUpTimeoutMs: number;
 }
 
 interface CheckpointOwnerGeneration {
@@ -89,13 +83,13 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       cancellationEpoch: admissionState.cancellationEpoch,
       parentTurnId: admissionState.parentTurnId,
       requestSequence: admissionState.requestSequence,
-      anchor: d.parentAnchor(options.ctx),
+      anchor: readParentAnchor(options.ctx),
     };
     let validForDelivery = true;
     let activeQueue: AdvisorReviewQueue | undefined;
     let activeCheckpointId: string | undefined;
     let ownerGeneration: CheckpointOwnerGeneration | undefined;
-    const ledgerScope = d.lifecycleScope(options.ctx);
+    const ledgerScope = readLifecycleScope(options.ctx);
     const startedAt = d.now();
     let reviewSettled = false;
     const settleReview = (settlement: CheckpointSettlement): CheckpointSettlement => {
@@ -103,7 +97,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       reviewSettled = true;
       d.updateApplicationState((state) => ({
         ...state,
-        metrics: d.recordReviewDuration(state.metrics, startedAt),
+        metrics: recordReviewDurationMetrics(state.metrics, startedAt, d.now()),
       }));
       return settlement;
     };
@@ -116,7 +110,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
         admission.requestSequence === state.requestSequence &&
         !parentSignalAborted(requestAbortInput) &&
         (!options.requiresEnabled || (state.config.enabled && state.config.configured)) &&
-        d.branchContains(options.ctx, admission.anchor) &&
+        branchContainsAnchor(options.ctx, admission.anchor) &&
         (options.trajectoryId === undefined || state.activeTrajectory?.id === options.trajectoryId)
       );
     };
@@ -138,7 +132,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       const cursorMismatch =
         !d.refs.runtimeCursor ||
         d.refs.runtimeCursor.fingerprint !== d.fingerprint() ||
-        !d.branchContains(options.ctx, d.refs.runtimeCursor.anchor);
+        !branchContainsAnchor(options.ctx, d.refs.runtimeCursor.anchor);
       if (cursorMismatch) {
         // One bounded restart remains part of this same checkpoint settlement,
         // so turn_end's hard catch-up barrier covers both re-seed and review.
@@ -239,7 +233,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
               ...state,
               reportedFailures: [...state.reportedFailures, kind],
             }));
-            d.notifyBestEffort(
+            notifyAtHostBoundary(
               options.ctx,
               `Advisor ${kind} failure; keeping the primary response. See the Advisor failure log.`,
               "warning",
@@ -325,7 +319,7 @@ export const makeCheckpointControls = (d: CheckpointDeps) => {
       );
       return awaitAdvisorCatchUpEffect(
         handle.settlement,
-        d.catchUpTimeoutMs,
+        ADVISOR_CATCH_UP_TIMEOUT_MS,
         cancellation,
         handle.cancelEffect,
       ).pipe(Effect.asVoid);

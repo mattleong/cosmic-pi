@@ -48,10 +48,7 @@ export interface AdvisorActiveTrajectoryState {
   readonly id: number;
   readonly loopChannel?: "thinking" | "text";
   readonly loopConfirmed: boolean;
-  readonly loopReason?: string;
   readonly reviewQueued: boolean;
-  readonly text: string;
-  readonly thinkingChars: number;
   readonly turnIndex: number;
 }
 

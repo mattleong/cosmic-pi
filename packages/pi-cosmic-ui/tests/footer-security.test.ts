@@ -76,7 +76,6 @@ describe("footer terminal safety", () => {
       footerData,
       callbacks,
       model: undefined,
-      contextUsage: undefined,
     });
     expect(projection.extensionStatuses).toEqual([{ id: "hostile", text: "status text" }]);
   });
@@ -122,6 +121,22 @@ describe("footer terminal safety", () => {
     expect(isTerminalImageLine(`${itermImage}suffix`)).toBe(false);
     expect(isTerminalImageLine("text \x1b_Gnot-an-image")).toBe(false);
     expect(isTerminalImageLine("\x1b]1337;File=not-terminated")).toBe(false);
+  });
+
+  it.each([kittyImage, itermImage])("rejects cursor-down suffixes on images", (image) => {
+    const line = `${image}\x1b[2B`;
+    expect(isTerminalImageLine(line)).toBe(false);
+    expect(combineSurface([line], [], 120, "inline-left", 20).join("")).not.toContain("\x1b");
+  });
+
+  it("replaces an image's leading cursor-up with balanced inline-left movement", () => {
+    const rendered = combineSurface([itermImage], ["first", "last"], 120, "inline-left", 20);
+    const output = rendered.join("\n");
+    expect(output).not.toContain("\x1b[2A");
+    expect(output.split("\x1b[1A")).toHaveLength(2);
+    expect(output.split("\x1b[1B")).toHaveLength(2);
+    expect(rendered.at(-1)?.endsWith("\x1b[1B")).toBe(true);
+    expect(output).toContain(itermImage.slice("\x1b[2A".length));
   });
 
   it("preserves exact images and keeps ordinary surfaces line- and style-safe", () => {

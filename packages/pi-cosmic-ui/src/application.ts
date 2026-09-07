@@ -494,9 +494,10 @@ export function cosmicUiWithDependencies(
     workingOwners.beginPrompt();
   });
   pi.on("ui_prompt_end", (_event, ctx) => {
-    if (!workingOwners.releasePrompt()) return;
+    const resume = workingOwners.releasePrompt();
+    if (!resume) return;
     updateContext(ctx);
-    workingOwners.resumeAfterPrompt();
+    resume();
   });
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", (event, ctx) => {

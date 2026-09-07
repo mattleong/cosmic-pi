@@ -1,12 +1,9 @@
-import * as MutableRef from "effect/MutableRef";
-import { visibleStatusLine, type XaiProjection } from "../usage/projection.ts";
+import type { XaiProjection } from "../usage/projection.ts";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 
-export function xaiUsageFooterPrimitive(
-  projection: MutableRef.MutableRef<XaiProjection>,
-): FooterTextPrimitive | undefined {
-  const text = visibleStatusLine(projection);
-  if (!text) return undefined;
+export function xaiUsageFooterPrimitive(state: XaiProjection): FooterTextPrimitive | undefined {
+  const text = state.statusLine;
+  if (!state.config || !state.eligible || !text) return undefined;
   return {
     kind: "text",
     id: "xai.usage",

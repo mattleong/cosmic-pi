@@ -45,8 +45,6 @@ const advancedState = (): AdvisorApplicationState => ({
     id: 3,
     loopConfirmed: true,
     reviewQueued: true,
-    text: "trajectory",
-    thinkingChars: 10,
     turnIndex: 2,
   },
   pendingPersistentRecovery: pendingRecovery(),

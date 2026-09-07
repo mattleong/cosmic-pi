@@ -113,7 +113,6 @@ export function createFooterComponent(options: {
             footerData,
             callbacks: options.callbacks,
             model,
-            contextUsage: currentContextUsage,
           });
           const registrySnapshot = registry.snapshot();
           const statusPlacements: FooterStatusPlacements = new Map(

@@ -583,24 +583,3 @@ export const patchSessionNestingSnapshot = (
     ),
   );
 };
-
-export const clearSessionProfileSnapshot = (
-  snapshot: SessionProfileSnapshot,
-  expectedRevision: number,
-): Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError> => {
-  if (expectedRevision !== snapshot.revision)
-    return conflict(
-      snapshot,
-      expectedRevision,
-      "Session profile settings changed while this page was open; refresh the profile workspace and try again.",
-    );
-  if (Object.keys(snapshot.overrides).length === 0) return Effect.succeed(snapshot);
-  const revision = incrementRevision(snapshot);
-  if (revision === undefined) return revisionLimit(snapshot);
-  return Effect.succeed(
-    makeSessionProfileSnapshot(
-      snapshot.baseConfig,
-      nextSeed(revision, {}, snapshot.baseline, snapshot.nesting),
-    ),
-  );
-};

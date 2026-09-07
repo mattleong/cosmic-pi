@@ -120,25 +120,33 @@ describe("herdr-btw workflow", () => {
     }),
   );
 
-  it.effect("retains the pane when startup omits exact Pi session identity", () =>
-    Effect.gen(function* () {
-      const test = fixture({ startedIdentityAvailable: false });
-      const result = yield* Effect.result(withShellReadiness(test.open("Review the BTW session.")));
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_agent_ownership_mismatch",
-          outcome: "uncertain",
-          paneId: "w1:p2",
-        });
-      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
-      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-      expect(test.recordedLinks).toEqual([]);
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-    }),
-  );
+  for (const [name, options, code = "herdr_agent_ownership_mismatch"] of [
+    ["startup omits exact Pi session identity", { startedIdentityAvailable: false }],
+    ["startup reports another terminal", { startedTerminalId: "term-other" }],
+    ["startup reports the parent session", { startedSession: SESSION_FILE }],
+    ["startup reports ID-only session evidence", { startedSessionKind: "id" }],
+    [
+      "startup has an uncertain failure",
+      { failOperation: "start side-session Pi" },
+      "fixture_start_side-session_pi",
+    ],
+  ] satisfies Array<[string, HerdrBtwFixtureOptions, string?]>) {
+    it.effect(`retains the pane without prompting or adopting when ${name}`, () =>
+      Effect.gen(function* () {
+        const test = fixture(options);
+        const result = yield* Effect.result(withShellReadiness(test.open("Do not misroute this.")));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure")
+          expect(result.failure).toMatchObject({ code, outcome: "uncertain", paneId: "w1:p2" });
+        expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
+        expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
+        expect(test.recordedLinks).toEqual([]);
+        expect(
+          operationNames(test.calls).filter((name) => name === "start side-session Pi"),
+        ).toHaveLength(1);
+      }),
+    );
+  }
 
   it.effect("accepts path startup evidence for the same filesystem identity", () =>
     Effect.gen(function* () {
@@ -149,26 +157,6 @@ describe("herdr-btw workflow", () => {
 
       expect(yield* withShellReadiness(test.open())).toMatchObject({ mode: "created" });
       expect(test.recordedLinks[0]?.childSessionPath).toBe(CHILD_FILE);
-    }),
-  );
-
-  it.effect("does not prompt or adopt mismatched startup evidence", () =>
-    Effect.gen(function* () {
-      const test = fixture({ startedTerminalId: "term-other" });
-      const result = yield* Effect.result(withShellReadiness(test.open("Do not misroute this.")));
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_agent_ownership_mismatch",
-          outcome: "uncertain",
-          paneId: "w1:p2",
-        });
-      expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
-      expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-      expect(test.recordedLinks).toEqual([]);
     }),
   );
 
@@ -313,24 +301,6 @@ describe("herdr-btw workflow", () => {
     }),
   );
 
-  it.effect("retains the pane when startup has an uncertain failure", () =>
-    Effect.gen(function* () {
-      const test = fixture({ failOperation: "start side-session Pi" });
-      const result = yield* Effect.result(withShellReadiness(test.open()));
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "fixture_start_side-session_pi",
-          outcome: "uncertain",
-          paneId: "w1:p2",
-        });
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-      expect(test.recordedLinks).toEqual([]);
-    }),
-  );
-
   it.effect("focuses a confirmed session even when optional prompt delivery fails", () =>
     Effect.gen(function* () {
       const test = fixture({ failOperation: "prompt side-session Pi" });
@@ -383,21 +353,6 @@ describe("herdr-btw workflow", () => {
           });
         expect(operationNames(test.calls)).not.toContain("start side-session Pi");
       }
-    }),
-  );
-
-  it.effect("requires a distinct path-based child session identity", () =>
-    Effect.gen(function* () {
-      const sameSession = fixture({ startedSession: SESSION_FILE });
-      const idSession = fixture({ startedSessionKind: "id" });
-      const sameResult = yield* Effect.result(withShellReadiness(sameSession.open()));
-      const idResult = yield* Effect.result(withShellReadiness(idSession.open()));
-      expect(sameResult._tag).toBe("Failure");
-      expect(idResult._tag).toBe("Failure");
-      if (sameResult._tag === "Failure")
-        expect(sameResult.failure.code).toBe("herdr_agent_ownership_mismatch");
-      if (idResult._tag === "Failure")
-        expect(idResult.failure.code).toBe("herdr_agent_ownership_mismatch");
     }),
   );
 });

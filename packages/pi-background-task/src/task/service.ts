@@ -46,7 +46,7 @@ import {
 
 interface TaskRecord {
   snapshot: BackgroundTaskSnapshot;
-  logs: LogBuffer;
+  readonly logs: LogBuffer;
   wake: Deferred.Deferred<void>;
   completion: Deferred.Deferred<BackgroundTaskSnapshot>;
   handleReady: Deferred.Deferred<LocalProcessHandle, LocalProcessError>;
@@ -199,7 +199,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }
       const dropped = selected?.logs.oldestEvent;
       if (!selected || !dropped) break;
-      selected.logs = selected.logs.dropOldest();
+      selected.logs.dropOldest();
       total -= dropped.bytes;
       selected.snapshot = {
         ...selected.snapshot,
@@ -249,7 +249,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const record = tasks.get(id);
         if (!record || !isActiveTaskState(record.snapshot.state)) return;
         const timestamp = yield* Clock.currentTimeMillis;
-        record.logs = record.logs
+        record.logs
           .addDropped(droppedBytes)
           .append(stream, text, timestamp, config.logBufferBytesPerTask, droppedBytes > 0);
         record.ingressDroppedObserved += droppedBytes;
@@ -424,7 +424,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 0,
                 handle.droppedOutputBytes() - record.ingressDroppedObserved,
               );
-              record.logs = record.logs.addDropped(unobservedDrops);
+              record.logs.addDropped(unobservedDrops);
               record.ingressDroppedObserved += unobservedDrops;
               completeRecord(record, exit, endedAt);
             }

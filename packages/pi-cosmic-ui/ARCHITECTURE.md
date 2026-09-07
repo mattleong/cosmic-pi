@@ -46,7 +46,7 @@ The v1 client in `src/activity/protocol.ts` carries exact session ID, host activ
 
 `src/working/service.ts` owns the scoped ticker and output-rate estimate. One `SynchronizedRef` serializes elapsed time, output time, and prompt waiting. `owner.ts` tracks runtime/agent/prompt ownership under application events. The outer prompt freezes both clocks and drops output deltas; prompt end restores prior elapsed time. Transient host-write failures are retried without advancing clocks during a prompt. Duplicate prompt events do nothing.
 
-An accepted prompt start records the current runtime token; its outer end resumes only that timer. Agent settlement, deactivation, and shutdown clear ownership. Pi prompt events have neither prompt nor session identity. A stale start first arriving after replacement while the new agent is active is indistinguishable from a current prompt and is attributed to the replacement runtime.
+An accepted prompt start retains the active run's owner object and runtime token. Prompt release returns a captured resume callback, which application invokes after updating context. Admission checks the token; execution rechecks activation and run identity. Delayed stops also check the settled generation. Agent settlement, deactivation, and shutdown clear ownership. Pi prompt events have neither prompt nor session identity. A stale start first arriving after replacement while the new agent is active is indistinguishable from a current prompt and is attributed to the replacement runtime.
 
 ## Lifecycle
 

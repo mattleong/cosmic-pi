@@ -52,14 +52,14 @@ pnpm validate
 Review the changes. The root and all package manifests should have the same version:
 
 ```bash
-git diff -- package.json packages/*/package.json
+git diff -- package.json packages/*/package.json packages/pi-code-mode/runtime/package.json
 git status --short
 ```
 
 Commit and push the release version:
 
 ```bash
-git add package.json packages/*/package.json
+git add package.json packages/*/package.json packages/pi-code-mode/runtime/package.json
 git commit -m "chore(release): v0.2.1"
 git push origin main
 ```

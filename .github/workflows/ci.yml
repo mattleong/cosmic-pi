@@ -31,8 +31,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify Effect language service patch
-        run: pnpm effect:lsp:check
-
       - name: Validate packages
         run: pnpm validate

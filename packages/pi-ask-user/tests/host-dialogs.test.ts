@@ -1,7 +1,7 @@
 import { defaultQuestion } from "./support/questionnaire.ts";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { controlled, makeTuiHost, opaqueHostFixture } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
@@ -20,53 +20,6 @@ const request: AskUserRequest = {
     },
   ],
 };
-
-const opaqueHostFixture = <Value>(value: Value): never => {
-  // SAFETY: Tests supply every opaque host member exercised by the dialog boundary.
-  return value as never;
-};
-
-const mountedHandle = (): OverlayHandle =>
-  opaqueHostFixture({ hide: vi.fn(), setHidden: vi.fn(), focus: vi.fn() });
-type TestDialogOptions = { onHandle: (handle: OverlayHandle) => void };
-
-type TestDialogFactory = (
-  tui: TUI,
-  theme: Theme,
-  keybindings: KeybindingsManager,
-  done: (outcome: AskUserOutcome) => void,
-) => Component;
-
-interface TestDialogFactoryHost {
-  readonly tui: TUI;
-  readonly theme: Theme;
-  readonly keybindings: KeybindingsManager;
-}
-
-const dialogFactoryHost = (): TestDialogFactoryHost => ({
-  tui: opaqueHostFixture({ requestRender: vi.fn(), showOverlay: () => ({ hide: vi.fn() }) }),
-  theme: opaqueHostFixture({
-    bold: (value: string) => value,
-    fg: (_color: string, value: string) => value,
-    bg: (_color: string, value: string) => value,
-  }),
-  keybindings: opaqueHostFixture({ matches: () => false }),
-});
-
-interface PromiseGate<Value> {
-  readonly promise: Promise<Value>;
-  readonly resolve: (value: Value | PromiseLike<Value>) => void;
-}
-
-const controllable = <Value>(): PromiseGate<Value> =>
-  // SAFETY: Supported Node versions implement Promise.withResolvers; the configured libs omit it.
-  (
-    Promise as PromiseConstructor & {
-      withResolvers<Resolved>(): PromiseGate<Resolved>;
-    }
-  ).withResolvers<Value>();
-
-const nonsettling = <Value>(): Promise<Value> => controllable<Value>().promise;
 
 const run = (
   ctx: ExtensionContext,
@@ -334,14 +287,10 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
-      const custom = vi.fn(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-      const ctx = opaqueHostFixture({
-        mode: "tui",
-        hasUI: true,
-        cwd: process.cwd(),
-        isProjectTrusted: () => true,
+      const {
+        ctx,
         ui: { custom },
-      });
+      } = makeTuiHost();
       const controller = new AbortController();
 
       const opening = run(ctx, request, { bridge, signal: controller.signal });
@@ -357,28 +306,19 @@ describe("TUI questionnaire boundary", () => {
   effectIt.effect("keeps normal dialog submission authoritative during cleanup", () =>
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
-      const done = vi.fn<(outcome: AskUserOutcome) => void>();
-      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
-        const completed = controllable<AskUserOutcome>();
-        const host = dialogFactoryHost();
-        const keybindings: KeybindingsManager = opaqueHostFixture({
-          matches: (data: string, id: string) => data === "\r" && id === "tui.select.confirm",
-        });
-        const component = factory(host.tui, host.theme, keybindings, (outcome) => {
-          done(outcome);
-          completed.resolve(outcome);
-        });
-        options.onHandle(mountedHandle());
-        component.handleInput?.("1");
-        component.handleInput?.("\r");
-        return completed.promise;
-      });
-      const ctx = opaqueHostFixture({
-        mode: "tui",
-        hasUI: true,
-        cwd: process.cwd(),
-        isProjectTrusted: () => true,
+      const host = makeTuiHost();
+      const {
+        ctx,
+        done,
         ui: { custom },
+      } = host;
+      const open = custom.getMockImplementation()!;
+      custom.mockImplementation((factory, options) => {
+        const completed = open(factory, options);
+        host.mount!();
+        host.component!.handleInput?.("1");
+        host.component!.handleInput?.("\r");
+        return completed;
       });
 
       const outcome = yield* Effect.promise(() => run(ctx, request, { bridge }));
@@ -398,14 +338,11 @@ describe("TUI questionnaire boundary", () => {
       const bridge = makeAskUserDialogBridge();
       const resume = vi.fn();
       bridge.activate(resume);
-      const custom = vi.fn(() => Promise.reject(new Error("custom unavailable")));
-      const ctx = opaqueHostFixture({
-        mode: "tui",
-        hasUI: true,
-        cwd: process.cwd(),
-        isProjectTrusted: () => true,
+      const {
+        ctx,
         ui: { custom },
-      });
+      } = makeTuiHost();
+      custom.mockRejectedValue(new Error("custom unavailable"));
 
       yield* Effect.promise(() =>
         expect(run(ctx, request, { bridge })).rejects.toMatchObject({
@@ -422,19 +359,17 @@ describe("TUI questionnaire boundary", () => {
   effectIt.effect("interrupts a nonsettling custom Promise and closes exactly once", () =>
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
-      const done = vi.fn<(outcome: AskUserOutcome) => void>();
-      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
-        const host = dialogFactoryHost();
-        factory(host.tui, host.theme, host.keybindings, done);
-        options.onHandle(mountedHandle());
-        return nonsettling<AskUserOutcome>();
-      });
-      const ctx = opaqueHostFixture({
-        mode: "tui",
-        hasUI: true,
-        cwd: process.cwd(),
-        isProjectTrusted: () => true,
+      const host = makeTuiHost();
+      const {
+        ctx,
+        done,
         ui: { custom },
+      } = host;
+      const open = custom.getMockImplementation()!;
+      custom.mockImplementation((factory, options) => {
+        open(factory, options);
+        host.mount!();
+        return controlled<AskUserOutcome>().promise;
       });
       const controller = new AbortController();
       const opening = run(ctx, request, { bridge, signal: controller.signal });
@@ -452,21 +387,19 @@ describe("TUI questionnaire boundary", () => {
   effectIt.effect("clears only its bridge token when a replacement wins during the open", () =>
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
-      const done = vi.fn<(outcome: AskUserOutcome) => void>();
-      const replacementResume = vi.fn();
-      const custom = vi.fn((factory: TestDialogFactory, options: TestDialogOptions) => {
-        const host = dialogFactoryHost();
-        factory(host.tui, host.theme, host.keybindings, done);
-        options.onHandle(mountedHandle());
-        bridge.activate(replacementResume);
-        return nonsettling<AskUserOutcome>();
-      });
-      const ctx = opaqueHostFixture({
-        mode: "tui",
-        hasUI: true,
-        cwd: process.cwd(),
-        isProjectTrusted: () => true,
+      const host = makeTuiHost();
+      const {
+        ctx,
+        done,
         ui: { custom },
+      } = host;
+      const replacementResume = vi.fn();
+      const open = custom.getMockImplementation()!;
+      custom.mockImplementation((factory, options) => {
+        open(factory, options);
+        host.mount!();
+        bridge.activate(replacementResume);
+        return controlled<AskUserOutcome>().promise;
       });
       const controller = new AbortController();
       const opening = run(ctx, request, { bridge, signal: controller.signal });

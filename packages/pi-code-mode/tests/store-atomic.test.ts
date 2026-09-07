@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import {
   AgentDirectory,
+  JsonDocumentError,
   JsonDocumentStore,
   provideBuiltLayer,
   type JsonDocumentStoreContract,
@@ -152,6 +153,52 @@ describe("code mode store atomic publication", () => {
       expect(published.at(-1)?.config.timeoutMs).toBe(1_000);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
+
+  for (const scope of ["global", "project"] as const) {
+    for (const failure of ["unreadable", "disappeared"] as const) {
+      it.effect(`commits ${scope} settings when the other document is ${failure}`, () => {
+        const memory = makeInMemoryDocuments({
+          [GLOBAL_PATH]: { timeoutMs: 60_000 },
+          [PROJECT_PATH]: { timeoutMs: 1_000 },
+        });
+        const otherPath = scope === "global" ? PROJECT_PATH : GLOBAL_PATH;
+        let unreadable = false;
+        const documents = Layer.succeed(JsonDocumentStore, {
+          ...memory.service,
+          readObject: (path) =>
+            unreadable && path === otherPath
+              ? Effect.fail(
+                  new JsonDocumentError({ operation: "read", path, message: "unreadable" }),
+                )
+              : memory.service.readObject(path),
+        });
+        const layer = CodeModeConfigStore.layer({ cwd: "/project", projectTrusted: true }).pipe(
+          Layer.provide(Layer.mergeAll(documents, Path.layer, AgentDirectory.layer("/agent"))),
+        );
+        return Effect.gen(function* () {
+          const store = yield* CodeModeConfigStore;
+          expect(store.snapshot().projectValues).toEqual({ timeoutMs: 1_000 });
+          expect(store.snapshot().globalValues).toEqual({ timeoutMs: 60_000 });
+          if (failure === "unreadable") unreadable = true;
+          else memory.documents.delete(otherPath);
+
+          const committed = yield* store.setSetting(scope, "maxToolCalls", "8");
+          expect(committed.config.maxToolCalls).toBe(8);
+          expect(committed.config.timeoutMs).toBe(scope === "global" ? 60_000 : 1_000);
+          expect(scope === "global" ? committed.projectValues : committed.globalValues).toEqual({});
+          expect(committed.provenance.timeoutMs).toBe(scope);
+
+          unreadable = false;
+          memory.documents.set(otherPath, { maxOutputBytes: 2_048 });
+          const recovered = yield* store.clearSetting(scope, "maxToolCalls");
+          expect(recovered.config.maxOutputBytes).toBe(2_048);
+          expect(recovered.provenance.maxOutputBytes).toBe(
+            scope === "global" ? "project" : "global",
+          );
+        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
+    }
+  }
 
   it.effect("overlays scopes field-wise across writes in one long-lived runtime", () => {
     const memory = makeInMemoryDocuments({

@@ -1,11 +1,8 @@
-// Local CLI wire transport: child spawn, bounded stdout/stderr/JSONL event queue,
-// backpressured writes, awaitExit, and fail-closed process-tree termination/release. This
-// boundary owns no harness filesystem state and never imports the LocalCliProcess service.
-import { nodeSpawn as spawn } from "./node-builtins.ts";
+// Native CLI frame limits and immediate parser-overflow termination policy.
+// process-transport.ts owns shared spawn, bounded queues, writes, and process-tree release.
+// This boundary owns no harness state and never imports the LocalCliProcess service.
 import * as Cause from "effect/Cause";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import type {
   CodexInitializedNotification,
@@ -16,16 +13,11 @@ import type {
   ClaudeUserFrame,
 } from "../backend/local-claude-protocol.ts";
 import { processCauseError, SubagentProcessError } from "../run/errors.ts";
-import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
-import { releaseChildProcess } from "./child-process.ts";
-import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
-import { decodeUnknownJsonOption } from "./wire-shared.ts";
-
-const MAX_LINE_BYTES = 4 * 1024 * 1024;
-const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
-const MAX_STDERR_BYTES = 128 * 1024;
-const EVENT_CAPACITY = 512;
-const WRITE_TIMEOUT = "10 seconds";
+import {
+  acquireProcessTransport,
+  MAX_PROCESS_LINE_BYTES,
+  type ProcessTransportRuntime,
+} from "./process-transport.ts";
 
 /** Outbound frames are locally constructed protocol values serialized as one pure JSONL line. */
 const encodeOutboundFrame = (value: LocalCliOutboundFrame): string => `${JSON.stringify(value)}\n`;
@@ -74,251 +66,38 @@ const processError = <ErrorInput>(
 ): SubagentProcessError =>
   processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
 
-interface BoundedTailChunks {
-  readonly chunks: Buffer[];
-  length: number;
-}
-
-/** Tail-bounded: keeps the LAST `maximum` bytes and drops the head. */
-const appendTailBounded = (target: BoundedTailChunks, chunk: Buffer, maximum: number): void => {
-  target.chunks.push(chunk);
-  target.length += chunk.byteLength;
-  while (target.length > maximum) {
-    const first = target.chunks[0];
-    if (!first) break;
-    const excess = target.length - maximum;
-    if (first.byteLength <= excess) {
-      target.chunks.shift();
-      target.length -= first.byteLength;
-    } else {
-      target.chunks[0] = first.subarray(excess);
-      target.length -= excess;
-    }
-  }
-};
-
-const appendTailText = (target: BoundedTailChunks, text: string): void => {
-  const chunk = Buffer.from(text, "utf8");
-  target.chunks.push(chunk);
-  target.length += chunk.byteLength;
-};
-
-const readTail = (target: BoundedTailChunks): string =>
-  Buffer.concat(target.chunks).toString("utf8");
-
-/** Spawns one local CLI child and owns its bounded wire transport until release. */
+/** The native adapters retain frame limits and immediate parser-overflow termination. */
 export const acquireLocalCliTransport = Effect.fn("LocalCliTransport.acquire")(function* (
   request: LocalCliTransportRequest,
+  runtime?: ProcessTransportRuntime,
 ) {
-  const events = yield* Queue.dropping<LocalCliWireEvent, Cause.Done>(EVENT_CAPACITY);
-  const ready = yield* Deferred.make<void, SubagentProcessError>();
-  const exited = yield* Deferred.make<Extract<LocalCliWireEvent, { readonly type: "exit" }>>();
-  const stderr: BoundedTailChunks = { chunks: [], length: 0 };
-  let settled = false;
-  let spawned = false;
-  let cleaned = false;
-  let stdinError: Error | undefined;
-
-  return yield* Effect.uninterruptible(
-    Effect.gen(function* () {
-      const platform = request.platform ?? process.platform;
-      const child = yield* Effect.try({
-        try: () =>
-          spawn(request.executable, [...request.args], {
-            cwd: request.cwd,
-            detached: platform !== "win32",
-            env: request.env,
-            stdio: ["pipe", "pipe", "pipe"],
-            windowsHide: true,
-          }),
-        catch: (error) => processError("spawn local CLI", error, "local_cli_spawn_failed"),
-      });
-      const room = makeByteBoundedQueueRoom(events, MAX_QUEUED_BYTES, () => {
-        appendTailText(stderr, `\nLocal CLI event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`);
-        Queue.offerUnsafe(events, {
-          type: "protocol_error",
-          message: "Local CLI event backlog exceeded its byte budget.",
-        });
-        void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
-      });
-      let queueOverflowed = false;
-      const offer = (event: LocalCliWireEvent, bytes = 0) => {
-        if (room.offer(event, bytes)) return;
-        if (queueOverflowed) return;
-        queueOverflowed = true;
-        appendTailText(
-          stderr,
-          `\nLocal CLI event queue exceeded ${EVENT_CAPACITY} pending events.`,
-        );
-        void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
-      };
-      const detachStdout = child.stdout
-        ? attachBoundedLineParser(child.stdout, {
-            maxLineBytes: MAX_LINE_BYTES,
-            maxQueuedBytes: MAX_QUEUED_BYTES,
-            onLine: (line) => {
-              const bytes = Buffer.byteLength(line, "utf8") + 1;
-              const decoded = decodeUnknownJsonOption(line);
-              if (Option.isSome(decoded)) offer({ type: "message", value: decoded.value }, bytes);
-              else
-                offer(
-                  { type: "protocol_error", message: "Local CLI emitted malformed JSONL." },
-                  bytes,
-                );
-            },
-            onOverflow: () => {
-              offer({
-                type: "protocol_error",
-                message: "Local CLI output exceeded its bounded parser budget.",
-              });
-              void terminateProcessTree(child, "force", { platform }).catch(() => undefined);
-            },
-          })
-        : () => {};
-      const onStderr = (chunk: Buffer) => {
-        appendTailBounded(stderr, chunk, MAX_STDERR_BYTES);
-      };
-      const onStdoutError = (error: Error) => {
-        onStderr(Buffer.from(`\nLocal CLI stdout error: ${error.message}\n`, "utf8"));
-        offer({ type: "protocol_error", message: "Local CLI output stream failed." });
-      };
-      const onStderrError = (error: Error) => {
-        onStderr(Buffer.from(`\nLocal CLI stderr error: ${error.message}\n`, "utf8"));
-        offer({ type: "protocol_error", message: "Local CLI diagnostic stream failed." });
-      };
-      const onStdinError = (error: Error) => {
-        stdinError = error;
-      };
-      const onSpawn = () => {
-        spawned = true;
-        Deferred.doneUnsafe(ready, Effect.void);
-      };
-      const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
-        if (settled) return;
-        settled = true;
-        Queue.endUnsafe(events);
-        const event: Extract<LocalCliWireEvent, { readonly type: "exit" }> = {
-          type: "exit",
-          exitCode,
-          ...(signal && { signal }),
-          stderr: readTail(stderr),
-        };
-        Deferred.doneUnsafe(exited, Effect.succeed(event));
-      };
-      const onError = (error: Error) => {
-        Deferred.doneUnsafe(
-          ready,
-          Effect.fail(processError("spawn local CLI", error, "local_cli_spawn_failed")),
-        );
-        if (!spawned) finish(null, null);
-      };
-      const onClose = (code: number | null, signal: NodeJS.Signals | null) => finish(code, signal);
-      const cleanup = () => {
-        if (cleaned) return;
-        cleaned = true;
-        detachStdout();
-        child.stdout?.off("error", onStdoutError);
-        child.stderr?.off("data", onStderr);
-        child.stderr?.off("error", onStderrError);
-        child.stdin?.off("error", onStdinError);
-        child.off("spawn", onSpawn);
-        child.off("error", onError);
-        child.off("close", onClose);
-        child.stdin?.destroy();
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      };
-      child.stdout?.on("error", onStdoutError);
-      child.stderr?.on("data", onStderr);
-      child.stderr?.on("error", onStderrError);
-      child.stdin?.on("error", onStdinError);
-      child.once("spawn", onSpawn);
-      child.once("error", onError);
-      child.once("close", onClose);
-      yield* Deferred.await(ready).pipe(Effect.onError(() => Effect.sync(cleanup)));
-      const pid = child.pid;
-      if (!pid) {
-        cleanup();
-        return yield* processError("spawn local CLI", "Process did not expose a pid.");
-      }
-
-      const send = (value: LocalCliOutboundFrame) =>
-        Effect.callback<void, SubagentProcessError>((resumeWrite) => {
-          const stdin = child.stdin;
-          if (!stdin || stdin.destroyed || stdinError) {
-            resumeWrite(
-              Effect.fail(
-                processError(
-                  "send local CLI protocol frame to",
-                  stdinError ?? "Local CLI input is closed.",
-                  "transport_not_sent",
-                ),
-              ),
-            );
-            return;
-          }
-          let encoded: string;
-          try {
-            encoded = encodeOutboundFrame(value);
-          } catch (error) {
-            resumeWrite(
-              Effect.fail(processError("encode local CLI frame for", error, "transport_not_sent")),
-            );
-            return;
-          }
-          if (Buffer.byteLength(encoded, "utf8") > MAX_LINE_BYTES) {
-            resumeWrite(
-              Effect.fail(
-                processError(
-                  "encode local CLI frame for",
-                  "Frame exceeded limit.",
-                  "transport_not_sent",
-                ),
-              ),
-            );
-            return;
-          }
-          stdin.write(encoded, (error) =>
-            resumeWrite(
-              error
-                ? Effect.fail(
-                    processError("send local CLI frame to", error, "transport_outcome_uncertain"),
-                  )
-                : Effect.void,
-            ),
-          );
-        }).pipe(
-          Effect.timeoutOrElse({
-            duration: WRITE_TIMEOUT,
-            orElse: () =>
-              Effect.fail(
-                processError(
-                  "send local CLI frame to",
-                  `Transport write exceeded ${WRITE_TIMEOUT}; delivery may already have occurred.`,
-                  "transport_outcome_uncertain",
-                ),
-              ),
-          }),
-        );
-      const terminate = (mode: "graceful" | "force") =>
-        terminateProcessTreeEffect(child, mode, { platform }).pipe(
-          Effect.mapError((error) => processError("terminate local CLI", error)),
-        );
-      const release = releaseChildProcess({
-        platform,
-        requestAbort: Effect.void,
-        terminate,
-        awaitExit: Deferred.await(exited),
-      }).pipe(Effect.ensuring(Effect.sync(cleanup)));
-      return {
-        pid,
-        events,
-        awaitExit: Deferred.await(exited),
-        send,
-        acknowledge: room.acknowledge,
-        terminate,
-        release,
-      };
-    }),
+  const platform = request.platform ?? process.platform;
+  const { attachment: _attachment, ...transport } = yield* acquireProcessTransport(
+    {
+      spawn: (spawn) =>
+        spawn(request.executable, [...request.args], {
+          cwd: request.cwd,
+          detached: platform !== "win32",
+          env: request.env,
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
+        }),
+      platform,
+      label: "Local CLI",
+      error: (operation, error, code) =>
+        processError(
+          `${operation} local CLI`,
+          error,
+          code ?? (operation === "spawn" ? "local_cli_spawn_failed" : undefined),
+        ),
+      message: (value): LocalCliWireEvent => ({ type: "message", value }),
+      encode: encodeOutboundFrame,
+      maxOutboundBytes: MAX_PROCESS_LINE_BYTES,
+      terminateOnParserOverflow: true,
+      synchronousWriteFailure: "defect",
+      attach: () => ({ value: undefined, detach: () => {} }),
+    },
+    runtime,
   );
+  return transport;
 });

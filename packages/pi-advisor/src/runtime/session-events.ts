@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { SynchronousIngressOfferResult } from "pi-cosmic-core";
 import { snapshotData } from "../domain/safe-data.ts";
-import { AdvisorModelError } from "./client.ts";
+import { AdvisorModelError, type AdvisorUsageTelemetry } from "./client.ts";
 import { isolateCallback, isToolCallDelta } from "./session.ts";
 import {
   AdvisorUsageWireSchema,
@@ -32,14 +32,7 @@ interface AdvisorSessionEventPort {
   readonly recordStream: (kind: "thinking" | "text" | "tool" | undefined, text: string) => void;
   readonly recordToolRound: () => void;
   readonly recordStopError: (message: string) => void;
-  readonly recordUsage: (usage: {
-    readonly cacheReadTokens: number;
-    readonly cacheWriteTokens: number;
-    readonly cost: number;
-    readonly inputTokens: number;
-    readonly outputTokens: number;
-    readonly totalTokens: number;
-  }) => void;
+  readonly recordUsage: (usage: AdvisorUsageTelemetry) => void;
 }
 
 export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
@@ -153,11 +146,7 @@ export const makeAdvisorSessionEvents = (port: AdvisorSessionEventPort) => {
       if (Option.isNone(usage)) return;
       isolateCallback(() =>
         port.recordUsage({
-          cacheReadTokens: usage.value.cacheRead ?? 0,
-          cacheWriteTokens: usage.value.cacheWrite ?? 0,
           cost: usage.value.cost?.total ?? 0,
-          inputTokens: usage.value.input ?? 0,
-          outputTokens: usage.value.output ?? 0,
           totalTokens: usage.value.totalTokens ?? 0,
         }),
       );

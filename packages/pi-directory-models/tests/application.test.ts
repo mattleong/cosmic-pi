@@ -142,6 +142,11 @@ const harness = (
 
     const initial = model("anthropic", "claude-sonnet");
     const remembered = model("openai-codex", "gpt-5.6-sol");
+    const rememberedPreference = {
+      provider: remembered.provider,
+      model: remembered.id,
+      thinkingLevel: "high" as const,
+    };
     const alternate = model("xai", "grok-code");
     const available = new Map(
       [initial, remembered, alternate].map((value) => [`${value.provider}/${value.id}`, value]),
@@ -226,12 +231,8 @@ const harness = (
       agentDirectory,
       initial,
       remembered,
-      seedRememberedPreference: () =>
-        writePreference(agentDirectory, cwd, {
-          provider: remembered.provider,
-          model: remembered.id,
-          thinkingLevel: "high",
-        }),
+      rememberedPreference,
+      seedRememberedPreference: () => writePreference(agentDirectory, cwd, rememberedPreference),
       alternate,
       notify,
       getEntries,
@@ -240,7 +241,10 @@ const harness = (
       setThinkingLevel,
       start,
       shutdown,
-      emit,
+      emitModel: (model: Model, previousModel: Model, source: "set" | "restore" = "set") =>
+        emit("model_select", { type: "model_select", model, previousModel, source }),
+      emitThinking: (level: string, previousLevel: string) =>
+        emit("thinking_level_select", { type: "thinking_level_select", level, previousLevel }),
       select(next: Model, thinking: "low" | "medium" | "high" = thinkingLevel) {
         activeModel = next;
         thinkingLevel = thinking;
@@ -427,12 +431,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         expect(h.setModel).not.toHaveBeenCalled();
 
         h.select(h.alternate, "medium");
-        yield* h.emit("model_select", {
-          type: "model_select",
-          model: h.alternate,
-          previousModel: h.initial,
-          source: "set",
-        });
+        yield* h.emitModel(h.alternate, h.initial);
         expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
           provider: h.alternate.provider,
           model: h.alternate.id,
@@ -450,12 +449,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
 
       h.select(h.remembered, "medium");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.remembered,
-        previousModel: h.initial,
-        source: "set",
-      });
+      yield* h.emitModel(h.remembered, h.initial);
       expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
         provider: h.remembered.provider,
         model: h.remembered.id,
@@ -463,25 +457,12 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       });
 
       h.select(h.remembered, "high");
-      yield* h.emit("thinking_level_select", {
-        type: "thinking_level_select",
-        level: "high",
-        previousLevel: "medium",
-      });
+      yield* h.emitThinking("high", "medium");
       expect((yield* readPreference(h.agentDirectory, h.cwd)).thinkingLevel).toBe("high");
 
       h.select(h.alternate, "low");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.alternate,
-        previousModel: h.remembered,
-        source: "restore",
-      });
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      yield* h.emitModel(h.alternate, h.remembered, "restore");
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
     }),
   );
 
@@ -491,11 +472,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
       h.select(h.remembered, "high");
 
-      yield* h.emit("thinking_level_select", {
-        type: "thinking_level_select",
-        level: "unexpected-level",
-        previousLevel: "low",
-      });
+      yield* h.emitThinking("unexpected-level", "low");
 
       expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
         provider: h.initial.provider,
@@ -512,12 +489,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
 
       h.select(h.alternate, "medium");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.alternate,
-        previousModel: h.remembered,
-        source: "set",
-      });
+      yield* h.emitModel(h.alternate, h.remembered);
       yield* h.flushThinkingEvents();
 
       expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
@@ -536,11 +508,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
       expect(h.model()).toBe(h.initial);
       expect(h.thinking()).toBe("low");
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
       expect(h.notify).toHaveBeenCalledTimes(1);
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
@@ -554,11 +522,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();
       expect(h.setThinkingLevel).not.toHaveBeenCalled();
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
       expect(h.notify).toHaveBeenCalledTimes(1);
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
@@ -590,17 +554,8 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       const h = yield* harness();
 
       h.select(h.remembered, "high");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.remembered,
-        previousModel: h.initial,
-        source: "set",
-      });
-      yield* h.emit("thinking_level_select", {
-        type: "thinking_level_select",
-        level: "high",
-        previousLevel: "low",
-      });
+      yield* h.emitModel(h.remembered, h.initial);
+      yield* h.emitThinking("high", "low");
       expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(false);
       expect(h.notify).not.toHaveBeenCalled();
 
@@ -610,17 +565,8 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       const persisted = yield* readPreference(h.agentDirectory, h.cwd);
 
       h.select(h.alternate, "high");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.alternate,
-        previousModel: h.initial,
-        source: "set",
-      });
-      yield* h.emit("thinking_level_select", {
-        type: "thinking_level_select",
-        level: "high",
-        previousLevel: "low",
-      });
+      yield* h.emitModel(h.alternate, h.initial);
+      yield* h.emitThinking("high", "low");
       expect(yield* readPreference(h.agentDirectory, h.cwd)).toEqual(persisted);
       expect(h.notify).not.toHaveBeenCalled();
     }),
@@ -641,18 +587,9 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       yield* fs.makeDirectory(cwd);
       h.select(h.remembered, "high");
-      yield* h.emit("model_select", {
-        type: "model_select",
-        model: h.remembered,
-        previousModel: h.initial,
-        source: "set",
-      });
+      yield* h.emitModel(h.remembered, h.initial);
 
-      expect(yield* readPreference(h.agentDirectory, cwd)).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      expect(yield* readPreference(h.agentDirectory, cwd)).toMatchObject(h.rememberedPreference);
       expect(h.notify).toHaveBeenCalledTimes(1);
     }),
   );
@@ -698,11 +635,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();
       expect(h.setThinkingLevel).not.toHaveBeenCalled();
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "high",
-      });
+      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
     }),
   );
 

@@ -14,7 +14,6 @@ import {
   normalizeAdvisorConfig,
 } from "../../config/options.ts";
 import { ConfigStore } from "../../config/store.ts";
-import { recordReviewDurationMetrics, recordUsageMetrics } from "../../domain/metrics.ts";
 import { FailureLogger } from "../../logging/logger.ts";
 import type { AdvisorReviewQueue } from "../../queue/review-queue.ts";
 import { buildAdvisorContext } from "../../review/context.ts";
@@ -22,9 +21,7 @@ import { AdvisorRuntimeService } from "../../runtime/runtime.ts";
 import { makeAdvisorResourceState } from "../../runtime/resource-state.ts";
 import { handleAdvisorCommand } from "../../settings/controller.ts";
 import { makeAdvisorStatusService } from "../../status/service.ts";
-import { notifyAtHostBoundary } from "pi-cosmic-core";
 import {
-  ADVISOR_CATCH_UP_TIMEOUT_MS,
   AdvisorController,
   extensionError,
   type AdvisorControllerApplicationOptions,
@@ -36,7 +33,6 @@ import { makeCheckpointControls } from "./checkpoint.ts";
 import { makeDeliver } from "./delivery.ts";
 import { makeLifecycleEvents } from "./events.ts";
 import { makeLedgerPersistence } from "./ledger.ts";
-import { branchContainsAnchor, readLifecycleScope, readParentAnchor } from "./parent-session.ts";
 import { makeRuntimeControls } from "./runtime.ts";
 import { createSessionRefs } from "./session-refs.ts";
 import { makeLifecycleStatusControls } from "./status.ts";
@@ -83,11 +79,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
       });
       const { stopStatusSpinner, setAdvisorStatus, startStatusSpinner, settleStatusSpinner } =
         makeLifecycleStatusControls({ statusService });
-
-      const recordReviewDuration = (
-        target: Parameters<typeof recordReviewDurationMetrics>[0],
-        startedAt: number,
-      ) => recordReviewDurationMetrics(target, startedAt, executor.now());
 
       const seedFromMessages = (messages: readonly unknown[]): string =>
         buildAdvisorContext({
@@ -139,12 +130,9 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         productionController: resources,
         productionRuntimeService,
         queueScope: applicationResourceScope,
-        notifyBestEffort: notifyAtHostBoundary,
         seedFromMessages,
         activeSeed,
         fingerprint,
-        parentAnchor: readParentAnchor,
-        recordUsage: recordUsageMetrics,
       });
 
       const { persistLedger, persistCurrentLedger } = makeLedgerPersistence({
@@ -152,7 +140,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         refs,
         getState: () => applicationStateStore.get(),
         fingerprint,
-        parentAnchor: readParentAnchor,
       });
 
       const ingest = (input: Parameters<AdvisorReviewQueue["ingest"]>[1]): void => {
@@ -170,7 +157,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         updateMetrics,
         ingest,
         recordReceipt,
-        notifyBestEffort: notifyAtHostBoundary,
       });
 
       const { requestCheckpoint, awaitCatchUpEffectOwned } = makeCheckpointControls({
@@ -182,7 +168,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         cancelRequest,
         persistCurrentLedger,
         persistLedger,
-        notifyBestEffort: notifyAtHostBoundary,
         setAdvisorStatus,
         failureLogger,
         applicationScope: applicationResourceScope,
@@ -192,11 +177,6 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         stopRuntimeEffect,
         deliver,
         fingerprint,
-        parentAnchor: readParentAnchor,
-        lifecycleScope: readLifecycleScope,
-        branchContains: branchContainsAnchor,
-        recordReviewDuration,
-        catchUpTimeoutMs: ADVISOR_CATCH_UP_TIMEOUT_MS,
       });
 
       const { commandActions, applyCommittedConfigEffect } = makeCommandWorkflows({
@@ -245,14 +225,12 @@ export const advisorControllerApplicationLayer = (options: AdvisorControllerAppl
         recordReceipt,
         mutateTrajectory,
         scheduleDelay: (milliseconds, task) => advisorDelay(executor, milliseconds, task),
-        notifyBestEffort: notifyAtHostBoundary,
         startRuntimeEffect,
         stopRuntimeEffect,
         stopRuntimeUnlockedEffect,
         runWithExplicitRuntimeEffect,
         requestCheckpoint,
         awaitCatchUpEffectOwned,
-        parentAnchor: readParentAnchor,
         checkpointOrchestrator,
         configStore,
         persistCommandConfig,

@@ -12,7 +12,6 @@ import {
   type ProfileResolutionEnvironment,
 } from "./resolve.ts";
 import {
-  clearSessionProfileSnapshot,
   makeSessionProfileSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
@@ -46,9 +45,6 @@ export interface SubagentProfileServiceContract {
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
   readonly patchSessionNesting: (
     patch: SessionNestingPatch,
-  ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
-  readonly clearSessionProfiles: (
-    expectedRevision: number,
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileConflictError>;
 }
 
@@ -134,8 +130,6 @@ export const makeSubagentProfileService = (
         commit((current) => replaceSessionProfileSnapshot(current, patch)),
       patchSessionNesting: (patch) =>
         commit((current) => patchSessionNestingSnapshot(current, patch)),
-      clearSessionProfiles: (expectedRevision) =>
-        commit((current) => clearSessionProfileSnapshot(current, expectedRevision)),
     });
   });
 

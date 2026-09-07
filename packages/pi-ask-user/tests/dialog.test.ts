@@ -1,4 +1,5 @@
-import { initTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { controlled as controllable, opaqueHostFixture, theme } from "./support/host.ts";
 import { type KeyId, matchesKey, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
@@ -11,19 +12,6 @@ const ENTER = "\r";
 const ESCAPE = "\x1b";
 const DOWN = "\x1b[B";
 const EXTERNAL_EDITOR = "\x07";
-
-interface PromiseGate<A> {
-  readonly promise: Promise<A>;
-  readonly resolve: (value: A | PromiseLike<A>) => void;
-}
-
-const controllable = <A>() =>
-  // SAFETY: Every supported Node version implements Promise.withResolvers; ES2023 libs omit it.
-  (
-    Promise as PromiseConstructor & {
-      withResolvers<Value>(): PromiseGate<Value>;
-    }
-  ).withResolvers<A>();
 
 const request = (mode: "single" | "multiple" = "single"): AskUserRequest => ({
   questions: [
@@ -38,17 +26,6 @@ const request = (mode: "single" | "multiple" = "single"): AskUserRequest => ({
       ],
     },
   ],
-});
-
-const opaqueHostFixture = <Value>(value: Value): never => {
-  // SAFETY: Dialog tests supply every opaque host member exercised by AskUserDialog.
-  return value as never;
-};
-
-const theme: Theme = opaqueHostFixture({
-  bold: (value: string) => value,
-  fg: (_color: string, value: string) => value,
-  bg: (_color: string, value: string) => value,
 });
 
 interface KeybindingFixture extends Readonly<Record<string, KeyId | undefined>> {}

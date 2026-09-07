@@ -63,23 +63,36 @@ describe("OpenAI image protocol", () => {
     }),
   );
 
-  it.effect("keeps partial images nonterminal", () =>
-    Effect.gen(function* () {
-      const result = yield* parseImageSse(
-        body(
-          dataEvent({ partial_image_b64: "cGFydGlhbA==" }) +
-            dataEvent({
-              type: "image_generation_call",
-              id: "complete",
-              status: "completed",
-              result: "ZmluYWw=",
-            }),
-        ),
-        "image/png",
-      );
+  it.effect.each(["partial_image_b64", "b64_json"] as const)(
+    "keeps %s partials nonterminal and rejects malformed or partial-only streams",
+    (field) =>
+      Effect.gen(function* () {
+        const partial = dataEvent({ [field]: "cGFydGlhbA==" });
+        const result = yield* parseImageSse(
+          body(
+            partial +
+              dataEvent({
+                type: "image_generation_call",
+                id: "complete",
+                status: "completed",
+                result: "ZmluYWw=",
+              }),
+          ),
+          "image/png",
+        );
+        expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
 
-      expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
-    }),
+        for (const input of [partial, dataEvent({ [field]: 42 })]) {
+          const failed = yield* parseImageSse(body(input), "image/png").pipe(Effect.result);
+          expect(failed._tag).toBe("Failure");
+          if (failed._tag === "Failure") {
+            expect(failed.failure.operation).toBe("stream");
+            expect(failed.failure.message).toContain(
+              input === partial ? "completed image" : "malformed event",
+            );
+          }
+        }
+      }),
   );
 
   it.effect("fails malformed known events and a terminal without completion", () =>

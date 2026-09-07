@@ -16,7 +16,6 @@ import {
   isMateriallyNovelAdvisorTerminal,
   LONG_TURN_REVIEW_MS,
   markConcreteAdvisorProgress,
-  MAX_TRAJECTORY_EVIDENCE_CHARS,
   pushAdvisorTrajectory,
   startAdvisorToolTrajectory,
 } from "../../../review/trajectory.ts";
@@ -52,8 +51,6 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
       id: ++refs.trajectorySequence,
       loopConfirmed: false,
       reviewQueued: false,
-      text: "",
-      thinkingChars: 0,
       turnIndex: event.turnIndex,
     };
     d.updateApplicationState((state) => ({ ...state, activeTrajectory: observation }));
@@ -92,14 +89,6 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
       const base = {
         ...current,
         detector: trajectoryResult.state,
-        thinkingChars:
-          channel === "thinking"
-            ? current.thinkingChars + update.delta.length
-            : current.thinkingChars,
-        text:
-          channel === "text"
-            ? `${current.text}${update.delta}`.slice(-MAX_TRAJECTORY_EVIDENCE_CHARS)
-            : current.text,
         abortAllowed:
           signal !== undefined
             ? advisorActiveToolCount(current.toolDetector) === 0
@@ -112,7 +101,6 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
             ...base,
             loopChannel: signal.channel,
             loopConfirmed: true,
-            loopReason: `${signal.channel} stream ${signal.reason}`,
           }
         : base;
     });
@@ -136,7 +124,7 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
   };
 
   const toolExecutionStart = (event: ToolExecutionStartEvent): Effect.Effect<void> => {
-    refs.activeToolCalls.set(event.toolCallId, { toolName: event.toolName, args: event.args });
+    refs.activeToolCalls.set(event.toolCallId, { args: event.args });
     const trajectory = d.getState().activeTrajectory;
     if (trajectory) {
       d.mutateTrajectory(trajectory.id, (current) => ({
@@ -181,7 +169,6 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
     const observation = d.getState().activeTrajectory;
     if (!observation) return Effect.void;
     const terminal = {
-      parentTurnId: d.getState().parentTurnId,
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       args: call?.args ?? "[call arguments unavailable]",
@@ -195,22 +182,18 @@ export const makeTrajectoryEventHandlers = (d: EventsDeps) => {
     );
     const toolResult = endAdvisorToolTrajectory(observation.toolDetector, terminal);
     const signal = toolResult.signal;
-    const next = d.mutateTrajectory(observation.id, (current) => {
-      const { loopReason: _loopReason, ...withoutLoopReason } = current;
-      const base = {
-        ...(concreteProgress ? withoutLoopReason : current),
-        toolDetector: concreteProgress
-          ? markConcreteAdvisorProgress(toolResult.state)
-          : toolResult.state,
-        loopConfirmed: concreteProgress ? false : signal ? true : current.loopConfirmed,
-        abortAllowed: concreteProgress
-          ? false
-          : signal
-            ? signal.abortSafe
-            : advisorActiveToolCount(toolResult.state) === 0,
-      };
-      return signal && !concreteProgress ? { ...base, loopReason: signal.reason } : base;
-    });
+    const next = d.mutateTrajectory(observation.id, (current) => ({
+      ...current,
+      toolDetector: concreteProgress
+        ? markConcreteAdvisorProgress(toolResult.state)
+        : toolResult.state,
+      loopConfirmed: concreteProgress ? false : signal ? true : current.loopConfirmed,
+      abortAllowed: concreteProgress
+        ? false
+        : signal
+          ? signal.abortSafe
+          : advisorActiveToolCount(toolResult.state) === 0,
+    }));
     if (concreteProgress || !signal || !next || next.reviewQueued) return Effect.void;
     d.ingest({
       type: "trajectory_signal",

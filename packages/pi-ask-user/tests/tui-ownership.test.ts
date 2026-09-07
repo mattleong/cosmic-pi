@@ -1,6 +1,6 @@
 import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
-import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import { makeTuiHost as hostFixture } from "./support/host.ts";
+import type { Component } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -14,11 +14,8 @@ import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
-import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
-// SAFETY: These fixtures provide exactly the opaque Pi/TUI members exercised by this boundary.
-const opaque = <A>(value: A): never => value as never;
 const request: AskUserRequest = {
   questions: [
     {
@@ -29,103 +26,6 @@ const request: AskUserRequest = {
       choices: ordinalChoices,
     },
   ],
-};
-type Factory = (
-  tui: TUI,
-  theme: Theme,
-  keys: KeybindingsManager,
-  done: (outcome: AskUserOutcome) => void,
-) => Component;
-
-type Mounted = { readonly onHandle: (handle: OverlayHandle) => void };
-
-// Models the owned public UI boundary, including Pi 0.85's global-pop done bug.
-const hostFixture = (gate?: ReturnType<typeof makeAskUserPromptGate>) => {
-  const stack: Component[] = [];
-  const ownedHide = vi.fn();
-  const guardHide = vi.fn();
-  const createGuard = vi.fn();
-  let customCalls = 0;
-  let mount: (() => void) | undefined;
-  let component: Component | undefined;
-  const theme = opaque({
-    fg: (_c: string, s: string) => s,
-    bg: (_c: string, s: string) => s,
-    bold: (s: string) => s,
-  });
-  const showOverlay = (item: Component, hide?: () => void) => {
-    stack.push(item);
-    return opaque({
-      hide: () => {
-        hide?.();
-        const i = stack.indexOf(item);
-        if (i >= 0) stack.splice(i, 1);
-      },
-      setHidden: vi.fn(),
-      focus: vi.fn(),
-    });
-  };
-  const tui: TUI = opaque({
-    requestRender: vi.fn(),
-    showOverlay: (item: Component) => {
-      createGuard();
-      return showOverlay(item, guardHide);
-    },
-  });
-  const done = vi.fn();
-  const custom = (factory: Factory, options: Mounted) => {
-    customCalls++;
-    gate?.started();
-    // SAFETY: Supported Node versions provide withResolvers, omitted by the ES2023 lib.
-    const completed = (
-      Promise as PromiseConstructor & {
-        withResolvers<A>(): { promise: Promise<A>; resolve: (value: A) => void };
-      }
-    ).withResolvers<AskUserOutcome>();
-    component = factory(
-      tui,
-      theme,
-      opaque({
-        matches: (data: string, key: string) =>
-          (data === "\r" && key === "tui.select.confirm") ||
-          (data === "external" && key === "app.editor.external") ||
-          (data === "\u001b" && key === "tui.select.cancel"),
-      }),
-      (outcome) => {
-        done(outcome);
-        stack.pop();
-        completed.resolve(outcome);
-      },
-    );
-    const owned = component;
-    mount = () => options.onHandle(showOverlay(owned, ownedHide));
-    return completed.promise.finally(() => gate?.ended());
-  };
-  const ctx: ExtensionContext = opaque({
-    mode: "tui",
-    hasUI: true,
-    cwd: process.cwd(),
-    ui: { custom },
-    isProjectTrusted: () => true,
-  });
-  return {
-    ctx,
-    stack,
-    showOverlay,
-    done,
-    ownedHide,
-    guardHide,
-    createGuard,
-    get customCalls() {
-      return customCalls;
-    },
-    get mount() {
-      return mount;
-    },
-    get component() {
-      return component;
-    },
-  };
 };
 const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
 

@@ -8,19 +8,11 @@ import {
 it("aggregates only visible usage totals", () => {
   const initial = emptyAdvisorSessionMetrics();
   const first = recordUsageMetrics(initial, {
-    cacheReadTokens: 2,
-    cacheWriteTokens: 3,
     cost: 0.125,
-    inputTokens: 5,
-    outputTokens: 7,
     totalTokens: 17,
   });
   const second = recordUsageMetrics(first, {
-    cacheReadTokens: 20,
-    cacheWriteTokens: 30,
     cost: 0.375,
-    inputTokens: 50,
-    outputTokens: 70,
     totalTokens: 170,
   });
 

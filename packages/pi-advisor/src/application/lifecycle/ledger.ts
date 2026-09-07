@@ -8,6 +8,7 @@ import {
 } from "../../review/emission-guard.ts";
 import { UNREADABLE_PARENT_ANCHOR, type ParentAnchor } from "../controller.ts";
 import type { AdvisorApplicationState } from "../state.ts";
+import { readParentAnchor } from "./parent-session.ts";
 import type { SessionRefs } from "./session-refs.ts";
 
 export const makeLedgerPersistence = (options: {
@@ -15,7 +16,6 @@ export const makeLedgerPersistence = (options: {
   readonly refs: SessionRefs;
   readonly getState: () => AdvisorApplicationState;
   readonly fingerprint: () => string;
-  readonly parentAnchor: (ctx: ExtensionContext) => ParentAnchor;
 }) => {
   const persistLedger = (anchor: ParentAnchor): void => {
     if (
@@ -60,6 +60,6 @@ export const makeLedgerPersistence = (options: {
 
   return {
     persistLedger,
-    persistCurrentLedger: (ctx: ExtensionContext): void => persistLedger(options.parentAnchor(ctx)),
+    persistCurrentLedger: (ctx: ExtensionContext): void => persistLedger(readParentAnchor(ctx)),
   };
 };

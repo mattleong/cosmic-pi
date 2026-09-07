@@ -64,7 +64,9 @@ export function registerBetterXaiApplication(
     if (!cfg) return;
     cosmicUi.query();
     const nextUsageVisible = cosmicUi.isVisible("xai.usage");
-    const usage = nextUsageVisible ? xaiUsageFooterPrimitive(projection) : undefined;
+    const usage = nextUsageVisible
+      ? xaiUsageFooterPrimitive(MutableRef.get(projection))
+      : undefined;
     if (hasTerminalUI(ctx) && cosmicUi.installed) {
       if (usage) cosmicUi.upsert(usage);
       else cosmicUi.remove("xai.usage");

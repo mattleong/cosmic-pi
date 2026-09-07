@@ -3,6 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
+import * as EffectScope from "effect/Scope";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import type { Scope } from "effect/Scope";
@@ -13,6 +15,8 @@ import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-superv
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
 import { makeLocalCliRawEventOwnership } from "../src/backend/local-cli-events.ts";
 import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
+import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
+import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { BackendEvent, BackendHandle, BackendLaunchRequest } from "../src/backend/model.ts";
 import type { SubagentError } from "../src/run/errors.ts";
 
@@ -47,6 +51,57 @@ const codexLaunch: BackendLaunchRequest = {
   parentSessionId: "parent-session",
   systemPrompt: "Use the private supervisor report tool.",
 };
+
+it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scope release", () =>
+  Effect.gen(function* () {
+    const scope = yield* EffectScope.make();
+    const childEvents = yield* Queue.bounded<ChildWireEvent, Cause.Done>(16);
+    const acknowledged: ChildWireEvent[] = [];
+    const driver = makeLocalPiBackendDriver({
+      spawn: () =>
+        Effect.succeed({
+          pid: 4242,
+          events: childEvents,
+          awaitExit: Effect.never,
+          send: () => Effect.void,
+          sendContactControl: () => Effect.void,
+          acknowledge: (raw) => void acknowledged.push(raw),
+          terminate: () => Effect.void,
+        }),
+      reclaimRunState: () => Effect.void,
+    });
+    const backend = yield* driver
+      .spawn(codexLaunch)
+      .pipe(Effect.provideService(EffectScope.Scope, scope));
+    const rpc: ChildWireEvent = { type: "rpc_message", value: { type: "agent_start" } };
+    yield* Queue.offer(childEvents, rpc);
+    const started = yield* Queue.take(backend.events);
+    expect(started.type).toBe("run_started");
+    expect(acknowledged).toEqual([]);
+    backend.acknowledge(started);
+    backend.acknowledge(started);
+    expect(acknowledged).toEqual([rpc]);
+
+    const contact: ChildWireEvent = {
+      type: "parent_contact",
+      value: {
+        channel: "pi-subagents",
+        type: "contact_parent",
+        kind: "progress",
+        requestId: "contact",
+        message: "working",
+      },
+    };
+    yield* Queue.offer(childEvents, contact);
+    const normalized = yield* Queue.take(backend.events);
+    expect(normalized.type).toBe("supervisor_contact");
+    expect(acknowledged).toEqual([rpc]);
+    yield* EffectScope.close(scope, Exit.void);
+    expect(acknowledged).toEqual([rpc, contact]);
+    backend.acknowledge(normalized);
+    expect(acknowledged).toEqual([rpc, contact]);
+  }),
+);
 
 describe("local CLI raw event ownership", () => {
   it.effect("keeps raw ownership across a delivered offer until acknowledgement", () =>

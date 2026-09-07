@@ -1,11 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { FullWidthDiffText } from "../../../diff/full-width-text";
 import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../../diff/render";
 import { previewFooter, showingFooter } from "../../../preview/format";
 import type { CodePreviewSettings } from "../../../config/schema";
 import { shouldSkipHighlight } from "../../../syntax/render";
 
-export function createDiffPreviewText(
+export function formatDiffPreview(
   diff: string,
   lang: string | undefined,
   theme: Theme,
@@ -14,45 +13,17 @@ export function createDiffPreviewText(
     totalLines: number;
     hiddenLineNoun: string;
     skipHighlightLabel: string;
-    decorate?: (body: string) => string;
     invalidate?: (() => void) | undefined;
   },
-): FullWidthDiffText {
-  const { body, syntaxHighlightSkipped } = renderDiffPreviewBody(
-    diff,
-    lang,
-    theme,
-    limit,
-    options.invalidate,
-  );
-  const decorated = appendDiffPreviewFooters(
-    options.decorate ? options.decorate(body) : body,
-    theme,
-    {
-      totalLines: options.totalLines,
-      limit,
-      hiddenLineNoun: options.hiddenLineNoun,
-      syntaxHighlightSkipped,
-      skipHighlightLabel: options.skipHighlightLabel,
-    },
-  );
-  return new FullWidthDiffText(decorated, theme);
-}
-
-export function renderDiffPreviewBody(
-  diff: string,
-  lang: string | undefined,
-  theme: Theme,
-  limit: number,
-  invalidate?: () => void,
-) {
+): string {
   const syntaxHighlightSkipped = shouldSkipHighlight(diff);
-  return {
-    body: syntaxHighlightSkipped
-      ? renderPlainDiff(diff, theme, limit)
-      : renderSyntaxHighlightedDiff(diff, lang, theme, limit, invalidate),
-    syntaxHighlightSkipped,
-  };
+  let text = syntaxHighlightSkipped
+    ? renderPlainDiff(diff, theme, limit)
+    : renderSyntaxHighlightedDiff(diff, lang, theme, limit, options.invalidate);
+  if (options.totalLines > limit)
+    text += showingFooter(theme, limit, options.totalLines, options.hiddenLineNoun);
+  if (syntaxHighlightSkipped) text += previewFooter(theme, options.skipHighlightLabel);
+  return text;
 }
 
 export function diffPreviewLineLimit(
@@ -61,22 +32,4 @@ export function diffPreviewLineLimit(
   collapsedLines: CodePreviewSettings["editCollapsedLines"],
 ): number {
   return expanded || collapsedLines === "all" ? totalLines : collapsedLines;
-}
-
-export function appendDiffPreviewFooters(
-  body: string,
-  theme: Theme,
-  options: {
-    totalLines: number;
-    limit: number;
-    hiddenLineNoun: string;
-    syntaxHighlightSkipped: boolean;
-    skipHighlightLabel: string;
-  },
-): string {
-  let text = body;
-  if (options.totalLines > options.limit)
-    text += showingFooter(theme, options.limit, options.totalLines, options.hiddenLineNoun);
-  if (options.syntaxHighlightSkipped) text += previewFooter(theme, options.skipHighlightLabel);
-  return text;
 }

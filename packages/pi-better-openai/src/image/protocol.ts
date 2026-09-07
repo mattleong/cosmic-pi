@@ -103,19 +103,8 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
     value !== null &&
     ("partial_image_b64" in value || "b64_json" in value)
   ) {
-    const event = yield* Schema.decodeUnknownEffect(PartialEventSchema)(value);
-    const raw = event.partial_image_b64 ?? event.b64_json;
-    const partial: ImageStreamEvent = raw?.trim()
-      ? {
-          _tag: "Image",
-          image: {
-            id: fallbackId,
-            status: "partial",
-            ...imageData(raw, fallbackMimeType),
-          },
-        }
-      : ignoredEvent;
-    return partial;
+    yield* Schema.decodeUnknownEffect(PartialEventSchema)(value);
+    return ignoredEvent;
   }
   yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
   return ignoredEvent;

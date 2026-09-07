@@ -341,17 +341,10 @@ function stripLeadingCursorUp(line: string): string {
   return /^\d+$/.test(line.slice(2, end)) ? line.slice(end + 1) : line;
 }
 
-function stripTrailingCursorDown(line: string): string {
-  if (!line.endsWith("B")) return line;
-  const start = line.lastIndexOf("\x1b[");
-  if (start === -1) return line;
-  return /^\d+$/.test(line.slice(start + 2, -1)) ? line.slice(0, start) : line;
-}
-
 function terminalImageInlineLeftSequence(line: string, totalRows: number): string {
   const moveUp = totalRows > 1 ? `\x1b[${totalRows - 1}A` : "";
   const moveDown = totalRows > 1 ? `\x1b[${totalRows - 1}B` : "";
-  const balancedLine = stripTrailingCursorDown(stripLeadingCursorUp(line));
+  const balancedLine = stripLeadingCursorUp(line);
   return `\x1b[0m\r${moveUp}${balancedLine}${moveDown}`;
 }
 
@@ -375,13 +368,9 @@ export function combineSurface(
   const surfaceWidth = Math.min(requestedSurfaceWidth, Math.max(1, width - 1));
   const textWidth = Math.max(1, width - surfaceWidth - gap);
   const totalRows = Math.max(sanitizedSurfaceLines.length, textLines.length);
-  const hasTerminalImage = sanitizedSurfaceLines.some(isTerminalImageLine);
   const leftImageLine =
     placement === "inline-left" ? sanitizedSurfaceLines.find(isTerminalImageLine) : undefined;
-  const renderSurfaceOnRight =
-    placement === "inline-right" ||
-    placement === "badge" ||
-    (placement !== "inline-left" && hasTerminalImage);
+  const renderSurfaceOnRight = placement === "inline-right" || placement === "badge";
   const lines: string[] = [];
 
   for (let row = 0; row < totalRows; row++) {

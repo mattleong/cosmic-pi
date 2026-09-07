@@ -66,27 +66,22 @@ export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope"
   }
   if (discriminant.method !== undefined) {
     const notification = yield* Schema.decodeUnknownEffect(Notification)(value);
-    const envelope: CodexEnvelope = (() => {
-      const baseResult = { type: "notification" as const, method: notification.method };
-      const withParams =
-        notification.params === undefined
-          ? baseResult
-          : { ...baseResult, params: notification.params };
-      return withParams;
-    })();
+    const envelope: CodexEnvelope = {
+      type: "notification",
+      method: notification.method,
+      ...(notification.params !== undefined && { params: notification.params }),
+    };
     return envelope;
   }
   const response = yield* Schema.decodeUnknownEffect(Response)(value);
   if (response.result === undefined && response.error === undefined)
     yield* Schema.decodeUnknownEffect(Schema.Struct({ result: Schema.Unknown }))(value);
-  const envelope: CodexEnvelope = (() => {
-    const baseResult = { type: "response" as const, id: response.id };
-    const withResult =
-      response.result === undefined ? baseResult : { ...baseResult, result: response.result };
-    const withError =
-      response.error === undefined ? withResult : { ...withResult, error: response.error };
-    return withError;
-  })();
+  const envelope: CodexEnvelope = {
+    type: "response",
+    id: response.id,
+    ...(response.result !== undefined && { result: response.result }),
+    ...(response.error !== undefined && { error: response.error }),
+  };
   return envelope;
 });
 
@@ -357,19 +352,14 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
       }
       case "turn/completed": {
         const value = yield* Schema.decodeUnknownEffect(TurnCompleted)(params);
-        const notification: CodexNotification = (() => {
-          const baseResult = {
-            type: "turn_completed" as const,
-            threadId: value.threadId,
-            turnId: value.turn.id,
-            status: value.turn.status,
-          };
-          const withDiagnostic =
-            value.turn.error && hasObjectRuntimeType(value.turn.error)
-              ? { ...baseResult, diagnostic: value.turn.error.message }
-              : baseResult;
-          return withDiagnostic;
-        })();
+        const notification: CodexNotification = {
+          type: "turn_completed",
+          threadId: value.threadId,
+          turnId: value.turn.id,
+          status: value.turn.status,
+          ...(value.turn.error &&
+            hasObjectRuntimeType(value.turn.error) && { diagnostic: value.turn.error.message }),
+        };
         return notification;
       }
       case "warning": {
@@ -399,88 +389,17 @@ export const decodeCodexNotification = Effect.fn("LocalCodexProtocol.decodeNotif
   },
 );
 
-export interface CodexInitializeRequest {
-  readonly id: string;
-  readonly method: "initialize";
-  readonly params: {
-    readonly clientInfo: {
-      readonly name: "pi-subagents";
-      readonly title: "pi-subagents";
-      readonly version: "1";
-    };
-    readonly capabilities: {
-      readonly experimentalApi: true;
-      readonly optOutNotificationMethods: ReadonlyArray<string>;
-    };
-  };
-}
-
-export interface CodexInitializedNotification {
-  readonly method: "initialized";
-}
-
-export interface CodexThreadStartRequest {
-  readonly id: string;
-  readonly method: "thread/start";
-  readonly params: {
-    readonly allowProviderModelFallback: false;
-    readonly approvalPolicy: "never";
-    readonly baseInstructions: string;
-    readonly cwd: string;
-    readonly dynamicTools: ReadonlyArray<never>;
-    readonly environments: ReadonlyArray<never>;
-    readonly ephemeral: true;
-    readonly experimentalRawEvents: false;
-    readonly model: string;
-    readonly serviceTier?: typeof FAST_SERVICE_TIER | undefined;
-    readonly multiAgentMode: "explicitRequestOnly";
-    readonly sandbox: "workspace-write" | "read-only";
-  };
-}
+export type CodexInitializeRequest = ReturnType<typeof initializeRequest>;
+export type CodexInitializedNotification = ReturnType<typeof initializedNotification>;
+export type CodexThreadStartRequest = ReturnType<typeof threadStartRequest>;
+export type CodexTurnStartRequest = ReturnType<typeof turnStartRequest>;
+export type CodexTurnSteerRequest = ReturnType<typeof turnSteerRequest>;
+export type CodexTurnInterruptRequest = ReturnType<typeof turnInterruptRequest>;
 
 export interface CodexTextInput {
   readonly type: "text";
   readonly text: string;
   readonly text_elements: ReadonlyArray<never>;
-}
-
-export interface CodexTurnStartRequest {
-  readonly id: string;
-  readonly method: "turn/start";
-  readonly params: {
-    readonly threadId: string;
-    readonly input: ReadonlyArray<CodexTextInput>;
-    readonly approvalPolicy: "never";
-    readonly cwd: undefined;
-    readonly effort: string;
-    readonly environments: ReadonlyArray<never>;
-    readonly model: string;
-    readonly serviceTier?: typeof FAST_SERVICE_TIER | undefined;
-    readonly multiAgentMode: "explicitRequestOnly";
-    readonly sandboxPolicy:
-      | {
-          readonly type: "workspaceWrite";
-          readonly writableRoots: ReadonlyArray<never>;
-          readonly networkAccess: false;
-        }
-      | { readonly type: "readOnly"; readonly networkAccess: false };
-  };
-}
-
-export interface CodexTurnSteerRequest {
-  readonly id: string;
-  readonly method: "turn/steer";
-  readonly params: {
-    readonly threadId: string;
-    readonly expectedTurnId: string;
-    readonly input: ReadonlyArray<CodexTextInput>;
-  };
-}
-
-export interface CodexTurnInterruptRequest {
-  readonly id: string;
-  readonly method: "turn/interrupt";
-  readonly params: { readonly threadId: string; readonly turnId: string };
 }
 
 export type CodexRequest =
@@ -490,18 +409,17 @@ export type CodexRequest =
   | CodexTurnSteerRequest
   | CodexTurnInterruptRequest;
 
-export const initializeRequest = (id: string): CodexInitializeRequest => ({
-  id,
-  method: "initialize",
-  params: {
-    clientInfo: { name: "pi-subagents", title: "pi-subagents", version: "1" },
-    capabilities: { experimentalApi: true, optOutNotificationMethods: [] },
-  },
-});
+export const initializeRequest = (id: string) =>
+  ({
+    id,
+    method: "initialize",
+    params: {
+      clientInfo: { name: "pi-subagents", title: "pi-subagents", version: "1" },
+      capabilities: { experimentalApi: true, optOutNotificationMethods: [] },
+    },
+  }) as const;
 
-export const initializedNotification = (): CodexInitializedNotification => ({
-  method: "initialized",
-});
+export const initializedNotification = () => ({ method: "initialized" }) as const;
 
 export const threadStartRequest = (
   id: string,
@@ -512,25 +430,25 @@ export const threadStartRequest = (
     readonly writeIntent: "read-only" | "writer";
     readonly openaiFastMode: boolean;
   },
-): CodexThreadStartRequest => {
-  const base: CodexThreadStartRequest["params"] = {
-    allowProviderModelFallback: false,
-    approvalPolicy: "never",
-    baseInstructions: request.systemPrompt,
-    cwd: request.cwd,
-    dynamicTools: [],
-    environments: [],
-    ephemeral: true,
-    experimentalRawEvents: false,
-    model: request.model,
-    multiAgentMode: "explicitRequestOnly",
-    sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
-  };
-  const params: CodexThreadStartRequest["params"] = request.openaiFastMode
-    ? { ...base, serviceTier: FAST_SERVICE_TIER }
-    : base;
-  return { id, method: "thread/start", params };
-};
+) =>
+  ({
+    id,
+    method: "thread/start",
+    params: {
+      allowProviderModelFallback: false,
+      approvalPolicy: "never",
+      baseInstructions: request.systemPrompt,
+      cwd: request.cwd,
+      dynamicTools: [],
+      environments: [],
+      ephemeral: true,
+      experimentalRawEvents: false,
+      model: request.model,
+      multiAgentMode: "explicitRequestOnly",
+      sandbox: request.writeIntent === "writer" ? "workspace-write" : "read-only",
+      ...(request.openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
+    },
+  }) as const;
 
 const input = (text: string): ReadonlyArray<CodexTextInput> => [
   { type: "text", text, text_elements: [] },
@@ -544,44 +462,37 @@ export const turnStartRequest = (
   effort: string,
   writeIntent: "read-only" | "writer",
   openaiFastMode: boolean,
-): CodexTurnStartRequest => {
-  const base: CodexTurnStartRequest["params"] = {
-    threadId,
-    input: input(text),
-    approvalPolicy: "never",
-    cwd: undefined,
-    effort,
-    environments: [],
-    model,
-    multiAgentMode: "explicitRequestOnly",
-    sandboxPolicy:
-      writeIntent === "writer"
-        ? { type: "workspaceWrite", writableRoots: [], networkAccess: false }
-        : { type: "readOnly", networkAccess: false },
-  };
-  const params: CodexTurnStartRequest["params"] = openaiFastMode
-    ? { ...base, serviceTier: FAST_SERVICE_TIER }
-    : base;
-  return { id, method: "turn/start", params };
-};
+) =>
+  ({
+    id,
+    method: "turn/start",
+    params: {
+      threadId,
+      input: input(text),
+      approvalPolicy: "never",
+      cwd: undefined,
+      effort,
+      environments: [],
+      model,
+      multiAgentMode: "explicitRequestOnly",
+      sandboxPolicy:
+        writeIntent === "writer"
+          ? ({ type: "workspaceWrite", writableRoots: [], networkAccess: false } as const)
+          : ({ type: "readOnly", networkAccess: false } as const),
+      ...(openaiFastMode && ({ serviceTier: FAST_SERVICE_TIER } as const)),
+    },
+  }) as const;
 
-export const turnSteerRequest = (
-  id: string,
-  threadId: string,
-  turnId: string,
-  text: string,
-): CodexTurnSteerRequest => ({
-  id,
-  method: "turn/steer",
-  params: { threadId, expectedTurnId: turnId, input: input(text) },
-});
+export const turnSteerRequest = (id: string, threadId: string, turnId: string, text: string) =>
+  ({
+    id,
+    method: "turn/steer",
+    params: { threadId, expectedTurnId: turnId, input: input(text) },
+  }) as const;
 
-export const turnInterruptRequest = (
-  id: string,
-  threadId: string,
-  turnId: string,
-): CodexTurnInterruptRequest => ({
-  id,
-  method: "turn/interrupt",
-  params: { threadId, turnId },
-});
+export const turnInterruptRequest = (id: string, threadId: string, turnId: string) =>
+  ({
+    id,
+    method: "turn/interrupt",
+    params: { threadId, turnId },
+  }) as const;

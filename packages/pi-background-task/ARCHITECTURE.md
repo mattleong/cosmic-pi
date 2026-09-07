@@ -51,4 +51,8 @@ display text, applies collection limits, and measures the exact serialized JSON 
 decoding allocates the detached result. The producer-owned output codec rejects invalid metadata,
 removes undeclared keys, and the provider freezes the accepted value before returning it.
 
+Each `TaskRecord` owns one mutable `LogBuffer` under the registry semaphore. Its offset-backed
+store compacts amortized dead prefixes; consumers retain only cached detached event slices.
+Appending or evicting logs never changes an earlier slice or its events.
+
 The UI and host footer project immutable service snapshots; neither owns subprocesses. Extensions exchange only the public plain tool-definition protocol.

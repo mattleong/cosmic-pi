@@ -6,30 +6,30 @@ import type { LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
 import type { BackendEvent } from "./model.ts";
 
 /**
- * Shared raw wire-event ownership for the local Claude/Codex adapters. A raw
+ * Shared raw wire-event ownership for local Pi, Claude, and Codex. A raw
  * transport event (and its byte budget) stays owned until run orchestration
  * consumes the normalized backend event that carries it; a normalized event
  * that could not be enqueued acknowledges its raw event immediately so the
  * bounded transport cannot stall behind an abandoned offer.
  */
-export interface LocalCliRawEventOwnership {
+export interface LocalCliRawEventOwnership<Raw = LocalCliWireEvent> {
   /** Enqueues one normalized event; a raw event transfers ownership on success. */
-  readonly offer: (event: BackendEvent, raw?: LocalCliWireEvent) => Effect.Effect<void>;
+  readonly offer: (event: BackendEvent, raw?: Raw) => Effect.Effect<void>;
   /** Lazily releases one raw wire event that was consumed without a normalized offer. */
-  readonly release: (raw: LocalCliWireEvent) => Effect.Effect<void>;
+  readonly release: (raw: Raw) => Effect.Effect<void>;
   /** Releases the raw wire event owned by a consumed normalized event. */
   readonly acknowledge: (event: BackendEvent) => void;
   /** Releases every still-owned raw wire event during transport/scope shutdown. */
   readonly acknowledgeAll: () => void;
 }
 
-export const makeLocalCliRawEventOwnership = (
+export const makeLocalCliRawEventOwnership = <Raw = LocalCliWireEvent>(
   events: Queue.Queue<BackendEvent, Cause.Done>,
-  acknowledgeRaw: (raw: LocalCliWireEvent) => void,
-): LocalCliRawEventOwnership => {
-  const rawOwners = new Map<BackendEvent, LocalCliWireEvent>();
-  const release = (raw: LocalCliWireEvent): Effect.Effect<void> =>
-    Effect.sync(() => acknowledgeRaw(raw));
+  acknowledgeRaw: (raw: Raw) => void,
+  label = "local-CLI",
+): LocalCliRawEventOwnership<Raw> => {
+  const rawOwners = new Map<BackendEvent, Raw>();
+  const release = (raw: Raw): Effect.Effect<void> => Effect.sync(() => acknowledgeRaw(raw));
   const acknowledge = (event: BackendEvent): void => {
     const raw = rawOwners.get(event);
     if (!raw) return;
@@ -43,9 +43,9 @@ export const makeLocalCliRawEventOwnership = (
   const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
     // Make overflow losses diagnosable instead of acknowledging them silently.
     Effect.logWarning(
-      `Subagent local-CLI event ingress overflowed; dropped a ${event.type} event.`,
+      `Subagent ${label} event ingress overflowed; dropped a ${event.type} event.`,
     ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))), Effect.asVoid);
-  const offer = (event: BackendEvent, raw?: LocalCliWireEvent): Effect.Effect<void> =>
+  const offer = (event: BackendEvent, raw?: Raw): Effect.Effect<void> =>
     Effect.suspend(() => {
       if (raw) rawOwners.set(event, raw);
       // A delivered offer settles inline; every other exit (ended queue, failure, defect,
