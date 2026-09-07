@@ -3,7 +3,8 @@ import type { ProfileDefinition, ProfileId, ProfileRoute } from "./model.ts";
 export const PROFILE_DEFINITIONS = {
   scout: {
     id: "scout",
-    description: "Locate and explain existing code, not review it or design changes.",
+    description:
+      "Map existing code, flows, tests, and constraints without proposing or evaluating changes.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "low",
@@ -12,7 +13,8 @@ export const PROFILE_DEFINITIONS = {
   },
   researcher: {
     id: "researcher",
-    description: "Focused external research using authoritative sources.",
+    description:
+      "Answer research questions by consulting authoritative external sources, verifying claims, and identifying evidence gaps.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "medium",
@@ -22,7 +24,7 @@ export const PROFILE_DEFINITIONS = {
   planner: {
     id: "planner",
     description:
-      "Recommend implementation strategies and ordered changes from requirements and code evidence.",
+      "Recommend an implementation approach and ordered tasks with risks and acceptance checks.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "xhigh",
@@ -31,7 +33,7 @@ export const PROFILE_DEFINITIONS = {
   },
   worker: {
     id: "worker",
-    description: "Focused implementation and validation of an approved task.",
+    description: "Implement an approved task and validate the changes.",
     defaultContext: "fresh",
     defaultWriteIntent: "writer",
     defaultEffort: "high",
@@ -41,7 +43,7 @@ export const PROFILE_DEFINITIONS = {
   reviewer: {
     id: "reviewer",
     description:
-      "Evaluate code, plans, and simplification opportunities before or after implementation.",
+      "Evaluate code, plans, and simplification opportunities; report evidence-backed findings and risks.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     defaultEffort: "high",
@@ -50,7 +52,8 @@ export const PROFILE_DEFINITIONS = {
   },
   oracle: {
     id: "oracle",
-    description: "High-context second opinion, assumption challenge, and drift detection.",
+    description:
+      "Reconstruct prior decisions, challenge assumptions, and identify drift before recommending the next step.",
     defaultContext: "fork",
     defaultWriteIntent: "read-only",
     defaultEffort: "high",
@@ -59,7 +62,7 @@ export const PROFILE_DEFINITIONS = {
   },
   generalist: {
     id: "generalist",
-    description: "General-purpose work without specialized role framing.",
+    description: "Handle bounded tasks that do not fit a specialized role.",
     defaultContext: "fresh",
     defaultWriteIntent: "read-only",
     guidance:
