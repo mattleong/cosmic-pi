@@ -43,6 +43,7 @@ export const makeAskUserTuiHost =
           let dialog: InstanceType<typeof AskUserDialog> | undefined;
           let releasePrompt: (() => void) | undefined;
           let blocked = false;
+          let rejectCompletion: (() => void) | undefined;
           const editors = new Set<Promise<void>>();
           const editExternally = (tui: TUI, value: string): Promise<string | undefined> => {
             if (authority.signal.aborted) return Promise.resolve(undefined);
@@ -70,9 +71,16 @@ export const makeAskUserTuiHost =
             settled = true;
             const finalOutcome = requested;
             const done = hostDone;
-            finishOwnedOverlay(hostTui, overlay, () => done(finalOutcome));
+            try {
+              finishOwnedOverlay(hostTui, overlay, () => done(finalOutcome));
+            } catch {
+              // Pi's custom Promise may remain pending when synchronous finish fails.
+              // Reject the owned Effect instead; never retry an unguarded global pop.
+              rejectCompletion?.();
+            }
           };
           const close = (): void => {
+            rejectCompletion = undefined;
             authority.abort();
             try {
               finish(cancelQuestionnaire());
@@ -95,59 +103,71 @@ export const makeAskUserTuiHost =
             Effect.andThen(Effect.promise(() => Promise.all(editors))),
           );
 
-          return Effect.tryPromise(() => {
-            // Recheck after the lazy import, in the same synchronous call as custom().
-            if ((opened || queued) && promptGate && !promptGate.canOpen()) {
-              blocked = true;
-              throw new Error("Another UI prompt owns input.");
-            }
-            releasePrompt = promptGate?.enter();
-            return ctx.ui.custom<AskUserOutcome>(
-              (tui, theme, keybindings, done) => {
-                hostDone = done;
-                hostTui = tui;
-                dialog = new AskUserDialog({
-                  tui,
-                  theme,
-                  keybindings,
-                  request,
-                  done: finish,
-                  editExternally: (value) => editExternally(tui, value),
-                  onCollapse: () => {
-                    if (!authority.signal.aborted && bridgeToken !== undefined)
-                      bridge.markCollapsed(bridgeToken);
+          return Effect.callback<AskUserOutcome, AskUserHostError>((resume) => {
+            const fail = () =>
+              resume(
+                Effect.fail(
+                  new AskUserHostError({
+                    operation: "render",
+                    message: "Unable to render the user questionnaire.",
+                  }),
+                ),
+              );
+            rejectCompletion = fail;
+            try {
+              // Recheck after the lazy import, in the same synchronous call as custom().
+              if ((opened || queued) && promptGate && !promptGate.canOpen()) {
+                blocked = true;
+                throw new Error("Another UI prompt owns input.");
+              }
+              releasePrompt = promptGate?.enter();
+              ctx.ui
+                .custom<AskUserOutcome>(
+                  (tui, theme, keybindings, done) => {
+                    hostDone = done;
+                    hostTui = tui;
+                    dialog = new AskUserDialog({
+                      tui,
+                      theme,
+                      keybindings,
+                      request,
+                      done: finish,
+                      editExternally: (value) => editExternally(tui, value),
+                      onCollapse: () => {
+                        if (!authority.signal.aborted && bridgeToken !== undefined)
+                          bridge.markCollapsed(bridgeToken);
+                      },
+                    });
+                    if (!authority.signal.aborted)
+                      bridgeToken = bridge.activate(() => {
+                        if (!authority.signal.aborted) dialog?.resume();
+                      });
+                    return dialog;
                   },
-                });
-                if (!authority.signal.aborted)
-                  bridgeToken = bridge.activate(() => {
-                    if (!authority.signal.aborted) dialog?.resume();
-                  });
-                return dialog;
-              },
-              {
-                overlay: true,
-                overlayOptions: {
-                  anchor: "bottom-center",
-                  width: "100%",
-                  maxHeight: "100%",
-                  margin: { left: 0, right: 0, bottom: 0 },
-                },
-                onHandle: (handle) => {
-                  overlay = handle;
-                  if (authority.signal.aborted || requested) {
-                    try {
-                      finish(requested ?? cancelQuestionnaire());
-                    } catch {
-                      /* Revoked callbacks cannot report into a disposed runtime. */
-                    }
-                    return;
-                  }
-                  dialog?.setOverlayHandle(handle);
-                  if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
-                  if (opened) Deferred.doneUnsafe(opened, Effect.void);
-                },
-              },
-            );
+                  {
+                    overlay: true,
+                    overlayOptions: {
+                      anchor: "bottom-center",
+                      width: "100%",
+                      maxHeight: "100%",
+                      margin: { left: 0, right: 0, bottom: 0 },
+                    },
+                    onHandle: (handle) => {
+                      overlay = handle;
+                      if (authority.signal.aborted || requested) {
+                        finish(requested ?? cancelQuestionnaire());
+                        return;
+                      }
+                      dialog?.setOverlayHandle(handle);
+                      if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
+                      if (opened) Deferred.doneUnsafe(opened, Effect.void);
+                    },
+                  },
+                )
+                .then((outcome) => resume(Effect.succeed(outcome)), fail);
+            } catch {
+              fail();
+            }
           }).pipe(
             Effect.ensuring(cleanup),
             Effect.catch(() =>

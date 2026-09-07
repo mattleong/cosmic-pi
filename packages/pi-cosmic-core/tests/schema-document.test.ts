@@ -26,6 +26,17 @@ it.effect("returns undefined for a missing document", () => {
   }).pipe(provideBuiltLayer(memory.layer));
 });
 
+it.effect("checks in-memory document existence each time the effect executes", () => {
+  const memory = makeInMemoryDocuments();
+  const exists = memory.service.exists("/config.json");
+  return Effect.gen(function* () {
+    memory.documents.set("/config.json", { enabled: true });
+    expect(yield* exists).toBe(true);
+    memory.documents.delete("/config.json");
+    expect(yield* exists).toBe(false);
+  });
+});
+
 it.effect("reports malformed documents with a path but without the rejected value", () => {
   const memory = makeInMemoryDocuments({ "/config.json": { enabled: "secret-value" } });
   return Effect.gen(function* () {

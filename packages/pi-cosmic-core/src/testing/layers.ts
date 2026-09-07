@@ -202,7 +202,7 @@ export function makeInMemoryDocuments(
       }),
     );
   const service: AtomicJsonDocumentStoreContract = {
-    exists: (path) => Effect.succeed(storedDocuments.has(path)),
+    exists: (path) => Effect.sync(() => storedDocuments.has(path)),
     readObject: (path) =>
       Effect.gen(function* () {
         const value = storedDocuments.get(path);

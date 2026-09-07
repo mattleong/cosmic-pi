@@ -326,7 +326,7 @@ export class TaskManagerComponent implements Component {
 
   // Caches fully sanitized, prefixed, themed lines per immutable log snapshot so a render tick
   // over unchanged events skips reassembly of the whole detail pane.
-  private readonly renderedLogLines = new WeakMap<
+  private renderedLogLines = new WeakMap<
     ReadonlyArray<BackgroundLogEvent>,
     ReadonlyArray<string>
   >();
@@ -440,5 +440,7 @@ export class TaskManagerComponent implements Component {
     return framedFill(this.frame, lines, height, inner);
   }
 
-  invalidate(): void {}
+  invalidate(): void {
+    this.renderedLogLines = new WeakMap();
+  }
 }

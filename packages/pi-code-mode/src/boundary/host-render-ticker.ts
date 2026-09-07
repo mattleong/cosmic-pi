@@ -27,9 +27,7 @@ export const syncProgressTicker = (
 ): void => {
   try {
     const rawState = context?.state;
-    const invalidate = context?.invalidate;
-    if (!hasObjectRuntimeType(rawState) || rawState === null || !Predicate.isFunction(invalidate))
-      return;
+    if (!hasObjectRuntimeType(rawState) || rawState === null) return;
     // SAFETY: Renderer state is host-owned extensible object storage; every property is guarded.
     const state = rawState as RendererState;
     if (!shouldAnimate) {
@@ -45,6 +43,8 @@ export const syncProgressTicker = (
         } catch {}
       return;
     }
+    const invalidate = context?.invalidate;
+    if (!Predicate.isFunction(invalidate)) return;
     state.piCodeModeProgressInvalidate = invalidate;
     if (Predicate.isFunction(state.piCodeModeProgressTicker)) return;
     const weakState = new WeakRef(state);

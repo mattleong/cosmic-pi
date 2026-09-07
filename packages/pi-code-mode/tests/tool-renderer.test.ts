@@ -178,6 +178,44 @@ describe("registered code mode renderers", () => {
     }
   });
 
+  it.each(["missing", "throwing"])("settles an owned ticker with %s invalidation", (kind) => {
+    const stop = vi.fn();
+    const start = vi.fn(() => stop);
+    const tool = definition(start);
+    const state = {};
+    tool.renderResult?.(
+      result("running"),
+      { isPartial: true, expanded: false },
+      opaqueHostFixture(theme),
+      opaqueHostFixture({ state, invalidate: vi.fn() }),
+    );
+    expect(start).toHaveBeenCalledOnce();
+    expect(state).toHaveProperty("piCodeModeProgressTicker", expect.any(Function));
+
+    const context =
+      kind === "missing"
+        ? { state }
+        : {
+            state,
+            get invalidate(): never {
+              throw new Error("hostile invalidate getter");
+            },
+          };
+    for (let index = 0; index < 2; index += 1) {
+      expect(() =>
+        tool.renderResult?.(
+          result("completed"),
+          { isPartial: false, expanded: false },
+          opaqueHostFixture(theme),
+          opaqueHostFixture(context),
+        ),
+      ).not.toThrow();
+      expect(stop).toHaveBeenCalledOnce();
+      expect(state).toHaveProperty("piCodeModeProgressTicker", undefined);
+      expect(state).toHaveProperty("piCodeModeProgressInvalidate", undefined);
+    }
+  });
+
   it("keeps registered output terminal-safe under hostile content and keybindings", () => {
     const getKeys = vi.fn(() => ["ctrl+o", "\u001b[2Jhostile", "x".repeat(100)]);
     setKeybindings(opaqueHostFixture({ getKeys }));

@@ -35,13 +35,17 @@ const task = (id: string, overrides: Partial<BackgroundTaskView> = {}): Backgrou
   ...overrides,
 });
 
-const makeManager = (initial: ReadonlyArray<BackgroundTaskView>, height = 8) => {
+const makeManager = (
+  initial: ReadonlyArray<BackgroundTaskView>,
+  height = 8,
+  managerTheme = theme,
+) => {
   let tasks = initial;
   const stop = vi.fn();
   const clear = vi.fn();
   const close = vi.fn();
   const component = new TaskManagerComponent({
-    theme,
+    theme: managerTheme,
     getProjection: () => ({ tasks }),
     getHeight: () => height,
     getNow: () => 1_000,
@@ -117,6 +121,37 @@ describe("/tasks stop confirmation", () => {
     setTasks([task("a", { state: "exited", endedAt: 5 })]);
     component.handleInput("x");
     expect(stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("/tasks theme invalidation", () => {
+  it("restyles an unchanged log snapshot after invalidation", () => {
+    const oldStyle = vi.fn((text: string) => `old-style${text}`);
+    const newStyle = vi.fn((text: string) => `new-style${text}`);
+    let errorStyle = oldStyle;
+    // SAFETY: This fixture supplies the theme methods used by the manager.
+    const mutableTheme = {
+      bold: theme.bold,
+      fg: (color: string, text: string) => (color === "error" ? errorStyle(text) : text),
+    } as Theme;
+    const logs = Object.freeze(
+      logEvents(1).map((event) => ({ ...event, stream: "stderr" as const })),
+    );
+    const { component } = makeManager([task("a", { logs })], 8, mutableTheme);
+    const logRow = () => component.render(120).find((line) => line.includes("line-1"));
+
+    expect(logRow()).toContain("old-style");
+    expect(oldStyle).toHaveBeenCalled();
+    errorStyle = newStyle;
+    expect(logRow()).toContain("old-style");
+    expect(newStyle).not.toHaveBeenCalled();
+
+    component.invalidate();
+
+    const refreshed = logRow();
+    expect(newStyle).toHaveBeenCalled();
+    expect(refreshed).toContain("new-style");
+    expect(refreshed).not.toContain("old-style");
   });
 });
 
