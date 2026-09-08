@@ -30,16 +30,16 @@ export function alignSides(left: string, right: string, width: number): string {
 const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
   ["model", "accent"],
   ["effort", "thinkingText"],
-  ["location", "text"],
-  ["branch", "text"],
-  ["pullRequest", "text"],
+  ["location", "accent"],
+  ["branch", "syntaxType"],
+  ["pullRequest", "mdLink"],
   ["git", "syntaxOperator"],
   ["session", "customMessageLabel"],
   ["metrics.input", "syntaxVariable"],
   ["metrics.output", "thinkingHigh"],
   ["metrics.cacheRead", "syntaxType"],
   ["metrics.cacheWrite", "syntaxType"],
-  ["metrics.cost", "text"],
+  ["metrics.cost", "syntaxNumber"],
   ["extensions", "mdLink"],
 ]);
 
@@ -70,12 +70,6 @@ export function tone(
     const effort = text.slice(1);
     return `${theme.fg("warning", "⚡")}${effort ? theme.fg(contributionColor(contribution), effort) : ""}`;
   }
-  if (contribution.id === "location" && text.startsWith("⌂ ")) {
-    return theme.fg("text", "⌂ ") + theme.fg("text", text.slice(2));
-  }
-  if (contribution.id === "branch" && text.startsWith("⎇ ")) {
-    return theme.fg("text", text);
-  }
   if (contribution.id === "git.lines") {
     return text
       .split(" ")
@@ -90,19 +84,6 @@ export function tone(
       })
       .join(theme.fg("dim", " "));
   }
-  if (contribution.id === "metrics.input" && text.startsWith("↑")) {
-    return theme.fg("syntaxVariable", "↑") + theme.fg("text", text.slice(1));
-  }
-  if (contribution.id === "metrics.output" && text.startsWith("↓")) {
-    return theme.fg("thinkingHigh", "↓") + theme.fg("text", text.slice(1));
-  }
-  if (contribution.id === "metrics.cacheRead" && /^[Rr]/u.test(text)) {
-    return theme.fg("text", text);
-  }
-  if (contribution.id === "metrics.cacheWrite" && /^[Ww]/u.test(text)) {
-    return theme.fg("text", text);
-  }
-  if (contribution.id === "metrics.cost") return theme.fg("text", text);
   return theme.fg(contributionColor(contribution), text);
 }
 

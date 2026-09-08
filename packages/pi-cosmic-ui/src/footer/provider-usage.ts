@@ -106,7 +106,7 @@ function simpleEntry(
   if (right && visibleWidth(fullLeft) + visibleWidth(right) + 2 > width) return undefined;
   if (!right && visibleWidth(fullLeft) > width) return undefined;
   return right
-    ? alignSides(fullLeft, theme.fg("text", right), width)
+    ? alignSides(fullLeft, theme.fg("mdLink", right), width)
     : truncateToWidth(fullLeft, width, "");
 }
 
@@ -130,7 +130,7 @@ function wrappedEntry(
   const right = entry.kind === "window" ? entry.resetText : undefined;
   if (right) {
     const resetWidth = Math.max(1, width - visibleWidth(continuation));
-    for (const part of wrapTextWithAnsi(theme.fg("text", right), resetWidth))
+    for (const part of wrapTextWithAnsi(theme.fg("mdLink", right), resetWidth))
       lines.push(alignSides(continuation, part, width));
   }
   return lines;

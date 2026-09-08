@@ -22,7 +22,7 @@ function contextUsageCandidates(
 ): string[] {
   const contextWindow = usage?.contextWindow ?? 0;
   const percent = usage?.percent;
-  const label = theme.fg("text", "▤");
+  const label = theme.fg("accent", "▤");
   if (percent === null || percent === undefined)
     return [`${label} ${theme.fg("text", `?/${formatTokens(contextWindow)}`)}`];
 
@@ -31,7 +31,7 @@ function contextUsageCandidates(
   const color = contextConsumptionTone(percent);
   const meter = progressBar(percent, cells, theme, color);
   const percentage = theme.fg(color, `${Math.round(percent)}%`);
-  const counts = theme.fg("text", `${formatTokens(tokens)}/${formatTokens(contextWindow)}`);
+  const counts = theme.fg("syntaxNumber", `${formatTokens(tokens)}/${formatTokens(contextWindow)}`);
   // Counts are the first responsive detail to drop, followed by the meter. This keeps the
   // percentage useful on narrow terminals while preserving the healthy/warning tone.
   return [

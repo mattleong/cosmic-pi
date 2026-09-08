@@ -34,8 +34,8 @@ function metricCacheGroup(
   const values: string[] = [];
   const read = cacheText(cacheRead, compact);
   const write = cacheText(cacheWrite, compact);
-  if (read) values.push(theme.fg("text", read));
-  if (write) values.push(theme.fg("text", write));
+  if (read) values.push(theme.fg("syntaxType", read));
+  if (write) values.push(theme.fg("syntaxType", write));
   if (values.length === 0) return "";
   return `${theme.fg("syntaxType", "⇄")} ${values.join(theme.fg("dim", " / "))}`;
 }

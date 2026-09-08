@@ -100,7 +100,7 @@ export function builtinContributions(
       text: `⌂ ${location}`,
       compactText: `⌂ ${basename(location)}`,
       tone: "normal",
-      color: "text",
+      color: "accent",
       priority: 100,
       order: 200,
     },
@@ -122,7 +122,7 @@ export function builtinContributions(
       text: `⎇ ${branch}`,
       compactText: `⎇ ${branch}`,
       tone: "normal",
-      color: "text",
+      color: "syntaxType",
       priority: 90,
       order: 200,
     });
