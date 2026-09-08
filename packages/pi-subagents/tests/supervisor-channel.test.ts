@@ -296,6 +296,72 @@ const connectionConfig = (handle: SupervisorChannelHandle): Promise<SupervisorCh
     (source) => JSON.parse(source) as SupervisorChannelConfig,
   );
 
+const withProxyChannel = (
+  test: (handle: SupervisorChannelHandle, direct: DirectRpcChannel) => Effect.Effect<void>,
+): Effect.Effect<void> =>
+  Effect.acquireUseRelease(
+    step(() => openChannel("agent-proxy-capacity", {}, true)),
+    ({ handle }) =>
+      Effect.acquireUseRelease(
+        step(() => connectionConfig(handle).then((config) => connectDirectRpc(handle, config))),
+        (direct) =>
+          Effect.gen(function* () {
+            const { rpc } = spawnHelper(handle);
+            yield* step(() => initialize(rpc, "pi-subagents-pi-bridge"));
+            yield* step(() => Effect.runPromise(handle.awaitReady));
+            yield* step(() => Effect.runPromise(handle.setAssignmentEpoch(1)));
+            yield* step(() => Effect.runPromise(handle.setAssignmentEpoch(2)));
+            yield* step(() => Effect.runPromise(direct.client.SupervisorOpenSession(direct.auth)));
+            yield* test(handle, direct);
+          }),
+        (direct) => step(() => direct.close()),
+      ),
+    ({ scope }) => step(() => Effect.runPromise(Scope.close(scope, Exit.void))),
+  );
+
+const progressCall = (direct: DirectRpcChannel, index: number) =>
+  direct.client.SupervisorProgress({
+    ...direct.auth,
+    requestId: SupervisorChannelIdSchema.make(`capacity-progress-${index}`),
+    assignmentEpoch: 2,
+    message: `Progress ${index}`,
+  });
+
+const proxyCall = (direct: DirectRpcChannel, requestId: string) =>
+  direct.client.SupervisorProxy({
+    ...direct.auth,
+    requestId: SupervisorChannelIdSchema.make(requestId),
+    tool: "subagent_list",
+    argumentsJson: "{}",
+  });
+
+const questionCall = (direct: DirectRpcChannel) =>
+  direct.client.SupervisorQuestion({
+    ...direct.auth,
+    requestId: SupervisorChannelIdSchema.make("capacity-question"),
+    assignmentEpoch: 2,
+    message: "Continue after cancellation?",
+  });
+
+const reportCall = (direct: DirectRpcChannel, epoch: number) =>
+  direct.client.SupervisorReport({
+    ...direct.auth,
+    requestId: SupervisorChannelIdSchema.make(`capacity-report-${epoch}`),
+    assignmentEpoch: epoch,
+    deliveryId: SupervisorDeliveryIdSchema.make(`capacity-report-${epoch}`),
+    text: `Assignment ${epoch} completed.`,
+  });
+
+// Wait for an observable queue boundary without draining events or assuming RPC scheduling.
+const waitForEventCount = (handle: SupervisorChannelHandle, count: number) =>
+  withTimeout(
+    Effect.runPromise(
+      Effect.gen(function* () {
+        while (Queue.sizeUnsafe(handle.events) !== count) yield* Effect.sleep("1 millis");
+      }),
+    ),
+  );
+
 describe("private supervisor channel", () => {
   effectTest("reports bounded startup failure and exits with code 2", function* () {
     const child = spawn(process.execPath, [helperExecutable], {
@@ -1374,6 +1440,216 @@ describe("private supervisor channel", () => {
       yield* step(() => direct.close());
       yield* step(() => Effect.runPromise(handle.close));
       yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+    },
+    20_000,
+  );
+
+  effectTest(
+    "rejects proxy admission rather than consuming question cancellation capacity",
+    function* () {
+      yield* withProxyChannel((handle, direct) =>
+        Effect.gen(function* () {
+          const pending = Effect.runPromiseExit(questionCall(direct));
+          const question = yield* step(() => takeEvent(handle));
+          if (question.type !== "supervisor_contact") throw new Error("expected question");
+          for (let index = 0; index < 63; index += 1)
+            yield* step(() => Effect.runPromise(progressCall(direct, index)));
+
+          yield* step(() =>
+            expect(
+              withTimeout(Effect.runPromise(proxyCall(direct, "rejected-proxy"))),
+            ).rejects.toMatchObject({ code: "event_queue_full" }),
+          );
+          handle.cancelPending();
+          expect(Exit.isFailure(yield* step(() => withTimeout(pending)))).toBe(true);
+          for (let index = 0; index < 63; index += 1)
+            expect(yield* step(() => takeEvent(handle))).toMatchObject({
+              type: "supervisor_contact",
+              kind: "progress",
+            });
+          expect(yield* step(() => takeEvent(handle))).toMatchObject({
+            type: "supervisor_question_cancelled",
+            requestId: question.requestId,
+            assignmentEpoch: 2,
+          });
+          yield* step(() =>
+            expect(
+              Effect.runPromise(handle.reply(question.requestId, "Too late.")),
+            ).rejects.toMatchObject({ code: "question_ownership_mismatch" }),
+          );
+          expect(yield* Queue.poll(handle.events)).toEqual(Option.none());
+        }),
+      );
+    },
+    20_000,
+  );
+
+  effectTest(
+    "preserves proxy reservations when admitting a new question and leaves rejected epochs reusable",
+    function* () {
+      yield* withProxyChannel((handle, direct) =>
+        Effect.gen(function* () {
+          const proxies = ["question-proxy-1", "question-proxy-2"].map((id) =>
+            Effect.runPromiseExit(proxyCall(direct, id)),
+          );
+          const requests = yield* step(() => Promise.all([takeEvent(handle), takeEvent(handle)]));
+          for (let index = 0; index < 61; index += 1)
+            yield* step(() => Effect.runPromise(progressCall(direct, index)));
+          yield* step(() =>
+            expect(withTimeout(Effect.runPromise(questionCall(direct)))).rejects.toMatchObject({
+              code: "event_queue_full",
+            }),
+          );
+          yield* step(() => takeEvent(handle));
+          const question = Effect.runPromiseExit(questionCall(direct));
+          yield* step(() => waitForEventCount(handle, 61));
+          handle.cancelPending();
+          expect(Exit.isFailure(yield* step(() => withTimeout(question)))).toBe(true);
+          for (const request of requests) {
+            if (request.type !== "proxy_request") throw new Error("expected proxy request");
+            yield* request.respond(true, "{}").pipe(Effect.orDie);
+          }
+          for (const exit of yield* step(() => withTimeout(Promise.all(proxies))))
+            expect(Exit.isSuccess(exit)).toBe(true);
+          for (let index = 0; index < 60; index += 1) yield* step(() => takeEvent(handle));
+          expect(yield* step(() => takeEvent(handle))).toMatchObject({
+            type: "supervisor_contact",
+            kind: "question",
+            requestId: "capacity-question",
+          });
+          expect(yield* step(() => takeEvent(handle))).toMatchObject({
+            type: "supervisor_question_cancelled",
+            requestId: "capacity-question",
+            assignmentEpoch: 2,
+          });
+          expect(yield* Queue.poll(handle.events)).toEqual(Option.none());
+        }),
+      );
+    },
+    20_000,
+  );
+
+  for (const hasQuestion of [false, true])
+    effectTest(
+      `preserves every proxy cancellation under report saturation ${hasQuestion ? "with" : "without"} a question`,
+      function* () {
+        yield* withProxyChannel((handle, direct) =>
+          Effect.gen(function* () {
+            const question = hasQuestion ? Effect.runPromiseExit(questionCall(direct)) : undefined;
+            if (question) yield* step(() => takeEvent(handle));
+            // A successful response must release its cancellation reservation.
+            const completed = Effect.runPromiseExit(proxyCall(direct, "completed-proxy"));
+            const completedEvent = yield* step(() => takeEvent(handle));
+            if (completedEvent.type !== "proxy_request") throw new Error("expected proxy request");
+            yield* completedEvent.respond(true, "{}").pipe(Effect.orDie);
+            expect(Exit.isSuccess(yield* step(() => withTimeout(completed)))).toBe(true);
+            const proxies = ["capacity-proxy-1", "capacity-proxy-2"].map((requestId) => {
+              const controller = new AbortController();
+              const pending = Effect.runPromiseExit(proxyCall(direct, requestId), {
+                signal: controller.signal,
+              });
+              return { requestId, controller, pending };
+            });
+            for (let index = 0; index < proxies.length; index += 1)
+              expect(yield* step(() => takeEvent(handle))).toMatchObject({ type: "proxy_request" });
+            for (let index = 0; index < 61; index += 1)
+              yield* step(() => Effect.runPromise(progressCall(direct, index)));
+            yield* step(() =>
+              expect(Effect.runPromise(progressCall(direct, 61))).rejects.toMatchObject({
+                code: "event_queue_full",
+              }),
+            );
+
+            if (hasQuestion) {
+              // Neither an older nor current report may steal any cancellation slot.
+              for (const epoch of [1, 2])
+                yield* step(() =>
+                  expect(Effect.runPromise(reportCall(direct, epoch))).rejects.toMatchObject({
+                    code: "event_queue_full",
+                  }),
+                );
+              expect(yield* handle.acceptedReportForEpoch(1).pipe(Effect.orDie)).toBeUndefined();
+              expect(yield* handle.acceptedReportForEpoch(2).pipe(Effect.orDie)).toBeUndefined();
+              yield* step(() => takeEvent(handle));
+            }
+            // Older evidence consumes one slot and leaves any epoch-2 question intact.
+            const report = yield* step(() => Effect.runPromise(reportCall(direct, 1)));
+            expect(report).toMatchObject({ duplicate: false, sequence: 1 });
+            expect(yield* step(() => Effect.runPromise(reportCall(direct, 1)))).toMatchObject({
+              duplicate: true,
+              sequence: report.sequence,
+            });
+            yield* step(() =>
+              expect(Effect.runPromise(reportCall(direct, 2))).rejects.toMatchObject({
+                code: "event_queue_full",
+              }),
+            );
+            yield* step(() =>
+              expect(
+                withTimeout(Effect.runPromise(proxyCall(direct, "overflow-proxy"))),
+              ).rejects.toMatchObject({ code: "event_queue_full" }),
+            );
+            for (const proxy of proxies) proxy.controller.abort();
+            yield* step(() => withTimeout(Promise.all(proxies.map((proxy) => proxy.pending))));
+            yield* step(() => waitForEventCount(handle, hasQuestion ? 63 : 64));
+            if (question) {
+              handle.cancelPending();
+              expect(Exit.isFailure(yield* step(() => withTimeout(question)))).toBe(true);
+              yield* step(() =>
+                expect(
+                  Effect.runPromise(handle.reply("capacity-question", "Too late.")),
+                ).rejects.toMatchObject({ code: "question_ownership_mismatch" }),
+              );
+            }
+            const events = [];
+            for (let index = 0; index < 64; index += 1)
+              events.push(yield* step(() => takeEvent(handle)));
+            expect(events.filter((event) => event.type === "proxy_cancel")).toEqual(
+              expect.arrayContaining(
+                proxies.map(({ requestId }) => ({ type: "proxy_cancel", requestId })),
+              ),
+            );
+            expect(events.filter((event) => event.type === "proxy_cancel")).toHaveLength(2);
+            expect(events.filter((event) => event.type === "report")).toHaveLength(1);
+            expect(
+              events.filter((event) => event.type === "supervisor_question_cancelled"),
+            ).toEqual(
+              hasQuestion
+                ? [
+                    {
+                      type: "supervisor_question_cancelled",
+                      assignmentEpoch: 2,
+                      requestId: "capacity-question",
+                    },
+                  ]
+                : [],
+            );
+            expect(yield* Queue.poll(handle.events)).toEqual(Option.none());
+            // Rejected admission and all completed/cancelled calls leave no reservation behind.
+            for (let index = 0; index < 63; index += 1)
+              yield* step(() => Effect.runPromise(progressCall(direct, index)));
+          }),
+        );
+      },
+      20_000,
+    );
+
+  effectTest(
+    "closes saturated question and proxy calls without draining events",
+    function* () {
+      yield* withProxyChannel((handle, direct) =>
+        Effect.gen(function* () {
+          const question = Effect.runPromiseExit(questionCall(direct));
+          yield* step(() => takeEvent(handle));
+          const proxy = Effect.runPromiseExit(proxyCall(direct, "closing-proxy"));
+          yield* step(() => takeEvent(handle));
+          for (let index = 0; index < 62; index += 1)
+            yield* step(() => Effect.runPromise(progressCall(direct, index)));
+          yield* step(() => withTimeout(Effect.runPromise(handle.close)));
+          expect(Exit.isFailure(yield* step(() => withTimeout(question)))).toBe(true);
+          expect(Exit.isFailure(yield* step(() => withTimeout(proxy)))).toBe(true);
+        }),
+      );
     },
     20_000,
   );

@@ -152,6 +152,8 @@ export const makeSupervisorChannelSession = ({
     let currentAssignmentEpoch = 0;
     let nextReportSequence = 1;
     let pendingQuestion: PendingQuestion | undefined;
+    // Each admitted proxy owns a cancellation slot until its RPC wait releases.
+    let pendingProxyCalls = 0;
     let closed = false;
 
     const hasReadyPeer = (): boolean => [...peers.values()].some((peer) => peer.watching);
@@ -302,7 +304,7 @@ export const makeSupervisorChannelSession = ({
         if (!isSupervisorMcpMessage(message))
           return Effect.fail(rpcFailure("invalid_message", "Supervisor message is invalid."));
         const offered =
-          Queue.sizeUnsafe(events) < contactEventCapacity &&
+          Queue.sizeUnsafe(events) < contactEventCapacity - pendingProxyCalls &&
           Queue.offerUnsafe(events, {
             type: "supervisor_contact",
             assignmentEpoch: epoch,
@@ -460,7 +462,7 @@ export const makeSupervisorChannelSession = ({
             };
             pendingQuestion = pending;
             const offered =
-              Queue.sizeUnsafe(events) < contactEventCapacity &&
+              Queue.sizeUnsafe(events) < contactEventCapacity - pendingProxyCalls &&
               Queue.offerUnsafe(events, {
                 type: "supervisor_contact",
                 assignmentEpoch: payload.assignmentEpoch,
@@ -516,31 +518,44 @@ export const makeSupervisorChannelSession = ({
                 "pi_proxy_forbidden",
                 "This authenticated supervisor channel does not belong to a Pi run.",
               );
-            const response = Deferred.makeUnsafe<{
-              readonly ok: boolean;
-              readonly payloadJson: string;
-            }>();
-            const offered = Queue.offerUnsafe(events, {
-              type: "proxy_request",
-              requestId: payload.requestId,
-              tool: payload.tool,
-              argumentsJson: payload.argumentsJson,
-              respond: (ok, payloadJson) =>
+            return yield* Effect.acquireUseRelease(
+              Effect.suspend(() => {
+                const requiredSlots = pendingProxyCalls + (pendingQuestion === undefined ? 2 : 3);
+                if (Queue.sizeUnsafe(events) > events.capacity - requiredSlots)
+                  return Effect.fail(
+                    rpcFailure("event_queue_full", "Supervisor event queue is full."),
+                  );
+                const response = Deferred.makeUnsafe<{
+                  readonly ok: boolean;
+                  readonly payloadJson: string;
+                }>();
+                const offered = Queue.offerUnsafe(events, {
+                  type: "proxy_request",
+                  requestId: payload.requestId,
+                  tool: payload.tool,
+                  argumentsJson: payload.argumentsJson,
+                  respond: (ok, payloadJson) =>
+                    Effect.sync(() => {
+                      Deferred.doneUnsafe(response, Effect.succeed({ ok, payloadJson }));
+                    }),
+                });
+                if (!offered)
+                  return Effect.fail(
+                    rpcFailure("event_queue_full", "Supervisor event queue is full."),
+                  );
+                pendingProxyCalls += 1;
+                return Effect.succeed(response);
+              }),
+              (response) => Deferred.await(response),
+              (_, exit) =>
                 Effect.sync(() => {
-                  Deferred.doneUnsafe(response, Effect.succeed({ ok, payloadJson }));
+                  pendingProxyCalls -= 1;
+                  if (Exit.hasInterrupts(exit))
+                    Queue.offerUnsafe(events, {
+                      type: "proxy_cancel",
+                      requestId: payload.requestId,
+                    });
                 }),
-            });
-            if (!offered)
-              return yield* rpcFailure("event_queue_full", "Supervisor event queue is full.");
-            return yield* Deferred.await(response).pipe(
-              Effect.onInterrupt(() =>
-                Effect.sync(() => {
-                  Queue.offerUnsafe(events, {
-                    type: "proxy_cancel",
-                    requestId: payload.requestId,
-                  });
-                }),
-              ),
             );
           }),
 
@@ -585,7 +600,7 @@ export const makeSupervisorChannelSession = ({
             };
             const cancelsQuestion =
               pendingQuestion !== undefined && pendingQuestion.epoch <= payload.assignmentEpoch;
-            const requiredSlots = pendingQuestion === undefined ? 1 : 2;
+            const requiredSlots = pendingProxyCalls + (pendingQuestion === undefined ? 1 : 2);
             if (
               Queue.sizeUnsafe(events) > events.capacity - requiredSlots ||
               !Queue.offerUnsafe(events, report)
