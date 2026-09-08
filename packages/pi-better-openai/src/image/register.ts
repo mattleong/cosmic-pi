@@ -27,6 +27,7 @@ const resultText = (result: CodexImageDetails): string => {
     `Action: ${result.action}.`,
     `Prompt: ${result.prompt}`,
   ];
+  if (result.imageModel) parts.push(`Image model: ${result.imageModel}.`);
   if (result.revisedPrompt) parts.push(`Revised prompt: ${result.revisedPrompt}`);
   if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
   return parts.join("\n");
@@ -44,6 +45,7 @@ const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDe
   Predicate.isString(value.mimeType) &&
   isOptionalString(value.savedPath) &&
   Predicate.isString(value.model) &&
+  isOptionalString(value.imageModel) &&
   Predicate.isString(value.action) &&
   Predicate.isString(value.outputFormat);
 

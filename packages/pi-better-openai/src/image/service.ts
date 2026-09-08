@@ -20,6 +20,7 @@ import { imageOutputMetadata, makeImageOutput } from "./output.ts";
 import { buildImageRequest, ImageRequestSchema } from "./protocol.ts";
 import { parseImageSse } from "./stream.ts";
 import {
+  DEFAULT_IMAGE_MODEL,
   TOOL_PARAMS,
   ToolParamsSchema,
   fail,
@@ -101,6 +102,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
             try: () => resolveModel(params, ctx, cfg),
             catch: imageError("context", "Unable to read the Pi model context."),
           });
+          const imageModel = params.imageModel ?? DEFAULT_IMAGE_MODEL;
           const action: ImageAction = params.action ?? "auto";
           const outputFormat: ImageOutputFormat = params.outputFormat ?? cfg.image.outputFormat;
           const save: ImageSaveMode = params.save ?? cfg.image.defaultSave;
@@ -150,6 +152,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
               buildImageRequest({
                 prompt: params.prompt,
                 model,
+                imageModel,
                 action,
                 outputFormat,
                 images: inputs,
@@ -183,8 +186,16 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           }
           const { bytes: _bytes, ...image } = validated;
           const result: CodexImageResult = savedPath
-            ? { ...image, prompt: params.prompt, savedPath, model, action, outputFormat }
-            : { ...image, prompt: params.prompt, model, action, outputFormat };
+            ? {
+                ...image,
+                prompt: params.prompt,
+                savedPath,
+                model,
+                imageModel,
+                action,
+                outputFormat,
+              }
+            : { ...image, prompt: params.prompt, model, imageModel, action, outputFormat };
           return result;
         });
         const safeGenerate = <Params>(params: Params) =>

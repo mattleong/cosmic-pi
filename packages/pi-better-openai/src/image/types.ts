@@ -8,6 +8,11 @@ import {
 
 export { IMAGE_OUTPUT_FORMATS, IMAGE_SAVE_MODES, type ImageOutputFormat, type ImageSaveMode };
 
+export const IMAGE_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] as const;
+export const ImageModelSchema = Schema.Literals(IMAGE_MODELS);
+export type ImageModel = typeof ImageModelSchema.Type;
+export const DEFAULT_IMAGE_MODEL: ImageModel = "gpt-image-2.5-sunburst";
+
 export const MAX_IMAGE_INPUTS = 5;
 export const IMAGE_ACTIONS = ["auto", "generate", "edit"] as const;
 export type ImageAction = (typeof IMAGE_ACTIONS)[number];
@@ -39,7 +44,13 @@ export const TOOL_PARAMS = {
     model: {
       ...boundedJsonString(MODEL_MAX_LENGTH),
       description:
-        "Mainline Codex model override, for example openai-codex/gpt-5.5. The hosted image model is GPT Image 2.5 Sunburst, not this field.",
+        "Mainline Codex model override, for example openai-codex/gpt-5.5. Use imageModel to select the hosted image model.",
+    },
+    imageModel: {
+      type: "string",
+      enum: IMAGE_MODELS,
+      description:
+        "Hosted image model. Defaults to gpt-image-2.5-sunburst for generation and precise editing; choose gpt-image-2.5-flare for faster generation.",
     },
     outputFormat: { type: "string", enum: IMAGE_OUTPUT_FORMATS },
     save: { type: "string", enum: IMAGE_SAVE_MODES },
@@ -57,6 +68,7 @@ export const ToolParamsSchema = Schema.Struct({
     Schema.Array(boundedString(PATH_MAX_LENGTH)).check(Schema.isMaxLength(MAX_IMAGE_INPUTS)),
   ),
   model: Schema.optional(boundedString(MODEL_MAX_LENGTH)),
+  imageModel: Schema.optional(ImageModelSchema),
   outputFormat: Schema.optional(Schema.Literals(IMAGE_OUTPUT_FORMATS)),
   save: Schema.optional(Schema.Literals(IMAGE_SAVE_MODES)),
   saveDir: Schema.optional(boundedString(PATH_MAX_LENGTH)),
@@ -75,12 +87,14 @@ export type CodexImageResult = {
   mimeType: string;
   savedPath?: string;
   model: string;
+  // Older saved results predate explicit image model selection.
+  imageModel?: string;
   action: ImageAction;
   outputFormat: ImageOutputFormat;
 };
 export type ExtractedImageResult = Omit<
   CodexImageResult,
-  "prompt" | "savedPath" | "model" | "action" | "outputFormat"
+  "prompt" | "savedPath" | "model" | "imageModel" | "action" | "outputFormat"
 >;
 
 export class OpenAIImageError extends Schema.TaggedError<OpenAIImageError>()("OpenAIImageError", {

@@ -2,7 +2,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { ImageOutputFormatSchema } from "../config/schema.ts";
-import type { ExtractedImageResult, ImageAction, ImageInput, ImageOutputFormat } from "./types.ts";
+import {
+  ImageModelSchema,
+  type ExtractedImageResult,
+  type ImageAction,
+  type ImageInput,
+  type ImageModel,
+  type ImageOutputFormat,
+} from "./types.ts";
 
 const ImageGenerationItemSchema = Schema.Struct({
   type: Schema.Literal("image_generation_call"),
@@ -110,9 +117,6 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   return ignoredEvent;
 });
 
-// The hosted image model is separate from the mainline Responses model.
-const IMAGE_GENERATION_MODEL = "gpt-image-2.5-sunburst";
-
 const InputContentSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal("input_text"), text: Schema.String }),
   Schema.Struct({
@@ -130,7 +134,7 @@ export const ImageRequestSchema = Schema.Struct({
   tools: Schema.Array(
     Schema.Struct({
       type: Schema.Literal("image_generation"),
-      model: Schema.Literal(IMAGE_GENERATION_MODEL),
+      model: ImageModelSchema,
       output_format: ImageOutputFormatSchema,
       action: Schema.optional(Schema.Literals(["generate", "edit"])),
     }),
@@ -147,6 +151,7 @@ export type ImageRequest = typeof ImageRequestSchema.Type;
 export function buildImageRequest(values: {
   readonly prompt: string;
   readonly model: string;
+  readonly imageModel: ImageModel;
   readonly action: ImageAction;
   readonly outputFormat: ImageOutputFormat;
   readonly images: readonly ImageInput[];
@@ -163,7 +168,7 @@ export function buildImageRequest(values: {
   }
   const tool: ImageRequest["tools"][number] = {
     type: "image_generation",
-    model: IMAGE_GENERATION_MODEL,
+    model: values.imageModel,
     output_format: values.outputFormat,
   };
   return {

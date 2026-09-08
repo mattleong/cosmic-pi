@@ -17,6 +17,7 @@ import {
 import { SharpAdapter } from "../src/boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.ts";
 import { OpenAIImageService } from "../src/image/service.ts";
+import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from "../src/image/types.ts";
 import { initialProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig } from "./helpers.ts";
 
@@ -108,6 +109,7 @@ describe("OpenAIImageService", () => {
       const overridden = yield* service.generate({
         prompt: "override request",
         model: "openai-codex/override-model",
+        imageModel: IMAGE_MODELS[1],
         action: "edit",
         outputFormat: "webp",
         save: "none",
@@ -115,12 +117,14 @@ describe("OpenAIImageService", () => {
 
       expect(defaulted).toMatchObject({
         model: "default-image-model",
+        imageModel: DEFAULT_IMAGE_MODEL,
         action: "auto",
         outputFormat: "png",
         mimeType: "image/png",
       });
       expect(overridden).toMatchObject({
         model: "override-model",
+        imageModel: IMAGE_MODELS[1],
         action: "edit",
         outputFormat: "webp",
         mimeType: "image/webp",
@@ -133,7 +137,9 @@ describe("OpenAIImageService", () => {
         model: "override-model",
         tools: [{ output_format: "webp", action: "edit" }],
       });
-      expect(modelReads).toBe(1);
+      const nextDefault = yield* service.generate({ prompt: "default after override" });
+      expect(nextDefault.imageModel).toBe(DEFAULT_IMAGE_MODEL);
+      expect(modelReads).toBe(2);
     }).pipe(provideBuiltLayer(serviceLayer));
   });
 
