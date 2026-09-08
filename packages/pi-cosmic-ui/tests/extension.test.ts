@@ -344,8 +344,10 @@ describe("Cosmic UI extension", () => {
       expect(h.setFooter).toHaveBeenCalledTimes(3);
       const footer = capturedFooter(h, 2);
       const rendered = footer.render(100);
-      expect(rendered[0]).toBe("Model   second-model • high");
-      expect(rendered[1]).toContain("Repo    /tmp/second-project");
+      expect(rendered[0]).toContain("second-model");
+      expect(rendered[0]).toContain("high");
+      expect(rendered[0]).toContain("Ctx");
+      expect(rendered[1]).toContain("⌂ /tmp/second-project");
       expect(rendered.join("\n")).toContain("second-session");
 
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
@@ -361,8 +363,10 @@ describe("Cosmic UI extension", () => {
       } as ExtensionContext;
       yield* emit(h, "model_select", {}, laterContext);
       const laterRendered = footer.render(100);
-      expect(laterRendered[0]).toBe("Model   later-model • high");
-      expect(laterRendered[1]).toContain("Repo    /tmp/later-project");
+      expect(laterRendered[0]).toContain("later-model");
+      expect(laterRendered[0]).toContain("high");
+      expect(laterRendered[0]).toContain("Ctx");
+      expect(laterRendered[1]).toContain("⌂ /tmp/later-project");
       expect(laterRendered.join("\n")).toContain("later-session");
     }),
   );

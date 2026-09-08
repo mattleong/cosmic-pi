@@ -54,6 +54,35 @@ export function formatCompactReset(
   return countdown && clock ? `${label} ↺ ${countdown} - ${clock}` : null;
 }
 
+/** Formats a reset with a compact local date/time while retaining its countdown. */
+export function formatShortReset(
+  label: string,
+  seconds: number | null,
+  _options: { readonly includeDate?: boolean } | undefined,
+  now: number,
+): string | null {
+  if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
+    return null;
+  const reset = DateTime.make(now + seconds * 1000);
+  if (Option.isNone(reset)) return null;
+  const date = DateTime.formatLocal(reset.value, {
+    locale: "en-US",
+    month: "numeric",
+    day: "numeric",
+  });
+  const time = DateTime.formatLocal(reset.value, {
+    locale: "en-US",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  })
+    .replace(/\s+/gu, "")
+    .replace(/AM$/u, "a")
+    .replace(/PM$/u, "p");
+  const countdown = formatResetCountdown(seconds);
+  return countdown ? `${label} ↺ ${countdown} - ${date} • ${time}` : `${label} ↺ ${date} • ${time}`;
+}
+
 /** Clamp a finite percent into the inclusive 0–100 range. */
 export function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
@@ -106,7 +135,7 @@ export type UsageWindowLine = {
  */
 export function formatWindowedUsageLine(
   windows: readonly UsageWindowLine[],
-  options: { readonly showResetTimes: boolean },
+  options: { readonly showResetTimes: boolean; readonly resetStyle?: "compact" | "short" },
   now: number,
   capturedAt: number,
 ): string {
@@ -117,12 +146,19 @@ export function formatWindowedUsageLine(
   const resets = options.showResetTimes
     ? visible
         .map((window) =>
-          formatCompactReset(
-            window.label,
-            remainingResetSeconds(window.resetInSeconds, capturedAt, now),
-            window.includeDate ? { includeDate: true } : undefined,
-            now,
-          ),
+          options.resetStyle === "short"
+            ? formatShortReset(
+                window.label,
+                remainingResetSeconds(window.resetInSeconds, capturedAt, now),
+                window.includeDate ? { includeDate: true } : undefined,
+                now,
+              )
+            : formatCompactReset(
+                window.label,
+                remainingResetSeconds(window.resetInSeconds, capturedAt, now),
+                window.includeDate ? { includeDate: true } : undefined,
+                now,
+              ),
         )
         .filter((value): value is string => value !== null)
     : [];

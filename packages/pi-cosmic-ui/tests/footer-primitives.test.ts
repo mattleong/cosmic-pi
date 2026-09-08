@@ -64,3 +64,52 @@ it("keeps context visibility and decorator consumption independent of its render
   hidden.splice(hidden.indexOf("context"), 1);
   expect(footer.render(120).join("")).not.toBe("");
 });
+
+it("uses compact text for labeled contributions in compact mode", () => {
+  const defaults = makeDefaultResolvedCosmicUiConfig();
+  const ctx = extensionContextFixture({
+    model: { id: "model", provider: "provider", reasoning: false, contextWindow: 200_000 },
+    modelRegistry: { isUsingOAuth: () => false },
+    sessionManager: {
+      getCwd: () => "/project",
+      getLeafId: () => null,
+      getSessionName: () => undefined,
+    },
+    getContextUsage: () => undefined,
+  });
+  const footer = createFooterComponent({
+    pi: extensionApiFixture({ getThinkingLevel: () => "off" }),
+    ctx: () => ctx,
+    homeDirectory: () => undefined,
+    footerData: footerDataProviderFixture({
+      getGitBranch: () => null,
+      getExtensionStatuses: () => new Map(),
+      getAvailableProviderCount: () => 1,
+    }),
+    theme: { fg: (_color, text) => text },
+    registry: {
+      snapshot: () => ({
+        contributions: [
+          {
+            kind: "text",
+            id: "labeled.detail",
+            region: "details",
+            text: "full detail",
+            compactText: "compact detail",
+            label: "Provider",
+          },
+        ],
+      }),
+      invalidate: () => undefined,
+    },
+    callbacks: makeHostCallbackBoundary(),
+    config: () => defaults,
+    totals: () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }),
+    gitStatus: () => undefined,
+    pullRequestNumber: () => undefined,
+  });
+
+  const rendered = footer.render(60).join("\n");
+  expect(rendered).toContain("compact detail");
+  expect(rendered).not.toContain("full detail");
+});

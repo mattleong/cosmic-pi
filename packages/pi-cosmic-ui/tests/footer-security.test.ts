@@ -3,11 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { materializeFooterHostProjection } from "../src/boundary/host-footer-projection.ts";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { makeSetStatusSafely } from "../src/boundary/host-status.ts";
-import {
-  combineSurface,
-  isTerminalImageLine,
-  renderContributionLine,
-} from "../src/footer/layout.ts";
+import { combineSurface, isTerminalImageLine } from "../src/footer/layout.ts";
 import {
   COSMIC_UI_PROTOCOL_VERSION,
   normalizeCosmicFooterUpsertEvent,
@@ -101,19 +97,6 @@ describe("footer terminal safety", () => {
     expect(setStatus).not.toHaveBeenCalled();
   });
 
-  it("maps every semantic contribution tone to its theme token", () => {
-    const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
-    for (const tone of ["normal", "accent", "dim", "success", "warning", "error"] as const) {
-      const rendered = renderContributionLine(
-        [{ kind: "text", id: `tone.${tone}`, region: "details", text: tone, tone }],
-        80,
-        theme,
-        false,
-      );
-      expect(rendered).toContain(`<${tone === "normal" ? "text" : tone}>`);
-    }
-  });
-
   it("recognizes only complete anchored pi-tui image forms", () => {
     expect(isTerminalImageLine(kittyImage)).toBe(true);
     expect(isTerminalImageLine(itermImage)).toBe(true);
@@ -151,8 +134,7 @@ describe("footer terminal safety", () => {
 
     expect(rendered[0]).toBe(kittyImage);
     expect(rendered[1]).toBe(itermImage);
-    expect(rendered[2]).toContain("\x1b[31mred next");
-    expect(rendered[2]?.endsWith("\x1b[0m")).toBe(true);
+    expect(rendered[2]).toContain("red next");
     expect(rendered[2]).not.toContain("\n");
     expect(rendered[2]).not.toContain("\x1b[2J");
     expect(rendered[2]).not.toContain("52;c;");

@@ -1,6 +1,7 @@
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { abbreviateHomePath, formatTokens } from "pi-cosmic-core";
 import type {
+  CosmicFooterColor,
   CosmicFooterStatusContribution,
   CosmicFooterTextContribution,
 } from "../protocol/protocol.ts";
@@ -24,6 +25,31 @@ function basename(path: string): string {
 const DEFAULT_STATUS_REGION = "details" as const;
 const DEFAULT_STATUS_PRIORITY = 20;
 const DEFAULT_STATUS_ORDER = 1020;
+
+const THINKING_COLORS = {
+  off: "thinkingOff",
+  minimal: "thinkingMinimal",
+  low: "thinkingLow",
+  medium: "thinkingMedium",
+  high: "thinkingHigh",
+  xhigh: "thinkingXhigh",
+  max: "thinkingMax",
+} satisfies Readonly<Record<string, CosmicFooterColor>>;
+
+const thinkingColor = (level: string): CosmicFooterColor => {
+  switch (level) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return THINKING_COLORS[level];
+    default:
+      return "thinkingText";
+  }
+};
 
 export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
 
@@ -60,7 +86,8 @@ export function builtinContributions(
             id: "effort",
             region: "identity" as const,
             text: thinking === "off" ? "thinking off" : thinking,
-            tone: "accent" as const,
+            tone: "normal" as const,
+            color: thinkingColor(thinking),
             priority: 95,
             order: 100,
           },
@@ -70,9 +97,10 @@ export function builtinContributions(
       kind: "text",
       id: "location",
       region: "identity",
-      text: location,
-      compactText: basename(location),
-      tone: "accent",
+      text: `⌂ ${location}`,
+      compactText: `⌂ ${basename(location)}`,
+      tone: "normal",
+      color: "text",
       priority: 100,
       order: 200,
     },
@@ -91,8 +119,10 @@ export function builtinContributions(
       kind: "text",
       id: "branch",
       region: "identity",
-      text: branch,
-      tone: "accent",
+      text: `⎇ ${branch}`,
+      compactText: `⎇ ${branch}`,
+      tone: "normal",
+      color: "text",
       priority: 90,
       order: 200,
     });
@@ -153,10 +183,10 @@ export function builtinContributions(
       ? { id: "metrics.output", text: `↓${formatTokens(totals.output)}`, order: 210 }
       : undefined,
     totals.cacheRead
-      ? { id: "metrics.cacheRead", text: `R${formatTokens(totals.cacheRead)}`, order: 220 }
+      ? { id: "metrics.cacheRead", text: `r${formatTokens(totals.cacheRead)}`, order: 220 }
       : undefined,
     totals.cacheWrite
-      ? { id: "metrics.cacheWrite", text: `W${formatTokens(totals.cacheWrite)}`, order: 230 }
+      ? { id: "metrics.cacheWrite", text: `w${formatTokens(totals.cacheWrite)}`, order: 230 }
       : undefined,
     totals.cost || subscription
       ? {
@@ -166,15 +196,18 @@ export function builtinContributions(
         }
       : undefined,
   ].filter((value): value is { id: string; text: string; order: number } => Boolean(value));
-  for (const metric of metricValues)
-    result.push({
+  for (const metric of metricValues) {
+    const contribution: CosmicFooterTextContribution = {
       kind: "text",
       id: metric.id,
       region: "metrics",
       text: metric.text,
       priority: 90,
       order: metric.order,
-    });
+    };
+    if (metric.id === "metrics.cost") contribution.align = "right";
+    result.push(contribution);
+  }
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);
     const contribution: CosmicFooterTextContribution = {

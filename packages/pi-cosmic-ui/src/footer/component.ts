@@ -19,13 +19,9 @@ import {
   type FooterTotals,
 } from "./builtin-contributions.ts";
 import { type FooterGitStatus } from "./git.ts";
-import {
-  combineSurface,
-  renderContextLine,
-  renderContributionLine,
-  renderLabeledContributionLine,
-  renderProviderUsageLine,
-} from "./layout.ts";
+import { combineSurface, renderContributionLine, renderModelContextLine } from "./layout.ts";
+import { renderMetricsLines } from "./metrics.ts";
+import { renderProviderUsageLines } from "./provider-usage.ts";
 import {
   hostQuery,
   materializeContextUsage,
@@ -152,7 +148,7 @@ export function createFooterComponent(options: {
           const modelIdentity = identity.filter((entry) => !repositoryIdentity.includes(entry));
           const metrics = text.filter((entry) => entry.region === "metrics");
           const contextVisible = metrics.some((entry) => entry.id === "context");
-          const sessionInfo = metrics.filter((entry) => entry.id !== "context");
+          const metricEntries = metrics.filter((entry) => entry.id !== "context");
           const details = text.filter((entry) => entry.region === "details");
           const labeledDetails = details.filter((entry) => entry.label !== undefined);
           const extensionDetails = details.filter((entry) => entry.id.startsWith("extension."));
@@ -160,27 +156,23 @@ export function createFooterComponent(options: {
             (entry) => entry.label === undefined && !entry.id.startsWith("extension."),
           );
           let lines: string[] = [];
-          if (modelIdentity.length)
-            lines.push(
-              renderLabeledContributionLine("Model", modelIdentity, width, theme, compact),
-            );
-          if (repositoryIdentity.length)
-            lines.push(
-              renderLabeledContributionLine("Repo", repositoryIdentity, width, theme, compact),
-            );
-          if (contextVisible || sessionInfo.length)
+          if (modelIdentity.length || contextVisible)
             lines.push(
               contextVisible
-                ? renderContextLine(currentContextUsage, sessionInfo, width, theme, compact)
-                : renderContributionLine(sessionInfo, width, theme, compact),
+                ? renderModelContextLine(modelIdentity, currentContextUsage, width, theme, compact)
+                : renderContributionLine(modelIdentity, width, theme, compact),
             );
+          if (repositoryIdentity.length)
+            lines.push(renderContributionLine(repositoryIdentity, width, theme, compact));
+          if (metricEntries.length)
+            lines.push(...renderMetricsLines(metricEntries, width, theme, compact));
           for (const usage of labeledDetails) {
             const label = usage.label;
             if (!label) continue;
             lines.push(
-              renderProviderUsageLine(
+              ...renderProviderUsageLines(
                 label,
-                compact && usage.compactText ? usage.compactText : usage.text,
+                compact && usage.compactText !== undefined ? usage.compactText : usage.text,
                 width,
                 theme,
                 compact,

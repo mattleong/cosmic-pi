@@ -210,6 +210,7 @@ export {
 export {
   clampPercent,
   formatCompactReset,
+  formatShortReset,
   formatPercent,
   formatTokens,
   formatWindowedUsageLine,

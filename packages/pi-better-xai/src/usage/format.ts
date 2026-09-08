@@ -118,7 +118,7 @@ export function formatUsageSnapshot(
         includeDate: true,
       },
     ],
-    options,
+    { ...options, resetStyle: "short" },
     now,
     snapshot.capturedAt,
   );

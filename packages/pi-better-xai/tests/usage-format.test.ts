@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatUsageDetails, parseUsageSnapshot, type UsageSnapshot } from "../src/usage/format.ts";
+import {
+  formatUsageDetails,
+  formatUsageSnapshot,
+  parseUsageSnapshot,
+  type UsageSnapshot,
+} from "../src/usage/format.ts";
 
 describe("xAI usage parsing", () => {
   it.each([undefined, null, { config: {} }, { config: { creditUsagePercent: 0 } }])(
@@ -66,6 +71,29 @@ const snapshotWithOnDemandUsed = (onDemandUsed: number | null): UsageSnapshot =>
 });
 
 describe("xAI usage formatting", () => {
+  it("keeps both billing windows and their short reset dates in status output", () => {
+    const snapshot = parseUsageSnapshot(
+      {
+        config: {
+          used: { val: 25 },
+          monthlyLimit: { val: 100 },
+          billingPeriodEnd: "1970-01-10T00:00:00Z",
+        },
+      },
+      {
+        config: {
+          creditUsagePercent: 25,
+          billingPeriodEnd: "1970-01-05T00:00:00Z",
+        },
+      },
+      0,
+    );
+    const rendered = formatUsageSnapshot(snapshot, { showResetTimes: true }, 0);
+    expect(rendered).toContain("7d: 75%");
+    expect(rendered).toContain("mo: 75%");
+    expect(rendered).toMatch(/\d+\/\d+ • \d+:\d{2}[ap]/);
+  });
+
   it("distinguishes unavailable on-demand usage from a numeric zero", () => {
     const unavailable = formatUsageDetails(snapshotWithOnDemandUsed(null), 0);
     const zero = formatUsageDetails(snapshotWithOnDemandUsed(0), 0);

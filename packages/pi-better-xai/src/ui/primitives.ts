@@ -9,8 +9,9 @@ export function xaiUsageFooterPrimitive(state: XaiProjection): FooterTextPrimiti
     id: "xai.usage",
     region: "details",
     text,
-    // Drop reset suffixes in compact mode so bars stay readable.
-    compactText: text.replace(/\s*\|\s*(?:7d|mo)\s*↺[^|]*/g, "").trim(),
+    // Provider reset dates remain part of the compact projection; Cosmic UI wraps them instead
+    // of dropping the suffix on narrow terminals.
+    compactText: text,
     label: "xAI",
     tone: "dim",
     priority: 60,

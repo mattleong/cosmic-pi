@@ -1,62 +1,78 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import {
-  clampPercent,
-  formatTokens,
-  sanitizeTerminalLine,
-  sanitizeTerminalStyledText,
-} from "pi-cosmic-core";
+import { formatTokens, sanitizeTerminalStyledText } from "pi-cosmic-core";
 import type {
-  CosmicFooterColor,
   CosmicFooterPlacement,
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
+import {
+  alignSides,
+  ranked,
+  rawContributionLine,
+  renderContributionLine,
+} from "./contributions.ts";
+import { contextConsumptionTone, progressBar } from "./meter.ts";
 
-type ProgressTone = "success" | "warning" | "error";
+export { renderContributionLine, renderLabeledContributionLine } from "./contributions.ts";
 
-function remainingCapacityTone(percent: number): ProgressTone {
-  if (percent >= 75) return "success";
-  if (percent >= 25) return "warning";
-  return "error";
-}
-
-function contextConsumptionTone(percent: number): ProgressTone {
-  if (percent > 75) return "error";
-  if (percent > 50) return "warning";
-  return "success";
-}
-
-function progressBar(
-  percent: number,
-  cells: number,
+function contextUsageCandidates(
+  usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
   theme: CosmicFooterTheme,
-  tone: ProgressTone,
+  compact: boolean,
+): string[] {
+  const contextWindow = usage?.contextWindow ?? 0;
+  const percent = usage?.percent;
+  const label = theme.fg("text", "Ctx");
+  if (percent === null || percent === undefined)
+    return [`${label} ${theme.fg("text", `?/${formatTokens(contextWindow)}`)}`];
+
+  const cells = compact ? 6 : 10;
+  const tokens = usage?.tokens ?? Math.round((percent / 100) * contextWindow);
+  const color = contextConsumptionTone(percent);
+  const meter = progressBar(percent, cells, theme, color);
+  const percentage = theme.fg(color, `${Math.round(percent)}%`);
+  const counts = theme.fg("text", `${formatTokens(tokens)}/${formatTokens(contextWindow)}`);
+  // Counts are the first responsive detail to drop, followed by the meter. This keeps the
+  // percentage useful on narrow terminals while preserving the healthy/warning tone.
+  return [
+    `${label} ${meter} ${percentage} ${counts}`,
+    `${label} ${meter} ${percentage}`,
+    `${label} ${percentage}`,
+  ];
+}
+
+/** Renders the model identity at left and the context meter at right without a fixed right budget. */
+export function renderModelContextLine(
+  modelIdentity: CosmicFooterTextContribution[],
+  usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
+  width: number,
+  theme: CosmicFooterTheme,
+  compact: boolean,
 ): string {
-  const value = clampPercent(percent);
-  if (value >= 100) return theme.fg(tone, "━".repeat(cells));
-  const filled = Math.floor((value / 100) * cells);
-  return theme.fg(tone, `${"━".repeat(filled)}╸${"─".repeat(cells - filled - 1)}`);
+  if (width <= 0) return "";
+  const leftRaw = rawContributionLine(ranked(modelIdentity), compact);
+  const leftWidth = visibleWidth(leftRaw);
+  const contextBudget = leftRaw ? Math.max(1, width - leftWidth - 2) : width;
+  const candidates = contextUsageCandidates(usage, theme, compact);
+  // Prefer the fullest context projection that fits beside model identity. If identity is too
+  // wide, retain the percentage before clipping identity; counts and then the meter are dropped.
+  const context =
+    candidates.find((candidate) => visibleWidth(candidate) <= contextBudget) ??
+    (visibleWidth(candidates.at(-1) ?? "") <= width
+      ? (candidates.at(-1) ?? "")
+      : truncateToWidth(candidates.at(-1) ?? "", width, ""));
+  const contextWidth = visibleWidth(context);
+  const leftBudget = Math.max(0, width - contextWidth - (leftRaw ? 2 : 0));
+  const left = modelIdentity.length
+    ? renderContributionLine(modelIdentity, leftBudget, theme, compact)
+    : "";
+  return alignSides(left, context, width);
 }
 
-const FOOTER_LABEL_WIDTH = 8;
-
-function footerLabel(label: string, theme: CosmicFooterTheme): string {
-  return theme.fg("mdLink", sanitizeTerminalLine(label).padEnd(FOOTER_LABEL_WIDTH));
-}
-
-function alignSides(left: string, right: string, width: number): string {
-  if (!right) return truncateToWidth(left, width, "");
-  if (!left) return truncateToWidth(right, width, "");
-  const rightWidth = Math.min(visibleWidth(right), Math.floor(width * 0.48));
-  const clippedRight = truncateToWidth(right, rightWidth, "");
-  const leftWidth = Math.max(0, width - visibleWidth(clippedRight) - 2);
-  const clippedLeft = truncateToWidth(left, leftWidth, "…");
-  const padding = " ".repeat(
-    Math.max(1, width - visibleWidth(clippedLeft) - visibleWidth(clippedRight)),
-  );
-  return truncateToWidth(`${clippedLeft}${padding}${clippedRight}`, width, "");
-}
-
+/**
+ * Compatibility wrapper for callers that used the old context/session arrangement. New footer
+ * rows place model contributions on the left and call renderModelContextLine directly.
+ */
 export function renderContextLine(
   usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
   sessionInfo: CosmicFooterTextContribution[],
@@ -64,236 +80,7 @@ export function renderContextLine(
   theme: CosmicFooterTheme,
   compact: boolean,
 ): string {
-  const contextWindow = usage?.contextWindow ?? 0;
-  const percent = usage?.percent;
-  let left: string;
-  if (percent === null || percent === undefined) {
-    left = footerLabel("Ctx", theme) + theme.fg("syntaxNumber", `?/${formatTokens(contextWindow)}`);
-  } else {
-    const cells = compact ? 6 : 10;
-    const tokens = usage?.tokens ?? Math.round((percent / 100) * contextWindow);
-    const color = contextConsumptionTone(percent);
-    left = [
-      footerLabel("Ctx", theme),
-      progressBar(percent, cells, theme, color),
-      theme.fg(
-        color,
-        ` ${Math.round(percent)}% used · ${formatTokens(tokens)}/${formatTokens(contextWindow)}`,
-      ),
-    ].join("");
-  }
-  const right =
-    width >= 48 && sessionInfo.length
-      ? renderContributionLine(sessionInfo, Math.floor(width * 0.48), theme, compact)
-      : "";
-  return alignSides(left, right, width);
-}
-
-/** Match window labels used by provider usage status lines (OpenAI 5h/7d, xAI 7d/mo). */
-const PROVIDER_USAGE_WINDOW_PATTERN = /([A-Za-z0-9]+):\s*(\d+(?:\.\d+)?)%/g;
-
-export function renderProviderUsageLine(
-  providerLabel: string,
-  text: string,
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string {
-  const body = sanitizeTerminalLine(text).replace(/^Usage:\s*/i, "");
-  const cells = compact ? 6 : 10;
-  const pieces = [footerLabel(providerLabel, theme)];
-  let cursor = 0;
-  let matched = false;
-  for (const match of body.matchAll(PROVIDER_USAGE_WINDOW_PATTERN)) {
-    matched = true;
-    const index = match.index ?? 0;
-    if (index > cursor) pieces.push(theme.fg("syntaxOperator", body.slice(cursor, index)));
-    const percent = Number(match[2]);
-    const color = remainingCapacityTone(percent);
-    pieces.push(theme.fg(color, `${match[1]?.toLowerCase()} `));
-    pieces.push(progressBar(percent, cells, theme, color));
-    pieces.push(theme.fg(color, ` ${Math.round(percent)}% left`));
-    cursor = index + match[0].length;
-  }
-  if (!matched) {
-    return truncateToWidth(
-      theme.fg("mdLink", `${providerLabel.padEnd(FOOTER_LABEL_WIDTH)}${body}`),
-      width,
-      "",
-    );
-  }
-  if (cursor < body.length) pieces.push(theme.fg("syntaxOperator", body.slice(cursor)));
-  return truncateToWidth(pieces.join(""), width, "");
-}
-
-const CONTRIBUTION_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
-  ["model", "mdLink"],
-  ["effort", "syntaxOperator"],
-  ["location", "accent"],
-  ["branch", "syntaxType"],
-  ["pullRequest", "mdLink"],
-  ["git", "syntaxOperator"],
-  ["session", "customMessageLabel"],
-  ["metrics.input", "syntaxVariable"],
-  ["metrics.output", "syntaxFunction"],
-  ["metrics.cacheRead", "syntaxType"],
-  ["metrics.cacheWrite", "syntaxKeyword"],
-  ["metrics.cost", "syntaxNumber"],
-  ["extensions", "mdLink"],
-]);
-
-const TONE_COLORS = {
-  normal: "text",
-  accent: "accent",
-  dim: "dim",
-  success: "success",
-  warning: "warning",
-  error: "error",
-} as const satisfies Record<NonNullable<CosmicFooterTextContribution["tone"]>, CosmicFooterColor>;
-
-function contributionColor(contribution: CosmicFooterTextContribution): CosmicFooterColor {
-  if (contribution.tone === "warning" || contribution.tone === "error") return contribution.tone;
-  if (contribution.color) return contribution.color;
-  const semanticColor = CONTRIBUTION_COLORS.get(contribution.id);
-  if (semanticColor) return semanticColor;
-  if (contribution.tone) return TONE_COLORS[contribution.tone];
-  return "accent";
-}
-
-function tone(
-  theme: CosmicFooterTheme,
-  contribution: CosmicFooterTextContribution,
-  text: string,
-): string {
-  if (contribution.id === "model") {
-    const separator = " / ";
-    const separatorIndex = text.indexOf(separator);
-    if (separatorIndex !== -1)
-      return [
-        theme.fg("syntaxType", text.slice(0, separatorIndex)),
-        theme.fg("syntaxPunctuation", separator),
-        theme.fg("mdLink", text.slice(separatorIndex + separator.length)),
-      ].join("");
-  }
-  if (contribution.id === "git.lines") {
-    return text
-      .split(" ")
-      .filter(Boolean)
-      .map((value) => {
-        const color = value.startsWith("+")
-          ? "success"
-          : value.startsWith("-")
-            ? "error"
-            : "syntaxNumber";
-        return theme.fg(color, value);
-      })
-      .join(" ");
-  }
-  return theme.fg(contributionColor(contribution), text);
-}
-
-function ranked(contributions: CosmicFooterTextContribution[]): CosmicFooterTextContribution[] {
-  return [...contributions].sort(
-    (a, b) => (a.order ?? 100) - (b.order ?? 100) || (b.priority ?? 50) - (a.priority ?? 50),
-  );
-}
-
-function contributionText(entry: CosmicFooterTextContribution, compact: boolean): string {
-  return sanitizeTerminalLine(compact && entry.compactText ? entry.compactText : entry.text);
-}
-
-function fitContributions(
-  entries: CosmicFooterTextContribution[],
-  available: number,
-  compact: boolean,
-): CosmicFooterTextContribution[] {
-  const kept = [...entries];
-  while (kept.length > 1) {
-    const value = rawContributionLine(kept, compact);
-    if (visibleWidth(value) <= available) break;
-    let lowest = 0;
-    for (let index = 1; index < kept.length; index++) {
-      if ((kept[index]?.priority ?? 50) < (kept[lowest]?.priority ?? 50)) lowest = index;
-    }
-    kept.splice(lowest, 1);
-  }
-  return kept;
-}
-
-function rawContributionLine(entries: CosmicFooterTextContribution[], compact: boolean): string {
-  return entries
-    .map((entry) => contributionText(entry, compact))
-    .filter(Boolean)
-    .join(" • ");
-}
-
-function styledContributionLine(
-  entries: CosmicFooterTextContribution[],
-  compact: boolean,
-  clipped: string,
-  raw: string,
-  theme: CosmicFooterTheme,
-): string {
-  if (clipped !== raw) return theme.fg("accent", clipped);
-  return entries
-    .filter((entry) => Boolean(contributionText(entry, compact)))
-    .map((entry) => tone(theme, entry, contributionText(entry, compact)))
-    .join(theme.fg("syntaxPunctuation", " • "));
-}
-
-export function renderLabeledContributionLine(
-  label: string,
-  contributions: CosmicFooterTextContribution[],
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string {
-  if (width <= 0) return "";
-  if (width <= FOOTER_LABEL_WIDTH)
-    return truncateToWidth(theme.fg("mdLink", sanitizeTerminalLine(label)), width, "");
-  return truncateToWidth(
-    `${footerLabel(label, theme)}${renderContributionLine(
-      contributions,
-      width - FOOTER_LABEL_WIDTH,
-      theme,
-      compact,
-    )}`,
-    width,
-    "",
-  );
-}
-
-export function renderContributionLine(
-  contributions: CosmicFooterTextContribution[],
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string {
-  if (width <= 0) return "";
-  const visible = ranked(contributions);
-  const left = visible.filter((entry) => entry.align !== "right");
-  const right = visible.filter((entry) => entry.align === "right");
-
-  const rightBudget = left.length > 0 ? Math.floor(width * 0.55) : width;
-  const fittedRight = fitContributions(right, rightBudget, compact);
-  const rightRaw = rawContributionLine(fittedRight, compact);
-  const clippedRight = truncateToWidth(rightRaw, rightBudget, "");
-  const rightWidth = visibleWidth(clippedRight);
-
-  const reservedGap = left.length > 0 && rightWidth > 0 ? 2 : 0;
-  const leftAvailable = Math.max(0, width - rightWidth - reservedGap);
-  const fittedLeft = fitContributions(left, leftAvailable, compact);
-  const leftRaw = rawContributionLine(fittedLeft, compact);
-  const clippedLeft = truncateToWidth(leftRaw, leftAvailable, "…");
-  const leftWidth = visibleWidth(clippedLeft);
-
-  const styledLeft = styledContributionLine(fittedLeft, compact, clippedLeft, leftRaw, theme);
-  const styledRight = styledContributionLine(fittedRight, compact, clippedRight, rightRaw, theme);
-  if (!clippedRight) return truncateToWidth(styledLeft, width, "");
-  if (!clippedLeft) return truncateToWidth(styledRight, width, "");
-
-  const padding = " ".repeat(Math.max(1, width - leftWidth - rightWidth));
-  return truncateToWidth(`${styledLeft}${padding}${styledRight}`, width, "");
+  return renderModelContextLine(sessionInfo, usage, width, theme, compact);
 }
 
 function spaces(width: number): string {
