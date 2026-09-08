@@ -356,7 +356,45 @@ describe("Herdr native harness security", () => {
       }
   });
 
-  it("requires the current Herdr 0.8 integration marker versions", () =>
+  effectTest(
+    "accepts reviewed hook versions and rejects unknown or wrong-runtime markers",
+    function* () {
+      const test = yield* step(setup);
+      for (const [runtime, versions] of [
+        ["pi", [8]],
+        ["claude", [7, 9]],
+        ["codex", [7, 8]],
+      ] as const) {
+        for (const version of versions) {
+          yield* step(() =>
+            fs.writeFile(
+              test.integrations[runtime],
+              `# installed by herdr\nHERDR_INTEGRATION_ID=${runtime}\nHERDR_INTEGRATION_VERSION=${version}\n`,
+            ),
+          );
+          yield* step(() => Effect.runPromise(test.harness.preflight(runtime, launch(runtime))));
+        }
+        for (const [id, version] of [
+          [runtime, 999],
+          ["other", versions[0]],
+        ] as const) {
+          yield* step(() =>
+            fs.writeFile(
+              test.integrations[runtime],
+              `# installed by herdr\nHERDR_INTEGRATION_ID=${id}\nHERDR_INTEGRATION_VERSION=${version}\n`,
+            ),
+          );
+          yield* step(() =>
+            expect(
+              Effect.runPromise(test.harness.preflight(runtime, launch(runtime))),
+            ).rejects.toMatchObject({ code: `${runtime}_herdr_integration_unavailable` }),
+          );
+        }
+      }
+    },
+  );
+
+  it("rejects obsolete Herdr integration marker versions", () =>
     setup().then((test) =>
       fs
         .writeFile(

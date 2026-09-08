@@ -11,7 +11,8 @@ import type { SubagentRuntime } from "../domain/routing.ts";
 import { hasControlCharacter } from "./harness-shared.ts";
 
 const HERDR_EXECUTABLE = "herdr";
-const SUPPORTED_PROTOCOL = 20;
+// Reviewed Herdr 0.8 and 0.9 protocols. Unknown versions still fail before mutation.
+const SUPPORTED_PROTOCOLS = [20, 22] as const;
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_BYTES = 128 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 8 * 1024;
@@ -660,12 +661,12 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           readinessError("herdr_schema_invalid", "Herdr returned an invalid protocol schema."),
         ),
       );
-      if (document.protocol !== SUPPORTED_PROTOCOL)
+      if (!SUPPORTED_PROTOCOLS.some((protocol) => protocol === document.protocol))
         return yield* readinessError(
-          document.protocol < SUPPORTED_PROTOCOL
+          document.protocol < SUPPORTED_PROTOCOLS[0]
             ? "herdr_upgrade_required"
             : "herdr_protocol_unsupported",
-          `Unsupported Herdr protocol ${document.protocol}. pi-subagents supports protocol ${SUPPORTED_PROTOCOL}; Herdr launch was blocked before topology changes.`,
+          `Unsupported Herdr protocol ${document.protocol}. pi-subagents supports protocols ${SUPPORTED_PROTOCOLS.join(" and ")}; Herdr launch was blocked before topology changes.`,
         );
       const liveSnapshot = yield* runCommand(
         fixedOptions,

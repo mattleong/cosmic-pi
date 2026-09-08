@@ -57,8 +57,10 @@ const SAFE_ENVIRONMENT_KEYS =
   "HOME USER LOGNAME PATH SHELL TMPDIR TMP TEMP LANG LC_ALL LC_CTYPE TERM COLORTERM SSL_CERT_FILE SSL_CERT_DIR XDG_CONFIG_HOME XDG_STATE_HOME HERDR_CONFIG_PATH HERDR_SOCKET_PATH HERDR_SESSION PI_CODING_AGENT_DIR PI_CONFIG_DIR CLAUDE_CONFIG_DIR".split(
     " ",
   );
-const HERDR_080_INTEGRATION_VERSIONS = { pi: 8, claude: 7, codex: 7 } satisfies Readonly<
-  Record<SubagentRuntime, number>
+// Reviewed hooks shipped with Herdr 0.8 and 0.9. CLI preflight separately requires
+// the installed hook to be current for the selected Herdr executable.
+const HERDR_INTEGRATION_VERSIONS = { pi: [8], claude: [7, 9], codex: [7, 8] } satisfies Readonly<
+  Record<SubagentRuntime, ReadonlyArray<number>>
 >;
 const CODEX_BOOTSTRAP_PROMPT =
   "Initialize the private Herdr lifecycle hook. This bootstrap turn must stop before inference.";
@@ -171,8 +173,8 @@ const validateIntegration = (path: string, runtime: SubagentRuntime): Promise<vo
       if (
         !source.includes("installed by herdr") ||
         !markers.includes(`HERDR_INTEGRATION_ID=${runtime}`) ||
-        !markers.includes(
-          `HERDR_INTEGRATION_VERSION=${HERDR_080_INTEGRATION_VERSIONS[runtime].toString()}`,
+        !HERDR_INTEGRATION_VERSIONS[runtime].some((version) =>
+          markers.includes(`HERDR_INTEGRATION_VERSION=${version.toString()}`),
         )
       )
         throw new Error("integration-marker-mismatch");

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Private Codex SessionStart compatibility hook. It adapts nullable transcript evidence for the
-// marker-validated Herdr v7 integration and blocks the bootstrap turn before model inference.
+// marker-validated Herdr integration and blocks the bootstrap turn before model inference.
 import { spawnSync } from "node:child_process";
 
 const MAX_INPUT_BYTES = 64 * 1024;

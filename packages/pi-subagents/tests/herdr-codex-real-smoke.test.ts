@@ -57,7 +57,7 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
       Effect.gen(function* () {
         const cli = yield* HerdrCli;
         const before = yield* cli.snapshot;
-        expect(before).toMatchObject({ version: expect.stringMatching(/^0\.8\./u), protocol: 20 });
+        expect([20, 22]).toContain(before.protocol);
         expect(before.panes.some((pane) => pane.paneId === environment.HERDR_PANE_ID)).toBe(true);
         const herdr = yield* HerdrHost;
         const supervisors = yield* SupervisorChannel;

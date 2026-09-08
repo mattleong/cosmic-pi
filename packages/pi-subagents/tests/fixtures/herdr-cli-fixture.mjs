@@ -16,7 +16,8 @@ await appendFile(
 );
 const args = process.argv.slice(2);
 const protocol =
-  config.mode === "legacy-protocol" ? 19 : config.mode === "future-protocol" ? 21 : 20;
+  config.protocol ??
+  (config.mode === "legacy-protocol" ? 19 : config.mode === "future-protocol" ? 23 : 20);
 if (config.mode === "sleep") {
   await new Promise((resolve) => setTimeout(resolve, 5_000));
   process.exit(0);
@@ -236,7 +237,8 @@ if (args[0] === "api" && args[1] === "snapshot") {
         type: "session_snapshot",
         snapshot: {
           version: "0.8.2",
-          protocol: config.mode === "live-protocol-mismatch" ? 19 : protocol,
+          protocol:
+            config.liveProtocol ?? (config.mode === "live-protocol-mismatch" ? 19 : protocol),
           focused_workspace_id: "user",
           focused_tab_id: "user:t",
           focused_pane_id: pane.pane_id,

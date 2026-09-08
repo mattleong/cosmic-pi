@@ -28,12 +28,15 @@ afterEach(() =>
 
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
-const makeFixtureCli = (mode = "ok") =>
+const makeFixtureCli = (mode = "ok", protocol?: number, liveProtocol?: number) =>
   mkdtemp(join(tmpdir(), "pi-subagents-herdr-cli-")).then((directory) => {
     temporaryDirectories.push(directory);
     const configPath = join(directory, "config.json");
     const logPath = join(directory, "commands.jsonl");
-    return writeFile(configPath, JSON.stringify({ mode, log: logPath })).then(() => {
+    return writeFile(
+      configPath,
+      JSON.stringify({ mode, protocol, liveProtocol, log: logPath }),
+    ).then(() => {
       const environment: NodeJS.ProcessEnv = {
         HOME: directory,
         PATH: inheritedPath(process.env),
@@ -70,17 +73,19 @@ describe("Herdr calling-pane readiness", () => {
   });
 
   effectTest(
-    "accepts protocol 20 with one exact live inherited calling pane and preserves its selector",
+    "accepts reviewed protocols with one exact live inherited calling pane and preserves its selector",
     function* () {
-      const { cli, logPath } = yield* step(() => makeFixtureCli());
-      yield* step(() => Effect.runPromise(cli.preflight("pi")));
+      for (const protocol of [20, 22]) {
+        const { cli, logPath } = yield* step(() => makeFixtureCli("ok", protocol));
+        yield* step(() => Effect.runPromise(cli.preflight("pi")));
 
-      const commands = (yield* step(() => readFile(logPath, "utf8")))
-        .trim()
-        .split("\n")
-        .map((line) => Schema.decodeUnknownSync(CommandLogSchema)(JSON.parse(line)));
-      expect(commands.length).toBeGreaterThan(0);
-      expect(commands.every((command) => command.pane === "user:p0")).toBe(true);
+        const commands = (yield* step(() => readFile(logPath, "utf8")))
+          .trim()
+          .split("\n")
+          .map((line) => Schema.decodeUnknownSync(CommandLogSchema)(JSON.parse(line)));
+        expect(commands.length).toBeGreaterThan(0);
+        expect(commands.every((command) => command.pane === "user:p0")).toBe(true);
+      }
     },
   );
 
@@ -90,7 +95,7 @@ describe("Herdr calling-pane readiness", () => {
       expect(Effect.runPromise(older.cli.preflight("pi"))).rejects.toMatchObject({
         code: "herdr_upgrade_required",
         message: expect.stringContaining(
-          "Unsupported Herdr protocol 19. pi-subagents supports protocol 20",
+          "Unsupported Herdr protocol 19. pi-subagents supports protocols 20 and 22",
         ),
       }),
     );
@@ -100,7 +105,7 @@ describe("Herdr calling-pane readiness", () => {
       expect(Effect.runPromise(newer.cli.preflight("pi"))).rejects.toMatchObject({
         code: "herdr_protocol_unsupported",
         message: expect.stringContaining(
-          "Unsupported Herdr protocol 21. pi-subagents supports protocol 20",
+          "Unsupported Herdr protocol 23. pi-subagents supports protocols 20 and 22",
         ),
       }),
     );
@@ -116,7 +121,23 @@ describe("Herdr calling-pane readiness", () => {
     );
   });
 
-  effectTest("treats protocol-20 agent_blocked as confirmed prompt non-application", function* () {
+  effectTest(
+    "rejects unreviewed intermediate protocols and mixed supported versions",
+    function* () {
+      for (const [protocol, liveProtocol, code] of [
+        [21, 21, "herdr_protocol_unsupported"],
+        [22, 20, "herdr_protocol_mismatch"],
+        [20, 22, "herdr_protocol_mismatch"],
+      ] as const) {
+        const { cli } = yield* step(() => makeFixtureCli("ok", protocol, liveProtocol));
+        yield* step(() =>
+          expect(Effect.runPromise(cli.preflight("pi"))).rejects.toMatchObject({ code }),
+        );
+      }
+    },
+  );
+
+  effectTest("treats agent_blocked as confirmed prompt non-application", function* () {
     const { cli } = yield* step(() => makeFixtureCli("agent-blocked"));
     yield* step(() =>
       expect(Effect.runPromise(cli.prompt("reviewer", "Continue"))).rejects.toMatchObject({
