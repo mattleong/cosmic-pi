@@ -146,7 +146,7 @@ describe("footer layout", () => {
       false,
     );
     expect(visibleWidth(line)).toBe(40);
-    expect(line.indexOf("Ctx")).toBeGreaterThan(0);
-    expect(line.trimStart()).toContain("Ctx");
+    expect(line.length).toBeGreaterThan(line.trimStart().length);
+    expect(line.trimStart()).toContain("38%");
   });
 });

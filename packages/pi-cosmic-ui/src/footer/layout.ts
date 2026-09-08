@@ -22,7 +22,7 @@ function contextUsageCandidates(
 ): string[] {
   const contextWindow = usage?.contextWindow ?? 0;
   const percent = usage?.percent;
-  const label = theme.fg("text", "Ctx");
+  const label = theme.fg("text", "▤");
   if (percent === null || percent === undefined)
     return [`${label} ${theme.fg("text", `?/${formatTokens(contextWindow)}`)}`];
 

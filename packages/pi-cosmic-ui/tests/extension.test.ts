@@ -346,7 +346,7 @@ describe("Cosmic UI extension", () => {
       const rendered = footer.render(100);
       expect(rendered[0]).toContain("second-model");
       expect(rendered[0]).toContain("high");
-      expect(rendered[0]).toContain("Ctx");
+      expect(rendered[0]).toContain("13k/100k");
       expect(rendered[1]).toContain("⌂ /tmp/second-project");
       expect(rendered.join("\n")).toContain("second-session");
 
@@ -365,7 +365,7 @@ describe("Cosmic UI extension", () => {
       const laterRendered = footer.render(100);
       expect(laterRendered[0]).toContain("later-model");
       expect(laterRendered[0]).toContain("high");
-      expect(laterRendered[0]).toContain("Ctx");
+      expect(laterRendered[0]).toContain("13k/100k");
       expect(laterRendered[1]).toContain("⌂ /tmp/later-project");
       expect(laterRendered.join("\n")).toContain("later-session");
     }),
