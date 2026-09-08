@@ -17,6 +17,7 @@ import {
   type SubagentActivityPresentationSnapshot,
 } from "../ui/activity-panel.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
+import { projectRunRoutePresentation } from "../ui/run-presentation.ts";
 
 const PROVIDER = "pi-subagents";
 const RUN_STATUS = {
@@ -95,6 +96,12 @@ export function subagentActivityItems(
         ].map((action) => Object.freeze(action)),
       ),
     };
+    const route = projectRunRoutePresentation(run);
+    Object.assign(item, {
+      route: sanitizeDiagnosticContent(`${route.hostRuntime} · ${route.model}`, {
+        maximumLength: 512,
+      }),
+    });
     if (run.profile !== undefined) Object.assign(item, { profile: run.profile });
     if (run.endedAt !== undefined) Object.assign(item, { endedAt: run.endedAt });
     if (run.parentRunId && run.parentRunId !== "root")

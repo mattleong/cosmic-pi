@@ -92,6 +92,10 @@ Example config:
 
 ## Image generation
 
+Image requests explicitly select `gpt-image-2.5-sunburst` for the hosted `image_generation` tool. OpenAI describes Sunburst as its [most capable image generation and editing model](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst). The faster 2.5 variant is `gpt-image-2.5-flare`; Better OpenAI uses Sunburst for all actions, including `auto`.
+
+The tool's `model` parameter and `image.defaultModel` still select the mainline Codex model that invokes image generation, not the image model itself. This separation follows OpenAI's [Responses image generation guide](https://developers.openai.com/api/docs/guides/tools-image-generation). Codex subscription availability depends on OpenAI's rollout and your account. Requests do not silently fall back to an older image model if rejected.
+
 Use the command for quick generation:
 
 ```text
@@ -103,7 +107,7 @@ Agents can call the `openai_image` tool directly. Supported parameters:
 - `prompt` (required): pass the user's image wording verbatim.
 - `action`: `auto`, `generate`, or `edit`.
 - `images`: up to five distinct project-local reference/edit image paths. Paths must stay inside the current workspace and point to readable PNG, JPEG, WebP, or GIF files; each file is limited to 20 MB and the combined input to 50 MB.
-- `model`: Codex image model override, for example `openai-codex/gpt-5.5`.
+- `model`: mainline Codex model override, for example `openai-codex/gpt-5.5`. Defaults to the current `openai-codex` session model, otherwise `image.defaultModel`. This does not change the hosted GPT Image 2.5 Sunburst model.
 - `outputFormat`: `png`, `jpeg`, or `webp`.
 - `save`: `project`, `global`, `custom`, or `none`.
 - `saveDir`: required for `save: "custom"` unless `PI_IMAGE_SAVE_DIR` is set.

@@ -36,7 +36,11 @@ export const TOOL_PARAMS = {
       maxItems: MAX_IMAGE_INPUTS,
       items: boundedJsonString(PATH_MAX_LENGTH),
     },
-    model: boundedJsonString(MODEL_MAX_LENGTH),
+    model: {
+      ...boundedJsonString(MODEL_MAX_LENGTH),
+      description:
+        "Mainline Codex model override, for example openai-codex/gpt-5.5. The hosted image model is GPT Image 2.5 Sunburst, not this field.",
+    },
     outputFormat: { type: "string", enum: IMAGE_OUTPUT_FORMATS },
     save: { type: "string", enum: IMAGE_SAVE_MODES },
     saveDir: boundedJsonString(PATH_MAX_LENGTH),

@@ -10,7 +10,13 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import { confirmEffectProcessClose, provideNodeProcess } from "pi-cosmic-core";
+import {
+  confirmEffectProcessClose,
+  nodeFilePlatformLayer,
+  provideNodeProcess,
+  SafeFile,
+} from "pi-cosmic-core";
+import { readClaudeModelPreference } from "./claude-model-preference.ts";
 import {
   initializeRequest,
   initializedNotification,
@@ -209,7 +215,7 @@ const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<Subagent
 const normalizeDescription = (value: string): string =>
   value.replaceAll("\r", " ").replaceAll("\n", " ").replaceAll("\t", " ").trim();
 
-const claudeArgs = (): ReadonlyArray<string> => [
+const claudeArgs = (probeSelector: string): ReadonlyArray<string> => [
   "--print",
   "--input-format",
   "stream-json",
@@ -217,7 +223,7 @@ const claudeArgs = (): ReadonlyArray<string> => [
   "stream-json",
   "--verbose",
   "--model",
-  "default",
+  probeSelector,
   "--effort",
   "low",
   "--disable-slash-commands",
@@ -225,6 +231,11 @@ const claudeArgs = (): ReadonlyArray<string> => [
   "--no-session-persistence",
   "--setting-sources",
   "",
+  "--settings",
+  '{"disableAllHooks":true,"enableAllProjectMcpServers":false}',
+  "--strict-mcp-config",
+  "--mcp-config",
+  '{"mcpServers":{}}',
   "--permission-mode",
   "dontAsk",
   "--tools",
@@ -466,12 +477,13 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
   sourceEnvironment: NodeJS.ProcessEnv,
   timeoutMillis: number,
   options: NativeModelCatalogLayerOptions,
+  probeSelector: string,
 ) {
   if (runtime !== "codex" || !options.agentDirectory)
     return yield* runCatalogProcess(
       runtime,
       executable,
-      runtime === "claude" ? claudeArgs() : codexArgv(),
+      runtime === "claude" ? claudeArgs(probeSelector) : codexArgv(),
       catalogFrames(runtime),
       cwd,
       sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
@@ -512,6 +524,7 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
 class CatalogCacheKey extends Data.Class<{
   readonly runtime: LocalCliRuntime;
   readonly cwd: string;
+  readonly probeSelector: string;
 }> {}
 
 const loadNativeModelCatalog =
@@ -522,51 +535,74 @@ const loadNativeModelCatalog =
     const { runtime, cwd } = key;
     const executable = options.executables?.[runtime] ?? runtime;
     const sourceEnvironment = options.environment ?? process.env;
-    return discoverCatalog(
-      runtime,
-      executable,
-      cwd,
-      sourceEnvironment,
-      options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
-      options,
-    ).pipe(
-      Effect.flatMap((value) => {
-        if (
-          (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
-          (runtime === "claude" && isClaudeCatalogErrorResponse(value))
-        )
-          return Effect.fail(
-            catalogError(
-              runtime,
-              "catalog_request_rejected",
-              `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
+    const load = (probeSelector: string) =>
+      discoverCatalog(
+        runtime,
+        executable,
+        cwd,
+        sourceEnvironment,
+        options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
+        options,
+        probeSelector,
+      ).pipe(
+        Effect.flatMap((value) => {
+          if (
+            (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||
+            (runtime === "claude" && isClaudeCatalogErrorResponse(value))
+          )
+            return Effect.fail(
+              catalogError(
+                runtime,
+                "catalog_request_rejected",
+                `${runtime === "claude" ? "Claude Code" : "Codex"} rejected the bounded model catalog request.`,
+              ),
+            );
+          return (runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)).pipe(
+            Effect.mapError(() =>
+              catalogError(
+                runtime,
+                "catalog_protocol_invalid",
+                `${runtime} returned an invalid model catalog.`,
+              ),
             ),
           );
-        return (runtime === "claude" ? decodeClaudeModels(value) : decodeCodexModels(value)).pipe(
-          Effect.mapError(() =>
-            catalogError(
-              runtime,
-              "catalog_protocol_invalid",
-              `${runtime} returned an invalid model catalog.`,
-            ),
-          ),
-        );
-      }),
-    );
+        }),
+      );
+    return Effect.gen(function* () {
+      const defaults = yield* load("default");
+      if (runtime !== "claude" || key.probeSelector === "default") return defaults;
+      const preferred = yield* load(key.probeSelector);
+      // Keep every advertised selector, with the preference probe's metadata for duplicates.
+      return [
+        ...new Map([...defaults, ...preferred].map((model) => [model.selector, model])).values(),
+      ];
+    });
   };
 
 export const makeNativeModelCatalog = (
   options: NativeModelCatalogLayerOptions = {},
 ): Effect.Effect<NativeModelCatalogContract> =>
-  // One session cwd can cache one key for each of the two native runtimes.
-  Cache.makeWith(loadNativeModelCatalog(options), {
-    capacity: 2,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
-  }).pipe(
-    Effect.map((cache) => ({
-      list: (runtime, cwd) => Cache.get(cache, new CatalogCacheKey({ runtime, cwd })),
-    })),
-  );
+  Effect.gen(function* () {
+    const safeFile = yield* SafeFile;
+    const cache = yield* Cache.makeWith(loadNativeModelCatalog(options), {
+      capacity: 2,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+    });
+    return {
+      list: (runtime, cwd) =>
+        Effect.gen(function* () {
+          // Re-read before cache lookup so external preference edits need no session reload.
+          const probeSelector =
+            runtime === "claude"
+              ? yield* readClaudeModelPreference(
+                  sanitizeLocalCliEnvironment(options.environment ?? process.env, runtime),
+                  safeFile,
+                )
+              : "default";
+          return yield* Cache.get(cache, new CatalogCacheKey({ runtime, cwd, probeSelector }));
+        }),
+    } satisfies NativeModelCatalogContract;
+  }).pipe(Effect.provide(SafeFile.layer.pipe(Layer.provide(nodeFilePlatformLayer))));
 
 export class NativeModelCatalog extends Context.Service<
   NativeModelCatalog,

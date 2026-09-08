@@ -110,6 +110,9 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   return ignoredEvent;
 });
 
+// The hosted image model is separate from the mainline Responses model.
+const IMAGE_GENERATION_MODEL = "gpt-image-2.5-sunburst";
+
 const InputContentSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal("input_text"), text: Schema.String }),
   Schema.Struct({
@@ -127,6 +130,7 @@ export const ImageRequestSchema = Schema.Struct({
   tools: Schema.Array(
     Schema.Struct({
       type: Schema.Literal("image_generation"),
+      model: Schema.Literal(IMAGE_GENERATION_MODEL),
       output_format: ImageOutputFormatSchema,
       action: Schema.optional(Schema.Literals(["generate", "edit"])),
     }),
@@ -157,19 +161,16 @@ export function buildImageRequest(values: {
       image_url: `data:${image.mimeType};base64,${image.data}`,
     });
   }
-  const tool: ImageRequest["tools"][number] =
-    values.action === "auto"
-      ? { type: "image_generation", output_format: values.outputFormat }
-      : {
-          type: "image_generation",
-          output_format: values.outputFormat,
-          action: values.action,
-        };
+  const tool: ImageRequest["tools"][number] = {
+    type: "image_generation",
+    model: IMAGE_GENERATION_MODEL,
+    output_format: values.outputFormat,
+  };
   return {
     model: values.model,
     instructions: "",
     input: [{ role: "user", content }],
-    tools: [tool],
+    tools: [values.action === "auto" ? tool : { ...tool, action: values.action }],
     tool_choice: { type: "image_generation" },
     parallel_tool_calls: false,
     store: false,

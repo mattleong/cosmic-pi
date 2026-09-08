@@ -29,6 +29,12 @@ The editor remembers candidate, field, and Advanced expansion when returning thr
 
 Model and profile search start ready to type and cancel with one Esc or configured cancel binding. Picker labels show each default/current status once; the explicit profile-default reasoning choice remains distinct from a pinned level. Help and confirmation hints follow the configured keys. Runtime changes requiring a model selection commit together; canceling leaves the route unchanged. Edits auto-save serially. Routine success shows a small Saved indicator in the existing frame instead of consuming field rows, including on short terminals. Policy-adjustment notices and warnings remain visible. Wide layouts give long model names more list width while keeping at least half the inner width for the divider and detail pane. Conflicts refresh without retrying, and failed refresh blocks further edits until reopening. Catalog cancellation and disposal abort outstanding work and ignore late continuations.
 
+## Native model discovery
+
+The Claude picker asks the installed CLI for its catalog without inference. Before each lookup it reads only the schema-validated `model` field from the user-level `$HOME/.claude/settings.json`, limited to 64 KiB and regular files. It follows this exact user config path's symlink to support dotfile managers, then reads the canonical target through core `SafeFile`. `HOME` matches the sanitized child environment; stripped `CLAUDE_CONFIG_DIR` overrides and project settings are not consulted. Missing or invalid settings use `default`.
+
+The probe preserves aliases and context suffixes such as `[1m]`. Its selector is part of the session cache key, so changing the user preference updates discovery on the next picker access without reload. When a preference is set, discovery combines the default and preferred-selector catalogs. Both probes must succeed. Exact duplicate selectors use the preferred probe's metadata; distinct aliases and context selectors remain separate choices. Each probe has its own 10-second deadline and confirmed process cleanup. Discovery keeps settings sources disabled, explicitly disables hooks, and uses strict empty MCP configuration. It does not change subagent launch policy.
+
 ## Saved-set library
 
 `p` opens a separate library grouped as Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration.

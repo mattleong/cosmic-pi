@@ -157,6 +157,8 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                   if (item.parent) Object.assign(detached, { parent: { ...item.parent } });
                   if (item.profile !== undefined)
                     Object.assign(detached, { profile: cleanText(item.profile) });
+                  if (item.route !== undefined)
+                    Object.assign(detached, { route: cleanText(item.route) });
                   if (item.summary !== undefined)
                     Object.assign(detached, { summary: cleanText(item.summary) });
                   if (item.detail !== undefined)

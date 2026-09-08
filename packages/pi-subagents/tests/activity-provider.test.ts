@@ -61,6 +61,22 @@ describe("subagent activity provider", () => {
     expect(items.map((item) => item.profile)).toEqual(["worker", "scout", undefined]);
     expect(items.map((item) => item.title)).toEqual(["Implementation", "Review", "Scout"]);
   });
+  it("publishes the selected host and model route with effort and fast mode", () => {
+    const items = subagentActivityItems({
+      revision: 1,
+      runs: [
+        view({
+          host: "herdr",
+          runtime: "pi",
+          model: "provider/model",
+          effort: "high",
+          openaiFastMode: true,
+        }),
+      ],
+    });
+    expect(items[0]?.route).toContain("herdr/pi");
+    expect(items[0]?.route).toContain("provider/model:high");
+  });
   it("keeps active descendants below completed ancestors without inventing missing parents", () => {
     const items = subagentActivityItems({
       revision: 4,

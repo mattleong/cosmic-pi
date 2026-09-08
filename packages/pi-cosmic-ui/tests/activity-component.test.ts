@@ -16,6 +16,20 @@ const row = (id: string): ActivityRow => ({
   providerId: "agents",
 });
 describe("activity presentation", () => {
+  it("keeps route metadata visible beside long titles on wide widgets", () => {
+    const agent = {
+      ...row("Long task title ".repeat(30)),
+      profile: "worker",
+      route: "herdr/pi · provider/model:high",
+      startedAt: 0,
+    };
+    for (const width of [100, 120, 160]) {
+      const lines = renderActivityWidget([agent], width, 8, { now: 60_000 });
+      expect(lines.join("\n")).toContain(agent.route);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+    expect(renderActivityWidget([agent], 80).join("\n")).not.toContain(agent.route);
+  });
   it("hides the widget after activity ends but keeps startup and awaited work visible", () => {
     const finished: ActivityRow[] = [
       { ...row("success"), status: "done", inputTarget: undefined, blockedReason: undefined },

@@ -19,6 +19,7 @@ const ActivityFields = {
   kind: Schema.Literals(["agent", "command", "question"]),
   title: Schema.String.check(Schema.isMaxLength(512)),
   profile: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
+  route: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
   awaited: Schema.optional(Schema.Boolean),
   revision: Id,
   startedAt: Schema.optional(Timestamp),
@@ -114,6 +115,7 @@ const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityIte
     if (item.parent) Object.assign(detached, { parent: { ...item.parent } });
     if (item.profile !== undefined)
       Object.assign(detached, { profile: safeSummary(item.profile, 80) });
+    if (item.route !== undefined) Object.assign(detached, { route: safeSummary(item.route, 512) });
     if (item.summary !== undefined)
       Object.assign(detached, { summary: safeSummary(item.summary, 4096) });
     if (item.detail !== undefined)

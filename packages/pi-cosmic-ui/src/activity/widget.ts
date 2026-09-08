@@ -133,11 +133,17 @@ export function activityRowLine(
   const glyph = paint(color, activityGlyph(row, now));
   const profile = profileName ? `${profileName} · ` : "";
   const omitted = interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "";
-  const left = truncateToWidth(
+  const route =
+    !interactive && width >= 100 && row.route
+      ? paint("muted", truncateToWidth(row.route, Math.floor(leftWidth / 2), "…"))
+      : "";
+  const routeWidth = route ? visibleWidth(route) + 2 : 0;
+  const identity = truncateToWidth(
     `${guide}${paint("accent", awaited)}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
-    leftWidth,
+    Math.max(0, leftWidth - routeWidth),
     "…",
   );
+  const left = route ? `${identity}  ${route}` : identity;
   const statusColor = warnings ? "warning" : !interactive && !attention ? "muted" : color;
   return showStatus
     ? `${left}${" ".repeat(Math.max(1, width - visibleWidth(left) - rightWidth))}${paint(statusColor, truncateToWidth(status, rightWidth, "…"))}`
