@@ -31,26 +31,23 @@ import {
   type BackendLaunchRequest,
 } from "./model.ts";
 import {
-  addUsageComponents,
   claudeLeadingTagDiagnostic,
   claudeOutboundAgeDiagnostic,
   claudeSessionDiagnostic,
   claudeTextLengthDiagnostic,
-  componentwiseMax,
-  cumulativeUsageDelta,
   isClaudeQueuedTaskNotificationReplay,
   isInternalReplayOrigin,
   isSameClaudeSession,
   makeClaudeResultCorrelation,
   uncorrelatedClaudeUserMessage,
   usageComponentsTotal,
-  zeroUsageComponents,
   type ClaudeSentContentMatch,
   type ClaudeSentUserKind,
   type ClaudeUserDiagnosticContext,
   type ResultExpectation,
-  type UsageComponents,
 } from "./local-claude-correlation.ts";
+import { makeLocalClaudeReportDelivery } from "./local-claude-report-delivery.ts";
+import { makeLocalClaudeUsage } from "./local-claude-usage.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { correlatedRequest, unsupported as unsupportedCapability } from "./driver-shared.ts";
 import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
@@ -74,11 +71,8 @@ import {
 
 const EVENT_CAPACITY = 512;
 const CONTROL_TIMEOUT = "10 seconds";
-// Native finalization after the report tool may require another model step.
-const RESULT_REPORT_GRACE = "10 seconds";
 const MCP_READY_ATTEMPTS = 100;
 const INITIALIZATION_PROBE = "pi-subagents native initialization probe";
-const ASSISTANT_USAGE_MESSAGE_LIMIT = 32;
 const CLAUDE_NATIVE_AGENT_START_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 const CLAUDE_NATIVE_AGENT_TOOLS: ReadonlySet<string> = new Set([
   "Agent",
@@ -158,12 +152,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   // replays of a known UUID stay nonfatal while unknown replays fail closed,
   // plus the owned result-expectation map/FIFO for exact result correlation.
   const correlation = makeClaudeResultCorrelation();
-  const assistantUsageByMessage = new Map<string, UsageComponents>();
-  let emittedUsageTotals: UsageComponents = zeroUsageComponents;
-  const bufferedReports = new Map<number, Extract<BackendEvent, { readonly type: "report" }>>();
-  const nativeResultEpochs = new Set<number>();
-  const forwardingReports = new Map<number, Deferred.Deferred<boolean>>();
-  const forwardedReportEpochs = new Set<number>();
+  const usage = makeLocalClaudeUsage();
+  const reports = makeLocalClaudeReportDelivery(offer);
   let pendingUserReplay: PendingUserReplay | undefined;
   let pendingInterrupt: PendingInterrupt | undefined;
   let assignmentEpoch = 0;
@@ -196,7 +186,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     toolNames.clear();
     nativeToolNames.clear();
     correlation.clear();
-    assistantUsageByMessage.clear();
+    usage.clearMessageHistory();
     supervisor.cancelPending(error.message);
   };
   yield* Effect.addFinalizer(() =>
@@ -209,64 +199,8 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     }),
   );
 
-  function forwardReport(
-    report: Extract<BackendEvent, { readonly type: "report" }>,
-  ): Effect.Effect<void, Cause.Done> {
-    return Effect.suspend(() => {
-      const epoch = report.assignmentEpoch;
-      if (forwardedReportEpochs.has(epoch)) return Effect.void;
-      const existing = forwardingReports.get(epoch);
-      if (existing)
-        return Deferred.await(existing).pipe(
-          Effect.flatMap((forwarded) => (forwarded ? Effect.void : forwardReport(report))),
-        );
-      const completion = Deferred.makeUnsafe<boolean>();
-      forwardingReports.set(epoch, completion);
-      let forwarded = false;
-      return offer(report).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            forwarded = true;
-            forwardedReportEpochs.add(epoch);
-            bufferedReports.delete(epoch);
-          }),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            forwardingReports.delete(epoch);
-            Deferred.doneUnsafe(completion, Effect.succeed(forwarded));
-          }),
-        ),
-      );
-    });
-  }
-
-  const releaseReportAfterNativeResult = (epoch: number) =>
-    Effect.suspend(() => {
-      nativeResultEpochs.add(epoch);
-      const report = bufferedReports.get(epoch);
-      return report ? forwardReport(report) : Effect.void;
-    });
-
-  const handleSupervisorEvent = (event: SupervisorEvent) => {
-    if (event.type !== "report") return offer(event);
-    if (forwardedReportEpochs.has(event.assignmentEpoch)) return Effect.void;
-    if (nativeResultEpochs.has(event.assignmentEpoch)) return forwardReport(event);
-    // Hold the accepted report briefly so final native usage/cost is forwarded
-    // first. Otherwise report settlement closes the backend scope and races away
-    // Claude's trailing result frame. The bound preserves completion if Claude
-    // never emits that frame.
-    bufferedReports.set(event.assignmentEpoch, event);
-    return Effect.sleep(RESULT_REPORT_GRACE).pipe(
-      Effect.andThen(
-        Effect.suspend(() =>
-          bufferedReports.get(event.assignmentEpoch) === event ? forwardReport(event) : Effect.void,
-        ),
-      ),
-      Effect.forkScoped,
-      Effect.asVoid,
-    );
-  };
+  const handleSupervisorEvent = (event: SupervisorEvent) =>
+    event.type === "report" ? reports.bufferAcceptedReport(event) : offer(event);
 
   const handleToolResults = (
     toolResults: ClaudeUserProtocolEvent["toolResults"],
@@ -477,7 +411,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
                     raw,
                   ),
                 ),
-                Effect.andThen(forwardReport({ type: "report", ...report })),
+                Effect.andThen(reports.forwardReport({ type: "report", ...report })),
               );
             }),
           );
@@ -516,7 +450,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             if (pending.resultKind)
               correlation.register(
                 { uuid: pending.uuid, kind: pending.resultKind, epoch: pending.epoch },
-                emittedUsageTotals,
+                usage.baseline(),
               );
             Deferred.doneUnsafe(pending.acknowledgement, Effect.void);
             return pending.emitRunStarted
@@ -558,7 +492,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             if (event.uuid !== undefined) correlation.rememberInternalReplayUuid(event.uuid);
             correlation.register(
               { uuid: syntheticUuid, kind: "synthetic", epoch: assignmentEpoch },
-              emittedUsageTotals,
+              usage.baseline(),
             );
             return offer({ type: "activity", assignmentEpoch }, raw);
           }),
@@ -622,26 +556,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
           args: tool.input,
         });
       }
-      // Native assistant usage repeats cumulatively per message id, so only the
-      // nonnegative delta for the same id is accounted.
-      const previous = event.messageId ? assistantUsageByMessage.get(event.messageId) : undefined;
-      const { delta, inconsistent } = cumulativeUsageDelta(
-        previous ?? zeroUsageComponents,
-        event.usage,
-      );
-      if (event.messageId) {
-        assistantUsageByMessage.delete(event.messageId);
-        assistantUsageByMessage.set(
-          event.messageId,
-          componentwiseMax(previous ?? zeroUsageComponents, event.usage),
-        );
-        while (assistantUsageByMessage.size > ASSISTANT_USAGE_MESSAGE_LIMIT) {
-          const oldest = assistantUsageByMessage.keys().next().value;
-          if (oldest === undefined) break;
-          assistantUsageByMessage.delete(oldest);
-        }
-      }
-      emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
+      const { delta, inconsistent } = usage.assistantDelta(event.messageId, event.usage);
       if (inconsistent)
         yield* offer({
           type: "warning",
@@ -670,16 +585,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       (event.usage === undefined && event.totalCostUsd === undefined)
     )
       return Effect.void;
-    // The nonnegative already-emitted amount for this exact query is
-    // the componentwise floor delta over its registration baseline.
-    const emittedForQuery: UsageComponents = cumulativeUsageDelta(
-      expectation.usageBaseline,
-      emittedUsageTotals,
-    ).delta;
-    const { delta, inconsistent } = event.usage
-      ? cumulativeUsageDelta(emittedForQuery, event.usage)
-      : { delta: zeroUsageComponents, inconsistent: false };
-    emittedUsageTotals = addUsageComponents(emittedUsageTotals, delta);
+    const { delta, inconsistent } = usage.resultDelta(expectation.usageBaseline, event.usage);
     // total_cost_usd is cumulative within one native query, but each
     // result/query reports independently. Consume it once by UUID.
     const costDelta = event.totalCostUsd;
@@ -741,7 +647,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
               ),
             onSuccess: (accepted) =>
               accepted
-                ? release(raw).pipe(Effect.andThen(releaseReportAfterNativeResult(completedEpoch)))
+                ? release(raw).pipe(Effect.andThen(reports.observeNativeResult(completedEpoch)))
                 : offer(
                     {
                       type: "protocol_error",
@@ -780,7 +686,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
         event.sessionId === nativeSessionId);
     if (interruptedResult)
       return reconcileResultUsage(event, expectation).pipe(
-        Effect.andThen(releaseReportAfterNativeResult(interrupt.epoch)),
+        Effect.andThen(reports.observeNativeResult(interrupt.epoch)),
         Effect.andThen(settleInterruptResult(interrupt, raw)),
       );
     if (event.isError)
@@ -869,10 +775,9 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
           Effect.flatMap((report) =>
             report
-              ? forwardReport({ type: "report", ...report }).pipe(
-                  Effect.timeoutOption("1 second"),
-                  Effect.asVoid,
-                )
+              ? reports
+                  .forwardReport({ type: "report", ...report })
+                  .pipe(Effect.timeoutOption("1 second"), Effect.asVoid)
               : Effect.void,
           ),
           Effect.catch(() =>

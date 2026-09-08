@@ -28,6 +28,7 @@ import {
 } from "./support/node-builtins.ts";
 import {
   makeSupervisorChannel,
+  SupervisorChannelError,
   type SupervisorChannelHandle,
   type SupervisorChannelLayerOptions,
 } from "../src/boundary/supervisor-channel.ts";
@@ -519,17 +520,82 @@ describe("private supervisor channel", () => {
     yield* step(() => Effect.runPromise(Scope.close(scope, Exit.void)));
   });
 
-  effectTest("shares successful cleanup across concurrent close and scope release", function* () {
-    const opened = yield* step(() => openChannel("agent-supervisor-concurrent-close"));
-    yield* step(() =>
-      Effect.runPromise(
-        Effect.all([opened.handle.close, opened.handle.close], { concurrency: "unbounded" }),
+  effectTest("shares complete cleanup across concurrent close and scope release", function* () {
+    const { handle, scope } = yield* step(() =>
+      openChannel("agent-supervisor-concurrent-close", {}, true),
+    );
+    const config = yield* step(() => connectionConfig(handle));
+    const direct = yield* step(() => connectDirectRpc(handle, config));
+    yield* step(() => Effect.runPromise(direct.client.SupervisorOpenSession(config)));
+    const notificationSeen = promiseGate();
+    const epochSeen = promiseGate();
+    const watching = Effect.runPromiseExit(
+      Stream.runForEach(direct.client.SupervisorWatchAssignments(config), (update) =>
+        update.kind === "assignment" && update.assignmentEpoch === 1
+          ? direct.client.SupervisorAcknowledgeAssignment({
+              ...config,
+              updateId: update.updateId,
+              assignmentEpoch: update.assignmentEpoch,
+            })
+          : Effect.sync(() => {
+              if (update.kind === "notification") notificationSeen.open();
+              else epochSeen.open();
+            }),
       ),
     );
-    yield* step(() =>
-      expect(stat(opened.handle.metadata.stateDirectory)).rejects.toMatchObject({ code: "ENOENT" }),
+    yield* step(() => Effect.runPromise(handle.awaitReady));
+    yield* step(() => Effect.runPromise(handle.setAssignmentEpoch(1)));
+    const question = Effect.runPromiseExit(
+      direct.client.SupervisorQuestion({
+        ...config,
+        assignmentEpoch: 1,
+        requestId: SupervisorChannelIdSchema.make("question-before-shared-close"),
+        message: "Will shutdown settle this question?",
+      }),
     );
-    yield* step(() => Effect.runPromise(Scope.close(opened.scope, Exit.void)));
+    expect(yield* step(() => takeEvent(handle))).toMatchObject({
+      type: "supervisor_contact",
+      kind: "question",
+    });
+    const notification = Effect.runPromise(
+      handle.deliverNotification("Awaiting helper acknowledgement.").pipe(Effect.flip),
+    );
+    yield* step(() => withTimeout(notificationSeen.promise));
+    const advancing = Effect.runPromise(handle.setAssignmentEpoch(2).pipe(Effect.flip));
+    yield* step(() => withTimeout(epochSeen.promise));
+
+    yield* step(() =>
+      Effect.runPromise(
+        Effect.all([handle.close, handle.close, Scope.close(scope, Exit.void)], {
+          concurrency: "unbounded",
+        }),
+      ),
+    );
+    // Logical shutdown rejects owned acknowledgements before socket teardown can replace the cause.
+    for (const pending of [notification, advancing]) {
+      const error = yield* step(() => withTimeout(pending));
+      expect(error).toBeInstanceOf(SupervisorChannelError);
+      expect(error.code).toBe("channel_closed");
+    }
+    expect(Exit.isFailure(yield* step(() => withTimeout(question)))).toBe(true);
+    yield* step(() => withTimeout(watching));
+    yield* step(() =>
+      expect(Effect.runPromise(handle.awaitReady)).rejects.toMatchObject({
+        code: "channel_closed",
+      }),
+    );
+    yield* step(() =>
+      expect(stat(handle.metadata.stateDirectory)).rejects.toMatchObject({ code: "ENOENT" }),
+    );
+    const refused = Deferred.makeUnsafe<boolean>();
+    const socket = connect({ host: handle.metadata.host, port: handle.metadata.port });
+    socket.once("connect", () => {
+      socket.destroy();
+      Deferred.doneUnsafe(refused, Effect.succeed(false));
+    });
+    socket.once("error", () => Deferred.doneUnsafe(refused, Effect.succeed(true)));
+    expect(yield* step(() => withTimeout(Effect.runPromise(Deferred.await(refused))))).toBe(true);
+    yield* step(() => direct.close());
   });
 
   effectTest(

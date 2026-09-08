@@ -1,9 +1,9 @@
 /**
  * Pure usage arithmetic and UUID/result correlation bookkeeping for the local
- * Claude adapter. `makeLocalClaudeHandle` remains the owner of report
- * buffering, interrupt lifecycles, control responses, the assignment epoch,
- * and initialization; this module only tracks what was sent and which native
- * result each issued input owns.
+ * Claude adapter. The driver owns interrupt lifecycles, control responses,
+ * assignment epochs, and initialization; separate delivery and usage owners
+ * handle report buffering and cumulative accounting. This module tracks sent
+ * inputs and the native result each owns.
  */
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 

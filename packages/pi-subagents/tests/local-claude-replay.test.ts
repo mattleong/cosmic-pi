@@ -4,6 +4,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import {
   decodeClaudeProtocolEvent,
@@ -40,7 +41,10 @@ type ReplayScenario =
   | "queued-task-notification-cross-session"
   | "tagged-task-notification-nonreplay"
   | "tagged-task-notification-channel"
-  | "accepted-report-foreign-replay";
+  | "accepted-report-foreign-replay"
+  | "accepted-report-result"
+  | "accepted-report-cost-only"
+  | "accepted-report-close";
 
 const launch = (model: ReplayScenario): BackendLaunchRequest => ({
   runId: `agent-${model}`,
@@ -61,6 +65,7 @@ const launch = (model: ReplayScenario): BackendLaunchRequest => ({
 interface ReplayHarness {
   readonly processes: LocalCliProcessContract;
   readonly supervisors: SupervisorChannelContract;
+  readonly finishResult: Effect.Effect<void>;
   readonly close: Effect.Effect<void>;
 }
 
@@ -68,17 +73,17 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
-    const acceptedReport =
-      scenario === "accepted-report-foreign-replay"
-        ? {
-            runId: `agent-${scenario}`,
-            assignmentEpoch: 12,
-            sequence: 1,
-            deliveryId: "accepted-delivery",
-            text: "Accepted report text",
-            evidence: "accepted-report-evidence",
-          }
-        : undefined;
+    let pendingResult: ClaudeInboundFrame | undefined;
+    const acceptedReport = scenario.startsWith("accepted-report-")
+      ? {
+          runId: `agent-${scenario}`,
+          assignmentEpoch: 12,
+          sequence: 1,
+          deliveryId: "accepted-delivery",
+          text: "Accepted report text",
+          evidence: "accepted-report-evidence",
+        }
+      : undefined;
     const offerChild = (value: ClaudeInboundFrame): void => {
       Queue.offerUnsafe(childEvents, { type: "message", value });
     };
@@ -252,15 +257,34 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
             session_id: "different-claude-session",
             message: outbound.message,
           });
-        offerChild({
+        if (scenario === "accepted-report-close") return;
+        const result: ClaudeInboundFrame = {
           type: "result",
           subtype: "success",
           is_error: false,
           session_id: "claude-replay-session",
           user_message_uuid: outbound.uuid,
-          usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+          ...(scenario !== "accepted-report-cost-only" && {
+            usage: { input_tokens: 5, output_tokens: 4, cache_read_input_tokens: 1 },
+          }),
           total_cost_usd: 0.001,
-        });
+        };
+        if (
+          (scenario === "accepted-report-result" || scenario === "accepted-report-cost-only") &&
+          acceptedReport
+        ) {
+          pendingResult = result;
+          Queue.offerUnsafe(supervisorEvents, { type: "report", ...acceptedReport });
+          // Observing this progress proves the adapter has consumed the earlier
+          // report event before the test releases native final telemetry.
+          Queue.offerUnsafe(supervisorEvents, {
+            type: "supervisor_contact",
+            assignmentEpoch: 12,
+            requestId: "after-report",
+            kind: "progress",
+            message: "Native finalization pending",
+          });
+        } else offerChild(result);
       });
 
     const child: LocalCliHandle = {
@@ -301,6 +325,10 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     return {
       processes,
       supervisors,
+      finishResult: Effect.sync(() => {
+        if (pendingResult) offerChild(pendingResult);
+        pendingResult = undefined;
+      }),
       close: Effect.sync(() => {
         Queue.endUnsafe(childEvents);
         Queue.endUnsafe(supervisorEvents);
@@ -484,6 +512,71 @@ describe("local Claude replay classification", () => {
         message: expect.stringContaining("session=mismatch"),
       });
     }),
+  );
+
+  it.effect("queues final usage and cost before settling an already-buffered report", () =>
+    Effect.gen(function* () {
+      for (const scenario of ["accepted-report-result", "accepted-report-cost-only"] as const) {
+        yield* withReplayHarness(scenario, ({ processes, supervisors, finishResult, close }) =>
+          Effect.gen(function* () {
+            const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
+              launch(scenario),
+            );
+            yield* backend.controls.initialize;
+            yield* backend.controls.start("Report before native finalization", 12);
+            const initial = [yield* take(backend), yield* take(backend), yield* take(backend)];
+            expect(initial).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ type: "run_started", assignmentEpoch: 12 }),
+                expect.objectContaining({ type: "assistant_message", assignmentEpoch: 12 }),
+                expect.objectContaining({ type: "supervisor_contact", kind: "progress" }),
+              ]),
+            );
+            expect(Option.isNone(yield* Queue.poll(backend.events))).toBe(true);
+            yield* finishResult;
+            const remainder = scenario === "accepted-report-result" ? 2 : 0;
+            expect(yield* take(backend)).toMatchObject({
+              type: "assistant_message",
+              assignmentEpoch: 12,
+              usage: {
+                input: remainder,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: remainder,
+                cost: 0.001,
+              },
+            });
+            expect(yield* take(backend)).toMatchObject({
+              type: "report",
+              assignmentEpoch: 12,
+              text: "Accepted report text",
+            });
+            yield* close;
+            // Transport recovery must not duplicate the report already forwarded.
+            expect(yield* Stream.runCollect(Stream.fromQueue(backend.events))).toEqual([]);
+          }),
+        );
+      }
+    }),
+  );
+
+  it.effect("recovers accepted evidence when transport closes before report forwarding", () =>
+    withReplayHarness("accepted-report-close", ({ processes, supervisors, close }) =>
+      Effect.gen(function* () {
+        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
+          launch("accepted-report-close"),
+        );
+        yield* backend.controls.initialize;
+        yield* backend.controls.start("Preserve accepted report on exit", 12);
+        expect(yield* take(backend)).toMatchObject({ type: "run_started" });
+        expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
+        yield* close;
+        expect(yield* Stream.runCollect(Stream.fromQueue(backend.events))).toMatchObject([
+          { type: "report", assignmentEpoch: 12, text: "Accepted report text" },
+        ]);
+      }),
+    ),
   );
 
   it.effect("preserves an accepted report when a trailing unknown replay arrives", () =>
