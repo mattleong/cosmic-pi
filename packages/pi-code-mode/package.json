@@ -49,7 +49,6 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "vitest run",
-    "eval:pilot": "node eval/run.mjs",
     "prepublishOnly": "pnpm validate",
     "pack:dry": "pnpm pack --dry-run"
   },

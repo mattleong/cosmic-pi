@@ -22,7 +22,11 @@ import {
   makeCodeModeToolExecute,
   type CodeModeExecutionEnvironment,
 } from "../src/tools/execution.ts";
-import { MAX_PROGRESS_ENTRIES, type CodeModeToolDetails } from "../src/tools/format.ts";
+import {
+  formatCodeModeSuccess,
+  MAX_PROGRESS_ENTRIES,
+  type CodeModeToolDetails,
+} from "../src/tools/format.ts";
 import { checkSourceSize, clampModelVisibleText, utf8ByteLength } from "../src/tools/limits.ts";
 import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
@@ -536,6 +540,27 @@ describe("host limits", () => {
 });
 
 describe("final model-visible byte bound", () => {
+  it.effect("clamps structured success with logs while preserving its output kind", () =>
+    Effect.gen(function* () {
+      const sample = {
+        ok: true,
+        value: { items: [1, 2], label: "café" },
+        logs: ["tail"],
+      } as const;
+      for (const budget of [20, 1000]) {
+        const execute = makeHarness({
+          config: { maxOutputBytes: budget },
+          executeCodeMode: () => Effect.succeed(sample),
+        });
+        const result = yield* Effect.tryPromise(() =>
+          execute("call-structured-bound", "return null;"),
+        );
+        expect(textOf(result)).toBe(clampModelVisibleText(formatCodeModeSuccess(sample), budget));
+        expect(result.details.outputKind).toBe("structured");
+      }
+    }),
+  );
+
   it.effect("bounds success logs and diagnostic framing", () =>
     Effect.gen(function* () {
       for (const [budget, code, expected] of [

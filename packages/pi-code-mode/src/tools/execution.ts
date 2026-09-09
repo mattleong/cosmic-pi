@@ -12,11 +12,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import {
-  CodeMode,
-  type CodeModeResult,
-  type CodeModeSuccess,
-} from "../boundary/codemode-runtime.ts";
+import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
   makeNestedPiToolDispatch,
@@ -65,10 +61,6 @@ export interface CodeModeExecutionEnvironment {
   readonly sessionId: string | undefined;
   /** Runtime execution boundary; injectable for compatibility tests. */
   readonly executeCodeMode?: typeof CodeMode.execute;
-  /** Package-private formatter comparison seam. Final clamping remains owned here. */
-  readonly formatSuccess?:
-    | ((result: CodeModeSuccess, maxOutputBytes: number) => string)
-    | undefined;
   /** One-shot handoff to the `tool_result` hook for failures Pi converts to details `{}`. */
   readonly retainFailureDetails?: (toolCallId: string, details: CodeModeToolDetails) => void;
 }
@@ -352,12 +344,7 @@ export const makeCodeModeToolExecute =
             content: [
               {
                 type: "text",
-                text: clampModelVisibleText(
-                  environment.formatSuccess
-                    ? environment.formatSuccess(result, config.maxOutputBytes)
-                    : formatCodeModeSuccess(result),
-                  config.maxOutputBytes,
-                ),
+                text: clampModelVisibleText(formatCodeModeSuccess(result), config.maxOutputBytes),
               },
             ],
             details,
