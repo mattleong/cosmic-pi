@@ -132,7 +132,9 @@ dropped. Background Tasks returns a copied structured result with bounded text a
 
 Each execution applies source, time, call-count, result, cumulative child-output, and discovery
 budgets. Success formatting uses compact JSON for non-string values and preserves returned
-strings and log contents. The final `clampModelVisibleText` bounds all model-visible success, failure, cancellation,
+strings and log contents. A package-private success-format dependency lets evaluations compare
+raw returned values before clamping; live registration supplies no override. The final
+`clampModelVisibleText` bounds all model-visible success, failure, cancellation,
 source-refusal, and unexpected-error text by exact UTF-8 bytes without splitting a code point.
 Zero bytes yields empty text. Only the stale or missing-state refusal uses a fixed bounded message
 because no current configuration exists. Successful nested text and catchable failure text share
@@ -163,15 +165,23 @@ Thrown executions retain copied final rows and counts in a bounded one-shot map.
 hook consumes another copy for the matching Code Mode call because Pi otherwise replaces details
 with `{}`. Text and `isError` semantics are unchanged.
 
-## Opt-in adoption evaluation
+## Opt-in evaluation
 
 `eval/` owns an opt-in model-backed pilot, separate from production application services and
 ordinary tests. Its standalone SDK host boundary runs fresh read-only fixtures through the real
 extension and interpreter, with fixture-only restrictions on both direct and nested definitions.
 It owns explicit session shutdown, temporary configuration, an attempt budget, and external
-aggregate artifacts. Separate adoption and output scorers compare frozen baseline/candidate
-pairs on disjoint held-out cohorts. Output scoring checks all-route bytes, required evidence,
-full-content controls, and bounded per-call size metadata without storing tool contents.
+aggregate artifacts. Separate adoption, output, wording, and formatter scorers compare frozen
+baseline/candidate pairs on disjoint cohorts. Wording scoring measures paired model turns
+with compact formatting fixed and enforces task-specific approval read restrictions on both
+routes. Output scoring checks all-route bytes, required evidence, full-content controls, and
+bounded per-call size metadata. Formatter scoring keeps guidance fixed and records numeric
+same-value rendering measurements alongside end-to-end tokens and cache-sensitive cost/latency.
+Wording and formatter replays apply frozen guidance only to evaluation tool definitions; production
+retains the original guideline. Archived adoption/output modes refuse model-backed runs before
+creating artifacts or sessions because they no longer reproduce the historical interventions.
+Answer diagnostics retain only bounded oracle locations,
+never answer values or tool contents.
 No evaluator or run artifact ships. See `eval/README.md` for limits and decision rules.
 
 ## Shipping and validation

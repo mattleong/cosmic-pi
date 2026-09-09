@@ -1,6 +1,7 @@
 /** Evaluation-only SDK tool boundary, applied to direct AND nested definitions. */
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { makeNestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
@@ -39,7 +40,12 @@ export function fixturePath(root: string, path: string): Promise<string> {
   );
 }
 
-export function fixtureDefinitions(root: string, metrics: DispatchMetrics, nested: boolean) {
+export function fixtureDefinitions(
+  root: string,
+  metrics: DispatchMetrics,
+  nested: boolean,
+  blockedReadPaths: readonly string[] = [],
+) {
   const definitions = makeNestedPiToolDefinitions(root);
   const guard = (name: keyof typeof definitions) => {
     const definition = definitions[name];
@@ -60,6 +66,17 @@ export function fixtureDefinitions(root: string, metrics: DispatchMetrics, neste
             Effect.mapError(() => evaluationError("dispatch")),
           );
           const canonical = yield* fixturePathEffect(root, path ?? ".");
+          const paths = yield* Path.Path;
+          for (const blocked of blockedReadPaths) {
+            const relative = paths.relative(canonical, paths.resolve(root, blocked));
+            const containsBlocked =
+              !paths.isAbsolute(relative) &&
+              relative !== ".." &&
+              !relative.startsWith(`..${paths.sep}`);
+            // A directory-wide content search also crosses the approval checkpoint.
+            if (relative === "" || (name === "grep" && containsBlocked))
+              return yield* new FixtureBoundaryError();
+          }
           // Pass the checked path, not the original spelling. Pi normalizes leading @,
           // whitespace, and home aliases differently from Path.resolve().
           const result = yield* Effect.tryPromise({

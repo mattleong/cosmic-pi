@@ -11,6 +11,17 @@ import { DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
 import { outputGuidelines } from "./output-candidate.ts";
 import { compareOutput, outputGates } from "./output-score.ts";
 import { outputTasks } from "./output-tasks.ts";
+import { formatterTasks, formatterSchedule, formatterScheduleSeed } from "./formatter-tasks.ts";
+import { compareFormatter, formatterGates } from "./formatter-score.ts";
+import { formatHistoricalSuccess } from "./formatter.ts";
+import { formatCodeModeSuccess } from "../src/tools/format.ts";
+import { wordingTasks } from "./wording-tasks.ts";
+import { compareWording, wordingGates } from "./wording-score.ts";
+import {
+  experimentalSelectionGuideline,
+  previousSelectionGuideline,
+  frozenWordingGuidelines,
+} from "./wording.ts";
 import { evaluationError, EvaluationError } from "./errors.ts";
 import { runEpisodeEffect } from "./host-session.ts";
 import { compare, type RunRecord } from "./score.ts";
@@ -24,18 +35,30 @@ export interface PilotOptions {
   readonly provider: string;
   readonly model: string;
   readonly maxSessions: number;
-  readonly experiment?: "adoption" | "output";
+  readonly experiment?: "adoption" | "output" | "wording" | "formatter";
 }
 
-export function schedule(experiment: "adoption" | "output" = "adoption") {
-  return (experiment === "output" ? outputTasks : tasks).flatMap((task, taskIndex) =>
-    Array.from({ length: task.split === "development" ? 1 : 2 }, (_, repetition) => {
-      const variants =
-        (taskIndex + repetition) % 2 === 0
-          ? (["baseline", "candidate"] as const)
-          : (["candidate", "baseline"] as const);
-      return variants.map((variant) => ({ task, variant, repetition }));
-    }).flat(),
+export function schedule(
+  experiment: "adoption" | "output" | "wording" | "formatter" = "adoption",
+  wordingSessions: 24 | 48 = 24,
+) {
+  if (experiment === "formatter") return formatterSchedule(wordingSessions);
+  return (
+    experiment === "wording" ? wordingTasks : experiment === "output" ? outputTasks : tasks
+  ).flatMap((task, taskIndex) =>
+    Array.from(
+      {
+        length:
+          experiment === "wording" ? wordingSessions / 12 : task.split === "development" ? 1 : 2,
+      },
+      (_, repetition) => {
+        const variants =
+          (taskIndex + repetition) % 2 === 0
+            ? (["baseline", "candidate"] as const)
+            : (["candidate", "baseline"] as const);
+        return variants.map((variant) => ({ task, variant, repetition }));
+      },
+    ).flat(),
   );
 }
 
@@ -49,11 +72,41 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const experiment = options.experiment ?? "adoption";
-    const selectedTasks = experiment === "output" ? outputTasks : tasks;
-    const selectedGuidelines =
-      experiment === "output" ? outputGuidelines : candidateSelectionGuidelines;
-    const score = experiment === "output" ? compareOutput : compare;
-    const plan = schedule(experiment);
+    if (!["wording", "formatter"].includes(experiment)) {
+      return yield* evaluationError(
+        "preflight",
+        "Archived adoption/output experiments cannot reproduce their original interventions. Model-backed replay is disabled; use their offline fixtures and reports.",
+      );
+    }
+    const formatterExperiment = experiment === "formatter";
+    const confirmationOnly = formatterExperiment || experiment === "wording";
+    const selectedTasks = formatterExperiment
+      ? formatterTasks
+      : experiment === "wording"
+        ? wordingTasks
+        : experiment === "output"
+          ? outputTasks
+          : tasks;
+    const selectedGuidelines = formatterExperiment
+      ? []
+      : experiment === "wording"
+        ? [experimentalSelectionGuideline]
+        : experiment === "output"
+          ? outputGuidelines
+          : candidateSelectionGuidelines;
+    const score = formatterExperiment
+      ? compareFormatter
+      : experiment === "wording"
+        ? compareWording
+        : experiment === "output"
+          ? compareOutput
+          : compare;
+    const plan = schedule(experiment, options.maxSessions === 48 ? 48 : 24);
+    if (confirmationOnly && options.maxSessions !== 24 && options.maxSessions !== 48)
+      return yield* evaluationError(
+        "budget",
+        "This frozen confirmation plan requires a cap of exactly 24 or 48 sessions.",
+      );
     if (
       !Number.isSafeInteger(options.maxSessions) ||
       options.maxSessions < 1 ||
@@ -72,10 +125,31 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
       new URL("../src/tools/format.ts", import.meta.url),
     );
     const formatter = yield* fs.readFileString(formatterPath);
+    const comparisonSource = yield* fs.readFileString(
+      yield* path.fromFileUrl(new URL("./formatter.ts", import.meta.url)),
+    );
     const manifest = {
-      version: 2,
+      version: 5,
       experiment,
-      gates: experiment === "output" ? outputGates : { relativeAdoptionIncrease: 0.1 },
+      effectiveGuidelines: {
+        baseline: frozenWordingGuidelines[formatterExperiment ? "candidate" : "baseline"],
+        candidate: frozenWordingGuidelines.candidate,
+      },
+      gates: formatterExperiment
+        ? formatterGates
+        : experiment === "wording"
+          ? wordingGates
+          : experiment === "output"
+            ? outputGates
+            : { relativeAdoptionIncrease: 0.1 },
+      baseline: formatterExperiment
+        ? "historical pretty JSON with compact fallback"
+        : experiment === "wording"
+          ? [previousSelectionGuideline]
+          : "production guidance at controllerDigest",
+      replacementStartsAt: formatterExperiment ? null : experiment === "output" ? 2 : 0,
+      formatterComparisonDigest: formatterExperiment ? digest(comparisonSource) : null,
+      scheduleSeed: formatterExperiment ? formatterScheduleSeed : null,
       executionLimits: DEFAULT_CODE_MODE_CONFIG,
       provider: options.provider,
       model: options.model,
@@ -84,8 +158,12 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
       taskDigest: digest(yield* compactJson(selectedTasks)),
       controllerDigest: digest(controller),
       formatterDigest: digest(formatter),
-      candidateDigest: digest(yield* compactJson(selectedGuidelines)),
-      candidate: selectedGuidelines,
+      candidateDigest: formatterExperiment
+        ? digest(formatter)
+        : digest(yield* compactJson(selectedGuidelines)),
+      candidate: formatterExperiment
+        ? "production compact JSON; shared frozen benchmark guidance"
+        : selectedGuidelines,
       restriction:
         "read-only fixture tools; real Code Mode interpreter and extension lifecycle; no ambient prompts or extensions",
       decision:
@@ -128,7 +206,6 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
       );
     // No inference: exercise SDK registration, real interpreter dispatch, and cleanup before
     // consuming the first model-backed slot. This cannot change the candidate or task set.
-    let preflightPassed = false;
     const preflightTask: EvalTask = {
       id: "preflight",
       split: "development",
@@ -137,46 +214,88 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
       files: { VERSION: "1.8.2\n" },
       expected: "1.8.2",
     };
-    const preflight = yield* runEpisodeEffect(
-      {
-        task: preflightTask,
-        experiment,
-        variant: "candidate",
-        repetition: 0,
-        scratch: options.scratch,
-        agentDir: options.agentDir,
-        modelRuntime,
-        model,
-        thinkingLevel: "medium",
-      },
-      (session) =>
-        Effect.gen(function* () {
-          const result = yield* Effect.tryPromise({
-            try: (signal) =>
-              session.agent.state.tools
-                .find((item) => item.name === "code_mode")!
-                .execute(
-                  "eval-interpreter-probe",
-                  {
-                    code: "return await tools.pi.read({path: 'VERSION'});",
-                    intent: "Verify fixture dispatch",
-                  },
-                  signal,
-                ),
-            catch: () => evaluationError("preflight"),
-          });
-          preflightPassed = result.content.some(
-            (block) => block.type === "text" && block.text.includes("1.8.2"),
-          );
-        }),
-    );
-    if (!preflightPassed || preflight.nestedSucceeded !== 1 || preflight.boundaryViolations !== 0) {
-      return yield* evaluationError(
-        "preflight",
-        "No-inference evaluation preflight failed; no model sessions launched.",
+    const preflightVariants = confirmationOnly
+      ? (["baseline", "candidate"] as const)
+      : (["candidate"] as const);
+    for (const variant of preflightVariants) {
+      let preflightPassed = false;
+      const preflight = yield* runEpisodeEffect(
+        {
+          task: preflightTask,
+          experiment,
+          variant,
+          repetition: 0,
+          scratch: options.scratch,
+          agentDir: options.agentDir,
+          modelRuntime,
+          model,
+          thinkingLevel: "medium",
+        },
+        (session) =>
+          Effect.gen(function* () {
+            const result = yield* Effect.tryPromise({
+              try: (signal) =>
+                session.agent.state.tools
+                  .find((item) => item.name === "code_mode")!
+                  .execute(
+                    "eval-interpreter-probe",
+                    {
+                      code: formatterExperiment
+                        ? "return {version: (await tools.pi.read({path: 'VERSION'})).trim(), flags: [false, 0, null]};"
+                        : "return await tools.pi.read({path: 'VERSION'});",
+                      intent: "Verify fixture dispatch",
+                    },
+                    signal,
+                  ),
+              catch: () => evaluationError("preflight"),
+            });
+            preflightPassed = result.content.some(
+              (block) => block.type === "text" && block.text.includes("1.8.2"),
+            );
+            if (formatterExperiment) {
+              const value = { version: "1.8.2", flags: [false, 0, null] };
+              const expected =
+                variant === "baseline"
+                  ? formatHistoricalSuccess(
+                      { ok: true, value },
+                      DEFAULT_CODE_MODE_CONFIG.maxOutputBytes,
+                    )
+                  : formatCodeModeSuccess({ ok: true, value });
+              preflightPassed &&=
+                result.content.some((block) => block.type === "text" && block.text === expected) &&
+                session.agent.state.systemPrompt.includes(experimentalSelectionGuideline) &&
+                !session.agent.state.systemPrompt.includes(previousSelectionGuideline);
+              yield* Schema.decodeUnknownEffect(
+                Schema.Struct({ outputKind: Schema.Literal("structured") }),
+              )(result.details).pipe(Effect.mapError(() => evaluationError("preflight")));
+            } else if (experiment === "wording") {
+              const expected =
+                variant === "baseline"
+                  ? previousSelectionGuideline
+                  : experimentalSelectionGuideline;
+              const excluded =
+                variant === "baseline"
+                  ? experimentalSelectionGuideline
+                  : previousSelectionGuideline;
+              preflightPassed &&=
+                session.agent.state.systemPrompt.includes(expected) &&
+                !session.agent.state.systemPrompt.includes(excluded);
+            }
+          }),
       );
+      if (
+        !preflightPassed ||
+        preflight.nestedSucceeded !== 1 ||
+        preflight.boundaryViolations !== 0 ||
+        (formatterExperiment && preflight.formatter?.changedCalls !== 1)
+      ) {
+        return yield* evaluationError(
+          "preflight",
+          "No-inference evaluation preflight failed; no model sessions launched.",
+        );
+      }
     }
-    yield* Effect.log("No-inference SDK/interpreter preflight passed.");
+    yield* Effect.log("No-inference SDK/interpreter and active-guidance preflight passed.");
     const records: RunRecord[] = [];
     let attempted = 0;
     let stopped = "budget-exhausted";
@@ -217,7 +336,7 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
           stopped = "safety-or-execution-failure";
           break;
         }
-        if (attempted === 8) {
+        if (!confirmationOnly && attempted === 8) {
           const development = score(records, 4);
           yield* fs.writeFileString(
             path.join(options.output, "development.json"),
@@ -248,18 +367,24 @@ const runPilotEffect = Effect.fn("Evaluation.runPilot")(
       ),
       Effect.onExit(() =>
         Effect.gen(function* () {
-          const report = {
-            attempted,
-            stopped,
-            development: score(
-              records.filter((record) => record.split === "development"),
-              4,
-            ),
-            heldOut: score(
-              records.filter((record) => record.split === "held-out"),
-              20,
-            ),
-          };
+          const report = confirmationOnly
+            ? {
+                attempted,
+                stopped,
+                comparison: score(records, plan.length / 2),
+              }
+            : {
+                attempted,
+                stopped,
+                development: score(
+                  records.filter((record) => record.split === "development"),
+                  4,
+                ),
+                heldOut: score(
+                  records.filter((record) => record.split === "held-out"),
+                  20,
+                ),
+              };
           yield* fs.writeFileString(
             path.join(options.output, "report.json"),
             (yield* prettyJson(report)) + "\n",

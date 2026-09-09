@@ -42,7 +42,7 @@ import {
   registerCodeModeTool,
   type CodeModeToolDefinition,
 } from "./tools/controller.ts";
-import { makeCodeModeToolExecute } from "./tools/execution.ts";
+import { makeCodeModeToolExecute, type CodeModeExecutionEnvironment } from "./tools/execution.ts";
 import {
   applyRetainedCodeModeFailureDetails,
   makeFailureDetailsRetention,
@@ -66,6 +66,8 @@ export interface CodeModeApplicationBoundaries {
   ) => ReturnType<typeof loadCodePreviewSettings>;
   readonly wrapTool: (tool: CodeModeToolDefinition) => CodeModeToolDefinition;
   readonly makeNestedDefinitions: (cwd: string) => NestedPiToolDefinitions;
+  /** Package-private evaluation seam; live registration keeps the production formatter. */
+  readonly formatSuccess?: CodeModeExecutionEnvironment["formatSuccess"];
   /** Package-private lifecycle test seam; production always uses `makeCodeModeLayer`. */
   readonly makeLayer?: typeof makeCodeModeLayer;
 }
@@ -162,6 +164,7 @@ export function registerCodeModeApplication(
               events: pi.events,
               sessionId: input.sessionId,
               retainFailureDetails: failureDetails.retain,
+              formatSuccess: boundaries.formatSuccess,
             }),
           }),
         );

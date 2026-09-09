@@ -19,10 +19,13 @@ import { loadCodePreviewSettings } from "pi-code-previews";
 import { registerCodeModeApplication } from "../src/application.ts";
 import { candidateSelectionGuidelines } from "./candidate.ts";
 import { outputGuidelines } from "./output-candidate.ts";
+import { wordingGuidelines } from "./wording.ts";
+import { freshFormatterMeasurements, measuredFormatter } from "./formatter.ts";
 import { evaluationError, type EvaluationError } from "./errors.ts";
 import { fixtureDefinitions, freshDispatchMetrics } from "./fixture-tools.ts";
 import { materializeEffect, unchangedEffect } from "./host-files.ts";
-import { checkAnswer, type RunRecord } from "./score.ts";
+import type { RunRecord } from "./score.ts";
+import { gradeAnswer } from "./answer-check.ts";
 import type { EvalTask } from "./tasks.ts";
 
 const Details = Schema.Struct({ truncated: Schema.optionalKey(Schema.Boolean) });
@@ -48,6 +51,7 @@ export function messageMetrics(messages: AgentSession["messages"]) {
   let completed = false;
   let codeModeCalls = 0;
   let codeModeErrors = 0;
+  let directToolErrors = 0;
   let toolResultBytes = 0;
   let codeModeToolResultBytes = 0;
   let directToolResultBytes = 0;
@@ -96,6 +100,7 @@ export function messageMetrics(messages: AgentSession["messages"]) {
       });
       largestToolResults.sort((left, right) => right.bytes - left.bytes);
       largestToolResults.length = Math.min(largestToolResults.length, 5);
+      if (message.isError && message.toolName !== "code_mode") directToolErrors++;
       if (message.toolName === "code_mode") {
         if (message.isError) codeModeErrors++;
         try {
@@ -111,6 +116,7 @@ export function messageMetrics(messages: AgentSession["messages"]) {
     completed,
     codeModeCalls,
     codeModeErrors,
+    directToolErrors,
     toolResultBytes,
     codeModeToolResultBytes,
     directToolResultBytes,
@@ -130,7 +136,7 @@ export interface EpisodeOptions {
   readonly task: EvalTask;
   readonly variant: RunRecord["variant"];
   readonly repetition: number;
-  readonly experiment?: "adoption" | "output";
+  readonly experiment?: "adoption" | "output" | "wording" | "formatter";
   readonly scratch: string;
   readonly agentDir: string;
   readonly modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
@@ -236,6 +242,7 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
           .realPath(directory)
           .pipe(Effect.mapError(() => evaluationError("fixture")));
         const dispatch = freshDispatchMetrics();
+        const formatter = freshFormatterMeasurements();
         let extensionFailed = false;
         const started = yield* Clock.monotonicTimeNanos;
         yield* materializeEffect(root, task);
@@ -246,7 +253,7 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
               retry: { enabled: false, maxRetries: 0 },
             });
             settings.setProjectTrusted(true);
-            const direct = fixtureDefinitions(root, dispatch, false);
+            const direct = fixtureDefinitions(root, dispatch, false, task.blockedReadPaths);
             const loader = new DefaultResourceLoader({
               cwd: root,
               agentDir: options.agentDir,
@@ -262,23 +269,36 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
                 (pi) =>
                   registerCodeModeApplication(pi, {
                     loadSettings: loadCodePreviewSettings,
-                    makeNestedDefinitions: () => fixtureDefinitions(root, dispatch, true),
+                    formatSuccess:
+                      options.experiment === "formatter"
+                        ? measuredFormatter(variant, formatter)
+                        : undefined,
+                    makeNestedDefinitions: () =>
+                      fixtureDefinitions(root, dispatch, true, task.blockedReadPaths),
                     wrapTool: (tool) =>
-                      variant === "baseline"
-                        ? tool
-                        : {
+                      options.experiment === "formatter" || options.experiment === "wording"
+                        ? {
                             ...tool,
-                            promptGuidelines:
-                              options.experiment === "output"
-                                ? [
-                                    ...(tool.promptGuidelines ?? []).slice(0, 2),
-                                    ...outputGuidelines,
-                                  ]
-                                : [
-                                    ...candidateSelectionGuidelines,
-                                    ...(tool.promptGuidelines ?? []).slice(1),
-                                  ],
-                          },
+                            promptGuidelines: wordingGuidelines(
+                              tool.promptGuidelines ?? [],
+                              options.experiment === "formatter" ? "candidate" : variant,
+                            ),
+                          }
+                        : variant === "baseline"
+                          ? tool
+                          : {
+                              ...tool,
+                              promptGuidelines:
+                                options.experiment === "output"
+                                  ? [
+                                      ...(tool.promptGuidelines ?? []).slice(0, 2),
+                                      ...outputGuidelines,
+                                    ]
+                                  : [
+                                      ...candidateSelectionGuidelines,
+                                      ...(tool.promptGuidelines ?? []).slice(1),
+                                    ],
+                            },
                   }),
               ],
             });
@@ -371,6 +391,7 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
               const completed =
                 measured.completed && !timedOut && !extensionFailed && !promptFailed;
               const { finalAnswer, ...metrics } = measured;
+              const grade = gradeAnswer(finalAnswer, task);
               return {
                 task: task.id,
                 split: task.split,
@@ -379,12 +400,10 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
                 repetition,
                 ...metrics,
                 ...dispatch,
+                formatter: { ...formatter },
                 completed,
-                correct:
-                  completed &&
-                  clean &&
-                  dispatch.boundaryViolations === 0 &&
-                  checkAnswer(finalAnswer, task),
+                correct: completed && clean && dispatch.boundaryViolations === 0 && grade.correct,
+                answerMismatchPaths: grade.mismatchPaths,
                 elapsedMs: Math.round(
                   Number((yield* Clock.monotonicTimeNanos) - started) / 1_000_000,
                 ),

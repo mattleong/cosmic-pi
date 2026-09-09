@@ -7,6 +7,8 @@ export interface EvalTask {
   readonly prompt: string;
   readonly files: Readonly<Record<string, string>>;
   readonly expected: Schema.Json;
+  /** Fixture content unavailable before a task-specific approval checkpoint. */
+  readonly blockedReadPaths?: readonly string[];
 }
 
 const json = (value: Schema.Json): string => JSON.stringify(value, null, 2) + "\n";

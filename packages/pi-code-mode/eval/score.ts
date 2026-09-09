@@ -1,5 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import * as Schema from "effect/Schema";
+import { gradeAnswer } from "./answer-check.ts";
+import type { FormatterMeasurements } from "./formatter.ts";
 import type { EvalTask } from "./tasks.ts";
 
 export interface RunRecord {
@@ -9,9 +9,13 @@ export interface RunRecord {
   readonly variant: "baseline" | "candidate";
   readonly repetition: number;
   readonly correct: boolean;
+  readonly answerMismatchPaths?: readonly string[];
+  readonly formatter?: Readonly<FormatterMeasurements>;
   readonly completed: boolean;
   readonly codeModeCalls: number;
   readonly codeModeErrors: number;
+  /** Present in wording-pilot records; older records cannot establish error-free direct work. */
+  readonly directToolErrors?: number;
   readonly nestedCalls: number;
   readonly nestedSucceeded: number;
   readonly nestedErrors: number;
@@ -40,14 +44,7 @@ export interface RunRecord {
 }
 
 export function checkAnswer(text: string, task: EvalTask): boolean {
-  // A surrounding fence is harmless presentation, not a correctness regression.
-  const normalized = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1");
-  try {
-    const answer = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(normalized);
-    return isDeepStrictEqual(answer, task.expected);
-  } catch {
-    return false;
-  }
+  return gradeAnswer(text, task).correct;
 }
 
 export const adopted = (run: RunRecord): boolean => run.codeModeCalls > 0 && run.nestedCalls > 0;
@@ -83,6 +80,7 @@ export function summarize(runs: readonly RunRecord[]) {
     nestedCalls: sum((run) => run.nestedCalls),
     nestedErrors: sum((run) => run.nestedErrors),
     codeModeErrors: sum((run) => run.codeModeErrors),
+    directToolErrors: sum((run) => run.directToolErrors ?? 0),
     outerCalls: sum((run) => run.outerCalls),
     modelTurns: sum((run) => run.turns),
     toolResultBytes: sum((run) => run.toolResultBytes),

@@ -9,19 +9,27 @@ const args = process.argv.slice(2);
 const value = (name) => args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 if (!args.includes("--run")) {
   console.log(
-    "Opt-in pilot: pnpm --filter pi-code-mode eval:pilot --run --experiment=output --provider=PROVIDER --model=MODEL --out=/absolute/new/directory",
+    "Opt-in pilot: pnpm --filter pi-code-mode eval:pilot --run --experiment=formatter --provider=PROVIDER --model=MODEL --out=/absolute/new/directory --max-sessions=24",
   );
   console.log(
-    "Maximum 48 fresh sessions: 8 development, 40 held-out. Medium effort. Read-only fixtures. No model calls without --run.",
+    "Formatter/wording replays require exactly 24 or 48 approved sessions. Adoption/output are archived and offline-only. All bundled cohorts are exposed regression material; fresh confirmation needs new tasks. Medium effort. Read-only fixtures. No model calls without --run.",
   );
 } else {
   const provider = value("provider");
   const model = value("model");
   const output = value("out");
-  const maxSessions = Number(value("max-sessions") ?? 48);
-  const experiment = value("experiment") ?? "adoption";
-  if (!["adoption", "output"].includes(experiment))
-    throw new Error("Experiment must be adoption or output.");
+  const maxSessions = Number(value("max-sessions"));
+  const experiment = value("experiment");
+  if (experiment === "adoption" || experiment === "output")
+    throw new Error(
+      "Archived adoption/output experiments cannot reproduce their original interventions. Model-backed replay is disabled; use their offline fixtures and reports.",
+    );
+  if (experiment !== "wording" && experiment !== "formatter")
+    throw new Error(
+      "Choose --experiment=wording or --experiment=formatter for an approved regression replay.",
+    );
+  if (["wording", "formatter"].includes(experiment) && maxSessions !== 24 && maxSessions !== 48)
+    throw new Error("This comparison requires --max-sessions=24 or --max-sessions=48.");
   if (
     !provider ||
     !model ||

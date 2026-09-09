@@ -173,7 +173,7 @@ describe("model-visible byte accounting", () => {
         toolName: index % 2 ? "code_mode" : "read",
         content: [{ type: "text", text: "é".repeat(index + 1) }],
         details: {},
-        isError: index === 7,
+        isError: index === 0 || index === 7,
         timestamp: index,
       }),
     );
@@ -182,6 +182,7 @@ describe("model-visible byte accounting", () => {
     expect(result.codeModeToolResultBytes).toBe(40);
     expect(result.directToolResultBytes).toBe(50);
     expect(result.codeModeErrors).toBe(1);
+    expect(result.directToolErrors).toBe(1);
     expect(result.largestToolResults).toHaveLength(5);
     expect(result.largestToolResults[0]).toEqual({
       index: 8,

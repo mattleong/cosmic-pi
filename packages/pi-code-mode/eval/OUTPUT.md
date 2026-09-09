@@ -2,22 +2,14 @@
 
 This pilot is complete. See [results and the separate formatter change](OUTPUT-RESULTS.md).
 Its tasks are now exposed regression material, not a fresh held-out cohort. Production gained
-compact JSON formatting after the pilot; reruns therefore do not reproduce its original baseline.
+compact JSON formatting after the pilot, so current production does not reproduce its original
+baseline. Model-backed `output` and `adoption` modes now refuse before creating artifacts or
+sessions. Their fixtures, scorers, and historical reports remain available offline.
 
-The experiment compares current production guidance with `output-candidate.ts`. It keeps
-selection and intent guidance, tool availability, execution limits, and the interpreter
-unchanged. The candidate replaces the output guidance only. Production is not edited until
-held-out results have been reviewed.
-
-```sh
-pnpm --filter pi-code-mode eval:pilot --run --experiment=output \
-  --provider=openai-codex --model=gpt-6-astra \
-  --out=/absolute/new/directory --max-sessions=48
-```
-
-The historical adoption experiment remains available as `--experiment=adoption`; it is not
-the baseline for this test. Its previously inspected H1-H10 tasks are exposed and cannot
-supply fresh confirmation evidence.
+The experiment compared production guidance at measurement time with `output-candidate.ts`.
+It kept selection and intent guidance, tool availability, execution limits, and the interpreter
+unchanged. The candidate replaced output guidance only. The archived adoption experiment was
+not its baseline. Neither cohort can supply fresh confirmation evidence.
 
 ## Candidate and tasks
 
