@@ -95,9 +95,11 @@ Code Mode is trusted-project-only. Availability is `projectTrusted && enabled`:
 ## Execution limits
 
 Each execution applies the resolved settings exactly: `timeoutMs`, `maxToolCalls`, and
-`maxOutputBytes` are enforced by the runtime (its truncation markers are reserved inside the
-byte budget; returned JSON is pretty-printed only while the pretty form still fits
-`maxOutputBytes`). The extension then applies one final code-point-safe UTF-8 clamp over the
+`maxOutputBytes` are enforced by the runtime, with truncation markers reserved inside the
+byte budget. The extension serializes non-string return values as compact JSON, without
+indentation. Returned strings, including JSON-looking strings and whitespace-sensitive
+file contents, and runtime log contents are preserved. The extension then applies one
+final code-point-safe UTF-8 clamp over the
 entire model-visible text — success or thrown failure, including logs and diagnostic framing,
 plus every early path (cancellation text, the `maxSourceBytes` refusal, unexpected runtime
 errors) — so what the model receives never exceeds `maxOutputBytes` (zero → empty; a hostile

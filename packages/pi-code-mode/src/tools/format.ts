@@ -9,7 +9,6 @@ import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
-import { utf8ByteLength } from "./limits.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
 export const MAX_INTENT_LENGTH = 160;
@@ -250,25 +249,17 @@ export const progressResult = (
 };
 
 /**
- * Successful program output: the returned string or serialized JSON, with runtime logs
- * appended. The runtime's `maxOutputBytes` bound applies to the *compact* serialization, so
- * pretty-printing is used only while it still fits the same budget; otherwise the exact
- * compact form the runtime bounded is emitted, keeping the model-visible value inside
- * `maxOutputBytes`.
+ * Return strings verbatim and serialize structured values without indentation. This preserves
+ * every JSON value without expanding the compact representation already bounded by the runtime.
+ * Execution applies the final UTF-8 byte clamp after logs are appended.
  */
-export const formatCodeModeSuccess = (result: CodeModeSuccess, maxOutputBytes: number): string => {
-  // The runtime validates returned values as plain JSON data, so stringify cannot throw; it
-  // yields undefined only for a program that returns undefined (serialized as null upstream).
+export const formatCodeModeSuccess = (result: CodeModeSuccess): string => {
+  // The runtime validates returned values as plain JSON data. Never parse or reformat strings,
+  // even when they contain JSON, source code, or whitespace-sensitive document contents.
   const output = Predicate.isString(result.value)
     ? result.value
-    : renderJson(result.value, maxOutputBytes);
+    : (JSON.stringify(result.value) ?? String(result.value));
   return withLogs(output, result.logs);
-};
-
-const renderJson = (value: Schema.Json, maxOutputBytes: number): string => {
-  const pretty = JSON.stringify(value, null, 2) ?? String(value);
-  if (utf8ByteLength(pretty) <= maxOutputBytes) return pretty;
-  return JSON.stringify(value) ?? String(value);
 };
 
 /**

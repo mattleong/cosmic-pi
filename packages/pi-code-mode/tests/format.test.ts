@@ -46,25 +46,52 @@ describe("defensive formatters", () => {
 });
 
 describe("formatCodeModeSuccess", () => {
-  it("returns string values verbatim and appends logs", () => {
-    expect(formatCodeModeSuccess({ ok: true, value: "hello", logs: ["one", "two"] }, 51_200)).toBe(
-      "hello\n\nLogs:\none\ntwo",
-    );
+  it("preserves returned strings exactly, including JSON-looking and whitespace-sensitive text", () => {
+    for (const value of [
+      "",
+      "hello",
+      '{\n  "a": 1\n}\n',
+      "  café\t\n    second line\n",
+      "0",
+      "null",
+    ]) {
+      expect(formatCodeModeSuccess({ ok: true, value })).toBe(value);
+    }
   });
 
-  it("pretty-prints structured values while they fit maxOutputBytes", () => {
-    expect(formatCodeModeSuccess({ ok: true, value: { a: 1 } }, 51_200)).toBe(
-      JSON.stringify({ a: 1 }, null, 2),
-    );
+  it("appends logs unchanged for text and structured results", () => {
+    const logs = ["  first\nline  ", "café\t"];
+    const suffix = `Logs:\n${logs.join("\n")}`;
+    expect(formatCodeModeSuccess({ ok: true, value: "hello", logs })).toBe(`hello\n\n${suffix}`);
+    expect(formatCodeModeSuccess({ ok: true, value: "", logs })).toBe(suffix);
+    const output = formatCodeModeSuccess({ ok: true, value: { ok: false }, logs });
+    expect(output).toBe(`${JSON.stringify({ ok: false })}\n\n${suffix}`);
   });
 
-  it("falls back to the runtime-bounded compact form when pretty output would exceed maxOutputBytes", () => {
-    // 64 one-byte entries: compact is well under the limit, pretty expansion is not.
-    const value = Array.from({ length: 64 }, () => "x");
-    const compact = JSON.stringify(value);
-    const limit = compact.length + 8;
-    expect(JSON.stringify(value, null, 2).length).toBeGreaterThan(limit);
-    expect(formatCodeModeSuccess({ ok: true, value }, limit)).toBe(compact);
+  it("keeps complete object and array values without expanding serialization whitespace", () => {
+    const values = [
+      {
+        items: [{ name: "Zoë", quota: 0, enabled: false, notes: " first\n  second\t " }],
+        missing: null,
+      },
+      Array.from({ length: 64 }, (_, index) => ({ index, text: "\n  exact content  " })),
+    ];
+    for (const value of values) {
+      const output = formatCodeModeSuccess({ ok: true, value });
+      // The formatter returns JSON from validated data, not an unknown external protocol.
+      expect(JSON.parse(output)).toEqual(value);
+      expect(Buffer.byteLength(output)).toBe(Buffer.byteLength(JSON.stringify(value)));
+      expect(Buffer.byteLength(output)).toBeLessThan(
+        Buffer.byteLength(JSON.stringify(value, null, 2)),
+      );
+    }
+  });
+
+  it("preserves scalar JSON results", () => {
+    for (const value of [null, true, false, 0, 42, -0.5]) {
+      const output = formatCodeModeSuccess({ ok: true, value });
+      expect(JSON.parse(output)).toEqual(value);
+    }
   });
 });
 

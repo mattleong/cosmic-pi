@@ -344,10 +344,7 @@ export const makeCodeModeToolExecute =
             content: [
               {
                 type: "text",
-                text: clampModelVisibleText(
-                  formatCodeModeSuccess(result, config.maxOutputBytes),
-                  config.maxOutputBytes,
-                ),
+                text: clampModelVisibleText(formatCodeModeSuccess(result), config.maxOutputBytes),
               },
             ],
             details,
