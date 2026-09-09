@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { schedule } from "../../eval/pilot.ts";
+import { schedule } from "../../eval/schedule.ts";
 import { buildCodeModeToolDefinition } from "../../src/tools/controller.ts";
 import type { RunRecord } from "../../eval/score.ts";
 import { compareWording } from "../../eval/wording-score.ts";

@@ -28,20 +28,10 @@ if (!args.includes("--run")) {
     throw new Error(
       "Choose --experiment=wording or --experiment=formatter for an approved regression replay.",
     );
-  if (["wording", "formatter"].includes(experiment) && maxSessions !== 24 && maxSessions !== 48)
+  if (maxSessions !== 24 && maxSessions !== 48)
     throw new Error("This comparison requires --max-sessions=24 or --max-sessions=48.");
-  if (
-    !provider ||
-    !model ||
-    !output ||
-    !isAbsolute(output) ||
-    !Number.isSafeInteger(maxSessions) ||
-    maxSessions < 1 ||
-    maxSessions > 48
-  ) {
-    throw new Error(
-      "Require --provider, --model, absolute --out, and --max-sessions between 1 and 48.",
-    );
+  if (!provider || !model || !output || !isAbsolute(output)) {
+    throw new Error("Require --provider, --model, and an absolute --out directory.");
   }
   const known = /^(--run|--(?:provider|model|out|max-sessions|experiment)=.+)$/;
   if (args.some((arg) => !known.test(arg))) throw new Error("Unknown evaluation argument.");

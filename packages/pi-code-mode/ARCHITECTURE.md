@@ -178,8 +178,10 @@ routes. Output scoring checks all-route bytes, required evidence, full-content c
 bounded per-call size metadata. Formatter scoring keeps guidance fixed and records numeric
 same-value rendering measurements alongside end-to-end tokens and cache-sensitive cost/latency.
 Wording and formatter replays apply frozen guidance only to evaluation tool definitions; production
-retains the original guideline. Archived adoption/output modes refuse model-backed runs before
-creating artifacts or sessions because they no longer reproduce the historical interventions.
+retains the original guideline. `eval/replay.ts` admits only those two modes at both the pilot
+and standalone episode boundaries. Archived adoption/output execution paths are removed;
+`eval/schedule.ts` retains all four offline plans alongside their fixtures, scorers, and results.
+Unsupported execution requests fail before creating artifacts, fixtures, or sessions.
 Answer diagnostics retain only bounded oracle locations,
 never answer values or tool contents.
 No evaluator or run artifact ships. See `eval/README.md` for limits and decision rules.

@@ -74,9 +74,12 @@ Foreign SDK calls use typed Effect boundaries; `errors.ts` keeps failures free o
 provider errors, and credentials. Promise APIs remain at the SDK and command entry points.
 Each episode has a fresh in-memory session and fixture. All sessions use a private temporary
 agent configuration directory. No ambient resource discovery enters the model prompt.
-`pilot.ts` owns the attempt ledger, sequential schedule, schema-encoded artifacts, and Effect
-logging. `run.mjs` owns the enclosing private directory and opt-in command. Neither evaluation
-code nor artifacts ship in the package.
+`schedule.ts` owns pure offline plans for all four cohorts, including the archived schedules.
+`replay.ts` admits only wording and formatter at both execution entries and owns their isolated
+tool overrides. `pilot.ts` owns the attempt ledger, sequential execution, schema-encoded artifacts,
+and Effect logging. It has no archived execution path or development gate. `run.mjs` owns the
+enclosing private directory and opt-in command. Neither evaluation code nor artifacts ship in
+the package.
 The SDK abort deadline requests cooperative cancellation; it is not a forced process deadline.
 For unattended use, run under a process supervisor with an outer timeout. A cleanup error
 ends the pilot rather than permitting another episode.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { adopted, checkAnswer, compare, type RunRecord } from "../../eval/score.ts";
-import { schedule } from "../../eval/pilot.ts";
+import { schedule } from "../../eval/schedule.ts";
 import { tasks } from "../../eval/tasks.ts";
 
 const run = (overrides: Partial<RunRecord> = {}): RunRecord => ({

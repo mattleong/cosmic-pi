@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compareOutput } from "../../eval/output-score.ts";
 import { checkAnswer, type RunRecord } from "../../eval/score.ts";
 import { messageMetrics } from "../../eval/host-session.ts";
-import { schedule } from "../../eval/pilot.ts";
+import { schedule } from "../../eval/schedule.ts";
 import { outputTasks } from "../../eval/output-tasks.ts";
 
 const run = (overrides: Partial<RunRecord> = {}): RunRecord => ({

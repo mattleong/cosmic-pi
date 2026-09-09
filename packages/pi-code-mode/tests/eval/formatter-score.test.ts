@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { schedule } from "../../eval/pilot.ts";
+import { schedule } from "../../eval/schedule.ts";
 import { compareFormatter } from "../../eval/formatter-score.ts";
 import { formatterTasks } from "../../eval/formatter-tasks.ts";
 import { freshFormatterMeasurements } from "../../eval/formatter.ts";

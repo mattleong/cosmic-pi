@@ -17,10 +17,13 @@ import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { loadCodePreviewSettings } from "pi-code-previews";
 import { registerCodeModeApplication } from "../src/application.ts";
-import { candidateSelectionGuidelines } from "./candidate.ts";
-import { outputGuidelines } from "./output-candidate.ts";
-import { wordingGuidelines } from "./wording.ts";
-import { freshFormatterMeasurements, measuredFormatter } from "./formatter.ts";
+import {
+  ReplayExperimentSchema,
+  replayRefusal,
+  replayToolOverrides,
+  type ReplayExperiment,
+} from "./replay.ts";
+import { freshFormatterMeasurements } from "./formatter.ts";
 import { evaluationError, type EvaluationError } from "./errors.ts";
 import { fixtureDefinitions, freshDispatchMetrics } from "./fixture-tools.ts";
 import { materializeEffect, unchangedEffect } from "./host-files.ts";
@@ -136,7 +139,7 @@ export interface EpisodeOptions {
   readonly task: EvalTask;
   readonly variant: RunRecord["variant"];
   readonly repetition: number;
-  readonly experiment?: "adoption" | "output" | "wording" | "formatter";
+  readonly experiment: ReplayExperiment;
   readonly scratch: string;
   readonly agentDir: string;
   readonly modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
@@ -230,6 +233,9 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
       catch: () => evaluationError("prompt"),
     }),
 ) {
+  const experiment = yield* Schema.decodeUnknownEffect(ReplayExperimentSchema)(
+    options.experiment,
+  ).pipe(Effect.mapError(() => evaluationError("preflight", replayRefusal)));
   const fs = yield* FileSystem.FileSystem;
   const { task, variant, repetition } = options;
   return yield* Effect.acquireUseRelease(
@@ -269,36 +275,9 @@ export const runEpisodeEffect = Effect.fn("Evaluation.runEpisode")(function* (
                 (pi) =>
                   registerCodeModeApplication(pi, {
                     loadSettings: loadCodePreviewSettings,
-                    formatSuccess:
-                      options.experiment === "formatter"
-                        ? measuredFormatter(variant, formatter)
-                        : undefined,
                     makeNestedDefinitions: () =>
                       fixtureDefinitions(root, dispatch, true, task.blockedReadPaths),
-                    wrapTool: (tool) =>
-                      options.experiment === "formatter" || options.experiment === "wording"
-                        ? {
-                            ...tool,
-                            promptGuidelines: wordingGuidelines(
-                              tool.promptGuidelines ?? [],
-                              options.experiment === "formatter" ? "candidate" : variant,
-                            ),
-                          }
-                        : variant === "baseline"
-                          ? tool
-                          : {
-                              ...tool,
-                              promptGuidelines:
-                                options.experiment === "output"
-                                  ? [
-                                      ...(tool.promptGuidelines ?? []).slice(0, 2),
-                                      ...outputGuidelines,
-                                    ]
-                                  : [
-                                      ...candidateSelectionGuidelines,
-                                      ...(tool.promptGuidelines ?? []).slice(1),
-                                    ],
-                            },
+                    ...replayToolOverrides(experiment, variant, formatter),
                   }),
               ],
             });
