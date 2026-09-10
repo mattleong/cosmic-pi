@@ -6,7 +6,9 @@ import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core"
 import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
 import { McpBoundaryError } from "../client/errors.ts";
 
-export const MCP_CARD_LIMITS = Object.freeze({ text: 12_000, nodes: 256, depth: 6, lines: 80 });
+import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
+
+export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
   readonly value: unknown;
 }
@@ -73,6 +75,7 @@ export interface McpCardDetails {
   readonly notices: readonly string[];
   readonly warnings: readonly string[];
   readonly truncated: boolean;
+  readonly displayCuts: readonly McpDisplayCut[];
   readonly attachmentCount: number;
   readonly attachmentsLimited: boolean;
   readonly imageCount: number;
@@ -89,60 +92,6 @@ const failureEvidenceSchema = Schema.Struct({
   reason: McpBoundaryError.fields.reason,
 });
 
-const preview = <Value>(value: Value): string => {
-  let nodes = 0;
-  const seen = new WeakSet<object>();
-  const copy = <Current>(current: Current, depth: number): Schema.Json => {
-    if (++nodes > MCP_CARD_LIMITS.nodes || depth > MCP_CARD_LIMITS.depth) return "[display limit]";
-    if (current === null) return null;
-    if (Predicate.isString(current)) return safeText(current, 2_000) ?? "";
-    if (Predicate.isBoolean(current)) return current;
-    if (Predicate.isNumber(current)) return Number.isFinite(current) ? current : "[invalid number]";
-    if (!Predicate.isObjectOrArray(current)) return "[unavailable]";
-    if (seen.has(current)) return "[circular]";
-    seen.add(current);
-    const length = arrayLength(current);
-    if (length !== undefined) {
-      const entries = list(current, 24).map((item) => copy(item, depth + 1));
-      if (length > entries.length) entries.push(`[${length - entries.length} more items]`);
-      return entries;
-    }
-    const result: Record<string, Schema.Json> = {};
-    try {
-      let count = 0;
-      for (const key in current) {
-        if (++count > 24 || nodes > MCP_CARD_LIMITS.nodes) {
-          result["[display limit]"] = true;
-          break;
-        }
-        const field = own(current, key).value;
-        if (field === undefined) continue;
-        const label = safeText(key, 128) ?? "field";
-        // This is a presentation copy, not a second retained response.
-        const sensitive =
-          /(?:token|password|secret|credentials?|pkce|authorization|authorizationurl|codeverifier|codechallenge|oauthstate|oauthcode|authorizationcode|callbackurl)$/.test(
-            key.toLowerCase().replace(/[^a-z0-9]/g, ""),
-          );
-        Object.defineProperty(result, label, {
-          value: sensitive ? "[redacted]" : copy(field, depth + 1),
-          enumerable: true,
-        });
-      }
-      return result;
-    } catch {
-      return "[unreadable]";
-    }
-  };
-  const text = JSON.stringify(copy(value, 0), null, 2);
-  const bounded = text
-    .slice(0, MCP_CARD_LIMITS.text)
-    .split("\n")
-    .slice(0, MCP_CARD_LIMITS.lines)
-    .join("\n");
-  return bounded.length < text.length
-    ? `${bounded}\n[display limit; use retained output if available]`
-    : bounded;
-};
 const legacyDetails = <Result>(result: Result): McpRenderField => {
   const details = own(result, "details").value;
   if (details !== undefined && details !== null) return { value: details };
@@ -331,6 +280,13 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     (item) => own(item, "type").value === "image",
   ).length;
   const resultId = own(details, "resultId").value;
+  const preview = mcpContentPreview(
+    action,
+    data ?? details,
+    own(data, "result").value !== undefined,
+  );
+  if (preview.cuts.length)
+    warnings.push(`Display omitted: ${preview.cuts.join(", ")}. Use retained output if available.`);
   let projection: McpCardDetails = {
     action,
     isError: currentError,
@@ -339,6 +295,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     notices,
     warnings,
     truncated,
+    displayCuts: preview.cuts,
     attachmentCount,
     attachmentsLimited: descriptors.limited,
     imageCount,
@@ -346,7 +303,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     preview:
       details === undefined
         ? "Details are unavailable for this historical result."
-        : preview(data ?? details),
+        : preview.combined,
   };
   if (currentOutcome) projection = { ...projection, outcome: currentOutcome };
   if (origin) projection = { ...projection, origin };

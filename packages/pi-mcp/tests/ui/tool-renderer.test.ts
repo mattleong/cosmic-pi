@@ -111,6 +111,43 @@ describe("MCP card projections", () => {
     expect(JSON.stringify(result)).toContain("PRIVATE-TOKEN");
   });
 
+  it("reports per-string display cuts without claiming source truncation or failure", () => {
+    const result = reply({ result: { content: [{ type: "text", text: "x".repeat(2001) }] } });
+    const retained = { ...result, details: { ...result.details, resultId: "retained-text" } };
+    const before = JSON.stringify(retained);
+    const projection = decodeMcpCardDetails(retained);
+    expect(projection.displayCuts).toContain("strings");
+    expect(projection.preview.length).toBeLessThan(MCP_CARD_LIMITS.text);
+    expect(projection.truncated).toBe(false);
+    expect(projection.isError).toBe(false);
+    expect(projection.outcome).toBe("completed");
+    for (const warning of projection.warnings)
+      expect(display(retained).replace(/\s+/g, " ")).toContain(warning);
+    expect(projection.warnings.join(" ")).toMatch(/display.*omitt/i);
+    expect(projection.recoveryHint).toContain("retained-text");
+    expect(JSON.stringify(retained)).toBe(before);
+  });
+
+  it("keeps readable multiline content and raw metadata together in expanded cards", () => {
+    const text = "first line\n  indented second\n\nlast line";
+    const result = reply({
+      result: {
+        content: [
+          { type: "text", text },
+          { type: "attachment", index: 0 },
+        ],
+        metadata: "raw-metadata",
+      },
+    });
+    const projection = decodeMcpCardDetails(result);
+    expect(projection.preview).toContain(text);
+    expect(projection.preview).toContain("raw-metadata");
+    expect(projection.preview).toContain("attachment");
+    expect(display(result, true)).toContain("first line");
+    expect(display(result, true)).toContain("raw-metadata");
+    expect(projection.displayCuts).toEqual([]);
+  });
+
   it("keeps unknown, cleanup and truncation warnings available without expansion", () => {
     const result = {
       ...reply({ kind: "cleanup", truncated: true }),

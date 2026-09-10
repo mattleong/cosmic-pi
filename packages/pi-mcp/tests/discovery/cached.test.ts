@@ -215,3 +215,115 @@ it("details preserve exact identifiers but bound descriptions and schemas withou
   expect(detail.metadata.length).toBeLessThanOrEqual(16_384);
   expect(() => describeCached(entry.ref, config, new Map())).toThrow();
 });
+
+it("ranks cached resources and templates by full metadata while retaining URI search and exact refs", () => {
+  const stored = new Map([
+    [
+      "a",
+      {
+        ...snapshot,
+        support: { ...snapshot.support, resources: true, templates: true },
+        resources: [
+          {
+            name: "ordinary",
+            uri: "mcp://host/read_file",
+            description: "x".repeat(600) + "\n\narchived data",
+          },
+          { name: "title", uri: "mcp://host/title", title: "Read file" },
+          { name: "name", uri: "mcp://host/name", description: "Read file" },
+        ],
+        templates: [{ name: "template", uriTemplate: "mcp://host/read_file/{id}" }],
+      },
+    ],
+  ]);
+  const first = queryCached(
+    { family: "resources", query: "read file", limit: 1 },
+    config,
+    stored,
+    new Map(),
+    emptyCursorState(),
+    "test",
+  );
+  expect(first.page.total).toBe(3);
+  expect(first.page.entries[0]?.ref.id).toBe("mcp://host/read_file");
+  const second = queryCached(
+    { family: "resources", query: "read file", limit: 1, cursor: first.page.next! },
+    config,
+    stored,
+    new Map(),
+    first.cursors,
+    "test",
+  );
+  expect(second.page.entries[0]?.ref.id).toBe("mcp://host/title");
+  for (const [family, query, id] of [
+    ["resources", "archived data", "mcp://host/read_file"],
+    ["resources", "mcp://host/read_file", "mcp://host/read_file"],
+    ["templates", "read file", "mcp://host/read_file/{id}"],
+  ] as const) {
+    const found = queryCached(
+      { family, query },
+      config,
+      stored,
+      new Map(),
+      emptyCursorState(),
+      "test",
+    );
+    expect(found.page.entries[0]?.ref.id).toBe(id);
+  }
+});
+
+it("cached cursor identity includes owner, refresh evidence and camel-case query tokenization", () => {
+  const first = queryCached(
+    { family: "tools", query: "tool", limit: 1 },
+    config,
+    snapshots,
+    new Map(),
+    emptyCursorState(),
+    "test",
+  );
+  for (const [stored, evidence] of [
+    [new Map([["a", { ...snapshot, owner: "replacement" }]]), new Map()],
+    [snapshots, new Map([["a", { owner: snapshot.owner, state: "refreshing" as const }]])],
+  ] as const) {
+    expect(() =>
+      queryCached(
+        { family: "tools", query: "tool", cursor: first.page.next! },
+        config,
+        stored,
+        evidence,
+        first.cursors,
+        "test",
+      ),
+    ).toThrowError(expect.objectContaining({ kind: "stale" }));
+  }
+  const stored = new Map([
+    [
+      "a",
+      {
+        ...snapshot,
+        tools: [
+          { name: "readFile", inputSchema: {} },
+          { name: "read_file", inputSchema: {} },
+        ],
+      },
+    ],
+  ]);
+  const page = queryCached(
+    { family: "tools", query: "readFile", limit: 1 },
+    config,
+    stored,
+    new Map(),
+    emptyCursorState(),
+    "test",
+  );
+  expect(() =>
+    queryCached(
+      { family: "tools", query: "readfile", cursor: page.page.next! },
+      config,
+      stored,
+      new Map(),
+      page.cursors,
+      "test",
+    ),
+  ).toThrowError(expect.objectContaining({ kind: "stale" }));
+});

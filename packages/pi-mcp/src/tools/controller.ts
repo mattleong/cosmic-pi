@@ -57,11 +57,11 @@ export const buildMcpTool = (options: McpToolControllerOptions): McpToolDefiniti
     name: "mcp",
     label: "MCP",
     description:
-      "Use configured MCP servers through one gateway. Status has no connection side effects. Discover tools before calling exact server/tool names; retrieve resources, templates, prompts, and retained result pages. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Unknown execution outcomes must not be replayed automatically.",
+      "Use configured MCP servers through one gateway. Status has no connection side effects. tools.list/search return selection summaries, not schemas or complete instructions. Use tools.describe for unfamiliar tools before calling exact server/tool names; never guess missing schemas. If describe is truncated, retrieve its retained result.read pages. Also supports resources, templates and prompts. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Never automatically replay unknown or completed operations to recover output.",
     promptSnippet:
       "Discover and call configured MCP tools, resources, prompts, and retained results",
     promptGuidelines: [
-      "Use mcp discovery before calling an unfamiliar MCP tool. Never automatically replay an mcp operation whose outcome is unknown.",
+      "Use tools.list/search summaries to select MCP tools, then tools.describe for unfamiliar tools' complete instructions and schemas. Never guess a missing schema; use retained result.read pages if describe is truncated. Annotation hints are server claims, not permissions. Never automatically replay unknown or completed MCP operations to recover output.",
     ],
     parameters: McpToolParameters,
     renderCall: (args, theme) => renderMcpCall(args, theme),

@@ -153,8 +153,8 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
       );
     case "cancelled":
       return diagnostic(
-        "Sign-in cancelled",
-        "This attempt stopped. Existing credentials were not deleted and no provider-side revocation is claimed.",
+        "Operation cancelled",
+        "The operation was cancelled. Cancellation does not undo work that already completed.",
         ["inspect-status"],
         "info",
       );

@@ -100,6 +100,22 @@ describe("fixed diagnostic recovery policy", () => {
     expect(missing.recovery).toEqual(["inspect-settings"]);
     expect(invalid.recovery).toEqual(["inspect-settings"]);
   });
+  it.each(["not-sent", "completed", "unknown"] as const)(
+    "does not interpret a cancelled %s operation as an authentication event",
+    (outcome) => {
+      const error = boundaryError("cancelled", outcome, "private-cancellation");
+      const diagnostic = mcpDiagnostic(error, { canSignIn: true, canReopen: true });
+      expect(`${diagnostic.title}\n${diagnostic.explanation}`).not.toMatch(
+        /sign[- ]?in|log[- ]?(?:in|out)|credential|authenticat/i,
+      );
+      expect(diagnostic.recovery).toEqual([
+        outcome === "not-sent" ? "inspect-status" : "inspect-operation",
+      ]);
+      const reply = mcpFailureReply("tools.call", error);
+      expect(reply).toMatchObject({ outcome, isError: true, data: { kind: "cancelled" } });
+      expect(reply.resultId).toBeUndefined();
+    },
+  );
   it("does not interpret an ordinary denied operation as auth rejection", () => {
     expect(
       mcpDiagnostic(boundaryError("denied", "not-sent", "expired token"), { canSignIn: true })

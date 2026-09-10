@@ -68,6 +68,21 @@ export const McpPromptMetadataSchema = Schema.StructWithRest(
 );
 
 export type McpToolMetadata = typeof McpToolMetadataSchema.Type;
+/** Selection metadata only. Omitted hints have no implied value or permission meaning. */
+export type McpToolSummary = {
+  readonly server: string;
+  readonly name: string;
+  readonly title?: string;
+  readonly titleTruncated?: true;
+  readonly description?: string;
+  readonly descriptionTruncated?: true;
+  readonly annotations?: {
+    readonly readOnlyHint?: boolean;
+    readonly destructiveHint?: boolean;
+    readonly idempotentHint?: boolean;
+    readonly openWorldHint?: boolean;
+  };
+};
 export type McpResourceMetadata = typeof McpResourceMetadataSchema.Type;
 export type McpTemplateMetadata = typeof McpTemplateMetadataSchema.Type;
 export type McpPromptMetadata = typeof McpPromptMetadataSchema.Type;

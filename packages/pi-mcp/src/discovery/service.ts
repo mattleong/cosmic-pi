@@ -6,7 +6,6 @@ import { McpActivity } from "../activity/service.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
-import type * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
@@ -24,6 +23,13 @@ import { isToolAllowed, requireToolAllowed } from "./policy.ts";
 import { cacheVisible, describeCached, queryCached, type McpCacheEvidence } from "./cached.ts";
 import { collectMetadata } from "./collect.ts";
 import { discoveryNotices } from "./diagnostics.ts";
+import { summarizeTool } from "./summary.ts";
+import {
+  compareDiscoveryCandidates,
+  compareDiscoveryText,
+  discoverySearchRank,
+  prepareDiscoverySearch,
+} from "./search.ts";
 
 interface DiscoveryState {
   readonly revision: number;
@@ -45,7 +51,7 @@ const visibleSnapshots = (state: DiscoveryState, config: McpResolvedConfig) =>
     .filter((snapshot) => {
       return cacheVisible(snapshot, config);
     })
-    .sort((left, right) => left.server.localeCompare(right.server));
+    .sort((left, right) => compareDiscoveryText(left.server, right.server));
 
 const makeDiscovery = Effect.gen(function* () {
   const connections = yield* McpConnections;
@@ -233,19 +239,24 @@ const makeDiscovery = Effect.gen(function* () {
               "not-sent",
               "MCP metadata changed before the page was published.",
             );
-          const filter = request.action === "tools.search" ? request.query.toLocaleLowerCase() : "";
-          const items: Array<Schema.Json> = [];
+          const search = prepareDiscoverySearch(
+            request.action === "tools.search" ? request.query : "",
+          );
+          const tools = request.action === "tools.list" || request.action === "tools.search";
+          const items: Array<{
+            server: string;
+            id: string;
+            rank: number;
+            metadata: McpMetadataSnapshot["tools" | "resources" | "templates" | "prompts"][number];
+          }> = [];
           for (const snapshot of snapshots) {
-            if (request.action === "tools.list" || request.action === "tools.search") {
+            if (tools) {
               const server = config.servers[snapshot.server];
               for (const tool of snapshot.tools) {
                 if (!server || !isToolAllowed(server, tool.name)) continue;
-                if (
-                  filter !== "" &&
-                  !`${tool.name}\n${tool.description ?? ""}`.toLocaleLowerCase().includes(filter)
-                )
-                  continue;
-                items.push({ ...tool, server: snapshot.server });
+                const rank = discoverySearchRank(search, tool);
+                if (rank === undefined) continue;
+                items.push({ metadata: tool, server: snapshot.server, id: tool.name, rank });
               }
             } else {
               const entries =
@@ -254,13 +265,16 @@ const makeDiscovery = Effect.gen(function* () {
                   : request.action === "resources.templates"
                     ? snapshot.templates
                     : snapshot.prompts;
-              items.push(...entries);
+              for (const metadata of entries)
+                items.push({ metadata, server: snapshot.server, id: metadata.name, rank: 0 });
             }
           }
+          if (tools) items.sort(compareDiscoveryCandidates);
           const signature = [
             request.action,
             request.server ?? "",
-            filter,
+            search.text,
+            search.words.join(" "),
             String(config.revision),
             ...snapshots.flatMap((snapshot) => [
               snapshot.server,
@@ -281,7 +295,18 @@ const makeDiscovery = Effect.gen(function* () {
                   .sort()
               : [];
           return [
-            { data: { page: result.data, undiscovered }, notices: discoveryNotices(snapshots) },
+            {
+              data: {
+                page: {
+                  ...result.data,
+                  items: result.data.items.map((item) =>
+                    tools ? summarizeTool(item.server, item.metadata) : item.metadata,
+                  ),
+                },
+                undiscovered,
+              },
+              notices: discoveryNotices(snapshots),
+            },
             { ...current, cursors: result.state },
           ];
         },

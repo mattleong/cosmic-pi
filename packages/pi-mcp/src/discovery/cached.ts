@@ -2,10 +2,9 @@ import * as Predicate from "effect/Predicate";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { boundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer, McpResolvedConfig } from "../config/model.ts";
-import type { McpCursorState } from "./pagination.ts";
+import { discoveryPage, type McpCursorState } from "./pagination.ts";
 import type {
   McpCachedDetail,
-  McpCachedEntry,
   McpCachedFamily,
   McpCachedPage,
   McpCachedRef,
@@ -14,6 +13,12 @@ import type {
   McpCatalogState,
 } from "./model.ts";
 import { isToolAllowed } from "./policy.ts";
+import {
+  compareDiscoveryCandidates,
+  compareDiscoveryText,
+  discoverySearchRank,
+  prepareDiscoverySearch,
+} from "./search.ts";
 
 export interface McpCacheEvidence {
   readonly owner: string;
@@ -70,7 +75,7 @@ export const queryCached = (
     (request.query?.length ?? 0) > 512
   )
     throw boundaryError("invalid-input", "not-sent", "MCP cached query is outside its limits.");
-  const query = (request.query ?? "").toLocaleLowerCase();
+  const search = prepareDiscoverySearch(request.query ?? "");
   const servers = Object.values(config.servers)
     .filter(
       (server) =>
@@ -80,17 +85,20 @@ export const queryCached = (
         server.definition &&
         (request.server === undefined || request.server === server.id),
     )
-    .sort((a, b) => a.id.localeCompare(b.id));
-  const entries: McpCachedEntry[] = [];
-  const prior = request.cursor ? cursors.entries.get(request.cursor) : undefined;
-  if (request.cursor && !prior)
-    throw boundaryError("stale", "not-sent", "MCP cached cursor is no longer current.");
-  const offset = prior?.offset ?? 0;
-  let total = 0;
+    .sort((a, b) => compareDiscoveryText(a.id, b.id));
+  const entries: Array<{
+    server: string;
+    snapshot: McpMetadataSnapshot;
+    metadata: ReturnType<typeof cachedEntries>[number];
+    id: string;
+    rank: number;
+  }> = [];
   const signature = [
+    "cached",
     request.family,
     request.server ?? "",
-    query,
+    search.text,
+    search.words.join(" "),
     String(config.revision),
     String(config.trusted),
   ];
@@ -105,27 +113,11 @@ export const queryCached = (
       observed?.state ?? "",
     );
     const catalog = snapshot ? cachedEntries(snapshot, request.family, server) : [];
-    for (const entry of catalog) {
-      const id = cachedId(request.family, entry);
-      if (
-        query &&
-        !`${id}\n${entry.name}\n${entry.description ?? ""}`.toLocaleLowerCase().includes(query)
-      )
-        continue;
-      const index = total++;
-      if (index < offset || entries.length >= limit) continue;
-      entries.push({
-        ref: {
-          server: server.id,
-          family: request.family,
-          id,
-          owner: snapshot!.owner,
-          revision: snapshot!.revision,
-          configRevision: snapshot!.configRevision,
-        },
-        name: safe(entry.name, 1024),
-        description: safe(entry.description ?? "", 512),
-      });
+    for (const metadata of catalog) {
+      const id = cachedId(request.family, metadata);
+      const rank = discoverySearchRank(search, metadata, id);
+      if (rank !== undefined && snapshot !== undefined)
+        entries.push({ server: server.id, snapshot, metadata, id, rank });
     }
     const state: McpCatalogState =
       observed?.state ??
@@ -146,22 +138,34 @@ export const queryCached = (
     return diagnostic ? { ...catalogState, reason: diagnostic.reason } : catalogState;
   });
   const binding = signature.map((part) => `${part.length}:${part}`).join("");
-  if (request.cursor && (!prior || prior.signature !== binding))
-    throw boundaryError("stale", "not-sent", "MCP cached cursor is no longer current.");
-  const shown = entries;
-  const end = offset + shown.length;
-  let next: string | undefined;
-  let updated = cursors;
-  if (end < total) {
-    next = `${namespace}.cached.${cursors.sequence + 1}`;
-    const retained = new Map(cursors.entries);
-    retained.set(next, { signature: binding, offset: end });
-    while (retained.size > 1024) retained.delete(retained.keys().next().value!);
-    updated = { sequence: cursors.sequence + 1, entries: retained };
-  }
+  if (search.text || request.family === "tools") entries.sort(compareDiscoveryCandidates);
+  const selected = discoveryPage(
+    entries,
+    { ...request, limit },
+    binding,
+    `${namespace}.cached`,
+    cursors,
+  );
   return {
-    page: { family: request.family, entries: shown, catalogs, total, next },
-    cursors: updated,
+    page: {
+      family: request.family,
+      entries: selected.data.items.map(({ server, snapshot, metadata, id }) => ({
+        ref: {
+          server,
+          family: request.family,
+          id,
+          owner: snapshot.owner,
+          revision: snapshot.revision,
+          configRevision: snapshot.configRevision,
+        },
+        name: safe(metadata.name, 1024),
+        description: safe(metadata.description ?? "", 512),
+      })),
+      catalogs,
+      total: selected.data.total,
+      next: selected.data.nextCursor,
+    },
+    cursors: selected.state,
   };
 };
 

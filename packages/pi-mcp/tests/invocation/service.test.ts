@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,13 @@ import {
   type JsonSchemaValidatorContract,
 } from "../../src/boundary/schema-validator.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
+import { makeMcpCodeModeHost } from "../../src/boundary/host-code-mode.ts";
+import {
+  MCP_CODE_MODE_QUERY,
+  MCP_CODE_MODE_VERSION,
+  normalizeMcpCodeModeCapability,
+  type McpCodeModeCapability,
+} from "../../src/code-mode/protocol.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpReply, McpRequest } from "../../src/client/model.ts";
 import type { McpEffectiveServer, McpResolvedConfig, McpSettings } from "../../src/config/model.ts";
@@ -312,6 +320,7 @@ const makeHarness = (seams: HarnessOptions = {}) =>
 const realFixture = (
   seams: {
     readonly settings?: Partial<McpSettings>;
+    readonly tools?: McpMetadataSnapshot["tools"];
     readonly config?: McpResolvedConfig;
     readonly isTrusted?: () => boolean;
     readonly auth?: Partial<McpAuthContract>;
@@ -382,7 +391,7 @@ const realFixture = (
                   yield* seams.request?.(input) ?? Effect.void;
                   const result =
                     input.action === "tools.list"
-                      ? { tools: initial.tools }
+                      ? { tools: seams.tools ?? initial.tools }
                       : input.action === "resources.list"
                         ? { resources: [] }
                         : input.action === "resources.templates"
@@ -422,6 +431,153 @@ const realFixture = (
     ),
   };
 };
+
+it.effect(
+  "gateway and Code Mode share summaries, full describe, retained reads and schema validation",
+  () => {
+    const metadata = {
+      name: "run",
+      title: "Run once",
+      description: "Selection summary.\n\n" + "Complete instructions. ".repeat(300),
+      inputSchema: {
+        type: "object",
+        required: ["value"],
+        properties: { value: { type: "number" } },
+      },
+      outputSchema: { type: "object", required: ["value"] },
+      annotations: { readOnlyHint: false, arbitrary: "opaque" },
+      examples: [{ value: 1 }],
+    };
+    const f = realFixture({
+      tools: [metadata],
+      request: (input) =>
+        input.action === "resources.list"
+          ? Effect.fail(
+              boundaryError(
+                "unsupported",
+                "completed",
+                "private-server-message",
+                "rpc-method-not-found",
+              ),
+            )
+          : Effect.void,
+    });
+    return Effect.gen(function* () {
+      const connections = yield* McpConnections;
+      const discovery = yield* McpDiscovery;
+      const validated: Array<Schema.Json> = [];
+      const { execution } = yield* makeHarness({
+        connections,
+        discovery,
+        auth: f.auth,
+        validate: (schema, data, outcome) => {
+          validated.push(schema);
+          return Schema.decodeUnknownEffect(Schema.Struct({ value: Schema.Finite }))(data).pipe(
+            Effect.asVoid,
+            Effect.mapError(() => boundaryError("invalid-input", outcome, "Invalid value.")),
+          );
+        },
+      });
+      const events = createEventBus();
+      const host = makeMcpCodeModeHost(events);
+      const runRequest = Effect.runPromiseWith(yield* Effect.context<never>());
+      yield* Effect.addFinalizer(() => Effect.sync(() => host.dispose()));
+      host.activate({
+        sessionId: "summary-test",
+        tokenCurrent: () => true,
+        toolActive: () => true,
+        trusted: () => true,
+        execute: (_callId, input, signal, maxOutputBytes) =>
+          runRequest(
+            execution
+              .execute(input, { maxOutputBytes, images: false })
+              .pipe(Effect.map((value) => value.reply)),
+            { signal },
+          ),
+      });
+      const providers: McpCodeModeCapability[] = [];
+      events.emit(MCP_CODE_MODE_QUERY, {
+        version: MCP_CODE_MODE_VERSION,
+        sessionId: "summary-test",
+        respond: <Value>(value: Value) => {
+          const provider = normalizeMcpCodeModeCapability(value);
+          if (provider) providers.push(provider);
+        },
+      });
+      const nested = (
+        input: Parameters<McpCodeModeCapability["execute"]>[1],
+        allowance = options.maxOutputBytes,
+      ) =>
+        Effect.promise(() =>
+          providers[0]!.execute("summary-call", input, new AbortController().signal, allowance),
+        );
+      for (const input of [
+        { action: "tools.list", server: "one" },
+        { action: "tools.search", query: "Complete instructions" },
+      ] as const) {
+        const gateway = yield* execution.execute(input, options);
+        const guest = yield* nested(input);
+        expect(guest.data).toEqual(gateway.reply.data);
+        expect(guest.notices).toEqual(gateway.reply.notices);
+        expect(guest.notices).toHaveLength(1);
+        expect(guest.notices.join("\n")).not.toContain("private-server-message");
+        expect(guest.data).toMatchObject({
+          result: {
+            page: {
+              items: [
+                {
+                  server: "one",
+                  name: "run",
+                  title: "Run once",
+                  description: "Selection summary.",
+                  descriptionTruncated: true,
+                  annotations: { readOnlyHint: false },
+                },
+              ],
+              total: 1,
+            },
+          },
+        });
+        expect(
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(guest.data),
+        ).not.toMatch(/inputSchema|outputSchema|examples|arbitrary/);
+      }
+      const describe = { action: "tools.describe", server: "one", tool: "run" } as const;
+      const complete = yield* nested(describe, 50 * 1024);
+      expect(complete.data).toMatchObject({ result: metadata });
+      const limited = yield* nested(describe);
+      expect(limited.data).toMatchObject({ truncated: true });
+      expect(limited.resultId).toBeDefined();
+      const recovered = yield* nested({ action: "result.read", id: limited.resultId! }, 50 * 1024);
+      const text = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+        recovered.data,
+      );
+      expect(yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text.text)).toEqual(
+        metadata,
+      );
+      expect(recovered.notices).toEqual(expect.arrayContaining([...complete.notices]));
+      expect(
+        yield* execution
+          .execute({ ...request, arguments: { value: "invalid" } }, options)
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
+      expect(f.sent.filter((input) => input.action === "tools.call")).toEqual([]);
+      const called = yield* nested(request);
+      expect(called).toMatchObject({ outcome: "completed", isError: false });
+      expect(validated).toEqual([
+        metadata.inputSchema,
+        metadata.inputSchema,
+        metadata.outputSchema,
+      ]);
+      const before = f.sent.length;
+      yield* nested({ action: "result.read", id: called.resultId! });
+      expect(f.sent).toHaveLength(before);
+      expect(f.sent.filter((input) => input.action === "tools.call")).toEqual([
+        { action: "tools.call", tool: "run", arguments: { value: 1 } },
+      ]);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
 
 const loginUi: McpLoginUi = {
   mode: "manual",

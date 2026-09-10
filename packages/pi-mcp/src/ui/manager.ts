@@ -75,7 +75,7 @@ export interface McpManagerComponentOptions {
   readonly keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) => string;
 }
 
-const managerShortcuts = new Set(["a", "b", "s", "[", "]", "n", "p"]);
+const managerShortcuts = new Set(["a", "b", "s", "[", "]", "n", "p", "v"]);
 const reservedLabels = new Set([...FULL_SCREEN_NAVIGATION_SHORTCUTS, ...managerShortcuts]);
 
 /** Pure component. Callbacks enqueue local reads; neither rendering nor navigation performs I/O. */
@@ -202,6 +202,8 @@ export class McpManagerComponent implements Component, Focusable {
       offset,
       deliver: (page) => {
         if (this.disposed || generation !== this.generation) return;
+        const snapshot = this.options.snapshot();
+        if (!snapshot.trusted || !snapshot.enabled) return;
         this.unavailable = !page;
         if (page) {
           this.result.accept(page, direction);
@@ -375,6 +377,11 @@ export class McpManagerComponent implements Component, Focusable {
         this.cursor = undefined;
         this.cursors.length = 0;
         this.update();
+      } else if (resolution.key === "v" && this.selection.screen === "result") {
+        if (this.result.toggleMode()) {
+          this.shell.resetDetailWindow();
+          this.shell.resetDetailScroll();
+        }
       } else if (resolution.key === "n") {
         if (this.selection.screen === "browse" && this.page?.next) {
           this.cursors.push(this.cursor);
@@ -445,6 +452,7 @@ export class McpManagerComponent implements Component, Focusable {
     const frame = listDetailFrame(theme);
     const snapshot = this.options.snapshot();
     if (!snapshot.trusted || !snapshot.enabled) {
+      this.generation += 1;
       this.page = undefined;
       this.detail = undefined;
       this.result.invalidate();
@@ -467,9 +475,12 @@ export class McpManagerComponent implements Component, Focusable {
     const cancel = label("tui.select.cancel", "Esc");
     const movement = `${label("tui.select.up", "↑")}/${label("tui.select.down", "↓")}/j/k Move`;
     const paging = `${label("tui.select.pageUp", "PgUp")}/${label("tui.select.pageDown", "PgDn")} Page`;
+    const resultMode = this.result.hasReadable
+      ? `v ${this.result.mode === "readable" ? "Raw" : "Readable"} / `
+      : "";
     const primary =
       this.selection.screen === "result"
-        ? "n p Pages / q Close"
+        ? `${resultMode}n p Pages / q Close`
         : this.actionRow()
           ? `${enter} Details / a Actions / / Search`
           : this.selection.screen === "browse"
@@ -478,7 +489,12 @@ export class McpManagerComponent implements Component, Focusable {
     const footer = renderResponsiveManagerFooter(
       inner,
       this.moreHelp
-        ? [[`${movement} / C-u/d Half / ${paging} / gg/G Ends`, `${cancel} Back / q Close`]]
+        ? [
+            [
+              `${movement} / C-u/d Half / ${paging} / gg/G Ends`,
+              `${this.selection.screen === "result" ? resultMode : ""}${cancel} Back / q Close`,
+            ],
+          ]
         : [
             [
               primary,
@@ -490,7 +506,7 @@ export class McpManagerComponent implements Component, Focusable {
             ],
             [
               this.selection.screen === "result"
-                ? "n p Pages"
+                ? `${resultMode}n p Pages`
                 : this.actionRow()
                   ? `${enter} Details`
                   : this.selection.screen === "browse"
@@ -541,7 +557,7 @@ export class McpManagerComponent implements Component, Focusable {
             ? dashboardDetail(this.selectedRows()[this.shell.state.selected])
             : this.selection.screen === "browse"
               ? browserDetail(this.page?.entries[this.shell.state.selected], this.detail)
-              : (this.result.page?.lines ?? [
+              : (this.result.lines ?? [
                   this.unavailable
                     ? "Result unavailable. It may have been evicted or revoked. The source operation was not replayed."
                     : "Reading authorized retained output locally.",

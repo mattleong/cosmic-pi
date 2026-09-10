@@ -167,7 +167,13 @@ The gateway accepts an explicit `action`; omitting it means `status`. Each actio
 | `prompts.get`                                           | `server`, `prompt`; optional string-valued `arguments` |
 | `result.read`                                           | `id`; optional `offset`, `limit`, `attachment`         |
 
-Discovery returns original remote names. Invocation needs exact `server` and `tool` fields, without aliases or fuzzy matching. Targeted discovery may connect lazily; unscoped list/search only inspect known snapshots and report undiscovered servers. Status never connects. Cursors belong to a frozen metadata revision and become invalid when it changes.
+`tools.list` and `tools.search` return compact selection entries by default, with no full-results mode. Entries preserve exact `server` and `name`, an optional title capped at 128 Unicode code points, and the first nonempty description paragraph capped at 512 code points. Whitespace is normalized; `titleTruncated` and `descriptionTruncated` disclose omitted text. Titles prefer the top-level title, then `annotations.title`. Only advertised boolean `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` annotations are copied. Missing hints remain unknown, and no hint grants permission. Schemas, examples, icons, and arbitrary extension fields are omitted.
+
+Use `tools.describe` for an unfamiliar tool's complete definition and instructions before constructing arguments. If its output is truncated, recover the retained pages rather than guessing a missing schema. Discovery retains full immutable definitions internally, and invocation still validates against the complete current schema.
+
+Search examines full names, titles, and descriptions, including text omitted from summaries. Exact names rank first, then name-token matches, title matches, and description matches. Multiword searches handle camelCase and common separators; all words must match. Equal ranks sort by exact server/name identity. Cached browsing uses the same ranking and also searches resource/template identifiers. Only the selected page is projected into response objects.
+
+Invocation needs exact `server` and `tool` fields, without aliases or fuzzy matching. Targeted discovery may connect lazily; unscoped list/search only inspect known snapshots and report undiscovered servers. Status never connects. Cursors belong to a frozen metadata revision and become invalid when it changes.
 
 Code Mode exposes these data actions through `tools.mcp.request`, but excludes `connect`, `disconnect`, `refresh`, auth, configuration writes, and arbitrary protocol methods. It requires exactly one active provider in the same stable Pi session and rechecks that provider on each request. Merely importing the protocol does not load the extension.
 
@@ -185,9 +191,11 @@ Check both `outcome` and `isError`. Output validation or projection can fail aft
 
 HTTP and stdio JSON-RPC errors retain fixed diagnostic reasons such as `rpc-method-not-found` or `rpc-invalid-params`, rather than appearing as transport failures. Raw server messages and error data stay private. A completed failure does not prove that output was retained; error guidance does not offer retained-output recovery without a result ID.
 
-The owned gateway has compact call/result cards under the existing code-preview shell. Expansion is display-only and preserves the original JSON, images, error receipts, and execution certainty. Unknown completion, cleanup, truncation, and originating failures remain visible when collapsed.
+The owned gateway has compact call/result cards under the existing code-preview shell. Expanded cards show recognized MCP text with its newlines and indentation, alongside sanitized raw JSON. One combined display budget covers both sections. String, collection, depth, node, line, and character cuts are disclosed separately from source truncation or operation failure. Expansion never changes the original JSON, images, error receipts, or execution certainty. Unknown completion, cleanup, truncation, and originating failures remain visible when collapsed. Ordinary cancellations use operation-neutral guidance, not sign-in instructions.
 
-`/mcp result ID` opens an authorized local retained-output viewer. Navigation follows returned offsets and preserves the originating outcome. Eviction or revocation withdraws displayed text; recovery never reruns the source operation. There is no new result-history store.
+`/mcp result ID` opens an authorized local retained-output viewer. A complete JSON page containing recognized tool, resource, or prompt text defaults to readable text; `v` toggles sanitized raw JSON. Partial pages stay raw, even when a fragment happens to parse as JSON. The viewer keeps its existing 8,192-character read allowance and never assembles pages to enable readable mode. Raw view retains page-sized strings and collections rather than applying the card's smaller cuts.
+
+Mode changes perform no reads or execution. Navigation follows original returned offsets, not sanitized text lengths, and preserves the originating outcome. The viewer keeps one authorized page and bounded previous offsets. Eviction or revocation withdraws both views; recovery never reruns the source operation. There is no new result-history store. Display sanitization is not a guarantee that arbitrary remote content contains no sensitive information.
 
 Accepted results are retained before inline projection. Disconnect preserves completed results. Disable, reconfigure, trust loss, logout, eviction, and session replacement revoke them. A retention failure explicitly says the output is not recoverable. Oversized wire responses may never reach retention.
 

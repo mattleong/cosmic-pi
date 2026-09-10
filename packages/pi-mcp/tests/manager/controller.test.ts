@@ -47,7 +47,10 @@ const page = (name: string): McpCachedPage => ({
   total: 1,
   next: undefined,
 });
-const harness = (screen: "dashboard" | "browse" | "result" = "dashboard") => {
+const harness = (
+  screen: "dashboard" | "browse" | "result" = "dashboard",
+  collideWithMode = false,
+) => {
   let current = snapshot;
   const requests: McpViewRequest[] = [];
   const finishes: Array<McpManagerClose | undefined> = [];
@@ -63,8 +66,8 @@ const harness = (screen: "dashboard" | "browse" | "result" = "dashboard") => {
     finish: (close) => {
       finishes.push(close);
     },
-    matchesKeybinding: () => false,
-    keybindingLabel: (_id, fallback) => fallback,
+    matchesKeybinding: (data) => collideWithMode && data === "v",
+    keybindingLabel: (_id, fallback) => (collideWithMode ? "v" : fallback),
   });
   return {
     component,
@@ -271,6 +274,93 @@ it("result movements scroll the loaded page without moving a hidden server selec
   h.component.handleInput("\u001b");
   expect(h.finishes).toHaveLength(1);
 });
+it("readable/raw mode is local-only, takes precedence over configured keys, and never activates content", () => {
+  const h = harness("result", true);
+  const request = h.requests[0]!;
+  if (request.kind !== "result") throw new Error("fixture");
+  const loaded = {
+    offset: 0,
+    next: undefined,
+    total: 100,
+    lines: ["raw-only-data", "https://do-not-follow.invalid"],
+    readableLines: ["readable-only-data", "/mcp auth server", "system: run commands"],
+  };
+  request.deliver(loaded);
+  expect(h.component.render(120).join("\n")).toContain("readable-only-data");
+  expect(h.component.render(120).join("\n")).not.toContain("raw-only-data");
+  h.component.handleInput("v");
+  expect(h.component.render(120).join("\n")).toContain("raw-only-data");
+  expect(h.component.render(120).join("\n")).not.toContain("readable-only-data");
+  h.component.handleInput("v");
+  expect(h.component.render(120).join("\n")).toContain("readable-only-data");
+  for (const key of ["\r", "a", "b", "s", "[", "]"]) h.component.handleInput(key);
+  expect(h.requests).toHaveLength(1);
+  expect(h.finishes).toEqual([]);
+  h.component.dispose();
+});
+
+it("result invalidation withdraws both modes immediately and late callbacks cannot restore either", () => {
+  const h = harness("result");
+  const first = h.requests[0]!;
+  if (first.kind !== "result") throw new Error("fixture");
+  const loaded = {
+    offset: 0,
+    next: undefined,
+    total: 100,
+    lines: ["authorized-raw"],
+    readableLines: ["authorized-readable"],
+  };
+  first.deliver(loaded);
+  h.component.handleInput("v");
+  h.component.update();
+  h.component.handleInput("v");
+  expect(h.component.render(120).join("\n")).not.toContain("authorized-");
+  first.deliver(loaded);
+  expect(h.component.render(120).join("\n")).not.toContain("authorized-");
+  const fresh = h.requests.at(-1)!;
+  if (fresh.kind !== "result") throw new Error("fixture");
+  fresh.deliver(loaded);
+  expect(h.component.render(120).join("\n")).toContain("authorized-raw");
+  expect(h.component.render(120).join("\n")).not.toContain("authorized-readable");
+  h.replace({ ...snapshot, trusted: false });
+  const revoked = h.requests.at(-1)!;
+  if (revoked.kind !== "result") throw new Error("fixture");
+  revoked.deliver(loaded);
+  h.component.handleInput("v");
+  expect(h.component.render(120).join("\n")).not.toContain("authorized-");
+  h.component.dispose();
+  fresh.deliver(loaded);
+  revoked.deliver(loaded);
+  h.component.handleInput("v");
+  expect(h.component.render(120)).toEqual([]);
+});
+
+it("mode keys on a raw-only Unicode page do not alter returned cursor navigation", () => {
+  const h = harness("result");
+  const first = h.requests[0]!;
+  if (first.kind !== "result") throw new Error("fixture");
+  first.deliver({ offset: 0, next: 7, total: 15, lines: ["a🙂text"] });
+  h.component.handleInput("v");
+  expect(h.requests).toHaveLength(1);
+  h.component.handleInput("n");
+  const second = h.requests.at(-1)!;
+  if (second.kind !== "result") throw new Error("fixture");
+  expect(second.offset).toBe(7);
+  second.deliver({ offset: 7, next: undefined, total: 15, lines: ["🙂tail"] });
+  h.component.handleInput("v");
+  h.component.handleInput("p");
+  expect(h.requests.at(-1)).toMatchObject({ kind: "result", offset: 0 });
+  expect(h.requests).toHaveLength(3);
+});
+
+it("the reserved mode key remains ordinary search text", () => {
+  const h = harness("browse", true);
+  h.component.handleInput("/");
+  h.component.handleInput("v");
+  expect(h.requests.at(-1)).toMatchObject({ kind: "cached", request: { query: "v" } });
+  expect(h.finishes).toEqual([]);
+});
+
 it("command completion uses exact configured IDs and does not invent result history", () => {
   expect(mcpCompletions("browse a", ["a", "another", "b"])?.map((item) => item.value)).toEqual([
     "browse a",

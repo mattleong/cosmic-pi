@@ -86,6 +86,13 @@ The closed request union accepts `status`, `tools.list`, `tools.search`, `tools.
 configuration changes, and arbitrary MCP protocol methods. A permitted targeted request can
 connect lazily. Unscoped discovery searches known metadata rather than starting every server.
 
+`tools.list` and `tools.search` return compact selection summaries, not schemas or complete
+instructions. Search ranks matches over full names, titles, and descriptions, including text
+omitted from those summaries. Use `tools.describe` for an unfamiliar tool's complete definition
+before constructing arguments. If that definition is truncated, read its retained pages rather
+than guessing a schema. Annotation hints are server claims, not permissions. This is the same
+default contract as the native gateway; there is no alternate full-discovery mode.
+
 Batch already-formed requests with ordinary interpreter control flow:
 
 ```js

@@ -171,18 +171,23 @@ export interface McpCursorState {
 }
 export const emptyCursorState = (): McpCursorState => ({ sequence: 0, entries: new Map() });
 
-export interface McpDiscoveryPage {
-  readonly data: Schema.Json;
+export interface McpDiscoveryPage<A> {
+  readonly data: {
+    readonly items: ReadonlyArray<A>;
+    readonly total: number;
+    readonly nextCursor?: string;
+  };
   readonly state: McpCursorState;
 }
 
-export const discoveryPage = (
-  entries: ReadonlyArray<Schema.Json>,
+/** Select references first; callers materialize output only for this local page. */
+export const discoveryPage = <A>(
+  entries: ReadonlyArray<A>,
   request: { readonly cursor?: string; readonly limit?: number },
   signature: string,
   namespace: string,
   state: McpCursorState,
-): McpDiscoveryPage => {
+): McpDiscoveryPage<A> => {
   const limit = request.limit ?? MCP_DISCOVERY_LIMITS.defaultPage;
   if (!Number.isInteger(limit) || limit < 1 || limit > MCP_DISCOVERY_LIMITS.maximumPage)
     throw boundaryError("invalid-input", "not-sent", "MCP discovery page limit is invalid.");

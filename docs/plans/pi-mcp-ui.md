@@ -305,3 +305,27 @@ A subsequent scoped probe confirmed the capability mismatch. Atlassian advertise
 Discovery now tolerates only a first-page `completed/unsupported/rpc-method-not-found` response, independently for each advertised catalog. Successful full lists, support flags, and fixed diagnostics publish as one owner-bound revision. Other failures and later-page missing methods remain fatal. Internal query results bind notices to their metadata revision; the existing gateway envelope and retained-result rules are unchanged.
 
 Twenty-six additional regressions cover independent families, recovery, invalidation, fatal and later-page failures, single-slot cold discovery/invocation, validation, and retained notices. All 520 MCP tests and 138 Code Mode tests pass. Package checks and Effect diagnostics pass with zero errors or warnings. After the user reloaded, the normal MCP gateway successfully discovered the Jira read tool and fetched the requested issue. No Jira write, login, logout, or endpoint/configuration change was performed. Workspace lint/format and packed-source smoke also pass. `pnpm validate` remains blocked by the same unchanged core typecheck diagnostics recorded above.
+
+### Follow-up discovery and preview polish
+
+The user authorized all six items and chose compact discovery as the default contract, without a compatibility mode:
+
+1. Cards disclose per-string and aggregate display cuts separately from source truncation and execution failure. Colliding sanitized field labels preserve the first field and disclose the omission.
+2. Generic cancellation guidance is operation-neutral; explicit auth progress retains its sign-in context.
+3. Tool list/search entries contain exact identity, bounded deterministic title/description excerpts, and recognized boolean annotation hints. Full definitions remain in the authoritative snapshot and `tools.describe`.
+4. Gateway and cached searches rank full names, titles, and descriptions, with deterministic ties and revision-bound cursors. Repeated query terms are deduplicated; native substring matching avoids a JavaScript token scan per term.
+5. Cards show recognized multiline MCP text and sanitized raw JSON under one display budget. Complete retained JSON pages support a local `v` view toggle; partial pages stay raw. Raw retained views preserve page-sized strings and collections. One authorized page replaces the unused multi-page display cache; invalidation withdraws both variants.
+6. Discovery materializes response objects only for the selected local page. Search candidates retain references rather than copying complete tool definitions.
+
+Owned integration tests exercise summary selection, full description and truncated-description recovery, captured-schema validation, and native/Code Mode agreement. Display tests cover cuts, hostile objects, terminal controls, redaction, complete-page predicates, raw/readable switching without I/O, and authority withdrawal. No provider-specific output parser, new runtime, persistence store, schema shortcut, or replay policy was added.
+
+Verification:
+
+- MCP: 576 tests across 46 files; package check passed; Effect diagnostics reported zero errors and warnings.
+- Code Mode: 138 tests across 17 files; package check and Effect diagnostics passed with zero errors and warnings. Shared Cosmic UI: 266 tests across 32 files passed.
+- Independent discovery and preview reviews completed. The sanitized-key collision finding has regressions for both ordinary labels and the display-omission marker. The generic-cancellation and collision regressions failed before their fixes.
+- A source-loaded smoke passed 90 layouts across complete/partial results, readable/raw views, and expanded/collapsed cards, at widths 4, 20, 40, 80, and 120. View toggles made no additional reads.
+- A bounded local comparison over roughly 3.8 MB of synthetic descriptions and a 999-character repeated-term query kept the same matches and reduced search time from 902 ms to 20 ms. This is an illustrative local comparison, not a provider-latency benchmark.
+- Root lint/format, diff checks, and packed-source smoke passed. Source-only loading remains intact.
+- `pnpm validate` reproduced the unchanged core TS47/TS29 diagnostics listed above. A separate full `pnpm test` passed MCP and Code Mode, but reproduced the same existing subagent process-transport timeout at line 316. Neither unrelated package was changed.
+- No live server calls, credential/configuration changes, version changes, or generated runtime files were part of this polish work.

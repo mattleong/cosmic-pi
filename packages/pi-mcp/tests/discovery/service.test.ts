@@ -288,7 +288,23 @@ it.effect(
         const listing = yield* discovery
           .query({ action: "tools.list", server: "a" })
           .pipe(Effect.flatMap(decodePage));
-        expect(listing.page.items).toEqual([expect.objectContaining({ server: "a" })]);
+        expect(listing.page.items).toEqual([{ server: "a", name: "alpha" }]);
+        const described = yield* discovery.query({
+          action: "tools.describe",
+          server: "a",
+          tool: "alpha",
+        });
+        expect(described.data).toBe(snapshot.tools[0]);
+        for (const [action, entries] of [
+          ["resources.list", snapshot.resources],
+          ["resources.templates", snapshot.templates],
+          ["prompts.list", snapshot.prompts],
+        ] as const) {
+          const page = yield* discovery
+            .query({ action, server: "a" })
+            .pipe(Effect.flatMap(decodePage));
+          expect(page.page.items).toEqual(entries);
+        }
         expect((yield* Ref.get(harness.calls)).map((call) => call.request.action)).not.toContain(
           "resources.read",
         );
@@ -341,6 +357,17 @@ it.effect("keeps tools when advertised resource listings are unavailable", () =>
       expect(described.data).toEqual(tool("alpha"));
       expect(described.notices).toHaveLength(2);
       expect(described.notices.join("\n")).not.toContain("private-");
+      for (const request of [
+        { action: "tools.list", limit: 1 },
+        { action: "tools.search", query: "a", limit: 1 },
+      ] as const) {
+        const first = yield* discovery.query(request);
+        const page = yield* decodePage(first);
+        expect(first.notices).toEqual(described.notices);
+        expect(page.page.items[0]).not.toHaveProperty("inputSchema");
+        const next = yield* discovery.query({ ...request, cursor: page.page.nextCursor! });
+        expect(next.notices).toEqual(first.notices);
+      }
       expect((yield* discovery.known)[0]?.diagnostics).toEqual(snapshot.diagnostics);
       const count = (yield* Ref.get(harness.calls)).length;
       expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(snapshot);
@@ -633,6 +660,92 @@ it.effect("targeted queries reuse an existing admission and reject a mismatched 
       );
       expect(mismatch).toMatchObject({ _tag: "Failure", failure: { kind: "invalid-input" } });
       expect(yield* Ref.get(harness.opened)).toEqual(["a"]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("ranks full metadata globally before paging and agrees with cached search", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({
+      a: server("a", { denyTools: ["read file"] }),
+      b: server("b"),
+      unknown: server("unknown"),
+    });
+    const catalog = [
+      { name: "description", description: "x".repeat(520) + "\n\nread any file" },
+      { name: "title", title: "Read a file" },
+      { name: "read_file", description: "Instructions.\n\nMore instructions." },
+      { name: "readFile" },
+      { name: "read file" },
+    ].map((metadata) => ({ ...metadata, inputSchema: { type: "object" }, extension: "omitted" }));
+    yield* Ref.set(harness.route, (request, id) =>
+      request.action === "tools.list"
+        ? Effect.succeed(reply(request, { tools: id === "a" ? catalog : [...catalog].reverse() }))
+        : defaultRoute(request, id),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const connections = yield* McpConnections;
+      yield* discovery.query({ action: "tools.list", server: "b" });
+      const listing = yield* discovery
+        .query({ action: "tools.list", server: "a" })
+        .pipe(Effect.flatMap(decodePage));
+      const Identity = Schema.Struct({ server: Schema.String, name: Schema.String });
+      const identities = (items: ReadonlyArray<Schema.Json>) =>
+        Schema.decodeUnknownSync(Schema.Array(Identity))(items).map(
+          ({ server, name }) => `${server}/${name}`,
+        );
+      expect(identities(listing.page.items)).toEqual([
+        "a/description",
+        "a/readFile",
+        "a/read_file",
+        "a/title",
+      ]);
+      const expected = [
+        "b/read file",
+        "a/readFile",
+        "a/read_file",
+        "b/readFile",
+        "b/read_file",
+        "a/title",
+        "b/title",
+        "a/description",
+        "b/description",
+      ];
+      const found: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const input = { action: "tools.search" as const, query: "read file", limit: 2 };
+        const request = cursor === undefined ? input : { ...input, cursor };
+        const page = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
+        expect(page.page.total).toBe(expected.length);
+        expect(page.undiscovered).toEqual(["unknown"]);
+        for (const item of page.page.items) {
+          expect(item).not.toHaveProperty("inputSchema");
+          expect(item).not.toHaveProperty("extension");
+        }
+        found.push(...identities(page.page.items));
+        cursor = page.page.nextCursor;
+      } while (cursor !== undefined);
+      expect(found).toEqual(expected);
+      const cached = yield* discovery.cached({ family: "tools", query: "read file" });
+      expect(cached.entries.map(({ ref }) => `${ref.server}/${ref.id}`)).toEqual(expected);
+      expect(yield* Ref.get(harness.opened)).toEqual(["b", "a"]);
+      const first = yield* discovery
+        .query({ action: "tools.search", query: "readFile", limit: 1 })
+        .pipe(Effect.flatMap(decodePage));
+      const token = first.page.nextCursor!;
+      expect(
+        yield* discovery
+          .query({ action: "tools.search", query: "readfile", cursor: token })
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "stale" });
+      yield* connections.withOperation("b", {}, discovery.refresh);
+      expect(
+        yield* discovery
+          .query({ action: "tools.search", query: "readFile", cursor: token })
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "stale" });
     }).pipe(Effect.provide(harness.layer));
   }),
 );
