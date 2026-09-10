@@ -194,7 +194,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         definition: {
           transport: "http",
           url: resource,
-          headers: { "X-Resource-Secret": { value: "must-not-leak" } },
+          headers: { "X-Resource-Secret": "must-not-leak" },
           denyTools: [],
           auth: {
             type: "oauth",

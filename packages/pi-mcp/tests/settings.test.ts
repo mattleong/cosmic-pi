@@ -37,7 +37,7 @@ const config: McpResolvedConfig = {
       definition: {
         transport: "http",
         url: `https://mcp.example/${secret}`,
-        headers: { Authorization: { value: secret } },
+        headers: { Authorization: secret },
         auth: { type: "none" },
         denyTools: [],
       },
@@ -79,7 +79,7 @@ describe("MCP argument-first commands", () => {
       const layer = Layer.succeed(McpConfigStore, store);
       const ctx = context();
       for (const command of [
-        `set-server project fixture {"transport":"http","url":"https://example.test","headers":{"Authorization":{"value":"${secret}"}}}`,
+        `set-server project fixture {"url":"https://example.test","headers":{"Authorization":"${secret}"}}`,
         'set-settings global {"enabled":false}',
         "remove-server project fixture",
         "reload",
@@ -93,7 +93,7 @@ describe("MCP argument-first commands", () => {
       expect(store.setServer).toHaveBeenCalledWith(
         "project",
         "fixture",
-        expect.objectContaining({ headers: { Authorization: { value: secret } } }),
+        expect.objectContaining({ headers: { Authorization: secret } }),
       );
       expect(store.setSettings).toHaveBeenCalledWith("global", { enabled: false });
       expect(store.removeServer).toHaveBeenCalledWith("project", "fixture");

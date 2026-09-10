@@ -9,7 +9,7 @@ import type * as Scope from "effect/Scope";
 import { FetchHttpClient } from "effect/unstable/http";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
-import type { McpBindingValue, McpEffectiveServer, McpSettings } from "../config/model.ts";
+import type { McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { openSdkHttp, type SdkHttpOptions } from "./sdk-http.ts";
 import { openSdkStdio } from "./sdk-stdio.ts";
 
@@ -27,21 +27,43 @@ export interface McpConnectorContract {
 const acquisitions = new Map<string, object>();
 const DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const configFailure = () =>
-  boundaryError("config", "not-sent", "MCP environment binding is unavailable.");
+  boundaryError("config", "not-sent", "MCP configuration value is unavailable or invalid.");
 
-const resolveBindings = (
-  bindings: Readonly<Record<string, McpBindingValue>>,
+const resolveInterpolatedValue = (
+  value: string,
   provider: ConfigProvider.ConfigProvider,
+  header: boolean,
 ) =>
   Effect.gen(function* () {
-    const resolved: Record<string, string> = {};
-    for (const [key, binding] of Object.entries(bindings)) {
-      resolved[key] =
-        "value" in binding
-          ? binding.value
-          : yield* Config.string(binding.env).parse(provider).pipe(Effect.mapError(configFailure));
+    const pattern = /\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+    let resolved = "";
+    let offset = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(value)) !== null) {
+      resolved += value.slice(offset, match.index);
+      resolved +=
+        match[0] === "$$"
+          ? "$"
+          : yield* Config.string(match[1]!).parse(provider).pipe(Effect.mapError(configFailure));
+      if (resolved.length > 8_192) return yield* Effect.fail(configFailure());
+      offset = match.index + match[0].length;
     }
+    resolved += value.slice(offset);
+    if (resolved.length > 8_192 || resolved.includes("\0") || (header && /[\r\n]/.test(resolved)))
+      return yield* Effect.fail(configFailure());
     return resolved;
+  });
+
+const resolveInterpolatedValues = (
+  values: Readonly<Record<string, string>>,
+  provider: ConfigProvider.ConfigProvider,
+  header: boolean,
+) =>
+  Effect.gen(function* () {
+    const resolved: Array<readonly [string, string]> = [];
+    for (const [key, value] of Object.entries(values))
+      resolved.push([key, yield* resolveInterpolatedValue(value, provider, header)]);
+    return Object.fromEntries(resolved);
   });
 
 export class McpConnector extends Context.Service<McpConnector, McpConnectorContract>()(
@@ -50,7 +72,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
   static readonly layer = Layer.effect(
     McpConnector,
     Effect.gen(function* () {
-      // Capture builtin capabilities once, but resolve secret bindings only at open.
+      // Capture builtin capabilities once, but resolve environment values only at open.
       const provider = yield* ConfigProvider.ConfigProvider;
       const nativeFetch = yield* FetchHttpClient.Fetch;
       const path = yield* Path.Path;
@@ -75,12 +97,12 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
                   cwd: path.resolve(server.directory, definition.cwd ?? "."),
                   environment: {
                     // PATH alone is sufficient for executable lookup. HOME and TMPDIR must
-                    // be explicit bindings; no Pi credentials or other parent env is copied.
+                    // be explicit entries; no Pi credentials or other parent env is copied.
                     PATH: yield* Config.string("PATH")
                       .pipe(Config.withDefault(DEFAULT_PATH))
                       .parse(provider)
                       .pipe(Effect.mapError(configFailure)),
-                    ...(yield* resolveBindings(definition.environment, provider)),
+                    ...(yield* resolveInterpolatedValues(definition.environment, provider, false)),
                   },
                 }
               : {
@@ -89,7 +111,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
                     try: () => new URL(definition.url),
                     catch: () => boundaryError("config", "not-sent", "Invalid MCP endpoint."),
                   }),
-                  headers: yield* resolveBindings(definition.headers, provider),
+                  headers: yield* resolveInterpolatedValues(definition.headers, provider, true),
                   token:
                     token ??
                     (definition.auth.type === "env"

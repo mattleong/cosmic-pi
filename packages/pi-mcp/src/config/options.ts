@@ -29,7 +29,7 @@ export interface McpConfigSource {
   readonly diagnostic?: string;
 }
 
-/** Bindings stay unresolved. The owning directory, not the current process cwd, owns relative paths. */
+/** Environment and header values stay unresolved. The owning directory, not the current process cwd, owns relative paths. */
 export function normalizeMcpServer(
   raw: McpRawEnabledServer,
   directory: string,
@@ -42,14 +42,14 @@ export function normalizeMcpServer(
     raw.allowTools === undefined
       ? policy
       : { ...policy, allowTools: [...new Set(raw.allowTools)].sort() };
-  if (raw.transport === "stdio")
+  if ("command" in raw)
     return {
       ...resolvedPolicy,
       transport: "stdio",
       command: raw.command,
       args: raw.args ?? [],
       cwd: path.resolve(directory, raw.cwd ?? "."),
-      environment: raw.environment ?? {},
+      environment: raw.env ?? {},
     };
   const auth = raw.auth ?? { type: "none" as const };
   return {
@@ -126,7 +126,7 @@ export const resolveMcpConfig = (options: {
     if (global.invalid || project.invalid) diagnostics.push("Some MCP settings were ignored.");
     const entries = new Map<string, { source: McpConfigSource; value: Schema.Json }>();
     for (const source of [options.global, options.project]) {
-      for (const [id, value] of Object.entries(source?.document?.servers ?? {})) {
+      for (const [id, value] of Object.entries(source?.document?.mcpServers ?? {})) {
         if (source === undefined) continue;
         entries.set(id, { source, value });
       }

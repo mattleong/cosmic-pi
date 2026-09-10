@@ -134,7 +134,7 @@ try {
     await readFile(join(root, "packages/pi-mcp/tests/fixtures/stdio-server.mjs")),
   );
   // Runtime imports and config acquisition must not see the caller's agent directory,
-  // credentials, browser profiles, or environment bindings. The only server is our fixture.
+  // credentials, browser profiles, or configured environment values. The only server is our fixture.
   const agentDirectory = join(temporaryDirectory, "agent");
   const fixtureDirectory = join(temporaryDirectory, "mcp-project");
   const consumerEnvironment = {
@@ -156,15 +156,13 @@ try {
   await writeFile(
     join(agentDirectory, "extensions/pi-mcp.json"),
     JSON.stringify({
-      version: 1,
       settings: { connectTimeoutMs: 10_000, requestTimeoutMs: 10_000 },
-      servers: {
+      mcpServers: {
         fixture: {
-          transport: "stdio",
           command: process.execPath,
           args: [join(temporaryDirectory, "mcp-fixture.mjs")],
           cwd: fixtureDirectory,
-          environment: {},
+          env: {},
         },
       },
     }),

@@ -17,12 +17,10 @@ describe("MCP configuration resolution", () => {
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const document = yield* decodeMcpDocument({
-        version: 1,
-        servers: {
-          all: { transport: "stdio", command: "server" },
-          none: { transport: "stdio", command: "server", allowTools: [], denyTools: ["remove"] },
+        mcpServers: {
+          all: { command: "server" },
+          none: { command: "server", allowTools: [], denyTools: ["remove"] },
           denied: {
-            transport: "stdio",
             command: "server",
             allowTools: ["remove", "read"],
             denyTools: ["remove"],
@@ -42,30 +40,27 @@ describe("MCP configuration resolution", () => {
     }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
   );
 
-  it.effect("normalizes owning cwd and OAuth registration without resolving bindings", () =>
+  it.effect("normalizes owning cwd and OAuth registration without resolving values", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const document = yield* decodeMcpDocument({
-        version: 1,
-        servers: {
+        mcpServers: {
           local: {
-            transport: "stdio",
+            type: "stdio",
             command: "npx",
             args: ["explicit-server"],
             cwd: "work",
-            environment: { TOKEN: { env: "UNRESOLVED_TOKEN" }, TEXT: { value: "$HOME" } },
+            env: { TOKEN: "${UNRESOLVED_TOKEN}", TEXT: "$HOME" },
           },
           pre: {
-            transport: "http",
             url: "https://example.test",
             auth: { type: "oauth", clientId: "public" },
           },
           metadata: {
-            transport: "http",
             url: "https://example.test",
             auth: { type: "oauth", clientMetadataUrl: "https://client.test/client.json" },
           },
-          dynamic: { transport: "http", url: "https://example.test", auth: { type: "oauth" } },
+          dynamic: { url: "https://example.test", auth: { type: "oauth" } },
         },
       });
       const resolved = yield* resolveMcpConfig({
@@ -77,7 +72,7 @@ describe("MCP configuration resolution", () => {
       expect(resolved.servers.local?.definition).toMatchObject({
         command: "npx",
         cwd: "/agent/work",
-        environment: { TOKEN: { env: "UNRESOLVED_TOKEN" }, TEXT: { value: "$HOME" } },
+        environment: { TOKEN: "${UNRESOLVED_TOKEN}", TEXT: "$HOME" },
       });
       for (const [id, registration] of [
         ["pre", "pre-registered"],
@@ -101,9 +96,8 @@ describe("MCP configuration resolution", () => {
             revision: 0,
             trusted: true,
             global: globalSource({
-              version: 1,
-              servers: {
-                server: { transport: "http", url: "https://example.test/mcp", auth: config },
+              mcpServers: {
+                server: { url: "https://example.test/mcp", auth: config },
               },
             }),
             path,
@@ -122,10 +116,8 @@ describe("MCP configuration resolution", () => {
           revision: 0,
           trusted: true,
           global: globalSource({
-            version: 1,
-            servers: {
+            mcpServers: {
               server: {
-                transport: "http",
                 url: "https://example.test/mcp",
                 auth: { type: "oauth", allowMissingResourceMetadata: true },
               },
@@ -144,14 +136,12 @@ describe("MCP configuration resolution", () => {
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const definition = {
-          transport: "http",
           url: "https://example.test/mcp",
-          headers: { "x-first": { value: "a" }, "x-second": { env: "TOKEN" } },
+          headers: { "x-first": "a", "x-second": "${TOKEN}" },
           auth: { type: "oauth", clientId: "client", issuer: "https://issuer.test" },
         };
         const document = yield* decodeMcpDocument({
-          version: 1,
-          servers: { server: definition, other: definition },
+          mcpServers: { server: definition, other: definition },
         });
         const resolve = (source: McpConfigSource) =>
           resolveMcpConfig({ revision: 1, trusted: true, global: source, path });
@@ -165,11 +155,10 @@ describe("MCP configuration resolution", () => {
         const rescoped = yield* resolve({ ...globalSource(document), scope: "project" });
         expect(original.servers.server?.identity).not.toBe(rescoped.servers.server?.identity);
         const reordered = yield* decodeMcpDocument({
-          version: 1,
-          servers: {
+          mcpServers: {
             server: {
               ...definition,
-              headers: { "x-second": { env: "TOKEN" }, "x-first": { value: "a" } },
+              headers: { "x-second": "${TOKEN}", "x-first": "a" },
             },
           },
         });
@@ -177,8 +166,7 @@ describe("MCP configuration resolution", () => {
           original.servers.server?.identity,
         );
         const changed = yield* decodeMcpDocument({
-          version: 1,
-          servers: {
+          mcpServers: {
             server: {
               ...definition,
               auth: { ...definition.auth, issuer: "https://other-issuer.test" },
@@ -188,16 +176,15 @@ describe("MCP configuration resolution", () => {
         expect((yield* resolve(globalSource(changed))).servers.server?.identity).not.toBe(
           original.servers.server?.identity,
         );
-        const binding = yield* decodeMcpDocument({
-          version: 1,
-          servers: {
+        const interpolation = yield* decodeMcpDocument({
+          mcpServers: {
             server: {
               ...definition,
-              headers: { "x-first": { value: "a" }, "x-second": { env: "OTHER_TOKEN" } },
+              headers: { "x-first": "a", "x-second": "${OTHER_TOKEN}" },
             },
           },
         });
-        expect((yield* resolve(globalSource(binding))).servers.server?.identity).not.toBe(
+        expect((yield* resolve(globalSource(interpolation))).servers.server?.identity).not.toBe(
           original.servers.server?.identity,
         );
       }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),

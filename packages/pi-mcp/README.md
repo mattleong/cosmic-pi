@@ -19,29 +19,28 @@ Pi/Jiti loads the shipped TypeScript source and fixed validator helper. No build
 
 ## Configuration and trust
 
-Create a version 1 document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`, or `<project>/.pi/extensions/pi-mcp.json`. The project directory name follows Pi's exported config-directory constant.
+Create a document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`, or `<project>/.pi/extensions/pi-mcp.json`. The project directory name follows Pi's exported config-directory constant. Existing files must have a `mcpServers` object; `version` and `servers` are rejected. A missing file is valid absence. The first settings or server write creates `{ "mcpServers": {} }` before applying the change.
 
 ```json
 {
-  "version": 1,
-  "servers": {
+  "mcpServers": {
     "files": {
-      "transport": "stdio",
+      "type": "stdio",
       "command": "node",
       "args": [
         "/absolute/path/server-filesystem/dist/index.js",
         "/absolute/path/allowed-directory"
       ],
-      "environment": {
-        "HOME": { "env": "HOME" }
+      "env": {
+        "HOME": "${HOME}"
       },
       "denyTools": ["delete_file"]
     },
     "remote": {
-      "transport": "http",
+      "type": "http",
       "url": "https://mcp.example.com/mcp",
       "headers": {
-        "X-Client": { "value": "pi" }
+        "X-Client": "pi"
       },
       "auth": { "type": "env", "env": "EXAMPLE_MCP_TOKEN" }
     }
@@ -49,7 +48,9 @@ Create a version 1 document at `<agent-dir>/extensions/pi-mcp.json`, normally `~
 }
 ```
 
-Install the server yourself and replace the example paths. Stdio launches an executable with an argument array, never an implicit shell. The child inherits only `PATH`, with `/usr/bin:/bin:/usr/sbin:/sbin` as the fallback. Add `HOME`, `TMPDIR`, or credentials through explicit `environment` bindings if needed. Bindings accept either `{ "env": "NAME" }` or `{ "value": "literal" }`; no command substitution runs. HTTP `headers` use the same binding form. HTTP auth defaults to `{ "type": "none" }`; `type: "env"` supplies a bearer token. Environment values resolve only when needed for connection or authentication, not during status inspection.
+Install the server yourself and replace the example paths. A server with `command` is stdio, and one with `url` is HTTP, so `type` is optional. Supplying both fields or a mismatched `type` is invalid. Stdio launches an executable with an argument array, never an implicit shell. The child inherits only `PATH`, with `/usr/bin:/bin:/usr/sbin:/sbin` as the fallback. Add `HOME`, `TMPDIR`, or credentials through the string-valued `env` map. HTTP `headers` is also a string map. HTTP auth defaults to `{ "type": "none" }`; `type: "env"` supplies a bearer token. Old `transport`, `environment`, and `{ "env": ... }`/`{ "value": ... }` binding forms are not accepted.
+
+At connection time, `${NAME}` in stdio `env` and HTTP `headers` resolves from the captured configuration provider. `$$` produces a literal dollar sign, so `$${NAME}` remains the literal `${NAME}`. Expansion is single-pass. It does not use shell expansion or recurse into substituted values. Only `env` and `headers` values expand; `command`, `args`, `url`, and `cwd` stay literal. Missing variables and expanded values that contain invalid control characters or exceed the configured length are rejected. Values resolve only when needed for connection or authentication, not during status inspection.
 
 Both global and project servers require a trusted Pi session to execute. An untrusted session can inspect local global-config status but cannot read, stat, or write project configuration, resolve credentials, authenticate, connect, or launch servers. Trust does not sandbox a server. A configured MCP executable is trusted local code with the user's OS privileges. Its cwd, tool allow list, and environment policy are not filesystem or network containment.
 
@@ -57,7 +58,7 @@ Settings resolve project over global over defaults, field by field. A project se
 
 A stdio server's default cwd is its owning project root or agent directory. Relative `cwd` values resolve against that same directory. `allowTools` and `denyTools` match exact remote tool names; deny wins. An absent allow list permits advertised tools, while `[]` permits none. Denied tools cannot be discovered or called. Resources and prompts follow enabled-server policy, without per-URI or per-prompt rules.
 
-Changes require `/mcp-settings reload` or a settings command. There is no watcher, host-config discovery, automatic package installation, or cross-session metadata cache. Writes preserve unrelated JSON fields and reject unknown document versions.
+Changes require `/mcp-settings reload` or a settings command. There is no watcher, host-config discovery, automatic package installation, or cross-session metadata cache. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
 
 | Setting            | Default  | Bounds        |
 | ------------------ | -------- | ------------- |
@@ -89,7 +90,7 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 /mcp-settings set-settings global|project JSON
 ```
 
-Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, bindings, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project server entry reveals the global entry again; use `{ "enabled": false }` to keep it disabled.
+Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project server entry reveals the global entry again; use `{ "enabled": false }` to keep it disabled.
 
 ### Dashboard and cached metadata
 

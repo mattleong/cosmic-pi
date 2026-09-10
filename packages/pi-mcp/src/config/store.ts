@@ -17,7 +17,6 @@ import {
   decodeMcpServer,
   MCP_CONFIG_BASENAME,
   MCP_CONFIG_LIMITS,
-  MCP_CONFIG_VERSION,
   McpServerIdSchema,
   McpSettingsPatchSchema,
 } from "./schema.ts";
@@ -144,9 +143,7 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
                     (document) =>
                       Effect.gen(function* () {
                         const base =
-                          Object.keys(document).length === 0
-                            ? { version: MCP_CONFIG_VERSION }
-                            : document;
+                          Object.keys(document).length === 0 ? { mcpServers: {} } : document;
                         yield* decodeMcpDocument(base);
                         const nextDocument = yield* mutate(base);
                         const decoded = yield* decodeMcpDocument(nextDocument);
@@ -186,8 +183,8 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               Effect.gen(function* () {
                 const servers = yield* Schema.decodeUnknownEffect(
                   Schema.Record(Schema.String, Schema.MutableJson),
-                )(document.servers ?? {}).pipe(Effect.mapError(configError));
-                return { ...document, servers: { ...servers, [id]: entry } };
+                )(document.mcpServers).pipe(Effect.mapError(configError));
+                return { ...document, mcpServers: { ...servers, [id]: entry } };
               }),
             );
           });
@@ -201,10 +198,10 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               Effect.gen(function* () {
                 const servers = yield* Schema.decodeUnknownEffect(
                   Schema.Record(Schema.String, Schema.MutableJson),
-                )(document.servers ?? {}).pipe(Effect.mapError(configError));
+                )(document.mcpServers).pipe(Effect.mapError(configError));
                 const next = { ...servers };
                 delete next[id];
-                return { ...document, servers: next };
+                return { ...document, mcpServers: next };
               }),
             );
           });

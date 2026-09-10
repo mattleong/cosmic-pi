@@ -59,11 +59,13 @@ const fakeConnection = (onCleanup: ((confirmed: boolean) => void) | undefined) =
 
 afterEach(() => vi.restoreAllMocks());
 
-it.effect("resolves only explicit bindings at connection time using its captured provider", () =>
+it.effect("resolves environment interpolation at connection time using its captured provider", () =>
   Effect.gen(function* () {
     const environment = {
       PATH: "/fixture/bin",
       MCP_SECRET: "first",
+      NESTED: "${OTHER}",
+      OTHER: "not-recursed",
       PI_API_KEY: "not-for-child",
       HOME: "/private/home",
     };
@@ -82,7 +84,12 @@ it.effect("resolves only explicit bindings at connection time using its captured
         args: [],
         cwd: "relative",
         denyTools: [],
-        environment: { TOKEN: { env: "MCP_SECRET" }, LITERAL: { value: "literal" } },
+        environment: {
+          TOKEN: "${MCP_SECRET}",
+          LITERAL: "literal",
+          ESCAPED: "$${MCP_SECRET}",
+          NONRECURSIVE: "${NESTED}",
+        },
       },
     };
     const connection = yield* connector
@@ -97,12 +104,108 @@ it.effect("resolves only explicit bindings at connection time using its captured
       PATH: "/fixture/bin",
       TOKEN: "rotated",
       LITERAL: "literal",
+      ESCAPED: "${MCP_SECRET}",
+      NONRECURSIVE: "${OTHER}",
     });
     expect(captured?.cwd).toBe("/fixture/mcp/relative");
     yield* connection.close;
     const minimal = yield* makeConnector();
     yield* minimal.open(server("minimal-env"), settings);
     expect(captured?.environment).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+  }),
+);
+
+it.effect("rejects missing variables before connection acquisition without leaking names", () =>
+  Effect.gen(function* () {
+    let opened = false;
+    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
+      opened = true;
+      return fakeConnection(options.onCleanup);
+    });
+    const connector = yield* makeConnector({ PRESENT: "ok" });
+    const result = yield* connector
+      .open(
+        {
+          ...server("missing-variable"),
+          definition: {
+            transport: "stdio",
+            command: "fixture",
+            args: [],
+            denyTools: [],
+            environment: { TOKEN: "prefix-${MISSING}-suffix" },
+          },
+        },
+        settings,
+      )
+      .pipe(Effect.result);
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { kind: "config", outcome: "not-sent" },
+    });
+    expect(String(result)).not.toContain("MISSING");
+    expect(opened).toBe(false);
+  }),
+);
+
+it.effect("rejects expanded header injection and oversized values before HTTP acquisition", () =>
+  Effect.gen(function* () {
+    let opened = false;
+    vi.spyOn(Http, "openSdkHttp").mockImplementation((options) => {
+      opened = true;
+      return fakeConnection(options.onCleanup);
+    });
+    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
+      opened = true;
+      return fakeConnection(options.onCleanup);
+    });
+    const connector = yield* makeConnector({
+      BAD: "safe\r\nInjected: secret",
+      LONG: "x".repeat(8_193),
+      HALF: "x".repeat(4_097),
+      NUL: "safe\0value",
+    });
+    for (const value of ["${BAD}", "${LONG}", "${HALF}${HALF}", "${NUL}"]) {
+      const result = yield* connector
+        .open(
+          {
+            ...server(`unsafe-${value}`),
+            definition: {
+              transport: "http",
+              url: "https://example.test/mcp",
+              denyTools: [],
+              headers: { "x-fixture": value },
+              auth: { type: "none" },
+            },
+          },
+          settings,
+        )
+        .pipe(Effect.result);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "config", outcome: "not-sent" },
+      });
+      expect(String(result)).not.toContain("BAD");
+    }
+    const stdio = yield* connector
+      .open(
+        {
+          ...server("unsafe-stdio"),
+          definition: {
+            transport: "stdio",
+            command: "fixture",
+            args: [],
+            denyTools: [],
+            environment: { value: "${NUL}" },
+          },
+        },
+        settings,
+      )
+      .pipe(Effect.result);
+    expect(stdio).toMatchObject({
+      _tag: "Failure",
+      failure: { kind: "config", outcome: "not-sent" },
+    });
+    expect(opened).toBe(false);
   }),
 );
 
@@ -122,7 +225,7 @@ it.effect("resolves explicit HTTP headers and env bearer credentials without acq
           transport: "http",
           url: "https://example.test/mcp",
           denyTools: [],
-          headers: { "x-fixture": { env: "HEADER" } },
+          headers: { "x-fixture": "${HEADER}" },
           auth: { type: "env", env: "BEARER" },
         },
       },

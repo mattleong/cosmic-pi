@@ -44,7 +44,7 @@ const gate = (ctx: ExtensionContext, current: () => boolean, trusted: boolean) =
     return !trusted || isProjectTrusted(ctx) ? Effect.void : Effect.fail(denied());
   });
 
-/** Deliberately omit endpoints, commands, arguments, paths, bindings and credential identities. */
+/** Deliberately omit endpoints, commands, arguments, paths, environment values, and credential identities. */
 export const mcpConfigMetadata = (config: McpResolvedConfig): Schema.Json => ({
   revision: config.revision,
   trusted: config.trusted,

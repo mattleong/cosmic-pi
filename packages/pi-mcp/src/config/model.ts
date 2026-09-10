@@ -4,7 +4,6 @@ import type * as Scope from "effect/Scope";
 import type { McpBoundaryError } from "../client/errors.ts";
 
 export type McpConfigScope = "global" | "project";
-export type McpBindingValue = { readonly env: string } | { readonly value: string };
 export interface McpOAuthConfig {
   readonly type: "oauth";
   readonly registration: "pre-registered" | "dynamic" | "metadata";
@@ -31,12 +30,12 @@ export type McpServerDefinition = ToolPolicy &
         readonly command: string;
         readonly args: ReadonlyArray<string>;
         readonly cwd?: string;
-        readonly environment: Readonly<Record<string, McpBindingValue>>;
+        readonly environment: Readonly<Record<string, string>>;
       }
     | {
         readonly transport: "http";
         readonly url: string;
-        readonly headers: Readonly<Record<string, McpBindingValue>>;
+        readonly headers: Readonly<Record<string, string>>;
         readonly auth: McpHttpAuth;
       }
   );

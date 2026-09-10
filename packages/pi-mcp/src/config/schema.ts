@@ -5,7 +5,6 @@ import { boundaryError } from "../client/errors.ts";
 import type { McpSettings } from "./model.ts";
 
 export const MCP_CONFIG_BASENAME = "pi-mcp.json";
-export const MCP_CONFIG_VERSION = 1;
 export const MCP_CONFIG_LIMITS = Object.freeze({
   bytes: 1_048_576,
   nodes: 32_768,
@@ -68,17 +67,10 @@ export const DEFAULT_MCP_SETTINGS: McpSettings = Object.freeze({
   maxQueued: 64,
 });
 
-export const McpBindingSchema = Schema.Union([
-  Schema.Struct({ env: envName }),
-  Schema.Struct({ value: noNulText(8_192, 0) }),
-]);
-const environment = Schema.Record(envName, McpBindingSchema).check(Schema.isMaxProperties(128));
+const environment = Schema.Record(envName, noNulText(8_192, 0)).check(Schema.isMaxProperties(128));
 const headers = Schema.Record(
   headerName,
-  Schema.Union([
-    Schema.Struct({ env: envName }),
-    Schema.Struct({ value: text(8_192, 0).check(Schema.isPattern(/^[^\r\n\0]*$/)) }),
-  ]),
+  text(8_192, 0).check(Schema.isPattern(/^[^\r\n\0]*$/)),
 ).check(
   Schema.isMaxProperties(128),
   Schema.makeFilter((value) => {
@@ -122,35 +114,39 @@ const policy = {
   allowTools: Schema.optionalKey(names),
   denyTools: Schema.optionalKey(names),
 };
-export const McpEnabledServerSchema = Schema.Union([
-  Schema.Struct({
-    ...policy,
-    transport: Schema.Literal("stdio"),
-    command: noNulText(8_192),
-    args: Schema.optionalKey(Schema.Array(noNulText(8_192, 0)).check(Schema.isMaxLength(256))),
-    cwd: Schema.optionalKey(noNulText(8_192)),
-    environment: Schema.optionalKey(environment),
-  }),
-  Schema.Struct({
-    ...policy,
-    transport: Schema.Literal("http"),
-    url: endpoint,
-    headers: Schema.optionalKey(headers),
-    auth: Schema.optionalKey(auth),
-  }),
-]);
+const stdioServer = Schema.Struct({
+  ...policy,
+  type: Schema.optionalKey(Schema.Literal("stdio")),
+  command: noNulText(8_192),
+  args: Schema.optionalKey(Schema.Array(noNulText(8_192, 0)).check(Schema.isMaxLength(256))),
+  cwd: Schema.optionalKey(noNulText(8_192)),
+  env: Schema.optionalKey(environment),
+});
+const httpServer = Schema.Struct({
+  ...policy,
+  type: Schema.optionalKey(Schema.Literal("http")),
+  url: endpoint,
+  headers: Schema.optionalKey(headers),
+  auth: Schema.optionalKey(auth),
+});
+export const McpEnabledServerSchema = Schema.Union([stdioServer, httpServer]);
 export type McpRawEnabledServer = typeof McpEnabledServerSchema.Type;
 export const McpDisabledServerSchema = Schema.Struct({ enabled: Schema.Literal(false) });
 
-export const McpDocumentSchema = Schema.Struct({
-  version: Schema.Literal(MCP_CONFIG_VERSION),
-  settings: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-  servers: Schema.optionalKey(
-    Schema.Record(Schema.String, Schema.Json).check(
-      Schema.isMaxProperties(MCP_CONFIG_LIMITS.servers),
-    ),
+const mcpServers = Schema.Record(Schema.String, Schema.Json).check(
+  Schema.isMaxProperties(MCP_CONFIG_LIMITS.servers),
+);
+export const McpDocumentSchema = Schema.StructWithRest(
+  Schema.Struct({
+    mcpServers,
+    settings: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)],
+).check(
+  Schema.makeFilter(
+    (value) => !Object.hasOwn(value, "version") && !Object.hasOwn(value, "servers"),
   ),
-});
+);
 export type McpDecodedDocument = typeof McpDocumentSchema.Type;
 
 const isConfigContainer = (value: Schema.Json): value is Schema.JsonArray | Schema.JsonObject =>
