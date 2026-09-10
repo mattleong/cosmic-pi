@@ -92,11 +92,13 @@ const oauth = Schema.Struct({
   clientId: Schema.optionalKey(noNulText(2_048)),
   clientMetadataUrl: Schema.optionalKey(endpoint),
   issuer: Schema.optionalKey(endpoint),
+  allowMissingResourceMetadata: Schema.optionalKey(Schema.Boolean),
   resource: Schema.optionalKey(endpoint),
   scopes: Schema.optionalKey(names),
   redirectUri: Schema.optionalKey(endpoint),
 }).check(
   Schema.makeFilter((value) => {
+    if (value.allowMissingResourceMetadata === true && value.issuer === undefined) return false;
     const registration =
       value.registration ??
       (value.clientId !== undefined

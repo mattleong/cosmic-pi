@@ -5,7 +5,12 @@ import * as Effect from "effect/Effect";
 const serialize = <Value>(value: Value) => JSON.stringify(value);
 // SAFETY: The tool controller never reads the Pi context; its execution port owns context checks.
 const unusedContext = {} as ExtensionContext;
-import { boundedMcpReply, makeMcpErrorReceipts } from "../src/boundary/host-tool-result.ts";
+import {
+  boundedMcpReply,
+  makeMcpErrorReceipts,
+  mcpFailureReply,
+} from "../src/boundary/host-tool-result.ts";
+import { boundaryError } from "../src/client/errors.ts";
 import { buildMcpTool } from "../src/tools/controller.ts";
 import type { McpGatewayReply } from "../src/tools/model.ts";
 
@@ -31,6 +36,27 @@ const event = (details: McpGatewayReply, toolCallId = "call"): ToolResultEvent =
 });
 
 describe("owned MCP error delivery", () => {
+  it("projects diagnostic reasons without exposing even typed exception messages", () => {
+    for (const reason of [
+      undefined,
+      "oauth-resource-metadata-missing",
+      "oauth-resource-metadata-invalid",
+    ] as const) {
+      const reply = mcpFailureReply(
+        "command",
+        boundaryError(
+          "unavailable",
+          "not-sent",
+          "private-token-callback-url-and-response-body",
+          reason,
+        ),
+      );
+      expect(reply).toMatchObject({ outcome: "not-sent", isError: true });
+      if (reason !== undefined) expect(reply.data).toMatchObject({ reason });
+      expect(serialize(reply)).not.toContain("private-token");
+    }
+  });
+
   it.effect(
     "patches an actual owned execute result once without replacing bounded details or prior content",
     () =>

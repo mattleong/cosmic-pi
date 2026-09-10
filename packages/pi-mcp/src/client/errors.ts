@@ -22,10 +22,17 @@ export class McpBoundaryError extends Schema.TaggedError<McpBoundaryError>()("Mc
   ]),
   outcome: Schema.Literals(["not-sent", "completed", "unknown"]),
   message: Schema.String,
+  reason: Schema.optionalKey(
+    Schema.Literals(["oauth-resource-metadata-missing", "oauth-resource-metadata-invalid"]),
+  ),
 }) {}
 
 export const boundaryError = (
   kind: McpBoundaryError["kind"],
   outcome: McpBoundaryError["outcome"],
   message: string,
-): McpBoundaryError => new McpBoundaryError({ kind, outcome, message });
+  reason?: McpBoundaryError["reason"],
+): McpBoundaryError => {
+  const fields = { kind, outcome, message };
+  return new McpBoundaryError(reason === undefined ? fields : { ...fields, reason });
+};

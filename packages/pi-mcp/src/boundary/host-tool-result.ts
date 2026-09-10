@@ -47,16 +47,31 @@ export const makeMcpErrorReceipts = () => {
 };
 export type McpErrorReceipts = ReturnType<typeof makeMcpErrorReceipts>;
 
-export const mcpFailureReply = (action: string, error: McpBoundaryError): McpGatewayReply => ({
-  action,
-  outcome: error.outcome,
-  isError: true,
-  data: { kind: error.kind, message: `MCP operation failed: ${error.kind}.` },
-  notices:
-    error.outcome === "unknown"
-      ? ["Execution may have completed. Do not replay this operation automatically."]
-      : [],
-});
+/** Public diagnostics are fixed by reason, never copied from exception messages. */
+const failureMessage = (error: McpBoundaryError): string => {
+  switch (error.reason) {
+    case "oauth-resource-metadata-missing":
+      return "OAuth protected-resource metadata is missing. Compatibility requires auth.allowMissingResourceMetadata: true and an explicit auth.issuer.";
+    case "oauth-resource-metadata-invalid":
+      return "OAuth protected-resource discovery failed. Missing-metadata compatibility cannot bypass invalid metadata or unexpected HTTP responses.";
+    default:
+      return `MCP operation failed: ${error.kind}.`;
+  }
+};
+
+export const mcpFailureReply = (action: string, error: McpBoundaryError): McpGatewayReply => {
+  const diagnostic = { kind: error.kind, message: failureMessage(error) };
+  return {
+    action,
+    outcome: error.outcome,
+    isError: true,
+    data: error.reason === undefined ? diagnostic : { ...diagnostic, reason: error.reason },
+    notices:
+      error.outcome === "unknown"
+        ? ["Execution may have completed. Do not replay this operation automatically."]
+        : [],
+  };
+};
 
 /** Last-resort protection for host display and details; projection normally enforces this first. */
 export const boundedMcpReply = (reply: McpGatewayReply): McpGatewayReply => {

@@ -34,7 +34,7 @@ Transport auth is token-only, with insufficient-scope recovery and legacy reconn
 
 ## Authentication
 
-`auth/service.ts` owns grant identity, refresh serialization, publication authority, and logout. `boundary/sdk-auth.ts` adapts SDK public-client discovery, pre-registration, dynamic registration, Client ID Metadata Documents, PKCE S256, exchange, and refresh. Application policy checks issuer/resource binding, redirect/state/issuer, public-client constraints, and supported endpoints before credential use.
+`auth/service.ts` owns grant identity, refresh serialization, publication authority, and logout. `boundary/sdk-auth.ts` adapts SDK public-client discovery, pre-registration, dynamic registration, Client ID Metadata Documents, PKCE S256, exchange, and refresh. `sdk-auth-discovery.ts` classifies protected-resource discovery responses inside the scoped auth-fetch boundary. Only an explicit compatibility opt-in with a configured issuer permits missing metadata, and only after exclusively 404/410 responses. Configured metadata provenance survives persistence and refresh; restoration rechecks that authority. Application policy checks issuer/resource binding, redirect/state/issuer, public-client constraints, and supported endpoints before credential use. Public discovery diagnostics use fixed reason-based text, never raw SDK messages.
 
 `boundary/auth-fetch.ts` owns bounded OAuth HTTP requests. Core's `NetworkAddresses` resolves candidates; MCP policy approves them; `pinnedNetworkLookup` supplies exactly that set to a scoped HTTP agent. Every allowed discovery redirect is checked again. The core resolver supplies no OAuth policy and makes no second DNS lookup at connection time.
 

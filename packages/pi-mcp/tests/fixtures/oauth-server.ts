@@ -25,6 +25,12 @@ export interface OAuthFixtureOptions {
   readonly secretClient?: boolean;
   readonly oversizedMetadata?: boolean;
   readonly unsafeTokenEndpoint?: boolean;
+  readonly resourceMetadataStatuses?: ReadonlyArray<number>;
+  readonly invalidResourceMetadata?: "json" | "schema";
+  readonly oversizedResourceMetadata?: boolean;
+  readonly resourceMetadataRedirect?: "private" | "loop";
+  readonly unsupportedPkce?: boolean;
+  readonly invalidTokens?: boolean;
 }
 export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
   Effect.gen(function* () {
@@ -45,6 +51,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
     let exchanged = 0;
     let refreshed = 0;
     let registered = 0;
+    let resourceMetadataRequests = 0;
     let currentRefresh = "fixture-refresh-0";
     const handler = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -53,6 +60,24 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
       const reply = (value: Schema.Json, status = 200) =>
         HttpServerResponse.jsonUnsafe(value, { status });
       if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
+        const statuses = options.resourceMetadataStatuses;
+        const status = statuses?.[resourceMetadataRequests++] ?? statuses?.at(-1) ?? 200;
+        if (status !== 200) return HttpServerResponse.text("fixture-private-body", { status });
+        if (options.invalidResourceMetadata === "json")
+          return HttpServerResponse.text("fixture-private-invalid-json");
+        if (options.invalidResourceMetadata === "schema")
+          return reply({ resource: 123, private: "fixture-private-invalid-schema" });
+        if (options.oversizedResourceMetadata) return HttpServerResponse.text("x".repeat(140_000));
+        if (options.resourceMetadataRedirect)
+          return HttpServerResponse.empty({
+            status: 302,
+            headers: {
+              location:
+                options.resourceMetadataRedirect === "private"
+                  ? "http://169.254.169.254/metadata"
+                  : "/.well-known/oauth-protected-resource/next",
+            },
+          });
         return reply({
           resource: options.resourceMismatch ? `${origin}/other` : resource,
           authorization_servers: [issuer],
@@ -68,7 +93,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             : `${origin}/token`,
           response_types_supported: ["code"],
           grant_types_supported: ["authorization_code", "refresh_token"],
-          code_challenge_methods_supported: ["S256"],
+          code_challenge_methods_supported: options.unsupportedPkce ? ["plain"] : ["S256"],
           token_endpoint_auth_methods_supported: ["none"],
           authorization_response_iss_parameter_supported: true,
           client_id_metadata_document_supported: options.metadata !== false,
@@ -144,7 +169,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         } else return reply({ error: "unsupported_grant_type" }, 400);
         return reply({
           access_token: `fixture-access-${refreshed}`,
-          token_type: "Bearer",
+          token_type: options.invalidTokens ? "Basic" : "Bearer",
           refresh_token: currentRefresh,
           expires_in: 3600,
         });

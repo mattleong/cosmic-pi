@@ -1,5 +1,4 @@
 import {
-  discoverOAuthProtectedResourceMetadata,
   discoverAuthorizationServerMetadata,
   startAuthorization,
   registerClient,
@@ -43,6 +42,7 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
 import { withAuthFetch } from "./auth-fetch.ts";
+import { discoverAuthResource } from "./sdk-auth-discovery.ts";
 
 const unsupported = () =>
   boundaryError(
@@ -100,6 +100,8 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         server.definition?.transport !== "http" ||
         grant.identity !== server.identity ||
         grant.registration !== config.registration ||
+        (grant.resourceMetadataSource === "configured" &&
+          (config.allowMissingResourceMetadata !== true || config.issuer === undefined)) ||
         (config.issuer !== undefined && grant.issuer !== config.issuer) ||
         (config.registration === "pre-registered" && grant.clientId !== config.clientId)
       )
@@ -169,9 +171,10 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           policy,
         );
         const endpoint = server.definition.url;
-        const resource = yield* withAuthFetch(policy, (fetch) =>
-          discoverOAuthProtectedResourceMetadata(endpoint, undefined, fetch),
-        ).pipe(Effect.provideService(NetworkAddresses, network));
+        const discovery = yield* discoverAuthResource(endpoint, resourceUrl, config, policy).pipe(
+          Effect.provideService(NetworkAddresses, network),
+        );
+        const resource = discovery.metadata;
         const issuer = config.issuer ?? resource.authorization_servers?.[0];
         if (
           !issuer ||
@@ -288,19 +291,22 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         const tokens = yield* withAuthFetch(policy, (fetch) =>
           exchangeAuthorization(issuer, { ...exchange, fetchFn: fetch }),
         ).pipe(Effect.provideService(NetworkAddresses, network));
+        const grant = {
+          version: 1 as const,
+          identity: server.identity,
+          issuer,
+          resource: resourceUrl.href,
+          clientId: client.client_id,
+          registration: config.registration,
+          redirectUri: redirect,
+          discovery: yield* json(metadata),
+          resourceMetadata: yield* json(resource),
+          clientInformation: yield* json(client),
+        };
         return yield* receipt(
-          {
-            version: 1,
-            identity: server.identity,
-            issuer,
-            resource: resourceUrl.href,
-            clientId: client.client_id,
-            registration: config.registration,
-            redirectUri: redirect,
-            discovery: yield* json(metadata),
-            resourceMetadata: yield* json(resource),
-            clientInformation: yield* json(client),
-          },
+          discovery.source === undefined
+            ? grant
+            : { ...grant, resourceMetadataSource: discovery.source },
           tokens,
         );
       }),

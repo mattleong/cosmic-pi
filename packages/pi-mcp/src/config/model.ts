@@ -11,6 +11,7 @@ export interface McpOAuthConfig {
   readonly clientId?: string;
   readonly clientMetadataUrl?: string;
   readonly issuer?: string;
+  readonly allowMissingResourceMetadata?: boolean;
   readonly resource?: string;
   readonly scopes: ReadonlyArray<string>;
   readonly redirectUri?: string;

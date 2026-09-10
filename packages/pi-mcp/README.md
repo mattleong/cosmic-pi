@@ -110,6 +110,19 @@ OAuth is HTTP-only and supports public clients with PKCE S256 and token-endpoint
 
 Dynamic registration and Client ID Metadata Documents require the authorization server to advertise support. This extension does not host a client metadata document or support confidential-client secrets. Optional OAuth fields are `issuer`, `resource`, `scopes`, and `redirectUri`. If `registration` is omitted, `clientId` selects pre-registration, `clientMetadataUrl` selects metadata registration, and neither selects dynamic registration.
 
+Protected-resource metadata is required by default. For a legacy server that publishes authorization-server metadata but no protected-resource metadata, explicitly pin its issuer and opt into compatibility:
+
+```json
+{
+  "type": "oauth",
+  "registration": "dynamic",
+  "issuer": "https://mcp.atlassian.com",
+  "allowMissingResourceMetadata": true
+}
+```
+
+This fallback applies only when every protected-resource discovery response is `404` or `410`. It uses the configured issuer and `resource`, or the server URL when `resource` is absent. It never replaces valid metadata, bypasses a binding mismatch, or recovers from malformed responses, other HTTP errors, network failures, denied redirects, or timeouts. An issuer pin alone does not enable compatibility. Stored grants record configured metadata provenance; removing the opt-in or changing the issuer/resource prevents their reuse. Discovery failures expose fixed diagnostic reasons, not server response text.
+
 Only an explicit user `/mcp auth ID` command can start login. Local login owns an IPv4 loopback listener, normally `http://127.0.0.1:<ephemeral-port>/callback`, and opens the browser. A configured redirect must be a supported `http://127.0.0.1` callback. `/mcp auth ID --manual` requires a configured fixed-port redirect and collects the full callback URL in a user-only dialog. It does not start a local listener. The provider must support that registered redirect; manual mode is not a promise of universal remote-terminal login.
 
 TUI and supported RPC dialogs can run login. Print/JSON mode can check an existing grant but cannot prompt or start a listener. Ordinary gateway and Code Mode calls never open login UI. Codes, callback URLs, and tokens are not tool inputs or model results.

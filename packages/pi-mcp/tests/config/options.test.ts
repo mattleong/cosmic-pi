@@ -91,6 +91,54 @@ describe("MCP configuration resolution", () => {
   );
 
   it.effect(
+    "requires an issuer for compatibility and binds the opt-in to credential identity",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const auth = { type: "oauth", issuer: "https://issuer.test", clientId: "public" };
+        const resolve = (config: typeof auth & { allowMissingResourceMetadata?: boolean }) =>
+          resolveMcpConfig({
+            revision: 0,
+            trusted: true,
+            global: globalSource({
+              version: 1,
+              servers: {
+                server: { transport: "http", url: "https://example.test/mcp", auth: config },
+              },
+            }),
+            path,
+          });
+        const strict = yield* resolve(auth);
+        const compatible = yield* resolve({ ...auth, allowMissingResourceMetadata: true });
+        expect(compatible.servers.server?.enabled).toBe(true);
+        expect(compatible.servers.server?.definition).toMatchObject({
+          auth: { allowMissingResourceMetadata: true },
+        });
+        expect(compatible.servers.server?.identity).not.toBe(strict.servers.server?.identity);
+        expect(strict.servers.server?.definition).not.toHaveProperty(
+          "auth.allowMissingResourceMetadata",
+        );
+        const invalid = yield* resolveMcpConfig({
+          revision: 0,
+          trusted: true,
+          global: globalSource({
+            version: 1,
+            servers: {
+              server: {
+                transport: "http",
+                url: "https://example.test/mcp",
+                auth: { type: "oauth", allowMissingResourceMetadata: true },
+              },
+            },
+          }),
+          path,
+        });
+        expect(invalid.servers.server?.enabled).toBe(false);
+        expect(invalid.diagnostics.length).toBeGreaterThan(0);
+      }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
+  );
+
+  it.effect(
     "binds identities to owning file, server id, complete auth and unresolved definitions",
     () =>
       Effect.gen(function* () {
