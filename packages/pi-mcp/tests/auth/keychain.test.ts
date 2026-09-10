@@ -5,11 +5,70 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import { makeKeychainStore, type KeychainEntryFactory } from "../../src/boundary/keychain.ts";
 
 const identity = "c".repeat(64);
 describe("Keychain native mutation ownership", () => {
+  it.effect(
+    "exposes pending and blocked mutation facts without new reads or indefinite joins",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const completion = Promise.withResolvers<void>();
+        let entryCalls = 0;
+        let reads = 0;
+        const factory: KeychainEntryFactory = () => {
+          entryCalls++;
+          return Promise.resolve({
+            getPassword: () => {
+              reads++;
+              return Promise.resolve(undefined);
+            },
+            setPassword: () => {
+              Deferred.doneUnsafe(entered, Effect.void);
+              return completion.promise;
+            },
+            deleteCredential: () => Promise.resolve(true),
+          });
+        };
+        const store = yield* makeKeychainStore({ entryFactory: factory, timeoutMs: 100 });
+        expect(yield* store.mutation(identity)).toBe("idle");
+        expect(entryCalls).toBe(0);
+        const saving = yield* store
+          .write(identity, "PRIVATE_GRANT")
+          .pipe(Effect.result, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        expect(yield* store.mutation(identity)).toBe("pending");
+        yield* TestClock.adjust(101);
+        expect(yield* Fiber.join(saving)).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: "oauth-mutation-unresolved" },
+        });
+        expect(yield* store.mutation(identity)).toBe("pending");
+        const deleting = yield* store.remove(identity).pipe(Effect.result, Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(101);
+        expect(yield* Fiber.join(deleting)).toMatchObject({
+          _tag: "Failure",
+          failure: { reason: "oauth-deletion-failed" },
+        });
+        expect(yield* store.mutation(identity)).toBe("pending");
+        completion.resolve();
+        let mutation = yield* store.mutation(identity);
+        yield* yieldUntil(() => entryCalls === 1);
+        for (let i = 0; i < 20 && mutation === "pending"; i++) {
+          yield* Effect.yieldNow;
+          mutation = yield* store.mutation(identity);
+        }
+        expect(mutation).toBe("blocked");
+        expect(reads).toBe(0);
+        expect(entryCalls).toBe(1);
+      }),
+  );
+
   it.effect("normalizes either native absence value without losing later stored credentials", () =>
     Effect.gen(function* () {
       for (const missing of [null, undefined]) {

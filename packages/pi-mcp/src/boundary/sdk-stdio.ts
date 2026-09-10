@@ -3,6 +3,7 @@ import {
   MissingRequiredClientCapabilityError,
   SdkError,
   SdkErrorCode,
+  ProtocolError,
   UnsupportedProtocolVersionError,
   UrlElicitationRequiredError,
   type Client,
@@ -22,6 +23,7 @@ import {
   type DuplexProcessOptions,
 } from "pi-cosmic-core";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
+import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
 import {
   MCP_BOUNDARY_LIMITS,
   type McpCapabilities,
@@ -162,6 +164,8 @@ const transportFailure = <Value>(
       "MCP server requires an unsupported interaction, capability, or protocol version.",
     );
   }
+  if (error instanceof ProtocolError)
+    return mapSdkProtocolError(error, outcome === "not-sent" ? "not-sent" : "completed");
   if (error instanceof SdkError) {
     switch (error.code) {
       case SdkErrorCode.RequestTimeout:

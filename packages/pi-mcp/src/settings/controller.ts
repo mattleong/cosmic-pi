@@ -14,6 +14,12 @@ import {
 } from "pi-cosmic-core";
 import type { McpCommandPort } from "../application/lifecycle.ts";
 import { McpAuth } from "../auth/service.ts";
+import { McpAuthFlow } from "../auth/flow.ts";
+import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
+import { confirmMcpAction } from "../boundary/host-ui.ts";
+import { McpManager } from "../manager/service.ts";
+import { mcpCompletions, readableMcpOutcome, runMcpManager } from "../manager/controller.ts";
+import { managerSelection } from "../ui/manager-state.ts";
 import { makeMcpLoginUi, mcpHasLoginUi } from "../boundary/host-auth.ts";
 import { boundedMcpReply, mcpFailureReply } from "../boundary/host-tool-result.ts";
 import { boundaryError } from "../client/errors.ts";
@@ -63,7 +69,7 @@ export const runMcpUserCommand = (
     if (args.length > 4_096) return yield* invalid();
     const words = args.trim().split(/\s+/);
     const action = words[0] || "status";
-    yield* gate(ctx, current, action !== "status");
+    yield* gate(ctx, current, action !== "status" && action !== "browse" && action !== "result");
     const execution = yield* McpExecution;
     if (action === "status" && words.length === 1)
       return (yield* execution.execute(
@@ -71,7 +77,39 @@ export const runMcpUserCommand = (
         { maxOutputBytes: MCP_INLINE_BYTES, images: false },
       )).reply;
     const server = words[1];
+    if (
+      (action === "browse" && words.length <= 2) ||
+      (action === "result" && words.length === 2 && server)
+    ) {
+      yield* runMcpManager(
+        pi,
+        ctx,
+        current,
+        action === "browse"
+          ? managerSelection("browse", server)
+          : managerSelection("result", undefined, server),
+      );
+      return reply("view", null);
+    }
     if (!server || server.length > 128) return yield* invalid();
+    if (
+      ctx.mode === "tui" &&
+      (action === "connect" ||
+        action === "disconnect" ||
+        action === "refresh" ||
+        action === "logout") &&
+      words.length === 2
+    ) {
+      const manager = yield* McpManager;
+      const row = (yield* manager.refresh).servers.find((entry) => entry.id === server);
+      if (!row) return yield* invalid();
+      const ticket = yield* manager.capture(row, action);
+      if (ticket.confirmation && !(yield* confirmMcpAction(ctx, ticket.confirmation, current)))
+        return reply("view", null);
+      yield* gate(ctx, current, true);
+      yield* manager.dispatch(ticket);
+      return reply(action, null);
+    }
     if (["connect", "disconnect", "refresh"].includes(action) && words.length === 2) {
       return (yield* execution.execute(
         { action, server },
@@ -104,9 +142,16 @@ export const runMcpUserCommand = (
       yield* gate(ctx, current, true);
       return reply("auth", { state: "ready" });
     }
-    const status = yield* execution.login(
+    const flow = yield* McpAuthFlow;
+    const present =
+      ctx.mode === "tui"
+        ? (attempt: Parameters<typeof presentMcpAuthPanel>[1]) =>
+            presentMcpAuthPanel(ctx, attempt, current)
+        : undefined;
+    const status = yield* flow.run(
       server,
       makeMcpLoginUi(pi, ctx, words[2] === "--manual", current),
+      present,
     );
     yield* gate(ctx, current, true);
     return reply("auth", { state: status.state });
@@ -164,7 +209,9 @@ const commandHandler =
     }
     const effect = settings
       ? runMcpSettingsCommand(args, ctx, current)
-      : runMcpUserCommand(args, pi, ctx, current);
+      : args.trim() === "" && ctx.mode === "tui"
+        ? runMcpManager(pi, ctx, current).pipe(Effect.as(reply("view", null)))
+        : runMcpUserCommand(args, pi, ctx, current);
     return port
       .run(Effect.result(effect), signal.signal)
       .then(
@@ -180,8 +227,12 @@ const commandHandler =
       )
       .then((output) => {
         if (!current() || invokeHostCallback(() => signal.signal?.aborted === true, true)) return;
+        if (output.action === "view") return;
         const bounded = boundedMcpReply(output);
-        const text = JSON.stringify(bounded);
+        const text =
+          ctx.mode === "tui" && !settings && args.trim() !== "status"
+            ? readableMcpOutcome(bounded)
+            : JSON.stringify(bounded);
         if (invokeHostCallback(() => ctx.hasUI, false))
           notifyAtHostBoundary(ctx, text, bounded.isError ? "warning" : "info");
         else
@@ -195,7 +246,8 @@ const commandHandler =
 export const registerMcpCommands = (pi: ExtensionAPI, port: McpCommandPort): void => {
   pi.registerCommand("mcp", {
     description:
-      "MCP: status | connect ID | disconnect ID | refresh ID | auth ID [--manual] | logout ID",
+      "MCP dashboard | status | browse [ID] | result ID | connect ID | disconnect ID | refresh ID | auth ID [--manual] | logout ID",
+    getArgumentCompletions: (prefix) => mcpCompletions(prefix, port.serverIds()),
     handler: commandHandler(pi, port, false),
   });
   pi.registerCommand("mcp-settings", {

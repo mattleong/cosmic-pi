@@ -2,6 +2,8 @@ import { it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
@@ -38,6 +40,77 @@ const parse = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
 // Each construction owns a separate private activation, even with identical config owners.
 describe("MCP result retention", () => {
+  it.effect(
+    "capacity eviction and revocation withdraw cached text, while reads and repeat retention are silent",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* makeMcpResults({ maxEntries: 1 });
+        let visible: string | undefined;
+        yield* service.subscribeChanges(() => {
+          throw new Error("observer failure");
+        });
+        yield* service.subscribeChanges(() => {
+          visible = undefined;
+        });
+        const first = yield* save(service, input({ secret: "first" }));
+        visible = "first";
+        for (let index = 0; index < 4; index += 1) {
+          const read = yield* service.read(
+            { action: "result.read", id: idOf(first.retention) },
+            options,
+            allow,
+          );
+          expect(read.reply.resultId).toBe(idOf(first.retention));
+          expect(visible).toBe("first");
+        }
+        yield* service.retain(first.prepared);
+        expect(visible).toBe("first");
+        const second = yield* save(service, input({ secret: "second" }));
+        expect(visible).toBeUndefined();
+        expect(
+          yield* Effect.result(
+            service.read({ action: "result.read", id: idOf(first.retention) }, options, allow),
+          ),
+        ).toMatchObject({ failure: { kind: "stale" } });
+        visible = "second";
+        yield* service.revoke("server");
+        expect(visible).toBeUndefined();
+        expect(
+          yield* Effect.result(
+            service.read({ action: "result.read", id: idOf(second.retention) }, options, allow),
+          ),
+        ).toMatchObject({ failure: { kind: "stale" } });
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("subscriptions are scoped and authority expiry withdraws a still-open projection", () =>
+    Effect.gen(function* () {
+      const owner = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const service = yield* makeMcpResults().pipe(Effect.provideService(Scope.Scope, owner));
+      let visible: string | undefined = "old";
+      yield* Effect.scoped(
+        service.subscribeChanges(() => {
+          visible = undefined;
+        }),
+      );
+      const saved = yield* save(service, input({ secret: "private" }));
+      expect(visible).toBe("old");
+      yield* service.subscribeChanges(() => {
+        visible = undefined;
+      });
+      visible = "private";
+      yield* Scope.close(owner, Exit.void);
+      expect(visible).toBeUndefined();
+      expect(
+        yield* Effect.result(
+          service.read({ action: "result.read", id: idOf(saved.retention) }, options, allow),
+        ),
+      ).toMatchObject({ failure: { kind: "stale" } });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
   it.effect("evicts oldest settled entries without changing order on reads", () =>
     Effect.gen(function* () {
       const service = yield* makeMcpResults({ maxEntries: 2 });

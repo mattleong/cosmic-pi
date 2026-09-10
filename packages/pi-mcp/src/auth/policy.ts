@@ -6,7 +6,12 @@ import type { McpEffectiveServer, McpOAuthConfig } from "../config/model.ts";
 export const authFailure = () =>
   boundaryError("auth-required", "not-sent", "MCP authentication is required.");
 export const deniedAuth = () =>
-  boundaryError("denied", "not-sent", "OAuth destination or binding was rejected.");
+  boundaryError(
+    "denied",
+    "not-sent",
+    "OAuth destination or binding was rejected.",
+    "oauth-binding-rejected",
+  );
 export const oauthConfig = (server: McpEffectiveServer): McpOAuthConfig | undefined =>
   server.enabled &&
   server.definition?.transport === "http" &&

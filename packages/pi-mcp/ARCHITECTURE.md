@@ -1,6 +1,6 @@
 # pi-mcp architecture
 
-`pi-mcp` owns one Pi `mcp` gateway, `/mcp` and `/mcp-settings` commands, and the producer side of `tools.mcp.request`. All execution goes through `McpExecution`; Code Mode does not own a second connection manager. The [README](./README.md) defines configuration, public actions, limits, and supported modes. The [plan](../../docs/plans/pi-mcp.md) tracks acceptance evidence.
+`pi-mcp` owns one Pi `mcp` gateway, `/mcp` and `/mcp-settings` commands, and the producer side of `tools.mcp.request`. All execution goes through `McpExecution`; Code Mode does not own a second connection manager. The [README](./README.md) defines configuration, public actions, limits, and supported modes. The [implementation plan](../../docs/plans/pi-mcp.md) and [UI upgrade record](../../docs/plans/pi-mcp-ui.md) track acceptance evidence.
 
 ## Application and authority
 
@@ -18,7 +18,7 @@ The activation owns tool-error receipts and a stable-session Code Mode provider.
 
 `boundary/sdk-connection.ts` resolves bindings at connection time. Stdio gets `PATH` plus explicit environment entries, with no implicit shell or ambient credentials. A server executable remains trusted local code with user privileges, not an OS sandbox. Configuration cwd and allow/deny rules do not confine its filesystem or network access.
 
-`discovery/` owns complete frozen metadata revisions, bounded remote pagination, list-change coalescing, exact lookup, and revision-bound gateway cursors. Unscoped discovery never connects every server. Resources and prompts use enabled-server authority. Resource URIs route only to that server; returned links are never followed locally. Prompt roles and server descriptions remain untrusted data, never system instructions or installed slash commands.
+`discovery/` owns complete frozen metadata revisions, bounded remote pagination, list-change coalescing, exact lookup, and revision-bound gateway cursors. `collect.ts` settles each advertised listing independently under one owner and budget. A first-page `completed/unsupported/rpc-method-not-found` response marks only that catalog unsupported and records a fixed diagnostic. Every other failure, including a later-page missing method, remains fatal. A complete revision combines full successful lists and explicitly unsupported catalogs; it never mixes partial pages or different revisions. The existing commit, expiry, and revocation checks govern arrays, support flags, and diagnostics together. Unscoped discovery never connects every server. Resources and prompts use enabled-server authority. Resource URIs route only to that server; returned links are never followed locally. Prompt roles and server descriptions remain untrusted data, never system instructions or installed slash commands.
 
 ## SDK transport boundaries
 
@@ -29,6 +29,8 @@ The official client/core SDK 2.0.0 owns framing, correlation, legacy negotiation
 `sdk-http.ts` and `sdk-http-transport.ts` own connection/request admission, dispatch/completion evidence, and continuous native-resource leases. GET, DELETE, and notifications have session traffic ownership separate from application calls. Close revokes admission, aborts and joins owners, and caches its result even if the first caller is interrupted. Consumer abort is not proof that native source cleanup finished.
 
 `sdk-fetch.ts` adapts the injected Effect fetch capability to SDK Promises/ReadableStreams, strips internal correlation headers, rejects redirects, and bounds bodies before SDK parsing. Native callbacks transfer fetch/body ownership without an idle gap. `sdk-http-control.ts` gives uncorrelated non-GET traffic its own 16-slot admission cap and scoped deadlines, independent of application permits. Cleanup uncertainty disables reuse. These adapters create no detached Effect runtime.
+
+`sdk-protocol-error.ts` maps SDK `ProtocolError` replies into fixed categories shared by HTTP and stdio. It distinguishes unsupported methods, rejected parameters/requests, missing resources, and server errors without copying remote messages, data, or custom codes. Each transport keeps its existing dispatch/completion evidence and cleanup precedence. Diagnostics preserve safe failure detail for completed operations without assuming retained output; unknown outcomes still prohibit automatic replay.
 
 Transport auth is token-only, with insufficient-scope recovery and legacy reconnection disabled. It cannot start login UI or replay a rejected application request.
 
@@ -41,6 +43,22 @@ Transport auth is token-only, with insufficient-scope recovery and legacy reconn
 `boundary/auth-callback.ts` owns a scoped IPv4 loopback listener using core's `nodeHttpServerLayer`. The auth attempt owns route, Host, origin, redirect, and one-use callback checks. Core owns native listener acquisition and connection closure; active clients cannot keep the listener alive after shutdown. `boundary/host-auth.ts` adapts explicit-user TUI/RPC dialogs and browser opening. Manual callbacks use the user-only dialog and require a fixed registered redirect. Print/JSON mode never starts interactive login.
 
 `boundary/credential-store.ts` is the grant persistence door. `keychain.ts` lazily loads macOS `@napi-rs/keyring`; there is no plaintext or session-only fallback. Native mutation fences survive runtime replacement. An aborted waiter is not native write completion, and deletion must join an earlier mutation before it can report success. Logout revokes connection/result authority before removing local grants and makes no provider-revocation claim.
+
+## Manager and auth presentation
+
+`auth/flow.ts` owns one explicit-user presentation around `McpExecution.login`. `auth/progress.ts` contains immutable, secret-free phase evidence. The auth service binds outer-completion hooks to the exact inner login receipt, so stale callbacks cannot publish readiness for a replacement attempt. Passive status starts at `unchecked`; native mutation observations do not read Keychain. A saved grant is not successful sign-in until the connection fence settles.
+
+`host-auth.ts` keeps browser URLs and callback values in private user capabilities. RPC uses fixed-title stock confirmation/input/select dialogs. `host-auth-panel.ts` owns the TUI overlay, repaint subscription, independent cancellation signal, and nonqueuing reopen ingress. Flow admission and native browser-call settlement each guard repeated opens. The callback page is static and acknowledges receipt only.
+
+`manager/service.ts` owns view admission, action tickets, and coalesced local invalidation. Its projections use connection status and cached discovery summaries, never gateway status polling or credential access. Every mutating action rechecks the displayed configuration, exact server identity, and operation revision at admission. `manager/controller.ts` closes and joins the dashboard before confirmations or auth, then reopens from safe navigation state.
+
+`discovery/cached.ts` implements bounded, policy-filtered reads across complete cached revisions. The discovery service remains the only metadata store. Internal queries return data and notices from the same revision. Gateway projection preserves those notices through retained reads; cached catalogs and manager summaries expose the same per-family evidence. Owner expiry and revocation withdraw content; refresh failure may preserve the last authorized revision with its failure state. The result service publishes scoped store-change notifications, so capacity eviction also withdraws open viewer text. Reads do not notify or allocate new results. UI components discard text immediately on invalidation and restore expansion/scroll state only through authorized local reads.
+
+`boundary/host-ui.ts` owns manager overlays using Pi's handle acknowledgment and guarded completion pattern. Late mounts and cancellation cannot pop an unrelated newer overlay. Top-level `ui/` contains pure components and tool renderers; it has no service runners or I/O. Tool cards preserve the execution envelope, native images, retained IDs, and error-receipt identity beneath `withCodePreviewShell`.
+
+`activity/service.ts` holds a bounded observational journal, not a scheduler. Actual shared auth/connect/metadata owners publish one row each, including work started through Code Mode. Terminal retention follows completion order. `host-mcp-status.ts` publishes Activity v1 and one keyed status contribution through Cosmic UI's public APIs. Inspect capabilities recheck activation and row revision, then delegate to the lifecycle-owned manager opener. They contain no auth capability. Deactivation removes only the old activation's subscriptions and contributions.
+
+All new services compose in `layer.ts` under the existing session runtime. `application/lifecycle.ts` remains the sole submission boundary. No settings form, parallel persistence API, custom RPC protocol, or generated runtime was added.
 
 ## Validation and results
 
@@ -56,4 +74,4 @@ Native image checks cover base64 bounds, MIME, header/container structure, and d
 
 The private package ships TypeScript source and its fixed `.mjs` helper, with no generated `dist/` or build prerequisite. SDK-internal Zod is transitive; authored schemas use Effect Schema. Core owns generic process, DNS-pinning, listener, and document boundaries, never MCP protocol or OAuth policy.
 
-Owned fixtures cover lifecycle, policy, validation, OAuth, HTTP JSON/SSE, and result behavior. The real macOS filesystem and Playwright smoke passed through `McpExecution` with protocol `2025-11-25`, including isolated browser use, 80 KB retention, and owned-resource cleanup. Native Keychain create/read/replace/delete and absence checks passed in a disposable namespace. The final workspace validation and clean-consumer packed-source checks also passed. Neither those fixtures nor SDK negotiation imply universal server or provider compatibility.
+Owned fixtures cover lifecycle, policy, validation, OAuth, HTTP JSON/SSE, and result behavior. The real macOS filesystem and Playwright smoke passed through `McpExecution` with protocol `2025-11-25`, including isolated browser use, 80 KB retention, and owned-resource cleanup. Native Keychain create/read/replace/delete and absence checks passed in a disposable namespace. The original acceptance passed workspace validation and clean-consumer packed-source checks. The UI upgrade record reports its separate verification and baseline blockers. Neither those fixtures nor SDK negotiation imply universal server or provider compatibility.

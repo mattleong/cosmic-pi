@@ -2,10 +2,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { decodeGrant, encodeGrant, type McpGrant } from "../auth/credentials.ts";
+import type { McpCredentialMutation } from "../auth/progress.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 import { makeKeychainStore, type KeychainOptions } from "./keychain.ts";
 
 export interface McpCredentialStoreContract {
+  readonly mutation: (identity: string) => Effect.Effect<McpCredentialMutation>;
   readonly read: (identity: string) => Effect.Effect<McpGrant | undefined, McpBoundaryError>;
   readonly write: (identity: string, grant: McpGrant) => Effect.Effect<void, McpBoundaryError>;
   /** Joins any native mutation before deleting. Failure never means removed. */
@@ -32,6 +34,7 @@ export class McpCredentialStore extends Context.Service<
           write: (identity, grant) =>
             encodeGrant(grant).pipe(Effect.flatMap((raw) => store.write(identity, raw))),
           remove: store.remove,
+          mutation: store.mutation,
         } satisfies McpCredentialStoreContract;
       }),
     );

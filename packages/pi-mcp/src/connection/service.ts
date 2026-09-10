@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { McpAuth } from "../auth/service.ts";
+import { McpActivity } from "../activity/service.ts";
 import { McpConnector } from "../boundary/sdk-connection.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection, McpRequest } from "../client/model.ts";
@@ -20,6 +21,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
     yield* McpConfigStore,
     yield* McpAuth,
     yield* McpConnector,
+    yield* McpActivity,
   );
   const { withLock, admission } = registry;
 
@@ -71,7 +73,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
     revision: number,
     tool?: string,
   ): McpOperation => {
-    const checkCurrent = withLock(registry.checkLocked(ticket, owner, tool));
+    const checkCurrent = withLock(registry.checkLocked(ticket, owner, tool, revision));
     const dispatchCheck = (input: McpRequest) =>
       withLock(
         Effect.gen(function* () {
@@ -79,6 +81,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
             ticket,
             owner,
             input.action === "tools.call" ? input.tool : tool,
+            revision,
           );
           yield* registry.acceptingLocked(owner);
         }),
@@ -106,6 +109,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
                   withLock(
                     Effect.gen(function* () {
                       if (recordsOutcome) ticket.outcome = error.outcome;
+                      if (error.kind === "auth-required") yield* registry.rejectAuthLocked(owner);
                       if (error.kind === "cleanup") yield* registry.terminalLocked(owner, true);
                     }),
                   ),
@@ -185,7 +189,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       commit: (publication) =>
         withLock(
           Effect.gen(function* () {
-            yield* registry.checkLocked(ticket, owner, tool);
+            yield* registry.checkLocked(ticket, owner, tool, revision);
             return yield* publication;
           }),
         ),
@@ -194,7 +198,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       forkOwned: (effect) =>
         withLock(
           Effect.gen(function* () {
-            yield* registry.checkLocked(ticket, owner, tool);
+            yield* registry.checkLocked(ticket, owner, tool, revision);
             return yield* Effect.forkIn(Effect.interruptible(effect), owner.scope);
           }),
         ),
@@ -207,6 +211,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
         const now = yield* Clock.currentTimeMillis;
         const acquired = yield* withLock(
           Effect.gen(function* () {
+            if (intent.expected) yield* registry.checkActionLocked(intent.expected);
             const server = yield* registry.executionServerLocked(serverId, intent.tool);
             const ticket = admission.issue(serverId, now);
             if (ticket instanceof McpBoundaryError) return yield* ticket;
@@ -233,11 +238,12 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       }),
     );
 
-  const withAuth: McpConnectionsContract["withAuth"] = (serverId, use) =>
+  const withAuth: McpConnectionsContract["withAuth"] = (serverId, use, expected) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const begin = withLock(
           Effect.gen(function* () {
+            if (expected) yield* registry.checkActionLocked(expected);
             const server = yield* registry.serverLocked(serverId);
             const existing = registry.suspensions.get(serverId);
             if (existing?.running) return { waiting: true as const, gate: existing };
@@ -248,6 +254,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
               running: true,
             };
             registry.suspensions.set(serverId, gate);
+            registry.changed();
             // Masked admission installs the gate and owned transport cleanup together.
             const retired = yield* registry.revokeLocked([serverId], true, "auth-transition");
             return { waiting: false as const, gate, retired };
@@ -300,6 +307,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
                   : result;
             if (registry.suspensions.get(serverId) === gate) {
               gate.running = false;
+              registry.changed();
               // A failed native handoff must not reopen execution. A later explicit auth
               // attempt can replace this settled gate instead of leaving an uncloseable wait.
               if (Exit.isSuccess(outcome)) registry.suspensions.delete(serverId);
@@ -321,9 +329,13 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
     requireServer: registry.requireServer,
     withAuth,
     withOperation,
-    connect: (id) => withOperation(id, {}, () => registry.status),
-    disconnect: (id) => registry.requireServer(id).pipe(Effect.andThen(registry.revoke(id, false))),
-    revoke: (id) => registry.revoke(id),
+    connect: (id, expected) =>
+      withOperation(id, expected ? { expected } : {}, () => registry.status),
+    disconnect: (id, expected) =>
+      registry.requireServer(id).pipe(Effect.andThen(registry.revoke(id, false, expected))),
+    revoke: (id) => registry.revoke(id).pipe(Effect.orDie),
+    checkAction: registry.checkAction,
+    subscribeChanges: registry.subscribeChanges,
     subscribeRevocations: registry.subscribeRevocations,
   } satisfies McpConnectionsContract;
 });

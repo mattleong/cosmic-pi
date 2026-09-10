@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import type { McpCredentialMutation } from "../auth/progress.ts";
 import { boundaryError } from "../client/errors.ts";
 
 export interface KeychainEntry {
@@ -30,13 +31,22 @@ const unavailable = () =>
   boundaryError(
     "unavailable",
     "not-sent",
-    "macOS Keychain is unavailable or a prior mutation is unresolved.",
+    "macOS Keychain is unavailable.",
+    "oauth-storage-unavailable",
+  );
+const unresolved = () =>
+  boundaryError(
+    "unavailable",
+    "not-sent",
+    "A credential mutation is unresolved.",
+    "oauth-mutation-unresolved",
   );
 const deletionFailed = () =>
   boundaryError(
     "cleanup",
     "not-sent",
     "OAuth credentials could not be removed from macOS Keychain.",
+    "oauth-deletion-failed",
   );
 
 export const makeKeychainStore = (options: KeychainOptions = {}) =>
@@ -63,8 +73,8 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
     const read = (identity: string) =>
       Effect.suspend(() => {
         const fence = fenceFor(identity);
-        if (!validIdentity(identity) || fence.blocked || fence.pending)
-          return Effect.fail(unavailable());
+        if (!validIdentity(identity)) return Effect.fail(unavailable());
+        if (fence.blocked || fence.pending) return Effect.fail(unresolved());
         const revision = fence.revision;
         return Effect.tryPromise({
           try: (signal) =>
@@ -89,7 +99,7 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
         const fence = fenceFor(identity);
         const removing = password === undefined;
         const error = removing ? deletionFailed : unavailable;
-        if (!removing && (fence.blocked || fence.pending)) return Effect.fail(error());
+        if (!removing && (fence.blocked || fence.pending)) return Effect.fail(unresolved());
         return Effect.tryPromise({
           try: (signal) => {
             const predecessor = fence.pending;
@@ -137,9 +147,20 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
               .finally(() => signal.removeEventListener("abort", abort));
           },
           catch: error,
-        }).pipe(Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.fail(error()) }));
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: timeout,
+            orElse: () => Effect.fail(removing ? deletionFailed() : unresolved()),
+          }),
+        );
       });
     return {
+      /** Passive process-local evidence. Does not load keyring, create an entry, or join a Promise. */
+      mutation: (identity: string): Effect.Effect<McpCredentialMutation> =>
+        Effect.sync(() => {
+          const fence = ownedRecords.get(`${service}\u0000${identity}`);
+          return fence?.pending ? "pending" : fence?.blocked ? "blocked" : "idle";
+        }),
       read,
       write: (identity: string, password: string) => mutate(identity, password),
       remove: (identity: string) => mutate(identity),

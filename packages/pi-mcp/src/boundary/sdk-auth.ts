@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { hasControlCharacter, NetworkAddresses } from "pi-cosmic-core";
 import type { McpLoginUi } from "../auth/model.ts";
+import { authProgress } from "../auth/progress.ts";
 import type { McpGrant } from "../auth/credentials.ts";
 import {
   authFailure,
@@ -49,6 +50,7 @@ const unsupported = () =>
     "unsupported",
     "not-sent",
     "OAuth requires an advertised public-client registration and PKCE flow.",
+    "oauth-registration-unsupported",
   );
 const sdk = <A>(work: () => A) => Effect.try({ try: work, catch: deniedAuth });
 const json = (
@@ -155,168 +157,195 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
       return { ...grant, tokens: yield* json(tokens), receivedAt, expiresAt } satisfies McpGrant;
     });
   const login: McpSdkAuthContract["login"] = (server, ui) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const config = oauthConfig(server);
-        if (!config || server.definition?.transport !== "http") return yield* authFailure();
-        const policy = yield* authUrlPolicy(server);
-        const listener =
-          ui.mode === "local" ? yield* openAuthCallback(config.redirectUri) : undefined;
-        const redirect =
-          listener?.redirectUri ?? (yield* callbackRedirect(config.redirectUri)).href;
-        if (ui.mode === "manual" && (!config.redirectUri || new URL(redirect).port === "0"))
-          return yield* unsupported();
-        const resourceUrl = yield* validateAuthUrl(
-          config.resource ?? server.definition.url,
-          policy,
-        );
-        const endpoint = server.definition.url;
-        const discovery = yield* discoverAuthResource(endpoint, resourceUrl, config, policy).pipe(
-          Effect.provideService(NetworkAddresses, network),
-        );
-        const resource = discovery.metadata;
-        const issuer = config.issuer ?? resource.authorization_servers?.[0];
-        if (
-          !issuer ||
-          resource.resource !== resourceUrl.href ||
-          !resource.authorization_servers?.includes(issuer)
-        )
-          return yield* deniedAuth();
-        const issuerUrl = yield* validateAuthUrl(issuer, policy);
-        if (issuerUrl.search) return yield* deniedAuth();
-        const metadata = yield* withAuthFetch(policy, (fetch) =>
-          discoverAuthorizationServerMetadata(issuer, { fetchFn: fetch }),
-        ).pipe(Effect.provideService(NetworkAddresses, network));
-        if (!metadata || metadata.issuer !== issuer) return yield* deniedAuth();
-        if (
-          !metadata.code_challenge_methods_supported?.includes("S256") ||
-          !metadata.response_types_supported.includes("code") ||
-          (metadata.token_endpoint_auth_methods_supported &&
-            !metadata.token_endpoint_auth_methods_supported.includes("none"))
-        )
-          return yield* unsupported();
-        const authorizationEndpoint = yield* validateAuthUrl(
-          metadata.authorization_endpoint,
-          policy,
-        );
-        yield* validateAuthUrl(metadata.token_endpoint, policy);
-        let client: OAuthClientInformationMixed;
-        if (config.registration === "pre-registered") {
-          if (!config.clientId) return yield* unsupported();
-          client = { client_id: config.clientId };
-        } else if (config.registration === "metadata") {
-          if (!config.clientMetadataUrl || metadata.client_id_metadata_document_supported !== true)
+    Effect.gen(function* () {
+      const deadline = (yield* Clock.currentTimeMillis) + 180_000;
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const config = oauthConfig(server);
+          if (!config || server.definition?.transport !== "http") return yield* authFailure();
+          const policy = yield* authUrlPolicy(server);
+          if (ui.mode === "local")
+            yield* authProgress(ui, { phase: "callback-listener", deadline });
+          const listener =
+            ui.mode === "local" ? yield* openAuthCallback(config.redirectUri) : undefined;
+          const redirect =
+            listener?.redirectUri ?? (yield* callbackRedirect(config.redirectUri)).href;
+          if (ui.mode === "manual" && (!config.redirectUri || new URL(redirect).port === "0"))
             return yield* unsupported();
-          const metadataUrl = yield* validateAuthUrl(config.clientMetadataUrl, policy);
-          yield* sdk(() => validateClientMetadataUrl(metadataUrl.href));
-          const addresses = yield* network
-            .resolve(metadataUrl.hostname)
-            .pipe(Effect.mapError(deniedAuth));
-          yield* validateAuthAddresses(metadataUrl, addresses, policy);
-          client = { client_id: metadataUrl.href };
-        } else {
-          if (!metadata.registration_endpoint) return yield* unsupported();
-          yield* validateAuthUrl(metadata.registration_endpoint, policy);
-          client = yield* withAuthFetch(policy, (fetch) =>
-            registerClient(issuer, {
-              metadata,
-              clientMetadata: {
-                redirect_uris: [redirect],
-                grant_types: ["authorization_code", "refresh_token"],
-                response_types: ["code"],
-                token_endpoint_auth_method: "none",
-                client_name: "Cosmic Pi MCP",
-              },
-              scope: config.scopes.join(" "),
-              fetchFn: fetch,
-            }),
+          const resourceUrl = yield* validateAuthUrl(
+            config.resource ?? server.definition.url,
+            policy,
+          );
+          const endpoint = server.definition.url;
+          yield* authProgress(ui, { phase: "discovery", deadline });
+          const discovery = yield* discoverAuthResource(endpoint, resourceUrl, config, policy).pipe(
+            Effect.provideService(NetworkAddresses, network),
+          );
+          const resource = discovery.metadata;
+          const issuer = config.issuer ?? resource.authorization_servers?.[0];
+          if (
+            !issuer ||
+            resource.resource !== resourceUrl.href ||
+            !resource.authorization_servers?.includes(issuer)
+          )
+            return yield* deniedAuth();
+          const issuerUrl = yield* validateAuthUrl(issuer, policy);
+          if (issuerUrl.search) return yield* deniedAuth();
+          const metadata = yield* withAuthFetch(policy, (fetch) =>
+            discoverAuthorizationServerMetadata(issuer, { fetchFn: fetch }),
           ).pipe(Effect.provideService(NetworkAddresses, network));
-          const registered = yield* sdk(() => OAuthClientInformationFullSchema.parse(client));
-          if (!registered.redirect_uris.includes(redirect)) return yield* deniedAuth();
-        }
-        if (!publicClient(client)) return yield* unsupported();
-        const state = Encoding.encodeBase64Url(
-          yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
-        );
-        const attempt = yield* Effect.tryPromise({
-          try: () =>
-            startAuthorization(issuer, {
-              metadata,
-              clientInformation: client,
-              redirectUrl: redirect,
-              scope: config.scopes.join(" "),
-              state,
-              resource: resourceUrl,
+          if (!metadata || metadata.issuer !== issuer) return yield* deniedAuth();
+          if (
+            !metadata.code_challenge_methods_supported?.includes("S256") ||
+            !metadata.response_types_supported.includes("code") ||
+            (metadata.token_endpoint_auth_methods_supported &&
+              !metadata.token_endpoint_auth_methods_supported.includes("none"))
+          )
+            return yield* unsupported();
+          const authorizationEndpoint = yield* validateAuthUrl(
+            metadata.authorization_endpoint,
+            policy,
+          );
+          yield* validateAuthUrl(metadata.token_endpoint, policy);
+          yield* authProgress(ui, { phase: "registration", deadline });
+          let client: OAuthClientInformationMixed;
+          if (config.registration === "pre-registered") {
+            if (!config.clientId) return yield* unsupported();
+            client = { client_id: config.clientId };
+          } else if (config.registration === "metadata") {
+            if (
+              !config.clientMetadataUrl ||
+              metadata.client_id_metadata_document_supported !== true
+            )
+              return yield* unsupported();
+            const metadataUrl = yield* validateAuthUrl(config.clientMetadataUrl, policy);
+            yield* sdk(() => validateClientMetadataUrl(metadataUrl.href));
+            const addresses = yield* network
+              .resolve(metadataUrl.hostname)
+              .pipe(Effect.mapError(deniedAuth));
+            yield* validateAuthAddresses(metadataUrl, addresses, policy);
+            client = { client_id: metadataUrl.href };
+          } else {
+            if (!metadata.registration_endpoint) return yield* unsupported();
+            yield* validateAuthUrl(metadata.registration_endpoint, policy);
+            client = yield* withAuthFetch(policy, (fetch) =>
+              registerClient(issuer, {
+                metadata,
+                clientMetadata: {
+                  redirect_uris: [redirect],
+                  grant_types: ["authorization_code", "refresh_token"],
+                  response_types: ["code"],
+                  token_endpoint_auth_method: "none",
+                  client_name: "Cosmic Pi MCP",
+                },
+                scope: config.scopes.join(" "),
+                fetchFn: fetch,
+              }),
+            ).pipe(Effect.provideService(NetworkAddresses, network));
+            const registered = yield* sdk(() => OAuthClientInformationFullSchema.parse(client));
+            if (!registered.redirect_uris.includes(redirect)) return yield* deniedAuth();
+          }
+          if (!publicClient(client)) return yield* unsupported();
+          const state = Encoding.encodeBase64Url(
+            yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
+          );
+          const attempt = yield* Effect.tryPromise({
+            try: () =>
+              startAuthorization(issuer, {
+                metadata,
+                clientInformation: client,
+                redirectUrl: redirect,
+                scope: config.scopes.join(" "),
+                state,
+                resource: resourceUrl,
+              }),
+            catch: deniedAuth,
+          });
+          const authorization = yield* validateAuthUrl(attempt.authorizationUrl.href, policy);
+          if (
+            authorization.origin !== authorizationEndpoint.origin ||
+            authorization.pathname !== authorizationEndpoint.pathname ||
+            authorization.searchParams.get("code_challenge_method") !== "S256" ||
+            authorization.searchParams.get("state") !== state ||
+            authorization.searchParams.get("redirect_uri") !== redirect ||
+            authorization.searchParams.get("resource") !== resourceUrl.href
+          )
+            return yield* deniedAuth();
+          const addresses = yield* network
+            .resolve(authorization.hostname)
+            .pipe(Effect.mapError(deniedAuth));
+          yield* validateAuthAddresses(authorization, addresses, policy);
+          const consume = singleUseCallback(redirect, state);
+          const receive = Effect.suspend(() =>
+            listener ? listener.receive : ui.readCallback(authorization.href, deadline),
+          );
+          const callback = ui.waitForCallback
+            ? yield* ui.waitForCallback(authorization.href, deadline, receive)
+            : yield* Effect.gen(function* () {
+                if (ui.mode === "local")
+                  yield* authProgress(ui, { phase: "opening-browser", deadline });
+                yield* ui.openBrowser(authorization.href);
+                yield* authProgress(ui, { phase: "awaiting-callback", deadline });
+                return yield* receive;
+              });
+          if (!callback)
+            return yield* boundaryError("cancelled", "not-sent", "OAuth login was cancelled.");
+          yield* authProgress(ui, { phase: "exchange", deadline });
+          const response = yield* consume(callback);
+          yield* sdk(() =>
+            validateAuthorizationResponseIssuer({
+              iss: response.iss,
+              expectedIssuer: metadata.issuer,
+              issParameterSupported:
+                metadata.authorization_response_iss_parameter_supported === true,
             }),
-          catch: deniedAuth,
-        });
-        const authorization = yield* validateAuthUrl(attempt.authorizationUrl.href, policy);
-        if (
-          authorization.origin !== authorizationEndpoint.origin ||
-          authorization.pathname !== authorizationEndpoint.pathname ||
-          authorization.searchParams.get("code_challenge_method") !== "S256" ||
-          authorization.searchParams.get("state") !== state ||
-          authorization.searchParams.get("redirect_uri") !== redirect ||
-          authorization.searchParams.get("resource") !== resourceUrl.href
-        )
-          return yield* deniedAuth();
-        const addresses = yield* network
-          .resolve(authorization.hostname)
-          .pipe(Effect.mapError(deniedAuth));
-        yield* validateAuthAddresses(authorization, addresses, policy);
-        const consume = singleUseCallback(redirect, state);
-        yield* ui.openBrowser(authorization.href);
-        const callback = listener
-          ? yield* listener.receive
-          : yield* ui.readCallback(authorization.href);
-        if (!callback)
-          return yield* boundaryError("cancelled", "not-sent", "OAuth login was cancelled.");
-        const response = yield* consume(callback);
-        yield* sdk(() =>
-          validateAuthorizationResponseIssuer({
-            iss: response.iss,
-            expectedIssuer: metadata.issuer,
-            issParameterSupported: metadata.authorization_response_iss_parameter_supported === true,
-          }),
-        );
-        const exchange: Parameters<typeof exchangeAuthorization>[1] = {
-          metadata,
-          clientInformation: { ...client, token_endpoint_auth_method: "none" },
-          authorizationCode: response.code,
-          codeVerifier: attempt.codeVerifier,
-          redirectUri: redirect,
-          resource: resourceUrl,
-        };
-        if (response.iss !== undefined) exchange.iss = response.iss;
-        const tokens = yield* withAuthFetch(policy, (fetch) =>
-          exchangeAuthorization(issuer, { ...exchange, fetchFn: fetch }),
-        ).pipe(Effect.provideService(NetworkAddresses, network));
-        const grant = {
-          version: 1 as const,
-          identity: server.identity,
-          issuer,
-          resource: resourceUrl.href,
-          clientId: client.client_id,
-          registration: config.registration,
-          redirectUri: redirect,
-          discovery: yield* json(metadata),
-          resourceMetadata: yield* json(resource),
-          clientInformation: yield* json(client),
-        };
-        return yield* receipt(
-          discovery.source === undefined
-            ? grant
-            : { ...grant, resourceMetadataSource: discovery.source },
-          tokens,
-        );
-      }),
-    ).pipe(
-      Effect.timeoutOrElse({
-        duration: 180_000,
-        orElse: () =>
-          Effect.fail(boundaryError("timeout", "not-sent", "OAuth login exceeded its deadline.")),
-      }),
-    );
+          );
+          const exchange: Parameters<typeof exchangeAuthorization>[1] = {
+            metadata,
+            clientInformation: { ...client, token_endpoint_auth_method: "none" },
+            authorizationCode: response.code,
+            codeVerifier: attempt.codeVerifier,
+            redirectUri: redirect,
+            resource: resourceUrl,
+          };
+          if (response.iss !== undefined) exchange.iss = response.iss;
+          const tokens = yield* withAuthFetch(policy, (fetch) =>
+            exchangeAuthorization(issuer, { ...exchange, fetchFn: fetch }),
+          ).pipe(Effect.provideService(NetworkAddresses, network));
+          const grant = {
+            version: 1 as const,
+            identity: server.identity,
+            issuer,
+            resource: resourceUrl.href,
+            clientId: client.client_id,
+            registration: config.registration,
+            redirectUri: redirect,
+            discovery: yield* json(metadata),
+            resourceMetadata: yield* json(resource),
+            clientInformation: yield* json(client),
+          };
+          return yield* receipt(
+            discovery.source === undefined
+              ? grant
+              : { ...grant, resourceMetadataSource: discovery.source },
+            tokens,
+          );
+        }),
+      ).pipe(
+        Effect.timeoutOrElse({
+          duration: 180_000,
+          orElse: () =>
+            Effect.fail(
+              boundaryError(
+                "timeout",
+                "not-sent",
+                "OAuth login exceeded its deadline.",
+                "oauth-callback-timeout",
+              ),
+            ),
+        }),
+      );
+    });
   const refresh: McpSdkAuthContract["refresh"] = (server, grant) =>
     Effect.gen(function* () {
       const { metadata, client, tokens } = yield* decode(server, grant);

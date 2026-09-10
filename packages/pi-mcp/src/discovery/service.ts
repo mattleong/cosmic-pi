@@ -1,4 +1,8 @@
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+import { McpActivity } from "../activity/service.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
@@ -10,29 +14,23 @@ import type { McpResolvedConfig } from "../config/model.ts";
 import type { McpOperation } from "../connection/model.ts";
 import { McpConnections } from "../connection/service.ts";
 import {
-  McpPromptMetadataSchema,
-  McpResourceMetadataSchema,
-  McpTemplateMetadataSchema,
-  McpToolMetadataSchema,
+  type McpDiscoveryQueryResult,
   type McpDiscoveryContract,
   type McpDiscoveryRequest,
   type McpMetadataSnapshot,
 } from "./model.ts";
-import {
-  discoveryPage,
-  emptyCursorState,
-  freezeMetadata,
-  listMetadata,
-  metadataBudget,
-  type McpCursorState,
-} from "./pagination.ts";
+import { discoveryPage, emptyCursorState, type McpCursorState } from "./pagination.ts";
 import { isToolAllowed, requireToolAllowed } from "./policy.ts";
+import { cacheVisible, describeCached, queryCached, type McpCacheEvidence } from "./cached.ts";
+import { collectMetadata } from "./collect.ts";
+import { discoveryNotices } from "./diagnostics.ts";
 
 interface DiscoveryState {
   readonly revision: number;
   readonly snapshots: ReadonlyMap<string, McpMetadataSnapshot>;
   readonly consumers: ReadonlyMap<string, string>;
   readonly cursors: McpCursorState;
+  readonly evidence: ReadonlyMap<string, McpCacheEvidence>;
 }
 const matches = (
   snapshot: McpMetadataSnapshot | undefined,
@@ -45,23 +43,23 @@ const matches = (
 const visibleSnapshots = (state: DiscoveryState, config: McpResolvedConfig) =>
   [...state.snapshots.values()]
     .filter((snapshot) => {
-      const server = config.servers[snapshot.server];
-      return (
-        config.trusted &&
-        config.settings.enabled &&
-        server?.enabled &&
-        server.identity === snapshot.identity
-      );
+      return cacheVisible(snapshot, config);
     })
     .sort((left, right) => left.server.localeCompare(right.server));
 
 const makeDiscovery = Effect.gen(function* () {
   const connections = yield* McpConnections;
+  const activity = yield* McpActivity;
   const state = yield* SynchronizedRef.make<DiscoveryState>({
     revision: 0,
     snapshots: new Map(),
     consumers: new Map(),
     cursors: emptyCursorState(),
+    evidence: new Map(),
+  });
+  const listeners = new Set<() => void>();
+  const changed = Effect.sync(() => {
+    for (const listener of listeners) listener();
   });
   const namespace = `mcp-${(yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16)}-${(yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16)}`;
 
@@ -70,17 +68,20 @@ const makeDiscovery = Effect.gen(function* () {
     SynchronizedRef.update(state, (current) => {
       const snapshots = new Map(current.snapshots);
       const consumers = new Map(current.consumers);
+      const evidence = new Map(current.evidence);
       for (const server of servers) {
         snapshots.delete(server);
         consumers.delete(server);
+        evidence.set(server, { owner: "", state: "invalidated" });
       }
       return {
         ...current,
         snapshots,
         consumers,
+        evidence,
         cursors: { ...current.cursors, entries: new Map() },
       };
-    }),
+    }).pipe(Effect.andThen(changed)),
   );
 
   const expireOwner = (server: string, owner: string) =>
@@ -88,68 +89,30 @@ const makeDiscovery = Effect.gen(function* () {
       const snapshots = new Map(current.snapshots);
       const consumers = new Map(current.consumers);
       if (consumers.get(server) === owner) consumers.delete(server);
-      if (snapshots.get(server)?.owner === owner) snapshots.delete(server);
-      return { ...current, snapshots, consumers };
-    });
+      const evidence = new Map(current.evidence);
+      if (snapshots.get(server)?.owner === owner) {
+        snapshots.delete(server);
+        evidence.set(server, { owner, state: "invalidated" });
+      }
+      if (evidence.get(server)?.owner === owner)
+        evidence.set(server, { owner, state: "invalidated" });
+      return { ...current, snapshots, consumers, evidence };
+    }).pipe(Effect.andThen(changed));
 
-  const fetchSnapshot = (
+  const observing = (operation: McpOperation, phase: "refreshing" | "refresh-failed") =>
+    SynchronizedRef.update(state, (current) => {
+      if (current.consumers.get(operation.binding.server) !== operation.owner) return current;
+      const evidence = new Map(current.evidence);
+      evidence.set(operation.binding.server, { owner: operation.owner, state: phase });
+      return { ...current, evidence };
+    }).pipe(Effect.andThen(changed));
+
+  const collectSnapshot = (
     operation: McpOperation,
   ): Effect.Effect<McpMetadataSnapshot, McpBoundaryError> =>
     Effect.gen(function* () {
-      const budget = metadataBudget();
-      const tools = operation.capabilities.tools
-        ? yield* listMetadata(
-            operation,
-            "tools.list",
-            "tools",
-            McpToolMetadataSchema,
-            (tool) => tool.name,
-            budget,
-          )
-        : [];
-      const resources = operation.capabilities.resources
-        ? yield* listMetadata(
-            operation,
-            "resources.list",
-            "resources",
-            McpResourceMetadataSchema,
-            (resource) => resource.uri,
-            budget,
-          )
-        : [];
-      const templates = operation.capabilities.resources
-        ? yield* listMetadata(
-            operation,
-            "resources.templates",
-            "resourceTemplates",
-            McpTemplateMetadataSchema,
-            (template) => template.uriTemplate,
-            budget,
-          )
-        : [];
-      const prompts = operation.capabilities.prompts
-        ? yield* listMetadata(
-            operation,
-            "prompts.list",
-            "prompts",
-            McpPromptMetadataSchema,
-            (prompt) => prompt.name,
-            budget,
-          )
-        : [];
-      const prepared = yield* Effect.try({
-        try: () =>
-          freezeMetadata(
-            structuredClone({
-              tools: tools.filter((tool) => isToolAllowed(operation.server, tool.name)),
-              resources,
-              templates,
-              prompts,
-            }),
-          ),
-        catch: () =>
-          boundaryError("output-limit", "not-sent", "Unable to prepare MCP metadata snapshot."),
-      });
+      yield* observing(operation, "refreshing");
+      const prepared = yield* collectMetadata(operation);
       const published = yield* operation.commit(
         SynchronizedRef.modify(
           state,
@@ -166,14 +129,46 @@ const makeDiscovery = Effect.gen(function* () {
             });
             const snapshots = new Map(current.snapshots);
             snapshots.set(snapshot.server, snapshot);
-            return [snapshot, { ...current, revision: snapshot.revision, snapshots }];
+            const evidence = new Map(current.evidence);
+            evidence.delete(snapshot.server);
+            return [snapshot, { ...current, revision: snapshot.revision, snapshots, evidence }];
           },
         ),
       );
+      yield* changed;
       return published === undefined
         ? yield* boundaryError("stale", "not-sent", "MCP metadata owner has expired.")
         : published;
-    }).pipe(Effect.withSpan("pi-mcp.discovery.refresh"));
+    }).pipe(
+      Effect.onError(() => observing(operation, "refresh-failed")),
+      Effect.withSpan("pi-mcp.discovery.refresh"),
+    );
+
+  const fetchSnapshot = (operation: McpOperation) =>
+    Effect.gen(function* () {
+      const handle = yield* activity.begin({
+        operation: "refresh",
+        server: operation.binding.server,
+      });
+      yield* activity.update(handle, { phase: "refreshing" });
+      return yield* collectSnapshot(operation).pipe(
+        Effect.onExit((exit) => {
+          const error = Exit.isFailure(exit)
+            ? Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+            : undefined;
+          return activity.finish(
+            handle,
+            Exit.isSuccess(exit)
+              ? { status: "done" }
+              : error
+                ? error.reason === undefined
+                  ? { status: "failed", kind: error.kind }
+                  : { status: "failed", kind: error.kind, reason: error.reason }
+                : { status: "cancelled" },
+          );
+        }),
+      );
+    });
 
   const watch = (operation: McpOperation): Effect.Effect<void, McpBoundaryError> =>
     Effect.uninterruptibleMask(() =>
@@ -230,7 +225,7 @@ const makeDiscovery = Effect.gen(function* () {
   ) =>
     SynchronizedRef.modifyEffect(state, (current) =>
       Effect.try({
-        try: (): readonly [Schema.Json, DiscoveryState] => {
+        try: (): readonly [McpDiscoveryQueryResult, DiscoveryState] => {
           const snapshots = targeted === undefined ? visibleSnapshots(current, config) : [targeted];
           if (targeted !== undefined && current.snapshots.get(targeted.server) !== targeted)
             throw boundaryError(
@@ -286,7 +281,7 @@ const makeDiscovery = Effect.gen(function* () {
                   .sort()
               : [];
           return [
-            { page: result.data, undiscovered },
+            { data: { page: result.data, undiscovered }, notices: discoveryNotices(snapshots) },
             { ...current, cursors: result.state },
           ];
         },
@@ -334,7 +329,9 @@ const makeDiscovery = Effect.gen(function* () {
               return yield* Effect.fail(
                 boundaryError("not-found", "not-sent", "MCP tool was not found."),
               );
-            return yield* operation.commit(Effect.succeed(tool));
+            return yield* operation.commit(
+              Effect.succeed({ data: tool, notices: discoveryNotices([snapshot]) }),
+            );
           }
           const config = yield* connections.config;
           return yield* operation
@@ -350,11 +347,58 @@ const makeDiscovery = Effect.gen(function* () {
     ensure,
     refresh,
     query,
+    subscribeChanges: (listener) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          listeners.add(listener);
+        }),
+        () =>
+          Effect.sync(() => {
+            listeners.delete(listener);
+          }),
+      ),
+    cached: (request) =>
+      Effect.gen(function* () {
+        const config = yield* connections.config;
+        return yield* SynchronizedRef.modifyEffect(state, (current) =>
+          Effect.try({
+            try: () => {
+              const result = queryCached(
+                request,
+                config,
+                current.snapshots,
+                current.evidence,
+                current.cursors,
+                namespace,
+              );
+              return [result.page, { ...current, cursors: result.cursors }] as const;
+            },
+            catch: (error) =>
+              error instanceof McpBoundaryError
+                ? error
+                : boundaryError("protocol", "not-sent", "MCP cached query is unavailable."),
+          }),
+        );
+      }),
+    cachedDetail: (ref) =>
+      Effect.gen(function* () {
+        const config = yield* connections.config;
+        const current = yield* SynchronizedRef.get(state);
+        return yield* Effect.try({
+          try: () => describeCached(ref, config, current.snapshots),
+          catch: (error) =>
+            error instanceof McpBoundaryError
+              ? error
+              : boundaryError("protocol", "not-sent", "MCP cached detail is unavailable."),
+        });
+      }),
     known: Effect.gen(function* () {
       const config = yield* connections.config;
       return visibleSnapshots(yield* SynchronizedRef.get(state), config).map((snapshot) => ({
         server: snapshot.server,
         revision: snapshot.revision,
+        support: snapshot.support,
+        diagnostics: snapshot.diagnostics,
         tools: snapshot.tools.length,
         resources: snapshot.resources.length,
         templates: snapshot.templates.length,

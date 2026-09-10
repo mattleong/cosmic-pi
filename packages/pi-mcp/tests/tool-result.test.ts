@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -36,6 +36,69 @@ const event = (details: McpGatewayReply, toolCallId = "call"): ToolResultEvent =
 });
 
 describe("owned MCP error delivery", () => {
+  it.effect(
+    "rendering preserves the machine envelope, native images and receipt identity without another execution",
+    () =>
+      Effect.gen(function* () {
+        const receipts = makeMcpErrorReceipts();
+        const owner = Symbol();
+        receipts.activate(owner);
+        const image = {
+          type: "image" as const,
+          mimeType: "image/png",
+          data: "existing-image-bytes",
+        };
+        let executions = 0;
+        const tool = buildMcpTool({
+          owner,
+          receipts,
+          execute: () => {
+            executions++;
+            return Promise.resolve({ reply: failure, images: [image] });
+          },
+        });
+        const result = yield* Effect.tryPromise(() =>
+          tool.execute(
+            "call",
+            { action: "tools.call", server: "docs", tool: "lookup" },
+            undefined,
+            undefined,
+            unusedContext,
+          ),
+        );
+        const serialized = serialize(result);
+        // SAFETY: Only these two semantic theme methods are consumed by this card fixture.
+        const theme = {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        } as Theme;
+        const context = {
+          args: {},
+          toolCallId: "call",
+          invalidate: () => undefined,
+          lastComponent: undefined,
+          state: {},
+          cwd: "/project",
+          executionStarted: true,
+          argsComplete: true,
+          isPartial: false,
+          expanded: false,
+          showImages: true,
+          isError: true,
+        };
+        for (const expanded of [false, true, false]) {
+          tool.renderCall!({}, theme, context).render(60);
+          tool.renderResult!(result, { expanded, isPartial: false }, theme, context).render(60);
+        }
+        expect(executions).toBe(1);
+        expect(serialize(result)).toBe(serialized);
+        expect(result.details).toBe(failure);
+        expect(result.content[0]).toEqual({ type: "text", text: serialize(failure) });
+        expect(result.content[1]).toBe(image);
+        expect(receipts.apply(event(result.details))).toEqual({ isError: true });
+      }),
+  );
+
   it("projects diagnostic reasons without exposing even typed exception messages", () => {
     for (const reason of [
       undefined,
@@ -57,9 +120,15 @@ describe("owned MCP error delivery", () => {
     }
   });
 
-  it.effect(
+  it.effect.each([
+    failure,
+    mcpFailureReply(
+      "tools.search",
+      boundaryError("protocol", "completed", "private-token", "rpc-invalid-params"),
+    ),
+  ])(
     "patches an actual owned execute result once without replacing bounded details or prior content",
-    () =>
+    (reply) =>
       Effect.gen(function* () {
         const receipts = makeMcpErrorReceipts();
         const owner = Symbol();
@@ -67,7 +136,7 @@ describe("owned MCP error delivery", () => {
         const tool = buildMcpTool({
           owner,
           receipts,
-          execute: () => Promise.resolve({ reply: failure, images: [] }),
+          execute: () => Promise.resolve({ reply, images: [] }),
         });
         const result = yield* Effect.tryPromise(() =>
           tool.execute("call", {}, undefined, undefined, unusedContext),
@@ -76,9 +145,14 @@ describe("owned MCP error delivery", () => {
         const patch = receipts.apply(original);
         expect({ ...original, ...patch }).toMatchObject({
           isError: true,
-          details: failure,
+          details: reply,
           content: original.content,
         });
+        expect(result.details).toBe(reply);
+        if (reply.resultId === undefined) {
+          expect(result.details.resultId).toBeUndefined();
+          expect(serialize(result)).not.toMatch(/private-token|existing result|result\.read/);
+        }
         expect(patch).toEqual({ isError: true });
         expect(receipts.apply(original)).toBeUndefined();
       }),

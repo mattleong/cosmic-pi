@@ -57,9 +57,13 @@ const sdk: McpSdkAuthContract = {
   refresh: (_server, value) => Effect.succeed(value),
   token: () => Effect.succeed("private-token"),
 };
-const make = (store: McpCredentialStoreContract, auth: McpSdkAuthContract = sdk) =>
+const make = (
+  store: Omit<McpCredentialStoreContract, "mutation"> &
+    Partial<Pick<McpCredentialStoreContract, "mutation">>,
+  auth: McpSdkAuthContract = sdk,
+) =>
   makeMcpAuth.pipe(
-    Effect.provideService(McpCredentialStore, store),
+    Effect.provideService(McpCredentialStore, { mutation: () => Effect.succeed("idle"), ...store }),
     Effect.provideService(McpSdkAuth, auth),
   );
 
@@ -72,7 +76,7 @@ describe("user-only authentication ownership", () => {
         write: () => forbidden,
         remove: () => forbidden,
       });
-      expect(yield* auth.status(server("1"))).toEqual({ state: "required" });
+      expect(yield* auth.status(server("1"))).toEqual({ state: "unchecked" });
       const env: McpEffectiveServer = {
         ...server("1"),
         definition: {
@@ -83,7 +87,7 @@ describe("user-only authentication ownership", () => {
           auth: { type: "env", env: "PI_MCP_MUST_NOT_READ" },
         },
       };
-      expect(yield* auth.status(env)).toEqual({ state: "required" });
+      expect(yield* auth.status(env)).toEqual({ state: "unchecked" });
     }),
   );
   it.effect(
@@ -147,6 +151,7 @@ describe("user-only authentication ownership", () => {
         const release = yield* Deferred.make<void>();
         let refreshes = 0;
         const store: McpCredentialStoreContract = {
+          mutation: () => Effect.succeed("idle"),
           read: () => Effect.sync(() => stored),
           write: (_identity, value) =>
             Effect.sync(() => {
@@ -311,6 +316,7 @@ describe("user-only authentication ownership", () => {
           write: (identity, value) =>
             encodeGrant(value).pipe(Effect.flatMap((encoded) => native.write(identity, encoded))),
           remove: native.remove,
+          mutation: native.mutation,
         });
         const login = yield* auth.login(currentServer, ui).pipe(Effect.result, Effect.forkScoped);
         yield* Deferred.await(entered);
@@ -347,6 +353,83 @@ describe("user-only authentication ownership", () => {
       expect(started).toBe(false);
     }),
   );
+  it.effect("publishes ready only from the exact still-current outer login receipt", () =>
+    Effect.gen(function* () {
+      const current = server("a");
+      const auth = yield* make({
+        read: () => Effect.succeed(undefined),
+        write: () => Effect.void,
+        remove: () => Effect.void,
+      });
+      const first = yield* auth.login(current, ui);
+      expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
+      yield* auth.completeLogin(current, { state: "ready" });
+      expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
+      yield* auth.completeLogin(current, first);
+      expect(yield* auth.status(current)).toEqual({ state: "ready" });
+      const second = yield* auth.login(current, ui);
+      yield* auth.finalizationFailed(current, second);
+      expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
+      yield* auth.completeLogin(current, second);
+      expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
+      const third = yield* auth.login(current, ui);
+      yield* auth.reject(current);
+      yield* auth.completeLogin(current, third);
+      expect(yield* auth.status(current)).toEqual({ state: "required" });
+      const fourth = yield* auth.login(current, ui);
+      yield* auth.revoke;
+      yield* auth.completeLogin(current, fourth);
+      expect(yield* auth.status(current)).toEqual({ state: "unchecked" });
+    }),
+  );
+
+  it.effect("does not let an older credential check erase current-owner auth rejection", () =>
+    Effect.gen(function* () {
+      const current = server("b");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const auth = yield* make(
+        {
+          read: () => Effect.succeed(grant(current.identity)),
+          write: () => Effect.void,
+          remove: () => Effect.void,
+        },
+        {
+          ...sdk,
+          token: () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as("PRIVATE_TOKEN"),
+            ),
+        },
+      );
+      const access = yield* auth.access(current).pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* auth.reject(current);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(access);
+      expect(yield* auth.status(current)).toEqual({ state: "required" });
+    }),
+  );
+
+  it.effect("reports native mutation blocking without an additional credential read", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const auth = yield* make({
+        read: () =>
+          Effect.sync(() => {
+            reads++;
+            return undefined;
+          }),
+        write: () => Effect.void,
+        remove: () => Effect.void,
+        mutation: () => Effect.succeed("pending"),
+      });
+      expect(yield* auth.status(server("d"))).toEqual({ state: "unavailable" });
+      expect(reads).toBe(0);
+    }),
+  );
+
   it.effect("versioned grants round-trip and malformed records redact rejected secrets", () =>
     Effect.gen(function* () {
       const value = grant("6".repeat(64));

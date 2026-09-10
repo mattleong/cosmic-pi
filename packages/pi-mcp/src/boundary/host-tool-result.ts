@@ -1,5 +1,6 @@
 import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { McpBoundaryError } from "../client/errors.ts";
+import { mcpDiagnostic } from "../client/diagnostics.ts";
 import { MCP_INLINE_BYTES, type McpGatewayReply } from "../tools/model.ts";
 
 export type McpActivationMarker = symbol;
@@ -55,7 +56,7 @@ const failureMessage = (error: McpBoundaryError): string => {
     case "oauth-resource-metadata-invalid":
       return "OAuth protected-resource discovery failed. Missing-metadata compatibility cannot bypass invalid metadata or unexpected HTTP responses.";
     default:
-      return `MCP operation failed: ${error.kind}.`;
+      return mcpDiagnostic(error).explanation;
   }
 };
 

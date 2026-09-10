@@ -72,6 +72,9 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 ## User commands
 
 ```text
+/mcp
+/mcp browse [ID]
+/mcp result ID
 /mcp status
 /mcp connect ID
 /mcp disconnect ID
@@ -86,7 +89,15 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 /mcp-settings set-settings global|project JSON
 ```
 
-Bare `/mcp` means status. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, bindings, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project server entry reveals the global entry again; use `{ "enabled": false }` to keep it disabled.
+Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, bindings, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project server entry reveals the global entry again; use `{ "enabled": false }` to keep it disabled.
+
+### Dashboard and cached metadata
+
+The TUI dashboard shows server scope, transport, connection state, observed auth state, active/queued work, and permitted cached counts. Opening it does not connect, discover metadata, check credentials, or allocate retained results. Enter inspects a server; `a` opens its action menu. Actions show blocked reasons and recheck the displayed target after confirmation. Sign in and Connect are separate actions.
+
+`/mcp browse [ID]` searches all permitted cached tools, resources, templates, and prompts in the selected scope. Use `[` and `]` to change family, `s` to filter servers, and `n`/`p` for pages. Discovery is an explicit server action and may connect. Browsing never invokes tools, reads resources, retrieves prompts, or follows links and schema references. Refresh state remains visible beside retained metadata; revoked content disappears. If an advertised listing method returns JSON-RPC `-32601` on its first page, only that catalog becomes unsupported. Working catalogs remain available, with warnings explaining the unavailable family. Auth, timeout, cleanup, malformed results, and later-page failures do not get this fallback. These views use Cosmic UI navigation, responsive list/detail layouts, and configured key hints. `?` shows navigation help. Browse and result views are TUI-only.
+
+A keyed MCP footer contribution summarizes connected, active, queued, and needs-attention counts. Activity shows actual shared sign-in, connection, and metadata work, including work initiated through Code Mode. It does not create jobs for idle connections or every tool call. Failures retain bounded local explanations. Inspecting Activity opens MCP details, not authentication or replay.
 
 ## OAuth
 
@@ -123,9 +134,15 @@ Protected-resource metadata is required by default. For a legacy server that pub
 
 This fallback applies only when every protected-resource discovery response is `404` or `410`. It uses the configured issuer and `resource`, or the server URL when `resource` is absent. It never replaces valid metadata, bypasses a binding mismatch, or recovers from malformed responses, other HTTP errors, network failures, denied redirects, or timeouts. An issuer pin alone does not enable compatibility. Stored grants record configured metadata provenance; removing the opt-in or changing the issuer/resource prevents their reuse. Discovery failures expose fixed diagnostic reasons, not server response text.
 
-Only an explicit user `/mcp auth ID` command can start login. Local login owns an IPv4 loopback listener, normally `http://127.0.0.1:<ephemeral-port>/callback`, and opens the browser. A configured redirect must be a supported `http://127.0.0.1` callback. `/mcp auth ID --manual` requires a configured fixed-port redirect and collects the full callback URL in a user-only dialog. It does not start a local listener. The provider must support that registered redirect; manual mode is not a promise of universal remote-terminal login.
+Only an explicit user `/mcp auth ID` command or dashboard Sign in action can start login. Local login owns an IPv4 loopback listener, normally `http://127.0.0.1:<ephemeral-port>/callback`, and opens the browser. A configured redirect must be a supported `http://127.0.0.1` callback. `/mcp auth ID --manual` requires a configured fixed-port redirect and collects the full callback URL in a user-only dialog. It does not start a local listener. The provider must support that registered redirect; manual mode is not a promise of universal remote-terminal login.
 
-TUI and supported RPC dialogs can run login. Print/JSON mode can check an existing grant but cannot prompt or start a listener. Ordinary gateway and Code Mode calls never open login UI. Codes, callback URLs, and tokens are not tool inputs or model results.
+TUI and supported RPC dialogs can run login. The TUI panel reports actual phases, elapsed time, and the current enforced deadline. Escape cancels that exact attempt and joins owned cleanup. Reopen browser reuses the same validated URL without registering again or extending its deadline. Repeated sign-in requests do not queue another login. Browser-open failure leaves an explicit recovery action.
+
+RPC uses stock private dialogs, never custom overlays. Manual handoff shows the authorization URL in a private confirmation body, followed by callback input; prompt titles are fixed and nonsecret. Local RPC offers explicit reopen/cancel choices while awaiting approval. Print/JSON mode can check an existing grant but cannot prompt or start a listener. Ordinary gateway and Code Mode calls never open login UI. Authorization URLs, codes, callback URLs, and tokens do not enter tool replies, public progress, Activity, or footer data.
+
+Auth status is observational. `unchecked` means credentials have not been checked in this activation; `required` means missing/rejected credentials or explicit logout; `ready` means the latest applicable check or complete login succeeded; `unavailable` means auth could not be checked; `none` means no managed authentication. Environment-auth readiness means a credential is available, not that a user signed in. Generic permission denial does not invalidate auth evidence. None of these states proves a live connection.
+
+The browser callback page only acknowledges receipt. Pi reports login success after credential persistence and the outer auth fence settle. Cancellation does not log out or undo a native Keychain write. Unresolved mutations remain blocked, and saved credentials followed by failed finalization get a partial-completion explanation rather than success.
 
 The SDK handles discovery, registration, PKCE, exchange, and refresh. Application policy checks issuer/resource binding, callback state and issuer, URL schemes, redirects, and resolved addresses. OAuth HTTP connections use the address set already approved by policy, with no second DNS lookup. Remote endpoints require HTTPS; local HTTP is limited to explicitly configured loopback origins. Discovered private addresses require an explicitly trusted origin. Tokens are not forwarded across redirects.
 
@@ -161,10 +178,16 @@ Nested MCP calls bypass Pi `tool_call`/`tool_result` middleware, unrelated appro
 Replies carry `action`, `outcome`, `isError`, `data`, optional `resultId`, and `notices`. Execution certainty is separate from success:
 
 - `not-sent`: the operation was not dispatched.
-- `completed`: the server result was accepted, including a tool-reported failure.
+- `completed`: the operation completed, possibly with a server-reported error or a local validation failure.
 - `unknown`: dispatch may have happened, but completion is unconfirmed.
 
 Check both `outcome` and `isError`. Output validation or projection can fail after the remote operation completed. Cancellation, deadlines, and cleanup cannot roll back server side effects. Never replay an unknown or completed operation just to recover output. Use `result.read` when a result ID is present; follow its returned `next` offset rather than calculating byte offsets. Retrieval preserves the original operation's outcome and error status under `data.origin`.
+
+HTTP and stdio JSON-RPC errors retain fixed diagnostic reasons such as `rpc-method-not-found` or `rpc-invalid-params`, rather than appearing as transport failures. Raw server messages and error data stay private. A completed failure does not prove that output was retained; error guidance does not offer retained-output recovery without a result ID.
+
+The owned gateway has compact call/result cards under the existing code-preview shell. Expansion is display-only and preserves the original JSON, images, error receipts, and execution certainty. Unknown completion, cleanup, truncation, and originating failures remain visible when collapsed.
+
+`/mcp result ID` opens an authorized local retained-output viewer. Navigation follows returned offsets and preserves the originating outcome. Eviction or revocation withdraws displayed text; recovery never reruns the source operation. There is no new result-history store.
 
 Accepted results are retained before inline projection. Disconnect preserves completed results. Disable, reconfigure, trust loss, logout, eviction, and session replacement revoke them. A retention failure explicitly says the output is not recoverable. Oversized wire responses may never reach retention.
 
@@ -191,7 +214,7 @@ The macOS real-server smoke passed through `McpExecution` with protocol `2025-11
 - `@modelcontextprotocol/server-filesystem@2026.8.31`: 14 tools, read/write, input/output validation, and bounded recovery of an 80 KB retained result.
 - `@playwright/mcp@0.0.80`: 24 tools, isolated browser navigation to an owned local page, snapshot, evaluation, and close. Its Playwright manifest was `1.63.0-alpha-2026-08-31`, with Chromium `153.0.8010.12`, revision `1243`.
 
-The smoke verified cleanup of owned processes, temporary installation, browser, and profile. Owned HTTP/OAuth fixtures cover cases that do not need third-party accounts. This evidence does not certify every SDK-negotiated protocol, server, OAuth provider, or OS. The full workspace and packed-install gates also passed. The [plan](../../docs/plans/pi-mcp.md#acceptance-record) records the acceptance checks.
+The smoke verified cleanup of owned processes, temporary installation, browser, and profile. Owned HTTP/OAuth fixtures cover cases that do not need third-party accounts. This evidence does not certify every SDK-negotiated protocol, server, OAuth provider, or OS. The original MCP acceptance also passed the workspace and packed-install gates. The [implementation plan](../../docs/plans/pi-mcp.md#acceptance-record) records that evidence; the [UI upgrade record](../../docs/plans/pi-mcp-ui.md#implementation-record) tracks this change's checks and any baseline failures.
 
 ```sh
 pnpm --filter pi-mcp test

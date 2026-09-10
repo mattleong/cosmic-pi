@@ -1,5 +1,6 @@
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpReply } from "../client/model.ts";
 import type { McpDataRequest, McpGatewayExecution, McpProjectionOptions } from "../tools/model.ts";
@@ -103,6 +104,8 @@ export interface McpResultsContract {
     authorize: McpResultAuthorize,
   ) => Effect.Effect<McpGatewayExecution, McpBoundaryError>;
   readonly revoke: (server?: string) => Effect.Effect<void>;
+  /** Synchronous withdrawal signal after a committed store change; reads never signal. */
+  readonly subscribeChanges: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export const originJson = (origin: McpResultOrigin): Schema.Json => ({ ...origin });

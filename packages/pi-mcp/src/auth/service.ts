@@ -14,6 +14,7 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import type { McpAuthContract, McpAuthStatus } from "./model.ts";
 import { authFailure, oauthConfig } from "./policy.ts";
+import { authProgress } from "./progress.ts";
 
 interface Authority {
   readonly permit: Semaphore.Semaphore;
@@ -54,11 +55,22 @@ export const makeMcpAuth = Effect.gen(function* () {
   let sessionGeneration = 0;
   let revoked = Deferred.makeUnsafe<void>();
   const observed = new Map<string, McpAuthStatus>();
+  const evidenceRevision = new Map<string, number>();
+  const pendingLogins = new Map<
+    string,
+    {
+      readonly status: McpAuthStatus;
+      readonly session: number;
+      readonly generation: number;
+      readonly evidence: number | undefined;
+    }
+  >();
   const revoke = Effect.sync(() => {
     sessionGeneration++;
     const previous = revoked;
     revoked = Deferred.makeUnsafe<void>();
     observed.clear();
+    pendingLogins.clear();
     Deferred.doneUnsafe(previous, Effect.void);
   });
   yield* Effect.addFinalizer(() =>
@@ -71,22 +83,33 @@ export const makeMcpAuth = Effect.gen(function* () {
   );
   const checkServer = (server: McpEffectiveServer) =>
     !disposed && server.enabled && server.definition ? Effect.void : Effect.fail(stale());
-  const owned = <A>(server: McpEffectiveServer, work: Effect.Effect<A, McpBoundaryError>) =>
+  const owned = <A>(
+    server: McpEffectiveServer,
+    work: Effect.Effect<A, McpBoundaryError>,
+    publishReady = true,
+  ) =>
     Effect.suspend(() => {
       const signal = revoked;
       const generation = sessionGeneration;
-      const serverSignal = authorityFor(server.identity).revoked;
+      const authority = authorityFor(server.identity);
+      const serverSignal = authority.revoked;
+      const serverGeneration = authority.generation;
+      const evidence = evidenceRevision.get(server.identity);
+      const current = () =>
+        generation === sessionGeneration &&
+        !disposed &&
+        serverGeneration === authority.generation &&
+        evidence === evidenceRevision.get(server.identity);
       const cancelled = Effect.raceFirst(Deferred.await(signal), Deferred.await(serverSignal));
       return Effect.raceFirst(work, cancelled.pipe(Effect.andThen(Effect.fail(stale())))).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
-            if (generation === sessionGeneration && !disposed)
-              observed.set(server.identity, { state: "ready" });
+            if (current() && publishReady) observed.set(server.identity, { state: "ready" });
           }),
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            if (generation === sessionGeneration && !disposed)
+            if (current() && error.kind !== "cancelled" && error.kind !== "stale")
               observed.set(server.identity, {
                 state: error.kind === "auth-required" ? "required" : "unavailable",
               });
@@ -141,6 +164,7 @@ export const makeMcpAuth = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* checkServer(server);
         if (!oauthConfig(server)) return yield* authFailure();
+        pendingLogins.delete(server.identity);
         const authority = authorityFor(server.identity);
         const generation = authority.generation;
         const session = sessionGeneration;
@@ -149,22 +173,54 @@ export const makeMcpAuth = Effect.gen(function* () {
         return yield* Effect.gen(function* () {
           if (!current()) return yield* stale();
           // Probe secure storage before starting a browser or sending registration traffic.
+          yield* authProgress(ui, { phase: "storage" });
           yield* store.read(server.identity);
           if (!current()) return yield* stale();
           const grant = yield* sdk.login(server, ui);
           if (!current()) return yield* stale();
-          yield* store.write(server.identity, grant).pipe(
+          yield* authProgress(ui, { phase: "saving" });
+          const status: McpAuthStatus = Object.freeze({ state: "ready" });
+          let saved = false;
+          // The native wait stays interruptible. A confirmed write and its local
+          // receipt commit together before cancellation can lose that evidence.
+          yield* Effect.uninterruptibleMask((restore) =>
+            restore(store.write(server.identity, grant)).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  saved = true;
+                  if (!current()) {
+                    authority.blocked = true;
+                    return;
+                  }
+                  authority.blocked = false;
+                  pendingLogins.set(server.identity, {
+                    status,
+                    session,
+                    generation,
+                    evidence: evidenceRevision.get(server.identity),
+                  });
+                  observed.set(server.identity, { state: "unavailable" });
+                }),
+              ),
+            ),
+          ).pipe(
             Effect.ensuring(
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 if (!current()) authority.blocked = true;
+                const mutation = yield* store.mutation(server.identity);
+                yield* authProgress(ui, {
+                  phase: saved ? "finalizing" : "saving",
+                  credentialsSaved: saved,
+                  mutation,
+                });
               }),
             ),
           );
           if (!current()) return yield* stale();
-          authority.blocked = false;
-          return { state: "ready" } as const;
+          return status;
         }).pipe(authority.permit.withPermits(1));
       }),
+      false,
     );
   const logout: McpAuthContract["logout"] = (server) =>
     Effect.suspend(() => {
@@ -173,6 +229,7 @@ export const makeMcpAuth = Effect.gen(function* () {
           boundaryError("unsupported", "not-sent", "Only stored OAuth grants support logout."),
         );
       observed.set(server.identity, { state: "required" });
+      pendingLogins.delete(server.identity);
       const authority = authorityFor(server.identity);
       authority.generation++;
       authority.blocked = true;
@@ -183,14 +240,60 @@ export const makeMcpAuth = Effect.gen(function* () {
       return store.remove(server.identity).pipe(authority.permit.withPermits(1));
     });
   const status: McpAuthContract["status"] = (server) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       if (disposed || !server.enabled || !server.definition) return { state: "unavailable" };
       if (server.definition.transport === "stdio" || server.definition.auth.type === "none")
         return { state: "none" };
+      if (
+        server.definition.auth.type === "oauth" &&
+        (yield* store.mutation(server.identity)) !== "idle"
+      )
+        return { state: "unavailable" };
       if (authorities.get(server.identity)?.blocked) return { state: "required" };
-      return observed.get(server.identity) ?? { state: "required" };
+      return observed.get(server.identity) ?? { state: "unchecked" };
     });
-  return { access, login, logout, status, revoke } satisfies McpAuthContract;
+  const reject: McpAuthContract["reject"] = (server) =>
+    Effect.sync(() => {
+      if (disposed) return;
+      evidenceRevision.set(server.identity, (evidenceRevision.get(server.identity) ?? 0) + 1);
+      pendingLogins.delete(server.identity);
+      observed.set(server.identity, { state: "required" });
+    });
+  const finishLogin = (server: McpEffectiveServer, status: McpAuthStatus, succeeded: boolean) =>
+    Effect.gen(function* () {
+      const mutation = yield* store.mutation(server.identity);
+      const receipt = pendingLogins.get(server.identity);
+      if (
+        !receipt ||
+        receipt.status !== status ||
+        disposed ||
+        receipt.session !== sessionGeneration ||
+        receipt.generation !== authorityFor(server.identity).generation ||
+        receipt.evidence !== evidenceRevision.get(server.identity)
+      )
+        return;
+      pendingLogins.delete(server.identity);
+      observed.set(server.identity, {
+        state:
+          succeeded && mutation === "idle" && !authorityFor(server.identity).blocked
+            ? "ready"
+            : "unavailable",
+      });
+    });
+  const completeLogin: McpAuthContract["completeLogin"] = (server, status) =>
+    finishLogin(server, status, true);
+  const finalizationFailed: McpAuthContract["finalizationFailed"] = (server, status) =>
+    finishLogin(server, status, false);
+  return {
+    access,
+    login,
+    logout,
+    status,
+    revoke,
+    reject,
+    completeLogin,
+    finalizationFailed,
+  } satisfies McpAuthContract;
 });
 export class McpAuth extends Context.Service<McpAuth, McpAuthContract>()(
   "pi-mcp/auth/service/McpAuth",

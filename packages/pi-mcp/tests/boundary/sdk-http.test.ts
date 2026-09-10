@@ -21,6 +21,7 @@ import { afterEach, vi } from "vitest";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
 import { startHttpServer, type HttpRequestRecord } from "../fixtures/http-server.ts";
+import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
 
 const Wire = Schema.fromJsonString(
   Schema.Struct({
@@ -115,8 +116,13 @@ const unsupportedErrors = [
     ),
   },
 ];
-const unsupportedResponses = unsupportedErrors.map(({ name, error }) => ({
+const protocolResponses = [
+  ...unsupportedErrors.map((entry) => ({ ...entry, kind: "unsupported", reason: undefined })),
+  ...protocolErrors,
+].map(({ name, error, kind, reason }) => ({
   name,
+  kind,
+  reason,
   response: { error: { code: error.code, message: error.message, data: error.data } },
 }));
 
@@ -147,42 +153,43 @@ describe("scoped SDK HTTP connection", () => {
         });
       }),
   );
-  it.effect.each(unsupportedResponses)("redacts unsupported $name without replay", ({ response }) =>
-    Effect.gen(function* () {
-      let calls = 0;
-      const cleanup: boolean[] = [];
-      const connection = yield* openSdkHttp({
-        url: fakeUrl,
-        ...defaults,
-        onCleanup: (confirmed) => cleanup.push(confirmed),
-        fetch: controlledFetch((_init, message) => {
-          if (message?.method !== "tools/call" || message.id === undefined) return undefined;
-          calls += 1;
-          return Promise.resolve(
-            new Response(serializeMessage({ jsonrpc: "2.0", id: message.id, ...response }), {
-              headers: { "content-type": "application/json" },
-            }),
-          );
-        }),
-      });
-      expect(connection.protocolVersion).toBe(initialized.protocolVersion);
-      const result = yield* connection
-        .request({ action: "tools.call", tool: "unsupported" })
-        .pipe(Effect.result);
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "unsupported", outcome: "completed" },
-      });
-      expect(String(result)).not.toContain("private-");
-      expect(calls).toBe(1);
-      expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
-      yield* connection.close;
-      expect(cleanup).toEqual([true]);
-    }),
+  it.effect.each(protocolResponses)(
+    "classifies and redacts $name without replay",
+    ({ response, kind, reason }) =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const cleanup: boolean[] = [];
+        const connection = yield* openSdkHttp({
+          url: fakeUrl,
+          ...defaults,
+          onCleanup: (confirmed) => cleanup.push(confirmed),
+          fetch: controlledFetch((_init, message) => {
+            if (message?.method !== "tools/list" || message.id === undefined) return undefined;
+            calls += 1;
+            return Promise.resolve(
+              new Response(serializeMessage({ jsonrpc: "2.0", id: message.id, ...response }), {
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          }),
+        });
+        expect(connection.protocolVersion).toBe(initialized.protocolVersion);
+        const result = yield* connection.request({ action: "tools.list" }).pipe(Effect.result);
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { kind, outcome: "completed" },
+        });
+        if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
+        expect(String(result)).not.toContain("private-");
+        expect(calls).toBe(1);
+        expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
+        yield* connection.close;
+        expect(cleanup).toEqual([true]);
+      }),
   );
-  it.effect.each(unsupportedResponses)(
+  it.effect.each(protocolResponses)(
     "cleans up initialization rejected for $name",
-    ({ response }) =>
+    ({ response, kind, reason }) =>
       Effect.gen(function* () {
         let calls = 0;
         const cleanup: boolean[] = [];
@@ -202,8 +209,9 @@ describe("scoped SDK HTTP connection", () => {
         }).pipe(Effect.result);
         expect(result).toMatchObject({
           _tag: "Failure",
-          failure: { kind: "unsupported", outcome: "completed" },
+          failure: { kind, outcome: "completed" },
         });
+        if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
         expect(String(result)).not.toContain("private-");
         expect(calls).toBe(1);
         expect(cleanup).toEqual([true]);
@@ -330,7 +338,7 @@ describe("scoped SDK HTTP connection", () => {
           connection.request({ action: "tools.call", tool: "denied" }),
         );
         expect(Result.isFailure(result) && result.failure).toMatchObject({
-          kind: "auth-required",
+          kind: status === 401 ? "auth-required" : "denied",
           outcome: "unknown",
         });
         expect(calls).toBe(1);

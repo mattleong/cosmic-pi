@@ -24,6 +24,7 @@ import { McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpConnection } from "../../src/client/model.ts";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
+import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
 import {
   makeSdkStdioTransport,
   SdkStdioTransportError,
@@ -370,64 +371,76 @@ const unsupportedErrors = [
   },
 ];
 
-const unsupportedResponses = unsupportedErrors.map(({ name, error }) => ({
+const protocolResponses = [
+  ...unsupportedErrors.map((entry) => ({ ...entry, kind: "unsupported", reason: undefined })),
+  ...protocolErrors,
+].map(({ name, error, kind, reason }) => ({
   name,
+  kind,
+  reason,
   response: { error: { code: error.code, message: error.message, data: error.data } },
 }));
 
-it.effect.each(unsupportedResponses)("redacts unsupported $name without replay", ({ response }) =>
-  Effect.gen(function* () {
-    const fake = yield* makeProcess;
-    vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
-      Effect.succeed({
-        ...fake.handle,
-        write: (bytes) =>
-          fake.handle.write(bytes).pipe(
-            Effect.andThen(
-              Effect.gen(function* () {
-                const message = deserializeMessage(new TextDecoder().decode(bytes));
-                if (!("id" in message) || !("method" in message) || message.method !== "tools/call")
-                  return;
-                yield* Queue.offer(
-                  fake.output,
-                  new TextEncoder().encode(
-                    serializeMessage({
-                      jsonrpc: "2.0",
-                      id: message.id,
-                      ...response,
-                    }),
-                  ),
-                );
-              }),
+it.effect.each(protocolResponses)(
+  "classifies and redacts $name without replay",
+  ({ response, kind, reason }) =>
+    Effect.gen(function* () {
+      const fake = yield* makeProcess;
+      vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
+        Effect.succeed({
+          ...fake.handle,
+          write: (bytes) =>
+            fake.handle.write(bytes).pipe(
+              Effect.andThen(
+                Effect.gen(function* () {
+                  const message = deserializeMessage(new TextDecoder().decode(bytes));
+                  if (
+                    !("id" in message) ||
+                    !("method" in message) ||
+                    message.method !== "tools/call"
+                  )
+                    return;
+                  yield* Queue.offer(
+                    fake.output,
+                    new TextEncoder().encode(
+                      serializeMessage({
+                        jsonrpc: "2.0",
+                        id: message.id,
+                        ...response,
+                      }),
+                    ),
+                  );
+                }),
+              ),
             ),
-          ),
-      }),
-    );
-    const cleanup: boolean[] = [];
-    const connection = yield* openSdkStdio({
-      ...options,
-      onCleanup: (confirmed) => cleanup.push(confirmed),
-    });
-    expect(connection.protocolVersion).toBe("2025-11-25");
-    const result = yield* call(connection, "unsupported").pipe(Effect.result);
-    expect(result).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "unsupported", outcome: "completed" },
-    });
-    expect(String(result)).not.toContain("private-");
-    expect(
-      fake.writes.filter((message) => "method" in message && message.method === "tools/call"),
-    ).toHaveLength(1);
-    expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
-    yield* connection.close;
-    expect(cleanup).toEqual([true]);
-    expect(fake.state.readers).toBe(0);
-  }),
+        }),
+      );
+      const cleanup: boolean[] = [];
+      const connection = yield* openSdkStdio({
+        ...options,
+        onCleanup: (confirmed) => cleanup.push(confirmed),
+      });
+      expect(connection.protocolVersion).toBe("2025-11-25");
+      const result = yield* call(connection, "unsupported").pipe(Effect.result);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { kind, outcome: "completed" },
+      });
+      if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
+      expect(String(result)).not.toContain("private-");
+      expect(
+        fake.writes.filter((message) => "method" in message && message.method === "tools/call"),
+      ).toHaveLength(1);
+      expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
+      yield* connection.close;
+      expect(cleanup).toEqual([true]);
+      expect(fake.state.readers).toBe(0);
+    }),
 );
 
-it.effect.each(unsupportedResponses)(
+it.effect.each(protocolResponses)(
   "cleans up initialization rejected for $name",
-  ({ response }) =>
+  ({ response, kind, reason }) =>
     Effect.gen(function* () {
       const fake = yield* makeProcess;
       vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
@@ -459,8 +472,9 @@ it.effect.each(unsupportedResponses)(
       }).pipe(Effect.result);
       expect(result).toMatchObject({
         _tag: "Failure",
-        failure: { kind: "unsupported", outcome: "not-sent" },
+        failure: { kind, outcome: "not-sent" },
       });
+      if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
       expect(String(result)).not.toContain("private-");
       expect(
         fake.writes.filter((message) => "method" in message && message.method === "initialize"),

@@ -36,11 +36,13 @@
     "effect": "catalog:",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*",
     "typebox": "catalog:"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
@@ -48,7 +50,8 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "catalog:"
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"

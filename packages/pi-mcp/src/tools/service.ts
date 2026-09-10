@@ -7,13 +7,15 @@ import type * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type { McpAuthStatus, McpLoginUi } from "../auth/model.ts";
 import { McpAuth } from "../auth/service.ts";
+import { authProgress } from "../auth/progress.ts";
 import { JsonSchemaValidator } from "../boundary/schema-validator.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer, McpResolvedConfig } from "../config/model.ts";
-import type { McpOperation } from "../connection/model.ts";
+import type { McpActionBinding, McpOperation } from "../connection/model.ts";
 import { McpConnections } from "../connection/service.ts";
 import type { McpDiscoveryRequest } from "../discovery/model.ts";
 import { McpDiscovery } from "../discovery/service.ts";
+import { discoveryNotices } from "../discovery/diagnostics.ts";
 import {
   decodeGatewayRequest,
   invokeTool,
@@ -36,8 +38,12 @@ export interface McpExecutionContract {
   readonly login: (
     serverId: string,
     ui: McpLoginUi,
+    expected?: McpActionBinding,
   ) => Effect.Effect<McpAuthStatus, McpBoundaryError>;
-  readonly logout: (serverId: string) => Effect.Effect<void, McpBoundaryError>;
+  readonly logout: (
+    serverId: string,
+    expected?: McpActionBinding,
+  ) => Effect.Effect<void, McpBoundaryError>;
 }
 
 interface LocalAuthority {
@@ -70,16 +76,18 @@ export const makeMcpExecution = Effect.gen(function* () {
   // without changing config revision, so they capture this publication epoch.
   const revocations = yield* Ref.make(0);
   yield* connections.subscribeRevocations((_servers, reason) =>
-    Effect.all(
-      [
-        Ref.update(revocations, (generation) => generation + 1),
-        results.revoke(),
-        // withAuth already fences its server. Do not cancel other servers' logins
-        // or erase the ready status just published by the completing login.
-        reason === "auth-transition" ? Effect.void : auth.revoke,
-      ],
-      { discard: true },
-    ),
+    reason === "connection"
+      ? Effect.void
+      : Effect.all(
+          [
+            Ref.update(revocations, (generation) => generation + 1),
+            results.revoke(),
+            // withAuth already fences its server. Do not cancel other servers' logins
+            // or erase the ready status just published by the completing login.
+            reason === "auth-transition" ? Effect.void : auth.revoke,
+          ],
+          { discard: true },
+        ),
   );
   const captureLocal = Effect.gen(function* () {
     const config = yield* connections.config;
@@ -150,6 +158,7 @@ export const makeMcpExecution = Effect.gen(function* () {
     data: Schema.Json,
     captured: LocalAuthority,
     options: McpProjectionOptions,
+    notices: ReadonlyArray<string> = [],
   ) =>
     Effect.gen(function* () {
       const check = Effect.gen(function* () {
@@ -168,6 +177,7 @@ export const makeMcpExecution = Effect.gen(function* () {
         server: "*",
         action,
         reply: { outcome: "completed", result: data },
+        notices,
       });
       yield* check;
       const retention =
@@ -185,16 +195,16 @@ export const makeMcpExecution = Effect.gen(function* () {
       return Effect.gen(function* () {
         const captured = yield* captureLocal;
         yield* requireEnabled(captured.config);
-        const data = yield* discovery.query(input);
-        return yield* projectLocal(input.action, data, captured, options);
+        const result = yield* discovery.query(input);
+        return yield* projectLocal(input.action, result.data, captured, options, result.notices);
       });
     return connections.withOperation(server, {}, (operation) =>
       Effect.gen(function* () {
-        const data = yield* discovery.query(input, operation);
+        const result = yield* discovery.query(input, operation);
         return yield* projectOperation(
           operation,
           input.action,
-          { reply: { outcome: "completed", result: data } },
+          { reply: { outcome: "completed", result: result.data }, notices: result.notices },
           options,
         );
       }),
@@ -216,8 +226,11 @@ export const makeMcpExecution = Effect.gen(function* () {
             ...status,
             servers: status.servers
               .filter((server) => config.trusted || server.scope === "global")
-              .map((server) => ({ ...server })),
-            metadata: known.map((summary) => ({ ...summary })),
+              .map((server) => ({ ...server, blockedReason: server.blockedReason ?? null })),
+            metadata: known.map((summary) => ({
+              ...summary,
+              diagnostics: summary.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+            })),
           };
           return yield* projectLocal(input.action, data, captured, options);
         });
@@ -267,7 +280,13 @@ export const makeMcpExecution = Effect.gen(function* () {
               {
                 reply: {
                   outcome: "completed",
-                  result: { ...status, servers: status.servers.map((server) => ({ ...server })) },
+                  result: {
+                    ...status,
+                    servers: status.servers.map((server) => ({
+                      ...server,
+                      blockedReason: server.blockedReason ?? null,
+                    })),
+                  },
                 },
               },
               options,
@@ -299,12 +318,15 @@ export const makeMcpExecution = Effect.gen(function* () {
                   result: {
                     server: snapshot.server,
                     revision: snapshot.revision,
+                    support: snapshot.support,
+                    diagnostics: snapshot.diagnostics.map((diagnostic) => ({ ...diagnostic })),
                     tools: snapshot.tools.length,
                     resources: snapshot.resources.length,
                     templates: snapshot.templates.length,
                     prompts: snapshot.prompts.length,
                   },
                 },
+                notices: discoveryNotices([snapshot]),
               },
               options,
             );
@@ -348,10 +370,32 @@ export const makeMcpExecution = Effect.gen(function* () {
       );
     });
 
-  const login: McpExecutionContract["login"] = (serverId, ui) =>
-    connections.withAuth(serverId, (server) => auth.login(server, ui));
-  const logout: McpExecutionContract["logout"] = (serverId) =>
-    connections.withAuth(serverId, (server) => auth.logout(server));
+  const login: McpExecutionContract["login"] = (serverId, ui, expected) =>
+    Effect.gen(function* () {
+      let saved:
+        | { readonly server: McpEffectiveServer; readonly status: McpAuthStatus }
+        | undefined;
+      return yield* connections
+        .withAuth(
+          serverId,
+          (server) =>
+            Effect.gen(function* () {
+              const status = yield* auth.login(server, ui);
+              saved = { server, status };
+              yield* authProgress(ui, { phase: "finalizing", credentialsSaved: true });
+              return status;
+            }),
+          expected,
+        )
+        .pipe(
+          Effect.tap((status) => (saved ? auth.completeLogin(saved.server, status) : Effect.void)),
+          Effect.onError(() =>
+            saved ? auth.finalizationFailed(saved.server, saved.status) : Effect.void,
+          ),
+        );
+    });
+  const logout: McpExecutionContract["logout"] = (serverId, expected) =>
+    connections.withAuth(serverId, (server) => auth.logout(server), expected);
   return {
     execute,
     login,

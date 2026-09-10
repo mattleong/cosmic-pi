@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
@@ -22,6 +23,7 @@ import type { McpEffectiveServer, McpResolvedConfig } from "../../src/config/mod
 import { McpConfigStore } from "../../src/config/store.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
+import type { McpDiscoveryQueryResult } from "../../src/discovery/model.ts";
 
 const server = (
   id: string,
@@ -62,7 +64,7 @@ const defaultRoute: Route = (request) =>
     ),
   );
 const makeHarness = (
-  servers = { a: server("a"), b: server("b") },
+  servers: McpResolvedConfig["servers"] = { a: server("a"), b: server("b") },
   capabilities: McpCapabilities = { tools: true, resources: false, prompts: false },
 ) =>
   Effect.gen(function* () {
@@ -91,7 +93,9 @@ const makeHarness = (
     const unsupported = Effect.fail(
       boundaryError("unsupported", "not-sent", "Fixture operation is unsupported."),
     );
+    const activity = McpActivity.layer();
     const dependencies = Layer.mergeAll(
+      activity,
       Layer.succeed(McpConfigStore, {
         snapshot: Ref.get(config),
         subscribe: (publish) =>
@@ -106,6 +110,9 @@ const makeHarness = (
         status: () => Effect.succeed({ state: "none" }),
         login: () => unsupported,
         logout: () => Effect.void,
+        reject: () => Effect.void,
+        completeLogin: () => Effect.void,
+        finalizationFailed: () => Effect.void,
         revoke: Effect.void,
       }),
       Layer.succeed(McpConnector, {
@@ -146,7 +153,9 @@ const makeHarness = (
     const connections = McpConnections.layer({ isTrusted: () => true }).pipe(
       Layer.provide(dependencies),
     );
-    const layer = McpDiscovery.layer.pipe(Layer.provideMerge(connections));
+    const layer = McpDiscovery.layer.pipe(
+      Layer.provideMerge(Layer.mergeAll(connections, activity)),
+    );
     return {
       layer,
       calls,
@@ -180,7 +189,8 @@ const Page = Schema.Struct({
   }),
   undiscovered: Schema.Array(Schema.String),
 });
-const decodePage = Schema.decodeUnknownEffect(Page);
+const decodePage = (result: McpDiscoveryQueryResult) =>
+  Schema.decodeUnknownEffect(Page)(result.data);
 
 it.effect(
   "unscoped list and search use only known metadata without connecting undiscovered servers",
@@ -284,6 +294,136 @@ it.effect(
         );
       }).pipe(Effect.provide(harness.layer));
     }),
+);
+
+it.effect("keeps tools when advertised resource listings are unavailable", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness(
+      { a: server("a") },
+      { tools: true, resources: true, prompts: false },
+    );
+    yield* Ref.set(harness.route, (request, id) =>
+      request.action === "resources.list" || request.action === "resources.templates"
+        ? Effect.fail(
+            boundaryError(
+              "unsupported",
+              "completed",
+              "private-server-message",
+              "rpc-method-not-found",
+            ),
+          )
+        : defaultRoute(request, id),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const connections = yield* McpConnections;
+      const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
+      expect(snapshot.tools.map((entry) => entry.name)).toEqual(["alpha", "beta", "gamma"]);
+      expect(snapshot.support).toEqual({
+        tools: true,
+        resources: false,
+        templates: false,
+        prompts: false,
+      });
+      expect(snapshot.diagnostics).toEqual([
+        { family: "resources", reason: "rpc-method-not-found" },
+        { family: "templates", reason: "rpc-method-not-found" },
+      ]);
+      expect((yield* discovery.cached({ family: "resources" })).catalogs[0]).toMatchObject({
+        state: "unsupported",
+        reason: "rpc-method-not-found",
+      });
+      const described = yield* discovery.query({
+        action: "tools.describe",
+        server: "a",
+        tool: "alpha",
+      });
+      expect(described.data).toEqual(tool("alpha"));
+      expect(described.notices).toHaveLength(2);
+      expect(described.notices.join("\n")).not.toContain("private-");
+      expect((yield* discovery.known)[0]?.diagnostics).toEqual(snapshot.diagnostics);
+      const count = (yield* Ref.get(harness.calls)).length;
+      expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(snapshot);
+      expect(yield* Ref.get(harness.calls)).toHaveLength(count);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each([
+  { action: "tools.list", family: "tools" },
+  { action: "resources.list", family: "resources" },
+  { action: "resources.templates", family: "templates" },
+  { action: "prompts.list", family: "prompts" },
+] as const)(
+  "settles $family independently and clears its diagnostic after recovery",
+  ({ action, family }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        { a: server("a") },
+        { tools: true, resources: true, prompts: true },
+      );
+      yield* Ref.set(harness.route, (request, id) =>
+        request.action === action
+          ? Effect.fail(
+              boundaryError("unsupported", "completed", "private-error", "rpc-method-not-found"),
+            )
+          : defaultRoute(request, id),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const first = yield* connections.withOperation("a", {}, discovery.ensure);
+        expect(first.support[family]).toBe(false);
+        expect(first[family]).toEqual([]);
+        expect(first.diagnostics).toEqual([{ family, reason: "rpc-method-not-found" }]);
+        for (const other of ["tools", "resources", "templates", "prompts"] as const)
+          if (other !== family) expect(first[other].length).toBeGreaterThan(0);
+        const oldPage = yield* discovery.cached({
+          family: family === "tools" ? "resources" : "tools",
+          limit: 1,
+        });
+        const oldRef = oldPage.entries[0]!.ref;
+        yield* Ref.set(harness.route, defaultRoute);
+        const restored = yield* connections.withOperation("a", {}, discovery.refresh);
+        expect(restored.support[family]).toBe(true);
+        expect(restored.diagnostics).toEqual([]);
+        expect(restored.revision).toBeGreaterThan(first.revision);
+        expect(yield* discovery.cachedDetail(oldRef).pipe(Effect.flip)).toMatchObject({
+          kind: "stale",
+        });
+        expect((yield* discovery.cached({ family })).catalogs[0]).toMatchObject({ state: "ready" });
+        yield* connections.disconnect("a");
+        expect(yield* discovery.known).toEqual([]);
+        expect((yield* discovery.cached({ family })).catalogs[0]?.reason).toBeUndefined();
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect.each([
+  boundaryError("auth-required", "completed", "rejected credentials"),
+  boundaryError("timeout", "unknown", "expired"),
+  boundaryError("unsupported", "unknown", "uncertain", "rpc-method-not-found"),
+  boundaryError("unsupported", "completed", "different interaction"),
+  boundaryError("protocol", "completed", "malformed result"),
+  boundaryError("cleanup", "unknown", "unconfirmed"),
+])("does not publish successful sibling catalogs after a fatal family failure", (failure) =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness(
+      { a: server("a") },
+      { tools: true, resources: true, prompts: true },
+    );
+    yield* Ref.set(harness.route, (request, id) =>
+      request.action === "resources.list" ? Effect.fail(failure) : defaultRoute(request, id),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      expect(
+        yield* discovery.query({ action: "tools.list", server: "a" }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure" });
+      expect(yield* discovery.known).toEqual([]);
+      expect((yield* discovery.cached({ family: "tools" })).entries).toEqual([]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );
 
 it.effect("refresh failure preserves the previous complete metadata revision", () =>
@@ -481,7 +621,7 @@ it.effect("targeted queries reuse an existing admission and reject a mismatched 
       const result = yield* connections.withOperation("a", {}, (operation) =>
         discovery.query({ action: "tools.describe", server: "a", tool: "alpha" }, operation),
       );
-      expect(result).toMatchObject({ name: "alpha" });
+      expect(result.data).toMatchObject({ name: "alpha" });
       const missing = yield* Effect.result(
         discovery.query({ action: "tools.describe", server: "a", tool: "ALPHA" }),
       );

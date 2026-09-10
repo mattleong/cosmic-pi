@@ -52,12 +52,19 @@ export const openAuthCallback = (configured?: string) =>
             return HttpServerResponse.empty({ status: 404 });
           consumed = true;
           yield* Deferred.succeed(received, callback.href);
-          return HttpServerResponse.text("You can return to Pi.", {
-            headers: {
-              "cache-control": "no-store",
-              "content-security-policy": "default-src 'none'",
+          return HttpServerResponse.text(
+            '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>MCP sign-in response</title><main><h1>Sign-in response received</h1><p>Return to Pi to finish.</p></main></html>',
+            {
+              contentType: "text/html; charset=utf-8",
+              headers: {
+                "cache-control": "no-store",
+                "content-security-policy":
+                  "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+                "referrer-policy": "no-referrer",
+                "x-content-type-options": "nosniff",
+              },
             },
-          });
+          );
         }),
       )
       .pipe(
@@ -66,14 +73,7 @@ export const openAuthCallback = (configured?: string) =>
       );
     return {
       redirectUri: redirect.href,
-      receive: Deferred.await(received).pipe(
-        Effect.timeoutOrElse({
-          duration: 180_000,
-          orElse: () =>
-            Effect.fail(
-              boundaryError("timeout", "not-sent", "OAuth callback exceeded its deadline."),
-            ),
-        }),
-      ),
+      // The SDK attempt owns the one applicable deadline, beginning before discovery.
+      receive: Deferred.await(received),
     };
   });

@@ -72,6 +72,14 @@ export const freezeMetadata = <A extends Schema.Json>(value: A): A => {
   return value;
 };
 
+export type McpMetadataList<A> =
+  | { readonly supported: true; readonly entries: ReadonlyArray<A> }
+  | {
+      readonly supported: false;
+      readonly entries: readonly [];
+      readonly reason: "rpc-method-not-found";
+    };
+
 export const listMetadata = <A extends Schema.Json>(
   operation: McpOperation,
   action: McpListAction,
@@ -79,7 +87,7 @@ export const listMetadata = <A extends Schema.Json>(
   entry: Schema.Codec<A>,
   key: (item: A) => string,
   budget: MetadataBudget,
-): Effect.Effect<ReadonlyArray<A>, McpBoundaryError> =>
+): Effect.Effect<McpMetadataList<A>, McpBoundaryError> =>
   Effect.gen(function* () {
     const result: Array<A> = [];
     const seenCursors = new Set<string>();
@@ -92,9 +100,21 @@ export const listMetadata = <A extends Schema.Json>(
       ),
     });
     for (let pageNumber = 0; pageNumber < MCP_DISCOVERY_LIMITS.pages; pageNumber++) {
-      const reply = yield* operation.request(
-        cursor === undefined ? { action } : { action, cursor },
-      );
+      const reply = yield* operation
+        .request(cursor === undefined ? { action } : { action, cursor })
+        .pipe(
+          Effect.catch((error) =>
+            pageNumber === 0 &&
+            error.kind === "unsupported" &&
+            error.outcome === "completed" &&
+            error.reason === "rpc-method-not-found"
+              ? Effect.succeed(undefined)
+              : Effect.fail(error),
+          ),
+        );
+      // Later-page failures are inconsistent traversals, not evidence of an absent method.
+      if (reply === undefined)
+        return { supported: false, entries: [], reason: "rpc-method-not-found" };
       if (reply.action !== action)
         return yield* Effect.fail(
           boundaryError("protocol", "not-sent", "MCP metadata action mismatch."),
@@ -129,7 +149,7 @@ export const listMetadata = <A extends Schema.Json>(
         seenEntries.add(identity);
         result.push(item);
       }
-      if (page.nextCursor === undefined) return result;
+      if (page.nextCursor === undefined) return { supported: true, entries: result };
       if (seenCursors.has(page.nextCursor))
         return yield* Effect.fail(
           boundaryError("protocol", "not-sent", "MCP metadata cursor repeated."),

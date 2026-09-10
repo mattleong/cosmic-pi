@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import type { McpRequest } from "../../src/client/model.ts";
+import { boundaryError } from "../../src/client/errors.ts";
 import type { McpOperation } from "../../src/connection/model.ts";
 import { MCP_DISCOVERY_LIMITS, McpToolMetadataSchema } from "../../src/discovery/model.ts";
 import {
@@ -73,8 +74,62 @@ it.effect(
           : { tools: [tool("last")] };
       });
       const entries = yield* traverse(operation);
-      expect(entries.map((entry) => entry.name)).toEqual(["first", "last"]);
+      expect(entries.entries.map((entry) => entry.name)).toEqual(["first", "last"]);
       expect(cursors).toEqual([undefined, ""]);
+    }),
+);
+
+it.effect("only an explicit first-page missing method becomes an unsupported catalog", () =>
+  Effect.gen(function* () {
+    const operation = yield* operationFor(() => ({ tools: [] }));
+    const failure = boundaryError(
+      "unsupported",
+      "completed",
+      "private-server-message",
+      "rpc-method-not-found",
+    );
+    const result = yield* traverse({ ...operation, request: () => Effect.fail(failure) });
+    expect(result).toEqual({ supported: false, entries: [], reason: "rpc-method-not-found" });
+    expect(yield* traverse(operation)).toEqual({ supported: true, entries: [] });
+  }),
+);
+
+it.effect.each([
+  boundaryError("unsupported", "not-sent", "not sent", "rpc-method-not-found"),
+  boundaryError("unsupported", "unknown", "uncertain", "rpc-method-not-found"),
+  boundaryError("unsupported", "completed", "another unsupported interaction"),
+  boundaryError("auth-required", "completed", "rejected credentials", "rpc-method-not-found"),
+  boundaryError("protocol", "completed", "invalid response", "rpc-invalid-params"),
+  boundaryError("timeout", "unknown", "expired"),
+  boundaryError("cleanup", "unknown", "unconfirmed"),
+])("does not downgrade other discovery failures", (failure) =>
+  Effect.gen(function* () {
+    const operation = yield* operationFor(() => ({ tools: [] }));
+    expect(
+      yield* traverse({ ...operation, request: () => Effect.fail(failure) }).pipe(Effect.flip),
+    ).toBe(failure);
+  }),
+);
+
+it.effect.each(["", "next"])(
+  "does not discard a traversal when a later page reports a missing method",
+  (cursor) =>
+    Effect.gen(function* () {
+      const operation = yield* operationFor(() => ({ tools: [tool("first")], nextCursor: cursor }));
+      const failure = boundaryError(
+        "unsupported",
+        "completed",
+        "private-server-message",
+        "rpc-method-not-found",
+      );
+      const paged = {
+        ...operation,
+        request: (request: McpRequest) =>
+          request.action === "tools.list" && request.cursor !== undefined
+            ? Effect.fail(failure)
+            : operation.request(request),
+      };
+      expect(yield* traverse(paged).pipe(Effect.flip)).toBe(failure);
     }),
 );
 

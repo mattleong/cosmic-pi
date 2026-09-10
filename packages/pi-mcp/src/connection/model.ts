@@ -6,6 +6,13 @@ import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpCapabilities, McpMetadataFamily, McpReply, McpRequest } from "../client/model.ts";
 import type { McpEffectiveServer, McpResolvedConfig } from "../config/model.ts";
 
+export interface McpActionBinding {
+  readonly server: string;
+  readonly identity: string;
+  readonly configRevision: number;
+  readonly operationRevision: number;
+}
+
 export interface McpOperationBinding {
   readonly server: string;
   readonly identity: string;
@@ -49,14 +56,24 @@ export interface McpConnectionStatus {
     readonly scope: "global" | "project";
     readonly enabled: boolean;
     readonly state: "disconnected" | "connecting" | "connected" | "closing" | "blocked";
-    readonly auth: "none" | "ready" | "required" | "unavailable";
+    readonly auth: "none" | "unchecked" | "ready" | "required" | "unavailable";
+    readonly operationRevision: number;
+    readonly active: number;
+    readonly queued: number;
+    readonly operations: number;
+    readonly blockedReason:
+      | "auth-running"
+      | "auth-suspended"
+      | "cleanup-running"
+      | "cleanup-unconfirmed"
+      | undefined;
   }>;
 }
 export interface McpConnectionsOptions {
   /** Captured host callback is total and reads live session trust. */
   readonly isTrusted: () => boolean;
 }
-export type McpRevocationReason = "authority" | "auth-transition";
+export type McpRevocationReason = "authority" | "auth-transition" | "connection";
 export type McpRevocationListener = (
   servers: ReadonlyArray<string>,
   /** Omitted reasons retain full authority revocation for existing producers. */
@@ -73,14 +90,24 @@ export interface McpConnectionsContract {
   readonly withAuth: <A>(
     serverId: string,
     use: (server: McpEffectiveServer) => Effect.Effect<A, McpBoundaryError>,
+    expected?: McpActionBinding,
   ) => Effect.Effect<A, McpBoundaryError>;
   readonly withOperation: <A>(
     serverId: string,
-    intent: { readonly tool?: string },
+    intent: { readonly tool?: string; readonly expected?: McpActionBinding },
     use: (operation: McpOperation) => Effect.Effect<A, McpBoundaryError>,
   ) => Effect.Effect<A, McpBoundaryError>;
-  readonly connect: (serverId: string) => Effect.Effect<McpConnectionStatus, McpBoundaryError>;
-  readonly disconnect: (serverId: string) => Effect.Effect<McpConnectionReceipt, McpBoundaryError>;
+  readonly connect: (
+    serverId: string,
+    expected?: McpActionBinding,
+  ) => Effect.Effect<McpConnectionStatus, McpBoundaryError>;
+  readonly disconnect: (
+    serverId: string,
+    expected?: McpActionBinding,
+  ) => Effect.Effect<McpConnectionReceipt, McpBoundaryError>;
+  readonly checkAction: (expected: McpActionBinding) => Effect.Effect<void, McpBoundaryError>;
+  /** Local invalidation callback. Never reenter this service from the callback. */
+  readonly subscribeChanges: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
   readonly revoke: (serverId?: string) => Effect.Effect<McpConnectionReceipt>;
   /** Local-only callbacks run inside the authority commit. Never reenter connections. */
   readonly subscribeRevocations: (

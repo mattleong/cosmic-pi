@@ -5,12 +5,15 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import type { McpActivityContract } from "../activity/service.ts";
+import type { McpActivityHandle, McpActivityFailure } from "../activity/model.ts";
 import type { McpAuthContract } from "../auth/model.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
 import type { McpConfigStoreContract, McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { McpAdmission, type AdmissionTicket } from "./admission.ts";
 import type {
+  McpActionBinding,
   McpConnectionReceipt,
   McpConnectionsOptions,
   McpConnectionStatus,
@@ -33,6 +36,8 @@ export interface ConnectionOwner {
   idle?: Fiber.Fiber<void>;
   connection?: McpConnection;
   uncertain: boolean;
+  activity?: McpActivityHandle;
+  failure?: McpActivityFailure;
 }
 export interface AuthSuspension {
   readonly server: McpEffectiveServer;
@@ -57,6 +62,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   store: McpConfigStoreContract,
   auth: McpAuthContract,
   connector: RegistryConnector,
+  activity: McpActivityContract,
 ) {
   const sessionScope = yield* Effect.scope;
   const resources = yield* Scope.fork(sessionScope);
@@ -69,7 +75,13 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   const owners = new Map<string, ConnectionOwner>();
   const suspensions = new Map<string, AuthSuspension>();
   const listeners = new Set<McpRevocationListener>();
-  const admission = new McpAdmission(() => config.settings);
+  const changes = new Set<() => void>();
+  let operationRevision = 0;
+  const changed = () => {
+    operationRevision += 1;
+    for (const listener of changes) listener();
+  };
+  const admission = new McpAdmission(() => config.settings, changed);
   const publishRevocation = (ids: ReadonlyArray<string>, reason: McpRevocationReason) =>
     Effect.forEach(listeners, (listener) => listener(ids, reason), { discard: true });
 
@@ -84,6 +96,15 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         const health = yield* owner.connection.health;
         uncertain = Exit.isFailure(result) || health.cleanupUnconfirmed || !health.closed;
       }
+      if (owner.activity)
+        yield* activity.finish(
+          owner.activity,
+          owner.failure
+            ? { ...owner.failure, status: "failed" }
+            : owner.uncertain || uncertain
+              ? { status: "failed", kind: "cleanup" }
+              : { status: "cancelled" },
+        );
       yield* withLock(
         Effect.sync(() => {
           owner.uncertain ||= uncertain;
@@ -91,6 +112,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
             if (owner.uncertain) owner.state = "blocked";
             else owners.delete(owner.server.id);
           }
+          changed();
           Deferred.doneUnsafe(
             owner.cleaned,
             Effect.succeed(owner.uncertain ? "unconfirmed" : "confirmed"),
@@ -106,7 +128,10 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
       owner.current = false;
       owner.accepting = false;
       owner.state = "closing";
+      if (owner.activity) yield* activity.update(owner.activity, { phase: "stopping" });
       owner.idleGeneration += 1;
+      changed();
+      yield* publishRevocation([owner.server.id], "connection");
       admission.revoke(owner.server.id);
       Deferred.doneUnsafe(owner.ready, Effect.fail(stale()));
       yield* Effect.forkIn(Effect.uninterruptible(cleanup(owner)), monitors);
@@ -118,6 +143,8 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     Effect.gen(function* () {
       owner.uncertain ||= uncertain;
       owner.accepting = false;
+      changed();
+      yield* publishRevocation([owner.server.id], "connection");
       if (owner.current) owner.state = "closing";
       owner.idleGeneration += 1;
       if (owner.operations === 0) yield* retire(owner);
@@ -185,6 +212,17 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
       return server;
     });
 
+  const checkActionLocked = (expected: McpActionBinding) =>
+    Effect.gen(function* () {
+      const server = yield* serverLocked(expected.server);
+      if (
+        server.identity !== expected.identity ||
+        config.revision !== expected.configRevision ||
+        operationRevision !== expected.operationRevision
+      )
+        return yield* stale();
+    });
+
   const executionServerLocked = (id: string, tool?: string) =>
     Effect.gen(function* () {
       const server = yield* serverLocked(id, tool);
@@ -208,9 +246,16 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         return yield* stale();
       }
     });
-  const checkLocked = (ticket: AdmissionTicket, owner: ConnectionOwner, tool?: string) =>
+  const checkLocked = (
+    ticket: AdmissionTicket,
+    owner: ConnectionOwner,
+    tool?: string,
+    revision?: number,
+  ) =>
     Effect.gen(function* () {
       yield* ownerCheckLocked(owner, tool);
+      if (revision !== undefined && revision !== config.revision)
+        return yield* stale(ticket.outcome);
       if (!ticket.current) return yield* stale(ticket.outcome);
       if ((yield* Clock.currentTimeMillis) >= ticket.deadline) {
         return yield* boundaryError("timeout", ticket.outcome, "MCP operation deadline expired.");
@@ -218,6 +263,21 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     }).pipe(Effect.mapError((error) => boundaryError(error.kind, ticket.outcome, error.message)));
 
   const access = auth.access;
+  const rejectAuthLocked = (owner: ConnectionOwner) =>
+    Effect.gen(function* () {
+      if (
+        closed ||
+        !config.trusted ||
+        !config.settings.enabled ||
+        !options.isTrusted() ||
+        !owner.current ||
+        owners.get(owner.server.id) !== owner ||
+        config.servers[owner.server.id]?.identity !== owner.server.identity
+      )
+        return;
+      yield* auth.reject(owner.server);
+      changed();
+    });
 
   const scheduleIdleLocked = (owner: ConnectionOwner): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -250,6 +310,8 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   const openOwner = (owner: ConnectionOwner, settings: McpSettings) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
+        owner.activity = yield* activity.begin({ operation: "connect", server: owner.server.id });
+        yield* activity.update(owner.activity, { phase: "connecting" });
         const acquired = yield* Effect.exit(
           restore(
             Effect.gen(function* () {
@@ -283,6 +345,8 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
               owner.connection = acquired.value;
               if (!owner.current) return;
               owner.state = "connected";
+              yield* activity.finish(owner.activity!, { status: "done" });
+              changed();
               Deferred.doneUnsafe(owner.ready, Effect.succeed(acquired.value));
               yield* Effect.forkIn(
                 Effect.interruptible(
@@ -306,6 +370,11 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
               // A failed acquisition's boundary error preserves unconfirmed cleanup evidence.
               if (error._tag === "Some" && error.value instanceof McpBoundaryError) {
                 owner.uncertain ||= error.value.kind === "cleanup";
+                owner.failure =
+                  error.value.reason === undefined
+                    ? { kind: error.value.kind }
+                    : { kind: error.value.kind, reason: error.value.reason };
+                if (error.value.kind === "auth-required") yield* rejectAuthLocked(owner);
               }
               Deferred.doneUnsafe(owner.ready, Effect.failCause(acquired.cause));
               // Preserve acquisition failures for its waiters. No ticket can dispatch without ready.
@@ -345,6 +414,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         uncertain: false,
       };
       owners.set(server.id, owner);
+      changed();
       yield* Effect.forkIn(Effect.interruptible(openOwner(owner, config.settings)), owner.scope);
       return owner;
     });
@@ -362,6 +432,18 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
             ? ("blocked" as const)
             : (owners.get(server.id)?.state ?? ("disconnected" as const)),
           auth: observed.state,
+          operationRevision,
+          ...admission.snapshot(server.id),
+          operations: admission.operations(server.id),
+          blockedReason: owners.get(server.id)?.uncertain
+            ? ("cleanup-unconfirmed" as const)
+            : owners.get(server.id)?.state === "closing"
+              ? ("cleanup-running" as const)
+              : suspensions.has(server.id)
+                ? suspensions.get(server.id)?.running
+                  ? ("auth-running" as const)
+                  : ("auth-suspended" as const)
+                : undefined,
         };
       }),
     );
@@ -374,11 +456,16 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     };
   });
 
-  const revoke = (serverId?: string, evict = true): Effect.Effect<McpConnectionReceipt> =>
+  const revoke = (
+    serverId?: string,
+    evict = true,
+    expected?: McpActionBinding,
+  ): Effect.Effect<McpConnectionReceipt, McpBoundaryError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const { ids, retired } = yield* withLock(
           Effect.gen(function* () {
+            if (expected) yield* checkActionLocked(expected);
             const ids =
               serverId === undefined
                 ? [...new Set([...Object.keys(config.servers), ...owners.keys()])]
@@ -420,13 +507,26 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
           closed = true;
         }),
       );
-      yield* revoke();
+      yield* revoke().pipe(Effect.catch(() => Effect.void));
     }),
   );
 
   return {
     withLock,
     admission,
+    changed,
+    checkActionLocked,
+    checkAction: (expected: McpActionBinding) => withLock(checkActionLocked(expected)),
+    subscribeChanges: (listener: () => void) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          changes.add(listener);
+        }),
+        () =>
+          Effect.sync(() => {
+            changes.delete(listener);
+          }),
+      ),
     ownerLocked,
     serverLocked,
     executionServerLocked,
@@ -435,6 +535,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     ownerCheckLocked,
     checkLocked,
     access,
+    rejectAuthLocked,
     scheduleIdleLocked,
     configLocked: () => config,
     retire,

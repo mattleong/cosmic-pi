@@ -12,9 +12,11 @@ import { NetworkAddresses } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import type { McpLoginUi } from "../../src/auth/model.ts";
+import type { McpAuthProgressEvent } from "../../src/auth/progress.ts";
 import { decodeGrant, encodeGrant, type McpGrant } from "../../src/auth/credentials.ts";
 import type { McpEffectiveServer } from "../../src/config/model.ts";
 import { makeMcpSdkAuth } from "../../src/boundary/sdk-auth.ts";
+import { openAuthCallback } from "../../src/boundary/auth-callback.ts";
 import { withAuthFetch } from "../../src/boundary/auth-fetch.ts";
 import { authUrlPolicy } from "../../src/auth/policy.ts";
 import { boundaryError } from "../../src/client/errors.ts";
@@ -53,6 +55,28 @@ const browser = (mode: "local" | "manual", mutate: (callback: string) => string 
   });
 
 describe("SDK-owned public OAuth", () => {
+  it.live(
+    "acknowledges receipt without reflecting callback values or claiming sign-in success",
+    () =>
+      Effect.gen(function* () {
+        const callback = yield* openAuthCallback("http://127.0.0.1:0/callback");
+        const client = yield* HttpClient.HttpClient;
+        const privateUrl = `${callback.redirectUri}?code=PRIVATE_CODE&state=PRIVATE_STATE`;
+        const response = yield* client.get(privateUrl);
+        const html = yield* response.text;
+        expect(response.headers["content-type"]).toContain("text/html");
+        expect(response.headers["cache-control"]).toBe("no-store");
+        expect(response.headers["referrer-policy"]).toBe("no-referrer");
+        expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+        expect(html).not.toMatch(/PRIVATE_|<script|https?:|signed in|sign-in succeeded/i);
+        expect(yield* callback.receive).toBe(privateUrl);
+        expect((yield* client.get(privateUrl)).status).toBe(404);
+      }).pipe(
+        Effect.provide(layers),
+        Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+      ),
+  );
+
   for (const mode of ["safe", "private", "loop"] as const) {
     it.live(`validates and bounds each metadata redirect: ${mode}`, () =>
       Effect.gen(function* () {
@@ -182,7 +206,31 @@ describe("SDK-owned public OAuth", () => {
                   }
                 : configured;
             const ui = yield* browser(mode);
-            const grant = yield* sdk.login(server, ui);
+            const progress: McpAuthProgressEvent[] = [];
+            const grant = yield* sdk.login(server, {
+              ...ui,
+              progress: (event) =>
+                Effect.sync(() => {
+                  progress.push(event);
+                }),
+            });
+            expect(progress.map((event) => event.phase)).toEqual(
+              mode === "local"
+                ? [
+                    "callback-listener",
+                    "discovery",
+                    "registration",
+                    "opening-browser",
+                    "awaiting-callback",
+                    "exchange",
+                  ]
+                : ["discovery", "registration", "awaiting-callback", "exchange"],
+            );
+            expect(new Set(progress.map((event) => event.deadline)).size).toBe(1);
+            expect(progress.every((event) => event.deadline !== undefined)).toBe(true);
+            expect(yield* serialize(progress)).not.toMatch(
+              /fixture-access|fixture-code|code_challenge|https?:/,
+            );
             expect(yield* sdk.token(server, grant)).toBe("fixture-access-0");
             expect(grant.version).toBe(1);
             expect(grant.expiresAt! - grant.receivedAt).toBe(3_600_000);

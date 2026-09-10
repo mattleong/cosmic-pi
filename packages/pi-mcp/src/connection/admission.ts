@@ -30,8 +30,10 @@ export class McpAdmission {
   private readonly dispatches = new Set<DispatchWaiter>();
   private readonly perServer = new Map<string, number>();
   private readonly settings: () => McpSettings;
-  constructor(settings: () => McpSettings) {
+  private readonly changed: () => void;
+  constructor(settings: () => McpSettings, changed: () => void = () => undefined) {
     this.settings = settings;
+    this.changed = changed;
   }
 
   issue(server: string, now: number): AdmissionTicket | McpBoundaryError {
@@ -64,6 +66,7 @@ export class McpAdmission {
     };
     this.tickets.set(ticket.id, ticket);
     if (dependency) this.dependencies.add(ticket.id);
+    this.changed();
     return ticket;
   }
 
@@ -131,8 +134,18 @@ export class McpAdmission {
     this.pump();
   }
 
-  snapshot(): AdmissionSnapshot {
-    return { active: this.dispatches.size, queued: this.waiting.length };
+  snapshot(server?: string): AdmissionSnapshot {
+    return server === undefined
+      ? { active: this.dispatches.size, queued: this.waiting.length }
+      : {
+          active: this.perServer.get(server) ?? 0,
+          queued: this.waiting.filter((waiter) => waiter.ticket.server === server).length,
+        };
+  }
+
+  operations(server: string): number {
+    return [...this.tickets.values()].filter((ticket) => ticket.server === server && ticket.current)
+      .length;
   }
 
   private stale(ticket: AdmissionTicket): McpBoundaryError {
@@ -141,6 +154,7 @@ export class McpAdmission {
 
   /** FIFO among eligible servers. A saturated server cannot block unrelated capacity. */
   private pump(): void {
+    this.changed();
     const settings = this.settings();
     for (
       let index = 0;

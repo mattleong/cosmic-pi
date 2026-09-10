@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { describe, expect } from "vitest";
+import { McpActivity } from "../../src/activity/service.ts";
 import type { McpGrant } from "../../src/auth/credentials.ts";
 import type { McpAuthContract, McpLoginUi } from "../../src/auth/model.ts";
 import { makeMcpAuth, McpAuth } from "../../src/auth/service.ts";
@@ -74,6 +75,8 @@ const initial: McpMetadataSnapshot = {
   identity: "first",
   configRevision: 1,
   revision: 1,
+  support: { tools: true, resources: true, templates: true, prompts: true },
+  diagnostics: [],
   tools: [
     {
       name: "run",
@@ -121,7 +124,20 @@ const makeHarness = (seams: HarnessOptions = {}) =>
       revision: current.revision,
       active: 0,
       queued: 0,
-      servers: [{ id: "one", scope: "global", enabled: true, state: "disconnected", auth: "none" }],
+      servers: [
+        {
+          id: "one",
+          scope: "global",
+          enabled: true,
+          state: "disconnected",
+          auth: "none",
+          active: 0,
+          queued: 0,
+          operations: 0,
+          operationRevision: 0,
+          blockedReason: undefined,
+        },
+      ],
     }));
     const revoke: McpConnectionsContract["revoke"] = (server) =>
       Effect.gen(function* () {
@@ -131,6 +147,8 @@ const makeHarness = (seams: HarnessOptions = {}) =>
         return { servers, cleanup: "confirmed" as const };
       });
     const connections: McpConnectionsContract = {
+      checkAction: () => Effect.void,
+      subscribeChanges: () => Effect.void,
       config: Effect.sync(() => current),
       status,
       requireServer,
@@ -215,17 +233,42 @@ const makeHarness = (seams: HarnessOptions = {}) =>
         }),
     };
     const discovery: McpDiscoveryContract = {
+      cached: (request) =>
+        Effect.succeed({
+          family: request.family,
+          entries: [],
+          catalogs: [],
+          total: 0,
+          next: undefined,
+        }),
+      cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
+      subscribeChanges: () => Effect.void,
       ensure: seams.ensure ?? (() => Effect.sync(() => snapshot)),
       refresh: () => Effect.sync(() => snapshot),
       query:
         seams.query ??
         ((input) =>
-          Effect.succeed({ action: input.action, items: [{ server: "one", name: "run" }] })),
+          Effect.succeed({
+            data: { action: input.action, items: [{ server: "one", name: "run" }] },
+            notices: [],
+          })),
       known: Effect.succeed([
-        { server: "one", revision: 1, tools: 1, resources: 0, templates: 0, prompts: 1 },
+        {
+          server: "one",
+          revision: 1,
+          tools: 1,
+          resources: 0,
+          templates: 0,
+          prompts: 1,
+          support: snapshot.support,
+          diagnostics: snapshot.diagnostics,
+        },
       ]),
     };
     const auth: McpAuthContract = {
+      reject: () => Effect.void,
+      completeLogin: () => Effect.void,
+      finalizationFailed: () => Effect.void,
       access: () => Effect.succeed(undefined),
       status: () => Effect.succeed({ state: "none" }),
       login: () => Effect.succeed({ state: "ready" }),
@@ -273,7 +316,7 @@ const realFixture = (
     readonly isTrusted?: () => boolean;
     readonly auth?: Partial<McpAuthContract>;
     readonly closing?: Effect.Effect<void>;
-    readonly request?: (input: McpRequest) => Effect.Effect<void>;
+    readonly request?: (input: McpRequest) => Effect.Effect<void, McpBoundaryError>;
   } = {},
 ) => {
   let current = {
@@ -283,6 +326,9 @@ const realFixture = (
   const listeners = new Set<(next: McpResolvedConfig) => Effect.Effect<void>>();
   const sent: Array<McpRequest> = [];
   const auth: McpAuthContract = {
+    reject: () => Effect.void,
+    completeLogin: () => Effect.void,
+    finalizationFailed: () => Effect.void,
     access: () => Effect.succeed("old-grant"),
     status: () => Effect.succeed({ state: "ready" }),
     login: () => Effect.succeed({ state: "ready" }),
@@ -290,7 +336,9 @@ const realFixture = (
     revoke: Effect.void,
     ...seams.auth,
   };
+  const activity = McpActivity.layer();
   const dependencies = Layer.mergeAll(
+    activity,
     Layer.succeed(McpConfigStore, {
       snapshot: Effect.sync(() => current),
       subscribe: (listener) =>
@@ -369,6 +417,7 @@ const realFixture = (
           Layer.provide(dependencies),
         ),
       ),
+      Layer.provide(activity),
       Layer.merge(NodeCrypto.layer),
     ),
   };
@@ -424,6 +473,7 @@ const makeAuthFixture = (login: McpSdkAuthContract["login"]) =>
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(McpCredentialStore, {
+            mutation: () => Effect.succeed("idle"),
             read: (identity) =>
               Effect.sync(() => {
                 reads++;
@@ -659,25 +709,76 @@ for (const failure of [false, true]) {
   );
 }
 
-for (const first of ["tools.list", "tools.call"] as const) {
-  it.effect(`runs cold ${first} prerequisites with one slot and zero queue`, () => {
-    const f = realFixture({ settings: { maxConcurrent: 1, maxPerServer: 1, maxQueued: 0 } });
-    return Effect.gen(function* () {
-      const connections = yield* McpConnections;
-      const discovery = yield* McpDiscovery;
-      const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
-      yield* execution.execute(
-        first === "tools.call" ? request : { action: first, server: "one" },
-        options,
-      );
-      yield* execution.execute(request, options);
-      yield* execution.execute({ action: "refresh", server: "one" }, options);
-      expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(
-        first === "tools.call" ? 2 : 1,
-      );
-      expect(yield* connections.status).toMatchObject({ active: 0, queued: 0 });
-    }).pipe(Effect.provide(f.layer));
-  });
+for (const first of ["tools.list", "tools.describe", "tools.call"] as const) {
+  for (const missingListings of [false, true]) {
+    it.effect(
+      `runs cold ${first} with one slot, zero queue and missing listings=${missingListings}`,
+      () => {
+        const f = realFixture({
+          settings: { maxConcurrent: 1, maxPerServer: 1, maxQueued: 0 },
+          request: (input) =>
+            missingListings &&
+            (input.action === "resources.list" || input.action === "resources.templates")
+              ? Effect.fail(
+                  boundaryError(
+                    "unsupported",
+                    "completed",
+                    "private-server-error",
+                    "rpc-method-not-found",
+                  ),
+                )
+              : Effect.void,
+        });
+        return Effect.gen(function* () {
+          const connections = yield* McpConnections;
+          const discovery = yield* McpDiscovery;
+          const validations: Array<string> = [];
+          const { execution } = yield* makeHarness({
+            connections,
+            discovery,
+            auth: f.auth,
+            validate: (_schema, _data, outcome) =>
+              Effect.sync(() => {
+                validations.push(outcome);
+              }),
+          });
+          yield* execution.execute(
+            first === "tools.call"
+              ? request
+              : first === "tools.describe"
+                ? { action: first, server: "one", tool: "run" }
+                : { action: first, server: "one" },
+            options,
+          );
+          const described = yield* execution.execute(
+            { action: "tools.describe", server: "one", tool: "run" },
+            options,
+          );
+          expect(described.reply.isError).toBe(false);
+          expect(described.reply.notices).toHaveLength(missingListings ? 2 : 0);
+          const recovered = yield* execution.execute(
+            { action: "result.read", id: resultId(described) },
+            options,
+          );
+          expect(recovered.reply.notices).toEqual(
+            expect.arrayContaining([...described.reply.notices]),
+          );
+          expect(described.reply.notices.join("\n")).not.toContain("private-server-error");
+          const aggregate = yield* execution.execute({ action: "tools.list" }, options);
+          expect(aggregate.reply.notices).toEqual(described.reply.notices);
+          yield* execution.execute(request, options);
+          const refreshed = yield* execution.execute({ action: "refresh", server: "one" }, options);
+          expect(refreshed.reply.notices).toEqual(described.reply.notices);
+          const calls = f.sent.filter((input) => input.action === "tools.call");
+          expect(calls).toHaveLength(first === "tools.call" ? 2 : 1);
+          expect(calls.every((input) => input.tool === "run")).toBe(true);
+          expect(validations).toContain("not-sent");
+          expect(validations).toContain("completed");
+          expect(yield* connections.status).toMatchObject({ active: 0, queued: 0 });
+        }).pipe(Effect.provide(f.layer));
+      },
+    );
+  }
 }
 
 it.effect(
@@ -1115,7 +1216,7 @@ describe("shared MCP execution", () => {
         query: () =>
           Deferred.succeed(entered, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
-            Effect.as({ items: [{ name: "private pre-logout metadata" }] }),
+            Effect.as({ data: { items: [{ name: "private pre-logout metadata" }] }, notices: [] }),
           ),
       });
       const pending = yield* harness.execution
@@ -1161,6 +1262,7 @@ describe("shared MCP execution", () => {
     () => {
       const sent: Array<McpRequest> = [];
       const dependencies = Layer.mergeAll(
+        McpActivity.layer(),
         Layer.succeed(McpConfigStore, {
           snapshot: Effect.succeed(config),
           subscribe: (listener) => listener(config),
@@ -1170,6 +1272,9 @@ describe("shared MCP execution", () => {
           setSettings: () => Effect.succeed(config),
         }),
         Layer.succeed(McpAuth, {
+          reject: () => Effect.void,
+          completeLogin: () => Effect.void,
+          finalizationFailed: () => Effect.void,
           access: () => Effect.succeed(undefined),
           status: () => Effect.succeed({ state: "none" }),
           login: () => Effect.succeed({ state: "none" }),

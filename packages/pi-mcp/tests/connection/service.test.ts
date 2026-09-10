@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
@@ -63,6 +64,7 @@ const fixture = (options: FixtureOptions = {}) => {
   let config = initialConfig(options.settings);
   let publish: ((next: McpResolvedConfig) => Effect.Effect<void>) | undefined;
   const tokens: Array<string | undefined> = [];
+  let observedAuth: "none" | "required" = "none";
   const state = { trusted: true, opens: 0, closes: 0, accesses: 0, requests: 0, tokens };
   const replace = (next: McpResolvedConfig) =>
     Effect.uninterruptible(
@@ -73,6 +75,7 @@ const fixture = (options: FixtureOptions = {}) => {
       }),
     );
   const dependencies = Layer.mergeAll(
+    McpActivity.layer(),
     Layer.succeed(McpConfigStore, {
       snapshot: Effect.sync(() => config),
       subscribe: (listener) =>
@@ -99,9 +102,15 @@ const fixture = (options: FixtureOptions = {}) => {
           state.accesses += 1;
           return yield* options.auth ?? Effect.succeed(undefined);
         }),
-      status: () => Effect.succeed({ state: "none" }),
+      status: () => Effect.succeed({ state: observedAuth }),
       login: () => Effect.succeed({ state: "none" }),
       logout: () => Effect.void,
+      reject: () =>
+        Effect.sync(() => {
+          observedAuth = "required";
+        }),
+      completeLogin: () => Effect.void,
+      finalizationFailed: () => Effect.void,
       revoke: Effect.void,
     }),
     Layer.succeed(McpConnector, {
@@ -180,6 +189,64 @@ const until = (predicate: () => boolean): Effect.Effect<void> =>
     for (let n = 0; n < 1_000 && !predicate(); n += 1) yield* Effect.yieldNow;
     expect(predicate()).toBe(true);
   });
+
+it.effect("only current-owner auth-specific transport rejection changes auth evidence", () =>
+  Effect.gen(function* () {
+    const authFailure = fixture({
+      request: () => Effect.fail(boundaryError("auth-required", "not-sent", "rejected")),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      yield* Effect.result(call(c));
+      expect((yield* c.status).servers[0]?.auth).toBe("required");
+    }).pipe(Effect.provide(authFailure.layer));
+    const permission = fixture({
+      request: (request) =>
+        Effect.succeed({
+          action: request.action,
+          outcome: "completed",
+          result: { isError: true, content: [{ type: "text", text: "permission denied" }] },
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      yield* call(c);
+      expect((yield* c.status).servers[0]?.auth).toBe("none");
+    }).pipe(Effect.provide(permission.layer));
+    const forbidden = fixture({
+      request: () => Effect.fail(boundaryError("denied", "unknown", "HTTP policy denial")),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      yield* Effect.result(call(c));
+      expect((yield* c.status).servers[0]?.auth).toBe("none");
+    }).pipe(Effect.provide(forbidden.layer));
+  }),
+);
+
+it.effect("an auth rejection arriving after lost trust cannot publish new auth evidence", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const f = fixture({
+      request: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Effect.fail(boundaryError("auth-required", "not-sent", "rejected"))),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      const pending = yield* Effect.forkScoped(Effect.result(call(c)));
+      yield* Deferred.await(entered);
+      f.state.trusted = false;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(pending);
+      f.state.trusted = true;
+      expect((yield* c.status).servers[0]?.auth).toBe("none");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
 
 it.effect("status does not connect, resolve credentials, or expose config details", () => {
   const f = fixture();
@@ -421,8 +488,9 @@ it.effect("unrelated config edits revoke accepted-result retention before commit
     yield* Effect.gen(function* () {
       const c = yield* McpConnections;
       const notices: Array<ReadonlyArray<string>> = [];
-      yield* c.subscribeRevocations((ids) =>
+      yield* c.subscribeRevocations((ids, reason) =>
         Effect.sync(() => {
+          if (reason === "connection") return;
           notices.push(ids);
         }),
       );
@@ -505,8 +573,9 @@ it.effect("disconnect preserves result authority while explicit revoke notifies 
   return Effect.gen(function* () {
     const c = yield* McpConnections;
     let revoked = 0;
-    yield* c.subscribeRevocations(() =>
+    yield* c.subscribeRevocations((_ids, reason) =>
       Effect.sync(() => {
+        if (reason === "connection") return;
         revoked += 1;
       }),
     );

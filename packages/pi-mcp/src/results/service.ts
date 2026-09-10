@@ -4,6 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { boundaryError } from "../client/errors.ts";
 import {
   MCP_RESULT_LIMITS,
@@ -35,6 +36,15 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
     // Weak identity evidence prevents an evicted prepared handle from resurrecting its ID.
     // Access stays inside the single synchronous Ref.modify retention transition.
     const settled = new WeakSet<McpPreparedResult>();
+    const listeners = new Set<() => void>();
+    // One signal per committed transition, even when that transition evicts many entries.
+    // Consumers clear visible text synchronously and coalesce any subsequent local reads.
+    const notify = () => {
+      const currentListeners = Array.from(listeners);
+      for (const listener of currentListeners) {
+        if (listeners.has(listener)) invokeHostCallback(listener, undefined);
+      }
+    };
     const maxEntries = ceiling(options.maxEntries, MCP_RESULT_LIMITS.entries);
     const maxBytes = ceiling(options.maxBytes, MCP_RESULT_LIMITS.retainedBytes);
     const state = yield* Ref.make<State>({
@@ -89,35 +99,46 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
       });
 
     const retain: McpResultsContract["retain"] = (prepared) =>
-      Ref.modify(state, (snapshot): [McpRetentionOutcome, State] => {
-        if (!current(prepared, snapshot))
-          return [{ status: "unretained", reason: "revoked" }, snapshot];
-        if (prepared.outputLimited || prepared.bytes > MCP_RESULT_LIMITS.acceptedBytes)
-          return [{ status: "unretained", reason: "output-limit" }, snapshot];
-        if (prepared.candidateId === undefined)
-          return [{ status: "unretained", reason: "unavailable" }, snapshot];
-        if (maxEntries === 0 || prepared.bytes > maxBytes)
-          return [{ status: "unretained", reason: "capacity" }, snapshot];
-        const existing = snapshot.entries.get(prepared.candidateId);
-        if (existing === prepared)
-          return [{ status: "retained", resultId: prepared.candidateId }, snapshot];
-        if (existing !== undefined || settled.has(prepared))
-          return [{ status: "unretained", reason: "unavailable" }, snapshot];
-        const entries = new Map(snapshot.entries);
-        let bytes = snapshot.bytes;
-        // Map insertion order is settlement order. Reads never refresh the eviction order.
-        for (const [id, entry] of entries) {
-          if (entries.size < maxEntries && bytes + prepared.bytes <= maxBytes) break;
-          entries.delete(id);
-          bytes -= entry.bytes;
-        }
-        entries.set(prepared.candidateId, prepared);
-        settled.add(prepared);
-        bytes += prepared.bytes;
-        return [
-          { status: "retained", resultId: prepared.candidateId },
-          { ...snapshot, entries, bytes },
-        ];
+      Effect.suspend(() => {
+        let changed = false;
+        return Ref.modify(state, (snapshot): [McpRetentionOutcome, State] => {
+          if (!current(prepared, snapshot))
+            return [{ status: "unretained", reason: "revoked" }, snapshot];
+          if (prepared.outputLimited || prepared.bytes > MCP_RESULT_LIMITS.acceptedBytes)
+            return [{ status: "unretained", reason: "output-limit" }, snapshot];
+          if (prepared.candidateId === undefined)
+            return [{ status: "unretained", reason: "unavailable" }, snapshot];
+          if (maxEntries === 0 || prepared.bytes > maxBytes)
+            return [{ status: "unretained", reason: "capacity" }, snapshot];
+          const existing = snapshot.entries.get(prepared.candidateId);
+          if (existing === prepared)
+            return [{ status: "retained", resultId: prepared.candidateId }, snapshot];
+          if (existing !== undefined || settled.has(prepared))
+            return [{ status: "unretained", reason: "unavailable" }, snapshot];
+          const entries = new Map(snapshot.entries);
+          let bytes = snapshot.bytes;
+          // Map insertion order is settlement order. Reads never refresh the eviction order.
+          for (const [id, entry] of entries) {
+            if (entries.size < maxEntries && bytes + prepared.bytes <= maxBytes) break;
+            entries.delete(id);
+            bytes -= entry.bytes;
+          }
+          entries.set(prepared.candidateId, prepared);
+          settled.add(prepared);
+          bytes += prepared.bytes;
+          changed = true;
+          return [
+            { status: "retained", resultId: prepared.candidateId },
+            { ...snapshot, entries, bytes },
+          ];
+        }).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (changed) notify();
+            }),
+          ),
+          Effect.uninterruptible,
+        );
       });
 
     const project: McpResultsContract["project"] = (prepared, retention, projectionOptions) =>
@@ -193,7 +214,7 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         const serverGenerations = new Map(snapshot.serverGenerations);
         serverGenerations.set(server, (serverGenerations.get(server) ?? 0) + 1);
         return { ...snapshot, entries, bytes, serverGenerations };
-      });
+      }).pipe(Effect.andThen(Effect.sync(notify)), Effect.uninterruptible);
 
     yield* Effect.addFinalizer(() =>
       Ref.update(state, (snapshot) => ({
@@ -202,9 +223,34 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         entries: new Map(),
         bytes: 0,
         serverGenerations: new Map(),
-      })),
+      })).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            notify();
+            listeners.clear();
+          }),
+        ),
+      ),
     );
-    return { prepare, retain, project, read, revoke } satisfies McpResultsContract;
+    const subscribeChanges: McpResultsContract["subscribeChanges"] = (listener) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          if (Ref.getUnsafe(state).closed) invokeHostCallback(listener, undefined);
+          else listeners.add(listener);
+        }),
+        () =>
+          Effect.sync(() => {
+            listeners.delete(listener);
+          }),
+      );
+    return {
+      prepare,
+      retain,
+      project,
+      read,
+      revoke,
+      subscribeChanges,
+    } satisfies McpResultsContract;
   });
 
 export class McpResults extends Context.Service<McpResults, McpResultsContract>()(

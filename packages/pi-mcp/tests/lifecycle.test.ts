@@ -11,6 +11,44 @@ import * as Layer from "effect/Layer";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { makeMcpLifecycle, type McpApplicationBoundaries } from "../src/application/lifecycle.ts";
+import { McpActivity } from "../src/activity/service.ts";
+import { McpAuthFlow } from "../src/auth/flow.ts";
+import { McpManager } from "../src/manager/service.ts";
+import type { McpManagerSnapshot } from "../src/manager/model.ts";
+const emptyManager: McpManagerSnapshot = {
+  revision: 1,
+  trusted: true,
+  enabled: true,
+  active: 0,
+  queued: 0,
+  servers: [],
+};
+const presentationLayer = Layer.mergeAll(
+  McpActivity.layer(),
+  Layer.succeed(McpAuthFlow, {
+    snapshot: () => undefined,
+    subscribe: () => Effect.void,
+    run: () => Effect.succeed({ state: "ready" }),
+  }),
+  Layer.succeed(McpManager, {
+    refresh: Effect.succeed(emptyManager),
+    snapshot: () => emptyManager,
+    subscribe: () => Effect.void,
+    withView: (effect) => effect,
+    capture: () => Effect.fail(boundaryError("unsupported", "not-sent", "fixture")),
+    check: () => Effect.void,
+    dispatch: () => Effect.void,
+    cached: (request) =>
+      Effect.succeed({
+        family: request.family,
+        entries: [],
+        catalogs: [],
+        total: 0,
+        next: undefined,
+      }),
+    cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
+  }),
+);
 import { McpAuth } from "../src/auth/service.ts";
 import { boundaryError } from "../src/client/errors.ts";
 import { MCP_CODE_MODE_QUERY, type McpCodeModeCapability } from "../src/code-mode/protocol.ts";
@@ -117,6 +155,7 @@ const harness = (
         diagnostics: [],
       };
       return Layer.mergeAll(
+        presentationLayer,
         Layer.effect(
           McpExecution,
           Effect.acquireRelease(
@@ -163,6 +202,9 @@ const harness = (
           status: () => Effect.succeed({ state: "none" }),
           login: () => Effect.succeed({ state: "ready" }),
           logout: () => Effect.void,
+          reject: () => Effect.void,
+          completeLogin: () => Effect.void,
+          finalizationFailed: () => Effect.void,
           revoke: Effect.void,
         }),
       );

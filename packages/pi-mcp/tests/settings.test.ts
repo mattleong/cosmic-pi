@@ -7,6 +7,8 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 const serialize = <Value>(value: Value) => JSON.stringify(value);
 import { McpAuth } from "../src/auth/service.ts";
+import { McpAuthFlow } from "../src/auth/flow.ts";
+import { McpManager } from "../src/manager/service.ts";
 import { makeMcpLoginUi } from "../src/boundary/host-auth.ts";
 import { boundaryError } from "../src/client/errors.ts";
 import { DEFAULT_MCP_SETTINGS } from "../src/config/schema.ts";
@@ -44,14 +46,14 @@ const config: McpResolvedConfig = {
   },
 };
 type CommandContextFixture = Pick<ExtensionContext, "mode" | "hasUI" | "isProjectTrusted"> & {
-  readonly ui: Pick<ExtensionContext["ui"], "input" | "notify">;
+  readonly ui: Pick<ExtensionContext["ui"], "input" | "confirm" | "notify">;
 };
 const context = (mode: ExtensionContext["mode"] = "tui", trusted = true): ExtensionContext => {
   const value: CommandContextFixture = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     isProjectTrusted: () => trusted,
-    ui: { input: vi.fn(), notify: vi.fn() },
+    ui: { input: vi.fn(), confirm: vi.fn(() => Promise.resolve(true)), notify: vi.fn() },
   };
   // SAFETY: This partial fixture supplies exactly the host fields consumed by commands and login UI.
   return value as ExtensionContext;
@@ -138,7 +140,31 @@ describe("MCP argument-first commands", () => {
       Effect.gen(function* () {
         const login = vi.fn(() => Effect.succeed({ state: "ready" as const }));
         let ready = false;
+        const forbidden = Effect.die("Headless auth opened interactive presentation");
         const layer = Layer.mergeAll(
+          Layer.succeed(McpAuthFlow, {
+            snapshot: () => undefined,
+            subscribe: () => forbidden,
+            run: () => forbidden,
+          }),
+          Layer.succeed(McpManager, {
+            withView: () => forbidden,
+            refresh: forbidden,
+            snapshot: () => ({
+              revision: 0,
+              trusted: false,
+              enabled: false,
+              active: 0,
+              queued: 0,
+              servers: [],
+            }),
+            subscribe: () => forbidden,
+            capture: () => forbidden,
+            check: () => forbidden,
+            dispatch: () => forbidden,
+            cached: () => forbidden,
+            cachedDetail: () => forbidden,
+          }),
           Layer.succeed(McpExecution, {
             execute: () => Effect.fail(boundaryError("unsupported", "not-sent", "unused")),
             login,
@@ -156,6 +182,9 @@ describe("MCP argument-first commands", () => {
             login,
             logout: () => Effect.void,
             revoke: Effect.void,
+            reject: () => Effect.void,
+            completeLogin: () => Effect.void,
+            finalizationFailed: () => Effect.void,
           }),
         );
         const ctx = context(mode);

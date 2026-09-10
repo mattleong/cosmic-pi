@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { expect } from "vitest";
+import { boundaryError } from "../../src/client/errors.ts";
 import type { McpRequest } from "../../src/client/model.ts";
 import type { McpOperation } from "../../src/connection/model.ts";
 import type { McpDiscoveryContract, McpMetadataSnapshot } from "../../src/discovery/model.ts";
@@ -13,15 +14,27 @@ const snapshot: McpMetadataSnapshot = {
   owner: "connection",
   configRevision: 1,
   revision: 1,
+  support: { tools: false, resources: false, templates: false, prompts: true },
+  diagnostics: [],
   tools: [],
   resources: [],
   templates: [],
   prompts: [{ name: "review", arguments: [{ name: "text", required: true }, { name: "style" }] }],
 };
 const discovery: McpDiscoveryContract = {
+  cached: (request) =>
+    Effect.succeed({
+      family: request.family,
+      entries: [],
+      catalogs: [],
+      total: 0,
+      next: undefined,
+    }),
+  cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
+  subscribeChanges: () => Effect.void,
   ensure: () => Effect.succeed(snapshot),
   refresh: () => Effect.succeed(snapshot),
-  query: () => Effect.succeed({}),
+  query: () => Effect.succeed({ data: {}, notices: [] }),
   known: Effect.succeed([]),
 };
 const fixture = () => {

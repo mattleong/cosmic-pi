@@ -6,6 +6,7 @@ import {
   UrlElicitationRequiredError,
   SdkError,
   SdkErrorCode,
+  ProtocolError,
   SdkHttpError,
   UnauthorizedError,
   InsufficientScopeError,
@@ -30,6 +31,7 @@ import {
   type SdkFetchFailure,
 } from "./sdk-fetch.ts";
 import type { SdkHttpControl } from "./sdk-http-control.ts";
+import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
 
 export interface SdkHttpTransportOperation extends SdkFetchOperation {
   readonly signal: AbortSignal;
@@ -255,9 +257,12 @@ export const mapSdkFailure = (
   if (
     error instanceof UnauthorizedError ||
     error instanceof InsufficientScopeError ||
-    (error instanceof SdkHttpError && (error.status === 401 || error.status === 403))
+    (error instanceof SdkHttpError && error.status === 401)
   ) {
     return boundaryError("auth-required", outcome, "MCP server requires authentication.");
+  }
+  if (error instanceof SdkHttpError && error.status === 403) {
+    return boundaryError("denied", outcome, "MCP server denied this operation.");
   }
   if (
     error instanceof UrlElicitationRequiredError ||
@@ -270,6 +275,7 @@ export const mapSdkFailure = (
       "MCP server requires an unsupported interaction, capability, or protocol version.",
     );
   }
+  if (error instanceof ProtocolError) return mapSdkProtocolError(error, outcome);
   if (error instanceof SdkError) {
     switch (error.code) {
       case SdkErrorCode.RequestTimeout:
@@ -282,8 +288,10 @@ export const mapSdkFailure = (
       case SdkErrorCode.AlreadyConnected:
         return boundaryError("connection", "not-sent", "MCP connection is unavailable.");
       case SdkErrorCode.ClientHttpAuthentication:
-      case SdkErrorCode.ClientHttpForbidden:
         return boundaryError("auth-required", outcome, "MCP server requires authentication.");
+      case SdkErrorCode.ClientHttpForbidden:
+        // A bare 403 can be an ACL or proxy denial, not rejected credentials.
+        return boundaryError("denied", outcome, "MCP server denied this operation.");
       default:
         return boundaryError("transport", outcome, "MCP transport request failed.");
     }

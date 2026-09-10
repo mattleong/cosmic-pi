@@ -37,6 +37,14 @@ import {
 import { buildMcpTool, type McpToolDefinition } from "../tools/controller.ts";
 import type { McpGatewayExecution, McpGatewayReply } from "../tools/model.ts";
 import { McpExecution, type McpExecutionContract } from "../tools/service.ts";
+import { McpManager } from "../manager/service.ts";
+import type { McpManagerContract } from "../manager/model.ts";
+import { runMcpManager } from "../manager/controller.ts";
+import { managerSelection } from "../ui/manager-state.ts";
+import { McpActivity } from "../activity/service.ts";
+import { McpAuthFlow } from "../auth/flow.ts";
+import { acquireMcpStatusHost, type McpStatusHost } from "../boundary/host-mcp-status.ts";
+import { makeSynchronousIngress } from "pi-cosmic-core";
 
 // Error-label decoding never traverses a rejected argument payload. The shared
 // execution decoder remains the only authority for admitting the complete request.
@@ -81,6 +89,7 @@ export interface McpCommandPort {
     signal?: AbortSignal,
   ) => Promise<A>;
   readonly capture: (ctx: ExtensionContext) => () => boolean;
+  readonly serverIds: () => ReadonlyArray<string>;
 }
 
 /** The only MCP Effect-to-Promise boundary. The core slot owns all runtime transitions. */
@@ -90,11 +99,13 @@ export const makeMcpLifecycle = (
 ) => {
   const receipts = makeMcpErrorReceipts();
   let host: McpCodeModeHost | undefined;
+  let statusHost: McpStatusHost | undefined;
   let active:
     | {
         readonly input: McpSessionInput;
         readonly token: number;
         readonly execution: McpExecutionContract;
+        readonly manager: McpManagerContract;
       }
     | undefined;
   let ownedSource: string | undefined;
@@ -169,7 +180,7 @@ export const makeMcpLifecycle = (
     McpApplication,
     never,
     McpRuntimeError,
-    McpExecutionContract
+    { readonly execution: McpExecutionContract; readonly manager: McpManagerContract }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(pi, boundaries.makeLayer(input), {
@@ -179,12 +190,13 @@ export const makeMcpLifecycle = (
     startup: (input) =>
       Effect.gen(function* () {
         const execution = yield* McpExecution;
+        const manager = yield* McpManager;
         yield* bestEffortHostBootstrap("pi-mcp.preview-settings", (signal) =>
           boundaries.loadSettings(input.cwd, input.projectTrusted && input.isTrusted(), signal),
         );
-        return execution;
+        return { execution, manager };
       }),
-    onActivated: (input, token, execution) => {
+    onActivated: (input, token, { execution, manager }) => {
       // Detect a foreign gateway immediately before mutation as well as before startup.
       const conflict = invokeHostCallback(() => visibleTool() !== undefined && !ownsTool(), true);
       if (conflict) {
@@ -195,7 +207,7 @@ export const makeMcpLifecycle = (
         );
         return;
       }
-      active = { input, token, execution };
+      active = { input, token, execution, manager };
       receipts.activate(input.owner);
       let wrapped: McpToolDefinition | undefined;
       try {
@@ -255,10 +267,74 @@ export const makeMcpLifecycle = (
             (result) => result.reply,
           ),
       });
+      if (input.sessionId)
+        slot.fork(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const activity = yield* McpActivity;
+              const flow = yield* McpAuthFlow;
+              const callbacks = new Set<() => void>();
+              yield* manager.subscribe(() => {
+                for (const callback of callbacks) invokeHostCallback(callback, undefined);
+              });
+              const refresh = yield* makeSynchronousIngress({
+                capacity: 1,
+                overflow: "coalesce-latest",
+                handle: () => manager.refresh.pipe(Effect.asVoid),
+              }).pipe(Effect.orDie);
+              yield* flow.subscribe(() => {
+                refresh.offer(undefined);
+              });
+              const owned = yield* acquireMcpStatusHost({
+                events: pi.events,
+                ctx: input.ctx,
+                sessionId: input.sessionId!,
+                isCurrent: () => current(input, token),
+                activity,
+                counts: () => {
+                  const snapshot = manager.snapshot();
+                  return {
+                    connected: snapshot.servers.filter((row) => row.state === "connected").length,
+                    active: snapshot.active,
+                    queued: snapshot.queued,
+                    attention: snapshot.servers.filter(
+                      (row) =>
+                        row.auth === "required" ||
+                        row.auth === "unavailable" ||
+                        row.state === "blocked",
+                    ).length,
+                  };
+                },
+                subscribeCounts: (listener) => {
+                  callbacks.add(listener);
+                  return () => {
+                    callbacks.delete(listener);
+                  };
+                },
+                openManager: (server, signal) =>
+                  current(input, token)
+                    ? slot.run(
+                        runMcpManager(
+                          pi,
+                          input.ctx,
+                          () => current(input, token),
+                          managerSelection("dashboard", server),
+                        ),
+                        signal,
+                      )
+                    : Promise.reject(boundaryError("stale", "not-sent", "MCP session changed.")),
+              });
+              if (current(input, token)) statusHost = owned;
+              return yield* Effect.never;
+            }),
+          ),
+        );
     },
     onDeactivated: () => {
       // Revoke capabilities and receipts synchronously BEFORE runtime disposal starts.
       active = undefined;
+      statusHost?.dispose();
+      statusHost = undefined;
       host?.deactivate();
       host?.dispose();
       host = undefined;
@@ -311,6 +387,7 @@ export const makeMcpLifecycle = (
   };
   const commands: McpCommandPort = {
     run: (effect, signal) => slot.run(effect, signal),
+    serverIds: () => active?.manager.snapshot().servers.map((server) => server.id) ?? [],
     capture: (ctx) => {
       const selected = active;
       const sessionId = mcpCodeModeSessionId(ctx);

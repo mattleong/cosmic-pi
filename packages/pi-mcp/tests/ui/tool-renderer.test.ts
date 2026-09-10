@@ -1,0 +1,266 @@
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { normalizeResult } from "../../src/results/normalize.ts";
+import { projectPrepared } from "../../src/results/projection.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+  decodeMcpCardDetails,
+  MCP_CARD_LIMITS,
+  mcpCallSummary,
+} from "../../src/ui/tool-render-details.ts";
+import { renderMcpCall, renderMcpResult } from "../../src/ui/tool-renderer.ts";
+
+const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+const reply = (data = {}) => ({
+  details: { action: "tools.call", outcome: "completed", isError: false, notices: [], data },
+  content: [],
+});
+const display = <Result>(result: Result, expanded = false, isPartial = false) =>
+  renderMcpResult(result, { expanded, isPartial }, theme, "configured-key to expand")
+    .render(80)
+    .join("\n");
+
+describe("MCP card projections", () => {
+  it.effect("projects actual discovery pages and normalized attachment descriptors", () =>
+    Effect.gen(function* () {
+      const normalized = normalizeResult({
+        owner: "owner",
+        server: "docs",
+        action: "tools.list",
+        reply: {
+          outcome: "completed",
+          result: {
+            page: {
+              items: [{ name: "one" }, { name: "two" }],
+              total: 7,
+              nextCursor: "opaque-next-cursor",
+            },
+            undiscovered: ["other"],
+          },
+        },
+      });
+      const discovery = yield* projectPrepared(
+        {
+          ...normalized,
+          owner: "owner",
+          server: "docs",
+          activation: {},
+          generation: 0,
+          serverGeneration: 0,
+        },
+        { status: "retained", resultId: "retained-1" },
+        { maxOutputBytes: 51_200, images: false },
+      );
+      const card = { details: discovery.reply, content: [] };
+      const projection = decodeMcpCardDetails(card);
+      expect(projection.page).toEqual({ returned: 2, total: 7, hasMore: true });
+      expect(projection.undiscoveredCount).toBe(1);
+      for (const count of projection.counts)
+        expect(display(card).replace(/\s+/g, " ")).toContain(count);
+      expect(display(card)).not.toContain("opaque-next-cursor");
+
+      const binary = normalizeResult({
+        owner: "owner",
+        server: "docs",
+        action: "tools.call",
+        reply: {
+          outcome: "completed",
+          result: {
+            content: [
+              { type: "image", mimeType: "image/png", data: "invalid" },
+              { type: "text", text: "existing text" },
+            ],
+          },
+        },
+      });
+      const projected = yield* projectPrepared(
+        {
+          ...binary,
+          owner: "owner",
+          server: "docs",
+          activation: {},
+          generation: 0,
+          serverGeneration: 0,
+        },
+        { status: "retained", resultId: "retained-2" },
+        { maxOutputBytes: 51_200, images: false },
+      );
+      expect(decodeMcpCardDetails({ details: projected.reply })).toMatchObject({
+        attachmentCount: 1,
+        imageCount: 0,
+        attachmentsLimited: false,
+      });
+    }),
+  );
+
+  it("preserves benign connection and remote state while redacting auth-specific fields", () => {
+    const result = reply({
+      result: {
+        servers: [{ state: "connected", auth: "unchecked" }],
+        state: "remote-state-value",
+        oauthState: "PRIVATE-STATE",
+        authorizationUrl: "PRIVATE-URL",
+        accessToken: "PRIVATE-TOKEN",
+      },
+    });
+    const projection = decodeMcpCardDetails(result);
+    expect(projection.preview).toContain("connected");
+    expect(projection.preview).toContain("unchecked");
+    expect(projection.preview).toContain("remote-state-value");
+    expect(projection.preview).not.toContain("PRIVATE");
+    expect(JSON.stringify(result)).toContain("PRIVATE-TOKEN");
+  });
+
+  it("keeps unknown, cleanup and truncation warnings available without expansion", () => {
+    const result = {
+      ...reply({ kind: "cleanup", truncated: true }),
+      details: {
+        ...reply().details,
+        outcome: "unknown",
+        isError: true,
+        data: { kind: "cleanup", truncated: true },
+        notices: ["Output was not retained and is not recoverable by result ID."],
+      },
+    };
+    const projection = decodeMcpCardDetails(result);
+    expect(projection.outcome).toBe("unknown");
+    expect(projection.truncated).toBe(true);
+    expect(projection.warnings).toHaveLength(4);
+    const collapsed = display(result).replace(/\s+/g, " ");
+    for (const warning of projection.warnings) expect(collapsed).toContain(warning);
+    expect(collapsed).not.toMatch(/retry/i);
+  });
+
+  it.each(["completed", "unknown"] as const)(
+    "preserves original %s failure when retrieving a successful retained page",
+    (outcome) => {
+      const result = {
+        details: {
+          ...reply().details,
+          action: "result.read",
+          resultId: "retained-1",
+          data: {
+            origin: {
+              action: "tools.call",
+              outcome,
+              isError: true,
+              outputValidation: "failed",
+            },
+            text: "existing output",
+            next: 19,
+            truncated: true,
+          },
+        },
+        content: [],
+      };
+      const before = JSON.stringify(result);
+      const projection = decodeMcpCardDetails(result);
+      expect(projection.isError).toBe(false);
+      expect(projection.origin).toMatchObject({
+        outcome,
+        isError: true,
+        outputValidationFailed: true,
+      });
+      for (const warning of projection.warnings)
+        expect(display(result).replace(/\s+/g, " ")).toContain(warning);
+      expect(projection.resultId).toBe("retained-1");
+      expect(projection.recoveryHint).toContain("/mcp result retained-1");
+      expect(display(result)).toMatch(/original.*validation failed/i);
+      expect(display(result, true)).toContain("existing output");
+      expect(JSON.stringify(result)).toBe(before);
+    },
+  );
+
+  it("reports counts and images without copying or touching image bytes", () => {
+    const image = {
+      type: "image",
+      get data() {
+        throw new Error("must not read image");
+      },
+    };
+    const result = {
+      ...reply({
+        result: { tools: [{ name: "one" }, { name: "two" }], attachments: [{ kind: "image" }] },
+      }),
+      content: [image],
+    };
+    const projection = decodeMcpCardDetails(result);
+    expect(projection.counts).toContain("2 tools");
+    expect(projection.attachmentCount).toBe(1);
+    expect(projection.imageCount).toBe(1);
+    expect(() => display(result, true)).not.toThrow();
+  });
+
+  it("reads a bounded legacy JSON envelope but does not invent certainty for partial or missing details", () => {
+    const legacy = { content: [{ type: "text", text: JSON.stringify(reply().details) }] };
+    expect(decodeMcpCardDetails(legacy)).toMatchObject({ known: true, outcome: "completed" });
+    for (const value of [
+      null,
+      [],
+      7,
+      { details: { action: "connect" } },
+      { content: [{ type: "text", text: "legacy non-JSON" }] },
+    ]) {
+      expect(decodeMcpCardDetails(value).known).toBe(false);
+      expect(decodeMcpCardDetails(value).outcome).toBeUndefined();
+      expect(() => display(value, true)).not.toThrow();
+    }
+    expect(display(reply(), false, true)).toMatch(/progress/i);
+    expect(display(reply(), false, true)).not.toMatch(/completed|not sent/i);
+    expect(display({ details: { isError: true } })).toMatch(/failed/i);
+  });
+
+  it("contains getters, cycles, revoked proxies and hostile terminal controls with bounded output", () => {
+    let getters = 0;
+    const data = {
+      text: "safe\x1b]52;c;PRIVATE-CLIPBOARD\x07\x1b[2J visible",
+      get secret() {
+        getters++;
+        throw new Error("SECRET");
+      },
+      toJSON: () => {
+        throw new Error("must not serialize source");
+      },
+    };
+    Object.defineProperty(data, "cycle", { value: data, enumerable: true });
+    const result = reply(data);
+    const text = display(result, true);
+    expect(getters).toBe(0);
+    expect(text).not.toContain("\x1b");
+    expect(text).not.toContain("PRIVATE-CLIPBOARD");
+    expect(text).toContain("visible");
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    expect(() => display(revoked.proxy, true)).not.toThrow();
+    expect(() => display(reply(revoked.proxy), true)).not.toThrow();
+    const huge = reply({ rows: Array.from({ length: 1000 }, () => "x".repeat(100_000)) });
+    const projection = decodeMcpCardDetails(huge);
+    expect(projection.preview.length).toBeLessThan(MCP_CARD_LIMITS.text + 100);
+    expect(projection.preview.split("\n").length).toBeLessThanOrEqual(MCP_CARD_LIMITS.lines + 1);
+    expect(
+      decodeMcpCardDetails({ details: { ...reply().details, resultId: "bad\n/mcp auth server" } })
+        .resultId,
+    ).toBeUndefined();
+    for (const width of [1, 12, 40]) {
+      const lines = renderMcpResult(result, { expanded: true, isPartial: false }, theme).render(
+        width,
+      );
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
+  });
+
+  it("keeps target identity separate from display and never inspects argument values", () => {
+    const args = {
+      action: "tools.call",
+      server: "docs\x1b[2J",
+      tool: "lookup",
+      get arguments() {
+        throw new Error("not presentation input");
+      },
+    };
+    expect(mcpCallSummary(args)).toEqual({ action: "tools.call", target: "docs / lookup" });
+    expect(renderMcpCall(args, theme).render(40).join(" ")).toContain("lookup");
+    expect(mcpCallSummary({})).toEqual({ action: "status", target: "" });
+    expect(args.server).toContain("\x1b");
+  });
+});
