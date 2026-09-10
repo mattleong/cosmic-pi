@@ -147,6 +147,43 @@ describe("trusted MCP configuration store", () => {
     },
   );
 
+  for (const scope of ["global", "project"] as const)
+    it.effect.each(["set-settings", "set-server", "remove-server"] as const)(
+      `initializes an existing empty ${scope} object only on an explicit %s write`,
+      (action) => {
+        const target = scope === "global" ? GLOBAL : PROJECT;
+        const initial = { [target]: "{}" };
+        if (scope === "project")
+          initial[GLOBAL] = JSON.stringify({ mcpServers: { inherited: stdio } });
+        const fixture = rawDocuments(initial);
+        return Effect.gen(function* () {
+          const store = yield* McpConfigStore;
+          expect((yield* store.snapshot).diagnostics.length).toBeGreaterThan(0);
+          const reloaded = yield* store.reload;
+          expect(reloaded.diagnostics.length).toBeGreaterThan(0);
+          expect(fixture.files.get(target)).toBe("{}");
+          if (scope === "project") expect(reloaded.servers.inherited?.enabled).toBe(false);
+          const updated = yield* action === "set-settings"
+            ? store.setSettings(scope, { maxQueued: 0 })
+            : action === "set-server"
+              ? store.setServer(scope, "server", stdio)
+              : store.removeServer(scope, "server");
+          expect(updated.diagnostics).toEqual([]);
+          expect(updated.revision).toBe(reloaded.revision + 1);
+          if (scope === "project") expect(updated.servers.inherited?.enabled).toBe(true);
+          expect(
+            yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
+              fixture.files.get(target)!,
+            ),
+          ).toEqual(
+            action === "set-settings"
+              ? { mcpServers: {}, settings: { maxQueued: 0 } }
+              : { mcpServers: action === "set-server" ? { server: stdio } : {} },
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      },
+    );
+
   it.effect.each(["global", "project"] as const)(
     "rejects an oversized latest %s document inside the locked write without publication",
     (scope) => {
@@ -389,7 +426,8 @@ describe("trusted MCP configuration store", () => {
   it.effect.each([
     { version: 2, mcpServers: {}, future: true },
     { servers: { legacy: true }, mcpServers: {}, future: true },
-  ])("rejects legacy root fields without rewriting them: %j", (document) => {
+    { settings: {} },
+  ])("rejects nonempty invalid documents without rewriting them: %j", (document) => {
     const memory = makeInMemoryDocuments({ [GLOBAL]: document });
     return Effect.gen(function* () {
       const store = yield* McpConfigStore;

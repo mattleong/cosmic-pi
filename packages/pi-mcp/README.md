@@ -19,7 +19,7 @@ Pi/Jiti loads the shipped TypeScript source and fixed validator helper. No build
 
 ## Configuration and trust
 
-Create a document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`, or `<project>/.pi/extensions/pi-mcp.json`. The project directory name follows Pi's exported config-directory constant. Existing files must have a `mcpServers` object; `version` and `servers` are rejected. A missing file is valid absence. The first settings or server write creates `{ "mcpServers": {} }` before applying the change.
+Create a document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`, or `<project>/.pi/extensions/pi-mcp.json`. The project directory name follows Pi's exported config-directory constant. Loading an existing file requires a `mcpServers` object; `version` and `servers` are rejected. A missing file is valid absence. An existing `{}` is invalid when loading or reloading, but an explicit `set-server`, `remove-server`, or `set-settings` command initializes it with `{ "mcpServers": {} }` before applying the change, just as it does for a missing file. Reads never repair files. This initialization applies only to an empty object, not to malformed JSON, nonempty invalid documents, or the old config format.
 
 ```json
 {

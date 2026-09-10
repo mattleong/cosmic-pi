@@ -243,6 +243,20 @@ const commandHandler =
       });
   };
 
+/** Static command syntax only; completion never reads configuration or suggests JSON values. */
+export const mcpSettingsCompletions = (prefix: string) => {
+  if (prefix.length > 256) return null;
+  const match = /^(set-server|remove-server|set-settings)\s+(\S*)$/.exec(prefix);
+  const candidates = match
+    ? ["global", "project"]
+        .filter((scope) => scope.startsWith(match[2]!))
+        .map((scope) => `${match[1]} ${scope}`)
+    : ["show", "reload", "set-server", "remove-server", "set-settings"].filter((action) =>
+        action.startsWith(prefix),
+      );
+  return candidates.length ? candidates.map((value) => ({ value, label: value })) : null;
+};
+
 export const registerMcpCommands = (pi: ExtensionAPI, port: McpCommandPort): void => {
   pi.registerCommand("mcp", {
     description:
@@ -253,6 +267,7 @@ export const registerMcpCommands = (pi: ExtensionAPI, port: McpCommandPort): voi
   pi.registerCommand("mcp-settings", {
     description:
       "MCP settings: show | reload | set-server SCOPE ID JSON | remove-server SCOPE ID | set-settings SCOPE JSON",
+    getArgumentCompletions: mcpSettingsCompletions,
     handler: commandHandler(pi, port, true),
   });
 };

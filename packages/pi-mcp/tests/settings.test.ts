@@ -16,6 +16,7 @@ import type { McpConfigStoreContract, McpResolvedConfig } from "../src/config/mo
 import { McpConfigStore } from "../src/config/store.ts";
 import {
   mcpConfigMetadata,
+  mcpSettingsCompletions,
   runMcpSettingsCommand,
   runMcpUserCommand,
 } from "../src/settings/controller.ts";
@@ -71,6 +72,39 @@ const makeStore = () => {
   };
   return store;
 };
+
+describe("MCP settings completion", () => {
+  const values = (prefix: string) =>
+    mcpSettingsCompletions(prefix)?.map((item) => item.value) ?? null;
+
+  it("completes actions and filters partially entered names", () => {
+    expect(values("")).toEqual(["show", "reload", "set-server", "remove-server", "set-settings"]);
+    expect(values("set-s")).toEqual(["set-server", "set-settings"]);
+    expect(values("rel")).toEqual(["reload"]);
+  });
+
+  it.each(["set-server", "remove-server", "set-settings"])(
+    "completes scopes for %s using the full argument prefix",
+    (action) => {
+      expect(values(`${action} `)).toEqual([`${action} global`, `${action} project`]);
+      expect(values(`${action} p`)).toEqual([`${action} project`]);
+      expect(values(`${action}\t g`)).toEqual([`${action} global`]);
+      expect(values(`${action} global `)).toBeNull();
+    },
+  );
+
+  it.each([
+    "unknown",
+    "show ",
+    "reload p",
+    "set-server unknown",
+    "set-server global server ",
+    'set-settings project {"enabled":',
+    "x".repeat(257),
+  ])("does not complete unsupported syntax or payloads: %s", (prefix) => {
+    expect(values(prefix)).toBeNull();
+  });
+});
 
 describe("MCP argument-first commands", () => {
   it.effect("passes JSON to the single config persistence API and shows only metadata", () =>

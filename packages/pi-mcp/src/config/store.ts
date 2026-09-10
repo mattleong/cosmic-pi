@@ -142,6 +142,8 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
                     target.path,
                     (document) =>
                       Effect.gen(function* () {
+                        // Explicit writes initialize missing files and empty objects alike.
+                        // Reads remain strict; nonempty invalid documents are never repaired.
                         const base =
                           Object.keys(document).length === 0 ? { mcpServers: {} } : document;
                         yield* decodeMcpDocument(base);
