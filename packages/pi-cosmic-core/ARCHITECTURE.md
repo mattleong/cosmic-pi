@@ -13,7 +13,7 @@
 
 - `src/runtime/` defines Pi-owned execution boundaries (`runtime.ts`, `session-runtime.ts`, `pi-api.ts`) plus `host-bootstrap.ts`, the shared `Effect.tryPromise` adapter for best-effort Promise prerequisites. The package root exports Effect's scoped `provide` unchanged as `provideBuiltLayer` for host and test entry points. The session slot returns Effect-owned startup values only to the current activation and exposes activation state without duplicating package-local flags. Host bootstrap forwards Effect's abort signal, detaches loaders that ignore cancellation, contains late settlement, and records a redacted debug diagnostic on failure.
 - `src/coordination/` provides scoped concurrency primitives (`refresh-coordinator.ts`, `subscription-refresh.ts`, `synchronous-ingress.ts`). The single-flight refresh coordinator transitions ownership and its one merged follow-up through atomic `Ref` updates. Registration through cleanup installation is masked; owner work and joiner waiting remain interruptible. Identity-checked cleanup settles the shared Deferred and permits reuse even when admission is interrupted. Subscription polling uses an rc.112 `Latch` pulse, so `release` wakes only pollers already awaiting it and does not retain early wakes. Subscription validation and commit share a fiber-reentrant transactional lock.
-- `src/platform/` contains typed Node, HTTP, document, file, process-coordination, bounded child-process, and agent-directory adapters. `nodeProcessLayer` is an opt-in capability and is never merged into the file or network platform Layers. `node-builtins.ts` is the single raw Node builtin door (`process.getBuiltinModule`) for SafeFile's `O_NOFOLLOW` opens and bigint inode identity checks plus the pure synchronous containment helpers; Effectful SafeFile normalization uses the injected `Path.Path` service. The bounded process adapter exposes normalized exit evidence and owns detached spawning, output limits, process-group termination, force escalation, and scoped cleanup. Its optional `onCleanup` observer receives explicit exit confirmation during scope finalization on success, failure, and interruption. Kill success alone is insufficient; confirmation checks the acquired handle's exit-backed running state. Failed acquisition reports uncertainty because the platform may own a child before returning a handle. Confirmation has a deadline, but the platform's subsequent finalizer may still wait for OS exit. Schema-document decode failures expose only bounded, sanitized issue paths and never rejected values. Atomic JSON modifications may return `write: false` to complete a lock-protected comparison without creating or rewriting a document or running an after-commit hook.
+- `src/platform/` contains typed Node, HTTP, document, file, process-coordination, bounded child-process, and agent-directory adapters. `nodeProcessLayer` is an opt-in capability and is never merged into the file or network platform Layers. `node-builtins.ts` is the single raw Node builtin door (`process.getBuiltinModule`) for SafeFile's `O_NOFOLLOW` opens and bigint inode identity checks, pure synchronous containment helpers, and duplex child spawning; Effectful SafeFile normalization uses the injected `Path.Path` service. The bounded process adapter exposes normalized exit evidence and owns detached spawning, output limits, process-group termination, force escalation, and scoped cleanup. Its optional `onCleanup` observer receives explicit exit confirmation during scope finalization on success, failure, and interruption. Kill success alone is insufficient; confirmation checks the acquired handle's exit-backed running state. Failed acquisition reports uncertainty because the platform may own a child before returning a handle. Confirmation has a deadline, but the platform's subsequent finalizer may still wait for OS exit. Schema-document decode failures expose only bounded, sanitized issue paths and never rejected values. Atomic JSON modifications may return `write: false` to complete a lock-protected comparison without creating or rewriting a document or running an after-commit hook.
 - `src/http/headers.ts` owns pure case-insensitive header merging shared by Advisor and OpenAI compaction. Later sources win with their casing; null deletes a header without mutating inputs. Provider schemas stay in their packages.
 - `src/config/` contains reusable scoped-store, document-ops, and tolerant-field configuration infrastructure.
 - `src/projection.ts` serializes private authoritative `Ref` transitions with a private `Semaphore`. Lock waiting, update work, and projection preparation remain interruptible. External publication, internal snapshot publication, and the backing `Ref.set` share one narrow uninterruptible commit. Rejected preparation or publication leaves state and the internal snapshot unchanged. Snapshots reject non-finite numbers and true object cycles with typed paths while preserving acyclic shared references.
@@ -28,6 +28,35 @@
 - `src/testing/` contains multi-consumer fakes and probes only.
 
 Public barrels (`index.ts`, `testing.ts`) re-export these modules; consumers import from `pi-cosmic-core` / `pi-cosmic-core/testing`, not internal paths.
+
+## Duplex process ownership
+
+`src/platform/duplex-process.ts` opens detached macOS processes through `node-builtins.ts` with no shell and an exact caller-supplied environment. Spawn installs lifecycle and pipe-error guards synchronously. One masked ownership handoff installs a cached close finalizer before restoring interruption for startup readiness. Failed or interrupted startup closes immediately, even when the caller's scope remains open.
+
+`duplex-process-io.ts` owns native stream ingress and one interruptible writer fiber in the process's private scope. Write completion waits for Node's write callback, not the boolean return from `write()`. Admission counts active and queued bytes together. Cancelling a queued write drops its buffer; cancelling an active waiter retains its byte charge until the native callback or pipe close releases it. Stdout overflow fails with a bounded tagged error. Root exit does not end readable queues; native EOF or pipe close does. Stderr has independent total-retention and queued-byte caps and supports zero retention.
+
+Close revokes input and joins the writer before `duplex-process-close.ts` performs TERM/KILL escalation. Grace, force, root/group confirmation, and native pipe closure share one cleanup deadline. Only root exit, absent process group, and closed native pipes confirm cleanup. A transient macOS EPERM probe is retried within that budget, never treated as absence. Explicit close, concurrent callers, failed acquisition, and scope release reuse the same cached outcome and cleanup observer result. Pipe error guards remain through native close, including late EPIPE after an unconfirmed cleanup. Descendants that deliberately escape the detached group are outside the guarantee. Native errors, argv, environment, and paths never enter process failures or diagnostics.
+
+## Network addresses and callback listeners
+
+`src/platform/network-addresses.ts` owns bounded native address resolution behind `NetworkAddresses`.
+Its callback can settle after interruption, but a late result cannot open a connection.
+`pinnedNetworkLookup` supplies only a copied, caller-approved address set to an HTTP agent. A
+hostname or family mismatch fails without another DNS lookup. Consumers own private-address,
+URL, redirect, and protocol policy; core does not decide which OAuth destinations are trusted.
+
+`src/platform/http-server.ts` provides the scoped `nodeHttpServerLayer` over Effect Node HTTP
+services. `node-builtins.ts` remains the raw native-listener door. The Layer owns acquisition and
+listener closure, including closing active connections before joining native shutdown. Consumers
+own bind addresses, routes, Host/origin checks, request limits, and callback state. MCP uses it
+for an auth-attempt-owned IPv4 loopback listener, not a process-global OAuth server.
+
+The JSON-document API accepts an optional per-call `maxBytes` bound before parsing, including
+locked reads. Atomic modifications also reject an oversized serialized replacement before any
+write or publication, counting formatting and the trailing newline. The in-memory adapter uses
+the same codec and byte representation. Existing callers that omit the bound retain their prior
+behavior. Feature stores choose the limit and own structural/schema validation. MCP uses a
+1 MiB configuration-document ceiling.
 
 ## Dependency rule
 

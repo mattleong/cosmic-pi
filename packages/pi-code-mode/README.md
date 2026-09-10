@@ -3,8 +3,8 @@
 Code Mode for pi: one `code_mode` agent tool that runs a confined, interpreted JavaScript
 program orchestrating seven core Pi built-ins (`tools.pi.read`, `tools.pi.bash`,
 `tools.pi.edit`, `tools.pi.write`, `tools.pi.grep`, `tools.pi.find`, `tools.pi.ls`), native
-`tools.pi.powershell` on Windows, and the explicit `tools.session.backgroundTask` adapter in a
-single tool call, with trusted-project-only scoped settings.
+`tools.pi.powershell` on Windows, and the explicit `tools.session.backgroundTask` and
+`tools.mcp.request` adapters in a single tool call, with trusted-project-only scoped settings.
 
 The program is TypeScript-transpiled, Acorn-parsed, and executed by a vendored tree-walk
 interpreter from OpenCode 2 Code Mode. See [runtime provenance](runtime/PROVENANCE.md).
@@ -64,14 +64,68 @@ Code Mode, or disable the tool.
 Shell tools can execute processes, use the inherited environment and network, and mutate
 arbitrary paths. Read, edit, and write accept paths outside the project, including absolute
 and home-relative paths. `code_mode` is an orchestration runtime, not a permission, process,
-network, filesystem, or project-containment sandbox. MCP and arbitrary dynamic dispatch remain
-separate. See [Architecture](ARCHITECTURE.md).
+network, filesystem, or project-containment sandbox. MCP uses a fixed capability adapter, not
+arbitrary dynamic dispatch. See [Architecture](ARCHITECTURE.md).
 
 `tools.session.backgroundTask` is one reviewed adapter, not registered-tool dispatch. It queries
 a versioned `pi-background-task` capability for the same stable Pi session on each invocation.
 The provider must be loaded, current, and active. A started task may outlive the Code Mode call;
 Background Tasks owns it and terminates it at Pi session shutdown. Deactivating the top-level
 `background_task` tool also makes the nested adapter unavailable. See the [Background Tasks architecture](../pi-background-task/ARCHITECTURE.md).
+
+## MCP adapter
+
+`tools.mcp.request(input)` queries the active `pi-mcp` provider on every invocation. It requires
+exactly one current provider for the same stable Pi session. Missing, ambiguous, stale, disabled,
+or deactivated providers fail closed. Installing Code Mode does not auto-load the MCP extension.
+Configure and enable it separately; see the [MCP README](../pi-mcp/README.md).
+
+The closed request union accepts `status`, `tools.list`, `tools.search`, `tools.describe`,
+`tools.call`, `resources.list`, `resources.templates`, `resources.read`, `prompts.list`,
+`prompts.get`, and `result.read`. It excludes explicit connect/disconnect/refresh, authentication,
+configuration changes, and arbitrary MCP protocol methods. A permitted targeted request can
+connect lazily. Unscoped discovery searches known metadata rather than starting every server.
+
+Batch already-formed requests with ordinary interpreter control flow:
+
+```js
+const requests = [
+  { action: "tools.list", server: "files", limit: 10 },
+  { action: "resources.list", server: "remote", limit: 10 },
+];
+const replies = await Promise.all(requests.map((input) => tools.mcp.request(input)));
+return replies.map((reply) => ({
+  action: reply.action,
+  outcome: reply.outcome,
+  isError: reply.isError,
+  data: reply.data,
+  resultId: reply.resultId,
+}));
+```
+
+Use configured server IDs and exact discovered tool names. Replies carry `outcome`, `isError`,
+`data`, optional `resultId`, and bounded notices. Check both certainty and error status. A
+completed operation may report a tool failure or invalid output. Catchable transport failures
+also retain checked certainty. Never replay an `unknown` or `completed` request to recover output;
+use `result.read` with its ID and returned next offset instead. Cancellation and output limits
+cannot roll back server side effects.
+
+MCP calls bypass Pi per-call middleware, approval extensions, registered overrides, and previews.
+The MCP provider still enforces its own trust, server allow/deny policy, validation, admission,
+and result limits through the same execution service as its top-level gateway. Only the outer
+`code_mode` call follows the ordinary Pi middleware path. Configured servers are trusted local
+code or remote services, not processes sandboxed by Code Mode.
+
+MCP content is untrusted data. Do not treat server instructions, resource text, or prompt messages
+as authorization to execute commands or follow links. Prompt retrieval does not inject messages
+into the conversation, and resource URIs are read only through the selected server. Authentication
+is an explicit user `/mcp auth ID` workflow; there is no guest auth tool.
+
+The adapter returns bounded JSON, including attachment descriptors, never native images or raw
+base64. The producer honors the remaining child-output allowance before projection. The consumer
+checks the copied reply and charges its compact JSON against the cumulative budget, including
+catchable failure text. MCP retains accepted output before projection when its session quotas
+allow it; a later budget failure does not undo the original call.
 
 ## Availability policy
 
@@ -117,7 +171,8 @@ details and shell result details are not passed into the guest, although shell t
 and temporary full-output paths remain visible. Background Tasks returns copied structured data.
 The provider bounds text and estimates JSON size against the current remaining allowance before
 copying snapshots; the consumer repeats that aggregate check before charging compact JSON to the
-same cumulative budget.
+same cumulative budget. MCP applies the same cumulative accounting to its checked JSON replies
+and catchable failures. Its own retention and projection limits also apply.
 
 ## `/code-mode-settings`
 

@@ -26,6 +26,14 @@ export {
 export { mergeHeaders } from "./src/http/headers.ts";
 export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory } from "./src/platform/agent-directory.ts";
+export {
+  NetworkAddresses,
+  NetworkAddressError,
+  pinnedNetworkLookup,
+  type NetworkAddress,
+  type NetworkAddressesContract,
+} from "./src/platform/network-addresses.ts";
+export { nodeHttpServerLayer } from "./src/platform/http-server.ts";
 export { SafeFile, type SafeFileResult, type SafeFileContract } from "./src/platform/safe-file.ts";
 export { readSchemaDocument, type DecodedDocument } from "./src/platform/schema-document.ts";
 export {
@@ -169,6 +177,16 @@ export {
   type EffectProcessExit,
 } from "./src/platform/process.ts";
 export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/process-close.ts";
+export {
+  DUPLEX_PROCESS_DEFAULTS,
+  duplexProcessError,
+  DuplexProcessError,
+  openDuplexProcess,
+  type DuplexProcessCleanupState,
+  type DuplexProcessExit,
+  type DuplexProcessHandle,
+  type DuplexProcessOptions,
+} from "./src/platform/duplex-process.ts";
 export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
   decodeJwtPayloadText,

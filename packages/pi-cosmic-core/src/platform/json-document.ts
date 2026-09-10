@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { JsonDocumentError } from "./errors.ts";
 import { ProcessCoordinator } from "./process-coordinator.ts";
 
@@ -28,11 +29,43 @@ export interface JsonDocumentModification<A, AfterCommitR = never> {
 }
 
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema, { space: 2 });
+export const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema, { space: 2 });
+
+/** Raw UTF-8 read limit. Mutations also bound the serialized replacement before committing. */
+export interface JsonDocumentReadOptions {
+  /** Positive integer, at most 64 MiB. */
+  readonly maxBytes?: number | undefined;
+}
+
+const ReadOptionsSchema = Schema.Struct({
+  maxBytes: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 * 1024 * 1024 })),
+  ),
+});
+const readLimitError = (path: string) =>
+  new JsonDocumentError({ operation: "read", path, message: "JSON document exceeds read limits." });
+
+/** Shared with the in-memory store so option validation also applies to missing documents. */
+export const validateJsonDocumentReadOptions = (path: string, options?: JsonDocumentReadOptions) =>
+  options === undefined
+    ? Effect.succeed(undefined)
+    : Schema.decodeUnknownEffect(ReadOptionsSchema)(options).pipe(
+        Effect.mapError(
+          () =>
+            new JsonDocumentError({
+              operation: "read",
+              path,
+              message: "Invalid JSON document read limits.",
+            }),
+        ),
+      );
 
 export interface JsonDocumentStoreContract {
   readonly exists: (path: string) => Effect.Effect<boolean, JsonDocumentError>;
-  readonly readObject: (path: string) => Effect.Effect<JsonObject | undefined, JsonDocumentError>;
+  readonly readObject: (
+    path: string,
+    options?: JsonDocumentReadOptions,
+  ) => Effect.Effect<JsonObject | undefined, JsonDocumentError>;
   readonly writeObject: (
     path: string,
     document: JsonObject,
@@ -43,10 +76,12 @@ export interface JsonDocumentStoreContract {
     modify: (
       document: JsonObject,
     ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+    options?: JsonDocumentReadOptions,
   ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
   readonly updateObject: (
     path: string,
     update: (document: JsonObject) => JsonObject,
+    options?: JsonDocumentReadOptions,
   ) => Effect.Effect<JsonObject, JsonDocumentError>;
 }
 
@@ -57,6 +92,7 @@ export interface AtomicJsonDocumentStoreContract extends JsonDocumentStoreContra
     modify: (
       document: JsonObject,
     ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+    options?: JsonDocumentReadOptions,
   ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
 }
 
@@ -82,13 +118,38 @@ export class JsonDocumentStore extends Context.Service<
 
       const readObjectUnlocked = Effect.fn("JsonDocumentStore.readObjectUnlocked")(function* (
         path: string,
+        options?: JsonDocumentReadOptions,
       ) {
-        const source = yield* fs.readFileString(path).pipe(
+        const limits = yield* validateJsonDocumentReadOptions(path, options);
+        const maxBytes = limits?.maxBytes;
+        const readSource =
+          maxBytes === undefined
+            ? fs.readFileString(path)
+            : fs
+                .stream(path, {
+                  bytesToRead: maxBytes + 1,
+                  chunkSize: Math.min(64 * 1024, maxBytes + 1),
+                })
+                .pipe(
+                  Stream.runCollect,
+                  Effect.flatMap((chunks) => {
+                    if (chunks.reduce((total, chunk) => total + chunk.byteLength, 0) > maxBytes)
+                      return Effect.fail(readLimitError(path));
+                    const decoder = new TextDecoder();
+                    return Effect.succeed(
+                      chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") +
+                        decoder.decode(),
+                    );
+                  }),
+                );
+        const source = yield* readSource.pipe(
           Effect.map(Option.some),
           Effect.catch((error) =>
-            error.reason._tag === "NotFound"
-              ? Effect.succeedNone
-              : Effect.fail(mapError("read", path, "Unable to read JSON document.")()),
+            error._tag === "JsonDocumentError"
+              ? Effect.fail(error)
+              : error.reason._tag === "NotFound"
+                ? Effect.succeedNone
+                : Effect.fail(mapError("read", path, "Unable to read JSON document.")()),
           ),
         );
         if (Option.isNone(source)) return undefined;
@@ -97,8 +158,8 @@ export class JsonDocumentStore extends Context.Service<
         );
       });
 
-      const readObject = Effect.fn("JsonDocumentStore.readObject")((path: string) =>
-        readObjectUnlocked(path),
+      const readObject = Effect.fn("JsonDocumentStore.readObject")(
+        (path: string, options?: JsonDocumentReadOptions) => readObjectUnlocked(path, options),
       );
 
       const encodeObject = (path: string, document: JsonObject) =>
@@ -112,8 +173,18 @@ export class JsonDocumentStore extends Context.Service<
         path: string,
         document: JsonObject,
         afterCommit?: Effect.Effect<void, never, AfterCommitR>,
+        options?: JsonDocumentReadOptions,
       ) {
         const source = yield* encodeObject(path, document);
+        if (
+          options?.maxBytes !== undefined &&
+          new TextEncoder().encode(`${source}\n`).byteLength > options.maxBytes
+        )
+          return yield* new JsonDocumentError({
+            operation: "write",
+            path,
+            message: "JSON document replacement exceeds its byte limit.",
+          });
         const directory = pathService.dirname(path);
         yield* fs
           .makeDirectory(directory, { recursive: true, mode: 0o700 })
@@ -181,14 +252,20 @@ export class JsonDocumentStore extends Context.Service<
         modify: (
           document: JsonObject,
         ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
+        options?: JsonDocumentReadOptions,
       ) {
         return yield* coordinator.withLock(
           pathService.resolve(path),
           Effect.gen(function* () {
-            const current = (yield* readObjectUnlocked(path)) ?? {};
+            const current = (yield* readObjectUnlocked(path, options)) ?? {};
             const modification = yield* modify(current);
             if (modification.write !== false)
-              yield* writeObjectUnlocked(path, modification.document, modification.afterCommit);
+              yield* writeObjectUnlocked(
+                path,
+                modification.document,
+                modification.afterCommit,
+                options,
+              );
             return modification.value;
           }),
         );
@@ -196,15 +273,21 @@ export class JsonDocumentStore extends Context.Service<
 
       const updateObject: JsonDocumentStoreContract["updateObject"] = Effect.fn(
         "JsonDocumentStore.updateObject",
-      )((path, update) =>
-        modifyObject(path, (current) =>
-          Effect.try({
-            try: () => {
-              const next = update(current);
-              return { value: next, document: next } satisfies JsonDocumentModification<JsonObject>;
-            },
-            catch: mapError("update", path, "Unable to update JSON document."),
-          }),
+      )((path, update, options) =>
+        modifyObject(
+          path,
+          (current) =>
+            Effect.try({
+              try: () => {
+                const next = update(current);
+                return {
+                  value: next,
+                  document: next,
+                } satisfies JsonDocumentModification<JsonObject>;
+              },
+              catch: mapError("update", path, "Unable to update JSON document."),
+            }),
+          options,
         ),
       );
 

@@ -9,12 +9,13 @@ This is a pnpm workspace. Shared configuration lives at the root; package source
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.
 - `packages/pi-better-xai/`: Better xAI subscription usage.
-- `packages/pi-code-mode/`: confined interpreted programs over Pi built-ins and an explicit Background Tasks adapter.
+- `packages/pi-code-mode/`: confined interpreted programs over Pi built-ins and explicit Background Tasks and MCP adapters.
 - `packages/pi-code-previews/`: code previews and the cooperative tool-rendering shell.
 - `packages/pi-cosmic-core/`: shared Effect runtime and platform code.
 - `packages/pi-cosmic-ui/`: shared UI components and responsive footer.
 - `packages/pi-directory-models/`: per-directory model and thinking-level preferences.
 - `packages/pi-herdr-btw/`: reusable Herdr BTW side sessions.
+- `packages/pi-mcp/`: one MCP gateway, trusted session connections, user-only OAuth, retained results, and a fixed Code Mode capability.
 - `packages/pi-subagents/`: session-scoped background subagents.
 
 Pi/Jiti loads packages directly from TypeScript source. Do not add generated `dist/` runtime dependencies or package build prerequisites. The private Code Mode runtime ships inside `packages/pi-code-mode/runtime/` and loads only through `src/boundary/codemode-runtime.ts`. Preserve its vendored-code rules in `runtime/PROVENANCE.md`.
@@ -85,7 +86,7 @@ Mock owned domain boundaries, not external provider protocols. Test command hand
 - Treat pinned Effect declarations as authoritative over older docs. Reassess this policy when the pin changes or Effect v4 becomes stable.
 - New or migrated packages must extend `tsconfig.effect.json`; all packages must inherit the Effect language-service plugin.
 - Keep Effect runners at named Pi host boundaries, scope every resource and background fiber, use Effect Schema at unknown boundaries, and model expected failures with typed tagged errors.
-- Do not add Zod. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
+- Do not import Zod, define schemas with it, or declare it as a direct workspace dependency. Third-party packages may use Zod internally through transitive dependencies. TypeBox or literal JSON Schema is allowed only where Pi requires tool parameter schemas.
 
 ## Verification
 

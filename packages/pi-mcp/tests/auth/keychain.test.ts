@@ -1,0 +1,191 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { it } from "@effect/vitest";
+import * as Config from "effect/Config";
+import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { describe, expect } from "vitest";
+import { makeKeychainStore, type KeychainEntryFactory } from "../../src/boundary/keychain.ts";
+
+const identity = "c".repeat(64);
+describe("Keychain native mutation ownership", () => {
+  it.effect("normalizes either native absence value without losing later stored credentials", () =>
+    Effect.gen(function* () {
+      for (const missing of [null, undefined]) {
+        let password: string | null | undefined = missing;
+        const factory: KeychainEntryFactory = () =>
+          Promise.resolve({
+            getPassword: () => Promise.resolve(password),
+            setPassword: (value) => {
+              password = value;
+              return Promise.resolve();
+            },
+            deleteCredential: () => {
+              password = missing;
+              return Promise.resolve(true);
+            },
+          });
+        const store = yield* makeKeychainStore({ entryFactory: factory });
+        expect(yield* store.read(identity)).toBeUndefined();
+        yield* store.write(identity, "private-grant");
+        expect(yield* store.read(identity)).toBe("private-grant");
+        yield* store.remove(identity);
+        expect(yield* store.read(identity)).toBeUndefined();
+      }
+    }),
+  );
+  it.effect(
+    "rejects a stale native read even when its concurrent replacement already settled",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const read = Promise.withResolvers<string | undefined>();
+        let first = true;
+        let password = "old-grant";
+        const factory: KeychainEntryFactory = () =>
+          Promise.resolve({
+            getPassword: () => {
+              if (!first) return Promise.resolve(password);
+              first = false;
+              Deferred.doneUnsafe(entered, Effect.void);
+              return read.promise;
+            },
+            setPassword: (value) => {
+              password = value;
+              return Promise.resolve();
+            },
+            deleteCredential: () => Promise.resolve(true),
+          });
+        const store = yield* makeKeychainStore({ entryFactory: factory });
+        const loading = yield* store.read(identity).pipe(Effect.result, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* store.write(identity, "new-grant");
+        read.resolve("old-grant");
+        expect((yield* Fiber.join(loading))._tag).toBe("Failure");
+        expect(yield* store.read(identity)).toBe("new-grant");
+      }),
+  );
+  it.effect(
+    "retains cancelled writes across service replacement and deletes only after native settlement",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        let release: () => void = () => undefined;
+        let password: string | undefined;
+        let removed = false;
+        const factory: KeychainEntryFactory = () =>
+          Promise.resolve({
+            getPassword: () => Promise.resolve(password),
+            setPassword: (value) => {
+              // Model a native write that ignores Effect cancellation until explicitly released.
+              const completion = Promise.withResolvers<void>();
+              release = () => {
+                password = value;
+                completion.resolve();
+              };
+              Deferred.doneUnsafe(entered, Effect.void);
+              return completion.promise;
+            },
+            deleteCredential: () => {
+              removed = true;
+              password = undefined;
+              return Promise.resolve(true);
+            },
+          });
+        const first = yield* makeKeychainStore({ entryFactory: factory });
+        const write = yield* first.write(identity, "private-grant").pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(write);
+        const replacement = yield* makeKeychainStore({ entryFactory: factory });
+        expect((yield* replacement.read(identity).pipe(Effect.result))._tag).toBe("Failure");
+        expect((yield* replacement.write(identity, "another").pipe(Effect.result))._tag).toBe(
+          "Failure",
+        );
+        const deletion = yield* replacement.remove(identity).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        expect(removed).toBe(false);
+        release();
+        yield* Fiber.join(deletion);
+        expect(removed).toBe(true);
+        expect(yield* replacement.read(identity)).toBeUndefined();
+      }),
+  );
+  it.effect(
+    "keeps failed deletion unavailable and supports explicit retry without claiming removal",
+    () =>
+      Effect.gen(function* () {
+        let fail = true;
+        let password: string | undefined = "private-grant";
+        const factory: KeychainEntryFactory = () =>
+          Promise.resolve({
+            getPassword: () => Promise.resolve(password),
+            setPassword: (value) => {
+              password = value;
+              return Promise.resolve();
+            },
+            deleteCredential: () => {
+              if (fail) return Promise.reject(new Error("secret-account-and-token"));
+              password = undefined;
+              return Promise.resolve(true);
+            },
+          });
+        const store = yield* makeKeychainStore({ entryFactory: factory });
+        const failed = yield* store.remove(identity).pipe(Effect.result);
+        expect(failed._tag).toBe("Failure");
+        expect(failed._tag === "Failure" && failed.failure.message).not.toContain("secret-account");
+        expect((yield* store.read(identity).pipe(Effect.result))._tag).toBe("Failure");
+        fail = false;
+        yield* store.remove(identity);
+        expect(yield* store.read(identity)).toBeUndefined();
+      }),
+  );
+  it.effect("does not create native entries until an actual read or mutation", () =>
+    Effect.gen(function* () {
+      let opened = false;
+      const store = yield* makeKeychainStore({
+        entryFactory: () => {
+          opened = true;
+          return Promise.reject(new Error("unavailable"));
+        },
+      });
+      expect(opened).toBe(false);
+      expect((yield* store.read(identity).pipe(Effect.result))._tag).toBe("Failure");
+      expect(opened).toBe(true);
+    }),
+  );
+});
+
+// Explicit opt-in only. This creates one disposable UUID namespace and one entry,
+// then deletes that exact entry in a finalizer. It never enumerates Keychain.
+it.live("round-trips a disposable macOS Keychain grant only when explicitly enabled", () =>
+  Effect.gen(function* () {
+    const enabled = yield* Config.string("PI_MCP_KEYCHAIN_INTEGRATION").pipe(
+      Config.withDefault("0"),
+    );
+    if (enabled !== "1" || process.platform !== "darwin") return;
+    const crypto = yield* Crypto.Crypto;
+    const uuid = yield* crypto.randomUUIDv4;
+    const service = `com.cosmic-pi.mcp.test.${uuid}`;
+    const store = yield* makeKeychainStore({ service });
+    expect(yield* store.read(identity)).toBeUndefined();
+    // A failed or interrupted write can still own a pending native mutation.
+    // Install deletion first so cleanup joins it even when the first write fails.
+    yield* Effect.addFinalizer(() =>
+      store.remove(identity).pipe(
+        Effect.tapError(() =>
+          Effect.logError(
+            `Disposable Keychain cleanup failed: service=${service} identity=${identity}`,
+          ),
+        ),
+        Effect.orDie,
+      ),
+    );
+    yield* store.write(identity, `disposable-${uuid}`);
+    expect(yield* store.read(identity)).toBe(`disposable-${uuid}`);
+    yield* store.write(identity, `replacement-${uuid}`);
+    expect(yield* store.read(identity)).toBe(`replacement-${uuid}`);
+    yield* store.remove(identity);
+    expect(yield* store.read(identity)).toBeUndefined();
+  }).pipe(Effect.provide(NodeCrypto.layer)),
+);

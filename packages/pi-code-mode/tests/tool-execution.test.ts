@@ -8,8 +8,17 @@ import {
   normalizeBackgroundTaskCodeModeQuery,
   type BackgroundTaskCodeModeCapability,
 } from "pi-background-task/code-mode";
+import {
+  MCP_CODE_MODE_QUERY,
+  MCP_CODE_MODE_VERSION,
+  McpCodeModeOutputSchema,
+  mcpCodeModeError,
+  normalizeMcpCodeModeQuery,
+  type McpCodeModeCapability,
+} from "pi-mcp/code-mode";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { CodeMode } from "../src/boundary/codemode-runtime.ts";
 import {
   type NestedPiToolDefinitions,
@@ -51,6 +60,18 @@ const backgroundEvents = (
     if (!query) return;
     for (const capability of capabilities) query.respond(capability);
   });
+  return events;
+};
+
+const mcpEvents = (execute: McpCodeModeCapability["execute"]): ExtensionAPI["events"] => {
+  const events = createEventBus();
+  events.on(MCP_CODE_MODE_QUERY, (value) =>
+    normalizeMcpCodeModeQuery(value)?.respond({
+      version: MCP_CODE_MODE_VERSION,
+      sessionId: "test-session",
+      execute,
+    }),
+  );
   return events;
 };
 
@@ -1054,5 +1075,167 @@ describe("diagnostics and errors", () => {
       expect(retained[0]?.details.toolCalls[0]?.status).toBe("error");
       expect(retained[0]?.details.counts).toMatchObject({ total: 1, failed: 1 });
     }),
+  );
+});
+
+describe("MCP guest execution", () => {
+  it.effect("batches calls concurrently and reads retained results in the same program", () =>
+    Effect.gen(function* () {
+      const started: string[] = [];
+      const ids = new Set<string>();
+      const release = yield* Deferred.make<void>();
+      const events = mcpEvents((callId, input, _signal, allowance) => {
+        ids.add(callId);
+        expect(allowance).toBeGreaterThan(0);
+        if (input.action === "tools.call") {
+          started.push(input.tool);
+          if (started.length === 2) Effect.runSync(Deferred.succeed(release, undefined));
+          return Effect.runPromise(Deferred.await(release)).then(() => ({
+            action: input.action,
+            outcome: "completed" as const,
+            isError: input.tool === "second",
+            data: null,
+            resultId: input.tool,
+            notices: ["retained"],
+          }));
+        }
+        if (input.action === "result.read")
+          return Promise.resolve({
+            action: input.action,
+            outcome: "completed" as const,
+            isError: false,
+            data: { originalIsError: input.id === "second", text: input.id },
+            notices: [],
+          });
+        throw new Error("unexpected request");
+      });
+      const result = yield* Effect.promise(() =>
+        makeHarness({ events })(
+          "mcp-batch",
+          `
+      const replies = await Promise.all(["first", "second"].map(tool => tools.mcp.request({ action: "tools.call", server: "fixture", tool })));
+      return await Promise.all(replies.map(reply => tools.mcp.request({ action: "result.read", id: reply.resultId })));
+    `,
+        ),
+      );
+      expect(started).toEqual(["first", "second"]);
+      expect(ids.size).toBe(4);
+      expect(guestJson(textOf(result)).map((reply: { data: object }) => reply.data)).toEqual([
+        { originalIsError: false, text: "first" },
+        { originalIsError: true, text: "second" },
+      ]);
+      expect(result.details.counts).toMatchObject({ total: 4, succeeded: 4 });
+    }),
+  );
+
+  it.effect("rejects management and excess fields before the provider receives anything", () =>
+    Effect.gen(function* () {
+      let called = false;
+      const events = mcpEvents(() => {
+        called = true;
+        return Promise.reject(new Error("unreachable"));
+      });
+      const result = yield* Effect.promise(() =>
+        makeHarness({ events })(
+          "mcp-closed",
+          `
+      const rejected = [];
+      for (const input of [{action:"disconnect",server:"fixture"},{action:"refresh",server:"fixture"},{action:"auth"},{action:"status",connect:true},{action:"config.write"}]) {
+        try { await tools.mcp.request(input); } catch { rejected.push(input.action); }
+      }
+      return rejected;
+    `,
+        ),
+      );
+      expect(guestJson(textOf(result))).toEqual([
+        "disconnect",
+        "refresh",
+        "auth",
+        "status",
+        "config.write",
+      ]);
+      expect(called).toBe(false);
+    }),
+  );
+
+  it.effect("keeps built-ins usable without either companion and makes MCP absence catchable", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.promise(() =>
+        makeHarness({ definitions: fakeDefinitions({ read: () => Promise.resolve("file") }) })(
+          "mcp-absent",
+          `
+      let absent = false;
+      try { await tools.mcp.request({action:"status"}); } catch { absent = true; }
+      return { absent, text: await tools.pi.read({path:"fixture"}) };
+    `,
+        ),
+      );
+      expect(guestJson(textOf(result))).toEqual({ absent: true, text: "file" });
+    }),
+  );
+
+  it.effect(
+    "charges compact JSON successes and catchable failure text to one cumulative budget",
+    () =>
+      Effect.gen(function* () {
+        const allowances: number[] = [];
+        const response = {
+          action: "status",
+          outcome: "completed" as const,
+          isError: false,
+          data: null,
+          notices: [],
+        };
+        const events = mcpEvents((_id, _input, _signal, allowance) => {
+          allowances.push(allowance);
+          if (allowances.length === 1) return Promise.resolve(response);
+          return Promise.reject(mcpCodeModeError("transport", "unknown"));
+        });
+        const result = yield* Effect.promise(() =>
+          makeHarness({ events, config: { maxCumulativeChildOutputBytes: 400 } })(
+            "mcp-budget",
+            `
+      await tools.mcp.request({action:"status"});
+      const errors = [];
+      for (let i=0;i<4;i++) { try { await tools.mcp.request({action:"status"}); } catch (error) { errors.push(error.message); } }
+      return errors;
+    `,
+          ),
+        );
+        const serialized = yield* Schema.encodeEffect(
+          Schema.fromJsonString(McpCodeModeOutputSchema),
+        )(response);
+        expect(allowances[1]).toBe(400 - utf8ByteLength(serialized));
+        // SAFETY: The controlled guest program returns only caught error.message strings.
+        const errors = guestJson(textOf(result)) as string[];
+        expect(errors.reduce((sum, message) => sum + utf8ByteLength(message), 0)).toBe(
+          allowances[1],
+        );
+        expect(allowances.at(-1)).toBe(0);
+        expect(errors.at(-1)).toBe("");
+      }),
+  );
+
+  it.effect(
+    "forwards outer cancellation to a pending MCP call without waiting for foreign settlement",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<AbortSignal>();
+        const events = mcpEvents((_id, _input, signal) => {
+          Effect.runSync(Deferred.succeed(started, signal));
+          return Promise.race([]);
+        });
+        const controller = new AbortController();
+        const pending = makeHarness({ events })(
+          "mcp-abort",
+          `return await tools.mcp.request({action:"tools.call",server:"fixture",tool:"wait"});`,
+          controller.signal,
+        );
+        const signal = yield* Deferred.await(started);
+        controller.abort();
+        const result = yield* Effect.promise(() => pending);
+        expect(signal.aborted).toBe(true);
+        expect(result.details.cancelled).toBe(true);
+      }),
   );
 });

@@ -12,6 +12,8 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { MCP_CODE_MODE_MAX_OUTPUT_BYTES } from "pi-mcp/code-mode";
+import { makeMcpDispatch } from "../boundary/host-mcp.ts";
 import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
@@ -55,7 +57,7 @@ export interface CodeModeExecutionEnvironment {
   readonly runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) => Promise<A>;
   /** Pi built-in definitions captured for this registration's cwd and platform. */
   readonly definitions: NestedPiToolDefinitions;
-  /** Shared extension event bus used only for the explicit Background Tasks protocol. */
+  /** Shared event bus used only for the explicit Background Tasks and MCP protocols. */
   readonly events: ExtensionAPI["events"];
   /** Stable Pi session id captured at activation; absence makes the adapter fail closed. */
   readonly sessionId: string | undefined;
@@ -206,9 +208,16 @@ export const makeCodeModeToolExecute =
             Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
         });
 
+        const dispatchMcp = makeMcpDispatch({
+          events: environment.events,
+          sessionId: environment.sessionId,
+          toolCallId,
+          maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
+        });
+
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
           code: params.code,
-          tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, budget, {
+          tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, dispatchMcp, budget, {
             includePowerShell: environment.definitions.powershell !== undefined,
           }),
           limits: {

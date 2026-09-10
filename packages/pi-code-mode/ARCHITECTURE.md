@@ -5,6 +5,7 @@ the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A tool c
 confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
 `write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
+versioned session protocol. The fixed `tools.mcp.request` leaf queries `pi-mcp` through its own
 versioned session protocol. The private runtime supplies `tools.$codemode.search`.
 
 The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/`. Its TypeScript source ships in this package and loads through one computed relative import
@@ -22,14 +23,14 @@ Only runtime source plus its README, legal, and provenance documents ship.
   notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
 - `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
   result formatting, failure-detail retention, tool registration, and active-list reconciliation.
-  Its Background Tasks leaf imports the producer-owned v1 input and
-  output codecs instead of declaring a second protocol shape.
+  Its Background Tasks and MCP leaves import producer-owned v1 input/output codecs instead of
+  declaring second protocol shapes. Neither adapter invokes a registered tool definition.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
   renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
   changing model-visible text.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
-  Windows PowerShell, the explicit Background Tasks protocol client, the guarded progress
+  Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
   deactivation handoff. Foreign Promise
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
@@ -114,7 +115,7 @@ persisted row after an active failure.
 ## Tool execution and limits
 
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
-`tools.session.backgroundTask` adapter, and runtime-owned search. Inputs pass Effect Schema before
+`tools.session.backgroundTask` and `tools.mcp.request` adapters, and runtime-owned search. Inputs pass Effect Schema before
 dispatch. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
 Grep context is a non-negative safe integer. Bash and PowerShell timeouts are positive finite
 numbers and may be fractional. Invalid numeric input fails before a fresh Pi definition runs.
@@ -123,6 +124,22 @@ Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and
 middleware, approvals, previews, registered overrides, and session-specific operations.
 Background Tasks calls query one stable-session, token-checked Promise capability on each
 invocation. They never dispatch the registered top-level definition.
+
+`boundary/host-mcp.ts` queries exactly one active stable-session provider per request through
+`pi-mcp/code-mode`. That import loads codecs, not an extension or runtime. The provider owns
+connections, authentication, policy, validation, and result retention. The guest can request
+status, bounded discovery, exact tool calls, resources/templates, prompts, and retained result
+reads, but not explicit connection management, authentication, configuration writes, or arbitrary
+protocol methods. The same MCP execution service enforces both gateway and nested-call policy.
+
+MCP replies preserve `not-sent`, `completed`, and `unknown` certainty independently of `isError`.
+The consumer validates bounded JSON, rejects binary payloads, and charges compact JSON or
+catchable failures to the remaining child-output budget. Native images never cross the protocol.
+A post-settlement projection failure retains known completion and does not authorize replay.
+Resource/prompt content stays untrusted data; the adapter does not follow links, install commands,
+or inject messages. MCP servers retain their own local-user or remote authority and are not
+sandboxed by the interpreter. Nested MCP operations bypass Pi middleware and unrelated approvals,
+just like the Background Tasks capability; only the outer Code Mode call uses that middleware.
 
 Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
 process, environment, network, and filesystem authority. Read, edit, and write accept relative,

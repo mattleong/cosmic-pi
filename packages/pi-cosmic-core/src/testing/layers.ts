@@ -9,7 +9,10 @@ import * as Tracer from "effect/Tracer";
 import {
   type AtomicJsonDocumentStoreContract,
   JsonDocumentStore,
+  JsonObjectFromString,
   type JsonDocumentModification,
+  type JsonDocumentReadOptions,
+  validateJsonDocumentReadOptions,
   type JsonDocumentStoreContract,
   type JsonObject,
 } from "../platform/json-document.ts";
@@ -49,9 +52,6 @@ interface JsonDocumentUpdateGate {
   readonly started: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
 }
-
-const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-const JsonObjectFromString = Schema.fromJsonString(JsonObjectSchema);
 
 const cloneInitialDocument = (document: JsonObject): JsonObject => {
   const source = Schema.encodeUnknownSync(JsonObjectFromString)(document);
@@ -122,16 +122,38 @@ class JsonDocumentMapView implements Map<string, JsonObject> {
   }
 }
 
-const cloneDocument = (operation: string, path: string, document: JsonObject) =>
+// Match the live store's serialized representation, including its trailing newline.
+const cloneDocument = (
+  operation: string,
+  path: string,
+  document: JsonObject,
+  options?: JsonDocumentReadOptions,
+) =>
   Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
-    Effect.flatMap((source) => Schema.decodeUnknownEffect(JsonObjectFromString)(source)),
-    Effect.mapError(
-      () =>
-        new JsonDocumentError({
-          operation,
-          path,
-          message: "Unable to clone JSON document.",
-        }),
+    Effect.flatMap((source) =>
+      Effect.gen(function* () {
+        if (
+          options?.maxBytes !== undefined &&
+          new TextEncoder().encode(`${source}\n`).byteLength > options.maxBytes
+        )
+          return yield* Effect.fail(
+            new JsonDocumentError({
+              operation: operation === "read" ? "read" : "write",
+              path,
+              message: "JSON document exceeds its byte limit.",
+            }),
+          );
+        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source);
+      }),
+    ),
+    Effect.mapError((error) =>
+      error._tag === "JsonDocumentError"
+        ? error
+        : new JsonDocumentError({
+            operation,
+            path,
+            message: "Unable to clone JSON document.",
+          }),
     ),
   );
 
@@ -153,19 +175,24 @@ export function makeInMemoryDocuments(
     pathSemaphores.set(path, created);
     return created;
   };
-  const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = (path, modify) =>
+  const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = (path, modify, options) =>
     semaphoreFor(path).withPermit(
       Effect.gen(function* () {
+        const limits = yield* validateJsonDocumentReadOptions(path, options);
         updateCount++;
         const current = storedDocuments.get(path);
-        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-        const isolated =
-          current === undefined ? ({} as JsonObject) : yield* cloneDocument("read", path, current);
-        const atomicCurrent = beforeNextUpdate ? beforeNextUpdate(isolated) : isolated;
+        const isolated: JsonObject =
+          current === undefined ? {} : yield* cloneDocument("read", path, current, limits);
+        const injected = beforeNextUpdate;
         beforeNextUpdate = undefined;
-        const { value, document, write, afterCommit } = yield* modify(atomicCurrent);
+        const atomicCurrent = injected ? injected(isolated) : isolated;
+        const boundedCurrent =
+          limits?.maxBytes === undefined || injected === undefined
+            ? atomicCurrent
+            : yield* cloneDocument("read", path, atomicCurrent, limits);
+        const { value, document, write, afterCommit } = yield* modify(boundedCurrent);
         if (write === false) return value;
-        const stored = yield* cloneDocument("update", path, document);
+        const stored = yield* cloneDocument("update", path, document, limits);
         const gate = nextUpdateGate;
         nextUpdateGate = undefined;
         if (gate?._tag === "BeforeCommit") {
@@ -183,31 +210,35 @@ export function makeInMemoryDocuments(
         return value;
       }),
     );
-  const updateObject: JsonDocumentStoreContract["updateObject"] = (path, update) =>
-    modifyObject(path, (document) =>
-      Effect.try({
-        try: () => {
-          const next = update(document);
-          return {
-            value: next,
-            document: next,
-          } satisfies JsonDocumentModification<JsonObject>;
-        },
-        catch: () =>
-          new JsonDocumentError({
-            operation: "update",
-            path,
-            message: "Unable to update JSON document.",
-          }),
-      }),
+  const updateObject: JsonDocumentStoreContract["updateObject"] = (path, update, options) =>
+    modifyObject(
+      path,
+      (document) =>
+        Effect.try({
+          try: () => {
+            const next = update(document);
+            return {
+              value: next,
+              document: next,
+            } satisfies JsonDocumentModification<JsonObject>;
+          },
+          catch: () =>
+            new JsonDocumentError({
+              operation: "update",
+              path,
+              message: "Unable to update JSON document.",
+            }),
+        }),
+      options,
     );
   const service: AtomicJsonDocumentStoreContract = {
     exists: (path) => Effect.sync(() => storedDocuments.has(path)),
-    readObject: (path) =>
+    readObject: (path, options) =>
       Effect.gen(function* () {
+        const limits = yield* validateJsonDocumentReadOptions(path, options);
         const value = storedDocuments.get(path);
         if (value === undefined) return undefined;
-        return yield* cloneDocument("read", path, value);
+        return yield* cloneDocument("read", path, value, limits);
       }),
     writeObject: (path, document) =>
       semaphoreFor(path).withPermit(

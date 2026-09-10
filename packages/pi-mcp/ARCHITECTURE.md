@@ -1,0 +1,59 @@
+# pi-mcp architecture
+
+`pi-mcp` owns one Pi `mcp` gateway, `/mcp` and `/mcp-settings` commands, and the producer side of `tools.mcp.request`. All execution goes through `McpExecution`; Code Mode does not own a second connection manager. The [README](./README.md) defines configuration, public actions, limits, and supported modes. The [plan](../../docs/plans/pi-mcp.md) tracks acceptance evidence.
+
+## Application and authority
+
+`extension.ts` and `application/register.ts` register inert callbacks. `application/lifecycle.ts` is the Effect-to-Promise boundary and uses core's session-runtime slot for startup, replacement, tree changes, and shutdown. Preview settings load before wrapping the owned gateway. A foreign `mcp` registration prevents installation without mutating its tools.
+
+The activation owns tool-error receipts and a stable-session Code Mode provider. Deactivation revokes both before runtime disposal. Pinned Pi treats a resolved tool execution as successful, so the owned `tool_result` hook restores the gateway's explicit error flag while preserving bounded content/details. It does not modify foreign results. Commands use current-generation session capabilities; authentication never enters the model request union.
+
+`code-mode/protocol.ts` exports producer-owned v1 codecs and a narrow Promise capability through `pi-mcp/code-mode`. `boundary/host-code-mode.ts` validates stable session identity, current activation, trust, and top-level tool activation on each query and call. The consumer must find exactly one provider. It cannot reach management, auth, config writes, or arbitrary wire methods. Nested calls bypass Pi middleware and unrelated approval extensions, so MCP policy lives in shared services rather than a `tool_call` hook.
+
+## Configuration and connections
+
+`config/store.ts` is the only persistence API. It captures fresh global and project scope paths, reads version 1 documents with core's bounded JSON-document API, preserves unrelated fields, and publishes a frozen configuration in the atomic write commit. Untrusted sessions perform no project-document I/O. Settings merge per field; server definitions replace as a whole. Invalid project overrides disable execution instead of inheriting a different target's credentials.
+
+`connection/service.ts`, `registry.ts`, and `admission.ts` own child scopes, deduplicated acquisition, bounded session/per-server admission, queue deadlines, idle cleanup, and revocation. Requests recheck current trust, configuration, and tool policy after queued waits. Auth operations use the connection owner's auth fence so login/logout cannot race a new dispatch. Revocation happens before interruption and cleanup; no registry lock spans remote work or a user dialog. Unconfirmed cleanup blocks replacement admission, including after session replacement.
+
+`boundary/sdk-connection.ts` resolves bindings at connection time. Stdio gets `PATH` plus explicit environment entries, with no implicit shell or ambient credentials. A server executable remains trusted local code with user privileges, not an OS sandbox. Configuration cwd and allow/deny rules do not confine its filesystem or network access.
+
+`discovery/` owns complete frozen metadata revisions, bounded remote pagination, list-change coalescing, exact lookup, and revision-bound gateway cursors. Unscoped discovery never connects every server. Resources and prompts use enabled-server authority. Resource URIs route only to that server; returned links are never followed locally. Prompt roles and server descriptions remain untrusted data, never system instructions or installed slash commands.
+
+## SDK transport boundaries
+
+The official client/core SDK 2.0.0 owns framing, correlation, legacy negotiation, cancellation messages, and wire schemas. `client/` defines internal operation contracts and redacted errors, while `tools/model.ts` owns the public request/reply union. `sdk-client.ts` uses public `request()` with SDK-exported schemas. It advertises no interactive capabilities and rejects synchronous remote schema compilation on Pi's thread.
+
+`boundary/sdk-stdio.ts` owns acquisition, admission-time deadlines, immediate revocation, and interruption-safe cached close. `sdk-stdio-transport.ts` uses public SDK framing over core's macOS duplex process. The SDK's native close lacks the required root/group/pipe confirmation. A child scope owns bounded readers, writer queues, and cancellation ingress. Cancelling one request does not close a healthy shared connection or undo remote work.
+
+`sdk-http.ts` and `sdk-http-transport.ts` own connection/request admission, dispatch/completion evidence, and continuous native-resource leases. GET, DELETE, and notifications have session traffic ownership separate from application calls. Close revokes admission, aborts and joins owners, and caches its result even if the first caller is interrupted. Consumer abort is not proof that native source cleanup finished.
+
+`sdk-fetch.ts` adapts the injected Effect fetch capability to SDK Promises/ReadableStreams, strips internal correlation headers, rejects redirects, and bounds bodies before SDK parsing. Native callbacks transfer fetch/body ownership without an idle gap. `sdk-http-control.ts` gives uncorrelated non-GET traffic its own 16-slot admission cap and scoped deadlines, independent of application permits. Cleanup uncertainty disables reuse. These adapters create no detached Effect runtime.
+
+Transport auth is token-only, with insufficient-scope recovery and legacy reconnection disabled. It cannot start login UI or replay a rejected application request.
+
+## Authentication
+
+`auth/service.ts` owns grant identity, refresh serialization, publication authority, and logout. `boundary/sdk-auth.ts` adapts SDK public-client discovery, pre-registration, dynamic registration, Client ID Metadata Documents, PKCE S256, exchange, and refresh. Application policy checks issuer/resource binding, redirect/state/issuer, public-client constraints, and supported endpoints before credential use.
+
+`boundary/auth-fetch.ts` owns bounded OAuth HTTP requests. Core's `NetworkAddresses` resolves candidates; MCP policy approves them; `pinnedNetworkLookup` supplies exactly that set to a scoped HTTP agent. Every allowed discovery redirect is checked again. The core resolver supplies no OAuth policy and makes no second DNS lookup at connection time.
+
+`boundary/auth-callback.ts` owns a scoped IPv4 loopback listener using core's `nodeHttpServerLayer`. The auth attempt owns route, Host, origin, redirect, and one-use callback checks. Core owns native listener acquisition and connection closure; active clients cannot keep the listener alive after shutdown. `boundary/host-auth.ts` adapts explicit-user TUI/RPC dialogs and browser opening. Manual callbacks use the user-only dialog and require a fixed registered redirect. Print/JSON mode never starts interactive login.
+
+`boundary/credential-store.ts` is the grant persistence door. `keychain.ts` lazily loads macOS `@napi-rs/keyring`; there is no plaintext or session-only fallback. Native mutation fences survive runtime replacement. An aborted waiter is not native write completion, and deletion must join an earlier mutation before it can report success. Logout revokes connection/result authority before removing local grants and makes no provider-revocation claim.
+
+## Validation and results
+
+`validation/schema-policy.ts` bounds schemas/data and allows supported constraints and local references only. The fixed packaged `schema-validator-helper.mjs` runs through core's bounded process service, never model-supplied code. A process-wide immediate permit covers helper work and cleanup; uncertain cleanup disables later helper admission. This isolates validator CPU, not OS memory or server privileges.
+
+`invocation/validation.ts` validates arguments before dispatch and declared structured output after settlement. `tools/service.ts` retains accepted results even when output validation fails. `results/` separates normalization/preparation, authority-checked retention commit, and bounded projection. It owns session quotas, oldest-settled eviction, result IDs, attachment descriptors, and authorized reads. Disconnect preserves completed results; configuration changes, trust loss, logout, eviction, and replacement revoke them.
+
+Outcomes retain `not-sent`, `completed`, or `unknown` certainty independently of `isError`. Accepted output remains completed after validation, projection, or retention failure. No automatic replay recovers uncertain or completed work. Cancellation and cleanup do not roll back remote side effects.
+
+Native image checks cover base64 bounds, MIME, header/container structure, and declared dimensions for PNG/JPEG/GIF/WebP. They do not fully decompress images or validate every frame. Native attachments use a separate bounded allowance; Code Mode receives JSON descriptors only. Returned content can contain prompt injection and never gains authority by being an MCP result.
+
+## Packaging and evidence
+
+The private package ships TypeScript source and its fixed `.mjs` helper, with no generated `dist/` or build prerequisite. SDK-internal Zod is transitive; authored schemas use Effect Schema. Core owns generic process, DNS-pinning, listener, and document boundaries, never MCP protocol or OAuth policy.
+
+Owned fixtures cover lifecycle, policy, validation, OAuth, HTTP JSON/SSE, and result behavior. The real macOS filesystem and Playwright smoke passed through `McpExecution` with protocol `2025-11-25`, including isolated browser use, 80 KB retention, and owned-resource cleanup. Native Keychain create/read/replace/delete and absence checks passed in a disposable namespace. The final workspace validation and clean-consumer packed-source checks also passed. Neither those fixtures nor SDK negotiation imply universal server or provider compatibility.

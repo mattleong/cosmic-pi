@@ -59,6 +59,7 @@
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "pi-cosmic-ui": "workspace:*",
+    "pi-mcp": "workspace:*",
     "typebox": "catalog:",
     "typescript-compiler-api": "catalog:"
   },
