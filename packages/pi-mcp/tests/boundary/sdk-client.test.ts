@@ -6,11 +6,44 @@ import * as Stream from "effect/Stream";
 import { makeSdkEvents, sdkCapabilities } from "../../src/boundary/sdk-events.ts";
 import { boundaryError } from "../../src/client/errors.ts";
 import {
+  boundedSdkInstructions,
   decodeMcpReply,
   decodeMcpRequest,
   executeSdkRequest,
   makeSdkClient,
 } from "../../src/boundary/sdk-client.ts";
+
+it.each([
+  { name: "absent", text: undefined, expected: undefined },
+  { name: "empty", text: "", expected: { text: "", truncated: false } },
+  {
+    name: "exact bound",
+    text: "x".repeat(65_536),
+    expected: { text: "x".repeat(65_536), truncated: false },
+  },
+  {
+    name: "oversized",
+    text: "x".repeat(65_537),
+    expected: { text: "x".repeat(65_536), truncated: true },
+  },
+  {
+    name: "multibyte boundary",
+    text: "x".repeat(65_533) + "😀suffix",
+    expected: { text: "x".repeat(65_533), truncated: true },
+  },
+  {
+    name: "exact multibyte bound",
+    text: "😀".repeat(16_384),
+    expected: { text: "😀".repeat(16_384), truncated: false },
+  },
+])("bounds $name initialize instructions without splitting characters", ({ text, expected }) => {
+  const snapshot = boundedSdkInstructions(text);
+  expect(snapshot).toEqual(expected);
+  if (snapshot !== undefined) {
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(new TextEncoder().encode(snapshot.text).byteLength).toBeLessThanOrEqual(65_536);
+  }
+});
 
 const makeClientHarness = Effect.gen(function* () {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

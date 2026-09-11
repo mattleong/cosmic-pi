@@ -346,6 +346,166 @@ describe("scoped SDK HTTP connection", () => {
     );
   }
 
+  it.live("never replays an expired-session call, even after explicit replacement", () =>
+    Effect.gen(function* () {
+      const initializations: Array<string | undefined> = [];
+      const sideEffects: Array<{ tool: string | undefined; session: string | undefined }> = [];
+      const cleanup: boolean[] = [];
+      const fixture = yield* realFixture((request, message) => {
+        if (message?.method === "initialize") {
+          initializations.push(request.headers["mcp-session-id"]);
+          return Effect.succeed(
+            HttpServerResponse.fromWeb(
+              new Response(resultBody(message.id, initialized), {
+                headers: {
+                  "content-type": "application/json",
+                  "mcp-session-id": initializations.length === 1 ? "sessionA" : "sessionB",
+                },
+              }),
+            ),
+          );
+        }
+        if (message?.method !== "tools/call") return undefined;
+        // A failed HTTP response cannot prove that the server did no work.
+        sideEffects.push({
+          tool: message.params?.name,
+          session: request.headers["mcp-session-id"],
+        });
+        return message.params?.name === "expired"
+          ? Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+          : undefined;
+      });
+      const connection = yield* openSdkHttp({
+        url: fixture.url,
+        ...defaults,
+        onCleanup: (confirmed) => cleanup.push(confirmed),
+      });
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "transport", outcome: "unknown" },
+      });
+      expect(sideEffects).toEqual([{ tool: "expired", session: "sessionA" }]);
+      expect(initializations).toEqual([undefined]);
+      expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
+
+      yield* connection.close;
+      expect(cleanup).toEqual([true]);
+      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+      expect(
+        fixture.requests
+          .filter((request) => request.method === "DELETE")
+          .map((request) => request.headers["mcp-session-id"]),
+      ).toEqual(["sessionA"]);
+      const closedRequestCount = fixture.requests.length;
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "unavailable", outcome: "not-sent" },
+      });
+      expect(fixture.requests).toHaveLength(closedRequestCount);
+
+      const replacement = yield* openSdkHttp({ url: fixture.url, ...defaults });
+      expect(initializations).toEqual([undefined, undefined]);
+      expect(sideEffects).toEqual([{ tool: "expired", session: "sessionA" }]);
+      expect(yield* replacement.request({ action: "tools.call", tool: "separate" })).toMatchObject({
+        outcome: "completed",
+        result: toolResult,
+      });
+      expect(sideEffects).toEqual([
+        { tool: "expired", session: "sessionA" },
+        { tool: "separate", session: "sessionB" },
+      ]);
+      yield* replacement.close;
+      expect(initializations).toHaveLength(2);
+      expect(sideEffects).toHaveLength(2);
+    }),
+  );
+
+  it.effect("redacts initialization HTTP 404 without recovery or session deletion", () =>
+    Effect.gen(function* () {
+      const requests: Array<{
+        method: string | undefined;
+        rpc: string | undefined;
+        session: string | null;
+      }> = [];
+      const cleanup: boolean[] = [];
+      const result = yield* openSdkHttp({
+        url: fakeUrl,
+        ...defaults,
+        onCleanup: (confirmed) => cleanup.push(confirmed),
+        fetch: controlledFetch((init, message) => {
+          requests.push({
+            method: init?.method,
+            rpc: message?.method,
+            session: new Headers(init?.headers).get("mcp-session-id"),
+          });
+          return message?.method === "initialize"
+            ? Promise.resolve(new Response("private-expired-session-response", { status: 404 }))
+            : undefined;
+        }),
+      }).pipe(Effect.result);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "transport", outcome: "unknown" },
+      });
+      expect(String(result)).not.toContain("private-");
+      expect(cleanup).toEqual([true]);
+      // Failed initialization never starts application traffic, recovery, or DELETE.
+      expect(requests).toEqual([{ method: "POST", rpc: "initialize", session: null }]);
+    }),
+  );
+
+  it.live("caches DELETE 404 cleanup uncertainty after an expired-session call", () =>
+    Effect.gen(function* () {
+      const cleanup: boolean[] = [];
+      const fixture = yield* realFixture((request, message) =>
+        request.method === "DELETE" || message?.method === "tools/call"
+          ? Effect.succeed(HttpServerResponse.empty({ status: 404 }))
+          : undefined,
+      );
+      const connection = yield* openSdkHttp({
+        url: fixture.url,
+        ...defaults,
+        onCleanup: (confirmed) => cleanup.push(confirmed),
+      });
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "transport", outcome: "unknown" },
+      });
+      const closed = yield* connection.close.pipe(Effect.result);
+      expect(closed).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "cleanup", outcome: "unknown" },
+      });
+      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: true });
+      expect(cleanup).toEqual([false]);
+      expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
+      expect(
+        fixture.requests.filter((request) => parseMessage(request.body)?.method === "initialize"),
+      ).toHaveLength(1);
+      const calls = fixture.requests.filter(
+        (request) => parseMessage(request.body)?.method === "tools/call",
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.headers["mcp-session-id"]).toBe("fixture-session");
+      const closedRequestCount = fixture.requests.length;
+      expect(yield* connection.close.pipe(Effect.result)).toEqual(closed);
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "later" }).pipe(Effect.result),
+      ).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "unavailable", outcome: "not-sent" },
+      });
+      expect(fixture.requests).toHaveLength(closedRequestCount);
+      expect(cleanup).toEqual([false]);
+    }),
+  );
+
   it.live("maps declared byte overflow while aborting an actual HTTP response", () =>
     Effect.gen(function* () {
       const fixture = yield* realFixture((_request, message) => {

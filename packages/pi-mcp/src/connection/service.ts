@@ -184,6 +184,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       server: owner.server,
       owner: owner.id,
       capabilities: connection.capabilities,
+      instructions: connection.instructions,
       changes: connection.changes,
       checkCurrent,
       commit: (publication) =>

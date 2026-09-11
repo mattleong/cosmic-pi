@@ -3,7 +3,13 @@ import type * as Fiber from "effect/Fiber";
 import type * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
 import type { McpBoundaryError } from "../client/errors.ts";
-import type { McpCapabilities, McpMetadataFamily, McpReply, McpRequest } from "../client/model.ts";
+import type {
+  McpCapabilities,
+  McpInstructions,
+  McpMetadataFamily,
+  McpReply,
+  McpRequest,
+} from "../client/model.ts";
 import type { McpEffectiveServer, McpResolvedConfig } from "../config/model.ts";
 
 export interface McpActionBinding {
@@ -25,6 +31,7 @@ export interface McpOperation {
   readonly server: McpEffectiveServer;
   readonly owner: string;
   readonly capabilities: McpCapabilities;
+  readonly instructions?: McpInstructions | undefined;
   readonly changes: Stream.Stream<McpMetadataFamily>;
   readonly checkCurrent: Effect.Effect<void, McpBoundaryError>;
   /** Only bounded local publication belongs here, never remote I/O or another owner wait. */

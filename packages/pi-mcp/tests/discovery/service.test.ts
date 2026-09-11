@@ -23,7 +23,7 @@ import type { McpEffectiveServer, McpResolvedConfig } from "../../src/config/mod
 import { McpConfigStore } from "../../src/config/store.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
-import type { McpDiscoveryQueryResult } from "../../src/discovery/model.ts";
+import type { McpDiscoveryQueryResult, McpDiscoveryRequest } from "../../src/discovery/model.ts";
 
 const server = (
   id: string,
@@ -202,6 +202,7 @@ it.effect(
         const empty = yield* discovery
           .query({ action: "tools.search", query: "" })
           .pipe(Effect.flatMap(decodePage));
+        expect(empty.page).toMatchObject({ items: [], total: 0 });
         expect(empty.undiscovered).toEqual(["a", "b"]);
         expect(yield* Ref.get(harness.opened)).toEqual([]);
         yield* discovery.query({ action: "tools.list", server: "a" });
@@ -460,9 +461,20 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       const discovery = yield* McpDiscovery;
       const connections = yield* McpConnections;
       const before = yield* connections.withOperation("a", {}, discovery.ensure);
+      yield* connections.withOperation("b", {}, discovery.ensure);
+      const queries: ReadonlyArray<McpDiscoveryRequest> = [
+        { action: "tools.list" },
+        { action: "tools.list", server: "a", limit: 1 },
+        { action: "tools.search", query: "no-match" },
+        { action: "tools.search", server: "a", query: "alpha" },
+        { action: "tools.describe", server: "a", tool: "alpha" },
+        { action: "resources.list", server: "a" },
+        { action: "resources.templates", server: "a" },
+        { action: "prompts.list", server: "a" },
+      ];
       yield* Ref.set(harness.route, (request, id) =>
         request.action === "prompts.list"
-          ? Effect.fail(boundaryError("transport", "not-sent", "Refresh failed."))
+          ? Effect.fail(boundaryError("transport", "not-sent", "private-refresh-error"))
           : request.action === "tools.list"
             ? Effect.succeed(reply(request, { tools: [tool("changed")] }))
             : defaultRoute(request, id),
@@ -473,6 +485,19 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       const after = yield* connections.withOperation("a", {}, discovery.ensure);
       expect(after).toBe(before);
       expect(after.tools.map((item) => item.name)).not.toContain("changed");
+      const callsBefore = yield* Ref.get(harness.calls);
+      for (const query of queries) {
+        const result = yield* discovery.query(query);
+        expect(result.notices).toHaveLength(1);
+        expect(result.notices[0]).toContain("a");
+        expect(result.notices.join("\n")).not.toContain("private-refresh-error");
+      }
+      expect((yield* discovery.query({ action: "tools.list", server: "b" })).notices).toEqual([]);
+      expect(yield* Ref.get(harness.calls)).toEqual(callsBefore);
+      yield* Ref.set(harness.route, defaultRoute);
+      const recovered = yield* connections.withOperation("a", {}, discovery.refresh);
+      expect(recovered.revision).toBeGreaterThan(before.revision);
+      for (const query of queries) expect((yield* discovery.query(query)).notices).toEqual([]);
     }).pipe(Effect.provide(harness.layer));
   }),
 );

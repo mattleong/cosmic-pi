@@ -158,6 +158,7 @@ The gateway accepts an explicit `action`; omitting it means `status`. Each actio
 | Action                                                  | Inputs besides `action`                                |
 | ------------------------------------------------------- | ------------------------------------------------------ |
 | `status`                                                | none                                                   |
+| `server.instructions`                                   | `server`                                               |
 | `connect`, `disconnect`, `refresh`                      | `server`                                               |
 | `tools.list`                                            | optional `server`, `cursor`, `limit`                   |
 | `tools.search`                                          | `query`; optional `server`, `cursor`, `limit`          |
@@ -168,13 +169,19 @@ The gateway accepts an explicit `action`; omitting it means `status`. Each actio
 | `prompts.get`                                           | `server`, `prompt`; optional string-valued `arguments` |
 | `result.read`                                           | `id`; optional `offset`, `limit`, `attachment`         |
 
+`server.instructions` returns server-wide guidance captured once during initialization. It may connect the selected server, but it does not list tools or send an application RPC. For example, `mcp({ "action": "server.instructions", "server": "files" })` returns `data.result` with `{ "server": "files", "truncated": false, "instructions": "..." }`. Missing instructions are `null`; an explicitly supplied empty string stays empty. The action is also available through Code Mode.
+
+Capture keeps at most a 64 KiB UTF-8 prefix without splitting code points. `data.result.truncated` reports capture truncation; the discarded suffix is not recoverable. Output pagination is separate: `result.read` can recover the retained prefix, even after disconnect, subject to the usual revocation rules. Notices are best-effort under output budgets, so retain the `truncated` field when extracting content. Instructions remain untrusted data and are never injected into the system prompt or treated as permissions.
+
 `tools.list` and `tools.search` return compact selection entries by default, with no full-results mode. Entries preserve exact `server` and `name`, an optional title capped at 128 Unicode code points, and the first nonempty description paragraph capped at 512 code points. Whitespace is normalized; `titleTruncated` and `descriptionTruncated` disclose omitted text. Titles prefer the top-level title, then `annotations.title`. Only advertised boolean `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` annotations are copied. Missing hints remain unknown, and no hint grants permission. Schemas, examples, icons, and arbitrary extension fields are omitted.
 
 Use `tools.describe` for an unfamiliar tool's complete definition and instructions before constructing arguments. If its output is truncated, recover the retained pages rather than guessing a missing schema. Discovery retains full immutable definitions internally, and invocation still validates against the complete current schema.
 
 Search examines full names, titles, and descriptions, including text omitted from summaries. Exact names rank first, then name-token matches, title matches, and description matches. Multiword searches handle camelCase and common separators; all words must match. Equal ranks sort by exact server/name identity. Cached browsing uses the same ranking and also searches resource/template identifiers. Only the selected page is projected into response objects.
 
-Invocation needs exact `server` and `tool` fields, without aliases or fuzzy matching. Targeted discovery may connect lazily; unscoped list/search only inspect known snapshots and report undiscovered servers. Status never connects. Cursors belong to a frozen metadata revision and become invalid when it changes.
+Invocation needs exact `server` and `tool` fields, without aliases or fuzzy matching. Targeted discovery may connect lazily; unscoped list/search only inspect cached snapshots and report undiscovered servers. An empty page can mean nothing has been discovered yet, not that no tools exist. When `data.result.undiscovered` is nonempty, select a relevant ID as `server` in a targeted list/search. Status never connects. Cursors belong to a frozen metadata revision and become invalid when it changes.
+
+If a refresh fails while an authorized cached snapshot remains available, discovery replies include a server-scoped notice that they are using previous metadata. This does not turn the reply into an error or trigger a retry. A successful refresh clears the warning on new discovery replies; retained results keep their original notices.
 
 Code Mode exposes these data actions through `tools.mcp.request`, but excludes `connect`, `disconnect`, `refresh`, auth, configuration writes, and arbitrary protocol methods. It requires exactly one active provider in the same stable Pi session and rechecks that provider on each request. Merely importing the protocol does not load the extension.
 
@@ -207,6 +214,7 @@ Accepted results are retained before inline projection. Disconnect preserves com
 | Config document / one server entry  | 1 MiB / 64 KiB, at most 256 servers                                    |
 | Serialized invocation input         | 1 MiB, with structural limits                                          |
 | Transport message / accepted result | 8 MiB                                                                  |
+| Captured server instructions        | 64 KiB UTF-8 prefix, with explicit truncation evidence                 |
 | Inline text and details             | 50 KiB and 2,000 lines                                                 |
 | Discovery page                      | 20 entries by default, at most 100                                     |
 | Remote discovery traversal          | 64 pages, 1,000 entries per family, 4 MiB metadata                     |
@@ -233,7 +241,14 @@ pnpm --filter pi-mcp typecheck
 pnpm --filter pi-mcp effect:diagnostics
 pnpm --filter pi-code-mode test
 pnpm mcp:smoke
+pnpm mcp:conformance
 pnpm validate
 ```
+
+`mcp:conformance` is an opt-in check using pinned `@modelcontextprotocol/conformance@0.1.16`. It runs only `initialize` and `tools_call`, sequentially, through the real `makeMcpLayer` and `McpExecution`. Each scenario uses disposable agent/project directories and a no-auth loopback server. A pass requires both the upstream checks and a driver receipt written after explicit confirmed disconnect and scoped cleanup. Crashes, timeouts, missing receipts, and unconfirmed cleanup fail the command. No expected-failure baseline hides failures.
+
+This is deliberately not the full conformance suite. OAuth/auth scenarios, elicitation, SSE retry, compatibility, draft, and extension scenarios are excluded. The grader is a development dependency only; it does not change the runtime SDK or add protocol capabilities. The command needs POSIX process groups and is excluded from `pnpm validate`. It was verified on macOS and does not establish conformance for every server, transport, or authorization flow.
+
+Owned HTTP regression tests also cover session-bearing POST 404 without replay, wrong-endpoint initialization, and explicit reconnection. If an expired server rejects DELETE with 404, cleanup remains unconfirmed and fails closed; the tests do not assume that an HTTP error proves a tool had no side effects.
 
 `mcp:smoke` installs pinned servers and downloads a browser into owned temporary storage. It needs network access and macOS, but no user account credentials. See [ARCHITECTURE.md](./ARCHITECTURE.md) for ownership and cleanup boundaries.

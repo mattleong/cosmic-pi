@@ -29,6 +29,7 @@ import {
   decodeMcpRequest,
   executeSdkRequest,
   makeSdkClient,
+  sdkHandshake,
 } from "./sdk-client.ts";
 import { SDK_OPERATION_HEADER, makeSdkFetch } from "./sdk-fetch.ts";
 import {
@@ -231,6 +232,7 @@ const makeConnection = (
   capabilities: McpCapabilities,
   events: SdkEvents,
   token: TokenState,
+  handshake: Pick<McpConnection, "protocolVersion" | "instructions">,
 ): McpConnection => {
   const request = (input: McpRequest): Effect.Effect<McpReply, McpBoundaryError> =>
     Effect.suspend(() => {
@@ -338,7 +340,7 @@ const makeConnection = (
     request,
     close,
     capabilities,
-    protocolVersion: client.getNegotiatedProtocolVersion(),
+    ...handshake,
     changes: events.changes,
     terminal: events.terminal,
     health: events.health,
@@ -512,6 +514,7 @@ export const openSdkHttp = (
           yield* sdkCapabilities(client),
           acquiredEvents,
           token,
+          yield* sdkHandshake(client),
         );
       }).pipe(Effect.provideService(Scope.Scope, owner));
       opening = yield* Effect.forkIn(acquire, owner, { uninterruptible: true });

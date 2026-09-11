@@ -42,6 +42,7 @@ import {
   decodeMcpRequest,
   executeSdkRequest,
   makeSdkClient,
+  sdkHandshake,
 } from "./sdk-client.ts";
 import {
   makeSdkStdioTransport,
@@ -228,9 +229,10 @@ const makeConnection = (
   close: Effect.Effect<void, McpBoundaryError>,
   capabilities: McpCapabilities,
   events: SdkEvents,
+  handshake: Pick<McpConnection, "protocolVersion" | "instructions">,
 ): McpConnection => ({
   capabilities,
-  protocolVersion: client.getNegotiatedProtocolVersion(),
+  ...handshake,
   changes: events.changes,
   terminal: events.terminal,
   health: events.health,
@@ -393,6 +395,7 @@ export const openSdkStdio = (
               close,
               yield* sdkCapabilities(client),
               acquiredEvents,
+              yield* sdkHandshake(client),
             );
           }).pipe(Effect.provideService(Scope.Scope, owner));
           opening = yield* Effect.forkIn(acquire, owner, { uninterruptible: true });

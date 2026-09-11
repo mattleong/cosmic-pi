@@ -55,11 +55,18 @@ export interface McpConnectionHealth {
   readonly cleanupUnconfirmed: boolean;
 }
 
+export interface McpInstructions {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
 /** Session-owned internal connection. Tokens never enter public gateway contracts. */
 export interface McpConnection {
   readonly capabilities: McpCapabilities;
   /** Negotiated by the completed SDK handshake; absent on injected connections. */
   readonly protocolVersion?: string | undefined;
+  /** Bounded, untrusted initialize instructions. Absent differs from supplied empty text. */
+  readonly instructions?: McpInstructions | undefined;
   /** One application consumer; each pending family is coalesced until delivery. */
   readonly changes: Stream.Stream<McpMetadataFamily>;
   /** Settles on local closure or terminal failure, not on individual request failure. */
@@ -71,6 +78,7 @@ export interface McpConnection {
 }
 
 export const MCP_BOUNDARY_LIMITS = Object.freeze({
+  instructionsBytes: 64 * 1024,
   connectTimeoutMs: 15_000,
   requestTimeoutMs: 60_000,
   cleanupTimeoutMs: 2_000,

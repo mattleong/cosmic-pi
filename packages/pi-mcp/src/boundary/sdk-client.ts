@@ -29,7 +29,28 @@ import {
   McpRequestSchema,
   type McpReply,
   type McpRequest,
+  type McpConnection,
+  type McpInstructions,
 } from "../client/model.ts";
+import { prefixBytes } from "../results/normalize.ts";
+
+/** Discard oversized optional guidance without rejecting an otherwise useful connection. */
+export const boundedSdkInstructions = (text: string | undefined): McpInstructions | undefined => {
+  if (text === undefined) return undefined;
+  const prefix = prefixBytes(text, MCP_BOUNDARY_LIMITS.instructionsBytes);
+  return Object.freeze({ text: prefix, truncated: prefix.length < text.length });
+};
+
+/** Called once after initialization, never on an application request. */
+export const sdkHandshake = (client: Client) =>
+  Effect.try({
+    try: (): Pick<McpConnection, "protocolVersion" | "instructions"> =>
+      Object.freeze({
+        protocolVersion: client.getNegotiatedProtocolVersion(),
+        instructions: boundedSdkInstructions(client.getInstructions()),
+      }),
+    catch: () => boundaryError("connection", "not-sent", "Unable to read MCP handshake metadata."),
+  });
 
 /** Keep remote schema compilation out of the SDK's synchronous high-level paths. */
 export const makeSdkClient = () =>

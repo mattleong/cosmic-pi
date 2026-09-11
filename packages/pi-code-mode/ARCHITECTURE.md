@@ -128,9 +128,11 @@ invocation. They never dispatch the registered top-level definition.
 `boundary/host-mcp.ts` queries exactly one active stable-session provider per request through
 `pi-mcp/code-mode`. That import loads codecs, not an extension or runtime. The provider owns
 connections, authentication, policy, validation, and result retention. The guest can request
-status, bounded discovery, exact tool calls, resources/templates, prompts, and retained result
-reads, but not explicit connection management, authentication, configuration writes, or arbitrary
-protocol methods. The same MCP execution service enforces both gateway and nested-call policy.
+status, server instructions, bounded discovery, exact tool calls, resources/templates, prompts,
+and retained result reads, but not explicit connection management, authentication, configuration
+writes, or arbitrary protocol methods. `server.instructions` projects the producer's bounded,
+connection-owned handshake snapshot without catalog discovery or an application RPC; it remains
+untrusted data. The same MCP execution service enforces both gateway and nested-call policy.
 
 MCP replies preserve `not-sent`, `completed`, and `unknown` certainty independently of `isError`.
 The consumer validates bounded JSON, rejects binary payloads, and charges compact JSON or

@@ -28,6 +28,7 @@
     "diagnostics:guard": "node scripts/check-no-disabled-diagnostics.mjs",
     "local:smoke": "node scripts/verify-local-advisor.mjs",
     "mcp:smoke": "node scripts/verify-mcp-compat.mjs",
+    "mcp:conformance": "node scripts/verify-mcp-conformance.mjs",
     "pack:smoke": "pnpm local:smoke && node scripts/verify-packed-core.mjs",
     "validate": "pnpm version:check && pnpm check && pnpm test && pnpm pack:smoke",
     "version:check": "node scripts/check-versions.mjs",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@effect/tsgo": "0.39.1",
+    "@modelcontextprotocol/conformance": "0.1.16",
     "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "jiti": "2.7.0",

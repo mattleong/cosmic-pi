@@ -22,7 +22,7 @@ import { discoveryPage, emptyCursorState, type McpCursorState } from "./paginati
 import { isToolAllowed, requireToolAllowed } from "./policy.ts";
 import { cacheVisible, describeCached, queryCached, type McpCacheEvidence } from "./cached.ts";
 import { collectMetadata } from "./collect.ts";
-import { discoveryNotices } from "./diagnostics.ts";
+import { gatewayDiscoveryNotices } from "./diagnostics.ts";
 import { summarizeTool } from "./summary.ts";
 import {
   compareDiscoveryCandidates,
@@ -305,7 +305,7 @@ const makeDiscovery = Effect.gen(function* () {
                 },
                 undiscovered,
               },
-              notices: discoveryNotices(snapshots),
+              notices: gatewayDiscoveryNotices(snapshots, current.evidence),
             },
             { ...current, cursors: result.state },
           ];
@@ -354,9 +354,23 @@ const makeDiscovery = Effect.gen(function* () {
               return yield* Effect.fail(
                 boundaryError("not-found", "not-sent", "MCP tool was not found."),
               );
-            return yield* operation.commit(
-              Effect.succeed({ data: tool, notices: discoveryNotices([snapshot]) }),
-            );
+            return yield* operation
+              .commit(
+                Effect.gen(function* () {
+                  const current = yield* SynchronizedRef.get(state);
+                  if (current.snapshots.get(snapshot.server) !== snapshot)
+                    return yield* boundaryError(
+                      "stale",
+                      "not-sent",
+                      "MCP metadata changed before the description was published.",
+                    );
+                  return {
+                    data: tool,
+                    notices: gatewayDiscoveryNotices([snapshot], current.evidence),
+                  };
+                }).pipe(Effect.result),
+              )
+              .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
           }
           const config = yield* connections.config;
           return yield* operation

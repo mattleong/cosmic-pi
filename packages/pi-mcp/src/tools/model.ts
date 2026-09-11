@@ -9,6 +9,7 @@ const Page = { cursor: Cursor, limit: Limit };
 /** Both entry points accept only these operations. Management is added only to the gateway. */
 export const McpDataRequestSchema = Schema.Union([
   Schema.Struct({ action: Schema.Literal("status") }),
+  Schema.Struct({ action: Schema.Literal("server.instructions"), server: Server }),
   Schema.Struct({
     action: Schema.Literal("tools.list"),
     server: Schema.optionalKey(Server),
