@@ -25,6 +25,7 @@ import {
 import {
   makeMcpErrorReceipts,
   mcpFailureReply,
+  promptArgumentHint,
   type McpActivationMarker,
 } from "../boundary/host-tool-result.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
@@ -160,7 +161,21 @@ export const makeMcpLifecycle = (
       .run(Effect.result(execution.execute(request, { maxOutputBytes, images })), signal)
       .then(
         (result) => {
-          if (Result.isFailure(result)) throw result.failure;
+          if (Result.isFailure(result)) {
+            const action = invokeHostCallback(
+              () =>
+                Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
+                  ?.action ?? "status",
+              "status",
+            );
+            if (promptArgumentHint(action, result.failure) !== undefined) {
+              if (!current(input, token))
+                throw boundaryError("stale", "not-sent", "MCP session was replaced.");
+              // Preserve this fixed hint through Code Mode's message-redacting error boundary.
+              return { reply: mcpFailureReply(action, result.failure), images: [] };
+            }
+            throw result.failure;
+          }
           if (!current(input, token))
             throw boundaryError("stale", result.success.reply.outcome, "MCP session was replaced.");
           return result.success;

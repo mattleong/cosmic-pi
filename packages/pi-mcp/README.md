@@ -153,7 +153,7 @@ OAuth logout revokes local auth and connection authority, removes retained resul
 
 ## Gateway and Code Mode
 
-The gateway accepts an explicit `action`; omitting it means `status`. Each action rejects unrelated fields. List/search `limit` is 1 to 100 entries; `result.read` accepts 1 to 50,000 UTF-16 code units and may return less to fit the output allowance. `prompts.get` arguments must be string-valued; `tools.call` arguments follow the described tool schema.
+The gateway accepts an explicit `action`; omitting it means `status`. Each action rejects unrelated fields. List/search `limit` is 1 to 100 entries; `result.read` accepts 1 to 50,000 UTF-16 code units and may return less to fit the output allowance. `prompts.get` arguments must be string-valued; `tools.call` arguments follow the described tool schema. For missing required or unexpected prompt arguments, both the gateway and Code Mode suggest `prompts.list` on the same server.
 
 | Action                                                  | Inputs besides `action`                                |
 | ------------------------------------------------------- | ------------------------------------------------------ |

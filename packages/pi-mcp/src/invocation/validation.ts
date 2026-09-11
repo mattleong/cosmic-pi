@@ -69,8 +69,10 @@ export const invokeTool = (
       arguments: arguments_,
     });
     yield* operation.checkCurrent;
-    if (outputSchema === undefined) return { reply };
     const result = reply.result;
+    // Tool-error payloads need not satisfy the tool's successful-output contract.
+    if (outputSchema === undefined || (isJsonObject(result) && result.isError === true))
+      return { reply };
     const structuredContent = isJsonObject(result) ? result.structuredContent : undefined;
     const validation =
       structuredContent === undefined

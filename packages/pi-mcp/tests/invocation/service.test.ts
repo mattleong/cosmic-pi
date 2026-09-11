@@ -1180,49 +1180,89 @@ describe("shared MCP execution", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect(
-    "retains completed output-validation failures without changing original tool failure or replaying",
-    () =>
-      Effect.gen(function* () {
-        for (const isError of [false, true]) {
-          const harness = yield* makeHarness({
-            request: (input) =>
-              Effect.succeed({
-                action: input.action,
-                outcome: "completed",
-                result: {
-                  isError,
-                  structuredContent: { value: "bad" },
-                  content: [{ type: "text", text: "remote side effect completed" }],
-                },
-              }),
-            validate: (_schema, _data, outcome) =>
-              outcome === "completed"
-                ? Effect.fail(boundaryError("protocol", "completed", "Invalid output."))
-                : Effect.void,
-          });
-          const completed = yield* harness.execution.execute(request, options);
-          expect(completed.reply).toMatchObject({
+  it.effect("retains invalid successful output without changing its origin or replaying", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        request: (input) =>
+          Effect.succeed({
+            action: input.action,
             outcome: "completed",
-            isError: true,
-            data: { origin: { isError, outputValidation: "failed" } },
-          });
-          const read = yield* harness.execution.execute(
-            { action: "result.read", id: resultId(completed) },
-            options,
-          );
-          expect(read.reply).toMatchObject({
-            action: "result.read",
-            outcome: "completed",
-            data: { origin: { isError, outcome: "completed", outputValidation: "failed" } },
-          });
-          const data = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
-            read.reply.data,
-          );
-          expect(data.text).toContain("remote side effect completed");
-          expect(harness.sent).toHaveLength(1);
-        }
-      }).pipe(Effect.provide(NodeCrypto.layer)),
+            result: {
+              isError: false,
+              structuredContent: { value: "bad" },
+              content: [{ type: "text", text: "remote side effect completed" }],
+            },
+          }),
+        validate: (_schema, _data, outcome) =>
+          outcome === "completed"
+            ? Effect.fail(boundaryError("protocol", "completed", "Invalid output."))
+            : Effect.void,
+      });
+      const completed = yield* harness.execution.execute(request, options);
+      expect(completed.reply).toMatchObject({
+        outcome: "completed",
+        isError: true,
+        data: { origin: { isError: false, outputValidation: "failed" } },
+      });
+      const read = yield* harness.execution.execute(
+        { action: "result.read", id: resultId(completed) },
+        options,
+      );
+      expect(read.reply).toMatchObject({
+        action: "result.read",
+        outcome: "completed",
+        data: { origin: { isError: false, outcome: "completed", outputValidation: "failed" } },
+      });
+      const data = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+        read.reply.data,
+      );
+      expect(data.text).toContain("remote side effect completed");
+      expect(harness.sent).toHaveLength(1);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect.each([
+    { isError: true, content: [{ type: "text", text: "Tool could not complete the request." }] },
+    { isError: true, structuredContent: { error: "missing value" }, content: [] },
+  ])("retains tool errors without applying the success-output schema: %j", (result) =>
+    Effect.gen(function* () {
+      const validated: string[] = [];
+      const harness = yield* makeHarness({
+        request: (input) => Effect.succeed({ action: input.action, outcome: "completed", result }),
+        validate: (_schema, _data, outcome) => {
+          validated.push(outcome);
+          return outcome === "completed"
+            ? Effect.die("Tool errors must not be validated as successful output.")
+            : Effect.void;
+        },
+      });
+      const completed = yield* harness.execution.execute(request, options);
+      expect(validated).toEqual(["not-sent"]);
+      expect(completed.reply).toMatchObject({
+        outcome: "completed",
+        isError: true,
+        data: { origin: { isError: true, outcome: "completed" }, result },
+      });
+      expect(completed.reply).not.toHaveProperty("data.origin.outputValidation");
+      expect(completed.reply.notices).toEqual([]);
+      const read = yield* harness.execution.execute(
+        { action: "result.read", id: resultId(completed) },
+        options,
+      );
+      expect(read.reply).toMatchObject({
+        outcome: "completed",
+        isError: false,
+        data: { origin: { isError: true, outcome: "completed" } },
+      });
+      expect(read.reply).not.toHaveProperty("data.origin.outputValidation");
+      const page = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+        read.reply.data,
+      );
+      expect(yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(page.text)).toEqual(
+        result,
+      );
+      expect(harness.sent).toHaveLength(1);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.effect(

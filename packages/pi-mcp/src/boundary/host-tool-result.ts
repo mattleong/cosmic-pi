@@ -60,8 +60,17 @@ const failureMessage = (error: McpBoundaryError): string => {
   }
 };
 
+export const promptArgumentHint = (action: string, error: McpBoundaryError): string | undefined =>
+  action === "prompts.get" &&
+  error.kind === "invalid-input" &&
+  error.outcome === "not-sent" &&
+  error.reason === undefined
+    ? "Call prompts.list on the same server to inspect the prompt's declared arguments."
+    : undefined;
+
 export const mcpFailureReply = (action: string, error: McpBoundaryError): McpGatewayReply => {
   const diagnostic = { kind: error.kind, message: failureMessage(error) };
+  const hint = promptArgumentHint(action, error);
   return {
     action,
     outcome: error.outcome,
@@ -70,7 +79,9 @@ export const mcpFailureReply = (action: string, error: McpBoundaryError): McpGat
     notices:
       error.outcome === "unknown"
         ? ["Execution may have completed. Do not replay this operation automatically."]
-        : [],
+        : hint === undefined
+          ? []
+          : [hint],
   };
 };
 

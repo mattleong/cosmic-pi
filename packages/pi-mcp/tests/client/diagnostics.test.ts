@@ -38,6 +38,28 @@ describe("fixed diagnostic recovery policy", () => {
       expect(diagnostic.recovery.length).toBeGreaterThan(0);
     }
   });
+  it("gives only local prompt argument rejections a fixed discovery hint", () => {
+    const privateText = "private-prompt-argument-value";
+    const rejection = boundaryError("invalid-input", "not-sent", privateText);
+    const reply = mcpFailureReply("prompts.get", rejection);
+    expect(reply).toMatchObject({ outcome: "not-sent", isError: true });
+    expect(reply.notices.join(" ")).toMatch(/prompts\.list.*same server.*arguments/);
+    expect(reply.resultId).toBeUndefined();
+    expect(JSON.stringify(reply)).not.toContain(privateText);
+    for (const other of [
+      mcpFailureReply("tools.call", rejection),
+      mcpFailureReply("prompts.get", boundaryError("config", "not-sent", privateText)),
+      mcpFailureReply("prompts.get", boundaryError("invalid-input", "completed", privateText)),
+      mcpFailureReply("prompts.get", boundaryError("invalid-input", "unknown", privateText)),
+      mcpFailureReply(
+        "prompts.get",
+        boundaryError("invalid-input", "not-sent", privateText, "rpc-invalid-params"),
+      ),
+    ]) {
+      expect(other.notices.join(" ")).not.toContain("prompts.list");
+      expect(JSON.stringify(other)).not.toContain(privateText);
+    }
+  });
   it("offers only currently available browser or explicit login actions", () => {
     const browser = boundaryError("unavailable", "not-sent", "", "oauth-browser-open-failed");
     expect(mcpDiagnostic(browser).recovery).not.toContain("reopen-browser");

@@ -8,6 +8,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { makeMcpLifecycle, type McpApplicationBoundaries } from "../src/application/lifecycle.ts";
@@ -51,7 +52,11 @@ const presentationLayer = Layer.mergeAll(
 );
 import { McpAuth } from "../src/auth/service.ts";
 import { boundaryError } from "../src/client/errors.ts";
-import { MCP_CODE_MODE_QUERY, type McpCodeModeCapability } from "../src/code-mode/protocol.ts";
+import {
+  MCP_CODE_MODE_QUERY,
+  McpCodeModeOutputSchema,
+  type McpCodeModeCapability,
+} from "../src/code-mode/protocol.ts";
 import { DEFAULT_MCP_SETTINGS } from "../src/config/schema.ts";
 import { McpConfigStore } from "../src/config/store.ts";
 import type { McpToolDefinition } from "../src/tools/controller.ts";
@@ -393,6 +398,68 @@ describe("MCP session ownership", () => {
       yield* host(() => h.lifecycle.shutdown());
       expect(h.counts).toEqual({ acquired: 2, released: 2 });
     }),
+  );
+
+  it.live("shares fixed prompt argument hints between gateway and Code Mode", () =>
+    Effect.gen(function* () {
+      const h = harness({
+        execute: () =>
+          Effect.fail(boundaryError("invalid-input", "not-sent", "private-argument-value")),
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      const signal = yield* Effect.abortSignal;
+      const provider = h.query()[0]!;
+      const input = {
+        action: "prompts.get",
+        server: "one",
+        prompt: "private-prompt-name",
+      } as const;
+      const gateway = yield* host(() => h.tool.execute("gateway", input, signal, undefined, h.ctx));
+      const nested = yield* host(() => provider.execute("nested", input, signal, 512));
+      expect(nested).toEqual(gateway.details);
+      expect(nested).toMatchObject({
+        action: "prompts.get",
+        outcome: "not-sent",
+        isError: true,
+        data: { kind: "invalid-input" },
+      });
+      expect(nested.notices.join(" ")).toMatch(/prompts\.list.*same server.*arguments/);
+      expect(nested.resultId).toBeUndefined();
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(nested),
+      ).not.toContain("private-");
+      yield* host(() => h.lifecycle.shutdown());
+      yield* host(() =>
+        expect(provider.execute("stale", input, signal, 512)).rejects.toMatchObject({
+          kind: "unavailable",
+          outcome: "not-sent",
+        }),
+      );
+    }),
+  );
+
+  it.live.each(["completed", "unknown"] as const)(
+    "does not convert a %s prompt failure into a local argument hint",
+    (outcome) =>
+      Effect.gen(function* () {
+        const h = harness({
+          execute: () => Effect.fail(boundaryError("invalid-input", outcome, "private-failure")),
+        });
+        yield* host(() => h.lifecycle.start(h.ctx));
+        const signal = yield* Effect.abortSignal;
+        const input = { action: "prompts.get", server: "one", prompt: "example" } as const;
+        yield* host(() =>
+          expect(h.query()[0]!.execute("remote", input, signal, 512)).rejects.toMatchObject({
+            kind: "invalid-input",
+            outcome,
+          }),
+        );
+        const gateway = yield* host(() =>
+          h.tool.execute("remote", input, signal, undefined, h.ctx),
+        );
+        expect(gateway.details?.notices.join(" ")).not.toContain("prompts.list");
+        yield* host(() => h.lifecycle.shutdown());
+      }),
   );
 
   it.live("retains typed certainty through the runtime-to-Code-Mode boundary", () =>

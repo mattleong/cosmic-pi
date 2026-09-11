@@ -81,6 +81,7 @@ it.effect("requires an exact advertised prompt and its required declared argumen
     ).toMatchObject({ kind: "not-found" });
     expect(yield* getPrompt(operation, input, discovery).pipe(Effect.flip)).toMatchObject({
       kind: "invalid-input",
+      outcome: "not-sent",
     });
     expect(
       yield* getPrompt(
@@ -88,7 +89,7 @@ it.effect("requires an exact advertised prompt and its required declared argumen
         { ...input, arguments: { text: "hello", unknown: "ignored?" } },
         discovery,
       ).pipe(Effect.flip),
-    ).toMatchObject({ kind: "invalid-input" });
+    ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
     expect(sent).toHaveLength(0);
     yield* getPrompt(operation, { ...input, arguments: { text: "", style: "concise" } }, discovery);
     expect(sent).toEqual([
