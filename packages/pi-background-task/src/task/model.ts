@@ -126,8 +126,7 @@ export function sortTasksByActivity<A extends Pick<BackgroundTaskSnapshot, "stat
 }
 
 export function footerStatus(projection: BackgroundTaskProjection): string | undefined {
-  const { active, failed } = countTaskStates(projection.tasks);
-  if (active === 0 && failed === 0) return undefined;
-  if (active === 0) return `${failed} background task${failed === 1 ? "" : "s"} failed`;
-  return `${active} background task${active === 1 ? "" : "s"} active${failed > 0 ? ` · ${failed} failed` : ""}`;
+  const { active } = countTaskStates(projection.tasks);
+  if (active === 0) return undefined;
+  return `${active} background task${active === 1 ? "" : "s"} active`;
 }
