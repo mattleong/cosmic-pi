@@ -40,6 +40,7 @@ export interface McpManagerServer {
   readonly transport: "http" | "stdio" | "invalid";
   readonly enabled: boolean;
   readonly invalid: boolean;
+  readonly diagnostic: string | undefined;
   readonly authType: "none" | "env" | "oauth";
   readonly auth: McpConnectionStatus["servers"][number]["auth"];
   readonly state: McpConnectionStatus["servers"][number]["state"];

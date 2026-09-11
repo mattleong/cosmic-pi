@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import type * as Schema from "effect/Schema";
 import { resolveMcpConfig, type McpConfigSource } from "../../src/config/options.ts";
 import { decodeMcpDocument } from "../../src/config/schema.ts";
 
@@ -38,6 +39,37 @@ describe("MCP configuration resolution", () => {
       expect(resolved.servers.none?.definition?.denyTools).toEqual(["remove"]);
       expect(resolved.servers.denied?.definition?.denyTools).toEqual(["remove"]);
     }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
+  );
+
+  it.effect.each([false, true])(
+    "normalizes auth:false without changing headers, placeholders, or identity: explicit HTTP=%s",
+    (explicit) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const base = {
+          url: "http://127.0.0.1:3845/mcp",
+          headers: { Authorization: "Bearer ${TOKEN}" },
+        };
+        const entry = explicit ? { ...base, type: "http" } : base;
+        const resolve = (server: Schema.Json) =>
+          resolveMcpConfig({
+            revision: 0,
+            trusted: true,
+            global: globalSource({ mcpServers: { server } }),
+            path,
+          });
+        const alias = (yield* resolve({ ...entry, auth: false })).servers.server!;
+        expect(alias.enabled).toBe(true);
+        expect(alias.definition).toMatchObject({
+          auth: { type: "none" },
+          headers: { authorization: "Bearer ${TOKEN}" },
+        });
+        for (const value of [entry, { ...entry, auth: { type: "none" } }]) {
+          const canonical = (yield* resolve(value)).servers.server!;
+          expect(canonical.definition).toEqual(alias.definition);
+          expect(canonical.identity).toBe(alias.identity);
+        }
+      }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
   );
 
   it.effect("normalizes owning cwd and OAuth registration without resolving values", () =>

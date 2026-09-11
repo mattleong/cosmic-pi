@@ -8,6 +8,7 @@ const row: Omit<McpManagerServer, "actions"> = {
   transport: "http",
   enabled: true,
   invalid: false,
+  diagnostic: undefined,
   authType: "oauth",
   auth: "unchecked",
   state: "disconnected",

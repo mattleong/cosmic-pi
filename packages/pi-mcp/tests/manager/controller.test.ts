@@ -20,6 +20,7 @@ const base: Omit<McpManagerServer, "actions"> = {
   transport: "stdio",
   enabled: true,
   invalid: false,
+  diagnostic: undefined,
   authType: "none",
   auth: "none",
   state: "disconnected",

@@ -89,6 +89,7 @@ export const dashboardDetail = (row: McpManagerServer | undefined): ReadonlyArra
   return [
     sanitizeTerminalLine(row.id),
     `${row.scope} / ${row.transport}`,
+    ...(row.diagnostic ? [sanitizeTerminalLine(row.diagnostic)] : []),
     authExplanation(row),
     `Connection: ${row.state}`,
     `Active ${row.active} / queued ${row.queued}`,

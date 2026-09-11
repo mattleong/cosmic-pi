@@ -125,6 +125,30 @@ describe("trusted MCP configuration store", () => {
     },
   );
 
+  it.effect.each([GLOBAL, PROJECT_ROOT, PROJECT])(
+    "accepts auth:false in %s without rewriting the source on reads or unrelated writes",
+    (target) => {
+      const source =
+        '{ "mcpServers": { "server": { "url": "http://127.0.0.1:3845/mcp", "auth": false } }, "future": true }';
+      const fixture = rawDocuments({ [target]: source });
+      return Effect.gen(function* () {
+        const store = yield* McpConfigStore;
+        for (const config of [
+          yield* store.snapshot,
+          yield* store.reload,
+          yield* store.setSettings(target === GLOBAL ? "project" : "global", { maxQueued: 0 }),
+        ]) {
+          expect(config.diagnostics).toEqual([]);
+          expect(config.servers.server).toMatchObject({
+            enabled: true,
+            definition: { auth: { type: "none" } },
+          });
+          expect(fixture.files.get(target)).toBe(source);
+        }
+      }).pipe(Effect.provide(fixture.layer));
+    },
+  );
+
   it.effect.each(["{", "{}", '{"mcpServers":[]}'])(
     "blocks execution on invalid root .mcp.json without repairing it: %s",
     (source) => {
@@ -353,12 +377,12 @@ describe("trusted MCP configuration store", () => {
       yield* store.setServer("project", "server", { enabled: false });
       expect((yield* store.snapshot).servers.server?.enabled).toBe(false);
       memory.documents.set(PROJECT, {
-        mcpServers: { server: { url: false } },
+        mcpServers: { server: { url: "https://project.test", auth: true } },
       });
       const malformed = yield* store.reload;
       expect(malformed.servers.server).toMatchObject({ enabled: false, scope: "project" });
       expect(malformed.servers.server?.definition).toBeUndefined();
-      expect(malformed.servers.server?.diagnostic).toBeDefined();
+      expect(malformed.servers.server?.diagnostic).toContain('"auth"');
       expect(serializedConfig(malformed)).not.toContain("GLOBAL_TOKEN");
       yield* store.removeServer("project", "server");
       expect((yield* store.snapshot).servers.server?.scope).toBe("global");

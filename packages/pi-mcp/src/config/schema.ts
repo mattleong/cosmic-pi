@@ -128,7 +128,7 @@ const httpServer = Schema.Struct({
   type: Schema.optionalKey(Schema.Literal("http")),
   url: endpoint,
   headers: Schema.optionalKey(headers),
-  auth: Schema.optionalKey(auth),
+  auth: Schema.optionalKey(Schema.Union([auth, Schema.Literal(false)])),
 });
 export const McpEnabledServerSchema = Schema.Union([stdioServer, httpServer]);
 export type McpRawEnabledServer = typeof McpEnabledServerSchema.Type;
@@ -198,14 +198,74 @@ export const decodeMcpDocument = (value: Schema.Json) =>
     ),
   );
 
+const serverFieldHints = new Map(
+  Object.entries({
+    enabled: '"enabled": expected a boolean.',
+    allowTools: '"allowTools": expected an array of tool-name strings.',
+    denyTools: '"denyTools": expected an array of tool-name strings.',
+    command: '"command": expected a nonempty executable string without NUL characters.',
+    args: '"args": expected an array of argument strings without NUL characters.',
+    cwd: '"cwd": expected a nonempty directory string without NUL characters.',
+    env: '"env": expected valid environment-variable names mapped to string values.',
+    url: '"url": expected an HTTP or HTTPS URL without embedded credentials or a fragment.',
+    headers:
+      '"headers": expected unique case-insensitive HTTP header names mapped to strings without CR, LF, or NUL.',
+    auth: '"auth": omit for no authentication, use false, or provide an object with type "none", "env", or "oauth" and its supported fields. Boolean true is not supported.',
+  }),
+);
+
+/** Runs only after bounded strict validation fails. Never format raw schema issues or input. */
+const invalidServerDiagnostic = (value: Schema.Json) =>
+  Effect.gen(function* () {
+    if (!Predicate.isObject(value) || Array.isArray(value))
+      return "Expected a server configuration object.";
+    const http = Object.hasOwn(value, "url");
+    if (http === Object.hasOwn(value, "command"))
+      return 'Provide exactly one of "command" for stdio or "url" for HTTP.';
+    const fields = http ? httpServer.fields : stdioServer.fields;
+    for (const field of Object.keys(value)) {
+      if (Object.hasOwn(fields, field)) continue;
+      if (field === "transport")
+        return '"transport" is unsupported. Use "type": "stdio" or "http", or omit it.';
+      if (field === "environment")
+        return '"environment" is unsupported. Use "env" with string values for stdio servers.';
+      // Arbitrary property names can contain secrets, so only known legacy names are exposed.
+      return http
+        ? "Unsupported HTTP server field. Allowed fields: type, url, headers, auth, enabled, allowTools, denyTools."
+        : "Unsupported stdio server field. Allowed fields: type, command, args, cwd, env, enabled, allowTools, denyTools.";
+    }
+    for (const [field, codec] of Object.entries<Schema.Decoder<unknown>>(fields)) {
+      if (!Object.hasOwn(value, field)) continue;
+      const result = yield* Schema.decodeUnknownEffect(codec)(value[field], {
+        onExcessProperty: "error",
+      }).pipe(Effect.result);
+      if (result._tag === "Failure")
+        return field === "type"
+          ? http
+            ? '"type": expected "http" for a URL server.'
+            : '"type": expected "stdio" for a command server.'
+          : (serverFieldHints.get(field) ?? "Invalid MCP server configuration.");
+    }
+    return "Invalid MCP server configuration.";
+  });
+
 export const decodeMcpServer = (value: Schema.Json) =>
   checkConfigBounds(value, MCP_CONFIG_LIMITS.entryBytes).pipe(
     Effect.andThen(
       Schema.decodeUnknownEffect(McpDisabledServerSchema)(value).pipe(
         Effect.catch(() =>
-          Schema.decodeUnknownEffect(McpEnabledServerSchema)(value, { onExcessProperty: "error" }),
+          Schema.decodeUnknownEffect(McpEnabledServerSchema)(value, {
+            onExcessProperty: "error",
+          }).pipe(
+            Effect.catch(() =>
+              invalidServerDiagnostic(value).pipe(
+                Effect.flatMap((message) =>
+                  Effect.fail(boundaryError("config", "not-sent", message)),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     ),
-    Effect.mapError(() => boundaryError("config", "not-sent", "Invalid MCP server configuration.")),
   );

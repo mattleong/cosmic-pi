@@ -13,7 +13,7 @@ import { McpAuth } from "../../src/auth/service.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
 import { JsonSchemaValidator } from "../../src/boundary/schema-validator.ts";
 import type { McpResolvedConfig } from "../../src/config/model.ts";
-import { DEFAULT_MCP_SETTINGS } from "../../src/config/schema.ts";
+import { DEFAULT_MCP_SETTINGS, decodeMcpServer } from "../../src/config/schema.ts";
 import { McpConfigStore } from "../../src/config/store.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
@@ -282,13 +282,22 @@ it.effect.each([false, true])(
         directory: "/project",
         enabled: false,
       };
+      const error = yield* decodeMcpServer({
+        url: "https://private-server.test",
+        auth: { type: "none", "private-secret": "private-secret" },
+      }).pipe(Effect.flip);
       const f = yield* fixture({
-        a: invalid ? { ...server, diagnostic: "Invalid server configuration." } : server,
+        a: invalid ? { ...server, diagnostic: error.message } : server,
       });
       yield* Effect.gen(function* () {
         const manager = yield* McpManager;
         const row = (yield* manager.refresh).servers[0]!;
         expect(row.invalid).toBe(invalid);
+        expect(row.diagnostic).toBe(invalid ? error.message : undefined);
+        if (invalid) expect(row.diagnostic).toContain('"auth"');
+        expect(yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(row)).not.toMatch(
+          /private-secret|private-server/,
+        );
         expect(row.enabled).toBe(false);
         expect(row.actions.find((choice) => choice.action === "connect")).toMatchObject({
           enabled: false,

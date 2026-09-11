@@ -51,7 +51,8 @@ export function normalizeMcpServer(
       cwd: path.resolve(directory, raw.cwd ?? "."),
       environment: raw.env ?? {},
     };
-  const auth = raw.auth ?? { type: "none" as const };
+  const auth =
+    raw.auth === false ? { type: "none" as const } : (raw.auth ?? { type: "none" as const });
   return {
     ...resolvedPolicy,
     transport: "http",
@@ -149,7 +150,7 @@ export const resolveMcpConfig = (options: {
       const diagnostic = projectBlocked
         ? "Project MCP configuration is unavailable; execution is disabled."
         : decoded._tag === "Failure"
-          ? "Invalid MCP server configuration; execution is disabled."
+          ? `${decoded.failure.message} Execution is disabled.`
           : undefined;
       if (decoded._tag === "Failure") invalidEntries = true;
       const enabled = diagnostic === undefined && definition !== undefined;
