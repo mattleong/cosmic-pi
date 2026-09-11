@@ -5,7 +5,11 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
 import { mcpCodeModeHasBinary } from "../../src/code-mode/protocol.ts";
-import { MCP_MIN_PROJECTION_BYTES, type McpPrepareInput } from "../../src/results/model.ts";
+import {
+  MCP_MIN_PROJECTION_BYTES,
+  MCP_RESULT_LIMITS,
+  type McpPrepareInput,
+} from "../../src/results/model.ts";
 import { makeMcpResults } from "../../src/results/service.ts";
 import { MCP_INLINE_BYTES, McpGatewayReplySchema } from "../../src/tools/model.ts";
 
@@ -284,6 +288,96 @@ describe("MCP result projection", () => {
         expect(encodeExecution(jsonRead)).not.toContain(png);
         expect(jsonRead.images).toHaveLength(0);
       }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect(
+    "preserves only description schema roots through bounded projection and retained pages",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* makeMcpResults();
+        const literals = [
+          { blob: "literal-blob" },
+          { base64: "literal-base64" },
+          { type: "image", data: png, mimeType: "image/png" },
+        ];
+        const schema = { const: literals, default: literals, enum: [literals], examples: literals };
+        const description = { name: "run", inputSchema: schema, outputSchema: schema };
+        const prepared = yield* service.prepare(input(description, "tools.describe"));
+        expect(prepared.attachments).toEqual([]);
+        expect(prepared.images).toEqual([]);
+        const retention = yield* service.retain(prepared);
+        if (retention.status !== "retained") throw new Error("Expected retention");
+        const full = yield* service.project(prepared, retention, {
+          maxOutputBytes: 8_192,
+          images: true,
+        });
+        expect(
+          Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }))(full.reply.data).result,
+        ).toEqual(description);
+        expect(mcpCodeModeHasBinary(full.reply.data, full.reply.action)).toBe(false);
+        let offset: number | null = 0;
+        let text = "";
+        while (offset !== null) {
+          const read = yield* service.read(
+            { action: "result.read", id: retention.resultId, offset },
+            { maxOutputBytes: 512, images: false },
+            allow,
+          );
+          expect(Buffer.byteLength(encodeExecution(read))).toBeLessThanOrEqual(512);
+          expect(mcpCodeModeHasBinary(read.reply.data, read.reply.action)).toBe(false);
+          const slice = page(read.reply.data);
+          text += slice.text;
+          offset = slice.next;
+        }
+        expect(yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text)).toEqual(
+          description,
+        );
+
+        // Tool-controlled names and claimed origins must not confer description authority.
+        for (const action of ["tools.call", "prompts.get", "resources.read", "tools.describe"]) {
+          const nested = yield* service.prepare(
+            input(
+              {
+                action: "tools.describe",
+                origin: { action: "tools.describe" },
+                structuredContent: description,
+                nested: { result: description },
+              },
+              action,
+            ),
+          );
+          const parsed = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
+            nested.serialized,
+          );
+          expect(mcpCodeModeHasBinary(parsed)).toBe(false);
+          expect(nested.attachments.length).toBeGreaterThan(0);
+        }
+        for (const result of [description, [description]]) {
+          const normalized = yield* service.prepare(input(result));
+          expect(normalized.attachments.length).toBeGreaterThan(0);
+        }
+        const array = yield* service.prepare(input([description], "tools.describe"));
+        expect(array.attachments.length).toBeGreaterThan(0);
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("bounds description schemas before exempting their literals from normalization", () =>
+    Effect.gen(function* () {
+      const service = yield* makeMcpResults();
+      let deep: Schema.Json = { blob: "literal" };
+      for (let depth = 0; depth <= MCP_RESULT_LIMITS.depth; depth++) deep = { const: deep };
+      for (const key of ["inputSchema", "outputSchema"]) {
+        for (const schema of [
+          deep,
+          { default: { blob: "x".repeat(MCP_RESULT_LIMITS.acceptedBytes + 1) } },
+        ]) {
+          const prepared = yield* service.prepare(input({ [key]: schema }, "tools.describe"));
+          expect(prepared.outputLimited).toBe(true);
+          expect(prepared.serialized).toBe("null");
+          expect(prepared.origin.outcome).toBe("completed");
+        }
+      }
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.effect("keeps nested binary envelopes out of full calls and every JSON text page", () =>

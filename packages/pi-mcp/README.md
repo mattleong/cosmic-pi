@@ -48,7 +48,7 @@ Create a document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent
 }
 ```
 
-Install the server yourself and replace the example paths. A server with `command` is stdio, and one with `url` is HTTP, so `type` is optional. Supplying both fields or a mismatched `type` is invalid. Stdio launches an executable with an argument array, never an implicit shell. The child inherits only `PATH`, with `/usr/bin:/bin:/usr/sbin:/sbin` as the fallback. Add `HOME`, `TMPDIR`, or credentials through the string-valued `env` map. HTTP `headers` is also a string map. HTTP auth defaults to `{ "type": "none" }`; `type: "env"` supplies a bearer token. Old `transport`, `environment`, and `{ "env": ... }`/`{ "value": ... }` binding forms are not accepted.
+Install the server yourself and replace the example paths. A server with `command` is stdio, and one with `url` is HTTP, so `type` is optional. Supplying both fields or a mismatched `type` is invalid. Stdio launches an executable with an argument array, never an implicit shell. The child inherits only `PATH`, with `/usr/bin:/bin:/usr/sbin:/sbin` as the fallback. Add `HOME`, `TMPDIR`, or credentials through the string-valued `env` map. HTTP `headers` is also a string map. HTTP auth defaults to `{ "type": "none" }`, which preserves configured headers, including Authorization. `type: "env"` supplies a managed bearer token. Old `transport`, `environment`, and `{ "env": ... }`/`{ "value": ... }` binding forms are not accepted.
 
 At connection time, `${NAME}` in stdio `env` and HTTP `headers` resolves from the captured configuration provider. `$$` produces a literal dollar sign, so `$${NAME}` remains the literal `${NAME}`. Expansion is single-pass. It does not use shell expansion or recurse into substituted values. Only `env` and `headers` values expand; `command`, `args`, `url`, and `cwd` stay literal. Missing variables and expanded values that contain invalid control characters or exceed the configured length are rejected. Values resolve only when needed for connection or authentication, not during status inspection.
 
@@ -122,7 +122,9 @@ OAuth is HTTP-only and supports public clients with PKCE S256 and token-endpoint
 
 Dynamic registration and Client ID Metadata Documents require the authorization server to advertise support. This extension does not host a client metadata document or support confidential-client secrets. Optional OAuth fields are `issuer`, `resource`, `scopes`, and `redirectUri`. If `registration` is omitted, `clientId` selects pre-registration, `clientMetadataUrl` selects metadata registration, and neither selects dynamic registration.
 
-Protected-resource metadata is required by default. For a legacy server that publishes authorization-server metadata but no protected-resource metadata, explicitly pin its issuer and opt into compatibility:
+Protected-resource metadata is required by default. Login first makes an unauthenticated GET to obtain a `WWW-Authenticate` challenge. A validated `resource_metadata` URL takes precedence over well-known discovery; malformed or unsafe hints fail rather than silently falling back. This probe sends no configured headers or credentials and does not invoke an MCP operation.
+
+For a legacy server that publishes authorization-server metadata but no protected-resource metadata, explicitly pin its issuer and opt into compatibility:
 
 ```json
 {
@@ -175,7 +177,7 @@ Capture keeps at most a 64 KiB UTF-8 prefix without splitting code points. `data
 
 `tools.list` and `tools.search` return compact selection entries by default, with no full-results mode. Entries preserve exact `server` and `name`, an optional title capped at 128 Unicode code points, and the first nonempty description paragraph capped at 512 code points. Whitespace is normalized; `titleTruncated` and `descriptionTruncated` disclose omitted text. Titles prefer the top-level title, then `annotations.title`. Only advertised boolean `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` annotations are copied. Missing hints remain unknown, and no hint grants permission. Schemas, examples, icons, and arbitrary extension fields are omitted.
 
-Use `tools.describe` for an unfamiliar tool's complete definition and instructions before constructing arguments. If its output is truncated, recover the retained pages rather than guessing a missing schema. Discovery retains full immutable definitions internally, and invocation still validates against the complete current schema.
+Use `tools.describe` for an unfamiliar tool's complete definition and instructions before constructing arguments. If its output is truncated, recover the retained pages rather than guessing a missing schema. Discovery retains full immutable definitions internally, and invocation still validates against the complete current schema. Input/output schema literals remain unchanged in descriptions and retained pages, even when their JSON fields resemble binary attachments.
 
 Search examines full names, titles, and descriptions, including text omitted from summaries. Exact names rank first, then name-token matches, title matches, and description matches. Multiword searches handle camelCase and common separators; all words must match. Equal ranks sort by exact server/name identity. Cached browsing uses the same ranking and also searches resource/template identifiers. Only the selected page is projected into response objects.
 

@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { it } from "@effect/vitest";
@@ -7,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpMiddleware, HttpServerResponse } from "effect/unstable/http";
 import { NetworkAddresses } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
@@ -251,6 +253,60 @@ describe("SDK-owned public OAuth", () => {
       );
     }
   }
+  it.live(
+    "challenge metadata supports login, persisted restoration and refresh without expanding scopes or headers",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({
+          resourceChallenge: (origin) =>
+            `Bearer resource_metadata="${origin}/oauth/resource", scope="admin"`,
+          resourceMetadataStatuses: [404],
+        });
+        const configured = fixture.configured("pre-registered");
+        if (configured.definition?.transport !== "http")
+          return yield* Effect.die("Missing fixture definition.");
+        const server = {
+          ...configured,
+          definition: {
+            ...configured.definition,
+            headers: { ...configured.definition.headers, Authorization: "fixture-static-secret" },
+          },
+        };
+        const sdk = yield* makeMcpSdkAuth;
+        const ui = yield* browser("manual");
+        const grant = yield* sdk.login(server, {
+          ...ui,
+          openBrowser: (url) =>
+            Effect.sync(() => {
+              expect(new URL(url).searchParams.get("scope")).toBe("tools");
+            }).pipe(Effect.andThen(ui.openBrowser(url))),
+        });
+        expect(grant.resourceMetadataSource).toBeUndefined();
+        const stored = yield* decodeGrant(yield* encodeGrant(grant));
+        const restored = yield* makeMcpSdkAuth;
+        expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
+        expect(yield* restored.token(server, yield* restored.refresh(server, stored))).toBe(
+          "fixture-access-1",
+        );
+        expect(
+          fixture.requests.some((request) =>
+            request.path.startsWith("/.well-known/oauth-protected-resource"),
+          ),
+        ).toBe(false);
+        expect(
+          fixture.requests
+            .filter((request) => request.path === "/mcp")
+            .map((request) => request.method),
+        ).toEqual(["GET"]);
+        expect(
+          fixture.requests.every(
+            (request) => !request.headers.authorization && !request.headers["x-resource-secret"],
+          ),
+        ).toBe(true);
+        expect(fixture.counts()).toEqual({ registered: 0, exchanged: 1, refreshed: 1 });
+      }).pipe(Effect.provide(layers)),
+  );
+
   for (const statuses of [
     [404, 404],
     [404, 410],
@@ -455,8 +511,57 @@ describe("SDK-owned public OAuth", () => {
       expect(fixture.counts().exchanged).toBe(0);
     }).pipe(Effect.provide(layers)),
   );
-  for (const mode of ["interrupt", "deadline"] as const) {
-    it.effect(`cancels an owned HTTP request on ${mode} and joins remote request cleanup`, () =>
+  it.effect(
+    "returns only probe headers and closes a nonending SSE body before the auth scope ends",
+    () =>
+      Effect.gen(function* () {
+        const closed = yield* Deferred.make<void>();
+        const nextEntered = yield* Deferred.make<void>();
+        const nextRelease = yield* Deferred.make<void>();
+        let visits = 0;
+        const fixture = yield* startHttpServer(() =>
+          ++visits > 1
+            ? Deferred.succeed(nextEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(nextRelease)),
+                Effect.as(HttpServerResponse.empty()),
+              )
+            : Effect.succeed(
+                HttpServerResponse.stream(
+                  Stream.make(new TextEncoder().encode(": keepalive\n\n")).pipe(
+                    Stream.concat(Stream.never),
+                    Stream.ensuring(Deferred.succeed(closed, undefined)),
+                  ),
+                  {
+                    status: 401,
+                    contentType: "text/event-stream",
+                    headers: { "www-authenticate": "Bearer realm=fixture" },
+                  },
+                ),
+              ),
+        );
+        const origin = fixture.url.origin;
+        const policy = { privateOrigins: new Set([origin]), localHttpOrigins: new Set([origin]) };
+        let response: Response | undefined;
+        const scope = yield* withAuthFetch(policy, (fetch, probe) =>
+          probe(fixture.url).then((headers) => {
+            response = headers;
+            return fetch(fixture.url);
+          }),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(nextEntered);
+        expect(response?.status).toBe(401);
+        expect(response?.body).toBeNull();
+        // The next request holds the auth scope open while native SSE cleanup settles.
+        yield* Deferred.await(closed);
+        yield* Deferred.succeed(nextRelease, undefined);
+        yield* Fiber.join(scope);
+      }).pipe(Effect.provide(layers)),
+  );
+
+  for (const [kind, mode] of ["fetch", "probe"].flatMap((kind) =>
+    ["interrupt", "deadline", "signal"].map((mode) => [kind, mode] as const),
+  )) {
+    it.effect(`cancels an owned ${kind} on ${mode} and joins remote request cleanup`, () =>
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const closed = yield* Deferred.make<void>();
@@ -468,18 +573,24 @@ describe("SDK-owned public OAuth", () => {
         );
         const origin = fixture.url.origin;
         const policy = { privateOrigins: new Set([origin]), localHttpOrigins: new Set([origin]) };
-        const request = yield* withAuthFetch(policy, (fetch) => fetch(fixture.url)).pipe(
-          Effect.result,
-          Effect.forkScoped,
-        );
+        const controller = new AbortController();
+        const request = yield* withAuthFetch(policy, (fetch, probe) =>
+          kind === "probe"
+            ? probe(fixture.url, controller.signal)
+            : fetch(fixture.url, { signal: controller.signal }),
+        ).pipe(Effect.result, Effect.forkScoped);
         yield* Deferred.await(entered);
         if (mode === "interrupt") yield* Fiber.interrupt(request);
         else {
-          yield* TestClock.adjust(15_000);
+          if (mode === "deadline") yield* TestClock.adjust(15_000);
+          else controller.abort();
           const result = yield* Fiber.join(request);
-          expect(result._tag === "Failure" && result.failure.kind).toBe("timeout");
+          expect(result._tag === "Failure" && result.failure.kind).toBe(
+            mode === "deadline" ? "timeout" : "cancelled",
+          );
         }
         yield* Deferred.await(closed);
+        expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
       }).pipe(Effect.provide(layers)),
     );
   }

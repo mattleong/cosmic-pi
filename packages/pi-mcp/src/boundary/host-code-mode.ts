@@ -113,7 +113,11 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
                     JSON.stringify(output),
                   ),
                 );
-                if (!reply || reply.action !== decoded.action || mcpCodeModeHasBinary(reply.data))
+                if (
+                  !reply ||
+                  reply.action !== decoded.action ||
+                  mcpCodeModeHasBinary(reply.data, reply.action)
+                )
                   throw mcpCodeModeError("protocol", outcome);
                 return reply;
               });

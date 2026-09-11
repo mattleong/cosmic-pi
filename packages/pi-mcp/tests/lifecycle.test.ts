@@ -400,6 +400,31 @@ describe("MCP session ownership", () => {
     }),
   );
 
+  it.live("preserves the instructions action when the gateway reports a failure", () =>
+    Effect.gen(function* () {
+      const h = harness({
+        execute: () => Effect.fail(boundaryError("auth-required", "not-sent", "private-failure")),
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      const gateway = yield* host(() =>
+        h.tool.execute(
+          "instructions",
+          { action: "server.instructions", server: "one" },
+          undefined,
+          undefined,
+          h.ctx,
+        ),
+      );
+      expect(gateway.details).toMatchObject({
+        action: "server.instructions",
+        outcome: "not-sent",
+        isError: true,
+        data: { kind: "auth-required" },
+      });
+      yield* host(() => h.lifecycle.shutdown());
+    }),
+  );
+
   it.live("shares fixed prompt argument hints between gateway and Code Mode", () =>
     Effect.gen(function* () {
       const h = harness({

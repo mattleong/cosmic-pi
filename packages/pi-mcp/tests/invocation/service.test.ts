@@ -545,6 +545,17 @@ it.effect(
 it.effect(
   "gateway and Code Mode share summaries, full describe, retained reads and schema validation",
   () => {
+    const literals = [
+      { blob: "literal-blob" },
+      { base64: "literal-base64" },
+      { type: "image", data: "literal-image", mimeType: "image/png" },
+    ];
+    const payloadSchema = {
+      const: literals,
+      default: literals,
+      enum: [literals],
+      examples: [literals],
+    };
     const metadata = {
       name: "run",
       title: "Run once",
@@ -552,9 +563,13 @@ it.effect(
       inputSchema: {
         type: "object",
         required: ["value"],
-        properties: { value: { type: "number" } },
+        properties: { value: { type: "number" }, payload: payloadSchema },
       },
-      outputSchema: { type: "object", required: ["value"] },
+      outputSchema: {
+        type: "object",
+        required: ["value"],
+        properties: { payload: payloadSchema },
+      },
       annotations: { readOnlyHint: false, arbitrary: "opaque" },
       examples: [{ value: 1 }],
     };
@@ -679,7 +694,15 @@ it.effect(
       expect(nestedPreserved.notices.join("\n")).not.toContain("private-refresh-failure");
       const describe = { action: "tools.describe", server: "one", tool: "run" } as const;
       const complete = yield* nested(describe, 50 * 1024);
-      expect(complete.data).toMatchObject({ result: metadata });
+      const gatewayComplete = yield* execution.execute(describe, {
+        ...options,
+        maxOutputBytes: 50 * 1024,
+      });
+      expect(complete.data).toEqual(gatewayComplete.reply.data);
+      const description = yield* Schema.decodeUnknownEffect(Schema.Struct({ result: Schema.Json }))(
+        complete.data,
+      );
+      expect(description.result).toEqual(metadata);
       const limited = yield* nested(describe);
       expect(limited.data).toMatchObject({ truncated: true });
       expect(limited.resultId).toBeDefined();

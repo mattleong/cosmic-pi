@@ -6,15 +6,18 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { HttpServerResponse } from "effect/unstable/http";
 import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
-import { McpConnector } from "../../src/boundary/sdk-connection.ts";
+import { McpConnector, type McpConnectorContract } from "../../src/boundary/sdk-connection.ts";
+import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpConnection, McpReply, McpRequest } from "../../src/client/model.ts";
 import type { McpResolvedConfig, McpSettings } from "../../src/config/model.ts";
 import { McpConfigStore } from "../../src/config/store.ts";
 import type { McpConnectionsContract, McpOperation } from "../../src/connection/model.ts";
 import { McpConnections } from "../../src/connection/service.ts";
+import { startHttpServer } from "../fixtures/http-server.ts";
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const defaults: McpSettings = {
@@ -53,6 +56,8 @@ const initialConfig = (settings?: Partial<McpSettings>): McpResolvedConfig => ({
 });
 interface FixtureOptions {
   readonly settings?: Partial<McpSettings>;
+  readonly config?: McpResolvedConfig;
+  readonly open?: McpConnectorContract["open"];
   readonly opening?: Effect.Effect<void, McpBoundaryError>;
   readonly closing?: Effect.Effect<void>;
   readonly uncertain?: boolean;
@@ -61,7 +66,7 @@ interface FixtureOptions {
   readonly request?: (input: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
 }
 const fixture = (options: FixtureOptions = {}) => {
-  let config = initialConfig(options.settings);
+  let config = options.config ?? initialConfig(options.settings);
   let publish: ((next: McpResolvedConfig) => Effect.Effect<void>) | undefined;
   const tokens: Array<string | undefined> = [];
   let observedAuth: "none" | "required" = "none";
@@ -114,10 +119,11 @@ const fixture = (options: FixtureOptions = {}) => {
       revoke: Effect.void,
     }),
     Layer.succeed(McpConnector, {
-      open: () =>
+      open: (server, settings, token) =>
         Effect.gen(function* () {
           state.opens += 1;
           yield* options.opening ?? Effect.void;
+          if (options.open) return yield* options.open(server, settings, token);
           const terminal = yield* Deferred.make<void, McpBoundaryError>();
           let closed = false;
           const close = Effect.uninterruptible(
@@ -621,6 +627,88 @@ it.effect("failed acquisition cleanup allows a later explicit attempt without re
     expect(f.state.opens).toBe(2);
   }).pipe(Effect.provide(f.layer));
 });
+
+it.live("preserves static HTTP authorization through request admission and disconnect", () =>
+  Effect.gen(function* () {
+    const authorization = "Bearer configured-secret";
+    const decode = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ method: Schema.String, id: Schema.optionalKey(Schema.Finite) }),
+      ),
+    );
+    const http = yield* startHttpServer((request) => {
+      if (request.headers.authorization !== authorization)
+        return Effect.succeed(HttpServerResponse.empty({ status: 401 }));
+      if (request.method === "GET")
+        return Effect.succeed(HttpServerResponse.empty({ status: 405 }));
+      if (request.method === "DELETE")
+        return Effect.succeed(HttpServerResponse.empty({ status: 204 }));
+      const message = decode(request.body);
+      if (message.id === undefined)
+        return Effect.succeed(HttpServerResponse.empty({ status: 202 }));
+      const initialize = message.method === "initialize";
+      return Effect.succeed(
+        HttpServerResponse.text(
+          serialize({
+            jsonrpc: "2.0",
+            id: message.id,
+            result: initialize
+              ? {
+                  protocolVersion: "2025-11-25",
+                  capabilities: { tools: {} },
+                  serverInfo: { name: "fixture", version: "1" },
+                }
+              : { content: [{ type: "text", text: "ok" }] },
+          }),
+          {
+            contentType: "application/json",
+            headers: initialize ? { "mcp-session-id": "fixture-session" } : {},
+          },
+        ),
+      );
+    });
+    const config = initialConfig();
+    const f = fixture({
+      config: {
+        ...config,
+        servers: {
+          a: {
+            ...config.servers.a!,
+            definition: {
+              transport: "http",
+              url: http.url.href,
+              headers: { Authorization: authorization },
+              auth: { type: "none" },
+              denyTools: [],
+            },
+          },
+        },
+      },
+      open: (server, settings, token) => {
+        const definition = server.definition;
+        if (definition?.transport !== "http")
+          return Effect.die("Expected HTTP fixture configuration.");
+        return openSdkHttp({
+          url: new URL(definition.url),
+          headers: definition.headers,
+          ...(token !== undefined && { token }),
+          connectTimeoutMs: settings.connectTimeoutMs,
+          requestTimeoutMs: settings.requestTimeoutMs,
+        });
+      },
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      expect((yield* call(c)).outcome).toBe("completed");
+      expect((yield* call(c)).outcome).toBe("completed");
+      expect(yield* c.disconnect("a")).toEqual({ servers: ["a"], cleanup: "confirmed" });
+      expect(http.requests.some((request) => request.method === "DELETE")).toBe(true);
+      expect(
+        http.requests.every((request) => request.headers.authorization === authorization),
+      ).toBe(true);
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
 
 it.effect(
   "every dispatch refreshes its token and policy denial never reaches auth or the SDK",

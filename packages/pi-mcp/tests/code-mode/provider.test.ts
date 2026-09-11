@@ -1,6 +1,7 @@
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
@@ -145,6 +146,52 @@ describe("MCP session capability producer", () => {
             outcome: "completed",
           }),
         );
+        h.host.dispose();
+      }),
+  );
+
+  it.effect(
+    "passes schema literals and retained text without granting nested descriptions an exemption",
+    () =>
+      Effect.gen(function* () {
+        const h = harness();
+        const literals = [
+          { blob: "literal-blob" },
+          { base64: "literal-base64" },
+          { type: "image", data: "literal-image" },
+        ];
+        const schema = { const: literals, default: literals, enum: [literals], examples: literals };
+        const result = { inputSchema: schema, outputSchema: schema };
+        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(result);
+        for (const action of ["tools.describe", "result.read"] as const) {
+          const input =
+            action === "tools.describe"
+              ? { action, server: "one", tool: "run" }
+              : { action, id: "retained" };
+          const source: McpCodeModeOutput = {
+            ...reply(),
+            action,
+            data:
+              action === "tools.describe"
+                ? { result }
+                : { origin: { action: "tools.describe" }, text },
+          };
+          h.host.activate(activation(() => Promise.resolve(source)));
+          const call = (budget = 8_192) =>
+            h.query()[0]!.execute("schema", input, new AbortController().signal, budget);
+          expect(yield* Effect.promise(() => call())).toEqual(source);
+          yield* Effect.promise(() =>
+            expect(call(512)).rejects.toMatchObject({ kind: "output-limit", outcome: "completed" }),
+          );
+          const rejected =
+            action === "tools.describe"
+              ? { result: { nested: { origin: { action: "tools.describe" }, result } } }
+              : { origin: { action: "tools.describe" }, result };
+          h.host.activate(activation(() => Promise.resolve({ ...source, data: rejected })));
+          yield* Effect.promise(() =>
+            expect(call()).rejects.toMatchObject({ kind: "protocol", outcome: "completed" }),
+          );
+        }
         h.host.dispose();
       }),
   );

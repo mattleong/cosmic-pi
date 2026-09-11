@@ -5,6 +5,7 @@ import {
   MCP_CODE_MODE_VERSION,
   McpCodeModeInputSchema,
   mcpCodeModeJsonFits,
+  mcpCodeModeHasBinary,
   normalizeMcpCodeModeError,
   normalizeMcpCodeModeQuery,
 } from "../../src/code-mode/protocol.ts";
@@ -21,6 +22,37 @@ describe("MCP Code Mode protocol admission", () => {
       { action: "tools.call", server: "fixture", tool: "x", method: "anything" },
     ])
       expect(Option.isNone(Schema.decodeUnknownOption(McpCodeModeInputSchema)(input))).toBe(true);
+  });
+
+  it("exempts only exact description schema roots, never embedded action or origin claims", () => {
+    for (const literal of [
+      { blob: "literal-blob" },
+      { base64: "literal-base64" },
+      { type: "image", data: "literal-image" },
+    ]) {
+      for (const key of ["inputSchema", "outputSchema"]) {
+        const result = {
+          [key]: { const: literal, default: literal, enum: [literal], examples: [literal] },
+        };
+        expect(mcpCodeModeHasBinary({ result }, "tools.describe")).toBe(false);
+        expect(mcpCodeModeHasBinary({ result })).toBe(true);
+        for (const action of ["tools.call", "prompts.get", "resources.read", "result.read"]) {
+          expect(
+            mcpCodeModeHasBinary({ origin: { action: "tools.describe" }, result }, action),
+          ).toBe(true);
+        }
+        for (const data of [
+          { result: { structuredContent: { action: "tools.describe", result } } },
+          { result: { nested: { origin: { action: "tools.describe" }, result } } },
+          { result: [result] },
+          [{ result }],
+          { [key]: literal },
+          { result, other: literal },
+        ])
+          expect(mcpCodeModeHasBinary(data, "tools.describe")).toBe(true);
+        expect(mcpCodeModeHasBinary({ text: JSON.stringify(result) }, "result.read")).toBe(false);
+      }
+    }
   });
 
   it("admits exact compact JSON byte fits, including escaping and surrogate pairs", () => {

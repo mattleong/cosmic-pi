@@ -96,7 +96,7 @@ export const makeMcpDispatch = (options: {
               return decodeOutput(JSON.stringify(output)).pipe(
                 Effect.mapError(() => failure(decoded, mcpCodeModeError("protocol", outcome))),
                 Effect.flatMap((reply) =>
-                  reply.action === decoded.action && !mcpCodeModeHasBinary(reply.data)
+                  reply.action === decoded.action && !mcpCodeModeHasBinary(reply.data, reply.action)
                     ? Effect.succeed(reply)
                     : Effect.fail(failure(decoded, mcpCodeModeError("protocol", outcome))),
                 ),

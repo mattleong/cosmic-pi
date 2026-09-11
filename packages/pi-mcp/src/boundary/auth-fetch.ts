@@ -22,6 +22,7 @@ const unavailable = () => boundaryError("unavailable", "not-sent", "OAuth HTTP r
 interface FetchJob {
   readonly url: string;
   readonly init: RequestInit;
+  readonly headersOnly: boolean;
   readonly resolve: (response: Response) => void;
   readonly reject: (error: McpBoundaryError) => void;
 }
@@ -36,6 +37,27 @@ const aborted = (signal: AbortSignal | null | undefined) =>
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
     return Effect.sync(() => signal.removeEventListener("abort", cancel));
+  });
+
+/** Agent destruction initiates closure; a headers-only probe also joins socket close. */
+const closeProbeAgent = (agent: NodeHttpClient.HttpAgent["Service"]) =>
+  Effect.callback<void>((resume) => {
+    const sockets = new Set(
+      [agent.http, agent.https].flatMap((owner) => Object.values(owner.sockets).flat()),
+    );
+    for (const socket of sockets) {
+      if (!socket || socket.closed) {
+        sockets.delete(socket);
+        continue;
+      }
+      socket.once("close", () => {
+        sockets.delete(socket);
+        if (sockets.size === 0) resume(Effect.void);
+      });
+    }
+    agent.http.destroy();
+    agent.https.destroy();
+    if (sockets.size === 0) resume(Effect.void);
   });
 
 /** Public Effect Node HTTP client, with connection DNS pinned to the validated set. */
@@ -77,6 +99,7 @@ const request = (
         lookup: pinnedNetworkLookup(url.hostname, addresses),
         keepAlive: false,
       });
+      if (job.headersOnly) yield* Effect.addFinalizer(() => closeProbeAgent(agent));
       const client = yield* NodeHttpClient.makeNodeHttp.pipe(
         Effect.provideService(NodeHttpClient.HttpAgent, agent),
       );
@@ -104,6 +127,11 @@ const request = (
         });
         return yield* request(policy, { ...job, url: target }, redirects + 1);
       }
+      if (job.headersOnly)
+        return yield* Effect.try({
+          try: () => new Response(null, { status: response.status, headers: response.headers }),
+          catch: unavailable,
+        });
       const chunks: Uint8Array[] = [];
       let bytes = 0;
       yield* response.stream.pipe(
@@ -144,7 +172,10 @@ const request = (
 /** SDK Promise ingress, not an Effect runner. Every request is owned by this scope. */
 export const withAuthFetch = <A>(
   policy: AuthUrlPolicy,
-  use: (fetch: FetchLike) => Promise<A>,
+  use: (
+    fetch: FetchLike,
+    probe: (url: string | URL, signal?: AbortSignal) => Promise<Response>,
+  ) => Promise<A>,
 ): Effect.Effect<A, McpBoundaryError, NetworkAddresses> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -176,7 +207,7 @@ export const withAuthFetch = <A>(
             }),
           ),
       }).pipe(Effect.mapError(unavailable));
-      const fetch: FetchLike = (url, init = {}) => {
+      const submit = (url: string | URL, init: RequestInit, headersOnly: boolean) => {
         if (closed || denied || init.signal?.aborted)
           return Promise.reject(denied ?? unavailable());
         // The SDK requires a Promise. Its resolve capability is transferred to the scoped worker.
@@ -184,6 +215,7 @@ export const withAuthFetch = <A>(
         const job: FetchJob = {
           url: String(url),
           init,
+          headersOnly,
           resolve: completion.resolve,
           reject: completion.reject,
         };
@@ -194,8 +226,20 @@ export const withAuthFetch = <A>(
         }
         return completion.promise;
       };
+      const fetch: FetchLike = (url, init = {}) => submit(url, init, false);
+      // No application headers, body, or credentials can enter the challenge probe.
+      const probe = (url: string | URL, signal?: AbortSignal) =>
+        submit(
+          url,
+          {
+            method: "GET",
+            headers: { accept: "application/json, text/event-stream" },
+            signal: signal ?? null,
+          },
+          true,
+        );
       const result = yield* Effect.tryPromise({
-        try: () => use(fetch),
+        try: () => use(fetch, probe),
         catch: () => denied ?? unavailable(),
       });
       if (denied) return yield* denied;

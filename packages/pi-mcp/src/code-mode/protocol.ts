@@ -236,27 +236,45 @@ export const mcpCodeModeJsonFits = <Value>(value: Value, maxBytes: number): bool
   }
 };
 
-/** Native MCP binary envelopes are not JSON attachment descriptors. */
-export const mcpCodeModeHasBinary = (value: McpCodeModeOutput["data"]): boolean => {
-  if (
-    value === null ||
-    Predicate.isString(value) ||
-    Predicate.isNumber(value) ||
-    Predicate.isBoolean(value)
-  )
-    return false;
-  if (Array.isArray(value)) return value.some(mcpCodeModeHasBinary);
-  if (
-    ("blob" in value && Predicate.isString(value.blob)) ||
-    ("base64" in value && Predicate.isString(value.base64))
-  )
-    return true;
-  if (
-    "type" in value &&
-    (value.type === "image" || value.type === "audio") &&
-    "data" in value &&
-    Predicate.isString(value.data)
-  )
-    return true;
-  return Object.values(value).some(mcpCodeModeHasBinary);
+/** Native MCP binary envelopes are not JSON attachment descriptors.
+ * Only a checked tools.describe reply can carry schema literals at data.result's roots.
+ * Retained result.read pages stay strings; embedded action/origin fields grant no exemption.
+ */
+export const mcpCodeModeHasBinary = (
+  value: McpCodeModeOutput["data"],
+  action?: McpCodeModeOutput["action"],
+): boolean => {
+  const visit = (item: McpCodeModeOutput["data"], context?: "data" | "description"): boolean => {
+    if (
+      item === null ||
+      Predicate.isString(item) ||
+      Predicate.isNumber(item) ||
+      Predicate.isBoolean(item)
+    )
+      return false;
+    if (Array.isArray(item)) return item.some((child) => visit(child));
+    if (
+      ("blob" in item && Predicate.isString(item.blob)) ||
+      ("base64" in item && Predicate.isString(item.base64))
+    )
+      return true;
+    if (
+      "type" in item &&
+      (item.type === "image" || item.type === "audio") &&
+      "data" in item &&
+      Predicate.isString(item.data)
+    )
+      return true;
+    return Object.entries(item).some(([key, child]) => {
+      if (context === "description" && (key === "inputSchema" || key === "outputSchema"))
+        return false;
+      return visit(
+        child,
+        context === "data" && key === "result" && action === "tools.describe"
+          ? "description"
+          : undefined,
+      );
+    });
+  };
+  return visit(value, "data");
 };

@@ -215,7 +215,7 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     );
   };
   type ContentContext = "result" | "block" | "resource" | "message" | undefined;
-  const normalize = (value: Schema.Json, context?: ContentContext): Schema.Json => {
+  const normalize = (value: Schema.Json, context?: ContentContext, root = false): Schema.Json => {
     if (jsonArray(value)) return value.map((item) => normalize(item, context));
     const block = record(value);
     if (block === undefined) return value;
@@ -238,6 +238,14 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     }
     return Object.fromEntries(
       Object.entries(block).map(([key, item]) => {
+        // Schema literals are JSON data, not content envelopes. Only the exact description
+        // roots are exempt, after copy has charged and bounded their entire subtrees.
+        if (
+          root &&
+          input.action === "tools.describe" &&
+          (key === "inputSchema" || key === "outputSchema")
+        )
+          return [key, item];
         let childContext: ContentContext;
         if (context === "result" && jsonArray(item)) {
           if (input.action === "tools.call" && key === "content") childContext = "block";
@@ -256,7 +264,7 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
   try {
     // The bounded copy charges discarded bytes and leaves the validated raw reply untouched.
     // Never parse strings: only JSON objects can be recognized as binary envelopes.
-    const serialized = JSON.stringify(normalize(copy(input.reply.result, 0), "result"));
+    const serialized = JSON.stringify(normalize(copy(input.reply.result, 0), "result", true));
     const bounded = boundedNotices([...notices, ...(input.notices ?? []).slice(0, 16)]);
     // Count all privately retained strings and descriptors, not just the text projection.
     const bytes =

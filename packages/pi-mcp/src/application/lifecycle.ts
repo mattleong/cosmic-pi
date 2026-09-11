@@ -55,6 +55,7 @@ const ErrorActionSchema = Schema.Struct({
     "connect",
     "disconnect",
     "refresh",
+    "server.instructions",
     "tools.list",
     "tools.search",
     "tools.describe",

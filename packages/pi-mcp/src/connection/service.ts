@@ -97,7 +97,10 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
               yield* dispatchCheck(input);
               const token = yield* registry.access(owner.server);
               yield* dispatchCheck(input);
-              yield* connection.setToken(token);
+              const definition = owner.server.definition;
+              // Static HTTP headers are not managed tokens; clearing would revoke them.
+              if (definition?.transport !== "http" || definition.auth.type !== "none")
+                yield* connection.setToken(token);
               yield* dispatchCheck(input);
               const recordsOutcome =
                 input.action === "tools.call" ||

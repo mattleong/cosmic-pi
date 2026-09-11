@@ -25,6 +25,9 @@ export interface OAuthFixtureOptions {
   readonly secretClient?: boolean;
   readonly oversizedMetadata?: boolean;
   readonly unsafeTokenEndpoint?: boolean;
+  readonly resourceChallenge?: (origin: string) => string;
+  readonly resourceProbeStatus?: number;
+  readonly challengeMetadataStatus?: number;
   readonly resourceMetadataStatuses?: ReadonlyArray<number>;
   readonly invalidResourceMetadata?: "json" | "schema";
   readonly oversizedResourceMetadata?: boolean;
@@ -59,9 +62,22 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
       requests.push({ path: url.pathname, method: request.method, headers: request.headers });
       const reply = (value: Schema.Json, status = 200) =>
         HttpServerResponse.jsonUnsafe(value, { status });
-      if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      if (url.pathname === "/mcp" || url.pathname === "/")
+        return HttpServerResponse.empty({
+          status: options.resourceProbeStatus ?? (options.resourceChallenge ? 401 : 404),
+          headers: options.resourceChallenge
+            ? { "www-authenticate": options.resourceChallenge(origin) }
+            : {},
+        });
+      if (
+        url.pathname === "/oauth/resource" ||
+        url.pathname.startsWith("/.well-known/oauth-protected-resource")
+      ) {
         const statuses = options.resourceMetadataStatuses;
-        const status = statuses?.[resourceMetadataRequests++] ?? statuses?.at(-1) ?? 200;
+        const status =
+          url.pathname === "/oauth/resource"
+            ? (options.challengeMetadataStatus ?? 200)
+            : (statuses?.[resourceMetadataRequests++] ?? statuses?.at(-1) ?? 200);
         if (status !== 200) return HttpServerResponse.text("fixture-private-body", { status });
         if (options.invalidResourceMetadata === "json")
           return HttpServerResponse.text("fixture-private-invalid-json");

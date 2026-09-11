@@ -32,6 +32,126 @@ const discover = (
     localHttpOrigins: new Set([origin]),
   });
 
+describe("protected-resource challenge discovery", () => {
+  for (const parameter of [
+    (origin: string) => `Bearer resource_metadata="${origin}/oauth/resource"`,
+    (origin: string) => `bearer Resource_Metadata = "${origin}/oauth/resource"`,
+    (origin: string) =>
+      `Bearer resource_metadata-extra="ignored", resource_metadata="${origin}/oauth/resource"`,
+    (origin: string) =>
+      `Basic realm="fixture", Bearer resource_metadata="${origin}/oauth/resource"`,
+    (origin: string) =>
+      `Basic resource_metadata="http://169.254.169.254/metadata", Bearer resource_metadata="${origin}/oauth/resource"`,
+    (origin: string) =>
+      `Bearer resource_metadata="${origin}/oauth/resource", Basic resource_metadata="http://169.254.169.254/metadata"`,
+    (origin: string) =>
+      `Bearer realm="resource_metadata=ignored", resource_metadata="${origin}/oauth/resource", error_description="resource_metadata=also-ignored"`,
+  ])
+    it.live("uses advertised metadata when guessed well-known paths are absent", () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({
+          resourceChallenge: parameter,
+          resourceMetadataStatuses: [404],
+        });
+        const result = yield* discover(fixture.origin, {
+          type: "oauth",
+          registration: "dynamic",
+          scopes: [],
+        });
+        expect(result.source).toBeUndefined();
+        expect(result.metadata.resource).toBe(fixture.resource);
+        expect(fixture.requests.map((request) => request.path)).toEqual([
+          "/mcp",
+          "/oauth/resource",
+        ]);
+        expect(fixture.requests.every((request) => request.method === "GET")).toBe(true);
+        expect(
+          fixture.requests.every(
+            (request) => !request.headers.authorization && !request.headers["x-resource-secret"],
+          ),
+        ).toBe(true);
+      }).pipe(Effect.provide(network)),
+    );
+
+  for (const status of [401, 404, 405])
+    it.live(`keeps no-hint fallback and compatibility after probe ${status}`, () =>
+      Effect.gen(function* () {
+        for (const metadataStatus of [200, 404]) {
+          const fixture = yield* startOAuthServer({
+            resourceProbeStatus: status,
+            resourceChallenge: () => 'Bearer realm="resource_metadata=not-a-hint"',
+            resourceMetadataStatuses: [metadataStatus],
+          });
+          const result = yield* discover(fixture.origin);
+          expect(result.metadata.resource).toBe(fixture.resource);
+          expect(result.source).toBe(metadataStatus === 404 ? "configured" : undefined);
+        }
+      }).pipe(Effect.provide(network)),
+    );
+
+  for (const header of [
+    'Bearer resource_metadata="/relative"',
+    'Bearer resource_metadata=""',
+    "Bearer resource_metadata=",
+    'Bearer resource_metadata="https://public.example/unclosed',
+    'Bearer resource_metadata="https://public.example/metadata"junk',
+    'Bearer resource_metadata="http://169.254.169.254/metadata"',
+    'Bearer resource_metadata="https://private.example/metadata"',
+    'Bearer resource_metadata="https://user:secret@public.example/metadata"',
+    'Bearer resource_metadata="https://public.example/metadata#fragment"',
+    'Bearer resource_metadata="https://public.example/white space"',
+    'Bearer resource_metadata="https://public.example/back\\\\slash"',
+    'Bearer resource_metadata="https://public.example/a", resource_metadata="https://public.example/b"',
+  ])
+    it.live(`rejects unsafe or malformed advertised hints: ${header}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ resourceChallenge: () => header });
+        const result = yield* discover(fixture.origin).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(fixture.requests.map((request) => request.path)).toEqual(["/mcp"]);
+        expect(yield* serialize(result)).not.toContain("user:secret");
+        expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
+      }).pipe(Effect.provide(network)),
+    );
+
+  it.live("does not use another authentication scheme's metadata parameter", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({
+        resourceChallenge: (origin) =>
+          `Bearer realm="fixture", Basic resource_metadata="${origin}/oauth/resource"`,
+      });
+      const result = yield* discover(fixture.origin);
+      expect(result.metadata.resource).toBe(fixture.resource);
+      expect(fixture.requests.some((request) => request.path === "/oauth/resource")).toBe(false);
+      expect(
+        fixture.requests.some((request) =>
+          request.path.startsWith("/.well-known/oauth-protected-resource"),
+        ),
+      ).toBe(true);
+    }).pipe(Effect.provide(network)),
+  );
+
+  for (const status of [401, 404, 500])
+    it.live(`does not replace a failed advertised URL with guessed metadata: ${status}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({
+          resourceChallenge: (origin) => `Bearer resource_metadata="${origin}/oauth/resource"`,
+          challengeMetadataStatus: status,
+        });
+        const result = yield* discover(fixture.origin, {
+          type: "oauth",
+          registration: "dynamic",
+          scopes: [],
+        }).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(fixture.requests.map((request) => request.path)).toEqual([
+          "/mcp",
+          "/oauth/resource",
+        ]);
+      }).pipe(Effect.provide(network)),
+    );
+});
+
 describe("protected-resource discovery compatibility", () => {
   for (const statuses of [
     [404, 404],
@@ -123,7 +243,7 @@ describe("protected-resource discovery compatibility", () => {
         Effect.result,
         Effect.provideService(NetworkAddresses, {
           resolve: () =>
-            ++lookups === 1
+            ++lookups <= 2
               ? Effect.succeed([{ address: "127.0.0.1", family: 4 as const }])
               : Effect.fail(new NetworkAddressError({ message: "fixture-private-network" })),
         }),
@@ -144,7 +264,7 @@ describe("protected-resource discovery compatibility", () => {
           Effect.result,
           Effect.provideService(NetworkAddresses, {
             resolve: () =>
-              ++lookups === 1
+              ++lookups <= 2
                 ? Effect.succeed([{ address: "127.0.0.1", family: 4 as const }])
                 : Deferred.succeed(entered, undefined).pipe(
                     Effect.andThen(Effect.never),

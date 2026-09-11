@@ -1,6 +1,7 @@
 import { createEventBus, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import {
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
@@ -128,6 +129,60 @@ describe("fixed MCP request adapter", () => {
       const error = yield* dispatch({ action: "status" }).pipe(Effect.flip);
       expect(error.message).toContain('"kind":"unavailable"');
     }),
+  );
+
+  it.effect(
+    "preserves description literals and retained text while rejecting forged nested descriptions",
+    () =>
+      Effect.gen(function* () {
+        const literals = [
+          { blob: "literal-blob" },
+          { base64: "literal-base64" },
+          { type: "image", data: "literal-image" },
+        ];
+        const schema = { const: literals, default: literals, enum: [literals], examples: literals };
+        const result = { inputSchema: schema, outputSchema: schema };
+        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(result);
+        for (const action of ["tools.describe", "result.read", "tools.call"] as const) {
+          const input =
+            action === "result.read"
+              ? { action, id: "retained" }
+              : { action, server: "one", tool: "run" };
+          const output: McpCodeModeOutput = {
+            ...reply(),
+            action,
+            data:
+              action === "tools.describe"
+                ? { result }
+                : { origin: { action: "tools.describe" }, text },
+          };
+          expect(yield* dispatchFor(eventsFor([capability(output)]), 8_192)(input)).toEqual(output);
+          const oversized = yield* dispatchFor(
+            eventsFor([capability(output)]),
+            512,
+          )(input).pipe(Effect.flip);
+          expect(oversized.message).toContain('"kind":"output-limit"');
+          const rejected =
+            action === "tools.describe"
+              ? {
+                  result: {
+                    nested: {
+                      action: "tools.describe",
+                      origin: { action: "tools.describe" },
+                      result,
+                    },
+                  },
+                }
+              : { origin: { action: "tools.describe" }, result };
+          const error = yield* dispatchFor(
+            eventsFor([capability({ ...output, data: rejected })]),
+            8_192,
+          )(input).pipe(Effect.flip);
+          expect(error.message).toContain('"kind":"protocol"');
+          expect(error.message).toContain('"outcome":"completed"');
+          expect(error.message).not.toContain("literal-image");
+        }
+      }),
   );
 
   it.effect(
