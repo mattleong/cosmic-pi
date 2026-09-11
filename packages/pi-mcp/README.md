@@ -153,7 +153,7 @@ OAuth logout revokes local auth and connection authority, removes retained resul
 
 ## Gateway and Code Mode
 
-The gateway accepts an explicit `action`; omitting it means `status`. Each action rejects unrelated fields.
+The gateway accepts an explicit `action`; omitting it means `status`. Each action rejects unrelated fields. List/search `limit` is 1 to 100 entries; `result.read` accepts 1 to 50,000 UTF-16 code units and may return less to fit the output allowance. `prompts.get` arguments must be string-valued; `tools.call` arguments follow the described tool schema.
 
 | Action                                                  | Inputs besides `action`                                |
 | ------------------------------------------------------- | ------------------------------------------------------ |
@@ -189,6 +189,8 @@ Replies carry `action`, `outcome`, `isError`, `data`, optional `resultId`, and `
 - `unknown`: dispatch may have happened, but completion is unconfirmed.
 
 Check both `outcome` and `isError`. Output validation or projection can fail after the remote operation completed. Cancellation, deadlines, and cleanup cannot roll back server side effects. Never replay an unknown or completed operation just to recover output. Use `result.read` when a result ID is present; follow its returned `next` offset rather than calculating byte offsets. Retrieval preserves the original operation's outcome and error status under `data.origin`.
+
+Full projected payloads are under `data.result`, alongside `data.origin`. Text pages instead contain `data.text`, `offset`, `next`, and `total`; the text is a slice of serialized JSON, not necessarily a complete JSON document. Text-only `result.read` always returns this page shape, even when the whole result fits. Follow the returned `next` until it is `null`; do not parse partial JSON. Attachment reads use `data.attachment` instead. Failed requests or omitted output may have neither `result` nor `text`, so check the reply before extracting either. A successful `result.read` reports successful retrieval only; preserve `data.origin` to check the originating operation's outcome, error, and output-validation status.
 
 HTTP and stdio JSON-RPC errors retain fixed diagnostic reasons such as `rpc-method-not-found` or `rpc-invalid-params`, rather than appearing as transport failures. Raw server messages and error data stay private. A completed failure does not prove that output was retained; error guidance does not offer retained-output recovery without a result ID.
 

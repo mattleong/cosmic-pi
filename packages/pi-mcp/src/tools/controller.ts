@@ -15,21 +15,79 @@ export const McpToolParameters = Type.Object(
   {
     action: Type.Optional(
       Type.String({
-        description:
-          "status (default), connect, disconnect, refresh, tools.list, tools.search, tools.describe, tools.call, resources.list, resources.templates, resources.read, prompts.list, prompts.get, or result.read",
+        enum: [
+          "status",
+          "connect",
+          "disconnect",
+          "refresh",
+          "tools.list",
+          "tools.search",
+          "tools.describe",
+          "tools.call",
+          "resources.list",
+          "resources.templates",
+          "resources.read",
+          "prompts.list",
+          "prompts.get",
+          "result.read",
+        ],
+        description: "Defaults to status. Supply only fields used by the selected action.",
       }),
     ),
-    server: Type.Optional(Type.String({ maxLength: 128 })),
-    tool: Type.Optional(Type.String({ maxLength: 1_024 })),
-    query: Type.Optional(Type.String({ maxLength: 1_024 })),
-    cursor: Type.Optional(Type.String({ maxLength: 8_192 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
-    arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    uri: Type.Optional(Type.String({ maxLength: 1_024 })),
-    prompt: Type.Optional(Type.String({ maxLength: 1_024 })),
-    id: Type.Optional(Type.String({ maxLength: 1_024 })),
-    offset: Type.Optional(Type.Integer({ minimum: 0 })),
-    attachment: Type.Optional(Type.Integer({ minimum: 0 })),
+    server: Type.Optional(
+      Type.String({
+        maxLength: 128,
+        description:
+          "Required except for status and result.read; optional for tools.list and tools.search.",
+      }),
+    ),
+    tool: Type.Optional(
+      Type.String({ maxLength: 1_024, description: "Required for tools.describe and tools.call." }),
+    ),
+    query: Type.Optional(
+      Type.String({ maxLength: 1_024, description: "Required for tools.search only." }),
+    ),
+    cursor: Type.Optional(
+      Type.String({
+        maxLength: 8_192,
+        description: "Returned discovery cursor for list/search pages.",
+      }),
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 50_000,
+        description:
+          "List/search: 1 to 100 entries. result.read: 1 to 50,000 UTF-16 code units; output may be smaller.",
+      }),
+    ),
+    arguments: Type.Optional(
+      Type.Record(Type.String(), Type.Unknown(), {
+        description:
+          "tools.call: arguments matching the described tool schema. prompts.get: string-valued arguments only.",
+      }),
+    ),
+    uri: Type.Optional(
+      Type.String({ maxLength: 1_024, description: "Required for resources.read only." }),
+    ),
+    prompt: Type.Optional(
+      Type.String({ maxLength: 1_024, description: "Required for prompts.get only." }),
+    ),
+    id: Type.Optional(
+      Type.String({
+        maxLength: 1_024,
+        description: "Returned resultId; required for result.read.",
+      }),
+    ),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "result.read only. Start at 0, then use the previous page's data.next.",
+      }),
+    ),
+    attachment: Type.Optional(
+      Type.Integer({ minimum: 0, description: "result.read only. Stored image attachment index." }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -57,7 +115,7 @@ export const buildMcpTool = (options: McpToolControllerOptions): McpToolDefiniti
     name: "mcp",
     label: "MCP",
     description:
-      "Use configured MCP servers through one gateway. Status has no connection side effects. tools.list/search return selection summaries, not schemas or complete instructions. Use tools.describe for unfamiliar tools before calling exact server/tool names; never guess missing schemas. If describe is truncated, retrieve its retained result.read pages. Also supports resources, templates and prompts. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Never automatically replay unknown or completed operations to recover output.",
+      "Use configured MCP servers through one gateway. Status has no connection side effects. tools.list/search return selection summaries, not schemas or complete instructions. Use tools.describe for unfamiliar tools before calling exact server/tool names; never guess missing schemas. If describe is truncated, retrieve its retained result.read pages. Also supports resources, templates and prompts. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Full payloads are at data.result; text pages are at data.text. Follow data.next with result.read; do not parse partial JSON. A successful read does not imply the original operation succeeded; inspect data.origin. Never automatically replay unknown or completed operations to recover output.",
     promptSnippet:
       "Discover and call configured MCP tools, resources, prompts, and retained results",
     promptGuidelines: [

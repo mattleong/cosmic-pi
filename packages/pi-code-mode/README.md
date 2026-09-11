@@ -101,13 +101,25 @@ const requests = [
   { action: "resources.list", server: "remote", limit: 10 },
 ];
 const replies = await Promise.all(requests.map((input) => tools.mcp.request(input)));
-return replies.map((reply) => ({
-  action: reply.action,
-  outcome: reply.outcome,
-  isError: reply.isError,
-  data: reply.data,
-  resultId: reply.resultId,
-}));
+const record = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+return replies.map((reply) => {
+  const data = record(reply.data);
+  const page = record(record(data.result).page);
+  return {
+    action: reply.action,
+    outcome: reply.outcome,
+    isError: reply.isError,
+    origin: data.origin,
+    names:
+      reply.outcome === "completed" && !reply.isError && Array.isArray(page.items)
+        ? page.items.map((item) => record(item).name)
+        : undefined,
+    nextCursor: page.nextCursor,
+    resultId: reply.resultId,
+    notices: reply.notices,
+  };
+});
 ```
 
 Use configured server IDs and exact discovered tool names. Replies carry `outcome`, `isError`,
@@ -116,6 +128,14 @@ completed operation may report a tool failure or invalid output. Catchable trans
 also retain checked certainty. Never replay an `unknown` or `completed` request to recover output;
 use `result.read` with its ID and returned next offset instead. Cancellation and output limits
 cannot roll back server side effects.
+
+Full payloads are under `data.result`. Text pages instead use `data.text`, `offset`, `next`,
+and `total`; text-only `result.read` always returns this page shape. Do not parse partial JSON.
+The example above omits text slices, so recover omitted output from offset `0`, then follow each
+returned `data.next` until it is `null`. Discovery's `data.result.page.nextCursor` is a separate
+cursor for subsequent listing requests. A successful read means retrieval succeeded, not that
+the original operation succeeded; inspect `data.origin.isError` and `data.origin.outputValidation`.
+Errors, omitted output, and attachment reads may have neither `result` nor `text`.
 
 MCP calls bypass Pi per-call middleware, approval extensions, registered overrides, and previews.
 The MCP provider still enforces its own trust, server allow/deny policy, validation, admission,
