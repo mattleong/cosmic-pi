@@ -5,6 +5,7 @@ import { boundaryError } from "../client/errors.ts";
 import type { McpSettings } from "./model.ts";
 
 export const MCP_CONFIG_BASENAME = "pi-mcp.json";
+export const MCP_PROJECT_CONFIG_BASENAME = ".mcp.json";
 export const MCP_CONFIG_LIMITS = Object.freeze({
   bytes: 1_048_576,
   nodes: 32_768,

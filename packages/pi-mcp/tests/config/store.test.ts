@@ -28,6 +28,7 @@ const serializedConfig = (config: McpResolvedConfig | McpEffectiveServer | undef
   JSON.stringify(config);
 const GLOBAL = "/agent/extensions/pi-mcp.json";
 const PROJECT = `/project/${CONFIG_DIR_NAME}/extensions/pi-mcp.json`;
+const PROJECT_ROOT = "/project/.mcp.json";
 const stdio = { command: "server" };
 const layerFor = (
   memory: InMemoryDocuments,
@@ -104,10 +105,9 @@ const paddedDocument = (bytes: number) => {
 };
 
 describe("trusted MCP configuration store", () => {
-  it.effect.each(["global", "project"] as const)(
+  it.effect.each([GLOBAL, PROJECT_ROOT, PROJECT])(
     "bounds initial %s reads and reloads at the exact UTF-8 byte limit",
-    (scope) => {
-      const target = scope === "global" ? GLOBAL : PROJECT;
+    (target) => {
       const fixture = rawDocuments({ [target]: paddedDocument(MCP_CONFIG_LIMITS.bytes + 1) });
       return Effect.gen(function* () {
         const store = yield* McpConfigStore;
@@ -121,6 +121,34 @@ describe("trusted MCP configuration store", () => {
         const missing = yield* store.reload;
         expect(missing.diagnostics).toEqual([]);
         expect(missing.servers).toEqual({});
+      }).pipe(Effect.provide(fixture.layer));
+    },
+  );
+
+  it.effect.each(["{", "{}", '{"mcpServers":[]}'])(
+    "blocks execution on invalid root .mcp.json without repairing it: %s",
+    (source) => {
+      const fixture = rawDocuments({
+        [GLOBAL]: JSON.stringify({ mcpServers: { inherited: stdio } }),
+        [PROJECT_ROOT]: source,
+        [PROJECT]: JSON.stringify({ mcpServers: { override: stdio } }),
+      });
+      return Effect.gen(function* () {
+        const store = yield* McpConfigStore;
+        for (const config of [
+          yield* store.snapshot,
+          yield* store.reload,
+          yield* store.setSettings("global", { maxQueued: 0 }),
+          yield* store.setServer("project", "added", stdio),
+        ]) {
+          expect(config.diagnostics.length).toBeGreaterThan(0);
+          expect(Object.values(config.servers).every((server) => !server.enabled)).toBe(true);
+        }
+        expect(fixture.files.get(PROJECT_ROOT)).toBe(source);
+        fixture.files.set(PROJECT_ROOT, '{"mcpServers":{}}');
+        const recovered = yield* store.reload;
+        expect(recovered.diagnostics).toEqual([]);
+        expect(Object.values(recovered.servers).every((server) => server.enabled)).toBe(true);
       }).pipe(Effect.provide(fixture.layer));
     },
   );
@@ -252,6 +280,7 @@ describe("trusted MCP configuration store", () => {
     () => {
       const memory = makeInMemoryDocuments({
         [GLOBAL]: { mcpServers: { server: stdio } },
+        [PROJECT_ROOT]: { mcpServers: { shared: stdio } },
         [PROJECT]: { mcpServers: { project: stdio } },
       });
       const touched: string[] = [];
@@ -336,9 +365,9 @@ describe("trusted MCP configuration store", () => {
     }).pipe(Effect.provide(layerFor(memory)));
   });
 
-  it.effect(
-    "fails closed on unreadable or malformed project documents, including global writes",
-    () => {
+  it.effect.each([PROJECT_ROOT, PROJECT])(
+    "fails closed on unreadable or malformed %s documents, including global writes",
+    (target) => {
       const memory = makeInMemoryDocuments({
         [GLOBAL]: { mcpServers: { server: stdio } },
       });
@@ -346,7 +375,7 @@ describe("trusted MCP configuration store", () => {
       const service: AtomicJsonDocumentStoreContract = {
         ...memory.service,
         readObject: (path) =>
-          path === PROJECT && unreadable
+          path === target && unreadable
             ? Effect.fail(
                 new JsonDocumentError({ operation: "read", path, message: "secret diagnostic" }),
               )
@@ -359,11 +388,11 @@ describe("trusted MCP configuration store", () => {
         expect((yield* store.snapshot).servers.server?.enabled).toBe(false);
         expect(serializedConfig(yield* store.snapshot)).not.toContain("secret diagnostic");
         unreadable = false;
-        memory.documents.set(PROJECT, { version: 99, mcpServers: {} });
+        memory.documents.set(target, { version: 99, mcpServers: {} });
         expect((yield* store.reload).servers.server?.enabled).toBe(false);
-        memory.documents.set(PROJECT, { mcpServers: {}, servers: [] });
+        memory.documents.set(target, { mcpServers: {}, servers: [] });
         expect((yield* store.reload).servers.server?.enabled).toBe(false);
-        memory.documents.delete(PROJECT);
+        memory.documents.delete(target);
         expect((yield* store.reload).servers.server?.enabled).toBe(true);
       }).pipe(Effect.provide(layerFor(memory, true, service)));
     },

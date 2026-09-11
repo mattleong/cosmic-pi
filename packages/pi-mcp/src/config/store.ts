@@ -17,6 +17,7 @@ import {
   decodeMcpServer,
   MCP_CONFIG_BASENAME,
   MCP_CONFIG_LIMITS,
+  MCP_PROJECT_CONFIG_BASENAME,
   McpServerIdSchema,
   McpSettingsPatchSchema,
 } from "./schema.ts";
@@ -52,7 +53,12 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
           directory: path.resolve(agentDirectory),
           path: path.resolve(agentDirectory, "extensions", MCP_CONFIG_BASENAME),
         };
-        // Constructing this path is pure. No project filesystem capability is used without trust.
+        // Constructing these paths is pure. Project filesystem I/O requires trust.
+        const projectRootSource: McpConfigSource = {
+          scope: "project",
+          directory: path.resolve(options.cwd),
+          path: path.resolve(options.cwd, MCP_PROJECT_CONFIG_BASENAME),
+        };
         const projectSource: McpConfigSource = {
           scope: "project",
           directory: path.resolve(options.cwd),
@@ -80,19 +86,28 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               }),
             ),
           );
-        const resolve = (revision: number, global: McpConfigSource, project?: McpConfigSource) =>
+        const resolve = (
+          revision: number,
+          global: McpConfigSource,
+          projectRoot?: McpConfigSource,
+          project?: McpConfigSource,
+        ) =>
           resolveMcpConfig({
             revision,
             trusted: options.projectTrusted,
             global,
+            projectRoot,
             project,
             path,
           }).pipe(Effect.provideService(Crypto.Crypto, crypto), Effect.flatMap(freezeConfig));
         const readConfig = (revision: number) =>
           Effect.gen(function* () {
             const global = yield* readSource(globalSource);
+            const projectRoot = options.projectTrusted
+              ? yield* readSource(projectRootSource)
+              : undefined;
             const project = options.projectTrusted ? yield* readSource(projectSource) : undefined;
-            return yield* resolve(revision, global, project);
+            return yield* resolve(revision, global, projectRoot, project);
           });
         const state = yield* Ref.make(yield* readConfig(0));
 
@@ -132,6 +147,9 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
                     );
                   const current = yield* Ref.get(state);
                   const target = scope === "global" ? globalSource : projectSource;
+                  const projectRoot = options.projectTrusted
+                    ? yield* readSource(projectRootSource)
+                    : undefined;
                   const other =
                     scope === "project"
                       ? yield* readSource(globalSource)
@@ -153,6 +171,7 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
                         const next = yield* resolve(
                           current.revision + 1,
                           scope === "global" ? nextSource : other!,
+                          projectRoot,
                           scope === "project" ? nextSource : other,
                         );
                         return { document: nextDocument, value: next, afterCommit: commit(next) };

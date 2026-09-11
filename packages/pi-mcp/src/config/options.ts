@@ -108,31 +108,32 @@ export const resolveMcpConfig = (options: {
   readonly revision: number;
   readonly trusted: boolean;
   readonly global: McpConfigSource;
+  readonly projectRoot?: McpConfigSource | undefined;
   readonly project?: McpConfigSource | undefined;
   readonly path: Path.Path;
 }) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
-    const global = yield* decodeSettings(options.global.document?.settings);
-    const project = yield* decodeSettings(options.project?.document?.settings);
-    const settings: McpSettings = {
-      ...DEFAULT_MCP_SETTINGS,
-      ...global.settings,
-      ...project.settings,
-    };
+    const sources = [options.global, options.projectRoot, options.project].filter(
+      (source) => source !== undefined,
+    );
+    let settings: McpSettings = { ...DEFAULT_MCP_SETTINGS };
+    let invalidSettings = false;
     const diagnostics: string[] = [];
-    for (const source of [options.global, options.project])
-      if (source?.diagnostic !== undefined) diagnostics.push(source.diagnostic);
-    if (global.invalid || project.invalid) diagnostics.push("Some MCP settings were ignored.");
     const entries = new Map<string, { source: McpConfigSource; value: Schema.Json }>();
-    for (const source of [options.global, options.project]) {
-      for (const [id, value] of Object.entries(source?.document?.mcpServers ?? {})) {
-        if (source === undefined) continue;
+    for (const source of sources) {
+      const decoded = yield* decodeSettings(source.document?.settings);
+      settings = { ...settings, ...decoded.settings };
+      invalidSettings ||= decoded.invalid;
+      if (source.diagnostic !== undefined) diagnostics.push(source.diagnostic);
+      for (const [id, value] of Object.entries(source.document?.mcpServers ?? {}))
         entries.set(id, { source, value });
-      }
     }
+    if (invalidSettings) diagnostics.push("Some MCP settings were ignored.");
     const servers: Record<string, McpEffectiveServer> = {};
-    const projectBlocked = options.project?.diagnostic !== undefined;
+    const projectBlocked = sources.some(
+      (source) => source.scope === "project" && source.diagnostic !== undefined,
+    );
     let invalidEntries = false;
     for (const [id, { source, value }] of entries) {
       if (!Schema.is(McpServerIdSchema)(id)) {

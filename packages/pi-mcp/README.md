@@ -19,7 +19,15 @@ Pi/Jiti loads the shipped TypeScript source and fixed validator helper. No build
 
 ## Configuration and trust
 
-Create a document at `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`, or `<project>/.pi/extensions/pi-mcp.json`. The project directory name follows Pi's exported config-directory constant. Loading an existing file requires a `mcpServers` object; `version` and `servers` are rejected. A missing file is valid absence. An existing `{}` is invalid when loading or reloading, but an explicit `set-server`, `remove-server`, or `set-settings` command initializes it with `{ "mcpServers": {} }` before applying the change, just as it does for a missing file. Reads never repair files. This initialization applies only to an empty object, not to malformed JSON, nonempty invalid documents, or the old config format.
+Configuration loads from these files, in increasing precedence:
+
+1. `<agent-dir>/extensions/pi-mcp.json`, normally `~/.pi/agent/extensions/pi-mcp.json`.
+2. `<project>/.mcp.json`.
+3. `<project>/.pi/extensions/pi-mcp.json`.
+
+The project is the session's current working directory; parent directories are not searched. The `.pi` directory name follows Pi's exported config-directory constant. Both project files use the format below and require project trust. `.mcp.json` support does not add other clients' transport types or interpolation syntax.
+
+Loading an existing file requires a `mcpServers` object; `version` and `servers` are rejected. A missing file is valid absence. An existing `{}` is invalid when loading or reloading, but an explicit `set-server`, `remove-server`, or `set-settings` command initializes it with `{ "mcpServers": {} }` before applying the change, just as it does for a missing file. Reads never repair files. This initialization applies only to an empty object, not to malformed JSON, nonempty invalid documents, or the old config format.
 
 ```json
 {
@@ -54,11 +62,11 @@ At connection time, `${NAME}` in stdio `env` and HTTP `headers` resolves from th
 
 Both global and project servers require a trusted Pi session to execute. An untrusted session can inspect local global-config status but cannot read, stat, or write project configuration, resolve credentials, authenticate, connect, or launch servers. Trust does not sandbox a server. A configured MCP executable is trusted local code with the user's OS privileges. Its cwd, tool allow list, and environment policy are not filesystem or network containment.
 
-Settings resolve project over global over defaults, field by field. A project server entry replaces the matching global entry in full, including its endpoint, headers, and auth configuration. `{ "enabled": false }` suppresses an inherited server. An invalid override disables that server instead of falling back to the global definition. An unreadable trusted project document blocks execution rather than ignoring possible overrides.
+Settings merge field by field in the order above, starting with defaults. A higher-priority server entry replaces the matching lower-priority entry in full, including its endpoint, headers, and auth configuration. `{ "enabled": false }` suppresses an inherited server. An invalid override disables that server instead of falling back to a lower-priority definition. An unreadable or invalid trusted project document, at either project path, blocks execution rather than ignoring possible overrides.
 
 A stdio server's default cwd is its owning project root or agent directory. Relative `cwd` values resolve against that same directory. `allowTools` and `denyTools` match exact remote tool names; deny wins. An absent allow list permits advertised tools, while `[]` permits none. Denied tools cannot be discovered or called. Resources and prompts follow enabled-server policy, without per-URI or per-prompt rules.
 
-Changes require `/mcp-settings reload` or a settings command. There is no watcher, host-config discovery, automatic package installation, or cross-session metadata cache. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
+Changes require `/mcp-settings reload` or a settings command. There is no watcher, discovery beyond these three paths, automatic package installation, or cross-session metadata cache. Project settings commands write only to `.pi/extensions/pi-mcp.json`; they never modify `.mcp.json`. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
 
 | Setting            | Default  | Bounds        |
 | ------------------ | -------- | ------------- |
@@ -90,7 +98,7 @@ Changes require `/mcp-settings reload` or a settings command. There is no watche
 /mcp-settings set-settings global|project JSON
 ```
 
-Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project server entry reveals the global entry again; use `{ "enabled": false }` to keep it disabled.
+Bare `/mcp` opens the server dashboard in TUI. In RPC and noninteractive modes it still means status. Explicit `/mcp status` keeps its structured reply. Bare `/mcp-settings` means show. Settings output omits endpoints, commands, environment and header values, and credential identities. For example, `/mcp-settings set-settings project {"requestTimeoutMs":90000}` changes one setting. Removing a project override reveals the `.mcp.json` entry, or the global entry if none exists there; use `{ "enabled": false }` to keep it disabled.
 
 ### Dashboard and cached metadata
 
