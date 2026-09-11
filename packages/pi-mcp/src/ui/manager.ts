@@ -42,7 +42,7 @@ import {
   browserLabel,
   cachedFamilies,
 } from "./browser.ts";
-import { dashboardDetail, dashboardLabel, dashboardRows } from "./dashboard.ts";
+import { dashboardDetail, dashboardRows, dashboardTable } from "./dashboard.ts";
 import type { McpManagerClose, McpManagerSelection } from "./manager-state.ts";
 import { McpResultNavigation, type McpResultPage } from "./result-view.ts";
 
@@ -533,18 +533,27 @@ export class McpManagerComponent implements Component, Focusable {
           ...(catalog ? [truncateToWidth(browserCatalogStatus(catalog), inner, "")] : []),
         ].slice(0, height);
         const bodyHeight = Math.max(0, height - prefix.length);
+        const wide = layout !== "narrow" && this.selection.screen !== "result";
+        const geometry = wideListDetailGeometry(width, 24, 0.45);
+        const table =
+          this.selection.screen === "dashboard"
+            ? dashboardTable(snapshot.servers, wide ? geometry.listWidth : inner, theme)
+            : undefined;
+        const columnHeader = table && bodyHeight > 1 ? [table.header] : [];
         const labels =
           this.selection.screen === "browse"
-            ? (this.page?.entries.map(browserLabel) ?? [])
-            : this.selectedRows().map(dashboardLabel);
-        const window = this.shell.visibleWindow(labels.length, bodyHeight);
-        const left = labels
-          .slice(window.start, window.end)
-          .map((label, index) =>
-            index + window.start === this.shell.state.selected
-              ? theme.fg("accent", `> ${label}`)
-              : `  ${label}`,
-          );
+            ? (this.page?.entries.map((entry, index) =>
+                index === this.shell.state.selected
+                  ? theme.fg("accent", `> ${browserLabel(entry)}`)
+                  : `  ${browserLabel(entry)}`,
+              ) ?? [])
+            : table
+              ? this.selectedRows().map((row, index) =>
+                  table.row(row, index === this.shell.state.selected),
+                )
+              : [];
+        const window = this.shell.visibleWindow(labels.length, bodyHeight - columnHeader.length);
+        const left = [...columnHeader, ...labels.slice(window.start, window.end)];
         if (!labels.length)
           left.push(
             ...(this.selection.screen === "browse"
@@ -562,8 +571,6 @@ export class McpManagerComponent implements Component, Focusable {
                     ? "Result unavailable. It may have been evicted or revoked. The source operation was not replayed."
                     : "Reading authorized retained output locally.",
                 ]);
-        const wide = layout !== "narrow" && this.selection.screen !== "result";
-        const geometry = wideListDetailGeometry(width, 24, 0.45);
         const detailWidth = wide ? geometry.detailWidth : inner;
         const lines = details.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, detailWidth)));
         const awaitingDetail =

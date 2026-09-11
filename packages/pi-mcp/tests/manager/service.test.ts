@@ -24,7 +24,7 @@ import { McpManagerComponent, type McpViewRequest } from "../../src/ui/manager.t
 import { managerSelection } from "../../src/ui/manager-state.ts";
 import { resultPage } from "../../src/ui/result-view.ts";
 
-const fixture = () =>
+const fixture = (servers?: McpResolvedConfig["servers"]) =>
   Effect.gen(function* () {
     let reads = 0;
     let opens = 0;
@@ -36,7 +36,7 @@ const fixture = () =>
       trusted: true,
       settings: { ...DEFAULT_MCP_SETTINGS, enabled: true },
       diagnostics: [],
-      servers: {
+      servers: servers ?? {
         a: {
           id: "a",
           identity: "private-config-hash",
@@ -267,6 +267,38 @@ it.effect(
           { maxOutputBytes: 4096, images: false },
         );
         expect(read.reply.resultId).toBe(retained.reply.resultId);
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect.each([false, true])(
+  "distinguishes disabled configuration from invalid overrides without permitting execution: invalid=%s",
+  (invalid) =>
+    Effect.gen(function* () {
+      const server = {
+        id: "a",
+        identity: "disabled-config",
+        scope: "project" as const,
+        directory: "/project",
+        enabled: false,
+      };
+      const f = yield* fixture({
+        a: invalid ? { ...server, diagnostic: "Invalid server configuration." } : server,
+      });
+      yield* Effect.gen(function* () {
+        const manager = yield* McpManager;
+        const row = (yield* manager.refresh).servers[0]!;
+        expect(row.invalid).toBe(invalid);
+        expect(row.enabled).toBe(false);
+        expect(row.actions.find((choice) => choice.action === "connect")).toMatchObject({
+          enabled: false,
+          reason: invalid ? "invalid" : "disabled",
+        });
+        expect(yield* Effect.result(manager.capture(row, "connect"))).toMatchObject({
+          _tag: "Failure",
+          failure: { kind: "denied" },
+        });
+        expect(f.counts()).toEqual({ reads: 0, opens: 0, requests: 0 });
       }).pipe(Effect.provide(f.layer));
     }),
 );

@@ -8,8 +8,12 @@ import { browserCatalogStatus } from "../../src/ui/browser.ts";
 import { managerSelection, type McpManagerClose } from "../../src/ui/manager-state.ts";
 import type { McpCachedEntry, McpCachedPage } from "../../src/discovery/model.ts";
 
-// SAFETY: The pure component uses only fg and bold from this controlled theme.
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as Theme;
+// SAFETY: The pure component uses only fg, bg and bold from this controlled theme.
+const theme = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
 const base: Omit<McpManagerServer, "actions"> = {
   id: "a",
   scope: "global",
@@ -98,6 +102,29 @@ it("dashboard opening/repaint/Enter remain passive and search keeps ordinary tex
   expect(h.requests.at(-1)).toMatchObject({ kind: "cached", request: { query: "a工具qj/?" } });
   expect(h.finishes).toEqual([]);
 });
+it.each(["first", "last"])(
+  "dashboard headers and resizing preserve the %s actionable server",
+  (target) => {
+    const h = harness();
+    const servers = Array.from({ length: 40 }, (_, index) => {
+      const row = { ...base, id: `server-${index}` };
+      return { ...row, actions: serverActions(row, true, true) };
+    });
+    h.replace({ ...snapshot, servers });
+    h.component.render(160);
+    if (target === "last") h.component.handleInput("G");
+    for (const width of [50, 90, 160]) h.component.render(width);
+    h.component.handleInput("a");
+    for (let index = 0; index < 3; index++) h.component.handleInput("j");
+    h.component.handleInput("\r");
+    expect(h.finishes[0]).toMatchObject({
+      action: "connect",
+      row: { id: target === "first" ? "server-0" : "server-39" },
+    });
+    expect(h.requests).toEqual([]);
+  },
+);
+
 it("late cached search/detail replies cannot republish withdrawn or replaced content", () => {
   const h = harness("browse");
   const old = h.requests[0]!;

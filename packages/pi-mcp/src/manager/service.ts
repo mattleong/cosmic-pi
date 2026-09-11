@@ -61,7 +61,8 @@ const makeManager = Effect.gen(function* () {
         const row = {
           ...server,
           transport: definition?.transport ?? ("invalid" as const),
-          invalid: definition === undefined || effective.diagnostic !== undefined,
+          invalid:
+            effective.diagnostic !== undefined || (effective.enabled && definition === undefined),
           authType: definition?.transport === "http" ? definition.auth.type : ("none" as const),
           metadata: known.find((summary) => summary.server === server.id),
           configRevision: status.revision,
