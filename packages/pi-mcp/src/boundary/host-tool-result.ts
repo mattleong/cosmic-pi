@@ -48,18 +48,6 @@ export const makeMcpErrorReceipts = () => {
 };
 export type McpErrorReceipts = ReturnType<typeof makeMcpErrorReceipts>;
 
-/** Public diagnostics are fixed by reason, never copied from exception messages. */
-const failureMessage = (error: McpBoundaryError): string => {
-  switch (error.reason) {
-    case "oauth-resource-metadata-missing":
-      return "OAuth protected-resource metadata is missing. Compatibility requires auth.allowMissingResourceMetadata: true and an explicit auth.issuer.";
-    case "oauth-resource-metadata-invalid":
-      return "OAuth protected-resource discovery failed. Missing-metadata compatibility cannot bypass invalid metadata or unexpected HTTP responses.";
-    default:
-      return mcpDiagnostic(error).explanation;
-  }
-};
-
 export const promptArgumentHint = (action: string, error: McpBoundaryError): string | undefined =>
   action === "prompts.get" &&
   error.kind === "invalid-input" &&
@@ -69,7 +57,8 @@ export const promptArgumentHint = (action: string, error: McpBoundaryError): str
     : undefined;
 
 export const mcpFailureReply = (action: string, error: McpBoundaryError): McpGatewayReply => {
-  const diagnostic = { kind: error.kind, message: failureMessage(error) };
+  // Public diagnostics are fixed by reason, never copied from exception messages.
+  const diagnostic = { kind: error.kind, message: mcpDiagnostic(error, { action }).explanation };
   const hint = promptArgumentHint(action, error);
   return {
     action,

@@ -61,19 +61,21 @@ export function normalizeMcpServer(
       Object.entries(raw.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
     ),
     auth:
-      auth.type === "oauth"
-        ? {
-            ...auth,
-            registration:
-              auth.registration ??
-              (auth.clientId !== undefined
-                ? "pre-registered"
-                : auth.clientMetadataUrl !== undefined
-                  ? "metadata"
-                  : "dynamic"),
-            scopes: [...new Set(auth.scopes ?? [])].sort(),
-          }
-        : auth,
+      raw.auth === undefined && Object.keys(raw.headers ?? {}).length === 0
+        ? { type: "oauth", implicit: true, registration: "dynamic", scopes: [] }
+        : auth.type === "oauth"
+          ? {
+              ...auth,
+              registration:
+                auth.registration ??
+                (auth.clientId !== undefined
+                  ? "pre-registered"
+                  : auth.clientMetadataUrl !== undefined
+                    ? "metadata"
+                    : "dynamic"),
+              scopes: [...new Set(auth.scopes ?? [])].sort(),
+            }
+          : auth,
   };
 }
 

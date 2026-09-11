@@ -35,6 +35,7 @@ import {
   callbackRedirect,
   deniedAuth,
   oauthConfig,
+  resourceMetadataFallback,
   singleUseCallback,
   validateAuthAddresses,
   validateAuthUrl,
@@ -43,7 +44,7 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
 import { withAuthFetch } from "./auth-fetch.ts";
-import { discoverAuthResource } from "./sdk-auth-discovery.ts";
+import { discoverAuthResource, missingOnlyMetadataFetch } from "./sdk-auth-discovery.ts";
 
 const unsupported = () =>
   boundaryError(
@@ -103,11 +104,19 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         grant.identity !== server.identity ||
         grant.registration !== config.registration ||
         (grant.resourceMetadataSource === "configured" &&
-          (config.allowMissingResourceMetadata !== true || config.issuer === undefined)) ||
+          (config.allowMissingResourceMetadata === false || config.issuer === undefined)) ||
         (config.issuer !== undefined && grant.issuer !== config.issuer) ||
         (config.registration === "pre-registered" && grant.clientId !== config.clientId)
       )
         return yield* deniedAuth();
+      if (grant.resourceMetadataSource === "origin") {
+        const fallback = yield* resourceMetadataFallback(server.definition.url, config);
+        if (
+          fallback?.source !== "origin" ||
+          (fallback.issuer !== grant.issuer && `${fallback.issuer}/` !== grant.issuer)
+        )
+          return yield* deniedAuth();
+      }
       const policy = yield* authUrlPolicy(server);
       const expectedResource = yield* validateAuthUrl(
         config.resource ?? server.definition.url,
@@ -181,8 +190,8 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           const discovery = yield* discoverAuthResource(endpoint, resourceUrl, config, policy).pipe(
             Effect.provideService(NetworkAddresses, network),
           );
-          const resource = discovery.metadata;
-          const issuer = config.issuer ?? resource.authorization_servers?.[0];
+          let resource = discovery.metadata;
+          let issuer = config.issuer ?? resource.authorization_servers?.[0];
           if (
             !issuer ||
             resource.resource !== resourceUrl.href ||
@@ -191,10 +200,22 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             return yield* deniedAuth();
           const issuerUrl = yield* validateAuthUrl(issuer, policy);
           if (issuerUrl.search) return yield* deniedAuth();
+          const discoveryIssuer = discovery.source === "origin" ? `${issuer}/` : issuer;
           const metadata = yield* withAuthFetch(policy, (fetch) =>
-            discoverAuthorizationServerMetadata(issuer, { fetchFn: fetch }),
+            discoverAuthorizationServerMetadata(discoveryIssuer, {
+              fetchFn: missingOnlyMetadataFetch(fetch),
+            }),
           ).pipe(Effect.provideService(NetworkAddresses, network));
-          if (!metadata || metadata.issuer !== issuer) return yield* deniedAuth();
+          if (
+            !metadata ||
+            (metadata.issuer !== issuer &&
+              !(discovery.source === "origin" && metadata.issuer === `${issuer}/`))
+          )
+            return yield* deniedAuth();
+          if (discovery.source === "origin") {
+            issuer = metadata.issuer;
+            resource = { ...resource, authorization_servers: [issuer] };
+          }
           if (
             !metadata.code_challenge_methods_supported?.includes("S256") ||
             !metadata.response_types_supported.includes("code") ||

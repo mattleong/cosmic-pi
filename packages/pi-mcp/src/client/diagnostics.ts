@@ -28,21 +28,46 @@ const diagnostic = (
 interface DiagnosticActions {
   readonly canReopen?: boolean;
   readonly canSignIn?: boolean;
+  readonly action?: string;
 }
 
 const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiagnostic => {
   const signIn: ReadonlyArray<McpRecovery> = actions.canSignIn ? ["sign-in"] : ["inspect-status"];
   switch (error.reason) {
+    case "auth-not-configured":
+      return diagnostic(
+        "Managed authentication is not configured",
+        "This HTTP server has no managed authentication configured. Omitting auth or setting auth: false does not enable automatic OAuth. Review /mcp-settings and configure the server's supported authentication, or check any configured authentication headers. OAuth must be configured before /mcp auth can start sign-in.",
+        ["inspect-settings"],
+      );
+    case "auth-env-required":
+      return diagnostic(
+        "Environment credential required",
+        "The configured environment credential is missing, invalid, or rejected. Check the credential supplied to Pi and the server's auth settings. Browser sign-in is unavailable for environment authentication.",
+        ["inspect-settings"],
+      );
+    case "auth-env-sign-in-unsupported":
+      return diagnostic(
+        "Browser sign-in is unavailable",
+        "This server uses an environment credential, not OAuth. /mcp auth cannot start browser sign-in for it. No credential check was performed. Review the server's auth settings if you intended to use OAuth.",
+        ["inspect-settings"],
+      );
+    case "auth-oauth-required":
+      return diagnostic(
+        "OAuth sign-in required",
+        "The OAuth credential check or transport rejected access. Use /mcp auth for this server or its Sign in action. Sign-in is an explicit user action and does not connect automatically.",
+        signIn,
+      );
     case "oauth-resource-metadata-missing":
       return diagnostic(
         "Resource metadata is missing",
-        "The resource did not publish protected-resource metadata. An explicit compatibility setting is available only with a configured issuer. Review the configuration; no setting was changed.",
+        "The resource did not publish protected-resource metadata, and the configured policy disables compatibility fallback. Review allowMissingResourceMetadata; no setting was changed.",
         ["inspect-settings"],
       );
     case "oauth-resource-metadata-invalid":
       return diagnostic(
         "Resource metadata was rejected",
-        "The protected-resource metadata is malformed or unsafe. The missing-metadata compatibility setting cannot bypass this rejection.",
+        "Protected-resource discovery returned malformed or unsafe metadata, or an unexpected HTTP response. Compatibility fallback cannot bypass these failures.",
         ["inspect-settings"],
         "error",
       );
@@ -148,7 +173,7 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
     case "auth-required":
       return diagnostic(
         "Authentication required",
-        "A credential check or authenticated transport rejected access. Sign-in is an explicit user action and will not connect automatically.",
+        "A credential check or transport rejected access. Inspect the server's authentication settings. Browser sign-in requires configured OAuth and an explicit user action.",
         signIn,
       );
     case "cancelled":
@@ -229,13 +254,28 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
 
 /** Fixed reasons only. Neither completion nor a failure diagnostic proves output was retained. */
 export const mcpDiagnostic = (error: Evidence, actions: DiagnosticActions = {}): McpDiagnostic => {
-  if (error.outcome === "unknown")
+  if (error.outcome === "unknown") {
+    const discovery = [
+      "tools.list",
+      "tools.search",
+      "tools.describe",
+      "resources.list",
+      "resources.templates",
+      "prompts.list",
+      "refresh",
+    ].includes(actions.action ?? "");
+    const explanation = discovery
+      ? "The connection or metadata discovery request may have run, but completion is unconfirmed. No tool invocation was requested. Inspect server status before continuing. The request was not replayed."
+      : "The remote operation may have run. Inspect its outcome before starting more work. It was not replayed.";
     return diagnostic(
-      "Outcome unknown",
-      "The remote operation may have run. Inspect its outcome before starting more work. It was not replayed.",
+      discovery ? "Discovery outcome unknown" : "Outcome unknown",
+      error.kind === "auth-required"
+        ? `${explanation} ${failureDiagnostic(error, {}).explanation}`
+        : explanation,
       ["inspect-operation"],
       "error",
     );
+  }
   const completed = error.outcome === "completed";
   const detail = failureDiagnostic(error, completed ? {} : actions);
   return completed

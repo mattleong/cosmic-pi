@@ -46,7 +46,10 @@ export const readableMcpOutcome = (reply: McpGatewayReply): string => {
     const fields = Option.getOrElse(Schema.decodeUnknownOption(CommandFailure)(reply.data), () => ({
       kind: "unavailable" as const,
     }));
-    const diagnostic = mcpDiagnostic({ ...fields, outcome: reply.outcome });
+    const diagnostic = mcpDiagnostic(
+      { ...fields, outcome: reply.outcome },
+      { action: reply.action },
+    );
     return `${diagnostic.title}. ${diagnostic.explanation}`;
   }
   switch (reply.action) {
@@ -214,7 +217,7 @@ export const runMcpManager = (
             }),
           );
           if (result._tag === "Failure" && current()) {
-            const diagnostic = mcpDiagnostic(result.failure);
+            const diagnostic = mcpDiagnostic(result.failure, { action: chosen.action });
             notifyAtHostBoundary(
               ctx,
               `${diagnostic.title}. ${diagnostic.explanation}`,

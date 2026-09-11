@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { boundaryError } from "../../src/client/errors.ts";
+import { mcpDiagnostic } from "../../src/client/diagnostics.ts";
+import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
 import { normalizeResult } from "../../src/results/normalize.ts";
 import { projectPrepared } from "../../src/results/projection.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -21,6 +24,23 @@ const display = <Result>(result: Result, expanded = false, isPartial = false) =>
     .join("\n");
 
 describe("MCP card projections", () => {
+  it("preserves auth recovery and discovery context when reconstructing historical error cards", () => {
+    const error = boundaryError("auth-required", "unknown", "private-token", "auth-not-configured");
+    const details = mcpFailureReply("tools.search", error);
+    const card = decodeMcpCardDetails({ details, content: [] });
+    expect(card.outcome).toBe("unknown");
+    expect(card.isError).toBe(true);
+    expect(card.diagnostic).toEqual(mcpDiagnostic(error, { action: "tools.search" }));
+    expect(card.diagnostic?.recovery).toEqual(["inspect-operation"]);
+    expect(card.warnings.join(" ")).toMatch(/Do not replay/);
+    expect(JSON.stringify(card)).not.toContain("private-token");
+    const legacy = decodeMcpCardDetails({
+      details: { ...details, data: { kind: "auth-required" } },
+      content: [],
+    });
+    expect(legacy.diagnostic?.explanation).not.toContain("no managed authentication configured");
+    expect(legacy.diagnostic?.recovery).toEqual(["inspect-operation"]);
+  });
   it.effect("projects actual discovery pages and normalized attachment descriptors", () =>
     Effect.gen(function* () {
       const normalized = normalizeResult({

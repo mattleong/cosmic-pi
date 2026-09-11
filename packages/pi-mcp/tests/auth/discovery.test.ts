@@ -131,7 +131,7 @@ describe("protected-resource challenge discovery", () => {
     }).pipe(Effect.provide(network)),
   );
 
-  for (const status of [401, 404, 500])
+  for (const status of [401, 500])
     it.live(`does not replace a failed advertised URL with guessed metadata: ${status}`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({
@@ -177,19 +177,29 @@ describe("protected-resource discovery compatibility", () => {
     }).pipe(Effect.provide(network)),
   );
 
-  for (const mode of ["default", "issuer-only", "opt-in-without-issuer"] as const)
-    it.live(`keeps missing metadata blocked for ${mode}`, () =>
+  for (const mode of ["default", "issuer-only", "opt-in-without-issuer", "strict"] as const)
+    it.live(`applies missing metadata policy for ${mode}`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ resourceMetadataStatuses: [404] });
         let config: McpOAuthConfig = { type: "oauth", registration: "dynamic", scopes: [] };
         if (mode === "issuer-only") config = { ...config, issuer: fixture.issuer };
         if (mode === "opt-in-without-issuer")
           config = { ...config, allowMissingResourceMetadata: true };
+        if (mode === "strict") config = { ...config, allowMissingResourceMetadata: false };
         const result = yield* discover(fixture.origin, config).pipe(Effect.result);
-        expect(result).toMatchObject({
-          _tag: "Failure",
-          failure: { kind: "unsupported", reason: "oauth-resource-metadata-missing" },
-        });
+        if (mode === "strict")
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { kind: "unsupported", reason: "oauth-resource-metadata-missing" },
+          });
+        else
+          expect(result).toMatchObject({
+            _tag: "Success",
+            success: {
+              source: mode === "issuer-only" ? "configured" : "origin",
+              metadata: { resource: fixture.resource, authorization_servers: [fixture.origin] },
+            },
+          });
         if (result._tag === "Failure") {
           const reply = mcpFailureReply("command", result.failure);
           expect(reply.data).toMatchObject({ reason: "oauth-resource-metadata-missing" });
@@ -199,6 +209,10 @@ describe("protected-resource discovery compatibility", () => {
     );
 
   const failures: ReadonlyArray<OAuthFixtureOptions> = [
+    { resourceMetadataStatuses: [401, 200] },
+    { resourceMetadataStatuses: [403, 200] },
+    { resourceMetadataStatuses: [429, 200] },
+    { resourceMetadataStatuses: [502, 200] },
     { resourceMetadataStatuses: [401, 404] },
     { resourceMetadataStatuses: [403, 404] },
     { resourceMetadataStatuses: [429, 404] },
@@ -221,19 +235,63 @@ describe("protected-resource discovery compatibility", () => {
       }).pipe(Effect.provide(network)),
     );
 
-  for (const statuses of [[200], [404, 200]])
-    it.live(`retains real metadata instead of replacing its bindings: ${statuses}`, () =>
+  it.live(
+    "derives a missing-metadata issuer from the endpoint, not a resource override or hint",
+    () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({
-          resourceMismatch: true,
-          resourceMetadataStatuses: statuses,
+          resourceMetadataStatuses: [404],
+          resourceChallenge: (origin) => `Bearer resource_metadata="${origin}/oauth/resource"`,
+          challengeMetadataStatus: 410,
         });
-        const result = yield* discover(fixture.origin);
-        expect(result.source).toBeUndefined();
-        // Login, not discovery, rejects this binding. Compatibility must not replace it.
-        expect(result.metadata.resource).not.toBe(fixture.resource);
+        const result = yield* discoverAuthResource(
+          `${fixture.origin}/mcp?tenant=fixture`,
+          new URL("https://other.example/resource"),
+          {
+            type: "oauth",
+            registration: "dynamic",
+            scopes: [],
+            resource: "https://other.example/resource",
+          },
+          {
+            privateOrigins: new Set([fixture.origin]),
+            localHttpOrigins: new Set([fixture.origin]),
+          },
+        );
+        expect(result).toMatchObject({
+          source: "origin",
+          metadata: {
+            resource: "https://other.example/resource",
+            authorization_servers: [fixture.origin],
+          },
+        });
+        expect(fixture.requests.some((request) => request.path.startsWith("/.well-known/"))).toBe(
+          false,
+        );
       }).pipe(Effect.provide(network)),
-    );
+  );
+
+  for (const allowMissingResourceMetadata of [false, true])
+    for (const statuses of [[200], [404, 200]])
+      it.live(
+        `retains real metadata bindings: ${statuses}, compatibility=${allowMissingResourceMetadata}`,
+        () =>
+          Effect.gen(function* () {
+            const fixture = yield* startOAuthServer({
+              resourceMismatch: true,
+              resourceMetadataStatuses: statuses,
+            });
+            const result = yield* discover(fixture.origin, {
+              type: "oauth",
+              registration: "dynamic",
+              scopes: [],
+              allowMissingResourceMetadata,
+            });
+            expect(result.source).toBeUndefined();
+            // Login, not discovery, rejects this binding. Compatibility must not replace it.
+            expect(result.metadata.resource).not.toBe(fixture.resource);
+          }).pipe(Effect.provide(network)),
+      );
 
   it.live("does not reinterpret a network failure following a missing response as absence", () =>
     Effect.gen(function* () {

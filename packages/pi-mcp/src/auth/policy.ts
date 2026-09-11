@@ -47,6 +47,18 @@ export const parseAuthUrl = (value: string) =>
     },
     catch: () => deniedAuth(),
   });
+/** Missing metadata may use only the resource server's origin unless explicitly pinned. */
+export const resourceMetadataFallback = (endpoint: string, config: McpOAuthConfig) =>
+  Effect.gen(function* () {
+    if (config.allowMissingResourceMetadata === false) return undefined;
+    const server = yield* parseAuthUrl(endpoint);
+    if (config.issuer !== undefined) {
+      yield* parseAuthUrl(config.issuer);
+      return { issuer: config.issuer, source: "configured" as const };
+    }
+    return { issuer: server.origin, source: "origin" as const };
+  });
+
 export const authUrlPolicy = (server: McpEffectiveServer) =>
   Effect.gen(function* () {
     if (server.definition?.transport !== "http") return yield* authFailure();

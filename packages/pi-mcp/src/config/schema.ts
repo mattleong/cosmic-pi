@@ -91,7 +91,6 @@ const oauth = Schema.Struct({
   redirectUri: Schema.optionalKey(endpoint),
 }).check(
   Schema.makeFilter((value) => {
-    if (value.allowMissingResourceMetadata === true && value.issuer === undefined) return false;
     const registration =
       value.registration ??
       (value.clientId !== undefined
@@ -210,7 +209,7 @@ const serverFieldHints = new Map(
     url: '"url": expected an HTTP or HTTPS URL without embedded credentials or a fragment.',
     headers:
       '"headers": expected unique case-insensitive HTTP header names mapped to strings without CR, LF, or NUL.',
-    auth: '"auth": omit for no authentication, use false, or provide an object with type "none", "env", or "oauth" and its supported fields. Boolean true is not supported.',
+    auth: '"auth": use false to disable managed authentication, or an object with type "none", "env", or "oauth" and its supported fields. Omission enables implicit OAuth only without custom headers. Boolean true is not supported.',
   }),
 );
 

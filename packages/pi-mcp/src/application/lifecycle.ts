@@ -169,10 +169,13 @@ export const makeMcpLifecycle = (
                   ?.action ?? "status",
               "status",
             );
-            if (promptArgumentHint(action, result.failure) !== undefined) {
+            if (
+              result.failure.kind === "auth-required" ||
+              promptArgumentHint(action, result.failure) !== undefined
+            ) {
               if (!current(input, token))
-                throw boundaryError("stale", "not-sent", "MCP session was replaced.");
-              // Preserve this fixed hint through Code Mode's message-redacting error boundary.
+                throw boundaryError("stale", result.failure.outcome, "MCP session was replaced.");
+              // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
               return { reply: mcpFailureReply(action, result.failure), images: [] };
             }
             throw result.failure;

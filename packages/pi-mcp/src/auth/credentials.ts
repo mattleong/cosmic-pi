@@ -13,7 +13,7 @@ export const grantSchema = Schema.Struct({
   redirectUri: Schema.String,
   discovery: Schema.Json,
   resourceMetadata: Schema.Json,
-  resourceMetadataSource: Schema.optionalKey(Schema.Literal("configured")),
+  resourceMetadataSource: Schema.optionalKey(Schema.Literals(["configured", "origin"])),
   clientInformation: Schema.Json,
   tokens: Schema.Json,
   receivedAt: Schema.Finite,

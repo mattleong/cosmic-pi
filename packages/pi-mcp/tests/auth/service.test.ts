@@ -68,6 +68,141 @@ const make = (
   );
 
 describe("user-only authentication ownership", () => {
+  for (const activation of ["challenge", "user-check", "login"] as const)
+    it.effect(`keeps implicit OAuth anonymous until ${activation}, then uses stored grants`, () =>
+      Effect.gen(function* () {
+        const current = server(`implicit-${activation}`);
+        if (current.definition?.transport !== "http" || current.definition.auth.type !== "oauth")
+          return yield* Effect.die("Missing OAuth fixture.");
+        const implicit = {
+          ...current,
+          definition: {
+            ...current.definition,
+            auth: { ...current.definition.auth, implicit: true as const },
+          },
+        };
+        let activated = false;
+        let saved: McpGrant | undefined;
+        const auth = yield* make({
+          read: () =>
+            activated ? Effect.succeed(saved) : Effect.die("Anonymous access read secure storage."),
+          write: (_identity, value) =>
+            Effect.sync(() => {
+              saved = value;
+            }),
+          remove: () => Effect.void,
+        });
+        expect(yield* auth.access(implicit)).toBeUndefined();
+        expect(yield* auth.access(implicit)).toBeUndefined();
+        expect(yield* auth.status(implicit)).toEqual({ state: "unchecked" });
+        activated = true;
+        if (activation === "login") {
+          const receipt = yield* auth.login(implicit, ui);
+          yield* auth.completeLogin(implicit, receipt);
+        } else {
+          if (activation === "challenge") yield* auth.reject(implicit);
+          expect(
+            yield* auth
+              .access(implicit, { requireGrant: activation === "user-check" })
+              .pipe(Effect.flip),
+          ).toMatchObject({
+            kind: "auth-required",
+            reason: "auth-oauth-required",
+            outcome: "not-sent",
+          });
+          expect(yield* auth.status(implicit)).toEqual({ state: "required" });
+          saved = grant(current.identity, Number.MAX_SAFE_INTEGER);
+        }
+        expect(yield* auth.access(implicit)).toBe("private-token");
+        expect(yield* auth.status(implicit)).toEqual({ state: "ready" });
+        yield* auth.revoke;
+        activated = false;
+        expect(yield* auth.access(implicit)).toBeUndefined();
+        expect(yield* auth.status(implicit)).toEqual({ state: "unchecked" });
+        activated = true;
+        yield* auth.reject(implicit);
+        expect(yield* auth.access(implicit)).toBe("private-token");
+        yield* auth.logout(implicit);
+        expect(yield* auth.access(implicit).pipe(Effect.flip)).toMatchObject({
+          kind: "auth-required",
+        });
+      }),
+    );
+  it.effect(
+    "explains non-OAuth login and missing environment credentials without starting sign-in",
+    () =>
+      Effect.gen(function* () {
+        const forbidden = Effect.die("non-OAuth recovery touched OAuth or storage");
+        const auth = yield* make(
+          { read: () => forbidden, write: () => forbidden, remove: () => forbidden },
+          { login: () => forbidden, refresh: () => forbidden, token: () => forbidden },
+        );
+        for (const mode of [
+          { type: "none" as const },
+          { type: "env" as const, env: "PRIVATE_MISSING_ENV" },
+        ]) {
+          const current: McpEffectiveServer = {
+            ...server("diagnostic"),
+            definition: {
+              transport: "http",
+              url: "https://resource.example/mcp",
+              headers: {},
+              denyTools: [],
+              auth: mode,
+            },
+          };
+          expect(yield* auth.login(current, ui).pipe(Effect.flip)).toMatchObject({
+            kind: mode.type === "none" ? "auth-required" : "unsupported",
+            outcome: "not-sent",
+            reason: mode.type === "none" ? "auth-not-configured" : "auth-env-sign-in-unsupported",
+          });
+          if (mode.type === "none") expect(yield* auth.access(current)).toBeUndefined();
+          else
+            expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
+              kind: "auth-required",
+              outcome: "not-sent",
+              reason: "auth-env-required",
+            });
+        }
+      }).pipe(
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({})),
+      ),
+  );
+  it.effect(
+    "unsupported browser sign-in does not invalidate a checked environment credential",
+    () =>
+      Effect.gen(function* () {
+        const forbidden = Effect.die("environment sign-in touched OAuth or storage");
+        const auth = yield* make(
+          { read: () => forbidden, write: () => forbidden, remove: () => forbidden },
+          { login: () => forbidden, refresh: () => forbidden, token: () => forbidden },
+        );
+        const current: McpEffectiveServer = {
+          ...server("env-login"),
+          definition: {
+            transport: "http",
+            url: "https://resource.example/mcp",
+            headers: {},
+            denyTools: [],
+            auth: { type: "env", env: "PRIVATE_ENV" },
+          },
+        };
+        expect(yield* auth.access(current)).toBe("private-token");
+        const before = yield* auth.status(current);
+        expect(before.state).toBe("ready");
+        expect(yield* auth.login(current, ui).pipe(Effect.flip)).toMatchObject({
+          kind: "unsupported",
+          outcome: "not-sent",
+          reason: "auth-env-sign-in-unsupported",
+        });
+        expect(yield* auth.status(current)).toEqual(before);
+      }).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord({ PRIVATE_ENV: "private-token" }),
+        ),
+      ),
+  );
   it.effect("status performs no store, SDK, or environment lookup", () =>
     Effect.gen(function* () {
       const forbidden = Effect.die("status touched a credential boundary");

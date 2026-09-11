@@ -6,6 +6,8 @@ import type { McpBoundaryError } from "../client/errors.ts";
 export type McpConfigScope = "global" | "project";
 export interface McpOAuthConfig {
   readonly type: "oauth";
+  /** Internal default for headerless URL servers; anonymous until challenged or checked by the user. */
+  readonly implicit?: true;
   readonly registration: "pre-registered" | "dynamic" | "metadata";
   readonly clientId?: string;
   readonly clientMetadataUrl?: string;

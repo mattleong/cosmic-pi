@@ -307,6 +307,76 @@ describe("SDK-owned public OAuth", () => {
       }).pipe(Effect.provide(layers)),
   );
 
+  for (const issuerRootSlash of [false, true])
+    it.live(
+      `restores and refreshes endpoint-origin fallback grants, root slash=${issuerRootSlash}`,
+      () =>
+        Effect.gen(function* () {
+          const fixture = yield* startOAuthServer({
+            resourceMetadataStatuses: [404],
+            issuerRootSlash,
+          });
+          const configured = fixture.configured("dynamic");
+          if (
+            configured.definition?.transport !== "http" ||
+            configured.definition.auth.type !== "oauth"
+          )
+            return yield* Effect.die("Missing OAuth fixture.");
+          const definition = configured.definition;
+          const auth = {
+            type: "oauth" as const,
+            registration: "dynamic" as const,
+            scopes: [],
+            redirectUri: configured.definition.auth.redirectUri!,
+          };
+          const server = { ...configured, definition: { ...definition, auth } };
+          const sdk = yield* makeMcpSdkAuth;
+          const grant = yield* sdk.login(server, yield* browser("manual"));
+          expect(grant.resourceMetadataSource).toBe("origin");
+          expect(grant.issuer).toBe(fixture.issuer);
+          const stored = yield* decodeGrant(yield* encodeGrant(grant));
+          const restored = yield* makeMcpSdkAuth;
+          expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
+          const refreshed = yield* restored.refresh(server, stored);
+          expect(refreshed.resourceMetadataSource).toBe("origin");
+          expect(yield* restored.token(server, refreshed)).toBe("fixture-access-1");
+          for (const changedDefinition of [
+            { ...definition, auth: { ...auth, allowMissingResourceMetadata: false } },
+            { ...definition, auth: { ...auth, issuer: "https://other.example" } },
+            { ...definition, url: "https://other.example/mcp", auth },
+            { ...definition, auth: { ...auth, resource: `${fixture.origin}/other` } },
+          ]) {
+            const changed = { ...server, definition: changedDefinition };
+            expect((yield* restored.token(changed, refreshed).pipe(Effect.result))._tag).toBe(
+              "Failure",
+            );
+            expect((yield* restored.refresh(changed, refreshed).pipe(Effect.result))._tag).toBe(
+              "Failure",
+            );
+          }
+          expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 1 });
+        }).pipe(Effect.provide(layers)),
+    );
+
+  for (const status of [404, 410, 401, 403, 429, 502])
+    it.live(`authorization-server fallback requires absence, not rejection: ${status}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ authorizationMetadataStatuses: [status, 200] });
+        const sdk = yield* makeMcpSdkAuth;
+        const result = yield* sdk
+          .login(fixture.configured("dynamic"), yield* browser("manual"))
+          .pipe(Effect.result);
+        if (status === 404 || status === 410) {
+          expect(result._tag).toBe("Success");
+          expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 0 });
+        } else {
+          expect(result._tag).toBe("Failure");
+          expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
+          expect(fixture.requests.some((request) => request.path.includes("openid"))).toBe(false);
+        }
+      }).pipe(Effect.provide(layers)),
+    );
+
   for (const statuses of [
     [404, 404],
     [404, 410],
@@ -342,8 +412,10 @@ describe("SDK-owned public OAuth", () => {
           expect(yield* restored.token(server, refreshed)).toBe("fixture-access-1");
           expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 1 });
           // Keep identity unchanged here to exercise restore policy independently of config hashing.
+          expect(
+            yield* restored.token({ ...server, definition: { ...definition, auth } }, refreshed),
+          ).toBe("fixture-access-1");
           for (const changedAuth of [
-            auth,
             { ...auth, allowMissingResourceMetadata: false },
             { ...auth, allowMissingResourceMetadata: true, issuer: `${fixture.issuer}/other` },
             { ...auth, allowMissingResourceMetadata: true, resource: `${fixture.origin}/other` },

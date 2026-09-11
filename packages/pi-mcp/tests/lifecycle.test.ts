@@ -3,6 +3,7 @@ import {
   createEventBus,
   type ExtensionAPI,
   type ExtensionContext,
+  type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,8 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { makeMcpLifecycle, type McpApplicationBoundaries } from "../src/application/lifecycle.ts";
 import { McpActivity } from "../src/activity/service.ts";
+import { registerMcpCommands } from "../src/settings/controller.ts";
+import { mcpFailureReply } from "../src/boundary/host-tool-result.ts";
 import { McpAuthFlow } from "../src/auth/flow.ts";
 import { McpManager } from "../src/manager/service.ts";
 import type { McpManagerSnapshot } from "../src/manager/model.ts";
@@ -421,6 +424,89 @@ describe("MCP session ownership", () => {
         isError: true,
         data: { kind: "auth-required" },
       });
+      yield* host(() => h.lifecycle.shutdown());
+    }),
+  );
+
+  it.live("shares bounded auth recovery and certainty between gateway and Code Mode", () =>
+    Effect.gen(function* () {
+      for (const outcome of ["not-sent", "completed", "unknown"] as const) {
+        for (const reason of [
+          "auth-not-configured",
+          "auth-env-required",
+          "auth-oauth-required",
+        ] as const) {
+          const h = harness({
+            execute: () =>
+              Effect.fail(boundaryError("auth-required", outcome, "private-credential", reason)),
+          });
+          yield* host(() => h.lifecycle.start(h.ctx));
+          const signal = yield* Effect.abortSignal;
+          const provider = h.query()[0]!;
+          const input = { action: "tools.search", server: "one", query: "private-query" } as const;
+          const gateway = yield* host(() =>
+            h.tool.execute("gateway", input, signal, undefined, h.ctx),
+          );
+          const nested = yield* host(() => provider.execute("nested", input, signal, 2_000));
+          expect(nested).toEqual(gateway.details);
+          expect(nested).toMatchObject({
+            action: "tools.search",
+            outcome,
+            isError: true,
+            data: { kind: "auth-required", reason },
+          });
+          expect(
+            yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(nested),
+          ).not.toContain("private-");
+          expect(nested.resultId).toBeUndefined();
+          if (outcome === "unknown") expect(nested.notices.join(" ")).toMatch(/Do not replay/);
+          yield* host(() =>
+            expect(provider.execute("bounded", input, signal, 1)).rejects.toMatchObject({
+              kind: "output-limit",
+              outcome,
+            }),
+          );
+          yield* host(() => h.lifecycle.shutdown());
+          yield* host(() =>
+            expect(provider.execute("stale", input, signal, 2_000)).rejects.toMatchObject({
+              kind: "unavailable",
+              outcome: "not-sent",
+            }),
+          );
+        }
+      }
+    }),
+  );
+
+  it.live("preserves refresh context and auth guidance through the user command handler", () =>
+    Effect.gen(function* () {
+      const error = boundaryError(
+        "auth-required",
+        "unknown",
+        "private-failure",
+        "auth-not-configured",
+      );
+      const h = harness({ execute: () => Effect.fail(error) });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+      registerMcpCommands(
+        {
+          ...h.pi,
+          registerCommand: (name, command) => {
+            commands.set(name, command);
+          },
+        },
+        h.lifecycle.commands,
+      );
+      // SAFETY: Commands use only the context fields provided by the lifecycle fixture.
+      const ctx = { ...h.ctx, mode: "rpc" } as ExtensionCommandContext;
+      yield* host(() => Promise.resolve(commands.get("mcp")!.handler("refresh one", ctx)));
+      const notification = h.notify.mock.calls.at(-1)?.[0];
+      const expected = mcpFailureReply("refresh", error);
+      expect(notification).toBe(
+        yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(expected),
+      );
+      expect(notification).not.toContain("private-failure");
       yield* host(() => h.lifecycle.shutdown());
     }),
   );

@@ -21,6 +21,8 @@ export interface OAuthFixtureOptions {
   readonly metadata?: boolean;
   readonly resourceMismatch?: boolean;
   readonly issuerMismatch?: boolean;
+  readonly issuerRootSlash?: boolean;
+  readonly authorizationMetadataStatuses?: ReadonlyArray<number>;
   readonly tokenRedirect?: boolean;
   readonly secretClient?: boolean;
   readonly oversizedMetadata?: boolean;
@@ -43,7 +45,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
       return yield* Effect.die("OAuth fixture requires TCP.");
     const origin = `http://127.0.0.1:${server.address.port}`;
     const resource = `${origin}/mcp`;
-    const issuer = origin;
+    const issuer = options.issuerRootSlash ? `${origin}/` : origin;
     const crypto = yield* Crypto.Crypto;
     const codes = new Map<string, { challenge: string; client: string; redirect: string }>();
     const requests: {
@@ -55,6 +57,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
     let refreshed = 0;
     let registered = 0;
     let resourceMetadataRequests = 0;
+    let authorizationMetadataRequests = 0;
     let currentRefresh = "fixture-refresh-0";
     const handler = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
@@ -100,6 +103,9 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         });
       }
       if (url.pathname.startsWith("/.well-known/")) {
+        const statuses = options.authorizationMetadataStatuses;
+        const status = statuses?.[authorizationMetadataRequests++] ?? statuses?.at(-1) ?? 200;
+        if (status !== 200) return HttpServerResponse.text("fixture-private-body", { status });
         if (options.oversizedMetadata) return HttpServerResponse.text("x".repeat(140_000));
         const metadata: FixtureDocument = {
           issuer: options.issuerMismatch ? `${origin}/other` : issuer,
@@ -108,6 +114,9 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             ? "http://169.254.169.254/token"
             : `${origin}/token`,
           response_types_supported: ["code"],
+          jwks_uri: `${origin}/jwks`,
+          subject_types_supported: ["public"],
+          id_token_signing_alg_values_supported: ["RS256"],
           grant_types_supported: ["authorization_code", "refresh_token"],
           code_challenge_methods_supported: options.unsupportedPkce ? ["plain"] : ["S256"],
           token_endpoint_auth_methods_supported: ["none"],

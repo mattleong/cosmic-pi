@@ -13,6 +13,7 @@ import { McpSdkAuth } from "../boundary/sdk-auth.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import type { McpAuthContract, McpAuthStatus } from "./model.ts";
+import { withAuthFailureReason } from "./diagnostics.ts";
 import { authFailure, oauthConfig } from "./policy.ts";
 import { authProgress } from "./progress.ts";
 
@@ -102,6 +103,7 @@ export const makeMcpAuth = Effect.gen(function* () {
         evidence === evidenceRevision.get(server.identity);
       const cancelled = Effect.raceFirst(Deferred.await(signal), Deferred.await(serverSignal));
       return Effect.raceFirst(work, cancelled.pipe(Effect.andThen(Effect.fail(stale())))).pipe(
+        Effect.mapError((error) => withAuthFailureReason(server, error)),
         Effect.tap(() =>
           Effect.sync(() => {
             if (current() && publishReady) observed.set(server.identity, { state: "ready" });
@@ -109,7 +111,12 @@ export const makeMcpAuth = Effect.gen(function* () {
         ),
         Effect.tapError((error) =>
           Effect.sync(() => {
-            if (current() && error.kind !== "cancelled" && error.kind !== "stale")
+            if (
+              current() &&
+              error.kind !== "cancelled" &&
+              error.kind !== "stale" &&
+              error.reason !== "auth-env-sign-in-unsupported"
+            )
               observed.set(server.identity, {
                 state: error.kind === "auth-required" ? "required" : "unavailable",
               });
@@ -117,53 +124,72 @@ export const makeMcpAuth = Effect.gen(function* () {
         ),
       );
     });
-  const access: McpAuthContract["access"] = (server) =>
-    owned(
-      server,
-      Effect.gen(function* () {
-        yield* checkServer(server);
-        const definition = server.definition!;
-        if (definition.transport === "stdio" || definition.auth.type === "none") return undefined;
-        if (definition.auth.type === "env") return yield* envToken(definition.auth.env);
-        const authority = authorityFor(server.identity);
-        const generation = authority.generation;
-        const session = sessionGeneration;
-        const current = () =>
-          !disposed &&
-          sessionGeneration === session &&
-          authority.generation === generation &&
-          !authority.blocked;
-        return yield* Effect.gen(function* () {
-          if (!current()) return yield* authFailure();
-          let grant = yield* store.read(server.identity);
-          if (!current()) return yield* stale();
-          if (!grant) return yield* authFailure();
-          const now = yield* Clock.currentTimeMillis;
-          if (grant.expiresAt !== undefined && grant.expiresAt <= now + 30_000) {
-            const refreshed = yield* sdk.refresh(server, grant);
+  const access: McpAuthContract["access"] = (server, options) =>
+    Effect.suspend(() => {
+      const anonymous =
+        oauthConfig(server)?.implicit === true &&
+        options?.requireGrant !== true &&
+        !observed.has(server.identity) &&
+        !authorities.get(server.identity)?.blocked;
+      return owned(
+        server,
+        Effect.gen(function* () {
+          yield* checkServer(server);
+          const definition = server.definition!;
+          if (definition.transport === "stdio" || definition.auth.type === "none") return undefined;
+          if (definition.auth.type === "env") return yield* envToken(definition.auth.env);
+          if (anonymous) return undefined;
+          const authority = authorityFor(server.identity);
+          const generation = authority.generation;
+          const session = sessionGeneration;
+          const current = () =>
+            !disposed &&
+            sessionGeneration === session &&
+            authority.generation === generation &&
+            !authority.blocked;
+          return yield* Effect.gen(function* () {
+            if (!current()) return yield* authFailure();
+            let grant = yield* store.read(server.identity);
             if (!current()) return yield* stale();
-            yield* store.write(server.identity, refreshed).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  if (!current()) authority.blocked = true;
-                }),
-              ),
-            );
+            if (!grant) return yield* authFailure();
+            const now = yield* Clock.currentTimeMillis;
+            if (grant.expiresAt !== undefined && grant.expiresAt <= now + 30_000) {
+              const refreshed = yield* sdk.refresh(server, grant);
+              if (!current()) return yield* stale();
+              yield* store.write(server.identity, refreshed).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    if (!current()) authority.blocked = true;
+                  }),
+                ),
+              );
+              if (!current()) return yield* stale();
+              grant = refreshed;
+            }
+            const token = yield* sdk.token(server, grant);
             if (!current()) return yield* stale();
-            grant = refreshed;
-          }
-          const token = yield* sdk.token(server, grant);
-          if (!current()) return yield* stale();
-          return token;
-        }).pipe(authority.permit.withPermits(1));
-      }),
-    );
+            return token;
+          }).pipe(authority.permit.withPermits(1));
+        }),
+        !anonymous,
+      );
+    });
   const login: McpAuthContract["login"] = (server, ui) =>
     owned(
       server,
       Effect.gen(function* () {
         yield* checkServer(server);
-        if (!oauthConfig(server)) return yield* authFailure();
+        if (!oauthConfig(server)) {
+          const definition = server.definition;
+          if (definition?.transport === "http" && definition.auth.type === "env")
+            return yield* boundaryError(
+              "unsupported",
+              "not-sent",
+              "Environment authentication does not support browser sign-in.",
+              "auth-env-sign-in-unsupported",
+            );
+          return yield* authFailure();
+        }
         pendingLogins.delete(server.identity);
         const authority = authorityFor(server.identity);
         const generation = authority.generation;

@@ -174,6 +174,7 @@ describe("MCP argument-first commands", () => {
       Effect.gen(function* () {
         const login = vi.fn(() => Effect.succeed({ state: "ready" as const }));
         let ready = false;
+        let anonymous = false;
         const forbidden = Effect.die("Headless auth opened interactive presentation");
         const layer = Layer.mergeAll(
           Layer.succeed(McpAuthFlow, {
@@ -208,10 +209,12 @@ describe("MCP argument-first commands", () => {
           }),
           Layer.succeed(McpConfigStore, makeStore()),
           Layer.succeed(McpAuth, {
-            access: () =>
-              ready
-                ? Effect.succeed(secret)
-                : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
+            access: (_server, options) =>
+              anonymous
+                ? Effect.succeed(undefined)
+                : ready && options?.requireGrant === true
+                  ? Effect.succeed(secret)
+                  : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
             status: () => Effect.succeed({ state: "required" }),
             login,
             logout: () => Effect.void,
@@ -231,6 +234,14 @@ describe("MCP argument-first commands", () => {
           failure: { kind: "unavailable", outcome: "not-sent" },
         });
         expect(serialize(denied)).not.toContain(secret);
+        anonymous = true;
+        expect(
+          yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(
+            Effect.provide(layer),
+            Effect.flip,
+          ),
+        ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
+        anonymous = false;
         ready = true;
         expect(
           yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(Effect.provide(layer)),

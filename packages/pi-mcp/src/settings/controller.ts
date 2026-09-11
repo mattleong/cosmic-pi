@@ -130,7 +130,11 @@ export const runMcpUserCommand = (
       const definition = config.servers[server];
       if (!config.trusted || !config.settings.enabled || !definition?.enabled)
         return yield* denied();
-      yield* McpAuth.use((auth) => auth.access(definition)).pipe(
+      yield* McpAuth.use((auth) => auth.access(definition, { requireGrant: true })).pipe(
+        Effect.filterOrFail(
+          (token) => token !== undefined,
+          () => boundaryError("auth-required", "not-sent", "No managed credential is available."),
+        ),
         Effect.mapError(() =>
           boundaryError(
             "unavailable",
@@ -197,6 +201,24 @@ export const runMcpSettingsCommand = (
     return reply(`settings.${action}`, mcpConfigMetadata(config));
   });
 
+/** Keep only recognized command syntax in failure context, never raw arguments. */
+const commandFailureAction = (args: string): string => {
+  if (args.length > 4_096) return "command";
+  const words = args.trim().split(/\s+/);
+  const action = words[0] || "status";
+  if (action === "status" && words.length === 1) return action;
+  const server = words[1];
+  if (!server || server.length > 128) return "command";
+  if (
+    ["connect", "disconnect", "refresh", "logout", "browse", "result"].includes(action) &&
+    words.length === 2
+  )
+    return action;
+  if (action === "auth" && (words.length === 2 || (words.length === 3 && words[2] === "--manual")))
+    return action;
+  return "command";
+};
+
 /** User command publication is generation checked and never prints exception diagnostics. */
 const commandHandler =
   (pi: ExtensionAPI, port: McpCommandPort, settings: boolean) =>
@@ -207,6 +229,7 @@ const commandHandler =
       notifyAtHostBoundary(ctx, "MCP is unavailable for this session.", "warning");
       return Promise.resolve();
     }
+    const failureAction = settings ? "settings" : commandFailureAction(args);
     const effect = settings
       ? runMcpSettingsCommand(args, ctx, current)
       : args.trim() === "" && ctx.mode === "tui"
@@ -218,10 +241,10 @@ const commandHandler =
         (result) =>
           Result.isSuccess(result)
             ? result.success
-            : mcpFailureReply(settings ? "settings" : "command", result.failure),
+            : mcpFailureReply(failureAction, result.failure),
         () =>
           mcpFailureReply(
-            "command",
+            failureAction,
             boundaryError("unavailable", "unknown", "MCP command did not complete."),
           ),
       )

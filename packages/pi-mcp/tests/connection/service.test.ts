@@ -196,6 +196,67 @@ const until = (predicate: () => boolean): Effect.Effect<void> =>
     expect(predicate()).toBe(true);
   });
 
+it.effect(
+  "carries admitted HTTP auth recovery through acquisition and discovery failures without replay",
+  () =>
+    Effect.gen(function* () {
+      for (const auth of [
+        { type: "none" as const },
+        { type: "env" as const, env: "PRIVATE_ENV" },
+        { type: "oauth" as const, registration: "dynamic" as const, scopes: [] },
+      ]) {
+        const config = initialConfig();
+        const current = config.servers.a!;
+        const configured = {
+          ...config,
+          servers: {
+            a: {
+              ...current,
+              definition: {
+                transport: "http" as const,
+                url: "https://private.example/mcp",
+                headers: { Authorization: "private-header" },
+                denyTools: [],
+                auth,
+              },
+            },
+          },
+        };
+        for (const phase of ["access", "open", "request"] as const) {
+          const outcome = phase === "access" ? "not-sent" : "unknown";
+          const rejected = Effect.fail(boundaryError("auth-required", outcome, "private-error"));
+          const f = fixture({
+            config: configured,
+            ...(phase === "access"
+              ? { auth: rejected }
+              : phase === "open"
+                ? { opening: rejected }
+                : { request: () => rejected }),
+          });
+          yield* Effect.gen(function* () {
+            const c = yield* McpConnections;
+            const error = yield* c
+              .withOperation("a", {}, (op) => op.request({ action: "tools.list" }))
+              .pipe(Effect.flip);
+            expect(error).toMatchObject({
+              kind: "auth-required",
+              outcome,
+              reason:
+                auth.type === "none"
+                  ? "auth-not-configured"
+                  : auth.type === "env"
+                    ? "auth-env-required"
+                    : "auth-oauth-required",
+            });
+            expect(f.state.requests).toBe(phase === "request" ? 1 : 0);
+            expect(f.state.opens).toBe(phase === "access" ? 0 : 1);
+            expect(f.config()).toBe(configured);
+          }).pipe(Effect.provide(f.layer));
+        }
+      }
+    }),
+);
+
 it.effect("only current-owner auth-specific transport rejection changes auth evidence", () =>
   Effect.gen(function* () {
     const authFailure = fixture({

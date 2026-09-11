@@ -8,6 +8,7 @@ import * as Semaphore from "effect/Semaphore";
 import type { McpActivityContract } from "../activity/service.ts";
 import type { McpActivityHandle, McpActivityFailure } from "../activity/model.ts";
 import type { McpAuthContract } from "../auth/model.ts";
+import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
 import type { McpConfigStoreContract, McpEffectiveServer, McpSettings } from "../config/model.ts";
@@ -329,6 +330,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                 owner.scope,
               );
             }).pipe(
+              Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
               Effect.timeoutOrElse({
                 duration: settings.connectTimeoutMs,
                 orElse: () =>

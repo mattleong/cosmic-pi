@@ -121,12 +121,12 @@ describe("project root .mcp.json", () => {
         expect(config.servers.shared?.definition).toMatchObject({
           url: "https://shared.test/mcp",
           headers: {},
-          auth: { type: "none" },
+          auth: { type: "oauth", implicit: true, registration: "dynamic", scopes: [] },
         });
         expect(config.servers.replaced?.definition).toMatchObject({
           url: "https://local.test/mcp",
           headers: {},
-          auth: { type: "none" },
+          auth: { type: "oauth", implicit: true, registration: "dynamic", scopes: [] },
         });
         expect(config.servers.disabled?.enabled).toBe(false);
         expect(config.servers.invalid?.enabled).toBe(false);

@@ -49,7 +49,7 @@ export const serverActions = (
     ),
     choice(
       "connect",
-      "Connect, checks credentials only",
+      "Connect without interactive sign-in",
       executionBlock ?? (row.state !== "disconnected" ? "not-applicable" : undefined),
     ),
     choice(
@@ -82,7 +82,7 @@ export const authExplanation = (row: Pick<McpManagerServer, "auth" | "authType">
     case "none":
       return "No managed authentication";
     case "unchecked":
-      return "Credentials unchecked. An explicit connection checks them.";
+      return "Credentials have not been checked in this activation.";
     case "required":
       return "Authentication required";
     case "unavailable":

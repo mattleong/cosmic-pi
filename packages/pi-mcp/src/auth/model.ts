@@ -33,9 +33,10 @@ export interface McpAuthStatus {
   readonly state: "none" | "unchecked" | "ready" | "required" | "unavailable";
 }
 export interface McpAuthContract {
-  /** No interactive fallback. Refresh happens before dispatch; returned token stays internal. */
+  /** No interactive fallback. requireGrant is for an explicit user check, never a gateway parameter. */
   readonly access: (
     server: McpEffectiveServer,
+    options?: { readonly requireGrant?: boolean },
   ) => Effect.Effect<string | undefined, McpBoundaryError>;
   readonly status: (server: McpEffectiveServer) => Effect.Effect<McpAuthStatus>;
   readonly login: (

@@ -72,6 +72,37 @@ describe("MCP configuration resolution", () => {
       }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
   );
 
+  it.effect("infers OAuth only for headerless URL servers without an explicit auth policy", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const resolved = yield* resolveMcpConfig({
+        revision: 0,
+        trusted: true,
+        path,
+        global: globalSource({
+          mcpServers: {
+            inferred: { url: "https://example.test/mcp" },
+            emptyHeaders: { url: "https://example.test/mcp", headers: {} },
+            disabled: { url: "https://example.test/mcp", auth: false },
+            none: { url: "https://example.test/mcp", auth: { type: "none" } },
+            custom: { url: "https://example.test/mcp", headers: { "X-Tenant": "fixture" } },
+            environment: { url: "https://example.test/mcp", auth: { type: "env", env: "TOKEN" } },
+            explicit: { url: "https://example.test/mcp", auth: { type: "oauth" } },
+          },
+        }),
+      });
+      for (const id of ["inferred", "emptyHeaders"])
+        expect(resolved.servers[id]?.definition).toMatchObject({
+          auth: { type: "oauth", implicit: true, registration: "dynamic", scopes: [] },
+        });
+      for (const id of ["disabled", "none", "custom"])
+        expect(resolved.servers[id]?.definition).toMatchObject({ auth: { type: "none" } });
+      expect(resolved.servers.environment?.definition).toMatchObject({ auth: { type: "env" } });
+      expect(resolved.servers.explicit?.definition).toMatchObject({ auth: { type: "oauth" } });
+      expect(resolved.servers.explicit?.definition).not.toHaveProperty("auth.implicit");
+    }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
+  );
+
   it.effect("normalizes owning cwd and OAuth registration without resolving values", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -118,7 +149,7 @@ describe("MCP configuration resolution", () => {
   );
 
   it.effect(
-    "requires an issuer for compatibility and binds the opt-in to credential identity",
+    "keeps omitted compatibility settings unmaterialized and binds explicit policy to identity",
     () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -144,7 +175,7 @@ describe("MCP configuration resolution", () => {
         expect(strict.servers.server?.definition).not.toHaveProperty(
           "auth.allowMissingResourceMetadata",
         );
-        const invalid = yield* resolveMcpConfig({
+        const inferred = yield* resolveMcpConfig({
           revision: 0,
           trusted: true,
           global: globalSource({
@@ -157,8 +188,10 @@ describe("MCP configuration resolution", () => {
           }),
           path,
         });
-        expect(invalid.servers.server?.enabled).toBe(false);
-        expect(invalid.diagnostics.length).toBeGreaterThan(0);
+        expect(inferred.servers.server?.enabled).toBe(true);
+        expect(inferred.diagnostics).toEqual([]);
+        const disabled = yield* resolve({ ...auth, allowMissingResourceMetadata: false });
+        expect(disabled.servers.server?.identity).not.toBe(strict.servers.server?.identity);
       }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
   );
 

@@ -371,7 +371,10 @@ describe("trusted MCP configuration store", () => {
         scope: "project",
         directory: "/project",
         enabled: true,
-        definition: { headers: {}, auth: { type: "none" } },
+        definition: {
+          headers: {},
+          auth: { type: "oauth", implicit: true, registration: "dynamic", scopes: [] },
+        },
       });
       expect(serializedConfig(server)).not.toContain("private");
       yield* store.setServer("project", "server", { enabled: false });

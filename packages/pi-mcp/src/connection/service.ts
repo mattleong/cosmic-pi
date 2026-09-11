@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { McpAuth } from "../auth/service.ts";
+import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { McpActivity } from "../activity/service.ts";
 import { McpConnector } from "../boundary/sdk-connection.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
@@ -95,7 +96,9 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
             Effect.gen(function* () {
               yield* Deferred.await(waiter.ready);
               yield* dispatchCheck(input);
-              const token = yield* registry.access(owner.server);
+              const token = yield* registry
+                .access(owner.server)
+                .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
               yield* dispatchCheck(input);
               const definition = owner.server.definition;
               // Static HTTP headers are not managed tokens; clearing would revoke them.
@@ -108,6 +111,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
                 input.action === "prompts.get";
               if (recordsOutcome) ticket.outcome = "unknown";
               const reply = yield* connection.request(input).pipe(
+                Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
                 Effect.tapError((error) =>
                   withLock(
                     Effect.gen(function* () {

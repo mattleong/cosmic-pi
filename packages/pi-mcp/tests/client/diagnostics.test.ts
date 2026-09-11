@@ -4,6 +4,10 @@ import { boundaryError } from "../../src/client/errors.ts";
 import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
 
 const reasons = [
+  "auth-not-configured",
+  "auth-env-required",
+  "auth-env-sign-in-unsupported",
+  "auth-oauth-required",
   "oauth-resource-metadata-missing",
   "oauth-resource-metadata-invalid",
   "oauth-storage-unavailable",
@@ -36,6 +40,53 @@ describe("fixed diagnostic recovery policy", () => {
         /PRIVATE_|issuer\.example/,
       );
       expect(diagnostic.recovery.length).toBeGreaterThan(0);
+    }
+  });
+  it("routes authentication recovery by configured mode, not sign-in availability alone", () => {
+    for (const reason of [
+      "auth-not-configured",
+      "auth-env-required",
+      "auth-env-sign-in-unsupported",
+    ] as const) {
+      const error = boundaryError("auth-required", "not-sent", "private-token", reason);
+      expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
+    }
+    const oauth = boundaryError("auth-required", "not-sent", "", "auth-oauth-required");
+    expect(mcpDiagnostic(oauth, { canSignIn: true }).recovery).toEqual(["sign-in"]);
+    expect(mcpDiagnostic(oauth).recovery).not.toContain("sign-in");
+  });
+  it("keeps auth configuration evidence with unknown discovery without authorizing replay", () => {
+    const error = boundaryError("auth-required", "unknown", "private-token", "auth-not-configured");
+    const cause = mcpDiagnostic({ ...error, outcome: "not-sent" });
+    for (const action of [
+      "tools.search",
+      "tools.list",
+      "tools.describe",
+      "resources.list",
+      "resources.templates",
+      "prompts.list",
+      "refresh",
+    ]) {
+      const detail = mcpDiagnostic(error, { action, canSignIn: true });
+      expect(detail.explanation).toContain(cause.explanation);
+      expect(detail.explanation).toMatch(/metadata discovery/);
+      expect(detail.explanation).toMatch(/No tool invocation was requested/);
+      expect(detail.recovery).toEqual(["inspect-operation"]);
+      const reply = mcpFailureReply(action, error);
+      expect(reply).toMatchObject({
+        outcome: "unknown",
+        isError: true,
+        data: { reason: "auth-not-configured", message: detail.explanation },
+      });
+      expect(reply.notices.join(" ")).toMatch(/Do not replay/);
+      expect(reply.resultId).toBeUndefined();
+      expect(JSON.stringify(reply)).not.toContain("private-token");
+    }
+    for (const action of ["tools.call", "resources.read", "prompts.get", "future.action"]) {
+      const detail = mcpDiagnostic(error, { action });
+      expect(detail.explanation).not.toMatch(/No tool invocation was requested/);
+      expect(detail.explanation).toContain(cause.explanation);
+      expect(detail.recovery).toEqual(["inspect-operation"]);
     }
   });
   it("gives only local prompt argument rejections a fixed discovery hint", () => {
@@ -110,15 +161,13 @@ describe("fixed diagnostic recovery policy", () => {
       expect(mcpFailureReply("tools.call", error).resultId).toBeUndefined();
     },
   );
-  it("keeps missing metadata compatibility distinct from malformed metadata and leaves config untouched", () => {
+  it("directs missing and invalid resource metadata to configuration review", () => {
     const missing = mcpDiagnostic(
       boundaryError("denied", "not-sent", "", "oauth-resource-metadata-missing"),
     );
     const invalid = mcpDiagnostic(
       boundaryError("denied", "not-sent", "", "oauth-resource-metadata-invalid"),
     );
-    expect(missing.explanation).toContain("configured issuer");
-    expect(invalid.explanation).toContain("cannot bypass");
     expect(missing.recovery).toEqual(["inspect-settings"]);
     expect(invalid.recovery).toEqual(["inspect-settings"]);
   });

@@ -179,7 +179,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   );
   const diagnostic =
     currentError && evidence
-      ? mcpDiagnostic({ ...evidence, outcome: currentOutcome ?? "unknown" })
+      ? mcpDiagnostic({ ...evidence, outcome: currentOutcome ?? "unknown" }, { action })
       : undefined;
   const rawOrigin = own(data, "origin").value;
   const originOutcome = outcome(own(rawOrigin, "outcome").value);

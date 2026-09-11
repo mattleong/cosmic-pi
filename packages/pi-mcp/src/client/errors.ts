@@ -24,6 +24,10 @@ export class McpBoundaryError extends Schema.TaggedError<McpBoundaryError>()("Mc
   message: Schema.String,
   reason: Schema.optionalKey(
     Schema.Literals([
+      "auth-not-configured",
+      "auth-env-required",
+      "auth-env-sign-in-unsupported",
+      "auth-oauth-required",
       "oauth-resource-metadata-missing",
       "oauth-resource-metadata-invalid",
       "oauth-storage-unavailable",
