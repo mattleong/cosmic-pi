@@ -105,6 +105,24 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
         "The provider or configured registration does not support the required public-client and PKCE flow. Review the server's registration settings.",
         ["inspect-settings"],
       );
+    case "oauth-pkce-unsupported":
+      return diagnostic(
+        "PKCE S256 is not advertised",
+        "The authorization-server metadata does not advertise PKCE S256. Sign-in stopped without weakening the authorization-code flow.",
+        ["inspect-settings"],
+      );
+    case "oauth-client-auth-method-unsupported":
+      return diagnostic(
+        "Registered client authentication unsupported",
+        "The client registration selected a token authentication method other than none. This extension supports public clients only; it did not switch authentication methods or send a client secret.",
+        ["inspect-settings"],
+      );
+    case "oauth-client-auth-method-ambiguous":
+      return diagnostic(
+        "Registered client authentication is ambiguous",
+        "The client registration returned a secret without explicitly selecting token authentication method none. The extension cannot assume public-client authentication, so it stopped before token exchange.",
+        ["inspect-settings"],
+      );
     case "oauth-binding-rejected":
       return diagnostic(
         "Authentication binding rejected",

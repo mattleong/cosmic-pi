@@ -25,6 +25,10 @@ export interface OAuthFixtureOptions {
   readonly authorizationMetadataStatuses?: ReadonlyArray<number>;
   readonly tokenRedirect?: boolean;
   readonly secretClient?: boolean;
+  /** null omits the returned method, rather than explicitly registering a public client. */
+  readonly clientAuthMethod?: string | null;
+  readonly tokenAuthMethods?: ReadonlyArray<string>;
+  readonly requireNativeClient?: boolean;
   readonly oversizedMetadata?: boolean;
   readonly unsafeTokenEndpoint?: boolean;
   readonly resourceChallenge?: (origin: string) => string;
@@ -119,7 +123,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           id_token_signing_alg_values_supported: ["RS256"],
           grant_types_supported: ["authorization_code", "refresh_token"],
           code_challenge_methods_supported: options.unsupportedPkce ? ["plain"] : ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
+          token_endpoint_auth_methods_supported: [...(options.tokenAuthMethods ?? ["none"])],
           authorization_response_iss_parameter_supported: true,
           client_id_metadata_document_supported: options.metadata !== false,
         };
@@ -130,14 +134,25 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         registered++;
         const body = yield* request.text;
         const input = yield* Schema.decodeEffect(
-          Schema.fromJsonString(Schema.Struct({ redirect_uris: Schema.Array(Schema.String) })),
+          Schema.fromJsonString(
+            Schema.Struct({
+              redirect_uris: Schema.Array(Schema.String),
+              application_type: Schema.optionalKey(Schema.String),
+            }),
+          ),
         )(body);
+        if (options.requireNativeClient && input.application_type !== "native")
+          return reply({ error: "invalid_client_metadata" }, 400);
         const registration: FixtureDocument = {
           client_id: "fixture-dynamic-client",
           redirect_uris: input.redirect_uris,
-          token_endpoint_auth_method: "none",
         };
-        if (options.secretClient) registration.client_secret = "fixture-rejected-secret";
+        if (options.clientAuthMethod !== null)
+          registration.token_endpoint_auth_method = options.clientAuthMethod ?? "none";
+        if (options.secretClient) {
+          registration.client_secret = "fixture-unused-secret";
+          registration.client_secret_expires_at = 0;
+        }
         return reply(registration, 201);
       }
       if (url.pathname === "/authorize") {
@@ -166,7 +181,11 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             headers: { location: `${origin}/token-replay` },
           });
         const input = new URLSearchParams(yield* request.text);
-        if (input.get("resource") !== resource || request.headers.authorization)
+        if (
+          input.get("resource") !== resource ||
+          request.headers.authorization ||
+          input.has("client_secret")
+        )
           return reply({ error: "invalid_request" }, 400);
         if (input.get("grant_type") === "authorization_code") {
           const code = input.get("code") ?? "";

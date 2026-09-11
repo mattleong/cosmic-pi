@@ -15,6 +15,9 @@ const reasons = [
   "oauth-browser-open-failed",
   "oauth-callback-timeout",
   "oauth-registration-unsupported",
+  "oauth-pkce-unsupported",
+  "oauth-client-auth-method-unsupported",
+  "oauth-client-auth-method-ambiguous",
   "oauth-binding-rejected",
   "oauth-deletion-failed",
   "oauth-finalization-failed",
@@ -41,6 +44,20 @@ describe("fixed diagnostic recovery policy", () => {
       );
       expect(diagnostic.recovery.length).toBeGreaterThan(0);
     }
+  });
+  it.each([
+    "oauth-pkce-unsupported",
+    "oauth-client-auth-method-unsupported",
+    "oauth-client-auth-method-ambiguous",
+  ] as const)("keeps %s actionable without automatically retrying sign-in", (reason) => {
+    const error = boundaryError("unsupported", "not-sent", "private-registration-response", reason);
+    expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
+    expect(mcpFailureReply("auth", error)).toMatchObject({
+      isError: true,
+      outcome: "not-sent",
+      data: { reason },
+    });
+    expect(mcpDiagnostic({ ...error, outcome: "unknown" }).recovery).toEqual(["inspect-operation"]);
   });
   it("routes authentication recovery by configured mode, not sign-in availability alone", () => {
     for (const reason of [

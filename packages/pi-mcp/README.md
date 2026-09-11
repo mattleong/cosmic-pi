@@ -132,7 +132,11 @@ OAuth is HTTP-only and supports public clients with PKCE S256 and token-endpoint
 }
 ```
 
-Dynamic registration and Client ID Metadata Documents require the authorization server to advertise support. This extension does not host a client metadata document or support confidential-client secrets. Optional OAuth fields are `issuer`, `resource`, `scopes`, and `redirectUri`. If `registration` is omitted, `clientId` selects pre-registration, `clientMetadataUrl` selects metadata registration, and neither selects dynamic registration.
+Dynamic registration and Client ID Metadata Documents require the authorization server to advertise support. Dynamic registration uses the SDK's metadata defaults, including native application type for loopback callbacks. This extension does not host a client metadata document or support secret-based client authentication.
+
+A registration that explicitly selects `token_endpoint_auth_method: "none"` may include an unused client secret; the extension discards the secret and its expiry before SDK use or storage. A secret without an explicit method, or any declared non-`none` method, is rejected with a specific diagnostic. Restoration preserves and rechecks the declared method, and refresh stores only the sanitized public-client information.
+
+Optional OAuth fields are `issuer`, `resource`, `scopes`, and `redirectUri`. If `registration` is omitted, `clientId` selects pre-registration, `clientMetadataUrl` selects metadata registration, and neither selects dynamic registration.
 
 Login first makes an unauthenticated GET to obtain a `WWW-Authenticate` challenge. A validated `resource_metadata` URL takes precedence over well-known discovery; malformed or unsafe hints fail rather than silently falling back. This probe sends no configured headers or credentials and does not invoke an MCP operation.
 

@@ -2,6 +2,7 @@ import {
   discoverAuthorizationServerMetadata,
   startAuthorization,
   registerClient,
+  resolveClientMetadata,
   exchangeAuthorization,
   refreshAuthorization,
   validateAuthorizationResponseIssuer,
@@ -12,7 +13,6 @@ import {
   type OAuthTokens,
 } from "@modelcontextprotocol/client";
 import {
-  OAuthClientInformationSchema,
   OAuthClientInformationFullSchema,
   OAuthMetadataSchema,
   OAuthProtectedResourceMetadataSchema,
@@ -44,6 +44,7 @@ import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
 import { withAuthFetch } from "./auth-fetch.ts";
+import { normalizePublicClient, restorePublicClient } from "./sdk-auth-client.ts";
 import { discoverAuthResource, missingOnlyMetadataFetch } from "./sdk-auth-discovery.ts";
 
 const unsupported = () =>
@@ -65,11 +66,6 @@ const json = (
     Effect.flatMap((text) => Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text)),
     Effect.mapError(deniedAuth),
   );
-const publicClient = (client: OAuthClientInformationMixed): boolean =>
-  client.client_secret === undefined &&
-  (!("token_endpoint_auth_method" in client) ||
-    client.token_endpoint_auth_method === "none" ||
-    client.token_endpoint_auth_method === undefined);
 const validTokens = (tokens: OAuthTokens): boolean =>
   tokens.token_type.toLowerCase() === "bearer" &&
   tokens.access_token.length > 0 &&
@@ -132,7 +128,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
       const resource = yield* sdk(() =>
         OAuthProtectedResourceMetadataSchema.parse(grant.resourceMetadata),
       );
-      const client = yield* sdk(() => OAuthClientInformationSchema.parse(grant.clientInformation));
+      const client = yield* restorePublicClient(grant.clientInformation);
       const tokens = yield* sdk(() => OAuthTokensSchema.parse(grant.tokens));
       const expiresAt =
         tokens.expires_in === undefined ? undefined : grant.receivedAt + tokens.expires_in * 1000;
@@ -141,7 +137,6 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         resource.resource !== grant.resource ||
         !resource.authorization_servers?.includes(grant.issuer) ||
         client.client_id !== grant.clientId ||
-        !publicClient(client) ||
         !validTokens(tokens) ||
         expiresAt !== grant.expiresAt
       )
@@ -151,7 +146,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
       yield* validateAuthUrl(metadata.token_endpoint, policy);
       yield* validateAuthUrl(metadata.authorization_endpoint, policy);
       yield* callbackRedirect(grant.redirectUri);
-      return { metadata, client: { ...client, token_endpoint_auth_method: "none" }, tokens };
+      return { metadata, client, tokens };
     });
   const receipt = (
     grant: Omit<McpGrant, "tokens" | "receivedAt" | "expiresAt">,
@@ -216,8 +211,14 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             issuer = metadata.issuer;
             resource = { ...resource, authorization_servers: [issuer] };
           }
+          if (!metadata.code_challenge_methods_supported?.includes("S256"))
+            return yield* boundaryError(
+              "unsupported",
+              "not-sent",
+              "OAuth metadata does not advertise PKCE S256.",
+              "oauth-pkce-unsupported",
+            );
           if (
-            !metadata.code_challenge_methods_supported?.includes("S256") ||
             !metadata.response_types_supported.includes("code") ||
             (metadata.token_endpoint_auth_methods_supported &&
               !metadata.token_endpoint_auth_methods_supported.includes("none"))
@@ -252,13 +253,16 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             client = yield* withAuthFetch(policy, (fetch) =>
               registerClient(issuer, {
                 metadata,
-                clientMetadata: {
-                  redirect_uris: [redirect],
-                  grant_types: ["authorization_code", "refresh_token"],
-                  response_types: ["code"],
-                  token_endpoint_auth_method: "none",
-                  client_name: "Cosmic Pi MCP",
-                },
+                clientMetadata: resolveClientMetadata({
+                  redirectUrl: redirect,
+                  clientMetadata: {
+                    redirect_uris: [redirect],
+                    grant_types: ["authorization_code", "refresh_token"],
+                    response_types: ["code"],
+                    token_endpoint_auth_method: "none",
+                    client_name: "Cosmic Pi MCP",
+                  },
+                }),
                 scope: config.scopes.join(" "),
                 fetchFn: fetch,
               }),
@@ -266,7 +270,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             const registered = yield* sdk(() => OAuthClientInformationFullSchema.parse(client));
             if (!registered.redirect_uris.includes(redirect)) return yield* deniedAuth();
           }
-          if (!publicClient(client)) return yield* unsupported();
+          client = yield* normalizePublicClient(client);
           const state = Encoding.encodeBase64Url(
             yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
           );
@@ -385,7 +389,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
         Effect.mapError(() => authFailure()),
       );
       const { tokens: _tokens, receivedAt: _receivedAt, expiresAt: _expiresAt, ...base } = grant;
-      return yield* receipt(base, updated);
+      return yield* receipt({ ...base, clientInformation: yield* json(client) }, updated);
     });
   return {
     login,

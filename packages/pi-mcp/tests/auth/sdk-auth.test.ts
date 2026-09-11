@@ -307,6 +307,59 @@ describe("SDK-owned public OAuth", () => {
       }).pipe(Effect.provide(layers)),
   );
 
+  it.live(
+    "registers a native public client and discards surplus secrets through login, restore and refresh",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({
+          secretClient: true,
+          requireNativeClient: true,
+          tokenAuthMethods: ["none", "client_secret_basic", "client_secret_post"],
+        });
+        const server = fixture.configured("dynamic");
+        const sdk = yield* makeMcpSdkAuth;
+        const grant = yield* sdk.login(server, yield* browser("manual"));
+        const encoded = yield* encodeGrant(grant);
+        expect(encoded).not.toContain("fixture-unused-secret");
+        expect(grant.clientInformation).not.toHaveProperty("client_secret");
+        expect(grant.clientInformation).not.toHaveProperty("client_secret_expires_at");
+        expect(grant.clientInformation).toHaveProperty("token_endpoint_auth_method", "none");
+        const stored = yield* decodeGrant(encoded);
+        const restored = yield* makeMcpSdkAuth;
+        expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
+        // A stored declaration must survive decoding, not become public through SDK field stripping.
+        for (const method of ["client_secret_post", "private_key_jwt"]) {
+          const changed = {
+            ...stored,
+            clientInformation: { client_id: stored.clientId, token_endpoint_auth_method: method },
+          };
+          expect(yield* restored.token(server, changed).pipe(Effect.flip)).toMatchObject({
+            reason: "oauth-client-auth-method-unsupported",
+          });
+          expect(yield* restored.refresh(server, changed).pipe(Effect.flip)).toMatchObject({
+            reason: "oauth-client-auth-method-unsupported",
+          });
+        }
+        // Rehydrate a compatible surplus-secret record; refreshed storage must be sanitized too.
+        const surplus = {
+          ...stored,
+          clientInformation: {
+            client_id: stored.clientId,
+            token_endpoint_auth_method: "none",
+            client_secret: "private-restored-unused-secret",
+            client_secret_expires_at: 0,
+          },
+        };
+        const refreshed = yield* restored.refresh(server, surplus);
+        expect(yield* restored.token(server, refreshed)).toBe("fixture-access-1");
+        expect(yield* encodeGrant(refreshed)).not.toContain("private-restored-unused-secret");
+        expect(refreshed.clientInformation).not.toHaveProperty("client_secret");
+        expect(refreshed.clientInformation).not.toHaveProperty("client_secret_expires_at");
+        expect(refreshed.clientInformation).toHaveProperty("token_endpoint_auth_method", "none");
+        expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 1 });
+      }).pipe(Effect.provide(layers)),
+  );
+
   for (const issuerRootSlash of [false, true])
     it.live(
       `restores and refreshes endpoint-origin fallback grants, root slash=${issuerRootSlash}`,
@@ -443,7 +496,7 @@ describe("SDK-owned public OAuth", () => {
     { resourceMismatch: true },
     { issuerMismatch: true, resourceMetadataStatuses: [404] },
     { unsupportedPkce: true, resourceMetadataStatuses: [404] },
-    { secretClient: true, resourceMetadataStatuses: [404] },
+    { secretClient: true, clientAuthMethod: "client_secret_post", resourceMetadataStatuses: [404] },
   ]) {
     it.live(
       `compatibility does not relax OAuth binding or client policy: ${JSON.stringify(options)}`,
@@ -467,7 +520,7 @@ describe("SDK-owned public OAuth", () => {
           const result = yield* sdk.login(server, yield* browser("manual")).pipe(Effect.result);
           expect(result._tag).toBe("Failure");
           expect(fixture.counts().exchanged).toBe(0);
-          expect(yield* serialize(result)).not.toContain("fixture-rejected-secret");
+          expect(yield* serialize(result)).not.toContain("fixture-unused-secret");
         }).pipe(Effect.provide(layers)),
     );
   }
@@ -528,7 +581,8 @@ describe("SDK-owned public OAuth", () => {
   for (const options of [
     { dynamic: false },
     { metadata: false },
-    { secretClient: true },
+    { secretClient: true, clientAuthMethod: "client_secret_post" },
+    { secretClient: true, clientAuthMethod: null },
     { resourceMismatch: true },
     { issuerMismatch: true },
     { tokenRedirect: true },
@@ -545,6 +599,22 @@ describe("SDK-owned public OAuth", () => {
           .pipe(Effect.result);
         expect(result._tag).toBe("Failure");
         expect(fixture.counts().exchanged).toBe(0);
+        if ("secretClient" in options) {
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              reason:
+                options.clientAuthMethod === null
+                  ? "oauth-client-auth-method-ambiguous"
+                  : "oauth-client-auth-method-unsupported",
+            },
+          });
+          expect(
+            fixture.requests.some(
+              (request) => request.path === "/authorize" || request.path === "/token",
+            ),
+          ).toBe(false);
+        }
         expect(fixture.requests.some((request) => request.path === "/token-replay")).toBe(false);
       }).pipe(Effect.provide(layers)),
     );
@@ -669,7 +739,7 @@ describe("SDK-owned public OAuth", () => {
   it.live("keeps callback URLs and OAuth requests out of ambient HTTP tracing", () => {
     const trace = makeCapturedTracer();
     return Effect.gen(function* () {
-      const fixture = yield* startOAuthServer().pipe(
+      const fixture = yield* startOAuthServer({ secretClient: true }).pipe(
         Effect.provideService(HttpMiddleware.TracerDisabledWhen, () => true),
       );
       const sdk = yield* makeMcpSdkAuth;
@@ -690,7 +760,7 @@ describe("SDK-owned public OAuth", () => {
       yield* sdk.refresh(server, grant);
       const snapshot = capturedTelemetrySnapshot(trace);
       expect(snapshot).not.toMatch(
-        /127\.0\.0\.1|fixture-code|fixture-access|fixture-refresh|state=/,
+        /127\.0\.0\.1|fixture-code|fixture-access|fixture-refresh|fixture-unused-secret|state=/,
       );
     }).pipe(Effect.provide(Layer.merge(layers, trace.layer)));
   });
