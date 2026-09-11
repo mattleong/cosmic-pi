@@ -53,7 +53,7 @@ export function normalizeMcpServer(
     };
   const auth =
     raw.auth === false ? { type: "none" as const } : (raw.auth ?? { type: "none" as const });
-  return {
+  const definition: McpServerDefinition = {
     ...resolvedPolicy,
     transport: "http",
     url: new URL(raw.url).href,
@@ -77,6 +77,9 @@ export function normalizeMcpServer(
             }
           : auth,
   };
+  if (auth.type === "oauth" && auth.scopes?.length === 0)
+    Object.assign(definition.auth, { explicitEmptyScopes: true });
+  return definition;
 }
 
 const decodeSettings = (value: McpDecodedDocument["settings"]) =>

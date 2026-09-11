@@ -9,6 +9,8 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpServerResponse } from "effect/unstable/http";
 import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
+import type { McpAuthRejection } from "../../src/auth/model.ts";
+import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
 import { McpConnector, type McpConnectorContract } from "../../src/boundary/sdk-connection.ts";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
@@ -70,7 +72,16 @@ const fixture = (options: FixtureOptions = {}) => {
   let publish: ((next: McpResolvedConfig) => Effect.Effect<void>) | undefined;
   const tokens: Array<string | undefined> = [];
   let observedAuth: "none" | "required" = "none";
-  const state = { trusted: true, opens: 0, closes: 0, accesses: 0, requests: 0, tokens };
+  const rejections: Array<McpAuthRejection | undefined> = [];
+  const state = {
+    trusted: true,
+    opens: 0,
+    closes: 0,
+    accesses: 0,
+    requests: 0,
+    tokens,
+    rejections,
+  };
   const replace = (next: McpResolvedConfig) =>
     Effect.uninterruptible(
       Effect.gen(function* () {
@@ -110,8 +121,9 @@ const fixture = (options: FixtureOptions = {}) => {
       status: () => Effect.succeed({ state: observedAuth }),
       login: () => Effect.succeed({ state: "none" }),
       logout: () => Effect.void,
-      reject: () =>
+      reject: (_server, evidence) =>
         Effect.sync(() => {
+          rejections.push(evidence);
           observedAuth = "required";
         }),
       completeLogin: () => Effect.void,
@@ -250,6 +262,7 @@ it.effect(
             });
             expect(f.state.requests).toBe(phase === "request" ? 1 : 0);
             expect(f.state.opens).toBe(phase === "access" ? 0 : 1);
+            expect(f.state.rejections).toHaveLength(phase === "access" ? 0 : 1);
             expect(f.config()).toBe(configured);
           }).pipe(Effect.provide(f.layer));
         }
@@ -311,6 +324,102 @@ it.effect("an auth rejection arriving after lost trust cannot publish new auth e
       yield* Fiber.join(pending);
       f.state.trusted = true;
       expect((yield* c.status).servers[0]?.auth).toBe("none");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+for (const phase of ["open", "request"] as const)
+  for (const token of [undefined, "private-token"])
+    it.effect(
+      `passes original ${phase} rejection evidence with credential use ${token !== undefined}`,
+      () =>
+        Effect.gen(function* () {
+          const challenge = {
+            status: 403 as const,
+            wwwAuthenticate: 'Bearer scope="private-scope"',
+          };
+          const original = setAuthChallenge(
+            boundaryError("auth-required", "unknown", "Rejected."),
+            challenge,
+          );
+          const f = fixture({
+            auth: Effect.succeed(token),
+            ...(phase === "open"
+              ? { opening: Effect.fail(original) }
+              : { request: () => Effect.fail(original) }),
+          });
+          yield* Effect.gen(function* () {
+            const c = yield* McpConnections;
+            const error = yield* call(c).pipe(Effect.flip);
+            expect(error.outcome).toBe("unknown");
+            expect(f.state.rejections).toHaveLength(1);
+            expect(f.state.rejections[0]?.credentialUsed).toBe(token !== undefined);
+            expect(f.state.rejections[0]?.error).toBe(original);
+            expect(getAuthChallenge(f.state.rejections[0]!.error!)).toEqual(challenge);
+            expect(f.state.requests).toBe(phase === "request" ? 1 : 0);
+          }).pipe(Effect.provide(f.layer));
+        }),
+    );
+
+it.effect("a dispatch-time local credential failure does not reject a server credential", () =>
+  Effect.gen(function* () {
+    let checks = 0;
+    const f = fixture({
+      auth: Effect.suspend(() =>
+        ++checks === 1
+          ? Effect.succeed("private-token")
+          : Effect.fail(boundaryError("auth-required", "not-sent", "Local grant unavailable.")),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      expect(yield* call(c).pipe(Effect.flip)).toMatchObject({
+        kind: "auth-required",
+        outcome: "not-sent",
+      });
+      expect(f.state.requests).toBe(0);
+      expect(f.state.rejections).toHaveLength(0);
+      expect((yield* c.status).servers[0]?.auth).toBe("none");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("current-owner rejection stops an already-admitted queued dispatch without replay", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const original = boundaryError("auth-required", "unknown", "Rejected request.");
+    const f = fixture({
+      settings: { maxPerServer: 1 },
+      auth: Effect.succeed("private-token"),
+      request: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Effect.fail(original)),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      const first = yield* call(c).pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const second = yield* call(c).pipe(Effect.result, Effect.forkScoped);
+      let queued = false;
+      for (let n = 0; n < 100 && !queued; n++) {
+        queued = (yield* c.status).servers[0]?.queued === 1;
+        if (!queued) yield* Effect.yieldNow;
+      }
+      expect(queued).toBe(true);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(first)).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "auth-required", outcome: "unknown" },
+      });
+      expect(yield* Fiber.join(second)).toMatchObject({
+        _tag: "Failure",
+        failure: { outcome: "not-sent" },
+      });
+      expect(f.state.requests).toBe(1);
+      expect(f.state.rejections).toHaveLength(1);
     }).pipe(Effect.provide(f.layer));
   }),
 );

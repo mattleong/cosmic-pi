@@ -1,5 +1,8 @@
 import type { OAuthClientInformationMixed } from "@modelcontextprotocol/client";
-import { OAuthClientInformationSchema } from "@modelcontextprotocol/core";
+import {
+  OAuthClientInformationFullSchema,
+  OAuthClientInformationSchema,
+} from "@modelcontextprotocol/core";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { deniedAuth } from "../auth/policy.ts";
@@ -33,6 +36,7 @@ export const normalizePublicClient = (client: OAuthClientInformationMixed) =>
 // The SDK's information-only decoder drops registration metadata, including this policy field.
 const storedMethod = Schema.Struct({
   token_endpoint_auth_method: Schema.optionalKey(Schema.String),
+  redirect_uris: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export const restorePublicClient = (raw: Schema.Json) =>
   Effect.gen(function* () {
@@ -40,7 +44,10 @@ export const restorePublicClient = (raw: Schema.Json) =>
       Effect.mapError(deniedAuth),
     );
     const information = yield* Effect.try({
-      try: () => OAuthClientInformationSchema.parse(raw),
+      try: () =>
+        method.redirect_uris === undefined
+          ? OAuthClientInformationSchema.parse(raw)
+          : OAuthClientInformationFullSchema.parse(raw),
       catch: deniedAuth,
     });
     return yield* normalizePublicClient({ ...information, ...method });

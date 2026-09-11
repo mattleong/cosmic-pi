@@ -7,7 +7,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import type { McpActivityContract } from "../activity/service.ts";
 import type { McpActivityHandle, McpActivityFailure } from "../activity/model.ts";
-import type { McpAuthContract } from "../auth/model.ts";
+import type { McpAuthContract, McpAuthRejection } from "../auth/model.ts";
 import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
@@ -264,7 +264,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     }).pipe(Effect.mapError((error) => boundaryError(error.kind, ticket.outcome, error.message)));
 
   const access = auth.access;
-  const rejectAuthLocked = (owner: ConnectionOwner) =>
+  const rejectAuthLocked = (owner: ConnectionOwner, evidence: McpAuthRejection) =>
     Effect.gen(function* () {
       if (
         closed ||
@@ -276,8 +276,10 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         config.servers[owner.server.id]?.identity !== owner.server.identity
       )
         return;
-      yield* auth.reject(owner.server);
-      changed();
+      yield* auth.reject(owner.server, evidence);
+      // Queued dispatches must stop even when the transport itself remains healthy.
+      // Do not revoke the rejected ticket or replace its original outcome.
+      yield* terminalLocked(owner);
     });
 
   const scheduleIdleLocked = (owner: ConnectionOwner): Effect.Effect<void> =>
@@ -326,7 +328,17 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                 }),
               );
               return yield* Scope.provide(
-                connector.open(owner.server, settings, token),
+                connector
+                  .open(owner.server, settings, token)
+                  .pipe(
+                    Effect.tapError((error) =>
+                      error.kind === "auth-required"
+                        ? withLock(
+                            rejectAuthLocked(owner, { credentialUsed: token !== undefined, error }),
+                          )
+                        : Effect.void,
+                    ),
+                  ),
                 owner.scope,
               );
             }).pipe(
@@ -376,7 +388,6 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                   error.value.reason === undefined
                     ? { kind: error.value.kind }
                     : { kind: error.value.kind, reason: error.value.reason };
-                if (error.value.kind === "auth-required") yield* rejectAuthLocked(owner);
               }
               Deferred.doneUnsafe(owner.ready, Effect.failCause(acquired.cause));
               // Preserve acquisition failures for its waiters. No ticket can dispatch without ready.

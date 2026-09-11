@@ -66,8 +66,11 @@ export const presentMcpAuthPanel = (
         if (!active()) return;
         const value = attempt.snapshot();
         invokeHostCallback(() => {
-          // Manual mode uses the stock private dialogs without competing overlay focus.
-          overlay?.setHidden(value.mode === "manual" && value.phase === "awaiting-callback");
+          // Stock consent and manual callback dialogs own input without an overlay on top.
+          overlay?.setHidden(
+            value.phase === "scope-approval" ||
+              (value.mode === "manual" && value.phase === "awaiting-callback"),
+          );
           tui?.requestRender();
         }, undefined);
       };

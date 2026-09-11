@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withAuthFailureReason } from "../../src/auth/diagnostics.ts";
+import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
 import { boundaryError } from "../../src/client/errors.ts";
 import type { McpEffectiveServer, McpServerDefinition } from "../../src/config/model.ts";
 
@@ -30,7 +31,13 @@ describe("authentication failure evidence", () => {
     ];
     for (const { auth, reason } of modes)
       for (const outcome of ["not-sent", "completed", "unknown"] as const) {
-        const original = boundaryError("auth-required", outcome, "fixed failure");
+        const original = setAuthChallenge(
+          boundaryError("auth-required", outcome, "fixed failure"),
+          {
+            status: 401,
+            wwwAuthenticate: 'Bearer scope="PRIVATE_ENV"',
+          },
+        );
         const annotated = withAuthFailureReason(server({ ...http, auth }), original);
         expect(annotated).toMatchObject({
           kind: original.kind,
@@ -40,6 +47,7 @@ describe("authentication failure evidence", () => {
         });
         expect(JSON.stringify(annotated)).not.toMatch(/private-token|PRIVATE_ENV|private\.example/);
         expect(original.reason).toBeUndefined();
+        expect(getAuthChallenge(annotated)).toEqual(getAuthChallenge(original));
       }
   });
   it("preserves specific causes and never infers authentication from other failures or stdio", () => {

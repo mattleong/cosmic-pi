@@ -11,6 +11,7 @@ import { McpActivity, makeMcpActivity } from "../../src/activity/service.ts";
 import { makeMcpAuthFlow, type McpAuthAttempt } from "../../src/auth/flow.ts";
 import type { McpLoginUi } from "../../src/auth/model.ts";
 import { authProgress, type McpAuthPhase, type McpAuthProgress } from "../../src/auth/progress.ts";
+import { approveScopes } from "../../src/auth/scopes.ts";
 import { boundaryError } from "../../src/client/errors.ts";
 import { McpExecution, type McpExecutionContract } from "../../src/tools/service.ts";
 
@@ -39,6 +40,34 @@ const capture = (target: Deferred.Deferred<McpAuthAttempt>) => (attempt: McpAuth
   Deferred.succeed(target, attempt).pipe(Effect.andThen(Effect.never));
 
 describe("session-owned explicit-user auth flow", () => {
+  for (const consent of [true, false])
+    it.effect(`preserves private scope consent through the owned login flow: ${consent}`, () =>
+      Effect.gen(function* () {
+        let browserAllowed = false;
+        const flow = yield* make((_server, owned) =>
+          Effect.gen(function* () {
+            const deadline = (yield* Clock.currentTimeMillis) + 1000;
+            yield* authProgress(owned, { phase: "scope-approval", deadline });
+            yield* approveScopes(
+              owned,
+              { requested: ["PRIVATE_SCOPE"], additions: ["PRIVATE_SCOPE"], source: "challenge" },
+              deadline,
+            );
+            browserAllowed = true;
+            return { state: "ready" } as const;
+          }),
+        );
+        const result = yield* flow
+          .run("owned", { ...ui, approveScopes: () => Effect.succeed(consent) })
+          .pipe(Effect.result);
+        expect(result._tag).toBe(consent ? "Success" : "Failure");
+        expect(browserAllowed).toBe(consent);
+        expect(flow.snapshot()?.phase).toBe(consent ? "succeeded" : "cancelled");
+        expect(yield* serialize([flow.snapshot(), flow.activity.snapshot()])).not.toContain(
+          "PRIVATE_SCOPE",
+        );
+      }),
+    );
   it.effect(
     "waits for outer finalization, rejects duplicate admission and retains only safe facts",
     () =>
@@ -89,6 +118,7 @@ describe("session-owned explicit-user auth flow", () => {
 
   for (const phase of [
     "waiting-fence",
+    "scope-approval",
     "awaiting-callback",
     "exchange",
     "saving",

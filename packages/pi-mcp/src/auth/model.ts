@@ -2,10 +2,39 @@ import type * as Effect from "effect/Effect";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import type { McpAuthProgressEvent } from "./progress.ts";
+import type { McpGrant, McpRegistrationReceipt } from "./credentials.ts";
+
+/** Private, untrusted transport evidence. Never serialize it into errors or public status. */
+export interface McpAuthChallenge {
+  readonly wwwAuthenticate: string;
+  readonly status: 401 | 403;
+}
+export interface McpAuthRejection {
+  readonly credentialUsed: boolean;
+  readonly error?: McpBoundaryError;
+}
+export interface McpScopeProposal {
+  readonly requested: ReadonlyArray<string>;
+  readonly additions: ReadonlyArray<string>;
+  readonly source: "configured" | "challenge" | "resource-metadata";
+}
+export interface McpLoginOptions {
+  readonly challenge?: McpAuthChallenge;
+  readonly previousGrant?: McpGrant;
+  readonly registration?: McpRegistrationReceipt;
+  readonly saveRegistration?: (
+    registration: McpRegistrationReceipt,
+  ) => Effect.Effect<void, McpBoundaryError>;
+}
 
 /** User command capability. Never accepted by gateway or Code Mode parameters. */
 export interface McpLoginUi {
   readonly mode: "local" | "manual";
+  /** Explicit user approval of this immutable permission proposal, not future expansion. */
+  readonly approveScopes?: (
+    proposal: McpScopeProposal,
+    deadline: number,
+  ) => Effect.Effect<boolean, McpBoundaryError>;
   /** The private guard is rechecked synchronously at the native launch boundary. */
   readonly openBrowser: (
     url: string,
@@ -46,7 +75,7 @@ export interface McpAuthContract {
   /** Caller revokes connection and result authority before this storage operation. */
   readonly logout: (server: McpEffectiveServer) => Effect.Effect<void, McpBoundaryError>;
   /** Only a current connection owner may report auth-specific transport rejection. */
-  readonly reject: (server: McpEffectiveServer) => Effect.Effect<void>;
+  readonly reject: (server: McpEffectiveServer, evidence?: McpAuthRejection) => Effect.Effect<void>;
   /** Execution publishes these only under its still-current outer auth fence authority. */
   readonly completeLogin: (
     server: McpEffectiveServer,

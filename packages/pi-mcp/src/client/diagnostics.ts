@@ -37,7 +37,7 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
     case "auth-not-configured":
       return diagnostic(
         "Managed authentication is not configured",
-        "This HTTP server has no managed authentication configured. Omitting auth or setting auth: false does not enable automatic OAuth. Review /mcp-settings and configure the server's supported authentication, or check any configured authentication headers. OAuth must be configured before /mcp auth can start sign-in.",
+        "Managed authentication is disabled for this HTTP server, or custom headers keep it outside implicit OAuth. Review /mcp-settings and the server's authentication headers. Explicit auth: false or auth: none does not enable OAuth. Headerless HTTP servers with omitted auth can use explicit user-approved OAuth sign-in after an authentication challenge.",
         ["inspect-settings"],
       );
     case "auth-env-required":
@@ -57,6 +57,38 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
         "OAuth sign-in required",
         "The OAuth credential check or transport rejected access. Use /mcp auth for this server or its Sign in action. Sign-in is an explicit user action and does not connect automatically.",
         signIn,
+      );
+    case "oauth-refresh-unresolved":
+      return diagnostic(
+        "Credential refresh unresolved",
+        "A refresh may have rotated credentials without a confirmed saved result. The old grant is blocked from reuse. Review credential status and storage before an explicit new sign-in; do not repeat the refresh or failed operation automatically.",
+        ["check-storage", "inspect-status"],
+        "error",
+      );
+    case "oauth-token-rejected":
+      return diagnostic(
+        "OAuth token rejected",
+        "The server rejected the credential used by this operation. It will not be reused or refreshed as recovery for this rejection. Review access before an explicit user-approved sign-in. The failed operation was not replayed.",
+        signIn,
+      );
+    case "oauth-insufficient-scope":
+      return diagnostic(
+        "OAuth permissions insufficient",
+        "The server requires permission review. Inspect the requested permissions and server settings before explicit user-approved sign-in with an approved scope proposal. Repeating sign-in with unchanged permissions is not a fix, and no failed operation was replayed.",
+        ["inspect-settings"],
+      );
+    case "oauth-scope-approval-required":
+      return diagnostic(
+        "Permission approval required",
+        "Additional OAuth permissions need explicit user approval. Review the permission proposal in an interactive sign-in dialog. No expanded permission request was authorized or sent automatically.",
+        ["inspect-settings"],
+      );
+    case "oauth-scope-invalid":
+      return diagnostic(
+        "OAuth permission request rejected",
+        "The server challenge or requested permissions were malformed, conflicting, or exceeded safe limits. Review the server and authentication settings. Invalid scope evidence cannot authorize expanded access.",
+        ["inspect-settings"],
+        "error",
       );
     case "oauth-resource-metadata-missing":
       return diagnostic(

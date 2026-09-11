@@ -30,6 +30,46 @@ const exec: ExtensionAPI["exec"] = () => Promise.reject(new Error("Must not open
 const host = { exec } as ExtensionAPI;
 
 describe("private stock RPC handoff", () => {
+  for (const outcome of ["current", "trust", "deadline", "cancel"] as const)
+    it.effect(`rejects late permission consent after ${outcome} changes`, () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const answer = Promise.withResolvers<boolean>();
+        let current = true;
+        let trusted = true;
+        let signal: AbortSignal | undefined;
+        const ctx = {
+          ...makeContext({
+            input: vi.fn(),
+            confirm: (_title, _message, options) => {
+              signal = options?.signal;
+              Deferred.doneUnsafe(entered, Effect.void);
+              return answer.promise;
+            },
+          }),
+          isProjectTrusted: () => trusted,
+        };
+        const ui = makeMcpLoginUi(host, ctx, false, () => current);
+        const waiting = yield* ui.approveScopes!(
+          { requested: ["PRIVATE_SCOPE"], additions: ["PRIVATE_SCOPE"], source: "challenge" },
+          (yield* Clock.currentTimeMillis) + 1000,
+        ).pipe(Effect.result, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        if (outcome === "current") current = false;
+        if (outcome === "trust") trusted = false;
+        if (outcome === "deadline") yield* TestClock.adjust(1000);
+        if (outcome === "cancel") {
+          yield* Fiber.interrupt(waiting);
+          expect(signal?.aborted).toBe(true);
+        }
+        answer.resolve(true);
+        if (outcome !== "cancel")
+          expect(yield* Fiber.join(waiting)).toMatchObject({
+            _tag: "Failure",
+            failure: { kind: outcome === "deadline" ? "timeout" : "stale" },
+          });
+      }),
+    );
   it.effect("does not overlap still-settling native opens or launch after private revocation", () =>
     Effect.gen(function* () {
       if (process.platform !== "darwin") return; // The local opener is supported only on macOS.
@@ -138,9 +178,20 @@ describe("private stock RPC handoff", () => {
         "https://issuer.example/authorize?state=PRIVATE_STATE&code_challenge=PRIVATE_PKCE",
       );
       expect(callback).toContain("PRIVATE_CALLBACK");
-      expect(privateMessages).toHaveLength(1);
+      expect(
+        yield* ui.approveScopes!(
+          {
+            requested: ["PRIVATE_SCOPE"],
+            additions: ["PRIVATE_SCOPE"],
+            source: "resource-metadata",
+          },
+          (yield* Clock.currentTimeMillis) + 1000,
+        ),
+      ).toBe(true);
+      expect(privateMessages).toHaveLength(2);
       expect(privateMessages[0]).toContain("PRIVATE_PKCE");
-      expect(publicEvents).toHaveLength(4);
+      expect(privateMessages[1]).toContain("PRIVATE_SCOPE");
+      expect(publicEvents).toHaveLength(6);
       expect(yield* serialize(publicEvents)).not.toMatch(/PRIVATE_|issuer\.example|callback\?code/);
     }),
   );

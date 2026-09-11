@@ -19,6 +19,7 @@ import {
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import {
@@ -32,6 +33,11 @@ import {
 } from "./sdk-fetch.ts";
 import type { SdkHttpControl } from "./sdk-http-control.ts";
 import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
+import {
+  beginSdkHttpChallenge,
+  sdkHttpChallengeStatus,
+  withSdkHttpChallenge,
+} from "./sdk-http-challenge.ts";
 
 export interface SdkHttpTransportOperation extends SdkFetchOperation {
   readonly signal: AbortSignal;
@@ -254,12 +260,29 @@ export const mapSdkFailure = (
   if (error instanceof SdkHttpTransportOperationError) {
     return boundaryError("unavailable", "not-sent", "MCP operation ownership is no longer active.");
   }
+  if (error instanceof InsufficientScopeError) {
+    return withSdkHttpChallenge(
+      error,
+      operation,
+      boundaryError(
+        "auth-required",
+        outcome,
+        "MCP server requires permission review.",
+        "oauth-insufficient-scope",
+      ),
+    );
+  }
   if (
     error instanceof UnauthorizedError ||
-    error instanceof InsufficientScopeError ||
-    (error instanceof SdkHttpError && error.status === 401)
+    (error instanceof SdkHttpError && error.status === 401) ||
+    // The SDK may throw while parsing a malformed challenge before UnauthorizedError.
+    sdkHttpChallengeStatus(error, operation) === 401
   ) {
-    return boundaryError("auth-required", outcome, "MCP server requires authentication.");
+    return withSdkHttpChallenge(
+      error,
+      operation,
+      boundaryError("auth-required", outcome, "MCP server requires authentication."),
+    );
   }
   if (error instanceof SdkHttpError && error.status === 403) {
     return boundaryError("denied", outcome, "MCP server denied this operation.");
@@ -288,7 +311,11 @@ export const mapSdkFailure = (
       case SdkErrorCode.AlreadyConnected:
         return boundaryError("connection", "not-sent", "MCP connection is unavailable.");
       case SdkErrorCode.ClientHttpAuthentication:
-        return boundaryError("auth-required", outcome, "MCP server requires authentication.");
+        return withSdkHttpChallenge(
+          error,
+          operation,
+          boundaryError("auth-required", outcome, "MCP server requires authentication."),
+        );
       case SdkErrorCode.ClientHttpForbidden:
         // A bare 403 can be an ACL or proxy denial, not rejected credentials.
         return boundaryError("denied", outcome, "MCP server denied this operation.");
@@ -440,14 +467,21 @@ export const makeSdkHttpTransport = (
         if (operation !== undefined) bindRequestIds(message, operation);
         const requestSignal = mergeSignals(options?.requestSignal, operation?.signal);
         const headers = withoutPrivateHeader(options?.headers);
-        if (options === undefined && requestSignal === undefined && headers === undefined) {
-          return transport.send(message);
-        }
-        return transport.send(message, {
-          ...options,
-          requestSignal,
-          headers,
-        });
+        const settleChallenge =
+          operation === undefined ? undefined : beginSdkHttpChallenge(operation);
+        return Promise.resolve()
+          .then(() =>
+            options === undefined && requestSignal === undefined && headers === undefined
+              ? transport.send(message)
+              : transport.send(message, { ...options, requestSignal, headers }),
+          )
+          .then(
+            () => settleChallenge?.(),
+            (error) => {
+              settleChallenge?.(Predicate.isError(error) ? error : undefined);
+              throw error;
+            },
+          );
       }),
   };
 

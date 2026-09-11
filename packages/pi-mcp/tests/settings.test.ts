@@ -10,9 +10,13 @@ import { McpAuth } from "../src/auth/service.ts";
 import { McpAuthFlow } from "../src/auth/flow.ts";
 import { McpManager } from "../src/manager/service.ts";
 import { makeMcpLoginUi } from "../src/boundary/host-auth.ts";
-import { boundaryError } from "../src/client/errors.ts";
+import { boundaryError, type McpBoundaryError } from "../src/client/errors.ts";
 import { DEFAULT_MCP_SETTINGS } from "../src/config/schema.ts";
-import type { McpConfigStoreContract, McpResolvedConfig } from "../src/config/model.ts";
+import type {
+  McpConfigStoreContract,
+  McpResolvedConfig,
+  McpHttpAuth,
+} from "../src/config/model.ts";
 import { McpConfigStore } from "../src/config/store.ts";
 import {
   mcpConfigMetadata,
@@ -175,6 +179,8 @@ describe("MCP argument-first commands", () => {
         const login = vi.fn(() => Effect.succeed({ state: "ready" as const }));
         let ready = false;
         let anonymous = false;
+        let ownedFailure: McpBoundaryError | undefined;
+        let auth: McpHttpAuth = { type: "oauth", registration: "dynamic", scopes: [] };
         const forbidden = Effect.die("Headless auth opened interactive presentation");
         const layer = Layer.mergeAll(
           Layer.succeed(McpAuthFlow, {
@@ -207,14 +213,33 @@ describe("MCP argument-first commands", () => {
             available: Effect.succeed(true),
             isAvailable: () => true,
           }),
-          Layer.succeed(McpConfigStore, makeStore()),
+          Layer.succeed(McpConfigStore, {
+            ...makeStore(),
+            snapshot: Effect.sync(() => ({
+              ...config,
+              servers: {
+                fixture: {
+                  ...config.servers.fixture!,
+                  definition: {
+                    transport: "http" as const,
+                    url: "https://fixture.example/mcp",
+                    headers: {},
+                    auth,
+                    denyTools: [],
+                  },
+                },
+              },
+            })),
+          }),
           Layer.succeed(McpAuth, {
             access: (_server, options) =>
-              anonymous
-                ? Effect.succeed(undefined)
-                : ready && options?.requireGrant === true
-                  ? Effect.succeed(secret)
-                  : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
+              ownedFailure !== undefined
+                ? Effect.fail(ownedFailure)
+                : anonymous
+                  ? Effect.succeed(undefined)
+                  : ready && options?.requireGrant === true
+                    ? Effect.succeed(secret)
+                    : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
             status: () => Effect.succeed({ state: "required" }),
             login,
             logout: () => Effect.void,
@@ -241,6 +266,37 @@ describe("MCP argument-first commands", () => {
             Effect.flip,
           ),
         ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
+        for (const reason of [
+          "oauth-storage-unavailable",
+          "oauth-mutation-unresolved",
+          "oauth-refresh-unresolved",
+          "oauth-token-rejected",
+          "oauth-binding-rejected",
+          "oauth-insufficient-scope",
+          "oauth-scope-invalid",
+        ] as const) {
+          ownedFailure = boundaryError("auth-required", "not-sent", "fixed owned failure", reason);
+          expect(
+            yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(
+              Effect.provide(layer),
+              Effect.flip,
+            ),
+          ).toBe(ownedFailure);
+        }
+        ownedFailure = undefined;
+        for (const mode of [
+          { auth: { type: "none" as const }, reason: "auth-not-configured" },
+          { auth: { type: "env" as const, env: "TOKEN" }, reason: "auth-env-required" },
+        ]) {
+          auth = mode.auth;
+          expect(
+            yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(
+              Effect.provide(layer),
+              Effect.flip,
+            ),
+          ).toMatchObject({ kind: "auth-required", outcome: "not-sent", reason: mode.reason });
+        }
+        auth = { type: "oauth", registration: "dynamic", scopes: [] };
         anonymous = false;
         ready = true;
         expect(

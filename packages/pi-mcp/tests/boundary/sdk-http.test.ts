@@ -19,6 +19,13 @@ import { HttpServerResponse } from "effect/unstable/http";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
+import { getAuthChallenge } from "../../src/auth/challenge.ts";
+import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
+import {
+  beginSdkHttpChallenge,
+  captureSdkHttpChallenge,
+} from "../../src/boundary/sdk-http-challenge.ts";
+import { SdkHttpOperationRegistry, mapSdkFailure } from "../../src/boundary/sdk-http-transport.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
 import { startHttpServer, type HttpRequestRecord } from "../fixtures/http-server.ts";
 import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
@@ -345,6 +352,181 @@ describe("scoped SDK HTTP connection", () => {
       }),
     );
   }
+
+  it.effect("keeps interleaved POST challenges private and bound to their own failures", () =>
+    Effect.gen(function* () {
+      const challenges = {
+        first: 'Bearer resource_metadata="https://private.example/first?secret=PRIVATE_FIRST"',
+        second: 'Bearer error="insufficient_scope", scope="PRIVATE_SECOND"',
+      };
+      const bodies = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+      const calls: string[] = [];
+      const connection = yield* openSdkHttp({
+        url: fakeUrl,
+        ...defaults,
+        token: "PRIVATE_TOKEN",
+        fetch: controlledFetch((_init, message) => {
+          if (message?.method !== "tools/call") return undefined;
+          const name = message.params?.name === "first" ? "first" : "second";
+          calls.push(name);
+          return Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>({
+                start: (controller) => {
+                  bodies.set(name, controller);
+                },
+              }),
+              {
+                status: name === "first" ? 401 : 403,
+                headers: { "www-authenticate": challenges[name] },
+              },
+            ),
+          );
+        }),
+      });
+      const first = yield* Effect.forkChild(
+        connection.request({ action: "tools.call", tool: "first" }).pipe(Effect.flip),
+      );
+      const second = yield* Effect.forkChild(
+        connection.request({ action: "tools.call", tool: "second" }).pipe(Effect.flip),
+      );
+      yield* yieldUntil(() => bodies.size === 2);
+      bodies.get("second")!.close();
+      const secondError = yield* Fiber.join(second);
+      bodies.get("first")!.close();
+      const firstError = yield* Fiber.join(first);
+      expect(firstError).toMatchObject({ kind: "auth-required", outcome: "unknown" });
+      expect(secondError).toMatchObject({
+        kind: "auth-required",
+        outcome: "unknown",
+        reason: "oauth-insufficient-scope",
+      });
+      expect(getAuthChallenge(firstError)).toEqual({
+        status: 401,
+        wwwAuthenticate: challenges.first,
+      });
+      expect(getAuthChallenge(secondError)).toEqual({
+        status: 403,
+        wwwAuthenticate: challenges.second,
+      });
+      expect(calls.sort()).toEqual(["first", "second"]);
+      expect(
+        yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+          firstError,
+          secondError,
+          mcpFailureReply("tools.call", secondError),
+        ]),
+      ).not.toMatch(/PRIVATE_|private\.example|wwwAuthenticate/);
+    }),
+  );
+
+  it.effect.each([
+    { name: "valid", challenge: 'Bearer resource_metadata="https://private.example/metadata"' },
+    { name: "malformed", challenge: 'Bearer resource_metadata="not a URL PRIVATE_MALFORMED"' },
+    { name: "oversized", challenge: `Bearer scope="${"X".repeat(9_000)}"` },
+  ])("preserves $name initialization challenge evidence before SDK parsing", ({ challenge }) =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const error = yield* openSdkHttp({
+        url: fakeUrl,
+        ...defaults,
+        fetch: controlledFetch((_init, message) => {
+          if (message?.method !== "initialize") return undefined;
+          calls += 1;
+          return Promise.resolve(
+            new Response(null, { status: 401, headers: { "www-authenticate": challenge } }),
+          );
+        }),
+      }).pipe(Effect.flip);
+      expect(error).toMatchObject({ kind: "auth-required", outcome: "unknown" });
+      expect(getAuthChallenge(error)).toEqual({
+        status: 401,
+        wwwAuthenticate: challenge.slice(0, 8_193),
+      });
+      expect(calls).toBe(1);
+      expect(yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(error)).not.toMatch(
+        /PRIVATE_|private\.example|wwwAuthenticate/,
+      );
+    }),
+  );
+
+  it.effect("does not inherit challenge headers from success or unrelated session traffic", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      const connection = yield* openSdkHttp({
+        url: fakeUrl,
+        ...defaults,
+        fetch: controlledFetch((init, message) => {
+          if (init?.method === "GET")
+            return Promise.resolve(
+              new Response(null, {
+                status: 401,
+                headers: { "www-authenticate": 'Bearer scope="PRIVATE_GET"' },
+              }),
+            );
+          if (message?.method !== "tools/call") return undefined;
+          const name = message.params?.name ?? "";
+          calls.push(name);
+          if (name === "success") {
+            const response = defaultResponse(init?.method, message);
+            response.headers.set("www-authenticate", 'Bearer scope="PRIVATE_SUCCESS"');
+            return Promise.resolve(response);
+          }
+          return Promise.resolve(new Response(null, { status: name === "bare403" ? 403 : 401 }));
+        }),
+      });
+      expect((yield* connection.request({ action: "tools.call", tool: "success" })).outcome).toBe(
+        "completed",
+      );
+      for (const name of ["bare401", "bare403"]) {
+        const error = yield* connection
+          .request({ action: "tools.call", tool: name })
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({
+          kind: name === "bare401" ? "auth-required" : "denied",
+          outcome: "unknown",
+        });
+        expect(getAuthChallenge(error)).toBeUndefined();
+      }
+      expect(calls).toEqual(["success", "bare401", "bare403"]);
+    }),
+  );
+
+  it("refuses stale, reused, and cross-operation SDK error associations", () => {
+    const registry = new SdkHttpOperationRegistry(1);
+    const first = registry.begin()!;
+    const second = registry.begin()!;
+    const challenge = 'Bearer resource_metadata="https://private.example/metadata"';
+    const capture = (operation: typeof first, error: Error) => {
+      const settle = beginSdkHttpChallenge(operation);
+      captureSdkHttpChallenge(
+        operation,
+        new Response(null, { status: 401, headers: { "www-authenticate": challenge } }),
+      );
+      settle(error);
+    };
+    const firstError = new TypeError("PRIVATE SDK parser error");
+    capture(first, firstError);
+    expect(getAuthChallenge(mapSdkFailure(firstError, first))).toBeDefined();
+    expect(getAuthChallenge(mapSdkFailure(firstError, second))).toBeUndefined();
+    capture(second, firstError);
+    expect(getAuthChallenge(mapSdkFailure(firstError, first))).toBeUndefined();
+    expect(getAuthChallenge(mapSdkFailure(firstError, second))).toBeUndefined();
+    const lateError = new TypeError("late");
+    capture(first, lateError);
+    first.abort();
+    expect(getAuthChallenge(mapSdkFailure(lateError, first))).toBeUndefined();
+    const start = beginSdkHttpChallenge(second);
+    const overlap = beginSdkHttpChallenge(second);
+    captureSdkHttpChallenge(
+      second,
+      new Response(null, { status: 401, headers: { "www-authenticate": challenge } }),
+    );
+    const ambiguous = new TypeError("overlapping sends");
+    start(ambiguous);
+    overlap(ambiguous);
+    expect(getAuthChallenge(mapSdkFailure(ambiguous, second))).toBeUndefined();
+  });
 
   it.live("never replays an expired-session call, even after explicit replacement", () =>
     Effect.gen(function* () {

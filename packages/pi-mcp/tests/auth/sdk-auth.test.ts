@@ -13,10 +13,15 @@ import { HttpClient, HttpMiddleware, HttpServerResponse } from "effect/unstable/
 import { NetworkAddresses } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
-import type { McpLoginUi } from "../../src/auth/model.ts";
+import type { McpLoginUi, McpScopeProposal } from "../../src/auth/model.ts";
 import type { McpAuthProgressEvent } from "../../src/auth/progress.ts";
-import { decodeGrant, encodeGrant, type McpGrant } from "../../src/auth/credentials.ts";
-import type { McpEffectiveServer } from "../../src/config/model.ts";
+import {
+  decodeGrant,
+  encodeGrant,
+  type McpGrant,
+  type McpRegistrationReceipt,
+} from "../../src/auth/credentials.ts";
+import type { McpEffectiveServer, McpOAuthConfig } from "../../src/config/model.ts";
 import { makeMcpSdkAuth } from "../../src/boundary/sdk-auth.ts";
 import { openAuthCallback } from "../../src/boundary/auth-callback.ts";
 import { withAuthFetch } from "../../src/boundary/auth-fetch.ts";
@@ -55,6 +60,401 @@ const browser = (mode: "local" | "manual", mutate: (callback: string) => string 
       readCallback: () => Effect.succeed(callback),
     } satisfies McpLoginUi;
   });
+
+const changeOAuth = (
+  server: McpEffectiveServer,
+  patch: Partial<McpOAuthConfig>,
+): McpEffectiveServer => {
+  if (server.definition?.transport !== "http" || server.definition.auth.type !== "oauth")
+    throw new Error("Missing fixture OAuth configuration");
+  return {
+    ...server,
+    definition: { ...server.definition, auth: { ...server.definition.auth, ...patch } },
+  };
+};
+const cancelledUi: McpLoginUi = {
+  mode: "manual",
+  openBrowser: () => Effect.void,
+  readCallback: () => Effect.succeed(undefined),
+  waitForCallback: () => Effect.succeed(undefined),
+};
+
+describe("explicit OAuth permissions and registration checkpoints", () => {
+  it.live(
+    "uses the original POST hint and privately approves inferred permissions and offline access",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({
+          resourceScopes: ["admin"],
+          serverScopes: ["admin", "offline_access"],
+          requireOfflineAccess: true,
+        });
+        const server = changeOAuth(fixture.configured("dynamic"), { scopes: [] });
+        const sdk = yield* makeMcpSdkAuth;
+        const ui = yield* browser("manual");
+        const proposals: McpScopeProposal[] = [];
+        const progress: McpAuthProgressEvent[] = [];
+        const grant = yield* sdk.login(
+          server,
+          {
+            ...ui,
+            approveScopes: (proposal) =>
+              Effect.sync(() => {
+                proposals.push(proposal);
+                return true;
+              }),
+            progress: (event) =>
+              Effect.sync(() => {
+                progress.push(event);
+              }),
+            openBrowser: (value) =>
+              Effect.sync(() => {
+                expect(new URL(value).searchParams.getAll("scope")).toEqual([
+                  "offline_access read",
+                ]);
+              }).pipe(Effect.andThen(ui.openBrowser(value))),
+          },
+          {
+            challenge: {
+              status: 401,
+              wwwAuthenticate: `Bearer resource_metadata="${fixture.origin}/oauth/resource", scope="read"`,
+            },
+          },
+        );
+        expect(grant.requestedScopes).toEqual(["offline_access", "read"]);
+        expect(grant.tokens).toHaveProperty("refresh_token");
+        expect(proposals).toEqual([
+          {
+            requested: ["offline_access", "read"],
+            additions: ["offline_access", "read"],
+            source: "challenge",
+          },
+        ]);
+        expect(progress.some((event) => event.phase === "scope-approval")).toBe(true);
+        expect(yield* serialize(progress)).not.toMatch(/offline_access|admin|"read"/);
+        expect(fixture.requests.some((request) => request.path === "/mcp")).toBe(false);
+        expect(
+          fixture.requests.some((request) =>
+            request.path.startsWith("/.well-known/oauth-protected-resource"),
+          ),
+        ).toBe(false);
+      }).pipe(Effect.provide(layers)),
+  );
+
+  for (const approval of ["missing", "declined", "stale"] as const)
+    it.live(`does not register, open, or exchange after ${approval} permission approval`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ resourceScopes: ["read"] });
+        const server = changeOAuth(fixture.configured("dynamic"), { scopes: [] });
+        const sdk = yield* makeMcpSdkAuth;
+        let opened = false;
+        const ui: McpLoginUi = {
+          ...cancelledUi,
+          openBrowser: () =>
+            Effect.sync(() => {
+              opened = true;
+            }),
+        };
+        if (approval !== "missing")
+          Object.assign(ui, {
+            approveScopes: () =>
+              approval === "stale"
+                ? Effect.fail(boundaryError("stale", "not-sent", "Fixture consent revoked."))
+                : Effect.succeed(false),
+          });
+        const result = yield* sdk.login(server, ui).pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(opened).toBe(false);
+        expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
+      }).pipe(Effect.provide(layers)),
+    );
+
+  it.live("cancellation interrupts permission approval before registration", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ resourceScopes: ["read"] });
+      const sdk = yield* makeMcpSdkAuth;
+      const entered = yield* Deferred.make<void>();
+      let released = false;
+      const login = yield* sdk
+        .login(changeOAuth(fixture.configured("dynamic"), { scopes: [] }), {
+          ...cancelledUi,
+          approveScopes: () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  released = true;
+                }),
+              ),
+            ),
+        })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(login);
+      expect(released).toBe(true);
+      expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("explicit empty scopes remove all endpoint scopes without inferring permissions", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({
+        resourceScopes: ["read"],
+        serverScopes: ["offline_access"],
+        authorizationScopeQuery: "?scope=admin&scope=write",
+        requireNoScope: true,
+      });
+      const sdk = yield* makeMcpSdkAuth;
+      const ui = yield* browser("manual");
+      const grant = yield* sdk.login(
+        changeOAuth(fixture.configured("dynamic"), {
+          scopes: [],
+          explicitEmptyScopes: true,
+        }),
+        {
+          ...ui,
+          openBrowser: (value) =>
+            Effect.sync(() => {
+              expect(new URL(value).searchParams.has("scope")).toBe(false);
+            }).pipe(Effect.andThen(ui.openBrowser(value))),
+        },
+      );
+      expect(grant.requestedScopes).toEqual([]);
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live(
+    "omits DCR and authorization scope when no configured or advertised permissions exist",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ requireNoScope: true });
+        const sdk = yield* makeMcpSdkAuth;
+        const grant = yield* sdk.login(
+          changeOAuth(fixture.configured("dynamic"), { scopes: [] }),
+          yield* browser("manual"),
+        );
+        expect(grant.requestedScopes).toEqual([]);
+        expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 0 });
+      }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("only retained insufficient-scope evidence can add to a configured baseline", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ resourceScopes: ["admin"] });
+      const sdk = yield* makeMcpSdkAuth;
+      const ui = yield* browser("manual");
+      let proposal: McpScopeProposal | undefined;
+      const grant = yield* sdk.login(
+        fixture.configured("pre-registered"),
+        {
+          ...ui,
+          approveScopes: (value) =>
+            Effect.sync(() => {
+              proposal = value;
+              return true;
+            }),
+        },
+        {
+          challenge: {
+            status: 403,
+            wwwAuthenticate: 'Bearer error="insufficient_scope", scope="write"',
+          },
+        },
+      );
+      expect(proposal).toEqual({
+        requested: ["tools", "write"],
+        additions: ["write"],
+        source: "challenge",
+      });
+      expect(grant.requestedScopes).toEqual(["tools", "write"]);
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("canonicalizes root resource spellings without relaxing path or query bindings", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ resourceRoot: true });
+      const sdk = yield* makeMcpSdkAuth;
+      const server = fixture.configured("pre-registered");
+      const grant = yield* sdk.login(server, yield* browser("manual"));
+      expect(grant.resource).toBe(`${fixture.origin}/`);
+      expect(
+        yield* sdk.token(server, {
+          ...grant,
+          resourceMetadata: { resource: fixture.origin, authorization_servers: [fixture.issuer] },
+        }),
+      ).toBe("fixture-access-0");
+      for (const resource of [
+        `${fixture.origin}/other`,
+        `${fixture.origin}/?tenant=x`,
+        `${fixture.origin}/ `,
+      ])
+        expect(
+          (yield* sdk
+            .token(server, {
+              ...grant,
+              resourceMetadata: { resource, authorization_servers: [fixture.issuer] },
+            })
+            .pipe(Effect.result))._tag,
+        ).toBe("Failure");
+    }).pipe(Effect.provide(layers)),
+  );
+
+  for (const mode of ["manual", "local"] as const)
+    it.live(`checkpoints and reuses a sanitized registration after cancelled ${mode} sign-in`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ secretClient: true });
+        const sdk = yield* makeMcpSdkAuth;
+        const server =
+          mode === "local"
+            ? changeOAuth(fixture.configured("dynamic"), {
+                redirectUri: "http://127.0.0.1:0/callback",
+              })
+            : fixture.configured("dynamic");
+        let registration: McpRegistrationReceipt | undefined;
+        const saveRegistration = (value: McpRegistrationReceipt) =>
+          Effect.sync(() => {
+            registration = value;
+          });
+        expect(
+          yield* sdk
+            .login(server, { ...cancelledUi, mode }, { saveRegistration })
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "cancelled" });
+        expect(registration).toBeDefined();
+        expect(registration!.clientInformation).toHaveProperty("application_type", "native");
+        expect(registration!.clientInformation).not.toHaveProperty("client_secret");
+        const grant = yield* sdk.login(server, yield* browser(mode), {
+          registration: registration!,
+          saveRegistration,
+        });
+        expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 0 });
+        const refreshed = yield* sdk.refresh(server, grant);
+        expect(refreshed.clientInformation).toHaveProperty("redirect_uris");
+        expect(refreshed.clientInformation).toHaveProperty("application_type", "native");
+        // A completed grant is also a compatible candidate when no separate checkpoint exists.
+        yield* sdk.login(server, yield* browser(mode), { previousGrant: refreshed });
+        expect(fixture.counts().registered).toBe(1);
+        const quarantined = { ...grant, quarantine: "refresh" as const };
+        expect(yield* sdk.token(server, quarantined).pipe(Effect.flip)).toMatchObject({
+          reason: "oauth-refresh-unresolved",
+        });
+        expect(yield* sdk.refresh(server, quarantined).pipe(Effect.flip)).toMatchObject({
+          reason: "oauth-refresh-unresolved",
+        });
+      }).pipe(Effect.provide(layers)),
+    );
+
+  it.live("reuses legacy completed grants only with consistent full client metadata evidence", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer({ registrationScope: "tools" });
+      const sdk = yield* makeMcpSdkAuth;
+      const server = fixture.configured("dynamic");
+      const grant = yield* sdk.login(server, yield* browser("manual"));
+      const { requestedScopes: _requestedScopes, ...legacy } = grant;
+      yield* sdk.login(server, yield* browser("manual"), { previousGrant: legacy });
+      expect(fixture.counts().registered).toBe(1);
+      yield* sdk
+        .login(server, cancelledUi, { previousGrant: { ...legacy, clientId: "different-client" } })
+        .pipe(Effect.result);
+      expect(fixture.counts().registered).toBe(2);
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live(
+    "rejects receipt identity, issuer, resource, method and fixed redirect mismatches before reuse",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer();
+        const sdk = yield* makeMcpSdkAuth;
+        const server = fixture.configured("dynamic");
+        let receipt: McpRegistrationReceipt | undefined;
+        yield* sdk
+          .login(server, cancelledUi, {
+            saveRegistration: (value) =>
+              Effect.sync(() => {
+                receipt = value;
+              }),
+          })
+          .pipe(Effect.result);
+        const original = receipt!;
+        const variants: McpRegistrationReceipt[] = [
+          { ...original, identity: "b".repeat(64) },
+          { ...original, issuer: `${fixture.issuer}/other` },
+          { ...original, resource: `${fixture.resource}?tenant=other` },
+          { ...original, redirectUri: "http://127.0.0.1:49192/callback" },
+          {
+            ...original,
+            clientInformation: {
+              client_id: "fixture-dynamic-client",
+              redirect_uris: [original.redirectUri],
+              token_endpoint_auth_method: "client_secret_post",
+            },
+          },
+        ];
+        for (const registration of variants)
+          yield* sdk.login(server, cancelledUi, { registration }).pipe(Effect.result);
+        expect(fixture.counts()).toEqual({
+          registered: 1 + variants.length,
+          exchanged: 0,
+          refreshed: 0,
+        });
+      }).pipe(Effect.provide(layers)),
+  );
+
+  it.live("checkpoint failure stops before browser admission", () =>
+    Effect.gen(function* () {
+      const fixture = yield* startOAuthServer();
+      const sdk = yield* makeMcpSdkAuth;
+      let opened = false;
+      const result = yield* sdk
+        .login(
+          fixture.configured("dynamic"),
+          {
+            ...cancelledUi,
+            openBrowser: () =>
+              Effect.sync(() => {
+                opened = true;
+              }),
+          },
+          {
+            saveRegistration: () =>
+              Effect.fail(boundaryError("unavailable", "not-sent", "Fixture storage failed.")),
+          },
+        )
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(opened).toBe(false);
+      expect(fixture.counts()).toEqual({ registered: 1, exchanged: 0, refreshed: 0 });
+    }).pipe(Effect.provide(layers)),
+  );
+
+  it.live(
+    "incompatible scope capacity creates a new registration, but a rejected reused client never retries",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* startOAuthServer({ rejectClient: true });
+        const sdk = yield* makeMcpSdkAuth;
+        const server = fixture.configured("dynamic");
+        let registration: McpRegistrationReceipt | undefined;
+        const saveRegistration = (value: McpRegistrationReceipt) =>
+          Effect.sync(() => {
+            registration = value;
+          });
+        yield* sdk.login(server, cancelledUi, { saveRegistration }).pipe(Effect.result);
+        const first = registration!;
+        yield* sdk
+          .login(server, cancelledUi, { registration: { ...first, scopes: [] }, saveRegistration })
+          .pipe(Effect.result);
+        expect(fixture.counts().registered).toBe(2);
+        const result = yield* sdk
+          .login(server, yield* browser("manual"), { registration: registration! })
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(fixture.counts().registered).toBe(2);
+        expect(fixture.counts().exchanged).toBe(0);
+      }).pipe(Effect.provide(layers)),
+  );
+});
 
 describe("SDK-owned public OAuth", () => {
   it.live(

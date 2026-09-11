@@ -1,32 +1,18 @@
 import {
   discoverAuthorizationServerMetadata,
   startAuthorization,
-  registerClient,
-  resolveClientMetadata,
   exchangeAuthorization,
   refreshAuthorization,
   validateAuthorizationResponseIssuer,
-  validateClientMetadataUrl,
-  type AuthorizationServerMetadata,
-  type OAuthClientInformationMixed,
-  type OAuthProtectedResourceMetadata,
-  type OAuthTokens,
 } from "@modelcontextprotocol/client";
-import {
-  OAuthClientInformationFullSchema,
-  OAuthMetadataSchema,
-  OAuthProtectedResourceMetadataSchema,
-  OAuthTokensSchema,
-} from "@modelcontextprotocol/core";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
-import { hasControlCharacter, NetworkAddresses } from "pi-cosmic-core";
-import type { McpLoginUi } from "../auth/model.ts";
+import { NetworkAddresses } from "pi-cosmic-core";
+import type { McpLoginOptions, McpLoginUi } from "../auth/model.ts";
 import { authProgress } from "../auth/progress.ts";
 import type { McpGrant } from "../auth/credentials.ts";
 import {
@@ -35,49 +21,34 @@ import {
   callbackRedirect,
   deniedAuth,
   oauthConfig,
-  resourceMetadataFallback,
   singleUseCallback,
   validateAuthAddresses,
   validateAuthUrl,
 } from "../auth/policy.ts";
+import {
+  approveScopes,
+  proposeScopes,
+  validateAuthorizationScopes,
+  type ScopeEvidence,
+} from "../auth/scopes.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
 import { withAuthFetch } from "./auth-fetch.ts";
-import { normalizePublicClient, restorePublicClient } from "./sdk-auth-client.ts";
 import { discoverAuthResource, missingOnlyMetadataFetch } from "./sdk-auth-discovery.ts";
-
-const unsupported = () =>
-  boundaryError(
-    "unsupported",
-    "not-sent",
-    "OAuth requires an advertised public-client registration and PKCE flow.",
-    "oauth-registration-unsupported",
-  );
-const sdk = <A>(work: () => A) => Effect.try({ try: work, catch: deniedAuth });
-const json = (
-  value:
-    | AuthorizationServerMetadata
-    | OAuthClientInformationMixed
-    | OAuthProtectedResourceMetadata
-    | OAuthTokens,
-) =>
-  Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(value).pipe(
-    Effect.flatMap((text) => Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text)),
-    Effect.mapError(deniedAuth),
-  );
-const validTokens = (tokens: OAuthTokens): boolean =>
-  tokens.token_type.toLowerCase() === "bearer" &&
-  tokens.access_token.length > 0 &&
-  !hasControlCharacter(tokens.access_token) &&
-  !/\s/.test(tokens.access_token) &&
-  (tokens.expires_in === undefined ||
-    (Number.isFinite(tokens.expires_in) && tokens.expires_in >= 0));
+import {
+  authJson as json,
+  decodeSdkGrant as decode,
+  sdkAuthValue as sdk,
+  sdkGrantReceipt as receipt,
+} from "./sdk-auth-grant.ts";
+import { loginClient, unsupportedRegistration as unsupported } from "./sdk-auth-registration.ts";
 
 export interface McpSdkAuthContract {
   readonly login: (
     server: McpEffectiveServer,
     ui: McpLoginUi,
+    options?: McpLoginOptions,
   ) => Effect.Effect<McpGrant, McpBoundaryError>;
   readonly refresh: (
     server: McpEffectiveServer,
@@ -91,76 +62,7 @@ export interface McpSdkAuthContract {
 export const makeMcpSdkAuth = Effect.gen(function* () {
   const network = yield* NetworkAddresses;
   const crypto = yield* Crypto.Crypto;
-  const decode = (server: McpEffectiveServer, grant: McpGrant) =>
-    Effect.gen(function* () {
-      const config = oauthConfig(server);
-      if (
-        !config ||
-        server.definition?.transport !== "http" ||
-        grant.identity !== server.identity ||
-        grant.registration !== config.registration ||
-        (grant.resourceMetadataSource === "configured" &&
-          (config.allowMissingResourceMetadata === false || config.issuer === undefined)) ||
-        (config.issuer !== undefined && grant.issuer !== config.issuer) ||
-        (config.registration === "pre-registered" && grant.clientId !== config.clientId)
-      )
-        return yield* deniedAuth();
-      if (grant.resourceMetadataSource === "origin") {
-        const fallback = yield* resourceMetadataFallback(server.definition.url, config);
-        if (
-          fallback?.source !== "origin" ||
-          (fallback.issuer !== grant.issuer && `${fallback.issuer}/` !== grant.issuer)
-        )
-          return yield* deniedAuth();
-      }
-      const policy = yield* authUrlPolicy(server);
-      const expectedResource = yield* validateAuthUrl(
-        config.resource ?? server.definition.url,
-        policy,
-      );
-      if (grant.resource !== expectedResource.href) return yield* deniedAuth();
-      if (config.registration === "metadata") {
-        if (!config.clientMetadataUrl) return yield* deniedAuth();
-        const expectedClient = yield* validateAuthUrl(config.clientMetadataUrl, policy);
-        if (grant.clientId !== expectedClient.href) return yield* deniedAuth();
-      }
-      const metadata = yield* sdk(() => OAuthMetadataSchema.parse(grant.discovery));
-      const resource = yield* sdk(() =>
-        OAuthProtectedResourceMetadataSchema.parse(grant.resourceMetadata),
-      );
-      const client = yield* restorePublicClient(grant.clientInformation);
-      const tokens = yield* sdk(() => OAuthTokensSchema.parse(grant.tokens));
-      const expiresAt =
-        tokens.expires_in === undefined ? undefined : grant.receivedAt + tokens.expires_in * 1000;
-      if (
-        metadata.issuer !== grant.issuer ||
-        resource.resource !== grant.resource ||
-        !resource.authorization_servers?.includes(grant.issuer) ||
-        client.client_id !== grant.clientId ||
-        !validTokens(tokens) ||
-        expiresAt !== grant.expiresAt
-      )
-        return yield* deniedAuth();
-      const issuerUrl = yield* validateAuthUrl(grant.issuer, policy);
-      if (issuerUrl.search) return yield* deniedAuth();
-      yield* validateAuthUrl(metadata.token_endpoint, policy);
-      yield* validateAuthUrl(metadata.authorization_endpoint, policy);
-      yield* callbackRedirect(grant.redirectUri);
-      return { metadata, client, tokens };
-    });
-  const receipt = (
-    grant: Omit<McpGrant, "tokens" | "receivedAt" | "expiresAt">,
-    tokens: OAuthTokens,
-  ) =>
-    Effect.gen(function* () {
-      if (!validTokens(tokens)) return yield* deniedAuth();
-      const receivedAt = yield* Clock.currentTimeMillis;
-      const expiresAt =
-        tokens.expires_in === undefined ? undefined : receivedAt + tokens.expires_in * 1000;
-      if (expiresAt !== undefined && !Number.isFinite(expiresAt)) return yield* deniedAuth();
-      return { ...grant, tokens: yield* json(tokens), receivedAt, expiresAt } satisfies McpGrant;
-    });
-  const login: McpSdkAuthContract["login"] = (server, ui) =>
+  const login: McpSdkAuthContract["login"] = (server, ui, options) =>
     Effect.gen(function* () {
       const deadline = (yield* Clock.currentTimeMillis) + 180_000;
       return yield* Effect.scoped(
@@ -182,10 +84,16 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           );
           const endpoint = server.definition.url;
           yield* authProgress(ui, { phase: "discovery", deadline });
-          const discovery = yield* discoverAuthResource(endpoint, resourceUrl, config, policy).pipe(
-            Effect.provideService(NetworkAddresses, network),
-          );
-          let resource = discovery.metadata;
+          const discovery = yield* discoverAuthResource(
+            endpoint,
+            resourceUrl,
+            config,
+            policy,
+            options?.challenge,
+          ).pipe(Effect.provideService(NetworkAddresses, network));
+          const discoveredResource = yield* validateAuthUrl(discovery.metadata.resource, policy);
+          if (discoveredResource.href !== resourceUrl.href) return yield* deniedAuth();
+          let resource = { ...discovery.metadata, resource: discoveredResource.href };
           let issuer = config.issuer ?? resource.authorization_servers?.[0];
           if (
             !issuer ||
@@ -229,48 +137,31 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             policy,
           );
           yield* validateAuthUrl(metadata.token_endpoint, policy);
+          const evidence: ScopeEvidence = { retained: discovery.retained };
+          if (discovery.challenge) Object.assign(evidence, { challenge: discovery.challenge });
+          if (resource.scopes_supported)
+            Object.assign(evidence, { resourceScopes: resource.scopes_supported });
+          if (metadata.scopes_supported)
+            Object.assign(evidence, { serverScopes: metadata.scopes_supported });
+          if (metadata.grant_types_supported)
+            Object.assign(evidence, { grantTypes: metadata.grant_types_supported });
+          const proposal = yield* proposeScopes(config, evidence);
+          if (proposal.additions.length > 0)
+            yield* authProgress(ui, { phase: "scope-approval", deadline });
+          const scopes = yield* approveScopes(ui, proposal, deadline);
           yield* authProgress(ui, { phase: "registration", deadline });
-          let client: OAuthClientInformationMixed;
-          if (config.registration === "pre-registered") {
-            if (!config.clientId) return yield* unsupported();
-            client = { client_id: config.clientId };
-          } else if (config.registration === "metadata") {
-            if (
-              !config.clientMetadataUrl ||
-              metadata.client_id_metadata_document_supported !== true
-            )
-              return yield* unsupported();
-            const metadataUrl = yield* validateAuthUrl(config.clientMetadataUrl, policy);
-            yield* sdk(() => validateClientMetadataUrl(metadataUrl.href));
-            const addresses = yield* network
-              .resolve(metadataUrl.hostname)
-              .pipe(Effect.mapError(deniedAuth));
-            yield* validateAuthAddresses(metadataUrl, addresses, policy);
-            client = { client_id: metadataUrl.href };
-          } else {
-            if (!metadata.registration_endpoint) return yield* unsupported();
-            yield* validateAuthUrl(metadata.registration_endpoint, policy);
-            client = yield* withAuthFetch(policy, (fetch) =>
-              registerClient(issuer, {
-                metadata,
-                clientMetadata: resolveClientMetadata({
-                  redirectUrl: redirect,
-                  clientMetadata: {
-                    redirect_uris: [redirect],
-                    grant_types: ["authorization_code", "refresh_token"],
-                    response_types: ["code"],
-                    token_endpoint_auth_method: "none",
-                    client_name: "Cosmic Pi MCP",
-                  },
-                }),
-                scope: config.scopes.join(" "),
-                fetchFn: fetch,
-              }),
-            ).pipe(Effect.provideService(NetworkAddresses, network));
-            const registered = yield* sdk(() => OAuthClientInformationFullSchema.parse(client));
-            if (!registered.redirect_uris.includes(redirect)) return yield* deniedAuth();
-          }
-          client = yield* normalizePublicClient(client);
+          const client = yield* loginClient({
+            server,
+            config,
+            issuer,
+            resource: resourceUrl,
+            metadata,
+            policy,
+            redirect,
+            mode: ui.mode,
+            scopes,
+            options,
+          }).pipe(Effect.provideService(NetworkAddresses, network));
           const state = Encoding.encodeBase64Url(
             yield* crypto.randomBytes(32).pipe(Effect.mapError(deniedAuth)),
           );
@@ -280,13 +171,16 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
                 metadata,
                 clientInformation: client,
                 redirectUrl: redirect,
-                scope: config.scopes.join(" "),
+                scope: scopes.join(" "),
                 state,
                 resource: resourceUrl,
               }),
             catch: deniedAuth,
           });
+          // Empty scope must not inherit any authorization endpoint scope query.
+          if (scopes.length === 0) attempt.authorizationUrl.searchParams.delete("scope");
           const authorization = yield* validateAuthUrl(attempt.authorizationUrl.href, policy);
+          yield* validateAuthorizationScopes(authorization, scopes);
           if (
             authorization.origin !== authorizationEndpoint.origin ||
             authorization.pathname !== authorizationEndpoint.pathname ||
@@ -344,6 +238,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             resource: resourceUrl.href,
             clientId: client.client_id,
             registration: config.registration,
+            requestedScopes: [...scopes],
             redirectUri: redirect,
             discovery: yield* json(metadata),
             resourceMetadata: yield* json(resource),

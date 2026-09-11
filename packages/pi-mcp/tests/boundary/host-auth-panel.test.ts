@@ -150,6 +150,32 @@ const harness = () => {
 };
 
 describe("owned auth overlay", () => {
+  for (const mode of ["local", "manual"] as const)
+    it.effect(`yields to stock scope consent and restores only its current ${mode} panel`, () =>
+      Effect.gen(function* () {
+        const fixture = harness();
+        fixture.update({ mode, phase: "scope-approval" });
+        const panel = yield* presentMcpAuthPanel(
+          fixture.ctx,
+          fixture.attempt,
+          fixture.current,
+        ).pipe(Effect.forkScoped);
+        yield* yieldUntil(fixture.ready);
+        fixture.factory();
+        fixture.mount();
+        expect(fixture.hidden()).toBe(true);
+        fixture.update({ phase: "registration" });
+        expect(fixture.hidden()).toBe(false);
+        fixture.update({ phase: "scope-approval" });
+        const foreign = fixture.foreign();
+        fixture.revoke();
+        fixture.update({ phase: "registration" });
+        expect(fixture.hidden()).toBe(true);
+        yield* Fiber.interrupt(panel);
+        expect(fixture.stack).toEqual([foreign]);
+        expect(fixture.subscriptions()).toBe(0);
+      }),
+    );
   it.effect("cancels only its attempt and preserves a newer questionnaire overlay", () =>
     Effect.gen(function* () {
       const fixture = harness();

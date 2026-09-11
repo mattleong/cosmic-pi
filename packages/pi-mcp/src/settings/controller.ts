@@ -15,6 +15,8 @@ import {
 import type { McpCommandPort } from "../application/lifecycle.ts";
 import { McpAuth } from "../auth/service.ts";
 import { McpAuthFlow } from "../auth/flow.ts";
+import { withAuthFailureReason } from "../auth/diagnostics.ts";
+import { copyAuthChallenge } from "../auth/challenge.ts";
 import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
 import { confirmMcpAction } from "../boundary/host-ui.ts";
 import { McpManager } from "../manager/service.ts";
@@ -135,12 +137,19 @@ export const runMcpUserCommand = (
           (token) => token !== undefined,
           () => boundaryError("auth-required", "not-sent", "No managed credential is available."),
         ),
-        Effect.mapError(() =>
-          boundaryError(
-            "unavailable",
-            "not-sent",
-            "MCP authentication requires an interactive user dialog.",
-          ),
+        Effect.mapError((error) => withAuthFailureReason(definition, error)),
+        Effect.mapError((error) =>
+          error.kind === "auth-required" &&
+          (error.reason === undefined || error.reason === "auth-oauth-required")
+            ? copyAuthChallenge(
+                error,
+                boundaryError(
+                  "unavailable",
+                  error.outcome,
+                  "MCP authentication requires an interactive user dialog.",
+                ),
+              )
+            : error,
         ),
       );
       yield* gate(ctx, current, true);

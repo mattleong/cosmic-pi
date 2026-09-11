@@ -14,6 +14,53 @@ const globalSource = (document: NonNullable<McpConfigSource["document"]>): McpCo
 });
 
 describe("MCP configuration resolution", () => {
+  it.effect(
+    "distinguishes explicit empty OAuth permissions while preserving omitted and nonempty normalization",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const resolve = (scopes?: string[]) => {
+          const auth = { type: "oauth" };
+          if (scopes !== undefined) Object.assign(auth, { scopes });
+          return resolveMcpConfig({
+            revision: 0,
+            trusted: true,
+            path,
+            global: globalSource({
+              mcpServers: {
+                server: {
+                  url: "https://example.test/mcp",
+                  auth,
+                },
+              },
+            }),
+          });
+        };
+        const omitted = (yield* resolve()).servers.server!;
+        const empty = (yield* resolve([])).servers.server!;
+        const baseline = (yield* resolve(["Read", "read", "Read"])).servers.server!;
+        expect(omitted.definition).toHaveProperty("auth", {
+          type: "oauth",
+          registration: "dynamic",
+          scopes: [],
+        });
+        expect(empty.definition).toHaveProperty("auth", {
+          type: "oauth",
+          registration: "dynamic",
+          scopes: [],
+          explicitEmptyScopes: true,
+        });
+        expect(empty.identity).not.toBe(omitted.identity);
+        expect(baseline.definition).toHaveProperty("auth", {
+          type: "oauth",
+          registration: "dynamic",
+          scopes: ["Read", "read"],
+        });
+        expect((yield* resolve(["read", "Read"])).servers.server?.identity).toBe(baseline.identity);
+        for (const malformed of [["read write"], [" read"], ['read"'], ["read\\"], ["é"]])
+          expect((yield* resolve(malformed)).servers.server?.enabled).toBe(false);
+      }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
+  );
   it.effect("keeps absent and empty tool allowlists distinct and preserves explicit denials", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

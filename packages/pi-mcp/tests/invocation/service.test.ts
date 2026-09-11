@@ -794,6 +794,8 @@ const makeAuthFixture = (login: McpSdkAuthContract["login"]) =>
         Layer.mergeAll(
           Layer.succeed(McpCredentialStore, {
             mutation: () => Effect.succeed("idle"),
+            readRegistration: () => Effect.succeed(undefined),
+            writeRegistration: () => Effect.void,
             read: (identity) =>
               Effect.sync(() => {
                 reads++;

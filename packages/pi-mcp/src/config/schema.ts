@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { boundaryError } from "../client/errors.ts";
+import { oauthScopes } from "../auth/scopes.ts";
 import type { McpSettings } from "./model.ts";
 
 export const MCP_CONFIG_BASENAME = "pi-mcp.json";
@@ -87,7 +88,7 @@ const oauth = Schema.Struct({
   issuer: Schema.optionalKey(endpoint),
   allowMissingResourceMetadata: Schema.optionalKey(Schema.Boolean),
   resource: Schema.optionalKey(endpoint),
-  scopes: Schema.optionalKey(names),
+  scopes: Schema.optionalKey(oauthScopes),
   redirectUri: Schema.optionalKey(endpoint),
 }).check(
   Schema.makeFilter((value) => {

@@ -2,6 +2,7 @@ import type { FetchLike, RequestId } from "@modelcontextprotocol/client";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { captureSdkHttpChallenge } from "./sdk-http-challenge.ts";
 
 /** This header is an internal correlation key and must never reach an MCP server. */
 export const SDK_OPERATION_HEADER = "x-pi-mcp-operation";
@@ -264,6 +265,9 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
               const error = new SdkFetchResponseLimitError();
               failed(error);
               return rejectResponse(error);
+            }
+            if (operation !== undefined && init?.method?.toUpperCase() === "POST") {
+              captureSdkHttpChallenge(operation, response);
             }
             if (response.body === null) return response;
 

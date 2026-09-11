@@ -9,6 +9,7 @@ export type McpAuthPhase =
   | "callback-listener"
   | "discovery"
   | "registration"
+  | "scope-approval"
   | "opening-browser"
   | "awaiting-callback"
   | "exchange"
@@ -59,6 +60,7 @@ export const authActivityPhase = (phase: McpAuthPhase): McpActivityPhase | undef
       return "preparing-client";
     case "opening-browser":
       return "opening-browser";
+    case "scope-approval":
     case "awaiting-callback":
       return "browser-approval";
     case "exchange":
@@ -85,6 +87,8 @@ export const authPhaseLabel = (phase: McpAuthPhase): string => {
       return "Discovering authentication metadata";
     case "registration":
       return "Preparing the public client";
+    case "scope-approval":
+      return "Waiting for permission approval";
     case "opening-browser":
       return "Opening the browser";
     case "awaiting-callback":

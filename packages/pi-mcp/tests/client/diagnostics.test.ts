@@ -11,6 +11,11 @@ const reasons = [
   "oauth-resource-metadata-missing",
   "oauth-resource-metadata-invalid",
   "oauth-storage-unavailable",
+  "oauth-refresh-unresolved",
+  "oauth-token-rejected",
+  "oauth-insufficient-scope",
+  "oauth-scope-approval-required",
+  "oauth-scope-invalid",
   "oauth-mutation-unresolved",
   "oauth-browser-open-failed",
   "oauth-callback-timeout",
@@ -58,6 +63,24 @@ describe("fixed diagnostic recovery policy", () => {
       data: { reason },
     });
     expect(mcpDiagnostic({ ...error, outcome: "unknown" }).recovery).toEqual(["inspect-operation"]);
+  });
+  it("requires permission review rather than unchanged sign-in for insufficient scopes", () => {
+    for (const reason of [
+      "oauth-insufficient-scope",
+      "oauth-scope-approval-required",
+      "oauth-scope-invalid",
+    ] as const) {
+      const error = boundaryError("auth-required", "not-sent", "PRIVATE_SCOPE", reason);
+      expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
+    }
+    const refresh = boundaryError("auth-required", "not-sent", "", "oauth-refresh-unresolved");
+    expect(mcpDiagnostic(refresh, { canSignIn: true }).recovery).toEqual([
+      "check-storage",
+      "inspect-status",
+    ]);
+    const token = boundaryError("auth-required", "not-sent", "", "oauth-token-rejected");
+    expect(mcpDiagnostic(token, { canSignIn: true }).recovery).toEqual(["sign-in"]);
+    expect(mcpDiagnostic(token).recovery).toEqual(["inspect-status"]);
   });
   it("routes authentication recovery by configured mode, not sign-in availability alone", () => {
     for (const reason of [

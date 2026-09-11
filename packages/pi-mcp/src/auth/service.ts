@@ -5,41 +5,38 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Semaphore from "effect/Semaphore";
 import { hasControlCharacter, NetworkAddresses } from "pi-cosmic-core";
 import { McpCredentialStore } from "../boundary/credential-store.ts";
 import type { KeychainOptions } from "../boundary/keychain.ts";
 import { McpSdkAuth } from "../boundary/sdk-auth.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
-import type { McpAuthContract, McpAuthStatus } from "./model.ts";
+import type { McpAuthChallenge, McpAuthContract, McpAuthStatus, McpLoginOptions } from "./model.ts";
+import { authorityFor, type AuthBlock } from "./authority.ts";
+import { getAuthChallenge } from "./challenge.ts";
+import type { McpRegistrationReceipt } from "./credentials.ts";
+import { refreshGrant } from "./refresh.ts";
 import { withAuthFailureReason } from "./diagnostics.ts";
 import { authFailure, oauthConfig } from "./policy.ts";
 import { authProgress } from "./progress.ts";
 
-interface Authority {
-  readonly permit: Semaphore.Semaphore;
-  generation: number;
-  blocked: boolean;
-  revoked: Deferred.Deferred<void>;
-}
-// Grants can be refreshed by replacement runtimes. Native persistence and refresh share
-// this process-wide admission, while each runtime separately revokes its own authority.
-const authorities = new Map<string, Authority>();
-const authorityFor = (identity: string): Authority => {
-  let value = authorities.get(identity);
-  if (!value) {
-    value = {
-      permit: Semaphore.makeUnsafe(1),
-      generation: 0,
-      blocked: false,
-      revoked: Deferred.makeUnsafe<void>(),
-    };
-    authorities.set(identity, value);
-  }
-  return value;
-};
 const stale = () => boundaryError("stale", "not-sent", "OAuth operation was revoked.");
+const blockedFailure = (block: AuthBlock): McpBoundaryError => {
+  if (block.kind === "logout") return authFailure();
+  if (block.kind === "refresh")
+    return boundaryError(
+      "auth-required",
+      "not-sent",
+      "OAuth refresh requires a new sign-in.",
+      "oauth-refresh-unresolved",
+    );
+  return boundaryError(
+    "auth-required",
+    "not-sent",
+    "The stored OAuth credential was rejected.",
+    block.reason ?? "oauth-token-rejected",
+  );
+};
 const envToken = (name: string) =>
   Config.nonEmptyString(name).pipe(
     Effect.mapError(authFailure),
@@ -56,14 +53,14 @@ export const makeMcpAuth = Effect.gen(function* () {
   let sessionGeneration = 0;
   let revoked = Deferred.makeUnsafe<void>();
   const observed = new Map<string, McpAuthStatus>();
-  const evidenceRevision = new Map<string, number>();
+  const challenges = new Map<string, McpAuthChallenge>();
   const pendingLogins = new Map<
     string,
     {
       readonly status: McpAuthStatus;
       readonly session: number;
       readonly generation: number;
-      readonly evidence: number | undefined;
+      readonly evidence: number;
     }
   >();
   const revoke = Effect.sync(() => {
@@ -72,6 +69,7 @@ export const makeMcpAuth = Effect.gen(function* () {
     revoked = Deferred.makeUnsafe<void>();
     observed.clear();
     pendingLogins.clear();
+    challenges.clear();
     Deferred.doneUnsafe(previous, Effect.void);
   });
   yield* Effect.addFinalizer(() =>
@@ -95,14 +93,15 @@ export const makeMcpAuth = Effect.gen(function* () {
       const authority = authorityFor(server.identity);
       const serverSignal = authority.revoked;
       const serverGeneration = authority.generation;
-      const evidence = evidenceRevision.get(server.identity);
+      const evidence = authority.evidenceRevision;
       const current = () =>
         generation === sessionGeneration &&
         !disposed &&
         serverGeneration === authority.generation &&
-        evidence === evidenceRevision.get(server.identity);
+        evidence === authority.evidenceRevision;
       const cancelled = Effect.raceFirst(Deferred.await(signal), Deferred.await(serverSignal));
       return Effect.raceFirst(work, cancelled.pipe(Effect.andThen(Effect.fail(stale())))).pipe(
+        Effect.filterOrFail(() => current(), stale),
         Effect.mapError((error) => withAuthFailureReason(server, error)),
         Effect.tap(() =>
           Effect.sync(() => {
@@ -130,7 +129,7 @@ export const makeMcpAuth = Effect.gen(function* () {
         oauthConfig(server)?.implicit === true &&
         options?.requireGrant !== true &&
         !observed.has(server.identity) &&
-        !authorities.get(server.identity)?.blocked;
+        !authorityFor(server.identity).blocked;
       return owned(
         server,
         Effect.gen(function* () {
@@ -142,32 +141,27 @@ export const makeMcpAuth = Effect.gen(function* () {
           const authority = authorityFor(server.identity);
           const generation = authority.generation;
           const session = sessionGeneration;
+          const evidence = authority.evidenceRevision;
           const current = () =>
             !disposed &&
             sessionGeneration === session &&
             authority.generation === generation &&
-            !authority.blocked;
+            authority.evidenceRevision === evidence;
           return yield* Effect.gen(function* () {
-            if (!current()) return yield* authFailure();
-            let grant = yield* store.read(server.identity);
             if (!current()) return yield* stale();
+            if (authority.blocked) return yield* blockedFailure(authority.blocked);
+            const grant = yield* store.read(server.identity);
+            if (!current() || authority.blocked) return yield* stale();
             if (!grant) return yield* authFailure();
-            const now = yield* Clock.currentTimeMillis;
-            if (grant.expiresAt !== undefined && grant.expiresAt <= now + 30_000) {
-              const refreshed = yield* sdk.refresh(server, grant);
-              if (!current()) return yield* stale();
-              yield* store.write(server.identity, refreshed).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    if (!current()) authority.blocked = true;
-                  }),
-                ),
-              );
-              if (!current()) return yield* stale();
-              grant = refreshed;
+            if (grant.quarantine !== undefined) {
+              authority.blocked = { kind: "refresh" };
+              return yield* blockedFailure(authority.blocked);
             }
+            const now = yield* Clock.currentTimeMillis;
+            if (grant.expiresAt !== undefined && grant.expiresAt <= now + 30_000)
+              return yield* refreshGrant(server, grant, authority, current, store, sdk);
             const token = yield* sdk.token(server, grant);
-            if (!current()) return yield* stale();
+            if (!current() || authority.blocked) return yield* stale();
             return token;
           }).pipe(authority.permit.withPermits(1));
         }),
@@ -194,16 +188,42 @@ export const makeMcpAuth = Effect.gen(function* () {
         const authority = authorityFor(server.identity);
         const generation = authority.generation;
         const session = sessionGeneration;
+        const evidence = authority.evidenceRevision;
         const current = () =>
-          !disposed && sessionGeneration === session && authority.generation === generation;
+          !disposed &&
+          sessionGeneration === session &&
+          authority.generation === generation &&
+          authority.evidenceRevision === evidence;
         return yield* Effect.gen(function* () {
           if (!current()) return yield* stale();
           // Probe secure storage before starting a browser or sending registration traffic.
           yield* authProgress(ui, { phase: "storage" });
-          yield* store.read(server.identity);
+          const previousGrant = yield* store.read(server.identity);
+          const registration = yield* store.readRegistration(server.identity);
           if (!current()) return yield* stale();
-          const grant = yield* sdk.login(server, ui);
+          let registering = true;
+          const saveRegistration = (receipt: McpRegistrationReceipt) =>
+            Effect.gen(function* () {
+              if (!registering || !current()) return yield* stale();
+              // Login already holds the identity permit. This checkpoint preserves the
+              // old grant and never publishes credential-save or readiness evidence.
+              yield* store.writeRegistration(server.identity, receipt);
+              if (!registering || !current()) return yield* stale();
+            });
+          const challenge = challenges.get(server.identity);
+          let options: McpLoginOptions = { saveRegistration };
+          if (previousGrant) options = { ...options, previousGrant };
+          if (registration) options = { ...options, registration };
+          if (challenge) options = { ...options, challenge };
+          const grant = yield* sdk.login(server, ui, options).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                registering = false;
+              }),
+            ),
+          );
           if (!current()) return yield* stale();
+          if (grant.quarantine !== undefined) return yield* authFailure();
           yield* authProgress(ui, { phase: "saving" });
           const status: McpAuthStatus = Object.freeze({ state: "ready" });
           let saved = false;
@@ -215,15 +235,16 @@ export const makeMcpAuth = Effect.gen(function* () {
                 Effect.sync(() => {
                   saved = true;
                   if (!current()) {
-                    authority.blocked = true;
+                    authority.blocked ??= { kind: "rejected" };
                     return;
                   }
-                  authority.blocked = false;
+                  authority.blocked = undefined;
+                  challenges.delete(server.identity);
                   pendingLogins.set(server.identity, {
                     status,
                     session,
                     generation,
-                    evidence: evidenceRevision.get(server.identity),
+                    evidence,
                   });
                   observed.set(server.identity, { state: "unavailable" });
                 }),
@@ -232,7 +253,7 @@ export const makeMcpAuth = Effect.gen(function* () {
           ).pipe(
             Effect.ensuring(
               Effect.gen(function* () {
-                if (!current()) authority.blocked = true;
+                if (!current()) authority.blocked ??= { kind: "rejected" };
                 const mutation = yield* store.mutation(server.identity);
                 yield* authProgress(ui, {
                   phase: saved ? "finalizing" : "saving",
@@ -258,7 +279,8 @@ export const makeMcpAuth = Effect.gen(function* () {
       pendingLogins.delete(server.identity);
       const authority = authorityFor(server.identity);
       authority.generation++;
-      authority.blocked = true;
+      authority.blocked = { kind: "logout" };
+      challenges.delete(server.identity);
       const previous = authority.revoked;
       authority.revoked = Deferred.makeUnsafe<void>();
       Deferred.doneUnsafe(previous, Effect.void);
@@ -275,13 +297,20 @@ export const makeMcpAuth = Effect.gen(function* () {
         (yield* store.mutation(server.identity)) !== "idle"
       )
         return { state: "unavailable" };
-      if (authorities.get(server.identity)?.blocked) return { state: "required" };
+      if (authorityFor(server.identity).blocked) return { state: "required" };
       return observed.get(server.identity) ?? { state: "unchecked" };
     });
-  const reject: McpAuthContract["reject"] = (server) =>
+  const reject: McpAuthContract["reject"] = (server, evidence) =>
     Effect.sync(() => {
       if (disposed) return;
-      evidenceRevision.set(server.identity, (evidenceRevision.get(server.identity) ?? 0) + 1);
+      const challenge = evidence?.error && getAuthChallenge(evidence.error);
+      if (challenge && oauthConfig(server)) challenges.set(server.identity, challenge);
+      if (evidence?.credentialUsed && oauthConfig(server))
+        authorityFor(server.identity).blocked =
+          evidence.error?.reason === "oauth-insufficient-scope"
+            ? { kind: "rejected", reason: "oauth-insufficient-scope" }
+            : { kind: "rejected" };
+      authorityFor(server.identity).evidenceRevision++;
       pendingLogins.delete(server.identity);
       observed.set(server.identity, { state: "required" });
     });
@@ -295,7 +324,7 @@ export const makeMcpAuth = Effect.gen(function* () {
         disposed ||
         receipt.session !== sessionGeneration ||
         receipt.generation !== authorityFor(server.identity).generation ||
-        receipt.evidence !== evidenceRevision.get(server.identity)
+        receipt.evidence !== authorityFor(server.identity).evidenceRevision
       )
         return;
       pendingLogins.delete(server.identity);

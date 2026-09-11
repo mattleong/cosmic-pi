@@ -40,6 +40,15 @@ export interface OAuthFixtureOptions {
   readonly resourceMetadataRedirect?: "private" | "loop";
   readonly unsupportedPkce?: boolean;
   readonly invalidTokens?: boolean;
+  readonly resourceScopes?: ReadonlyArray<string>;
+  readonly serverScopes?: ReadonlyArray<string>;
+  readonly grantTypes?: ReadonlyArray<string>;
+  readonly requireOfflineAccess?: boolean;
+  readonly requireNoScope?: boolean;
+  readonly resourceRoot?: boolean;
+  readonly authorizationScopeQuery?: string;
+  readonly registrationScope?: string;
+  readonly rejectClient?: boolean;
 }
 export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
   Effect.gen(function* () {
@@ -48,10 +57,13 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
     if (server.address._tag !== "TcpAddress")
       return yield* Effect.die("OAuth fixture requires TCP.");
     const origin = `http://127.0.0.1:${server.address.port}`;
-    const resource = `${origin}/mcp`;
+    const resource = options.resourceRoot ? `${origin}/` : `${origin}/mcp`;
     const issuer = options.issuerRootSlash ? `${origin}/` : origin;
     const crypto = yield* Crypto.Crypto;
-    const codes = new Map<string, { challenge: string; client: string; redirect: string }>();
+    const codes = new Map<
+      string,
+      { challenge: string; client: string; redirect: string; scopes: string[] }
+    >();
     const requests: {
       path: string;
       method: string;
@@ -101,10 +113,16 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
                   : "/.well-known/oauth-protected-resource/next",
             },
           });
-        return reply({
-          resource: options.resourceMismatch ? `${origin}/other` : resource,
+        const metadata: FixtureDocument = {
+          resource: options.resourceMismatch
+            ? `${origin}/other`
+            : options.resourceRoot
+              ? origin
+              : resource,
           authorization_servers: [issuer],
-        });
+        };
+        if (options.resourceScopes) metadata.scopes_supported = [...options.resourceScopes];
+        return reply(metadata);
       }
       if (url.pathname.startsWith("/.well-known/")) {
         const statuses = options.authorizationMetadataStatuses;
@@ -113,7 +131,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         if (options.oversizedMetadata) return HttpServerResponse.text("x".repeat(140_000));
         const metadata: FixtureDocument = {
           issuer: options.issuerMismatch ? `${origin}/other` : issuer,
-          authorization_endpoint: `${origin}/authorize`,
+          authorization_endpoint: `${origin}/authorize${options.authorizationScopeQuery ?? ""}`,
           token_endpoint: options.unsafeTokenEndpoint
             ? "http://169.254.169.254/token"
             : `${origin}/token`,
@@ -121,12 +139,15 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           jwks_uri: `${origin}/jwks`,
           subject_types_supported: ["public"],
           id_token_signing_alg_values_supported: ["RS256"],
-          grant_types_supported: ["authorization_code", "refresh_token"],
+          grant_types_supported: [
+            ...(options.grantTypes ?? ["authorization_code", "refresh_token"]),
+          ],
           code_challenge_methods_supported: options.unsupportedPkce ? ["plain"] : ["S256"],
           token_endpoint_auth_methods_supported: [...(options.tokenAuthMethods ?? ["none"])],
           authorization_response_iss_parameter_supported: true,
           client_id_metadata_document_supported: options.metadata !== false,
         };
+        if (options.serverScopes) metadata.scopes_supported = [...options.serverScopes];
         if (options.dynamic !== false) metadata.registration_endpoint = `${origin}/register`;
         return reply(metadata);
       }
@@ -138,15 +159,20 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             Schema.Struct({
               redirect_uris: Schema.Array(Schema.String),
               application_type: Schema.optionalKey(Schema.String),
+              scope: Schema.optionalKey(Schema.String),
             }),
           ),
         )(body);
+        if (options.requireNoScope && input.scope !== undefined)
+          return reply({ error: "invalid_scope" }, 400);
         if (options.requireNativeClient && input.application_type !== "native")
           return reply({ error: "invalid_client_metadata" }, 400);
         const registration: FixtureDocument = {
           client_id: "fixture-dynamic-client",
           redirect_uris: input.redirect_uris,
         };
+        if (input.application_type) registration.application_type = input.application_type;
+        if (options.registrationScope !== undefined) registration.scope = options.registrationScope;
         if (options.clientAuthMethod !== null)
           registration.token_endpoint_auth_method = options.clientAuthMethod ?? "none";
         if (options.secretClient) {
@@ -156,6 +182,8 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         return reply(registration, 201);
       }
       if (url.pathname === "/authorize") {
+        if (options.requireNoScope && url.searchParams.has("scope"))
+          return reply({ error: "invalid_scope" }, 400);
         if (
           url.searchParams.get("resource") !== resource ||
           url.searchParams.get("code_challenge_method") !== "S256"
@@ -167,6 +195,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           challenge: url.searchParams.get("code_challenge") ?? "",
           client: url.searchParams.get("client_id") ?? "",
           redirect,
+          scopes: url.searchParams.get("scope")?.split(" ") ?? [],
         });
         const callback = new URL(redirect);
         callback.searchParams.set("code", code);
@@ -181,6 +210,8 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             headers: { location: `${origin}/token-replay` },
           });
         const input = new URLSearchParams(yield* request.text);
+        if (options.rejectClient) return reply({ error: "invalid_client" }, 400);
+        let offline = !options.requireOfflineAccess;
         if (
           input.get("resource") !== resource ||
           request.headers.authorization ||
@@ -204,6 +235,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             saved.redirect !== input.get("redirect_uri")
           )
             return reply({ error: "invalid_grant" }, 400);
+          offline ||= saved.scopes.includes("offline_access");
           exchanged++;
         } else if (input.get("grant_type") === "refresh_token") {
           if (input.get("refresh_token") !== currentRefresh)
@@ -211,12 +243,13 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
           refreshed++;
           currentRefresh = `fixture-refresh-${refreshed}`;
         } else return reply({ error: "unsupported_grant_type" }, 400);
-        return reply({
+        const tokens: FixtureDocument = {
           access_token: `fixture-access-${refreshed}`,
           token_type: options.invalidTokens ? "Basic" : "Bearer",
-          refresh_token: currentRefresh,
           expires_in: 3600,
-        });
+        };
+        if (offline) tokens.refresh_token = currentRefresh;
+        return reply(tokens);
       }
       return HttpServerResponse.empty({ status: 404 });
     }).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.empty({ status: 500 }))));

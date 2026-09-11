@@ -15,6 +15,8 @@ export interface McpOAuthConfig {
   readonly allowMissingResourceMetadata?: boolean;
   readonly resource?: string;
   readonly scopes: ReadonlyArray<string>;
+  /** Distinguishes configured [] from omission without changing other credential identities. */
+  readonly explicitEmptyScopes?: true;
   readonly redirectUri?: string;
 }
 export type McpHttpAuth =

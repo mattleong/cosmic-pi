@@ -1,5 +1,6 @@
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
+import { copyAuthChallenge } from "./challenge.ts";
 
 /** Capture only the admitted auth mode, never credentials or a later configuration. */
 export const withAuthFailureReason = (
@@ -19,5 +20,5 @@ export const withAuthFailureReason = (
       : definition.auth.type === "env"
         ? "auth-env-required"
         : "auth-oauth-required";
-  return boundaryError(error.kind, error.outcome, error.message, reason);
+  return copyAuthChallenge(error, boundaryError(error.kind, error.outcome, error.message, reason));
 };

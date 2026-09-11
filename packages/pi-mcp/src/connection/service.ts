@@ -111,16 +111,20 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
                 input.action === "prompts.get";
               if (recordsOutcome) ticket.outcome = "unknown";
               const reply = yield* connection.request(input).pipe(
-                Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
                 Effect.tapError((error) =>
                   withLock(
                     Effect.gen(function* () {
                       if (recordsOutcome) ticket.outcome = error.outcome;
-                      if (error.kind === "auth-required") yield* registry.rejectAuthLocked(owner);
+                      if (error.kind === "auth-required")
+                        yield* registry.rejectAuthLocked(owner, {
+                          credentialUsed: token !== undefined,
+                          error,
+                        });
                       if (error.kind === "cleanup") yield* registry.terminalLocked(owner, true);
                     }),
                   ),
                 ),
+                Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
               );
               yield* withLock(
                 Effect.gen(function* () {

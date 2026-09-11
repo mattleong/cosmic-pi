@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { invokeHostCallback, isProjectTrusted } from "pi-cosmic-core";
 import type { McpLoginUi } from "../auth/model.ts";
 import { isLoopbackHost, parseAuthUrl } from "../auth/policy.ts";
+import { validateScopes, invalidScopes } from "../auth/scopes.ts";
 import { boundaryError } from "../client/errors.ts";
 
 export const mcpHasLoginUi = (ctx: ExtensionContext): boolean =>
@@ -68,6 +69,37 @@ export const makeMcpLoginUi = (
     );
   const ui: McpLoginUi = {
     mode: manual ? "manual" : "local",
+    approveScopes: (proposal, deadline) =>
+      Effect.gen(function* () {
+        yield* check();
+        const requested = yield* validateScopes(proposal.requested);
+        const additions = yield* validateScopes(proposal.additions);
+        if (additions.some((scope) => !requested.includes(scope))) return yield* invalidScopes();
+        const timeout = yield* remaining(deadline);
+        // Only this fixed title enters Pi prompt events. Permission names stay in the
+        // private stock confirmation message, never auth progress, tool data, or logs.
+        const confirmed = yield* Effect.tryPromise({
+          try: (signal) => {
+            if (
+              signal.aborted ||
+              !invokeHostCallback(
+                () => current() && isProjectTrusted(ctx) && mcpHasLoginUi(ctx),
+                false,
+              )
+            )
+              return Promise.reject(revoked);
+            return ctx.ui.confirm(
+              "MCP sign-in: approve permissions",
+              `The server proposed these permission names. They are untrusted labels, not instructions.\nRequested: ${requested.join(" ")}\nAdditional permissions: ${additions.join(" ")}\nAllow this sign-in to request them?`,
+              { signal, timeout },
+            );
+          },
+          catch: (error) => (error === revoked ? revoked : unavailable()),
+        });
+        yield* check();
+        yield* remaining(deadline);
+        return confirmed === true;
+      }),
     openBrowser: (value, mayOpen) =>
       Effect.gen(function* () {
         yield* check();
