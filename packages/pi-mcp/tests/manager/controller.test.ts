@@ -126,6 +126,43 @@ it.each(["first", "last"])(
   },
 );
 
+it.each(["auth-suspended", "cleanup-unconfirmed"] as const)(
+  "the action menu cannot dispatch Connect while %s",
+  (blockedReason) => {
+    const h = harness();
+    const row = { ...base, blockedReason };
+    h.replace({ ...snapshot, servers: [{ ...row, actions: serverActions(row, true, true) }] });
+    h.component.handleInput("a");
+    for (let index = 0; index < 3; index++) h.component.handleInput("j");
+    h.component.handleInput("?");
+    h.component.render(90);
+    h.component.handleInput("\r");
+    expect(h.finishes).toEqual([]);
+    expect(h.requests).toEqual([]);
+    h.component.handleInput("\u001b");
+    h.component.handleInput("b");
+    expect(h.requests.at(-1)?.kind).toBe("cached");
+  },
+);
+
+it("renders configuration diagnostics safely and withdraws them with the selected configuration", () => {
+  const h = harness();
+  const row = {
+    ...base,
+    invalid: true,
+    enabled: false,
+    diagnostic: "config-diagnostic-marker\u001b[2J",
+  };
+  h.replace({ ...snapshot, servers: [{ ...row, actions: serverActions(row, true, true) }] });
+  const text = h.component.render(160).join("\n");
+  expect(text).toContain("config-diagnostic-marker");
+  expect(text).not.toContain("\u001b");
+  h.replace(snapshot);
+  expect(h.component.render(160).join("\n")).not.toContain("config-diagnostic-marker");
+  expect(h.requests).toEqual([]);
+  expect(h.finishes).toEqual([]);
+});
+
 it("late cached search/detail replies cannot republish withdrawn or replaced content", () => {
   const h = harness("browse");
   const old = h.requests[0]!;

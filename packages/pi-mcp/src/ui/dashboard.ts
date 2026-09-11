@@ -23,14 +23,14 @@ const dashboardStatus = (row: McpManagerServer): DashboardStatus => {
     case "cleanup-unconfirmed":
       return { label: "Cleanup unconfirmed", tone: "error" };
     case "cleanup-running":
-      return { label: "Disconnecting", tone: "warning" };
+      return { label: "Disconnecting", tone: "muted" };
     case "auth-running":
-      return { label: "Signing in", tone: "warning" };
+      return { label: "Signing in", tone: "muted" };
     case "auth-suspended":
       return { label: "Auth interrupted", tone: "warning" };
   }
-  if (row.state === "connecting") return { label: "Connecting", tone: "warning" };
-  if (row.state === "closing") return { label: "Disconnecting", tone: "warning" };
+  if (row.state === "connecting") return { label: "Connecting", tone: "muted" };
+  if (row.state === "closing") return { label: "Disconnecting", tone: "muted" };
   if (row.state === "blocked") return { label: "Blocked", tone: "warning" };
   if (row.auth === "required") return { label: "Sign-in needed", tone: "warning" };
   if (row.auth === "unavailable") return { label: "Auth unavailable", tone: "warning" };
@@ -84,24 +84,39 @@ export const dashboardTable = (
     },
   };
 };
-export const dashboardDetail = (row: McpManagerServer | undefined): ReadonlyArray<string> => {
-  if (!row) return ["No server selected."];
-  return [
-    sanitizeTerminalLine(row.id),
-    `${row.scope} / ${row.transport}`,
-    ...(row.diagnostic ? [sanitizeTerminalLine(row.diagnostic)] : []),
-    authExplanation(row),
-    `Connection: ${row.state}`,
-    `Active ${row.active} / queued ${row.queued}`,
-    ...(row.blockedReason ? [blockedExplanation(row.blockedReason)] : []),
-    row.metadata
-      ? `Cached tools ${row.metadata.tools}, resources ${row.metadata.resources}, templates ${row.metadata.templates}, prompts ${row.metadata.prompts}`
-      : "Metadata not discovered or withdrawn.",
-    ...discoveryNotices(row.metadata ? [row.metadata] : []),
-    "",
-    "Connect does not discover metadata, start sign-in, or prove remote health.",
-    ...row.actions.map(
-      (choice) => `${choice.label}${choice.reason ? `: ${blockedExplanation(choice.reason)}` : ""}`,
+export const dashboardDetail = (
+  row: McpManagerServer | undefined,
+  theme: Theme,
+): ReadonlyArray<string> => {
+  if (!row) return [theme.fg("muted", "No server selected.")];
+  const status = dashboardStatus(row);
+  const field = (label: string, value: string, tone: DashboardStatus["tone"] | "text" = "text") =>
+    `${theme.fg("dim", label.padEnd(12))}${theme.fg(tone, value)}`;
+  const notices = [
+    ...(row.diagnostic ? [theme.fg("error", sanitizeTerminalLine(row.diagnostic))] : []),
+    ...(row.blockedReason ? [theme.fg(status.tone, blockedExplanation(row.blockedReason))] : []),
+    ...discoveryNotices(row.metadata ? [row.metadata] : []).map((notice) =>
+      theme.fg("warning", sanitizeTerminalLine(notice)),
     ),
+  ];
+  return [
+    theme.fg("text", theme.bold(sanitizeTerminalLine(row.id))),
+    theme.fg(
+      "dim",
+      row.transport === "invalid" ? row.scope : `${row.scope} · ${row.transport.toUpperCase()}`,
+    ),
+    "",
+    field("Status", status.label, status.tone === "muted" ? "text" : status.tone),
+    field("Auth", row.invalid ? "Not evaluated" : authExplanation(row)),
+    field(
+      "Metadata",
+      row.metadata
+        ? `${row.metadata.tools} tools · ${row.metadata.resources} resources · ${row.metadata.templates} templates · ${row.metadata.prompts} prompts`
+        : "No cached metadata",
+    ),
+    ...(row.active || row.queued
+      ? [field("Activity", `${row.active} active · ${row.queued} queued`)]
+      : []),
+    ...(notices.length ? ["", ...notices] : []),
   ];
 };

@@ -267,7 +267,14 @@ export class McpManagerComponent implements Component, Focusable {
       choices: row.actions.map((choice) => ({
         value: choice.action,
         payload: choice.action,
-        item: { value: choice.action, label: choice.label },
+        item:
+          choice.action === "connect"
+            ? {
+                value: choice.action,
+                label: choice.label,
+                description: "No metadata discovery, sign-in, or remote-health check.",
+              }
+            : { value: choice.action, label: choice.label },
         searchText: choice.label,
         enabled: choice.enabled,
         disabledReason: choice.reason ? blockedExplanation(choice.reason) : undefined,
@@ -482,7 +489,7 @@ export class McpManagerComponent implements Component, Focusable {
       this.selection.screen === "result"
         ? `${resultMode}n p Pages / q Close`
         : this.actionRow()
-          ? `${enter} Details / a Actions / / Search`
+          ? `${enter} Inspect / a Actions / / Search`
           : this.selection.screen === "browse"
             ? "/ Search / s Server"
             : "b Browse / / Search";
@@ -508,7 +515,7 @@ export class McpManagerComponent implements Component, Focusable {
               this.selection.screen === "result"
                 ? `${resultMode}n p Pages`
                 : this.actionRow()
-                  ? `${enter} Details`
+                  ? `${enter} Inspect / a Actions`
                   : this.selection.screen === "browse"
                     ? "s Server"
                     : "b Browse",
@@ -563,7 +570,7 @@ export class McpManagerComponent implements Component, Focusable {
           );
         const details =
           this.selection.screen === "dashboard"
-            ? dashboardDetail(this.selectedRows()[this.shell.state.selected])
+            ? dashboardDetail(this.selectedRows()[this.shell.state.selected], theme)
             : this.selection.screen === "browse"
               ? browserDetail(this.page?.entries[this.shell.state.selected], this.detail)
               : (this.result.lines ?? [
