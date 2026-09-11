@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { mcpCompletions } from "../../src/manager/controller.ts";
 import type { McpManagerServer, McpManagerSnapshot } from "../../src/manager/model.ts";
 import { serverActions } from "../../src/manager/policy.ts";
+import { actionMenu } from "../../src/ui/actions.ts";
 import { McpManagerComponent, type McpViewRequest } from "../../src/ui/manager.ts";
 import { browserCatalogStatus } from "../../src/ui/browser.ts";
 import { managerSelection, type McpManagerClose } from "../../src/ui/manager-state.ts";
@@ -29,6 +30,7 @@ const base: Omit<McpManagerServer, "actions"> = {
   queued: 0,
   operations: 0,
   metadata: undefined,
+  metadataState: "undiscovered",
   configRevision: 1,
   operationRevision: 0,
 };
@@ -116,12 +118,71 @@ it.each(["first", "last"])(
     if (target === "last") h.component.handleInput("G");
     for (const width of [50, 90, 160]) h.component.render(width);
     h.component.handleInput("a");
-    for (let index = 0; index < 3; index++) h.component.handleInput("j");
     h.component.handleInput("\r");
     expect(h.finishes[0]).toMatchObject({
-      action: "connect",
+      action: "refresh",
       row: { id: target === "first" ? "server-0" : "server-39" },
     });
+    expect(h.requests).toEqual([]);
+  },
+);
+
+it.each(["discover", "browse", "auth", "recovery"] as const)(
+  "highlights the useful %s action without running it before confirmation",
+  (mode) => {
+    const h = harness();
+    const row: Omit<McpManagerServer, "actions"> = {
+      ...base,
+      authType: mode === "auth" || mode === "recovery" ? "oauth" : "none",
+      auth: mode === "auth" ? "required" : "none",
+      blockedReason: mode === "recovery" ? "auth-suspended" : undefined,
+      metadataState: mode === "browse" ? "ready" : "undiscovered",
+      metadata:
+        mode === "browse"
+          ? {
+              server: "a",
+              revision: 1,
+              support: { tools: true, resources: false, templates: false, prompts: false },
+              diagnostics: [],
+              tools: 1,
+              resources: 0,
+              templates: 0,
+              prompts: 0,
+            }
+          : undefined,
+    };
+    const server = { ...row, actions: serverActions(row, true, true) };
+    h.replace({ ...snapshot, servers: [server] });
+    expect(actionMenu(server).choices.some((choice) => choice.payload === "inspect")).toBe(false);
+    h.component.handleInput("a");
+    h.component.render(90);
+    expect(h.finishes).toEqual([]);
+    expect(h.requests).toEqual([]);
+    h.component.handleInput("\r");
+    if (mode === "browse") {
+      expect(h.requests.at(-1)).toMatchObject({ kind: "cached", request: { server: "a" } });
+      expect(h.finishes).toEqual([]);
+    } else expect(h.finishes[0]?.action).toBe(mode === "discover" ? "refresh" : "auth");
+  },
+);
+
+it.each([50, 90, 160])(
+  "pane focus controls whether navigation moves the selected server at width %s",
+  (width) => {
+    const h = harness();
+    const row = { ...base, id: "b" };
+    h.replace({
+      ...snapshot,
+      servers: [snapshot.servers[0]!, { ...row, actions: serverActions(row, true, true) }],
+    });
+    h.component.render(width);
+    h.component.handleInput("\r");
+    h.component.handleInput("j");
+    h.component.handleInput("h");
+    h.component.handleInput("j");
+    h.component.handleInput("a");
+    h.component.handleInput("\r");
+    expect(h.finishes[0]?.row.id).toBe("b");
     expect(h.requests).toEqual([]);
   },
 );
@@ -133,12 +194,16 @@ it.each(["auth-suspended", "cleanup-unconfirmed"] as const)(
     const row = { ...base, blockedReason };
     h.replace({ ...snapshot, servers: [{ ...row, actions: serverActions(row, true, true) }] });
     h.component.handleInput("a");
-    for (let index = 0; index < 3; index++) h.component.handleInput("j");
     h.component.handleInput("?");
+    h.component.handleInput("/");
+    h.component.handleInput(
+      serverActions(row, true, true).find((choice) => choice.action === "connect")!.label,
+    );
     h.component.render(90);
     h.component.handleInput("\r");
     expect(h.finishes).toEqual([]);
     expect(h.requests).toEqual([]);
+    h.component.handleInput("\u001b");
     h.component.handleInput("\u001b");
     h.component.handleInput("b");
     expect(h.requests.at(-1)?.kind).toBe("cached");
@@ -270,11 +335,8 @@ it("an open action menu returns its displayed row rather than a replacement snap
   h.component.handleInput("a");
   const replacement = { ...snapshot.servers[0]!, configRevision: 2 };
   h.replace({ ...snapshot, revision: 2, servers: [replacement] });
-  h.component.handleInput("j");
-  h.component.handleInput("j");
-  h.component.handleInput("j");
   h.component.handleInput("\r");
-  expect(h.finishes[0]?.action).toBe("connect");
+  expect(h.finishes[0]?.action).toBe("refresh");
   expect(h.finishes[0]?.row).toBe(snapshot.servers[0]);
   expect(h.finishes[0]?.row).not.toBe(replacement);
 });
@@ -293,7 +355,6 @@ it("empty all-server browsing can select a server before explicit discovery", ()
   h.component.handleInput("\r");
   expect(h.requests.at(-1)).toMatchObject({ kind: "cached", request: { server: "a" } });
   h.component.handleInput("a");
-  for (let index = 0; index < 4; index += 1) h.component.handleInput("j");
   h.component.handleInput("\r");
   expect(h.finishes[0]).toMatchObject({ action: "refresh", row: { id: "a" } });
 });

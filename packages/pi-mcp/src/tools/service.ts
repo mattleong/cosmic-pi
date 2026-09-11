@@ -15,6 +15,7 @@ import type { McpActionBinding, McpOperation } from "../connection/model.ts";
 import { McpConnections } from "../connection/service.ts";
 import type { McpDiscoveryRequest } from "../discovery/model.ts";
 import { McpDiscovery } from "../discovery/service.ts";
+import { isToolAllowed } from "../discovery/policy.ts";
 import { discoveryNotices } from "../discovery/diagnostics.ts";
 import {
   decodeGatewayRequest,
@@ -346,7 +347,9 @@ export const makeMcpExecution = Effect.gen(function* () {
                     revision: snapshot.revision,
                     support: snapshot.support,
                     diagnostics: snapshot.diagnostics.map((diagnostic) => ({ ...diagnostic })),
-                    tools: snapshot.tools.length,
+                    tools: snapshot.tools.filter((tool) =>
+                      isToolAllowed(operation.server, tool.name),
+                    ).length,
                     resources: snapshot.resources.length,
                     templates: snapshot.templates.length,
                     prompts: snapshot.prompts.length,

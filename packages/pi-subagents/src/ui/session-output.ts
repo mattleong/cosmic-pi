@@ -26,6 +26,8 @@ import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } fr
 export interface SessionOutputRenderOptions {
   readonly now?: number;
   readonly showTechnicalDetails?: boolean;
+  /** Pure presentation hook for the fleet pane; transcript output keeps its own heading. */
+  readonly renderHeading?: (sanitizedName: string) => string;
 }
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
@@ -348,7 +350,7 @@ export function renderSubagentSessionOutput(
   );
   container.addChild(
     new Text(
-      `${theme.fg("toolTitle", theme.bold(name))}  ${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`)}`,
+      `${options.renderHeading ? options.renderHeading(name) : theme.fg("toolTitle", theme.bold(name))}  ${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`)}`,
       0,
       0,
     ),

@@ -20,6 +20,8 @@ import {
   framedWideRows,
   framedStackedRows,
   listDetailFrame,
+  listDetailHeading,
+  detailFieldRows,
 } from "../manager/list-detail-shell.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
@@ -51,7 +53,7 @@ export interface ActivityComponentOptions {
   readonly snapshot: () => readonly ActivityRow[];
   readonly starting?: () => number;
   readonly presentation?: ActivityPresentation;
-  readonly theme: Pick<Theme, "fg"> & Partial<Pick<Theme, "bg">>;
+  readonly theme: Pick<Theme, "fg" | "bold"> & Partial<Pick<Theme, "bg">>;
   readonly height: () => number;
   readonly now?: () => number;
   readonly close: (action?: ActivityActionRequest) => void;
@@ -271,7 +273,7 @@ export class ActivityComponent {
     this.shell.ensureSelectionPane(!!selected);
     const height = Math.max(0, this.options.height());
     const inner = Math.max(0, width - 2);
-    const frame = listDetailFrame(this.options.theme);
+    const frame = listDetailFrame(this.options.theme, this.shell.state.pane);
     const urgent = needsYou(this.options.snapshot());
     const attention = activityAttentionLabels({
       ...activityAttentionTotals(this.options.snapshot()),
@@ -384,12 +386,7 @@ export class ActivityComponent {
           const heading = entries.length
             ? `Activity · ${start}–${end} of ${entries.length}${start > 1 ? " · ↑ more" : ""}${end < entries.length ? " · ↓ more" : ""}`
             : "Activity · none";
-          list.unshift(
-            this.options.theme.fg(
-              listFocused ? "accent" : "muted",
-              `${listFocused ? "› " : ""}${heading}`,
-            ),
-          );
+          list.unshift(listDetailHeading(this.options.theme, heading, listFocused));
         }
         while (list.length < listHeight) list.push("");
         const row = selected?.row;
@@ -409,8 +406,17 @@ export class ActivityComponent {
             : "";
         const detailText = row
           ? [
-              this.options.theme.fg("accent", activityOwnerLabel(this.options.snapshot(), row)),
-              `${activityType(row)}${row.kind === "agent" && row.profile ? ` · ${row.profile}` : ""} · ${activityStatus(row)} · ${activityElapsed(row, now)}`,
+              listDetailHeading(
+                this.options.theme,
+                activityOwnerLabel(this.options.snapshot(), row),
+                !listFocused,
+              ),
+              ...detailFieldRows(this.options.theme, [
+                {
+                  label: "Status",
+                  value: `${activityType(row)}${row.kind === "agent" && row.profile ? ` · ${row.profile}` : ""} · ${activityStatus(row)} · ${activityElapsed(row, now)}`,
+                },
+              ]),
               truncateToWidth(stale, detailWidth, "…"),
               row.summary ?? "",
               loaded,

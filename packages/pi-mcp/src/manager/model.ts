@@ -4,6 +4,7 @@ import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpActionBinding, McpConnectionStatus } from "../connection/model.ts";
 import type {
   McpCachedDetail,
+  McpCatalogState,
   McpCachedPage,
   McpCachedRef,
   McpCachedRequest,
@@ -49,6 +50,7 @@ export interface McpManagerServer {
   readonly queued: number;
   readonly operations: number;
   readonly metadata: McpMetadataSummary | undefined;
+  readonly metadataState: McpCatalogState | "unavailable" | "checking";
   readonly configRevision: number;
   readonly operationRevision: number;
   readonly actions: ReadonlyArray<McpActionChoice>;
@@ -77,7 +79,9 @@ export interface McpManagerContract {
     action: McpManagerAction,
   ) => Effect.Effect<McpManagerTicket, McpBoundaryError>;
   readonly check: (ticket: McpManagerTicket) => Effect.Effect<void, McpBoundaryError>;
-  readonly dispatch: (ticket: McpManagerTicket) => Effect.Effect<void, McpBoundaryError>;
+  readonly dispatch: (
+    ticket: McpManagerTicket,
+  ) => Effect.Effect<McpMetadataSummary | undefined, McpBoundaryError>;
   readonly cached: (request: McpCachedRequest) => Effect.Effect<McpCachedPage, McpBoundaryError>;
   readonly cachedDetail: (ref: McpCachedRef) => Effect.Effect<McpCachedDetail, McpBoundaryError>;
 }

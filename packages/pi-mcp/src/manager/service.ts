@@ -51,6 +51,13 @@ const makeManager = Effect.gen(function* () {
     const config = yield* connections.config;
     const status = yield* connections.status;
     const known = config.trusted && config.settings.enabled ? yield* discovery.known : [];
+    const catalogs =
+      config.trusted && config.settings.enabled
+        ? yield* discovery.cached({ family: "tools", catalogsOnly: true }).pipe(
+            Effect.map((page) => page.catalogs),
+            Effect.catch(() => Effect.succeed([])),
+          )
+        : [];
     if (config.revision !== status.revision || requested !== generation || !(yield* Ref.get(alive)))
       return SynchronizedRef.getUnsafe(projection);
     const servers = status.servers
@@ -58,6 +65,10 @@ const makeManager = Effect.gen(function* () {
       .map((server): McpManagerServer => {
         const effective = config.servers[server.id]!;
         const definition = effective.definition;
+        const catalog = catalogs.find((entry) => entry.server === server.id);
+        const summary = known.find(
+          (entry) => entry.server === server.id && entry.revision === catalog?.revision,
+        );
         const row = {
           ...server,
           transport: definition?.transport ?? ("invalid" as const),
@@ -65,7 +76,8 @@ const makeManager = Effect.gen(function* () {
             effective.diagnostic !== undefined || (effective.enabled && definition === undefined),
           diagnostic: effective.diagnostic,
           authType: definition?.transport === "http" ? definition.auth.type : ("none" as const),
-          metadata: known.find((summary) => summary.server === server.id),
+          metadata: summary && catalog ? { ...summary, tools: catalog.count } : undefined,
+          metadataState: catalog?.state ?? ("unavailable" as const),
           configRevision: status.revision,
         };
         const displayed = Object.freeze({
@@ -131,11 +143,19 @@ const makeManager = Effect.gen(function* () {
         servers: value.servers.map((row) => ({
           ...row,
           metadata: undefined,
+          metadataState: "unavailable",
           actions: serverActions(row, false, value.enabled),
         })),
       };
     if (generation !== publishedGeneration)
-      return { ...value, servers: value.servers.map((row) => ({ ...row, metadata: undefined })) };
+      return {
+        ...value,
+        servers: value.servers.map((row) => ({
+          ...row,
+          metadata: undefined,
+          metadataState: "checking",
+        })),
+      };
     return value;
   };
   const check: McpManagerContract["check"] = (ticket) =>
@@ -187,17 +207,20 @@ const makeManager = Effect.gen(function* () {
     dispatch: (ticket) =>
       Effect.gen(function* () {
         yield* check(ticket);
+        let discoveredRevision: number | undefined;
         switch (ticket.action) {
           case "connect":
             yield* connections.connect(ticket.binding.server, ticket.binding);
             break;
-          case "refresh":
-            yield* connections.withOperation(
+          case "refresh": {
+            const discovered = yield* connections.withOperation(
               ticket.binding.server,
               { expected: ticket.binding },
               (operation) => discovery.refresh(operation),
             );
+            discoveredRevision = discovered.revision;
             break;
+          }
           case "disconnect": {
             const receipt = yield* connections.disconnect(ticket.binding.server, ticket.binding);
             if (receipt.cleanup === "unconfirmed")
@@ -225,6 +248,13 @@ const makeManager = Effect.gen(function* () {
         )
           return yield* stale();
         yield* refresh;
+        // Return counts only for the admitted discovery revision while it remains authorized.
+        const summary = snapshot().servers.find(
+          (row) => row.id === ticket.binding.server,
+        )?.metadata;
+        return discoveredRevision !== undefined && summary?.revision === discoveredRevision
+          ? summary
+          : undefined;
       }),
     cached: discovery.cached,
     cachedDetail: discovery.cachedDetail,

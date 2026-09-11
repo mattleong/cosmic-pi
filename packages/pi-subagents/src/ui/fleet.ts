@@ -34,6 +34,7 @@ import {
   framedStackedRows,
   framedWideRows,
   listDetailFrame,
+  listDetailHeading,
   ListDetailShell,
   type ListDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -196,13 +197,15 @@ export class SubagentFleetComponent implements Component, Focusable {
   private busyAction: string | undefined;
   private _focused = false;
   private readonly shell = new ListDetailShell();
-  private readonly frame: ListDetailFrame;
   private readonly options: FleetOptions;
   private readonly collapsedRunIds = new Set<string>();
 
   constructor(options: FleetOptions) {
     this.options = options;
-    this.frame = listDetailFrame(options.theme);
+  }
+
+  private get frame(): ListDetailFrame {
+    return listDetailFrame(this.options.theme, this.shell.state.pane);
   }
 
   private tree(projection: SubagentProjection) {
@@ -719,6 +722,8 @@ export class SubagentFleetComponent implements Component, Focusable {
     return renderSubagentSessionOutput(run, this.options.theme, {
       now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
+      renderHeading: (name) =>
+        listDetailHeading(this.options.theme, name, this.shell.state.pane === "detail"),
     }).render(Math.max(1, width));
   }
 
@@ -739,11 +744,11 @@ export class SubagentFleetComponent implements Component, Focusable {
   ): string[] {
     const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
     const visible = this.visibleRows(rows, Math.max(1, height - 1));
-    const focused = this.shell.state.pane === "list";
     const left = [
-      this.options.theme.fg(
-        focused ? "accent" : "muted",
-        `${focused ? "› " : ""}${this.listHeading(rows, visible)}`,
+      listDetailHeading(
+        this.options.theme,
+        this.listHeading(rows, visible),
+        this.shell.state.pane === "list",
       ),
       ...visible.map(({ row, index }) => this.runLine(row, index, listWidth, scopeRuns)),
     ];
@@ -761,11 +766,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     const inner = width - 2;
     const listHeight = stackedListHeight(height, rows.length);
     const visible = this.visibleRows(rows, listHeight - 1);
-    const focused = this.shell.state.pane === "list";
     const list = [
-      this.options.theme.fg(
-        focused ? "accent" : "muted",
-        `${focused ? "› " : ""}${this.listHeading(rows, visible)}`,
+      listDetailHeading(
+        this.options.theme,
+        this.listHeading(rows, visible),
+        this.shell.state.pane === "list",
       ),
       ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
     ];
@@ -791,7 +796,11 @@ export class SubagentFleetComponent implements Component, Focusable {
               if (height <= 1)
                 return visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns));
               return [
-                this.options.theme.fg("accent", this.listHeading(rows, visible)),
+                listDetailHeading(
+                  this.options.theme,
+                  this.listHeading(rows, visible),
+                  this.shell.state.pane === "list",
+                ),
                 ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
               ];
             })()

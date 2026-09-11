@@ -17,6 +17,7 @@ const row: Omit<McpManagerServer, "actions"> = {
   queued: 0,
   operations: 0,
   metadata: undefined,
+  metadataState: "undiscovered",
   configRevision: 1,
   operationRevision: 0,
 };

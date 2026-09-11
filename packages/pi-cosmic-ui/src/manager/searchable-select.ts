@@ -28,6 +28,8 @@ export interface SearchableSelectPageChoice<A> {
   readonly payload: A;
   readonly enabled?: boolean | undefined;
   readonly disabledReason?: string | undefined;
+  /** Short caller-owned reason shown beside an unavailable choice. */
+  readonly disabledHint?: string | undefined;
 }
 
 export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
@@ -136,9 +138,20 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     );
     const theme = this.options.theme;
     const list = new SelectList(
-      this.filtered.map((choice) =>
-        this.alternateHelp ? choice.item : { value: choice.item.value, label: choice.item.label },
-      ),
+      this.filtered.map((choice) => {
+        const item = this.alternateHelp
+          ? choice.item
+          : { value: choice.item.value, label: choice.item.label };
+        return choice.enabled === false
+          ? {
+              ...item,
+              label: theme.fg(
+                "dim",
+                `${item.label ?? item.value}${choice.disabledHint ? ` · ${choice.disabledHint}` : ""}`,
+              ),
+            }
+          : item;
+      }),
       this.listHeight,
       {
         selectedPrefix: (text: string) => theme.fg("accent", text),
@@ -381,6 +394,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   invalidate(): void {
     this.input.invalidate();
-    this.list.invalidate();
+    this.list = this.buildList();
   }
 }

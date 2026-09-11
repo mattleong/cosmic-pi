@@ -113,7 +113,7 @@ export const queryCached = (
       observed?.state ?? "",
     );
     const catalog = snapshot ? cachedEntries(snapshot, request.family, server) : [];
-    for (const metadata of catalog) {
+    for (const metadata of request.catalogsOnly ? [] : catalog) {
       const id = cachedId(request.family, metadata);
       const rank = discoverySearchRank(search, metadata, id);
       if (rank !== undefined && snapshot !== undefined)
@@ -137,6 +137,11 @@ export const queryCached = (
     const diagnostic = snapshot?.diagnostics.find((item) => item.family === request.family);
     return diagnostic ? { ...catalogState, reason: diagnostic.reason } : catalogState;
   });
+  if (request.catalogsOnly)
+    return {
+      page: { family: request.family, entries: [], catalogs, total: 0, next: undefined },
+      cursors,
+    };
   const binding = signature.map((part) => `${part.length}:${part}`).join("");
   if (search.text || request.family === "tools") entries.sort(compareDiscoveryCandidates);
   const selected = discoveryPage(

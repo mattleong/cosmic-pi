@@ -90,7 +90,7 @@ describe("activity presentation", () => {
     const deliveries: Array<(text: string) => void> = [];
     const component = new ActivityComponent({
       snapshot: () => [row("work")],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 16,
       close: () => undefined,
       requestRender: () => undefined,
@@ -118,7 +118,7 @@ describe("activity presentation", () => {
       Array.from({ length: count }, (_, index) => `log-${index}`).join("\n");
     const component = new ActivityComponent({
       snapshot: () => [current],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 16,
       close: () => undefined,
       requestRender: () => undefined,
@@ -156,7 +156,7 @@ describe("activity presentation", () => {
     let loads = 0;
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 16,
       close: () => undefined,
       requestRender: () => undefined,
@@ -190,7 +190,7 @@ describe("activity presentation", () => {
     ];
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: () => undefined,
       requestRender: () => undefined,
@@ -229,7 +229,7 @@ describe("activity presentation", () => {
     });
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 20,
       close: () => undefined,
       requestRender: () => undefined,
@@ -246,7 +246,7 @@ describe("activity presentation", () => {
     const closed: Array<ActivityActionRequest | undefined> = [];
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: (request) => {
         closed.push(request);
@@ -266,7 +266,7 @@ describe("activity presentation", () => {
     const closed: Array<ActivityActionRequest | undefined> = [];
     const component = new ActivityComponent({
       snapshot: () => [current],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: (request) => {
         closed.push(request);
@@ -292,7 +292,7 @@ describe("activity presentation", () => {
     const closed: Array<ActivityActionRequest | undefined> = [];
     const component = new ActivityComponent({
       snapshot: () => [current],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: (request) => {
         closed.push(request);
@@ -313,7 +313,7 @@ describe("activity presentation", () => {
     let loads = 0;
     const component = new ActivityComponent({
       snapshot: () => [current],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 20,
       close: () => undefined,
       requestRender: () => undefined,
@@ -342,7 +342,7 @@ describe("activity presentation", () => {
     const closed: Array<ActivityActionRequest | undefined> = [];
     const component = new ActivityComponent({
       snapshot: () => [current],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: (request) => {
         closed.push(request);
@@ -367,7 +367,7 @@ describe("activity presentation", () => {
     };
     const component = new ActivityComponent({
       snapshot: () => [parent, child, row("other")],
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: () => undefined,
       requestRender: () => undefined,
@@ -408,7 +408,7 @@ describe("activity presentation", () => {
     let rows = [owner, parent, blocked, human];
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: () => undefined,
       requestRender: () => undefined,
@@ -433,7 +433,7 @@ describe("activity presentation", () => {
     const rows = Array.from({ length: 80 }, (_, index) => row(`Long activity ${index} 界界界`));
     const component = new ActivityComponent({
       snapshot: () => rows,
-      theme: { fg: (_color, text) => text },
+      theme: { fg: (_color, text) => text, bold: (text) => text },
       height: () => 12,
       close: () => undefined,
       requestRender: () => undefined,

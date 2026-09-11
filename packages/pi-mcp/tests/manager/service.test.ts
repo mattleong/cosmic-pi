@@ -23,8 +23,16 @@ import { McpExecution } from "../../src/tools/service.ts";
 import { McpManagerComponent, type McpViewRequest } from "../../src/ui/manager.ts";
 import { managerSelection } from "../../src/ui/manager-state.ts";
 import { resultPage } from "../../src/ui/result-view.ts";
+import { boundaryError } from "../../src/client/errors.ts";
 
-const fixture = (servers?: McpResolvedConfig["servers"]) =>
+const fixture = (
+  servers?: McpResolvedConfig["servers"],
+  listing: {
+    readonly toolNames?: ReadonlyArray<string>;
+    readonly denyTools?: ReadonlyArray<string>;
+    readonly unavailable?: boolean;
+  } = {},
+) =>
   Effect.gen(function* () {
     let reads = 0;
     let opens = 0;
@@ -48,7 +56,7 @@ const fixture = (servers?: McpResolvedConfig["servers"]) =>
             command: "private-command",
             args: ["private-argument"],
             environment: {},
-            denyTools: [],
+            denyTools: listing.denyTools ?? [],
           },
         },
       },
@@ -106,19 +114,24 @@ const fixture = (servers?: McpResolvedConfig["servers"]) =>
             close,
             setToken: () => Effect.void,
             request: (input) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 requests += 1;
+                if (listing.unavailable)
+                  return yield* boundaryError(
+                    "unsupported",
+                    "completed",
+                    "Tools unavailable.",
+                    "rpc-method-not-found",
+                  );
                 return {
                   action: input.action,
                   outcome: "completed" as const,
                   result: {
-                    tools: [
-                      {
-                        name: "lookup",
-                        description: "cached fixture",
-                        inputSchema: { type: "object" },
-                      },
-                    ],
+                    tools: (listing.toolNames ?? ["lookup"]).map((name) => ({
+                      name,
+                      description: "cached fixture",
+                      inputSchema: { type: "object" },
+                    })),
                   },
                 };
               }),
@@ -269,6 +282,79 @@ it.effect(
         expect(read.reply.resultId).toBe(retained.reply.resultId);
       }).pipe(Effect.provide(f.layer));
     }),
+);
+
+it.effect(
+  "manager metadata evidence distinguishes initial, withdrawn, and unauthorized states",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* Effect.gen(function* () {
+        const manager = yield* McpManager;
+        const initial = (yield* manager.refresh).servers[0]!;
+        expect(initial.metadataState).toBe("undiscovered");
+        expect(initial.metadata).toBeUndefined();
+        const receipt = yield* manager.dispatch(yield* manager.capture(initial, "refresh"));
+        expect(receipt?.tools).toBe(1);
+        const connected = (yield* manager.refresh).servers[0]!;
+        expect(connected.metadataState).toBe("ready");
+        const connections = yield* McpConnections;
+        yield* connections.disconnect("a");
+        const withdrawn = (yield* manager.refresh).servers[0]!;
+        expect(withdrawn.metadataState).toBe("invalidated");
+        expect(withdrawn.metadata).toBeUndefined();
+        f.untrust();
+        expect(manager.snapshot().servers[0]).toMatchObject({
+          metadataState: "unavailable",
+          metadata: undefined,
+        });
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect.each([0, 125])(
+  "discovery feedback counts all permitted tools, not a displayed page: %s",
+  (count) =>
+    Effect.gen(function* () {
+      const f = yield* fixture(undefined, {
+        toolNames: [...Array.from({ length: count }, (_, index) => `tool-${index}`), "hidden"],
+        denyTools: ["hidden"],
+      });
+      yield* Effect.gen(function* () {
+        const manager = yield* McpManager;
+        const row = (yield* manager.refresh).servers[0]!;
+        const receipt = yield* manager.dispatch(yield* manager.capture(row, "refresh"));
+        expect(receipt).toMatchObject({ tools: count, support: { tools: true } });
+        expect((yield* manager.refresh).servers[0]?.metadataState).toBe(
+          count === 0 ? "empty" : "ready",
+        );
+        const execution = yield* McpExecution;
+        const command = yield* execution.execute(
+          { action: "refresh", server: "a" },
+          { maxOutputBytes: 4096, images: false },
+        );
+        expect(command.reply.data).toMatchObject({
+          result: { tools: count, support: { tools: true } },
+        });
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect("successful discovery keeps unsupported tools distinct from a loaded empty catalog", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(undefined, { unavailable: true });
+    yield* Effect.gen(function* () {
+      const manager = yield* McpManager;
+      const row = (yield* manager.refresh).servers[0]!;
+      const receipt = yield* manager.dispatch(yield* manager.capture(row, "refresh"));
+      expect(receipt).toMatchObject({
+        tools: 0,
+        support: { tools: false },
+        diagnostics: [{ family: "tools" }],
+      });
+      expect((yield* manager.refresh).servers[0]?.metadataState).toBe("unsupported");
+    }).pipe(Effect.provide(f.layer));
+  }),
 );
 
 it.effect.each([false, true])(

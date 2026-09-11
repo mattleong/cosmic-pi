@@ -38,7 +38,7 @@ const presentationLayer = Layer.mergeAll(
     withView: (effect) => effect,
     capture: () => Effect.fail(boundaryError("unsupported", "not-sent", "fixture")),
     check: () => Effect.void,
-    dispatch: () => Effect.void,
+    dispatch: () => Effect.succeed(undefined),
     cached: (request) =>
       Effect.succeed({
         family: request.family,

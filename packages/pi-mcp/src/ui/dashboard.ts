@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
+import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { McpManagerServer, McpManagerSnapshot } from "../manager/model.ts";
 import { authExplanation, blockedExplanation } from "../manager/policy.ts";
 import { discoveryNotices } from "../discovery/diagnostics.ts";
@@ -44,6 +45,7 @@ export const dashboardTable = (
   rows: ReadonlyArray<McpManagerServer>,
   width: number,
   theme: Theme,
+  focused: boolean,
 ) => {
   const scopeWidth = width >= 34 ? 7 : 0;
   const statusWidth =
@@ -65,9 +67,10 @@ export const dashboardTable = (
   const fields = (name: string, scope: string, status: string) =>
     `${name}${scopeWidth ? `  ${scope}` : ""}${statusWidth ? `  ${status}` : ""}`;
   return {
-    header: theme.fg(
-      "dim",
-      `  ${fields(cell("Server", nameWidth), cell("Scope", scopeWidth), cell("Status", statusWidth))}`,
+    header: listDetailHeading(
+      theme,
+      fields(cell("Server", nameWidth), cell("Scope", scopeWidth), cell("Status", statusWidth)),
+      focused,
     ),
     row: (row: McpManagerServer, selected: boolean) => {
       const status = dashboardStatus(row);
@@ -84,14 +87,40 @@ export const dashboardTable = (
     },
   };
 };
+const metadataExplanation = (row: McpManagerServer): string => {
+  const summary = row.metadata
+    ? `${row.metadata.support.tools ? `${row.metadata.tools} tools` : "Tools unavailable"} · ${row.metadata.resources} resources · ${row.metadata.templates} templates · ${row.metadata.prompts} prompts`
+    : undefined;
+  switch (row.metadataState) {
+    case "unavailable":
+      return "Unavailable";
+    case "checking":
+      return "Checking cached metadata";
+    case "undiscovered":
+      return row.actions.some((choice) => choice.action === "refresh" && choice.enabled)
+        ? "Discover metadata to load tools"
+        : "Not discovered";
+    case "invalidated":
+      return "Cached metadata withdrawn. Discover again when ready.";
+    case "refreshing":
+      return summary ? `${summary} · refreshing` : "Discovering metadata";
+    case "refresh-failed":
+      return summary ? `${summary} · refresh failed` : "Discovery failed. Retry from Actions.";
+    case "unsupported":
+      return summary ?? "Tools catalog unavailable";
+    case "empty":
+    case "ready":
+      return summary ?? "Cached metadata unavailable";
+  }
+};
+
 export const dashboardDetail = (
   row: McpManagerServer | undefined,
   theme: Theme,
+  focused: boolean,
 ): ReadonlyArray<string> => {
   if (!row) return [theme.fg("muted", "No server selected.")];
   const status = dashboardStatus(row);
-  const field = (label: string, value: string, tone: DashboardStatus["tone"] | "text" = "text") =>
-    `${theme.fg("dim", label.padEnd(12))}${theme.fg(tone, value)}`;
   const notices = [
     ...(row.diagnostic ? [theme.fg("error", sanitizeTerminalLine(row.diagnostic))] : []),
     ...(row.blockedReason ? [theme.fg(status.tone, blockedExplanation(row.blockedReason))] : []),
@@ -100,23 +129,24 @@ export const dashboardDetail = (
     ),
   ];
   return [
-    theme.fg("text", theme.bold(sanitizeTerminalLine(row.id))),
+    listDetailHeading(theme, sanitizeTerminalLine(row.id), focused),
     theme.fg(
       "dim",
       row.transport === "invalid" ? row.scope : `${row.scope} · ${row.transport.toUpperCase()}`,
     ),
     "",
-    field("Status", status.label, status.tone === "muted" ? "text" : status.tone),
-    field("Auth", row.invalid ? "Not evaluated" : authExplanation(row)),
-    field(
-      "Metadata",
-      row.metadata
-        ? `${row.metadata.tools} tools · ${row.metadata.resources} resources · ${row.metadata.templates} templates · ${row.metadata.prompts} prompts`
-        : "No cached metadata",
-    ),
-    ...(row.active || row.queued
-      ? [field("Activity", `${row.active} active · ${row.queued} queued`)]
-      : []),
+    ...detailFieldRows(theme, [
+      {
+        label: "Status",
+        value: status.label,
+        tone: status.tone === "muted" ? "text" : status.tone,
+      },
+      { label: "Auth", value: row.invalid ? "Not evaluated" : authExplanation(row) },
+      { label: "Metadata", value: metadataExplanation(row) },
+      ...(row.active || row.queued
+        ? [{ label: "Activity", value: `${row.active} active · ${row.queued} queued` }]
+        : []),
+    ]),
     ...(notices.length ? ["", ...notices] : []),
   ];
 };

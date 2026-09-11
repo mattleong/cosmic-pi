@@ -23,6 +23,8 @@ import {
   framedStackedRows,
   framedWideRows,
   listDetailFrame,
+  listDetailHeading,
+  detailFieldRows,
   ListDetailShell,
   type ListDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -100,12 +102,14 @@ export class TaskManagerComponent implements Component {
   private alternateHelp = false;
   private pendingStop: string | undefined;
   private readonly shell = new ListDetailShell();
-  private readonly frame: ListDetailFrame;
   private readonly options: TaskManagerOptions;
 
   constructor(options: TaskManagerOptions) {
     this.options = options;
-    this.frame = listDetailFrame(options.theme);
+  }
+
+  private get frame(): ListDetailFrame {
+    return listDetailFrame(this.options.theme, this.shell.state.pane);
   }
 
   private applySelection(next: ListSelectionChange): void {
@@ -346,20 +350,25 @@ export class TaskManagerComponent implements Component {
     if (!task) return [this.options.theme.fg("dim", "No background tasks.")];
     const presentation = statePresentation(task, Math.floor(this.options.getNow() / 160));
     const lines = [
-      this.options.theme.fg("accent", displayName(task)),
-      this.options.theme.fg(
-        presentation.color,
-        `${presentation.label} · ${duration(task, this.options.getNow())}`,
-      ),
+      listDetailHeading(this.options.theme, displayName(task), this.shell.state.pane === "detail"),
+      ...detailFieldRows(this.options.theme, [
+        {
+          label: "Status",
+          value: `${presentation.label} · ${duration(task, this.options.getNow())}`,
+          tone: presentation.color,
+        },
+      ]),
     ];
     if (this.showTechnicalDetails) {
       lines.push(
-        this.options.theme.fg("dim", `ID ${sanitizeTerminalLine(task.id)}`),
-        this.options.theme.fg(
-          "dim",
-          sanitizeTerminalLine(`${task.cwd}${task.pid ? ` · pid ${task.pid}` : ""}`),
-        ),
-        this.options.theme.fg("dim", sanitizeTerminalLine(task.command)),
+        ...detailFieldRows(this.options.theme, [
+          { label: "ID", value: sanitizeTerminalLine(task.id) },
+          {
+            label: "Directory",
+            value: sanitizeTerminalLine(`${task.cwd}${task.pid ? ` · pid ${task.pid}` : ""}`),
+          },
+          { label: "Command", value: sanitizeTerminalLine(task.command) },
+        ]),
       );
     }
     if (task.droppedLogBytes > 0)
@@ -386,9 +395,8 @@ export class TaskManagerComponent implements Component {
     limit: number,
     width: number,
   ): string[] {
-    const focused = this.shell.state.pane === "list";
     return [
-      this.options.theme.fg(focused ? "accent" : "muted", `${focused ? "› " : ""}Background tasks`),
+      listDetailHeading(this.options.theme, "Background tasks", this.shell.state.pane === "list"),
       ...this.visibleTasks(tasks, limit).map(({ task, index }) =>
         this.taskLine(task, index, width),
       ),

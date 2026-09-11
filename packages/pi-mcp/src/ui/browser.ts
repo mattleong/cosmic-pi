@@ -1,4 +1,6 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import type {
   McpCachedDetail,
   McpCachedEntry,
@@ -35,12 +37,16 @@ export const browserCatalogStatus = (catalog: McpCachedCatalog): string => {
 export const browserDetail = (
   entry: McpCachedEntry | undefined,
   detail: McpCachedDetail | undefined,
+  theme: Theme,
+  focused: boolean,
 ): ReadonlyArray<string> => {
   if (!entry) return ["Select cached metadata. Browsing never invokes it."];
   return [
-    sanitizeTerminalLine(entry.ref.server),
-    `Exact identifier: ${sanitizeTerminalLine(entry.ref.id)}`,
-    `Family: ${entry.ref.family} / revision ${entry.ref.revision}`,
+    listDetailHeading(theme, sanitizeTerminalLine(entry.ref.server), focused),
+    ...detailFieldRows(theme, [
+      { label: "Exact identifier", value: sanitizeTerminalLine(entry.ref.id) },
+      { label: "Family", value: `${entry.ref.family} / revision ${entry.ref.revision}` },
+    ]),
     "",
     stripTerminalControls(detail?.description ?? entry.description),
     ...(detail

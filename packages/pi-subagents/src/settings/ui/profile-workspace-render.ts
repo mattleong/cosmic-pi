@@ -16,6 +16,7 @@ import {
   framedStackedRows,
   framedWideRows,
   listDetailFrame,
+  detailFieldRows,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import { PROFILE_IDS, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
@@ -278,10 +279,12 @@ const candidateDetail = (
     theme.fg("accent", theme.bold(`${profile} · ${profileRouteOptionLabel(state.candidateIndex)}`)),
     ...wrapped(theme.fg("muted", profileDescription(profile)), width),
     "",
-    `Model       ${candidate.model}`,
-    `Reasoning   ${candidateEffortLabel(profile, candidate, state.parentEffort)}`,
-    `File access ${candidate.writeIntent}`,
-    `Run with    ${runWithLabel(candidate)}`,
+    ...detailFieldRows(theme, [
+      { label: "Model", value: candidate.model },
+      { label: "Reasoning", value: candidateEffortLabel(profile, candidate, state.parentEffort) },
+      { label: "File access", value: candidate.writeIntent },
+      { label: "Run with", value: runWithLabel(candidate) },
+    ]),
     "",
     theme.fg(
       "dim",
@@ -360,7 +363,7 @@ const fieldDetail = (
     "",
     ...wrapped(fieldHelp[row.field], width),
     "",
-    `Current  ${row.value}`,
+    ...detailFieldRows(theme, [{ label: "Current", value: row.value }]),
     "",
     theme.fg(
       "dim",

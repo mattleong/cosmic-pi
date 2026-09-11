@@ -11,6 +11,7 @@ import {
   reconcileListSelection,
   selectListIndex,
   type ListDetailMotion,
+  type ListDetailPane,
   type ListDetailMotionState,
   type ListSelectionChange,
 } from "./list-detail.ts";
@@ -137,11 +138,43 @@ export interface ListDetailFrame {
   readonly inner: (text: string) => string;
 }
 
-/** Standard border renderers shared by list/detail managers. */
-export const listDetailFrame = (theme: Pick<Theme, "fg">): ListDetailFrame => ({
+/** Derive from the current pane each render; omitted focus preserves neutral single-pane frames. */
+export const listDetailFrame = (
+  theme: Pick<Theme, "fg">,
+  focusedPane?: ListDetailPane,
+): ListDetailFrame => ({
   outer: (text) => theme.fg("borderAccent", text),
-  inner: (text) => theme.fg("borderMuted", text),
+  inner: (text) => theme.fg(focusedPane === "detail" ? "borderAccent" : "borderMuted", text),
 });
+
+/** Caller-sanitized heading with a stable marker gutter as focus moves between panes. */
+export const listDetailHeading = (
+  theme: Pick<Theme, "fg" | "bold">,
+  text: string,
+  focused: boolean,
+): string => theme.fg(focused ? "accent" : "muted", `${focused ? "› " : "  "}${theme.bold(text)}`);
+
+export interface ListDetailField {
+  readonly label: string;
+  readonly value: string;
+  readonly tone?: "text" | "muted" | "dim" | "accent" | "success" | "warning" | "error";
+}
+
+/** Align a group of caller-sanitized fields. Callers retain wrapping and disclosure policy. */
+export const detailFieldRows = (
+  theme: Pick<Theme, "fg">,
+  fields: ReadonlyArray<ListDetailField>,
+  minimumLabelWidth = 10,
+): ReadonlyArray<string> => {
+  const labelWidth = Math.max(
+    minimumLabelWidth,
+    ...fields.map((field) => visibleWidth(field.label)),
+  );
+  return fields.map(
+    (field) =>
+      `${theme.fg("dim", padListDetailRow(field.label, labelWidth))}  ${theme.fg(field.tone ?? "text", field.value)}`,
+  );
+};
 
 export const framedRow = (frame: ListDetailFrame, line: string, inner: number) =>
   `${frame.outer("│")}${padListDetailRow(line, inner)}${frame.outer("│")}`;

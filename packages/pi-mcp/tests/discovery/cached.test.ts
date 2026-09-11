@@ -118,6 +118,41 @@ it("search covers the catalog beyond its visible page and tool policy still appl
     ).page.entries,
   ).toEqual([]);
 });
+it("catalog-only reads keep full permitted counts without consuming browser cursors", () => {
+  const first = queryCached(
+    { family: "tools", limit: 1 },
+    config,
+    snapshots,
+    new Map(),
+    emptyCursorState(),
+    "test",
+  );
+  let cursors = first.cursors;
+  for (let index = 0; index < 1050; index++) {
+    const observed = queryCached(
+      { family: "tools", catalogsOnly: true },
+      config,
+      snapshots,
+      new Map(),
+      cursors,
+      "test",
+    );
+    expect(observed.page.entries).toEqual([]);
+    expect(observed.page.next).toBeUndefined();
+    expect(observed.page.catalogs[0]).toMatchObject({ state: "ready", count: 150 });
+    cursors = observed.cursors;
+  }
+  const next = queryCached(
+    { family: "tools", cursor: first.page.next!, limit: 1 },
+    config,
+    snapshots,
+    new Map(),
+    cursors,
+    "test",
+  );
+  expect(next.page.entries[0]?.ref.id).toBe("tool-1");
+});
+
 it("cursor binding rejects changed query, config and metadata revisions", () => {
   const first = queryCached(
     { family: "tools", limit: 1 },
@@ -188,6 +223,30 @@ it("unsupported, undiscovered, failed refresh and invalidated states remain dist
     ).page.catalogs[0]?.state,
   ).toBe("refresh-failed");
 });
+it("catalog-only reads distinguish withdrawn metadata from first discovery and hide untrusted catalogs", () => {
+  const evidence = new Map([["a", { owner: "owner", state: "invalidated" as const }]]);
+  expect(
+    queryCached(
+      { family: "tools", catalogsOnly: true },
+      config,
+      new Map(),
+      evidence,
+      emptyCursorState(),
+      "test",
+    ).page.catalogs[0]?.state,
+  ).toBe("invalidated");
+  expect(
+    queryCached(
+      { family: "tools", catalogsOnly: true },
+      { ...config, trusted: false },
+      snapshots,
+      evidence,
+      emptyCursorState(),
+      "test",
+    ).page.catalogs,
+  ).toEqual([]);
+});
+
 it("details preserve exact identifiers but bound descriptions and schemas without following references", () => {
   const long = {
     ...snapshot,

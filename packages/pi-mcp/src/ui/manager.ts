@@ -33,7 +33,7 @@ import type {
   McpCachedRequest,
 } from "../discovery/model.ts";
 import type { McpManagerSnapshot } from "../manager/model.ts";
-import { blockedExplanation } from "../manager/policy.ts";
+import { actionMenu } from "./actions.ts";
 import {
   browserDetail,
   browserCatalogStatus,
@@ -264,25 +264,10 @@ export class McpManagerComponent implements Component, Focusable {
       breadcrumb: "MCP actions",
       title: sanitizeTerminalLine(row.id),
       subtitle: "Enter chooses an action. Blocked actions explain why.",
-      choices: row.actions.map((choice) => ({
-        value: choice.action,
-        payload: choice.action,
-        item:
-          choice.action === "connect"
-            ? {
-                value: choice.action,
-                label: choice.label,
-                description: "No metadata discovery, sign-in, or remote-health check.",
-              }
-            : { value: choice.action, label: choice.label },
-        searchText: choice.label,
-        enabled: choice.enabled,
-        disabledReason: choice.reason ? blockedExplanation(choice.reason) : undefined,
-      })),
+      ...actionMenu(row),
       select: (action) => {
         this.menu = undefined;
-        if (action === "inspect") this.inspect();
-        else if (action === "browse") {
+        if (action === "browse") {
           this.selection = {
             ...this.selection,
             screen: "browse",
@@ -456,7 +441,7 @@ export class McpManagerComponent implements Component, Focusable {
     if (this.menu) return this.menu.render(width);
     if (this.disposed || width < 4) return [];
     const theme = this.options.theme;
-    const frame = listDetailFrame(theme);
+    const frame = listDetailFrame(theme, this.shell.state.pane);
     const snapshot = this.options.snapshot();
     if (!snapshot.trusted || !snapshot.enabled) {
       this.generation += 1;
@@ -544,7 +529,12 @@ export class McpManagerComponent implements Component, Focusable {
         const geometry = wideListDetailGeometry(width, 24, 0.45);
         const table =
           this.selection.screen === "dashboard"
-            ? dashboardTable(snapshot.servers, wide ? geometry.listWidth : inner, theme)
+            ? dashboardTable(
+                snapshot.servers,
+                wide ? geometry.listWidth : inner,
+                theme,
+                this.shell.state.pane === "list",
+              )
             : undefined;
         const columnHeader = table && bodyHeight > 1 ? [table.header] : [];
         const labels =
@@ -570,9 +560,18 @@ export class McpManagerComponent implements Component, Focusable {
           );
         const details =
           this.selection.screen === "dashboard"
-            ? dashboardDetail(this.selectedRows()[this.shell.state.selected], theme)
+            ? dashboardDetail(
+                this.selectedRows()[this.shell.state.selected],
+                theme,
+                this.shell.state.pane === "detail",
+              )
             : this.selection.screen === "browse"
-              ? browserDetail(this.page?.entries[this.shell.state.selected], this.detail)
+              ? browserDetail(
+                  this.page?.entries[this.shell.state.selected],
+                  this.detail,
+                  theme,
+                  this.shell.state.pane === "detail",
+                )
               : (this.result.lines ?? [
                   this.unavailable
                     ? "Result unavailable. It may have been evicted or revoked. The source operation was not replayed."

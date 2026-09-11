@@ -132,6 +132,8 @@ export type McpDiscoveryRequest = Extract<
 export type McpCachedFamily = "tools" | "resources" | "templates" | "prompts";
 export interface McpCachedRequest {
   readonly family: McpCachedFamily;
+  /** Read only catalog evidence and counts without allocating a pagination cursor. */
+  readonly catalogsOnly?: boolean;
   readonly server?: string;
   readonly query?: string;
   readonly cursor?: string;

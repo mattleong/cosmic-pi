@@ -20,10 +20,26 @@ import { resultPage } from "../ui/result-view.ts";
 import type { McpGatewayReply } from "../tools/model.ts";
 import { McpExecution } from "../tools/service.ts";
 import { McpManager } from "./service.ts";
+import { MCP_DISCOVERY_LIMITS, type McpMetadataSummary } from "../discovery/model.ts";
 
 const CommandFailure = Schema.Struct({
   kind: McpBoundaryError.fields.kind,
   reason: McpBoundaryError.fields.reason,
+});
+const RefreshFeedback = Schema.Struct({
+  result: Schema.Struct({
+    tools: Schema.Int.check(
+      Schema.isBetween({ minimum: 0, maximum: MCP_DISCOVERY_LIMITS.entriesPerFamily }),
+    ),
+    support: Schema.Struct({ tools: Schema.Boolean }),
+    diagnostics: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          family: Schema.Literals(["tools", "resources", "templates", "prompts"]),
+        }),
+      ),
+    ),
+  }),
 });
 export const readableMcpOutcome = (reply: McpGatewayReply): string => {
   if (reply.isError) {
@@ -38,8 +54,15 @@ export const readableMcpOutcome = (reply: McpGatewayReply): string => {
       return "Connected. Metadata was not discovered. This is not a health check.";
     case "disconnect":
       return "Disconnected. Completed results remain available until eviction or authority revocation.";
-    case "refresh":
-      return "Metadata refreshed. No tools were invoked.";
+    case "refresh": {
+      const decoded = Schema.decodeUnknownOption(RefreshFeedback)(reply.data);
+      if (Option.isNone(decoded)) return "Metadata refreshed. No tools were invoked.";
+      const { tools, support, diagnostics } = decoded.value.result;
+      const summary = support.tools
+        ? `${tools} ${tools === 1 ? "tool" : "tools"} loaded.`
+        : "Metadata refreshed. Tools catalog unavailable.";
+      return `${summary} No tools were invoked.${diagnostics?.length ? " Some catalogs are unavailable." : ""}`;
+    }
     case "auth":
       return "Credentials verified locally. Connect separately when ready.";
     case "logout":
@@ -159,6 +182,7 @@ export const runMcpManager = (
               )
                 return;
               yield* manager.check(ticket);
+              let metadata: McpMetadataSummary | undefined;
               if (ticket.action === "auth") {
                 yield* flow.run(
                   ticket.binding.server,
@@ -166,7 +190,7 @@ export const runMcpManager = (
                   (attempt) => presentMcpAuthPanel(ctx, attempt, current),
                   ticket.binding,
                 );
-              } else yield* manager.dispatch(ticket);
+              } else metadata = yield* manager.dispatch(ticket);
               if (current())
                 notifyAtHostBoundary(
                   ctx,
@@ -174,7 +198,15 @@ export const runMcpManager = (
                     action: ticket.action,
                     outcome: "completed",
                     isError: false,
-                    data: null,
+                    data: metadata
+                      ? {
+                          result: {
+                            tools: metadata.tools,
+                            support: { tools: metadata.support.tools },
+                            diagnostics: metadata.diagnostics.map(({ family }) => ({ family })),
+                          },
+                        }
+                      : null,
                     notices: [],
                   }),
                   "info",

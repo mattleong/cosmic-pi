@@ -96,6 +96,7 @@ describe("searchable selector state", () => {
     const moved = page();
     moved.component.handleInput("\u001b[B");
     moved.component.handleInput("?");
+    moved.component.invalidate();
     moved.component.handleInput("\r");
     expect(moved.select).toHaveBeenCalledWith("openai/model-two");
 
@@ -134,6 +135,7 @@ describe("searchable selector state", () => {
           payload: "disabled",
           enabled: false,
           disabledReason: "Unavailable in this runtime",
+          disabledHint: "runtime-unavailable-marker",
         },
       ],
       getHeight: () => 12,
@@ -142,6 +144,11 @@ describe("searchable selector state", () => {
       cancel: vi.fn(),
     });
 
+    expect(component.render(80).join("\n")).toContain("runtime-unavailable-marker");
+    component.handleInput("?");
+    component.invalidate();
+    component.handleInput("/");
+    component.handleInput("disabled");
     component.handleInput("\r");
 
     expect(select).not.toHaveBeenCalled();
