@@ -136,13 +136,11 @@ const cloneDocument = (
           options?.maxBytes !== undefined &&
           new TextEncoder().encode(`${source}\n`).byteLength > options.maxBytes
         )
-          return yield* Effect.fail(
-            new JsonDocumentError({
-              operation: operation === "read" ? "read" : "write",
-              path,
-              message: "JSON document exceeds its byte limit.",
-            }),
-          );
+          return yield* new JsonDocumentError({
+            operation: operation === "read" ? "read" : "write",
+            path,
+            message: "JSON document exceeds its byte limit.",
+          });
         return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source);
       }),
     ),
@@ -182,7 +180,9 @@ export function makeInMemoryDocuments(
         updateCount++;
         const current = storedDocuments.get(path);
         const isolated: JsonObject =
-          current === undefined ? {} : yield* cloneDocument("read", path, current, limits);
+          current === undefined
+            ? {}
+            : yield* cloneDocument("read", path, current, limits ?? undefined);
         const injected = beforeNextUpdate;
         beforeNextUpdate = undefined;
         const atomicCurrent = injected ? injected(isolated) : isolated;
@@ -192,7 +192,7 @@ export function makeInMemoryDocuments(
             : yield* cloneDocument("read", path, atomicCurrent, limits);
         const { value, document, write, afterCommit } = yield* modify(boundedCurrent);
         if (write === false) return value;
-        const stored = yield* cloneDocument("update", path, document, limits);
+        const stored = yield* cloneDocument("update", path, document, limits ?? undefined);
         const gate = nextUpdateGate;
         nextUpdateGate = undefined;
         if (gate?._tag === "BeforeCommit") {
@@ -238,7 +238,7 @@ export function makeInMemoryDocuments(
         const limits = yield* validateJsonDocumentReadOptions(path, options);
         const value = storedDocuments.get(path);
         if (value === undefined) return undefined;
-        return yield* cloneDocument("read", path, value, limits);
+        return yield* cloneDocument("read", path, value, limits ?? undefined);
       }),
     writeObject: (path, document) =>
       semaphoreFor(path).withPermit(

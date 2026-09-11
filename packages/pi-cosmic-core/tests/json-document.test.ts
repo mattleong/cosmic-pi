@@ -20,13 +20,11 @@ function documentLayer(initial: Record<string, string>, chunkBytes = 64 * 1024) 
         Effect.gen(function* () {
           const source = files.get(path);
           if (source === undefined)
-            return yield* Effect.fail(
-              PlatformError.systemError({
-                _tag: "NotFound",
-                module: "FileSystem",
-                method: "open",
-              }),
-            );
+            return yield* PlatformError.systemError({
+              _tag: "NotFound",
+              module: "FileSystem",
+              method: "open",
+            });
           const bytes = new TextEncoder().encode(source);
           let offset = 0;
           const file: FileSystem.File = {

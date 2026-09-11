@@ -48,7 +48,7 @@ const readLimitError = (path: string) =>
 /** Shared with the in-memory store so option validation also applies to missing documents. */
 export const validateJsonDocumentReadOptions = (path: string, options?: JsonDocumentReadOptions) =>
   options === undefined
-    ? Effect.succeed(undefined)
+    ? Effect.void
     : Schema.decodeUnknownEffect(ReadOptionsSchema)(options).pipe(
         Effect.mapError(
           () =>

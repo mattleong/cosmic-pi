@@ -177,9 +177,9 @@ for (const mode of ["timeout", "stream", "partial-spawn", "spawn"] as const) {
               }),
               () => Effect.ignore(Effect.fail(denied)),
             );
-            return yield* Effect.fail(denied);
+            return yield* denied;
           }
-          if (mode === "spawn") return yield* Effect.fail(denied);
+          if (mode === "spawn") return yield* denied;
           return handle;
         }),
       );
