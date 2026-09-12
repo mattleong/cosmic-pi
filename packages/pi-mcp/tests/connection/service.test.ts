@@ -63,6 +63,7 @@ interface FixtureOptions {
   readonly opening?: Effect.Effect<void, McpBoundaryError>;
   readonly closing?: Effect.Effect<void>;
   readonly uncertain?: boolean;
+  readonly scopeCleanup?: boolean;
   readonly terminalBeforeReply?: boolean;
   readonly auth?: Effect.Effect<string | undefined, McpBoundaryError>;
   readonly request?: (input: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
@@ -132,11 +133,13 @@ const fixture = (options: FixtureOptions = {}) => {
       revoke: Effect.void,
     }),
     Layer.succeed(McpConnector, {
-      open: (server, settings, token) =>
+      open: (server, settings, token, onCleanup) =>
         Effect.gen(function* () {
           state.opens += 1;
           yield* options.opening ?? Effect.void;
-          if (options.open) return yield* options.open(server, settings, token);
+          if (options.open) return yield* options.open(server, settings, token, onCleanup);
+          if (options.scopeCleanup !== undefined)
+            yield* Effect.addFinalizer(() => Effect.sync(() => onCleanup?.(options.scopeCleanup!)));
           const terminal = yield* Deferred.make<void, McpBoundaryError>();
           let closed = false;
           const close = Effect.uninterruptible(
@@ -900,6 +903,82 @@ it.effect(
       yield* f.replace({ ...f.config(), revision: 2 });
       expect(yield* Effect.result(c.connect("a"))).toMatchObject({ failure: { kind: "cleanup" } });
       expect(f.state.opens).toBe(1);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect.each([true, false])(
+  "outer acquisition deadline retains observer cleanup evidence: %s",
+  (confirmed) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const settled = yield* Deferred.make<void>();
+      const observed: boolean[] = [];
+      const f = fixture({
+        settings: { connectTimeoutMs: 100 },
+        auth: Effect.sleep(40).pipe(Effect.as(undefined)),
+        open: (_server, settings, _token, onCleanup) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* Effect.never.pipe(
+              Effect.timeoutOrElse({
+                duration: settings.connectTimeoutMs,
+                orElse: () => Effect.fail(boundaryError("timeout", "not-sent", "Inner deadline.")),
+              }),
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  observed.push(confirmed);
+                  onCleanup?.(confirmed);
+                  // Later positive evidence must not erase an earlier failure.
+                  onCleanup?.(true);
+                }),
+              ),
+            );
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const c = yield* McpConnections;
+        const opening = yield* Effect.result(c.connect("a")).pipe(
+          Effect.ensuring(Deferred.succeed(settled, undefined)),
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust(40);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust(59);
+        expect(yield* Deferred.isDone(settled)).toBe(false);
+        yield* TestClock.adjust(1);
+        expect(yield* Fiber.join(opening)).toMatchObject({ failure: { kind: "timeout" } });
+        expect(observed).toEqual([confirmed]);
+        expect(yield* c.disconnect("a")).toMatchObject({
+          cleanup: confirmed ? "confirmed" : "unconfirmed",
+        });
+        expect((yield* c.status).servers.find((server) => server.id === "a")?.state).toBe(
+          confirmed ? "disconnected" : "blocked",
+        );
+        const replacement = yield* Effect.result(c.connect("a")).pipe(Effect.forkScoped);
+        if (confirmed) {
+          yield* TestClock.adjust(100);
+          expect(yield* Fiber.join(replacement)).toMatchObject({ failure: { kind: "timeout" } });
+          expect(f.state.opens).toBe(2);
+        } else {
+          expect(yield* Fiber.join(replacement)).toMatchObject({ failure: { kind: "cleanup" } });
+          expect(f.state.opens).toBe(1);
+        }
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect(
+  "successful acquisition retains later scope cleanup failure despite healthy close",
+  () => {
+    const f = fixture({ scopeCleanup: false });
+    return Effect.gen(function* () {
+      const c = yield* McpConnections;
+      yield* c.connect("a");
+      expect(yield* c.disconnect("a")).toMatchObject({ cleanup: "unconfirmed" });
+      expect(yield* Effect.result(c.connect("a"))).toMatchObject({ failure: { kind: "cleanup" } });
+      expect(f.state.opens).toBe(1);
+      expect(f.state.closes).toBe(1);
     }).pipe(Effect.provide(f.layer));
   },
 );

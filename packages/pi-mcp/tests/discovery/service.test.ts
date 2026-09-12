@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import { McpActivity } from "../../src/activity/service.ts";
 import { McpAuth } from "../../src/auth/service.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
@@ -608,6 +609,230 @@ it.effect(
         expect(yield* Ref.get(harness.calls)).toHaveLength(2);
       }).pipe(Effect.provide(harness.layer));
     }),
+);
+
+const notificationProbe = Effect.gen(function* () {
+  const discovery = yield* McpDiscovery;
+  const connections = yield* McpConnections;
+  let entered = 0;
+  let settled = 0;
+  let changed = false;
+  yield* connections.withOperation("a", {}, (operation) =>
+    discovery.ensure({
+      ...operation,
+      shared: (key, use) =>
+        Effect.suspend(() => {
+          entered++;
+          return operation.shared(key, use).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                settled++;
+              }),
+            ),
+          );
+        }),
+    }),
+  );
+  yield* discovery.subscribeChanges(() => {
+    changed = true;
+  });
+  return {
+    joined: yieldUntil(() => changed).pipe(
+      Effect.andThen(TestClock.adjust("30 millis")),
+      Effect.andThen(yieldUntil(() => entered >= 2)),
+    ),
+    settled: (count: number) => yieldUntil(() => settled >= count),
+  };
+});
+
+it.effect.each([
+  { phase: "response", ttlMs: 60_000 },
+  { phase: "settlement", ttlMs: 60_000 },
+  { phase: "response", ttlMs: 0 },
+  { phase: "settlement", ttlMs: 0 },
+])(
+  "a notification during held $phase publishes passive metadata with TTL $ttlMs",
+  ({ phase, ttlMs }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const refreshed = yield* Deferred.make<void>();
+      const pause = Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)));
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const probe = yield* notificationProbe;
+        yield* Ref.set(harness.route, (request) =>
+          (phase === "response" ? pause : Effect.void).pipe(
+            Effect.as(reply(request, { tools: [tool("superseded")] })),
+          ),
+        );
+        const foreground = yield* connections
+          .withOperation("a", {}, (operation) =>
+            discovery.refresh({
+              ...operation,
+              shared: (key, use) =>
+                operation.shared(key, (owned) =>
+                  use(owned).pipe(Effect.tap(() => (phase === "settlement" ? pause : Effect.void))),
+                ),
+            }),
+          )
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(held);
+        yield* harness.notify("a", "tools");
+        yield* probe.joined;
+        yield* Ref.set(harness.route, (request) =>
+          Deferred.succeed(refreshed, undefined).pipe(
+            Effect.as(reply(request, { ttlMs, tools: [tool("changed")] })),
+          ),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(foreground);
+        yield* probe.settled(3);
+        expect(yield* Deferred.isDone(refreshed)).toBe(true);
+        const cached = yield* discovery.cached({ family: "tools" });
+        expect(cached.catalogs[0]?.state).toBe(ttlMs === 0 ? "stale" : "ready");
+        const page = yield* discovery
+          .query({ action: "tools.list" })
+          .pipe(Effect.flatMap(decodePage));
+        expect(page.page.items).toEqual([expect.objectContaining({ name: "changed" })]);
+        yield* TestClock.adjust("100 millis");
+        expect(yield* Ref.get(harness.calls)).toHaveLength(3);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect.each(["failure", "deadline", "revocation"] as const)(
+  "notification follow-up stays bounded after %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const followup = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const probe = yield* notificationProbe;
+        yield* Ref.set(harness.route, (request) =>
+          Deferred.succeed(held, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(reply(request, { tools: [tool("superseded")] })),
+          ),
+        );
+        const foreground = yield* connections
+          .withOperation("a", {}, discovery.refresh)
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(held);
+        yield* harness.notify("a", "tools");
+        yield* probe.joined;
+        yield* Ref.set(harness.route, () =>
+          Deferred.succeed(followup, undefined).pipe(
+            Effect.andThen(
+              outcome === "failure"
+                ? Effect.fail(boundaryError("transport", "unknown", "Fixture refresh failed."))
+                : Effect.never,
+            ),
+          ),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(foreground);
+        yield* yieldUntil(() => Deferred.isDoneUnsafe(followup));
+        if (outcome === "revocation") yield* connections.revoke("a");
+        yield* TestClock.adjust("61 seconds");
+        yield* probe.settled(3);
+        expect(yield* Ref.get(harness.calls)).toHaveLength(3);
+        const cached = yield* discovery.cached({ family: "tools" });
+        if (outcome === "revocation") {
+          expect(cached.entries).toEqual([]);
+          expect(yield* discovery.known).toEqual([]);
+        } else {
+          expect(cached.catalogs[0]?.state).toBe("refresh-failed");
+          const page = yield* discovery
+            .query({ action: "tools.list" })
+            .pipe(Effect.flatMap(decodePage));
+          expect(page.page.items).toHaveLength(3);
+        }
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("notifications arriving during the bounded follow-up remain pending", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ a: server("a") });
+    const held = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const followup = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const connections = yield* McpConnections;
+      const probe = yield* notificationProbe;
+      yield* Ref.set(harness.route, (request) =>
+        Deferred.succeed(held, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(reply(request, { tools: [tool("superseded")] })),
+        ),
+      );
+      const foreground = yield* connections
+        .withOperation("a", {}, discovery.refresh)
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(held);
+      yield* harness.notify("a", "tools");
+      yield* probe.joined;
+      yield* Ref.set(harness.route, (request) =>
+        Deferred.succeed(followup, undefined).pipe(
+          Effect.andThen(Deferred.await(finish)),
+          Effect.as(reply(request, { tools: [tool("also-superseded")] })),
+        ),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(foreground);
+      yield* yieldUntil(() => Deferred.isDoneUnsafe(followup));
+      let arrivals = 0;
+      yield* discovery.subscribeChanges(() => {
+        arrivals++;
+      });
+      yield* harness.notify("a", "tools");
+      yield* yieldUntil(() => arrivals > 0);
+      yield* TestClock.adjust("30 millis");
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed(reply(request, { tools: [tool("latest")] })),
+      );
+      yield* Deferred.succeed(finish, undefined);
+      yield* probe.settled(3);
+      yield* TestClock.adjust("30 millis");
+      yield* probe.settled(4);
+      expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("ready");
+      const page = yield* discovery
+        .query({ action: "tools.list" })
+        .pipe(Effect.flatMap(decodePage));
+      expect(page.page.items).toEqual([expect.objectContaining({ name: "latest" })]);
+      expect(yield* Ref.get(harness.calls)).toHaveLength(4);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("a notification-owned failed refresh is not retried", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ a: server("a") });
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const probe = yield* notificationProbe;
+      yield* Ref.set(harness.route, () =>
+        Effect.fail(boundaryError("transport", "unknown", "Fixture refresh failed.")),
+      );
+      yield* harness.notify("a", "tools");
+      yield* probe.joined;
+      yield* probe.settled(2);
+      yield* TestClock.adjust("100 millis");
+      expect(yield* Ref.get(harness.calls)).toHaveLength(2);
+      expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe(
+        "refresh-failed",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );
 
 it.effect(

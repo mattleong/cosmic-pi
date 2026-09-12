@@ -301,6 +301,7 @@ it.effect.each([
     const cleaning = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const observed: boolean[] = [];
+    const forwarded: boolean[] = [];
     vi.spyOn(Core, "openDuplexProcess").mockImplementation((options) =>
       Effect.gen(function* () {
         yield* Effect.addFinalizer(() =>
@@ -322,7 +323,10 @@ it.effect.each([
     const target = server(`startup-interrupt-${confirmed}-${replaceScope}`);
     const oldScope = yield* Scope.fork(yield* Effect.scope);
     const opening = yield* first
-      .open(target, settings)
+      .open(target, settings, undefined, (cleanup) => {
+        forwarded.push(cleanup);
+        throw new Error("Observer failure must not interrupt cleanup");
+      })
       .pipe(Effect.provideService(Scope.Scope, oldScope), Effect.forkChild);
     yield* Deferred.await(started);
     const interrupt = yield* (
@@ -337,6 +341,7 @@ it.effect.each([
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(interrupt);
     expect(observed).toEqual([confirmed]);
+    expect(forwarded).toEqual([confirmed]);
     vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) =>
       fakeConnection(options.onCleanup),
     );

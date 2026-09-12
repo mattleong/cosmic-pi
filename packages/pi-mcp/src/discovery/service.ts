@@ -6,6 +6,7 @@ import { McpActivity } from "../activity/service.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
@@ -191,6 +192,27 @@ const makeDiscovery = Effect.gen(function* () {
       );
     });
 
+  const refreshNotification = (operation: McpOperation) =>
+    Effect.gen(function* () {
+      const started = yield* Ref.make(false);
+      yield* operation
+        .shared("metadata", (owned) =>
+          Ref.set(started, true).pipe(Effect.andThen(fetchSnapshot(owned))),
+        )
+        .pipe(Effect.catch(() => Effect.void));
+      if (yield* Ref.get(started)) return;
+      const current = yield* SynchronizedRef.get(state);
+      const server = operation.binding.server;
+      if (
+        current.consumers.get(server) !== operation.owner ||
+        current.evidence.get(server)?.owner !== operation.owner
+      )
+        return;
+      // Joined work may have committed before the notification arrived. Shared removes
+      // that work before settling waiters, so one follow-up cannot rejoin it.
+      yield* operation.shared("metadata", fetchSnapshot).pipe(Effect.catch(() => Effect.void));
+    });
+
   const watch = (operation: McpOperation): Effect.Effect<void, McpBoundaryError> =>
     Effect.uninterruptibleMask(() =>
       Effect.gen(function* () {
@@ -220,9 +242,7 @@ const makeDiscovery = Effect.gen(function* () {
               // Invalidate on arrival, before debounce or an in-flight shared refresh can finish.
               Stream.tap(() => observing(operation, "refreshing")),
               Stream.debounce("20 millis"),
-              Stream.runForEach(() =>
-                operation.shared("metadata", fetchSnapshot).pipe(Effect.catch(() => Effect.void)),
-              ),
+              Stream.runForEach(() => refreshNotification(operation)),
               Effect.ensuring(expireOwner(operation.binding.server, operation.owner)),
             ),
           )

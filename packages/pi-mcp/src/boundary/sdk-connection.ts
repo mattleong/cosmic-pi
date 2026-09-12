@@ -12,6 +12,7 @@ import type { McpConnection } from "../client/model.ts";
 import type { McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { openSdkHttp, type SdkHttpOptions } from "./sdk-http.ts";
 import { openSdkStdio } from "./sdk-stdio.ts";
+import { observeSdkCleanup } from "./sdk-events.ts";
 import { requireSecureBearerDestination } from "../auth/policy.ts";
 
 export interface McpConnectorContract {
@@ -19,6 +20,8 @@ export interface McpConnectorContract {
     server: McpEffectiveServer,
     settings: McpSettings,
     token?: string,
+    /** Reports cleanup during acquisition or later scope finalization. */
+    onCleanup?: (confirmed: boolean) => void,
   ) => Effect.Effect<McpConnection, McpBoundaryError, Scope.Scope>;
 }
 
@@ -77,7 +80,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
       const provider = yield* ConfigProvider.ConfigProvider;
       const nativeFetch = yield* FetchHttpClient.Fetch;
       const path = yield* Path.Path;
-      const open: McpConnectorContract["open"] = (server, settings, token) =>
+      const open: McpConnectorContract["open"] = (server, settings, token, observer) =>
         Effect.gen(function* () {
           if (!settings.enabled || !server.enabled || server.definition === undefined) {
             return yield* Effect.fail(
@@ -146,6 +149,7 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
             const onCleanup = (confirmed: boolean): void => {
               observed = true;
               if (confirmed && acquisitions.get(key) === owner) acquisitions.delete(key);
+              observeSdkCleanup(observer, confirmed);
             };
             let acquired: Effect.Effect<McpConnection, McpBoundaryError, Scope.Scope>;
             if (options.transport === "stdio") {

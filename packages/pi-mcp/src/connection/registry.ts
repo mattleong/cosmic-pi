@@ -14,6 +14,7 @@ import type { McpAuthContract, McpAuthRejection } from "../auth/model.ts";
 import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
+import type { McpConnectorContract } from "../boundary/sdk-connection.ts";
 import type { McpConfigStoreContract, McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { McpAdmission, type AdmissionTicket } from "./admission.ts";
 import type {
@@ -53,13 +54,7 @@ export interface AuthSuspension {
   readonly done: Deferred.Deferred<void>;
   running: boolean;
 }
-export interface RegistryConnector {
-  readonly open: (
-    server: McpEffectiveServer,
-    settings: McpSettings,
-    token?: string,
-  ) => Effect.Effect<McpConnection, McpBoundaryError, Scope.Scope>;
-}
+export type RegistryConnector = McpConnectorContract;
 
 const stale = (outcome: McpBoundaryError["outcome"] = "not-sent") =>
   boundaryError("stale", outcome, "MCP operation authority was revoked.");
@@ -82,6 +77,9 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   let closed = false;
   let sequence = 0;
   const owners = new Map<string, ConnectionOwner>();
+  // Native callbacks record sticky exact-owner evidence without taking the registry lock.
+  // Only locked transitions merge it into authoritative state.
+  const cleanupUnconfirmed = new WeakSet<ConnectionOwner>();
   // Diagnostic only, bounded by current configured identities; no remote data retained.
   const observationFailures = new Map<string, string>();
   const suspensions = new Map<string, AuthSuspension>();
@@ -111,6 +109,11 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         const health = yield* owner.connection.health;
         uncertain = Exit.isFailure(result) || health.cleanupUnconfirmed || !health.closed;
       }
+      yield* withLock(
+        Effect.sync(() => {
+          owner.uncertain ||= uncertain || cleanupUnconfirmed.has(owner);
+        }),
+      );
       if (owner.activity)
         yield* activity.finish(
           owner.activity,
@@ -377,7 +380,9 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
               owner.authorizationToken = token;
               return yield* Scope.provide(
                 connector
-                  .open(owner.server, settings, token)
+                  .open(owner.server, settings, token, (confirmed) => {
+                    if (!confirmed) cleanupUnconfirmed.add(owner);
+                  })
                   .pipe(
                     Effect.tapError((error) =>
                       error.kind === "auth-required"
@@ -403,6 +408,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         );
         yield* withLock(
           Effect.gen(function* () {
+            owner.uncertain ||= cleanupUnconfirmed.has(owner);
             if (Exit.isSuccess(acquired)) {
               owner.connection = acquired.value;
               if (!owner.current) return;
