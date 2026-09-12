@@ -1,32 +1,8 @@
-import {
-  ProtocolError,
-  SdkError,
-  SdkErrorCode,
-  type Client,
-  type SubscriptionFilter,
-} from "@modelcontextprotocol/client";
+import type { Client, SubscriptionFilter } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
-import { boundaryError, McpBoundaryError } from "../../../client/errors.ts";
+import { boundaryError } from "../../../client/errors.ts";
 import type { SdkEvents } from "../../sdk-events.ts";
-import { mapSdkProtocolError } from "../../sdk-protocol-error.ts";
-
-/** Without HTTP operation evidence, only SDK predispatch failures prove no send. */
-const mapSubscriptionFailure = (cause: unknown): McpBoundaryError => {
-  if (cause instanceof McpBoundaryError) return cause;
-  if (cause instanceof ProtocolError) return mapSdkProtocolError(cause, "completed");
-  if (cause instanceof SdkError) {
-    switch (cause.code) {
-      case SdkErrorCode.MethodNotSupportedByProtocolVersion:
-        return boundaryError("unsupported", "not-sent", "MCP subscriptions are unavailable.");
-      case SdkErrorCode.NotConnected:
-      case SdkErrorCode.NotInitialized:
-        return boundaryError("connection", "not-sent", "MCP connection is unavailable.");
-      case SdkErrorCode.RequestTimeout:
-        return boundaryError("timeout", "unknown", "MCP subscription acknowledgement timed out.");
-    }
-  }
-  return boundaryError("transport", "unknown", "MCP subscription was not acknowledged.");
-};
+import { mapSubscriptionFailure } from "../shared/subscription-failure.ts";
 
 /** SDK timeout bounds acknowledgement only. The connection scope owns stream lifetime. */
 export const ownSubscription = (

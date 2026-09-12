@@ -1,8 +1,9 @@
-import { SdkHttpError } from "@modelcontextprotocol/client";
+import { ProtocolError, SdkHttpError } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import { boundaryError } from "../../../client/errors.ts";
 import type { McpProtocolAdapter } from "../contract.ts";
+import { mapSubscriptionFailure } from "../shared/subscription-failure.ts";
 
 /** Legacy list notifications use the connection's unsolicited channel. */
 export const legacyProtocol: McpProtocolAdapter = {
@@ -11,14 +12,13 @@ export const legacyProtocol: McpProtocolAdapter = {
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const traffic = yield* events.beginSubscription(identity);
-        let acknowledged = false;
-        let attempted = false;
+        let establishmentUnknown = false;
         yield* Effect.addFinalizer(() =>
           traffic.close.pipe(
             Effect.tapError(() => Effect.sync(events.cleanupFailed)),
             Effect.ensuring(
               Effect.sync(() => {
-                if (attempted && !acknowledged) events.cleanupFailed();
+                if (establishmentUnknown) events.cleanupFailed();
               }),
             ),
             Effect.ignore,
@@ -27,7 +27,7 @@ export const legacyProtocol: McpProtocolAdapter = {
         yield* restore(
           Effect.tryPromise({
             try: (signal) => {
-              attempted = true;
+              establishmentUnknown = true;
               return client.request(
                 { method: "resources/subscribe", params: { uri } },
                 {
@@ -40,15 +40,17 @@ export const legacyProtocol: McpProtocolAdapter = {
                 },
               );
             },
-            catch: () =>
-              boundaryError(
-                "connection",
-                "unknown",
-                "MCP resource subscription was not acknowledged.",
-              ),
+            catch: (cause) => {
+              const error = (traffic.mapFailure ?? mapSubscriptionFailure)(cause);
+              // A rejected request or proven non-dispatch cannot establish a lease.
+              // Other completed failures may be malformed successful acknowledgements.
+              if (cause instanceof ProtocolError || error.outcome === "not-sent")
+                establishmentUnknown = false;
+              return error;
+            },
           }),
         );
-        acknowledged = true;
+        establishmentUnknown = false;
         traffic.acknowledge({ resourceSubscriptions: [uri] });
         const ended = yield* Deferred.make<void>();
         const close = yield* Effect.cached(

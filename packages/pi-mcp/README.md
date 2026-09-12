@@ -70,6 +70,8 @@ Settings merge field by field in the order above, starting with defaults. A high
 
 A stdio server's default cwd is its owning project root or agent directory. Relative `cwd` values resolve against that same directory. `allowTools` and `denyTools` match exact remote tool names; deny wins. An absent allow list permits advertised tools, while `[]` permits none. Denied tools cannot be discovered or called. Resources and prompts follow enabled-server policy, without per-URI or per-prompt rules.
 
+Trusted sessions, enabled servers, and exact-name tool allow/deny rules are the intended MCP authorization model. Per-call approval of tool arguments is an optional future policy, not an implementation defect or a completion requirement for this scope. Permitted tools can run without another confirmation, including sensitive operations. Server annotations never grant permission.
+
 Changes require `/mcp-settings reload` or a settings command. There is no watcher, discovery beyond these three paths, automatic package installation, or cross-session metadata cache. Project settings commands write only to `.pi/extensions/pi-mcp.json`; they never modify `.mcp.json`. Writes preserve unrelated JSON fields and reject invalid legacy root fields without rewriting them.
 
 | Setting            | Default  | Bounds        |
@@ -253,7 +255,7 @@ For modern HTTP, `x-mcp-header` annotations mirror validated string, integer, or
 
 Code Mode exposes these data actions through `tools.mcp.request`, but excludes `connect`, `disconnect`, `refresh`, auth, configuration writes, and arbitrary protocol methods. It requires exactly one active provider in the same stable Pi session and rechecks that provider on each request. Merely importing the protocol does not load the extension.
 
-Nested MCP calls bypass Pi `tool_call`/`tool_result` middleware, unrelated approval extensions, registered tool overrides, and previews. The shared MCP execution service still applies trust, server policy, validation, admission, and result limits. Only the outer `code_mode` call follows the ordinary Pi middleware path. See the [Code Mode README](../pi-code-mode/README.md#mcp-adapter).
+Pi has no built-in approval middleware. Nested MCP calls bypass its `tool_call`/`tool_result` hooks, any checks supplied by unrelated optional extensions, registered tool overrides, and previews. The shared MCP execution service still applies trust, server policy, validation, admission, and result limits. Only the outer `code_mode` call follows the ordinary Pi middleware path. See the [Code Mode README](../pi-code-mode/README.md#mcp-adapter).
 
 ## Private modern user input
 
