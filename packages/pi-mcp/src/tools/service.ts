@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import type * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type { McpAuthStatus, McpLoginUi } from "../auth/model.ts";
+import { authCommandFailure } from "../auth/policy.ts";
 import { McpAuth } from "../auth/service.ts";
 import { authProgress } from "../auth/progress.ts";
 import { JsonSchemaValidator } from "../boundary/schema-validator.ts";
@@ -398,6 +399,7 @@ export const makeMcpExecution = Effect.gen(function* () {
               return status;
             }),
           expected,
+          (server) => authCommandFailure(server, "login"),
         )
         .pipe(
           Effect.tap((status) => (saved ? auth.completeLogin(saved.server, status) : Effect.void)),
@@ -407,7 +409,12 @@ export const makeMcpExecution = Effect.gen(function* () {
         );
     });
   const logout: McpExecutionContract["logout"] = (serverId, expected) =>
-    connections.withAuth(serverId, (server) => auth.logout(server), expected);
+    connections.withAuth(
+      serverId,
+      (server) => auth.logout(server),
+      expected,
+      (server) => authCommandFailure(server, "logout"),
+    );
   return {
     execute,
     login,

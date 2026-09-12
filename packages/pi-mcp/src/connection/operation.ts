@@ -281,15 +281,29 @@ export const makeOperationFactory = (
               Effect.gen(function* () {
                 yield* Deferred.await(waiter.ready);
                 yield* checkCurrent;
-                const token = yield* registry.access(owner.server);
+                const token = yield* registry
+                  .access(owner.server)
+                  .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
                 yield* withLock(registry.checkTokenLocked(owner, token));
                 yield* checkCurrent;
                 ticket.outcome = "unknown";
-                const result = yield* registry.resourceSubscriptions.subscribe(
-                  owner,
-                  connection,
-                  uri,
-                );
+                const result = yield* registry.resourceSubscriptions
+                  .subscribe(owner, connection, uri)
+                  .pipe(
+                    Effect.tapError((error) =>
+                      withLock(
+                        Effect.gen(function* () {
+                          ticket.outcome = error.outcome;
+                          if (error.kind === "auth-required")
+                            yield* registry.rejectAuthLocked(owner, {
+                              credentialUsed: token !== undefined,
+                              error,
+                            });
+                        }),
+                      ),
+                    ),
+                    Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
+                  );
                 ticket.outcome = "completed";
                 yield* checkCurrent;
                 return result;

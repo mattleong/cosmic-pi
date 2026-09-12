@@ -390,13 +390,47 @@ for (const cancel of [false, true])
       }),
   );
 
+for (const [code, kind, reason] of [
+  [-32602, "protocol", "rpc-invalid-params"],
+  [-32601, "unsupported", "rpc-method-not-found"],
+] as const)
+  it.live(`a rejected HTTP subscription preserves completed certainty for ${code}`, () => {
+    const secret = "private-server-message-and-data";
+    const fixture = optionalFixture((request) =>
+      request.method === "subscriptions/listen"
+        ? new Response(
+            serialize({
+              jsonrpc: "2.0",
+              id: request.id,
+              error: { code, message: secret, data: { secret } },
+            }),
+            { headers: { "content-type": "application/json" } },
+          )
+        : undefined,
+    );
+    return Effect.gen(function* () {
+      const execution = yield* McpExecution;
+      const error = yield* execution.execute(subscribe, projection).pipe(Effect.flip);
+      expect(error).toMatchObject({ kind, outcome: "completed", reason });
+      expect(serialize(error)).not.toContain(secret);
+      expect((yield* execution.execute(status, projection)).reply.data).toMatchObject({
+        result: { subscriptions: [] },
+      });
+      expect(
+        fixture.requests.filter((request) => request.method === "subscriptions/listen"),
+      ).toHaveLength(1);
+      expect(fixture.opens()).toBe(1);
+    }).pipe(Effect.provide(fixture.layer));
+  });
+
 it.live("rejected honored filters discard ACK-adjacent updates", () => {
   const fixture = adjacentStream(false);
   return Effect.gen(function* () {
     const execution = yield* McpExecution;
-    expect(Exit.isFailure(yield* execution.execute(subscribe, projection).pipe(Effect.exit))).toBe(
-      true,
-    );
+    expect(yield* execution.execute(subscribe, projection).pipe(Effect.flip)).toMatchObject({
+      kind: "protocol",
+      outcome: "completed",
+    });
     yield* Effect.sleep(10);
     expect(
       (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply

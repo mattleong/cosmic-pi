@@ -93,6 +93,63 @@ it.each([
 ])("rejects annotations outside properties-only paths: %j", (invalid) => {
   expect(scanParameterHeaders(invalid).valid).toBe(false);
 });
+it.each(["const", "default", "examples", "enum", "x-example"])(
+  "does not interpret literal data under %s as header annotations",
+  (keyword) => {
+    const literal = {
+      "x-mcp-header": "literal data",
+      properties: { nested: annotated("number", "NotAnAnnotation") },
+    };
+    const input = {
+      properties: {
+        region: annotated(),
+        payload: {
+          type: "object",
+          [keyword]: keyword === "examples" || keyword === "enum" ? [literal] : literal,
+        },
+      },
+    };
+    expect(scanParameterHeaders(input).valid).toBe(true);
+    expect(parameterHeaders(input, { region: "north", payload: literal })).toEqual({
+      "Mcp-Param-Region": "north",
+    });
+  },
+);
+it.each(["$defs", "definitions", "patternProperties", "dependentSchemas", "dependencies"])(
+  "rejects annotations in schema maps without interpreting map keys: %s",
+  (keyword) => {
+    expect(scanParameterHeaders({ [keyword]: { "x-mcp-header": { type: "string" } } }).valid).toBe(
+      true,
+    );
+    expect(scanParameterHeaders({ [keyword]: { "x-mcp-header": annotated() } }).valid).toBe(false);
+  },
+);
+it("retains structural limits inside literal schema data", () => {
+  let literal: Schema.Json = {};
+  for (let index = 0; index < 70; index++) literal = { child: literal };
+  expect(scanParameterHeaders(schema({ default: literal })).valid).toBe(false);
+});
+it("counts schema containers, property entries, and literal data in the node budget", () => {
+  // Root, default array, properties map, payload schema, and allOf array use five nodes.
+  const literal: Array<Schema.Json> = Array.from(
+    { length: MCP_PARAMETER_HEADER_LIMITS.schemaNodes - 5 },
+    () => null,
+  );
+  const input = { default: literal, properties: { payload: {} }, allOf: [] };
+  expect(scanParameterHeaders(input).valid).toBe(true);
+  literal.push(null);
+  expect(scanParameterHeaders(input).valid).toBe(false);
+});
+it.each([{ allOf: [] }, { properties: {} }])(
+  "counts empty schema containers at the depth boundary: %j",
+  (container) => {
+    let input: Schema.Json = container;
+    for (let index = 1; index < MCP_PARAMETER_HEADER_LIMITS.schemaDepth; index++)
+      input = { not: input };
+    expect(scanParameterHeaders(input).valid).toBe(true);
+    expect(scanParameterHeaders({ not: input }).valid).toBe(false);
+  },
+);
 it("rejects duplicate names ignoring case, including nested paths", () => {
   expect(
     scanParameterHeaders({

@@ -1151,6 +1151,7 @@ it.effect.each([true, false])(
   (modern) =>
     Effect.gen(function* () {
       const capabilities = { tools: true, resources: false, prompts: false };
+      const validNames = ["valid", "literal-const", "literal-default", "literal-examples"];
       const harness = yield* makeHarness(
         { a: server("a") },
         modern ? { ...capabilities, parameterHeaders: true } : capabilities,
@@ -1160,6 +1161,21 @@ it.effect.each([true, false])(
           reply(request, {
             tools: [
               tool("valid"),
+              ...["const", "default", "examples"].map((keyword) => ({
+                name: `literal-${keyword}`,
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    payload: {
+                      type: "object",
+                      [keyword]:
+                        keyword === "examples"
+                          ? [{ "x-mcp-header": "literal data" }]
+                          : { "x-mcp-header": "literal data" },
+                    },
+                  },
+                },
+              })),
               {
                 name: "invalid",
                 inputSchema: { properties: { value: { type: "number", "x-mcp-header": "Value" } } },
@@ -1173,12 +1189,12 @@ it.effect.each([true, false])(
         const connections = yield* McpConnections;
         const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(snapshot.tools.map((entry) => entry.name)).toEqual(
-          modern ? ["valid"] : ["valid", "invalid"],
+          modern ? validNames : [...validNames, "invalid"],
         );
         const listed = yield* discovery
           .query({ action: "tools.list", server: "a" })
           .pipe(Effect.flatMap(decodePage));
-        expect(listed.page.total).toBe(modern ? 1 : 2);
+        expect(listed.page.total).toBe(validNames.length + (modern ? 0 : 1));
         const found = yield* discovery
           .query({ action: "tools.search", query: "invalid" })
           .pipe(Effect.flatMap(decodePage));
@@ -1187,7 +1203,9 @@ it.effect.each([true, false])(
           .query({ action: "tools.describe", server: "a", tool: "invalid" })
           .pipe(Effect.result);
         expect(exact._tag).toBe(modern ? "Failure" : "Success");
-        expect((yield* discovery.cached({ family: "tools" })).total).toBe(modern ? 1 : 2);
+        expect((yield* discovery.cached({ family: "tools" })).total).toBe(
+          validNames.length + (modern ? 0 : 1),
+        );
       }).pipe(Effect.provide(harness.layer));
     }),
 );

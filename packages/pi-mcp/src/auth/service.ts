@@ -23,7 +23,12 @@ import { getAuthChallenge } from "./challenge.ts";
 import type { McpRegistrationReceipt } from "./credentials.ts";
 import { refreshGrant } from "./refresh.ts";
 import { withAuthFailureReason } from "./diagnostics.ts";
-import { authFailure, oauthConfig, requireSecureBearerDestination } from "./policy.ts";
+import {
+  authCommandFailure,
+  authFailure,
+  oauthConfig,
+  requireSecureBearerDestination,
+} from "./policy.ts";
 import { authProgress } from "./progress.ts";
 
 const stale = () => boundaryError("stale", "not-sent", "OAuth operation was revoked.");
@@ -217,17 +222,8 @@ export const makeMcpAuthWithAuthority = (
         server,
         Effect.gen(function* () {
           yield* checkServer(server);
-          if (!oauthConfig(server)) {
-            const definition = server.definition;
-            if (definition?.transport === "http" && definition.auth.type === "env")
-              return yield* boundaryError(
-                "unsupported",
-                "not-sent",
-                "Environment authentication does not support browser sign-in.",
-                "auth-env-sign-in-unsupported",
-              );
-            return yield* authFailure();
-          }
+          const failure = authCommandFailure(server, "login");
+          if (failure) return yield* failure;
           pendingLogins.delete(server.identity);
           const authority = authorityFor(server.identity);
           const generation = authority.generation;
@@ -326,10 +322,8 @@ export const makeMcpAuthWithAuthority = (
       );
     const logout: McpAuthContract["logout"] = (server) =>
       Effect.suspend(() => {
-        if (!oauthConfig(server))
-          return Effect.fail(
-            boundaryError("unsupported", "not-sent", "Only stored OAuth grants support logout."),
-          );
+        const failure = authCommandFailure(server, "logout");
+        if (failure) return Effect.fail(failure);
         observed.set(server.identity, { state: "required" });
         pendingLogins.delete(server.identity);
         const authority = authorityFor(server.identity);

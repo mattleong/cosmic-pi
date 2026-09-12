@@ -104,13 +104,15 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       }),
     );
 
-  const withAuth: McpConnectionsContract["withAuth"] = (serverId, use, expected) =>
+  const withAuth: McpConnectionsContract["withAuth"] = (serverId, use, expected, preflight) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const begin = withLock(
           Effect.gen(function* () {
             if (expected) yield* registry.checkActionLocked(expected);
             const server = yield* registry.serverLocked(serverId);
+            const failure = preflight?.(server);
+            if (failure) return yield* failure;
             const existing = registry.suspensions.get(serverId);
             if (existing?.running) return { waiting: true as const, gate: existing };
             const gate: AuthSuspension = {

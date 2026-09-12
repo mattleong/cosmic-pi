@@ -136,7 +136,11 @@ it.live(
 it.live(
   "HTTP logs retain exact stream opt-in and threshold across interleaved requests and immediate terminal frames",
   () => {
-    const ready = Deferred.makeUnsafe<void>();
+    const started = [
+      Deferred.makeUnsafe<void>(),
+      Deferred.makeUnsafe<void>(),
+      Deferred.makeUnsafe<void>(),
+    ];
     const active: Array<{
       id: string | number;
       stream: ReadableStreamDefaultController<Uint8Array>;
@@ -147,7 +151,8 @@ it.live(
         new ReadableStream<Uint8Array>({
           start(stream) {
             active.push({ id: request.id!, stream });
-            if (active.length === 3) Deferred.doneUnsafe(ready, Effect.void);
+            const ready = started[active.length - 1];
+            if (ready) Deferred.doneUnsafe(ready, Effect.void);
           },
         }),
         { headers: { "content-type": "text/event-stream" } },
@@ -164,13 +169,13 @@ it.live(
       const a = yield* Effect.forkScoped(
         execution.execute({ ...request, logLevel: "error" }, projection),
       );
-      yield* Effect.sleep(10);
+      yield* Deferred.await(started[0]!);
       const b = yield* Effect.forkScoped(
         execution.execute({ ...request, logLevel: "info" }, projection),
       );
-      yield* Effect.sleep(10);
+      yield* Deferred.await(started[1]!);
       const c = yield* Effect.forkScoped(execution.execute(request, projection));
-      yield* Deferred.await(ready);
+      yield* Deferred.await(started[2]!);
       const finish = (index: number, level: string, text: string) => {
         const current = active[index]!;
         const log = (message: string, severity = level) => ({

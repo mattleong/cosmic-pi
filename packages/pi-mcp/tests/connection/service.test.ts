@@ -66,6 +66,7 @@ interface FixtureOptions {
   readonly terminalBeforeReply?: boolean;
   readonly auth?: Effect.Effect<string | undefined, McpBoundaryError>;
   readonly request?: (input: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly subscribeResource?: McpConnection["subscribeResource"];
 }
 const fixture = (options: FixtureOptions = {}) => {
   let config = options.config ?? initialConfig(options.settings);
@@ -151,7 +152,13 @@ const fixture = (options: FixtureOptions = {}) => {
             }),
           );
           const connection: McpConnection = {
-            capabilities: { tools: true, resources: true, prompts: true },
+            capabilities: {
+              tools: true,
+              resources: true,
+              prompts: true,
+              resourceSubscriptions: options.subscribeResource !== undefined,
+            },
+            ...(options.subscribeResource && { subscribeResource: options.subscribeResource }),
             changes: Stream.empty,
             terminal: Deferred.await(terminal),
             health: Effect.sync(() => ({ closed, cleanupUnconfirmed: options.uncertain === true })),
@@ -328,7 +335,7 @@ it.effect("an auth rejection arriving after lost trust cannot publish new auth e
   }),
 );
 
-for (const phase of ["open", "request"] as const)
+for (const phase of ["open", "request", "subscribe"] as const)
   for (const token of [undefined, "private-token"])
     it.effect(
       `passes original ${phase} rejection evidence with credential use ${token !== undefined}`,
@@ -346,11 +353,17 @@ for (const phase of ["open", "request"] as const)
             auth: Effect.succeed(token),
             ...(phase === "open"
               ? { opening: Effect.fail(original) }
-              : { request: () => Effect.fail(original) }),
+              : phase === "request"
+                ? { request: () => Effect.fail(original) }
+                : { subscribeResource: () => Effect.fail(original) }),
           });
           yield* Effect.gen(function* () {
             const c = yield* McpConnections;
-            const error = yield* call(c).pipe(Effect.flip);
+            const error = yield* (
+              phase === "subscribe"
+                ? c.withOperation("a", {}, (op) => op.subscribeResource!("test://one"))
+                : call(c)
+            ).pipe(Effect.flip);
             expect(error.outcome).toBe("unknown");
             expect(f.state.rejections).toHaveLength(1);
             expect(f.state.rejections[0]?.credentialUsed).toBe(token !== undefined);
@@ -420,6 +433,118 @@ it.effect("current-owner rejection stops an already-admitted queued dispatch wit
       });
       expect(f.state.requests).toBe(1);
       expect(f.state.rejections).toHaveLength(1);
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("subscription rejection fences queued dispatch and attaches fixed auth guidance", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const original = boundaryError("auth-required", "unknown", "Rejected subscription.");
+    const config = initialConfig({ maxPerServer: 1 });
+    const f = fixture({
+      config: {
+        ...config,
+        servers: {
+          a: {
+            ...config.servers.a!,
+            definition: {
+              transport: "http",
+              url: "https://private.example/mcp",
+              headers: {},
+              denyTools: [],
+              auth: { type: "env", env: "PRIVATE_TOKEN" },
+            },
+          },
+        },
+      },
+      auth: Effect.succeed("private-token"),
+      subscribeResource: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.andThen(Effect.fail(original)),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      const first = yield* c
+        .withOperation("a", {}, (op) => op.subscribeResource!("test://one"))
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const second = yield* call(c).pipe(Effect.result, Effect.forkScoped);
+      let queued = false;
+      for (let n = 0; n < 100 && !queued; n++) {
+        queued = (yield* c.status).servers[0]?.queued === 1;
+        if (!queued) yield* Effect.yieldNow;
+      }
+      expect(queued).toBe(true);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Fiber.join(first)).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "auth-required", outcome: "unknown", reason: "auth-env-required" },
+      });
+      expect(yield* Fiber.join(second)).toMatchObject({
+        _tag: "Failure",
+        failure: { outcome: "not-sent" },
+      });
+      expect(f.state.requests).toBe(0);
+      expect(f.state.opens).toBe(1);
+      expect(f.state.rejections).toHaveLength(1);
+      expect(f.state.rejections[0]?.error).toBe(original);
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect.each(["not-sent", "completed", "unknown"] as const)(
+  "subscription failure keeps %s certainty for later authority checks",
+  (outcome) =>
+    Effect.gen(function* () {
+      const original = boundaryError("protocol", outcome, "Subscription failed.");
+      const f = fixture({ subscribeResource: () => Effect.fail(original) });
+      yield* Effect.gen(function* () {
+        const c = yield* McpConnections;
+        const error = yield* c
+          .withOperation("a", {}, (op) =>
+            Effect.gen(function* () {
+              const failed = yield* op.subscribeResource!("test://one").pipe(Effect.result);
+              expect(failed._tag).toBe("Failure");
+              if (failed._tag === "Failure") expect(failed.failure).toBe(original);
+              f.state.trusted = false;
+              yield* op.checkCurrent;
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(error.outcome).toBe(outcome);
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
+it.effect("subscription auth lookup failure does not reject a dispatched credential", () =>
+  Effect.gen(function* () {
+    let checks = 0;
+    let subscriptions = 0;
+    const f = fixture({
+      auth: Effect.suspend(() =>
+        ++checks === 1
+          ? Effect.succeed("private-token")
+          : Effect.fail(boundaryError("auth-required", "not-sent", "Local grant unavailable.")),
+      ),
+      subscribeResource: () => {
+        subscriptions++;
+        return Effect.die("No subscription should be dispatched.");
+      },
+    });
+    yield* Effect.gen(function* () {
+      const c = yield* McpConnections;
+      expect(
+        yield* c
+          .withOperation("a", {}, (op) => op.subscribeResource!("test://one"))
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "auth-required", outcome: "not-sent" });
+      expect(subscriptions).toBe(0);
+      expect(f.state.rejections).toHaveLength(0);
+      expect((yield* c.status).servers[0]?.auth).toBe("none");
     }).pipe(Effect.provide(f.layer));
   }),
 );

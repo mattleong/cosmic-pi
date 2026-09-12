@@ -19,6 +19,32 @@ export const oauthConfig = (server: McpEffectiveServer): McpOAuthConfig | undefi
     ? server.definition.auth
     : undefined;
 
+/** Reject unsupported user commands before suspending connection or result authority. */
+export const authCommandFailure = (
+  server: McpEffectiveServer,
+  command: "login" | "logout",
+): McpBoundaryError | undefined => {
+  if (oauthConfig(server)) return undefined;
+  if (command === "logout")
+    return boundaryError("unsupported", "not-sent", "Only stored OAuth grants support logout.");
+  const definition = server.definition;
+  if (definition?.transport === "http" && definition.auth.type === "env")
+    return boundaryError(
+      "unsupported",
+      "not-sent",
+      "Environment authentication does not support browser sign-in.",
+      "auth-env-sign-in-unsupported",
+    );
+  return boundaryError(
+    "auth-required",
+    "not-sent",
+    "MCP authentication is required.",
+    definition?.transport === "http" && definition.auth.type === "none"
+      ? "auth-not-configured"
+      : undefined,
+  );
+};
+
 export interface AuthUrlPolicy {
   readonly privateOrigins: ReadonlySet<string>;
   readonly localHttpOrigins: ReadonlySet<string>;

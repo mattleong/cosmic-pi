@@ -64,6 +64,7 @@ export const sdkCapabilities = (
 
 export interface SdkSubscriptionTraffic {
   readonly options: RequestOptions;
+  readonly mapFailure?: (cause: unknown) => McpBoundaryError;
   readonly close: Effect.Effect<void, McpBoundaryError>;
   readonly run: <A>(callback: () => A) => A;
 }
@@ -247,6 +248,7 @@ export const makeSdkEvents = (
           return {
             identity: entry.identity,
             options: traffic?.options ?? { headers: { [SDK_OPERATION_HEADER]: tag } },
+            mapFailure: traffic?.mapFailure,
             run: <A>(callback: () => A): A =>
               context.run(entry, () => (traffic ? traffic.run(callback) : callback())),
             acknowledge: (filter: SubscriptionFilter) => {

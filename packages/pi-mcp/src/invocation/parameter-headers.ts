@@ -10,6 +10,29 @@ export const MCP_PARAMETER_HEADER_LIMITS = Object.freeze({
   schemaDepth: 64,
 });
 const token = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const schemaMaps = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "dependencies",
+]);
+const schemaArrays = new Set(["allOf", "anyOf", "oneOf", "prefixItems", "items"]);
+const schemaValues = new Set([
+  "items",
+  "additionalItems",
+  "contains",
+  "unevaluatedItems",
+  "additionalProperties",
+  "unevaluatedProperties",
+  "propertyNames",
+  "not",
+  "if",
+  "then",
+  "else",
+  "contentSchema",
+]);
 const object = (value: Schema.Json | undefined): value is Schema.JsonObject =>
   Predicate.isObject(value) && !Array.isArray(value);
 interface ParameterHeader {
@@ -27,7 +50,8 @@ export const scanParameterHeaders = (schema: Schema.Json): ParameterHeaderScan =
     value: Schema.Json;
     path: ReadonlyArray<string> | undefined;
     depth: number;
-  }> = [{ value: schema, path: [], depth: 0 }];
+    schema: boolean;
+  }> = [{ value: schema, path: [], depth: 0, schema: true }];
   const headers: Array<ParameterHeader> = [];
   const names = new Set<string>();
   let nodes = 0;
@@ -42,7 +66,7 @@ export const scanParameterHeaders = (schema: Schema.Json): ParameterHeaderScan =
       return invalid;
     if (!Array.isArray(current.value) && !Predicate.isObject(current.value)) continue;
     const value = current.value;
-    if (object(value) && Object.hasOwn(value, "x-mcp-header")) {
+    if (current.schema && object(value) && Object.hasOwn(value, "x-mcp-header")) {
       const name = value["x-mcp-header"];
       const type = value.type;
       if (
@@ -67,19 +91,38 @@ export const scanParameterHeaders = (schema: Schema.Json): ParameterHeaderScan =
     if (nodes + pending.length + entries.length > MCP_PARAMETER_HEADER_LIMITS.schemaNodes)
       return invalid;
     for (const [key, child] of entries) {
-      if (key === "properties" && object(child)) {
-        // A properties-map key is a parameter name, not a schema annotation.
-        const properties = Object.entries(child);
-        if (nodes + pending.length + properties.length > MCP_PARAMETER_HEADER_LIMITS.schemaNodes)
+      if (
+        current.schema &&
+        ((schemaMaps.has(key) && object(child)) || (schemaArrays.has(key) && Array.isArray(child)))
+      ) {
+        // Count containers even when empty, without interpreting their keys as annotations.
+        if (
+          ++nodes > MCP_PARAMETER_HEADER_LIMITS.schemaNodes ||
+          current.depth + 1 > MCP_PARAMETER_HEADER_LIMITS.schemaDepth
+        )
           return invalid;
-        for (const [property, nested] of properties)
+        // Map keys and array indices are not annotations. Only properties provide input paths.
+        const nestedSchemas = Object.entries(child);
+        if (nodes + pending.length + nestedSchemas.length > MCP_PARAMETER_HEADER_LIMITS.schemaNodes)
+          return invalid;
+        for (const [property, nested] of nestedSchemas)
           pending.push({
             value: nested,
             depth: current.depth + 2,
-            path: current.path === undefined ? undefined : [...current.path, property],
+            path:
+              key === "properties" && current.path !== undefined
+                ? [...current.path, property]
+                : undefined,
+            schema: true,
           });
       } else {
-        pending.push({ value: child, depth: current.depth + 1, path: undefined });
+        // Literal data still consumes the structural budget, but cannot declare headers.
+        pending.push({
+          value: child,
+          depth: current.depth + 1,
+          path: undefined,
+          schema: current.schema && schemaValues.has(key),
+        });
       }
     }
   }

@@ -12,13 +12,20 @@ import {
   Client,
   serializeMessage,
   type FetchLike,
+  type Transport,
 } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { openSdkHttp } from "../../../src/boundary/sdk-http.ts";
+import { makeSdkClient } from "../../../src/boundary/sdk-client.ts";
+import { makeSdkEvents } from "../../../src/boundary/sdk-events.ts";
+import { ownSubscription } from "../../../src/boundary/mcp-protocol/modern/subscriptions.ts";
+import { boundaryError } from "../../../src/client/errors.ts";
+import { getAuthChallenge, setAuthChallenge } from "../../../src/auth/challenge.ts";
 
+const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decode = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -44,6 +51,135 @@ const response = (id: string | number, result: Schema.JsonObject) =>
       result: { resultType: "complete", ttlMs: 0, cacheScope: "private", ...result },
     }),
   );
+
+it.live.each([
+  "params",
+  "missing-method",
+  "lost-ack",
+  "broken-send",
+  "boundary",
+  "legacy",
+] as const)("preserves subscription certainty without HTTP traffic mapping: %s", (mode) =>
+  Effect.gen(function* () {
+    const client = yield* makeSdkClient(mode === "legacy" ? "legacy" : "auto");
+    const events = yield* makeSdkEvents(client, {
+      closing: false,
+      closed: false,
+      cleanupUnconfirmed: false,
+    });
+    const original = setAuthChallenge(boundaryError("auth-required", "unknown", "Rejected."), {
+      status: 401,
+      wwwAuthenticate: 'Bearer realm="private"',
+    });
+    let listens = 0;
+    const transport: Transport = {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      send: (message) =>
+        Promise.resolve().then(() => {
+          if (!("method" in message) || !("id" in message)) return;
+          if (message.method === "server/discover" || message.method === "initialize") {
+            transport.onmessage?.({
+              jsonrpc: "2.0",
+              id: message.id,
+              result:
+                mode === "legacy"
+                  ? {
+                      protocolVersion: "2025-11-25",
+                      capabilities: {},
+                      serverInfo: { name: "fixture", version: "1" },
+                    }
+                  : { resultType: "complete", ...discovered },
+            });
+          } else if (message.method === "subscriptions/listen") {
+            listens++;
+            if (mode === "boundary") throw original;
+            if (mode === "broken-send") throw new Error("private unproven send failure");
+            if (mode === "params" || mode === "missing-method")
+              transport.onmessage?.({
+                jsonrpc: "2.0",
+                id: message.id,
+                error: {
+                  code: mode === "params" ? -32602 : -32601,
+                  message: "private server message",
+                  data: { secret: "private server data" },
+                },
+              });
+          }
+        }),
+    };
+    yield* Effect.addFinalizer(() => Effect.promise(() => client.close()));
+    yield* Effect.tryPromise(() => client.connect(events.bindTransport(transport)));
+    const error = yield* Effect.scoped(
+      ownSubscription(client, { resourcesListChanged: true }, events, 20, 100),
+    ).pipe(Effect.flip);
+    if (mode === "boundary") {
+      expect(error).toBe(original);
+      expect(getAuthChallenge(error)).toEqual(getAuthChallenge(original));
+    } else {
+      expect(error).toMatchObject(
+        mode === "params"
+          ? { kind: "protocol", outcome: "completed", reason: "rpc-invalid-params" }
+          : mode === "missing-method"
+            ? { kind: "unsupported", outcome: "completed", reason: "rpc-method-not-found" }
+            : mode === "legacy"
+              ? { kind: "unsupported", outcome: "not-sent" }
+              : { kind: mode === "lost-ack" ? "timeout" : "transport", outcome: "unknown" },
+      );
+      expect(serialize(error)).not.toContain("private");
+    }
+    expect(listens).toBe(mode === "legacy" ? 0 : 1);
+  }),
+);
+
+it.live.each(["lost-ack", "auth"] as const)(
+  "HTTP subscription maps %s with its owned transport evidence and no replay",
+  (mode) =>
+    Effect.gen(function* () {
+      let listens = 0;
+      let cancelled = false;
+      const challenge = 'Bearer realm="private", resource_metadata="https://fixture.test/meta"';
+      const fetch: FetchLike = (_url, init) =>
+        Promise.resolve().then(() => {
+          if (init?.method !== "POST") return new Response(null, { status: 405 });
+          const request = decode(init.body);
+          if (request.id === undefined) return new Response(null, { status: 202 });
+          if (request.method === "server/discover")
+            return response(request.id, {
+              ...discovered,
+              capabilities: { resources: { subscribe: true } },
+            });
+          listens++;
+          return mode === "auth"
+            ? new Response(null, { status: 401, headers: { "www-authenticate": challenge } })
+            : new Response(
+                new ReadableStream<Uint8Array>({
+                  cancel() {
+                    cancelled = true;
+                  },
+                }),
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              );
+        });
+      const connection = yield* openSdkHttp({ url, fetch, ...defaults, requestTimeoutMs: 20 });
+      const error = yield* Effect.scoped(connection.subscribeResource!("test://one")).pipe(
+        Effect.flip,
+      );
+      expect(error).toMatchObject({
+        kind: mode === "auth" ? "auth-required" : "timeout",
+        outcome: "unknown",
+      });
+      if (mode === "auth")
+        expect(getAuthChallenge(error)).toMatchObject({ status: 401, wwwAuthenticate: challenge });
+      else expect(cancelled).toBe(true);
+      expect(serialize(error)).not.toContain("private");
+      expect(listens).toBe(1);
+      yield* connection.close;
+      expect((yield* connection.health).cleanupUnconfirmed).toBe(false);
+    }),
+);
 
 it.live.each(["modern", "legacy"])(
   "runs %s discovery and all application request families through makeMcpLayer",

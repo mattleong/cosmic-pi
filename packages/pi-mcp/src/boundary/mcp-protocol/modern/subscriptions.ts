@@ -1,7 +1,32 @@
-import type { Client, SubscriptionFilter } from "@modelcontextprotocol/client";
+import {
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  type Client,
+  type SubscriptionFilter,
+} from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
-import { boundaryError } from "../../../client/errors.ts";
+import { boundaryError, McpBoundaryError } from "../../../client/errors.ts";
 import type { SdkEvents } from "../../sdk-events.ts";
+import { mapSdkProtocolError } from "../../sdk-protocol-error.ts";
+
+/** Without HTTP operation evidence, only SDK predispatch failures prove no send. */
+const mapSubscriptionFailure = (cause: unknown): McpBoundaryError => {
+  if (cause instanceof McpBoundaryError) return cause;
+  if (cause instanceof ProtocolError) return mapSdkProtocolError(cause, "completed");
+  if (cause instanceof SdkError) {
+    switch (cause.code) {
+      case SdkErrorCode.MethodNotSupportedByProtocolVersion:
+        return boundaryError("unsupported", "not-sent", "MCP subscriptions are unavailable.");
+      case SdkErrorCode.NotConnected:
+      case SdkErrorCode.NotInitialized:
+        return boundaryError("connection", "not-sent", "MCP connection is unavailable.");
+      case SdkErrorCode.RequestTimeout:
+        return boundaryError("timeout", "unknown", "MCP subscription acknowledgement timed out.");
+    }
+  }
+  return boundaryError("transport", "unknown", "MCP subscription was not acknowledged.");
+};
 
 /** SDK timeout bounds acknowledgement only. The connection scope owns stream lifetime. */
 export const ownSubscription = (
@@ -36,12 +61,7 @@ export const ownSubscription = (
                 timeout: ackTimeoutMs,
               }),
             ),
-          catch: () =>
-            boundaryError(
-              "connection",
-              "not-sent",
-              "MCP metadata subscription was not acknowledged.",
-            ),
+          catch: (error) => (traffic.mapFailure ?? mapSubscriptionFailure)(error),
         }),
       );
       const close = yield* Effect.cached(
@@ -83,8 +103,8 @@ export const ownSubscription = (
           false)
       ) {
         return yield* boundaryError(
-          "connection",
-          "not-sent",
+          "protocol",
+          "completed",
           "MCP metadata subscription was not honored.",
         );
       }

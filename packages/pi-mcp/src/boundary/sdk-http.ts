@@ -404,6 +404,13 @@ export const openSdkHttp = (
               );
               return {
                 options: { signal: owned.signal, headers: { [SDK_OPERATION_HEADER]: owned.tag } },
+                mapFailure: (cause: unknown) =>
+                  cause instanceof McpBoundaryError
+                    ? cause
+                    : mapSdkFailure(
+                        Predicate.isError(cause) ? cause : new Error("MCP SDK operation failed."),
+                        owned,
+                      ),
                 close,
                 run: <A>(callback: () => A): A => registry.run(owned, callback),
               };

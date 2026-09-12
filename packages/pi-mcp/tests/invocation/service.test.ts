@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -165,9 +166,11 @@ const makeHarness = (seams: HarnessOptions = {}) =>
       status,
       requireServer,
       revoke,
-      withAuth: (id, use) =>
+      withAuth: (id, use, _expected, preflight) =>
         Effect.gen(function* () {
           const server = yield* requireServer(id);
+          const failure = preflight?.(server);
+          if (failure) return yield* failure;
           yield* revoke(id);
           return yield* use(server);
         }),
@@ -783,6 +786,151 @@ const authConfig: McpResolvedConfig = {
     ]),
   ),
 };
+for (const mode of ["stdio", "env", "none"] as const) {
+  for (const command of ["login", "logout"] as const) {
+    it.effect(
+      `preserves connections and retained results after unsupported ${mode} ${command}`,
+      () =>
+        Effect.gen(function* () {
+          const forbidden = () => Effect.die("Unsupported auth touched credentials or user I/O.");
+          const auth = yield* makeMcpAuth.pipe(
+            Effect.provideService(
+              McpCredentialStore,
+              transactionStore({
+                mutation: () => Effect.succeed("idle"),
+                read: forbidden,
+                write: forbidden,
+                remove: forbidden,
+                readRegistration: forbidden,
+                writeRegistration: forbidden,
+              }),
+            ),
+            Effect.provideService(McpSdkAuth, {
+              login: forbidden,
+              refresh: forbidden,
+              token: forbidden,
+            }),
+          );
+          const server: McpEffectiveServer = {
+            ...config.servers.one!,
+            definition:
+              mode === "stdio"
+                ? config.servers.one!.definition!
+                : {
+                    transport: "http",
+                    url: "https://one.example/mcp",
+                    headers: {},
+                    denyTools: [],
+                    auth: mode === "env" ? { type: "env", env: "PRIVATE_ENV" } : { type: "none" },
+                  },
+          };
+          let closed = 0;
+          const f = realFixture({
+            config: { ...config, servers: { one: server } },
+            auth,
+            closing: Effect.sync(() => {
+              closed++;
+            }),
+          });
+          yield* Effect.gen(function* () {
+            const connections = yield* McpConnections;
+            const discovery = yield* McpDiscovery;
+            const { execution } = yield* makeHarness({ connections, discovery, auth });
+            const saved = yield* execution.execute(request, options);
+            const aggregate = yield* execution.execute({ action: "tools.list" }, options);
+            const before = yield* connections.status;
+            const error = yield* (
+              command === "login"
+                ? execution.login("one", {
+                    mode: "manual",
+                    openBrowser: forbidden,
+                    readCallback: forbidden,
+                  })
+                : execution.logout("one")
+            ).pipe(Effect.flip);
+            expect(error).toMatchObject({
+              kind: command === "logout" || mode === "env" ? "unsupported" : "auth-required",
+              outcome: "not-sent",
+            });
+            expect(error.reason).toBe(
+              command === "logout" || mode === "stdio"
+                ? undefined
+                : mode === "env"
+                  ? "auth-env-sign-in-unsupported"
+                  : "auth-not-configured",
+            );
+            expect(closed).toBe(0);
+            expect(yield* connections.status).toEqual(before);
+            for (const result of [saved, aggregate])
+              expect(
+                (yield* execution.execute({ action: "result.read", id: resultId(result) }, options))
+                  .reply.isError,
+              ).toBe(false);
+            expect((yield* execution.execute(request, options)).reply.isError).toBe(false);
+            expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(2);
+            expect(closed).toBe(0);
+          }).pipe(Effect.provide(f.layer));
+        }).pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnvRecord({ PRIVATE_ENV: "private-token" }),
+          ),
+        ),
+    );
+  }
+}
+
+it.effect(
+  "rechecks unsupported auth after queued readmission without clearing an OAuth failure fence",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const checked = yield* Deferred.make<void>();
+      const f = realFixture({
+        config: authConfig,
+        auth: { login: () => Effect.die("Stale OAuth command reached authentication.") },
+      });
+      yield* Effect.gen(function* () {
+        const connections = yield* McpConnections;
+        const discovery = yield* McpDiscovery;
+        const first = yield* connections
+          .withAuth("one", () =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(entered);
+        const { execution } = yield* makeHarness({
+          connections: {
+            ...connections,
+            withAuth: (id, use, expected, preflight) =>
+              connections.withAuth(id, use, expected, (server) => {
+                Deferred.doneUnsafe(checked, Effect.void);
+                return preflight?.(server);
+              }),
+          },
+          discovery,
+          auth: f.auth,
+        });
+        const pending = yield* execution
+          .login("one", loginUi)
+          .pipe(Effect.result, Effect.forkChild);
+        yield* Deferred.await(checked);
+        yield* f.publish({ ...config, revision: 2 });
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Fiber.join(first)).toMatchObject({ failure: { kind: "stale" } });
+        expect(yield* Fiber.join(pending)).toMatchObject({
+          failure: { kind: "auth-required", outcome: "not-sent" },
+        });
+        expect(yield* execution.execute(request, options).pipe(Effect.flip)).toMatchObject({
+          kind: "busy",
+          outcome: "not-sent",
+        });
+        expect(f.sent).toEqual([]);
+      }).pipe(Effect.provide(f.layer));
+    }),
+);
+
 const loginGrant = (server: McpEffectiveServer): McpGrant => ({
   version: 1,
   identity: server.identity,
@@ -969,6 +1117,7 @@ for (const failure of [false, true]) {
         let deleted = false;
         let attempts = 0;
         const f = realFixture({
+          config: authConfig,
           closing: Deferred.succeed(closing, undefined).pipe(
             Effect.andThen(Deferred.await(closeAllowed)),
           ),
@@ -1519,6 +1668,7 @@ describe("shared MCP execution", () => {
             Effect.fail(boundaryError("unavailable", "not-sent", "Storage unavailable.")),
         },
       });
+      yield* harness.setConfig(authConfig);
       const status = yield* harness.execution.execute({ action: "status" }, options);
       const call = yield* harness.execution.execute(request, options);
       expect(yield* harness.execution.logout("one").pipe(Effect.flip)).toMatchObject({
@@ -1621,6 +1771,7 @@ describe("shared MCP execution", () => {
               }),
           },
         });
+        yield* login.setConfig(authConfig);
         const saved = yield* login.execution.execute(request, options);
         yield* login.execution.login("one", {
           mode: "manual",

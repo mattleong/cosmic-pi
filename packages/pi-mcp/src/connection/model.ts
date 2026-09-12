@@ -121,11 +121,13 @@ export interface McpConnectionsContract {
   ) => Effect.Effect<Schema.Json, McpBoundaryError>;
   readonly requireServer: (id: string) => Effect.Effect<McpEffectiveServer, McpBoundaryError>;
   /** Explicit user authentication only. Serializes auth, suspends execution, and revokes results.
-   * Failure/interruption keeps execution suspended until a successful explicit auth retry. */
+   * Pure preflight runs under admission before any suspension or revocation, including after waits.
+   * Once admitted, failure/interruption keeps execution suspended until a successful auth retry. */
   readonly withAuth: <A>(
     serverId: string,
     use: (server: McpEffectiveServer) => Effect.Effect<A, McpBoundaryError>,
     expected?: McpActionBinding,
+    preflight?: (server: McpEffectiveServer) => McpBoundaryError | undefined,
   ) => Effect.Effect<A, McpBoundaryError>;
   readonly withOperation: <A>(
     serverId: string,
