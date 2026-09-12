@@ -32,6 +32,7 @@ import {
 
 const fixture = fileURLToPath(new URL("../fixtures/stdio-server.mjs", import.meta.url));
 const options = {
+  protocol: "legacy" as const,
   command: process.execPath,
   args: [fixture],
   environment: {},
@@ -431,7 +432,7 @@ it.effect.each(protocolResponses)(
       expect(
         fake.writes.filter((message) => "method" in message && message.method === "tools/call"),
       ).toHaveLength(1);
-      expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
+      expect(yield* connection.health).toMatchObject({ closed: false, cleanupUnconfirmed: false });
       yield* connection.close;
       expect(cleanup).toEqual([true]);
       expect(fake.state.readers).toBe(0);
@@ -704,7 +705,7 @@ it.effect("early first-close interruption cannot strand connection cleanup or sc
       expect(cleanup).toEqual([true]);
       yield* connection.terminal;
       yield* connection.setToken("stdio-no-op");
-      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
     }
   }),
 );

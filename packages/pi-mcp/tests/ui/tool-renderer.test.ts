@@ -228,6 +228,40 @@ describe("MCP card projections", () => {
     },
   );
 
+  it("discloses unavailable validation without claiming an output mismatch", () => {
+    const result = {
+      details: {
+        ...reply().details,
+        action: "result.read",
+        resultId: "retained-1",
+        data: {
+          origin: {
+            action: "tools.call",
+            outcome: "completed",
+            isError: false,
+            outputValidation: "unavailable",
+          },
+          text: "existing output",
+        },
+      },
+      content: [],
+    };
+    const projection = decodeMcpCardDetails(result);
+    expect(projection.isError).toBe(false);
+    expect(projection.origin).toMatchObject({
+      outcome: "completed",
+      isError: false,
+      outputValidationFailed: false,
+      outputValidationUnavailable: true,
+    });
+    expect(projection.warnings.length).toBeGreaterThan(0);
+    for (const warning of projection.warnings)
+      expect(display(result).replace(/\s+/g, " ")).toContain(warning);
+    expect(display(result)).not.toMatch(/validation failed/i);
+    expect(projection.recoveryHint).toContain("/mcp result retained-1");
+    expect(display(result, true)).toContain("existing output");
+  });
+
   it("reports counts and images without copying or touching image bytes", () => {
     const image = {
       type: "image",

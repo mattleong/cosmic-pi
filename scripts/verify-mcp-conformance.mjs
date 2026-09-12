@@ -119,7 +119,9 @@ try {
         cleanup: "confirmed",
       });
       await assert.rejects(lstat(workspace), { code: "ENOENT" }, "Driver workspace remains.");
-      console.log(`${scenario}: passed with confirmed application cleanup.\n${output}`);
+      console.log(
+        `${scenario}: legacy protocol passed with confirmed application cleanup.\n${output}`,
+      );
     } catch (error) {
       failures.push(scenario);
       console.error(`${scenario}: failed\n${String(error).slice(0, 36 * 1024)}`);

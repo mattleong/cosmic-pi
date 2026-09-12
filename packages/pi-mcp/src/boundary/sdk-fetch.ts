@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { captureSdkHttpChallenge } from "./sdk-http-challenge.ts";
+import { makeSseBudget } from "./mcp-protocol/shared/sse-budget.ts";
 
 /** This header is an internal correlation key and must never reach an MCP server. */
 export const SDK_OPERATION_HEADER = "x-pi-mcp-operation";
@@ -54,6 +55,9 @@ export interface SdkFetchOptions {
   /** Returns an admitted control owner with its initial fetch lease already held. */
   readonly beginControl: () => SdkFetchOwner;
   readonly lookupOperation: (requestId: RequestId) => SdkFetchOperation | undefined;
+  readonly isObservationRequest?: (method: string) => boolean;
+  readonly onObservationFailure?: () => void;
+  readonly onResponse?: (status: number, requestHeaders: Headers) => void;
 }
 
 const decodeRequestId = Schema.decodeUnknownOption(
@@ -66,10 +70,10 @@ const decodeRequestId = Schema.decodeUnknownOption(
   ),
 );
 
-const requestIdFromBody = (body: BodyInit | null | undefined): RequestId | undefined => {
+const requestFromBody = (body: BodyInit | null | undefined) => {
   if (!Predicate.isString(body)) return undefined;
   const decoded = decodeRequestId(body);
-  return Option.isSome(decoded) ? decoded.value.id : undefined;
+  return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
 const stripInternalHeaders = (headers: HeadersInit | undefined): Headers => {
@@ -112,8 +116,11 @@ const makeBoundedBody = (
   signal: AbortSignal,
   finished: () => void,
   failed: (error: SdkFetchFailure) => void,
+  sse: boolean,
+  ended: () => void,
 ): ReadableStream<Uint8Array> => {
   const reader = body.getReader();
+  const withinSseBudget = makeSseBudget(maxBytes);
   let bytes = 0;
   let sourceFinished = false;
   let terminal = false;
@@ -163,11 +170,12 @@ const makeBoundedBody = (
           if (result.done) {
             terminal = true;
             finish();
+            ended();
             controller.close();
             return;
           }
-          bytes += result.value.byteLength;
-          if (bytes > maxBytes) {
+          if (!sse) bytes += result.value.byteLength;
+          if (sse ? !withinSseBudget(result.value) : bytes > maxBytes) {
             const error = new SdkFetchResponseLimitError();
             failed(error);
             errorConsumer(error);
@@ -200,15 +208,16 @@ const makeBoundedBody = (
 export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
   return (url, init) =>
     Promise.resolve().then(() => {
-      const requestId = requestIdFromBody(init?.body);
-      const operation = requestId === undefined ? undefined : options.lookupOperation(requestId);
+      const request = requestFromBody(init?.body);
+      const operation = request === undefined ? undefined : options.lookupOperation(request.id);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const observation =
+        method === "GET" ||
+        (request !== undefined && options.isObservationRequest?.(request.method) === true);
       if (options.session.signal.aborted || init?.signal?.aborted || operation?.signal.aborted) {
         throw aborted();
       }
-      const control =
-        operation === undefined && (init?.method ?? "GET").toUpperCase() !== "GET"
-          ? options.beginControl()
-          : undefined;
+      const control = operation === undefined && !observation ? options.beginControl() : undefined;
       const owner = operation ?? control;
       const owners: ReadonlyArray<SdkFetchOwner> =
         owner === undefined ? [options.session] : [owner, options.session];
@@ -233,7 +242,13 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
       const finished = () => {
         for (const owner of owners) owner.bodyFinished();
       };
-      const failed = (error: SdkFetchFailure) => operation?.fail(error);
+      const observationFailed = () => {
+        if (observation && !signal.aborted) options.onObservationFailure?.();
+      };
+      const failed = (error: SdkFetchFailure) => {
+        operation?.fail(error);
+        observationFailed();
+      };
 
       // The public FetchLike seam may throw synchronously. Its settlement callback
       // retains ownership even after the Effect caller has stopped waiting.
@@ -260,8 +275,27 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
               failed(error);
               return rejectResponse(error);
             }
+            options.onResponse?.(response.status, new Headers(sanitizedInit.headers));
+            const sse =
+              response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ===
+              "text/event-stream";
+            // A missing optional GET route is not an expired session. Some stateless
+            // servers return 404 rather than 405; a session-bearing 404 still fails.
+            // Auth/outage responses and successful non-SSE GETs lose observation.
+            const optionalGetAbsent =
+              method === "GET" &&
+              (response.status === 405 ||
+                (response.status === 404 &&
+                  !new Headers(sanitizedInit.headers).has("mcp-session-id")));
+            if (
+              operation === undefined &&
+              observation &&
+              !optionalGetAbsent &&
+              (response.status >= 400 || (method === "GET" && (!sse || response.body === null)))
+            )
+              observationFailed();
             const declaredLength = contentLength(response);
-            if (declaredLength !== undefined && declaredLength > options.maxBytes) {
+            if (!sse && declaredLength !== undefined && declaredLength > options.maxBytes) {
               const error = new SdkFetchResponseLimitError();
               failed(error);
               return rejectResponse(error);
@@ -279,6 +313,10 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
                 signal,
                 finished,
                 failed,
+                sse,
+                () => {
+                  if (sse) observationFailed();
+                },
               );
               return new Response(boundedBody, {
                 headers: response.headers,
@@ -298,6 +336,7 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
           },
           () => {
             for (const owner of owners) owner.fetchFinished();
+            observationFailed();
             throw signal.aborted ? aborted() : new SdkFetchBodyError();
           },
         );

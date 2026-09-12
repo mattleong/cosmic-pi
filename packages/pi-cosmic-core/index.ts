@@ -63,6 +63,13 @@ export {
   type JsonHttpResponseSchema,
 } from "./src/platform/json-http.ts";
 export {
+  CrossProcessLock,
+  CrossProcessLockError,
+  type CrossProcessLease,
+  type CrossProcessLockContract,
+  type CrossProcessLockOptions,
+} from "./src/platform/cross-process-lock.ts";
+export {
   ProcessCoordinator,
   type ProcessCoordinatorContract,
 } from "./src/platform/process-coordinator.ts";

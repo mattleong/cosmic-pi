@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { hasControlCharacter, type NetworkAddress } from "pi-cosmic-core";
-import { boundaryError } from "../client/errors.ts";
+import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer, McpOAuthConfig } from "../config/model.ts";
 
 export const authFailure = () =>
@@ -47,6 +47,18 @@ export const parseAuthUrl = (value: string) =>
     },
     catch: () => deniedAuth(),
   });
+/** The configured bearer destination must use TLS, except explicit loopback HTTP. */
+export const requireSecureBearerDestination = (
+  endpoint: string,
+): Effect.Effect<void, McpBoundaryError> =>
+  parseAuthUrl(endpoint).pipe(
+    Effect.flatMap((url) =>
+      url.protocol === "https:" || isLoopbackHost(url.hostname)
+        ? Effect.void
+        : Effect.fail(deniedAuth()),
+    ),
+  );
+
 /** Missing metadata may use only the resource server's origin unless explicitly pinned. */
 export const resourceMetadataFallback = (endpoint: string, config: McpOAuthConfig) =>
   Effect.gen(function* () {

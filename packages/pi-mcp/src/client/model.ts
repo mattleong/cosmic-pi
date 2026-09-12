@@ -53,6 +53,7 @@ export interface McpCapabilities {
 export interface McpConnectionHealth {
   readonly closed: boolean;
   readonly cleanupUnconfirmed: boolean;
+  readonly observation?: "active" | "failed";
 }
 
 export interface McpInstructions {

@@ -51,7 +51,7 @@ const decodeHelperReply = (
     onExcessProperty: "error",
   }).pipe(
     Effect.mapError(() =>
-      boundaryError("protocol", outcome, "Schema validator returned an invalid response."),
+      boundaryError("unavailable", outcome, "Schema validator returned an invalid response."),
     ),
   );
 

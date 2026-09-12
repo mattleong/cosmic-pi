@@ -25,14 +25,14 @@ export interface McpPrepareInput {
   readonly action: string;
   readonly reply: Pick<McpReply, "outcome" | "result">;
   readonly notices?: ReadonlyArray<string>;
-  readonly outputValidation?: "failed" | "passed";
+  readonly outputValidation?: "failed" | "passed" | "unavailable";
 }
 
 export interface McpResultOrigin {
   readonly action: string;
   readonly outcome: "completed";
   readonly isError: boolean;
-  readonly outputValidation?: "failed" | "passed";
+  readonly outputValidation?: "failed" | "passed" | "unavailable";
 }
 
 export interface McpAttachment {

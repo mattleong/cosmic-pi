@@ -34,7 +34,7 @@ export const decodeGatewayRequest = <Input>(
 
 export interface McpInvocationReply {
   readonly reply: McpReply;
-  readonly outputValidation?: "passed" | "failed";
+  readonly outputValidation?: "passed" | "failed" | "unavailable";
   readonly notices?: ReadonlyArray<string>;
 }
 
@@ -78,18 +78,17 @@ export const invokeTool = (
       structuredContent === undefined
         ? Effect.fail(boundaryError("protocol", "completed", "MCP structured output is missing."))
         : validate(outputSchema, structuredContent, "completed");
-    const outputValidation = yield* validation.pipe(
-      Effect.as("passed" as const),
-      Effect.orElseSucceed(() => "failed" as const),
-    );
+    const validationResult = yield* validation.pipe(Effect.result);
     yield* operation.checkCurrent;
-    return outputValidation === "passed"
-      ? { reply, outputValidation }
-      : {
-          reply,
-          outputValidation,
-          notices: [
-            "Completed MCP output failed its captured schema validation. The operation was not replayed.",
-          ],
-        };
+    if (validationResult._tag === "Success") return { reply, outputValidation: "passed" };
+    // A local validator failure says nothing about whether remote output matches.
+    return {
+      reply,
+      outputValidation: validationResult.failure.kind === "protocol" ? "failed" : "unavailable",
+      notices: [
+        validationResult.failure.kind === "protocol"
+          ? "Completed MCP output failed its captured schema validation. The operation was not replayed."
+          : "Completed MCP output could not be schema-validated. This is not evidence of an output mismatch. The operation was not replayed.",
+      ],
+    };
   });

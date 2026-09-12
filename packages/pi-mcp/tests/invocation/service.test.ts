@@ -40,6 +40,7 @@ import type { McpResultsContract } from "../../src/results/model.ts";
 import { makeMcpResults, McpResults } from "../../src/results/service.ts";
 import type { McpGatewayExecution } from "../../src/tools/model.ts";
 import { makeMcpExecution } from "../../src/tools/service.ts";
+import { transactionStore } from "../fixtures/credential-store.ts";
 
 const options = { maxOutputBytes: 4_096, images: false };
 const request = {
@@ -792,24 +793,27 @@ const makeAuthFixture = (login: McpSdkAuthContract["login"]) =>
     const auth = yield* makeMcpAuth.pipe(
       Effect.provide(
         Layer.mergeAll(
-          Layer.succeed(McpCredentialStore, {
-            mutation: () => Effect.succeed("idle"),
-            readRegistration: () => Effect.succeed(undefined),
-            writeRegistration: () => Effect.void,
-            read: (identity) =>
-              Effect.sync(() => {
-                reads++;
-                return grants.get(identity);
-              }),
-            write: (identity, grant) =>
-              Effect.sync(() => {
-                grants.set(identity, grant);
-              }),
-            remove: (identity) =>
-              Effect.sync(() => {
-                grants.delete(identity);
-              }),
-          }),
+          Layer.succeed(
+            McpCredentialStore,
+            transactionStore({
+              mutation: () => Effect.succeed("idle"),
+              readRegistration: () => Effect.succeed(undefined),
+              writeRegistration: () => Effect.void,
+              read: (identity) =>
+                Effect.sync(() => {
+                  reads++;
+                  return grants.get(identity);
+                }),
+              write: (identity, grant) =>
+                Effect.sync(() => {
+                  grants.set(identity, grant);
+                }),
+              remove: (identity) =>
+                Effect.sync(() => {
+                  grants.delete(identity);
+                }),
+            }),
+          ),
           Layer.succeed(McpSdkAuth, {
             login,
             refresh: (_server, grant) => Effect.succeed(grant),
@@ -1243,6 +1247,57 @@ describe("shared MCP execution", () => {
       );
       expect(data.text).toContain("remote side effect completed");
       expect(harness.sent).toHaveLength(1);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("retains distinct evidence for output mismatch and unavailable validation", () =>
+    Effect.gen(function* () {
+      const notices: Array<ReadonlyArray<string>> = [];
+      for (const kind of [
+        "protocol",
+        "unavailable",
+        "timeout",
+        "invalid-input",
+        "cleanup",
+        "output-limit",
+      ] as const) {
+        const harness = yield* makeHarness({
+          request: (input) =>
+            Effect.succeed({
+              action: input.action,
+              outcome: "completed",
+              result: { structuredContent: { value: 1 }, content: [] },
+            }),
+          validate: (_schema, _data, outcome) =>
+            outcome === "completed"
+              ? Effect.fail(boundaryError(kind, "completed", "private validator diagnostic"))
+              : Effect.void,
+        });
+        const completed = yield* harness.execution.execute(request, options);
+        expect(completed.reply).toMatchObject({
+          outcome: "completed",
+          isError: true,
+          data: { origin: { outputValidation: kind === "protocol" ? "failed" : "unavailable" } },
+        });
+        const read = yield* harness.execution.execute(
+          { action: "result.read", id: resultId(completed) },
+          options,
+        );
+        expect(read.reply).toMatchObject({
+          outcome: "completed",
+          isError: false,
+          data: { origin: { outputValidation: kind === "protocol" ? "failed" : "unavailable" } },
+        });
+        expect(read.reply.notices).toEqual(completed.reply.notices);
+        expect(completed.reply.notices.join(" ")).not.toContain("private validator diagnostic");
+        expect(harness.sent).toHaveLength(1);
+        notices.push(completed.reply.notices);
+      }
+      expect(notices[0]).not.toEqual(notices[1]);
+      expect(notices[1]).toEqual(notices[2]);
+      expect(notices[1]).toEqual(notices[3]);
+      expect(notices[1]).toEqual(notices[4]);
+      expect(notices[1]).toEqual(notices[5]);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 

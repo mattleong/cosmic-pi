@@ -102,6 +102,7 @@ export const projectPrepared = (
       ? false
       : prepared.origin.isError ||
         prepared.origin.outputValidation === "failed" ||
+        prepared.origin.outputValidation === "unavailable" ||
         prepared.outputLimited ||
         !retained;
     let base: McpGatewayReply = {

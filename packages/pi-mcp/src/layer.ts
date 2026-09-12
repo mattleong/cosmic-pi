@@ -2,6 +2,8 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
+import { boundaryError } from "./client/errors.ts";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { McpAuth } from "./auth/service.ts";
 import { McpAuthFlow } from "./auth/flow.ts";
@@ -27,7 +29,38 @@ export const makeMcpLayer = (input: McpLayerInput) => {
     AgentDirectory.layerFromHost(getAgentDir),
   );
   const config = McpConfigStore.layer(input).pipe(Layer.provide(platform));
-  const auth = McpAuth.layer();
+  const isTrusted = () => {
+    try {
+      return input.isTrusted() === true;
+    } catch {
+      return false;
+    }
+  };
+  const auth = Layer.unwrap(
+    Effect.gen(function* () {
+      const store = yield* McpConfigStore;
+      return McpAuth.layer(
+        {},
+        {
+          isTrusted,
+          check: (server) =>
+            Effect.gen(function* () {
+              const current = yield* store.snapshot;
+              const selected = current.servers[server.id];
+              if (
+                !isTrusted() ||
+                !current.trusted ||
+                !current.settings.enabled ||
+                !selected?.enabled ||
+                !selected.definition ||
+                selected.identity !== server.identity
+              )
+                return yield* boundaryError("stale", "not-sent", "OAuth authority was revoked.");
+            }),
+        },
+      );
+    }),
+  ).pipe(Layer.provide(config));
   const activity = McpActivity.layer();
   const connections = McpConnections.layer({ isTrusted: input.isTrusted }).pipe(
     Layer.provide(Layer.mergeAll(config, auth, activity, McpConnector.layer)),

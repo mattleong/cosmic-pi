@@ -12,6 +12,7 @@ import type { McpConnection } from "../client/model.ts";
 import type { McpEffectiveServer, McpSettings } from "../config/model.ts";
 import { openSdkHttp, type SdkHttpOptions } from "./sdk-http.ts";
 import { openSdkStdio } from "./sdk-stdio.ts";
+import { requireSecureBearerDestination } from "../auth/policy.ts";
 
 export interface McpConnectorContract {
   readonly open: (
@@ -84,7 +85,14 @@ export class McpConnector extends Context.Service<McpConnector, McpConnectorCont
             );
           }
           const definition = server.definition;
+          // Reject plaintext destinations before reading managed environment credentials.
+          if (
+            definition.transport === "http" &&
+            (token !== undefined || definition.auth.type === "env")
+          )
+            yield* requireSecureBearerDestination(definition.url);
           const common = {
+            protocol: definition.protocol ?? "auto",
             connectTimeoutMs: settings.connectTimeoutMs,
             requestTimeoutMs: settings.requestTimeoutMs,
           };

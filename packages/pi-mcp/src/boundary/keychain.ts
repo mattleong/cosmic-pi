@@ -1,9 +1,9 @@
 import * as Effect from "effect/Effect";
+import type { CrossProcessLease } from "pi-cosmic-core";
 import type { McpCredentialMutation } from "../auth/progress.ts";
-import { boundaryError } from "../client/errors.ts";
+import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 
 export interface KeychainEntry {
-  /** The native implementation can return null despite its optional-string declaration. */
   readonly getPassword: () => Promise<string | null | undefined>;
   readonly setPassword: (password: string) => Promise<void>;
   readonly deleteCredential: () => Promise<boolean>;
@@ -14,6 +14,13 @@ export interface KeychainOptions {
   readonly entryFactory?: KeychainEntryFactory;
   readonly service?: string;
   readonly timeoutMs?: number;
+  /** Private directory override for child-process tests, never derived from agentDir. */
+  readonly lockDirectory?: string;
+}
+export interface KeychainMutationOwner {
+  readonly lease?: CrossProcessLease;
+  readonly isCurrent?: () => boolean;
+  readonly checkCurrent?: Effect.Effect<void, McpBoundaryError>;
 }
 const nativeEntry: KeychainEntryFactory = (service, identity) => {
   if (process.platform !== "darwin") return Promise.reject(new Error("Keychain is unavailable."));
@@ -24,8 +31,8 @@ interface Fence {
   blocked: boolean;
   revision: number;
 }
-// Native writes cannot be reliably cancelled. This record outlives Effect scopes.
-// Never pass an AbortSignal to napi writes: an aborted Promise is not native completion.
+// Native completion ownership outlives an interrupted Effect waiter. No AbortSignal is
+// passed to napi: cancellation of its Promise would not establish native completion.
 const fences = new WeakMap<KeychainEntryFactory, Map<string, Fence>>();
 const unavailable = () =>
   boundaryError(
@@ -70,83 +77,102 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
     };
     const validIdentity = (identity: string) => /^[a-f0-9]{64}$/.test(identity);
     const timeout = options.timeoutMs ?? 15_000;
-    const read = (identity: string) =>
+    const read = (identity: string, owner?: KeychainMutationOwner) =>
       Effect.suspend(() => {
         const fence = fenceFor(identity);
         if (!validIdentity(identity)) return Effect.fail(unavailable());
         if (fence.blocked || fence.pending) return Effect.fail(unresolved());
         const revision = fence.revision;
-        return Effect.tryPromise({
-          try: (signal) =>
-            factory(service, identity)
-              .then((entry) => {
-                if (signal.aborted || fence.blocked || fence.pending) throw unavailable();
-                return entry.getPassword();
-              })
-              .then((value) => {
-                if (fence.blocked || fence.pending || fence.revision !== revision)
-                  throw unavailable();
+        return Effect.gen(function* () {
+          const entry = yield* Effect.tryPromise({
+            try: () => factory(service, identity),
+            catch: unavailable,
+          });
+          // The factory may await keyring import or a native entry. Recheck full config
+          // authority in Effect after that wait, not just the synchronous trust predicate.
+          yield* owner?.checkCurrent ?? Effect.void;
+          return yield* Effect.tryPromise({
+            try: (signal) => {
+              const current = () =>
+                !signal.aborted &&
+                owner?.isCurrent?.() !== false &&
+                !fence.blocked &&
+                !fence.pending &&
+                fence.revision === revision;
+              if (!current()) throw unavailable();
+              return entry.getPassword().then((value) => {
+                if (!current()) throw unavailable();
                 return value ?? undefined;
-              }),
-          catch: unavailable,
+              });
+            },
+            catch: unavailable,
+          });
         }).pipe(
           Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.fail(unavailable()) }),
         );
       });
-    const mutate = (identity: string, password?: string) =>
+    const mutate = (identity: string, password?: string, owner?: KeychainMutationOwner) =>
       Effect.suspend(() => {
         if (!validIdentity(identity)) return Effect.fail(unavailable());
         const fence = fenceFor(identity);
         const removing = password === undefined;
         const error = removing ? deletionFailed : unavailable;
         if (!removing && (fence.blocked || fence.pending)) return Effect.fail(unresolved());
-        return Effect.tryPromise({
-          try: (signal) => {
-            const predecessor = fence.pending;
-            // Revocation is synchronous and precedes joining an older native write.
-            fence.blocked = true;
-            fence.revision++;
-            let interrupted = signal.aborted;
-            const abort = () => {
-              interrupted = true;
-              fence.blocked = true;
-            };
-            signal.addEventListener("abort", abort, { once: true });
-            const operation = (predecessor ?? Promise.resolve())
-              .then(() => {
-                if (signal.aborted) throw error();
-                return factory(service, identity);
-              })
-              .then((entry) => {
-                if (signal.aborted) throw error();
-                return removing
+        const predecessor = fence.pending;
+        fence.blocked = true;
+        const revision = ++fence.revision;
+        return Effect.gen(function* () {
+          if (predecessor) yield* Effect.tryPromise({ try: () => predecessor, catch: error });
+          const entry = yield* Effect.tryPromise({
+            try: () => factory(service, identity),
+            catch: error,
+          });
+          yield* owner?.checkCurrent ?? Effect.void;
+          return yield* Effect.tryPromise({
+            try: (signal) => {
+              if (signal.aborted || owner?.isCurrent?.() === false || fence.revision !== revision)
+                throw error();
+              // Durable journal before native admission; no asynchronous work between them.
+              owner?.lease?.mutationStarted();
+              const completion = Promise.withResolvers<void>();
+              fence.pending = completion.promise;
+              let interrupted: boolean = signal.aborted;
+              const abort = () => {
+                interrupted = true;
+                fence.blocked = true;
+              };
+              signal.addEventListener("abort", abort, { once: true });
+              let native: Promise<void>;
+              try {
+                native = removing
                   ? entry.deleteCredential().then(() => undefined)
                   : entry.setPassword(password);
-              });
-            // Always resolves, but only after the native operation actually settles.
-            const completion = operation.then(
-              () => undefined,
-              () => undefined,
-            );
-            fence.pending = completion;
-            return operation
-              .then(
-                () => {
-                  if (fence.pending === completion) {
-                    fence.pending = undefined;
-                    fence.blocked = interrupted;
-                  }
-                  if (interrupted) throw error();
-                },
-                () => {
-                  if (fence.pending === completion) fence.pending = undefined;
-                  fence.blocked = true;
-                  throw error();
-                },
-              )
-              .finally(() => signal.removeEventListener("abort", abort));
-          },
-          catch: error,
+              } catch {
+                // A throwing foreign API may already have dispatched. Retain pending journal.
+                signal.removeEventListener("abort", abort);
+                throw error();
+              }
+              return native
+                .then(
+                  () => {
+                    owner?.lease?.mutationSettled();
+                    if (fence.pending === completion.promise) fence.pending = undefined;
+                    if (fence.revision === revision) fence.blocked = interrupted;
+                    completion.resolve();
+                    if (interrupted) throw error();
+                  },
+                  () => {
+                    owner?.lease?.mutationSettled();
+                    if (fence.pending === completion.promise) fence.pending = undefined;
+                    fence.blocked = true;
+                    completion.resolve();
+                    throw error();
+                  },
+                )
+                .finally(() => signal.removeEventListener("abort", abort));
+            },
+            catch: error,
+          });
         }).pipe(
           Effect.timeoutOrElse({
             duration: timeout,
@@ -155,14 +181,16 @@ export const makeKeychainStore = (options: KeychainOptions = {}) =>
         );
       });
     return {
-      /** Passive process-local evidence. Does not load keyring, create an entry, or join a Promise. */
+      /** Passive process-local evidence. Never loads keyring or joins a Promise. */
       mutation: (identity: string): Effect.Effect<McpCredentialMutation> =>
         Effect.sync(() => {
           const fence = ownedRecords.get(`${service}\u0000${identity}`);
           return fence?.pending ? "pending" : fence?.blocked ? "blocked" : "idle";
         }),
       read,
-      write: (identity: string, password: string) => mutate(identity, password),
-      remove: (identity: string) => mutate(identity),
+      write: (identity: string, password: string, owner?: KeychainMutationOwner) =>
+        mutate(identity, password, owner),
+      remove: (identity: string, owner?: KeychainMutationOwner) =>
+        mutate(identity, undefined, owner),
     };
   });

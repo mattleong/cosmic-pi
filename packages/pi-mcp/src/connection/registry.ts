@@ -74,6 +74,8 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   let closed = false;
   let sequence = 0;
   const owners = new Map<string, ConnectionOwner>();
+  // Diagnostic only, bounded by current configured identities; no remote data retained.
+  const observationFailures = new Map<string, string>();
   const suspensions = new Map<string, AuthSuspension>();
   const listeners = new Set<McpRevocationListener>();
   const changes = new Set<() => void>();
@@ -183,6 +185,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   const trustLocked = Effect.gen(function* () {
     if (config.trusted && !options.isTrusted()) {
       config = { ...config, trusted: false };
+      observationFailures.clear();
       yield* revokeLocked(Object.keys(config.servers), true);
     }
   });
@@ -358,6 +361,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
             if (Exit.isSuccess(acquired)) {
               owner.connection = acquired.value;
               if (!owner.current) return;
+              observationFailures.delete(owner.server.id);
               owner.state = "connected";
               yield* activity.finish(owner.activity!, { status: "done" });
               changed();
@@ -368,10 +372,21 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                     Effect.flatMap((exit) => {
                       const error = Exit.findErrorOption(exit);
                       return withLock(
-                        terminalLocked(
-                          owner,
-                          error._tag === "Some" && error.value.kind === "cleanup",
-                        ),
+                        Effect.gen(function* () {
+                          if (
+                            owner.current &&
+                            owners.get(owner.server.id) === owner &&
+                            config.trusted &&
+                            options.isTrusted() &&
+                            config.servers[owner.server.id]?.identity === owner.server.identity &&
+                            (yield* acquired.value.health).observation === "failed"
+                          )
+                            observationFailures.set(owner.server.id, owner.server.identity);
+                          yield* terminalLocked(
+                            owner,
+                            error._tag === "Some" && error.value.kind === "cleanup",
+                          );
+                        }),
                       );
                     }),
                   ),
@@ -437,7 +452,9 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
       Effect.gen(function* () {
         // Auth.status reads only observed state. Never resolve credentials from status.
         const observed = yield* auth.status(server);
-        return {
+        const connection = owners.get(server.id)?.connection;
+        const health = connection === undefined ? undefined : yield* connection.health;
+        let result: McpConnectionStatus["servers"][number] = {
           id: server.id,
           scope: server.scope,
           enabled: server.enabled,
@@ -458,6 +475,13 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                   : ("auth-suspended" as const)
                 : undefined,
         };
+        if (connection?.protocolVersion !== undefined)
+          result = { ...result, protocolVersion: connection.protocolVersion };
+        const observation =
+          health?.observation ??
+          (observationFailures.get(server.id) === server.identity ? "failed" : undefined);
+        if (observation !== undefined) result = { ...result, observation };
+        return result;
       }),
     );
     return {
@@ -509,6 +533,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
             config.servers[id]?.enabled !== next.servers[id]?.enabled,
         );
         config = next;
+        observationFailures.clear();
         yield* revokeLocked(affected, true);
       }),
     ),

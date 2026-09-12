@@ -73,7 +73,7 @@ const makeClientHarness = Effect.gen(function* () {
       });
     }
   };
-  const client = yield* Effect.acquireRelease(makeSdkClient(), (owned) =>
+  const client = yield* Effect.acquireRelease(makeSdkClient("legacy"), (owned) =>
     Effect.promise(() => owned.close()),
   );
   yield* Effect.tryPromise({
@@ -170,6 +170,6 @@ it.effect("coalesces metadata changes and ends delivery on terminal transport cl
     });
     yield* Fiber.join(reader);
     expect(delivered.sort()).toEqual(["prompts", "resources", "tools"]);
-    expect(yield* events.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+    expect(yield* events.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
   }),
 );

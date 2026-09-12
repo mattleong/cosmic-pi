@@ -1,9 +1,12 @@
+import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
-import type { BoundedProcessResult } from "pi-cosmic-core";
+import { HttpServerResponse } from "effect/unstable/http";
+import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
+import { startHttpServer } from "../fixtures/http-server.ts";
 import {
   JSON_SCHEMA_VALIDATOR_LIMITS,
   makeJsonSchemaValidator,
@@ -14,6 +17,20 @@ const jsonStringSchema = Schema.fromJsonString(Schema.Json);
 const encodeJson = Schema.encodeSync(jsonStringSchema);
 const decodeJson = Schema.decodeUnknownSync(jsonStringSchema);
 const encodeUnknown = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+const runHelper = (schema: Schema.Json, data: Schema.Json) =>
+  runBoundedProcessNode({
+    executable: process.execPath,
+    args: [
+      fileURLToPath(new URL("../../src/boundary/schema-validator-helper.mjs", import.meta.url)),
+    ],
+    stdin: new TextEncoder().encode(encodeJson({ schema, data })),
+    stdoutLimitBytes: 4096,
+    stderrLimitBytes: 256,
+    totalOutputLimitBytes: 4352,
+    timeoutMillis: 2000,
+    cleanupTimeoutMillis: 2000,
+  });
 
 const processResult = (stdout: string, overrides?: Partial<BoundedProcessResult>) =>
   ({
@@ -186,54 +203,450 @@ it.live("preserves nested nulls and rejects unsupported __proto__ schema propert
   }),
 );
 
-it.effect("rejects remote references and custom constraints before process admission", () =>
+it.effect("rejects async extensions and malformed constraints before process admission", () =>
   Effect.gen(function* () {
     let calls = 0;
-    const runner: JsonSchemaProcessRunner = (_input, onCleanup) =>
-      Effect.sync(() => {
-        calls += 1;
-        onCleanup(true);
-        return processResult('{"valid":true}');
-      });
-    const validator = yield* makeJsonSchemaValidator({ processRunner: runner });
-
-    const remote = yield* validator
-      .validateJsonSchema({ $ref: "https://example.test/schema.json" }, {}, "not-sent")
-      .pipe(Effect.result);
-    const file = yield* validator
-      .validateJsonSchema({ $ref: "file:///tmp/schema.json" }, {}, "not-sent")
-      .pipe(Effect.result);
-    const custom = yield* validator
-      .validateJsonSchema({ type: "string", "x-executable": true }, "secret", "not-sent")
-      .pipe(Effect.result);
-    const customFormat = yield* validator
-      .validateJsonSchema({ type: "string", format: "secret-format" }, "secret", "not-sent")
-      .pipe(Effect.result);
-    const malformed = yield* validator
-      .validateJsonSchema({ required: [1] }, {}, "not-sent")
-      .pipe(Effect.result);
-
-    expect(remote).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
+    const validator = yield* makeJsonSchemaValidator({
+      processRunner: (_input, onCleanup) =>
+        Effect.sync(() => {
+          calls += 1;
+          onCleanup(true);
+          return processResult('{"valid":true}');
+        }),
     });
-    expect(file).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(custom).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(customFormat).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(malformed).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
+    for (const schema of [
+      { $async: true, type: "string" },
+      { $ref: "#/annotation", annotation: { $async: true, type: "string" } },
+      { required: [1] },
+      { format: 1 },
+    ]) {
+      expect(
+        yield* validator.validateJsonSchema(schema, {}, "not-sent").pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
+    }
     expect(calls).toBe(0);
+  }),
+);
+
+it.live("resolves identifiers locally without loading external schemas", () =>
+  Effect.gen(function* () {
+    const server = yield* startHttpServer(() => Effect.succeed(HttpServerResponse.text("true")));
+    const validator = yield* makeJsonSchemaValidator();
+    const id = server.url.href;
+    for (const ref of ["#/$defs/count", "count", new URL("count", id).href]) {
+      const schema = {
+        $id: id,
+        $defs: { count: { $id: "count", type: "integer", minimum: 1 } },
+        $ref: ref,
+      };
+      yield* validator.validateJsonSchema(schema, 1, "not-sent");
+      expect(
+        yield* validator.validateJsonSchema(schema, 0, "completed").pipe(Effect.flip),
+      ).toMatchObject({ kind: "protocol", outcome: "completed" });
+    }
+    yield* validator.validateJsonSchema(
+      {
+        $id: "urn:example:count",
+        $defs: { count: { $anchor: "count", type: "integer" } },
+        $ref: "#count",
+      },
+      1,
+      "not-sent",
+    );
+    for (const ref of [id, `${id}#/missing`, "file:///tmp/schema.json", "missing.json"]) {
+      expect(
+        yield* validator.validateJsonSchema({ $ref: ref }, {}, "completed").pipe(Effect.flip),
+      ).toMatchObject({ kind: "unavailable", outcome: "completed" });
+    }
+    expect(server.requests).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+it.live("keeps content and custom annotations inert while enforcing ordinary constraints", () =>
+  Effect.gen(function* () {
+    const validator = yield* makeJsonSchemaValidator();
+    const schema = {
+      type: "object",
+      properties: {
+        value: {
+          type: "string",
+          minLength: 2,
+          pattern: "^[a-z ]+$",
+          default: "default",
+          contentEncoding: "base64",
+          contentMediaType: "application/json",
+          contentSchema: false,
+          format: "custom-annotation-format",
+          "x-executable": "not executed",
+          custom: { $ref: "https://example.test/annotation-only" },
+        },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    };
+    yield* validator.validateJsonSchema(
+      {
+        $vocabulary: {
+          "https://json-schema.org/draft/2020-12/vocab/core": true,
+          "https://example.test/optional-vocabulary": false,
+        },
+        type: "string",
+      },
+      "annotation",
+      "not-sent",
+    );
+    const data = { value: "not encoded or json" };
+    const before = encodeJson({ schema, data });
+    yield* validator.validateJsonSchema(schema, data, "not-sent");
+    expect(encodeJson({ schema, data })).toBe(before);
+    for (const invalid of [
+      {},
+      { value: 12 },
+      { value: "a" },
+      { value: "AA" },
+      { ...data, extra: 1 },
+    ]) {
+      expect(
+        yield* validator.validateJsonSchema(schema, invalid, "not-sent").pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input" });
+    }
+    expect(
+      yield* validator
+        .validateJsonSchema({ type: "string", format: "email" }, "not an email", "not-sent")
+        .pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input" });
+  }),
+);
+
+it.live("uses 2020-12 by default and honors supported dialect aliases and tuple rules", () =>
+  Effect.gen(function* () {
+    const validator = yield* makeJsonSchemaValidator();
+    const modern = { type: "array", prefixItems: [{ type: "integer" }], items: false };
+    const dialects = [
+      undefined,
+      "http://json-schema.org/draft/2020-12/schema#",
+      "https://json-schema.org/draft/2019-09/schema#",
+      "http://json-schema.org/draft-07/schema",
+      "https://json-schema.org/draft-06/schema",
+    ];
+    for (const dialect of dialects) {
+      const schema =
+        dialect === undefined
+          ? modern
+          : {
+              $schema: dialect,
+              ...(dialect.includes("2020-12")
+                ? modern
+                : {
+                    type: "array",
+                    items: [{ type: "integer" }],
+                    additionalItems: false,
+                  }),
+            };
+      yield* validator.validateJsonSchema(schema, [1], "not-sent");
+      for (const data of [["bad"], [1, 2]]) {
+        expect(
+          yield* validator.validateJsonSchema(schema, data, "not-sent").pipe(Effect.flip),
+        ).toMatchObject({ kind: "invalid-input" });
+      }
+    }
+    const modernObject = {
+      allOf: [{ properties: { count: { type: "integer" } } }],
+      dependentRequired: { count: ["label"] },
+      properties: { label: { type: "string" } },
+      unevaluatedProperties: false,
+    };
+    yield* validator.validateJsonSchema(modernObject, { count: 1, label: "a" }, "not-sent");
+    for (const data of [{ count: 1 }, { count: 1, label: "a", extra: true }]) {
+      expect(
+        yield* validator.validateJsonSchema(modernObject, data, "not-sent").pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input" });
+    }
+    const dependencies = { dependencies: { count: ["label"], label: { required: ["count"] } } };
+    yield* validator.validateJsonSchema(dependencies, { count: 1, label: "a" }, "not-sent");
+    expect(
+      yield* validator
+        .validateJsonSchema(dependencies, { label: "a" }, "not-sent")
+        .pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input" });
+  }),
+);
+
+it.live("enforces dynamic and recursive references in their supported dialects", () =>
+  Effect.gen(function* () {
+    const validator = yield* makeJsonSchemaValidator();
+    for (const schema of [
+      {
+        $dynamicAnchor: "node",
+        type: "object",
+        properties: {
+          value: { type: "integer" },
+          child: { $dynamicRef: "#node" },
+        },
+      },
+      {
+        $schema: "https://json-schema.org/draft/2019-09/schema",
+        $recursiveAnchor: true,
+        type: "object",
+        properties: {
+          value: { type: "integer" },
+          child: { $recursiveRef: "#" },
+        },
+      },
+    ]) {
+      yield* validator.validateJsonSchema(schema, { child: { value: 1 } }, "not-sent");
+      expect(
+        yield* validator
+          .validateJsonSchema(schema, { child: { value: "bad" } }, "completed")
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "protocol", outcome: "completed" });
+    }
+  }),
+);
+
+it.live(
+  "the direct helper cannot use async schemas or cached metaschemas to bypass constraints",
+  () =>
+    Effect.gen(function* () {
+      for (const schema of [
+        { $async: true, type: "integer" },
+        { $ref: "#/annotation", annotation: { $async: true, type: "integer" } },
+        { $id: "https://json-schema.org/draft/2020-12/schema", type: "integer" },
+        { $id: "HTTP://JSON-SCHEMA.ORG/draft/2020-12/schema#/$defs/schemaArray", type: "integer" },
+        {
+          $schema: "https://json-schema.org/draft/2019-09/schema",
+          $id: "https://json-schema.org/draft/2019-09/schema",
+          type: "integer",
+        },
+        {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          $id: "http://json-schema.org/draft-07/schema#",
+          type: "integer",
+        },
+        { $vocabulary: { "https://example.test/required-vocabulary": true } },
+      ]) {
+        const result = yield* runHelper(schema, {});
+        expect(result.code).not.toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(result.cleanupUnconfirmed).toBe(false);
+      }
+    }),
+);
+
+it.live("guards annotation nodes promoted through pointers, identifiers, and anchors", () =>
+  Effect.gen(function* () {
+    for (const target of [
+      { type: "string", nullable: true },
+      { $vocabulary: { "https://example.test/required-vocabulary": true } },
+      {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "array",
+        items: [{ type: "integer" }],
+        additionalItems: false,
+      },
+    ]) {
+      for (const schema of [
+        {
+          type: "object",
+          properties: { value: { $ref: "#/x" } },
+          required: ["value"],
+          x: target,
+        },
+        { $ref: "#/x/a~1b~0c%20d", x: { "a/b~c d": target } },
+        { $ref: "#/x/0", x: [{ $ref: "#/y" }], y: target },
+        { $ref: "#/const", const: target },
+        { $ref: "#/examples/0", examples: [target] },
+        { $ref: "#/annotation/x", annotation: { $id: "child", ...target, x: true } },
+        {
+          $id: "https://example.test/root",
+          $ref: "child#/x",
+          annotation: { $id: "child", x: target },
+        },
+        {
+          $id: "https://example.test/root",
+          $ref: "child#value",
+          annotation: { $id: "child", x: { $anchor: "value", ...target } },
+        },
+        { $ref: "#value", annotation: { $id: "#value", ...target } },
+        { $ref: "#/x", annotation: { $id: "#/x", ...target } },
+        {
+          $id: "https://example.test/root",
+          $ref: "child#/x",
+          annotation: { $id: "child", ...target, x: { type: "string" } },
+        },
+        {
+          $id: "https://example.test/root",
+          $ref: "child#value",
+          annotation: { $id: "child", ...target, x: { $anchor: "value", type: "string" } },
+        },
+      ]) {
+        const result = yield* runHelper(schema, { value: null });
+        expect(result.code).not.toBe(0);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toBe("");
+        expect(result.cleanupUnconfirmed).toBe(false);
+      }
+    }
+  }),
+);
+
+it.live.each([
+  {
+    name: "encoded leading slash",
+    schema: (target: Schema.Json) => ({ $ref: "#%2Fannotation", annotation: target }),
+  },
+  {
+    name: "encoded nested separator and token",
+    schema: (target: Schema.Json) => ({ $ref: "#/%61nnotation%2fx", annotation: { x: target } }),
+  },
+  {
+    name: "encoded pointer escapes",
+    schema: (target: Schema.Json) => ({
+      $ref: "#/annotation/a%7E1b%7E0c%20d",
+      annotation: { "a/b~c d": target },
+    }),
+  },
+  {
+    name: "literal percent encoding is not decoded twice",
+    schema: (target: Schema.Json) => ({
+      $ref: "#/annotation/a%252Fb",
+      annotation: { "a%2Fb": target },
+    }),
+  },
+  {
+    name: "Unicode token",
+    schema: (target: Schema.Json) => ({
+      $ref: "#/annotation/%E2%98%83",
+      annotation: { "☃": target },
+    }),
+  },
+  {
+    name: "encoded named anchor",
+    schema: (target: Schema.JsonObject) => ({
+      $ref: "#%76alue",
+      annotation: { $anchor: "value", ...target },
+    }),
+  },
+  {
+    name: "encoded identifier anchor",
+    schema: (target: Schema.JsonObject) => ({
+      $ref: "#%76alue",
+      annotation: { $id: "#value", ...target },
+    }),
+  },
+  {
+    name: "reference chain into annotation data",
+    schema: (target: Schema.Json) => ({
+      $ref: "#%2Fannotation%2F0",
+      annotation: [{ $ref: "#%2Fx" }],
+      x: target,
+    }),
+  },
+  {
+    name: "nested identifier scope",
+    schema: (target: Schema.Json) => ({
+      $id: "https://example.test/root",
+      $ref: "child#%2Fx",
+      annotation: { $id: "child", x: target },
+    }),
+  },
+  {
+    name: "URN resource scope",
+    schema: (target: Schema.Json) => ({
+      $id: "urn:example:root",
+      $ref: "urn:example:root#/annotation%2Fx",
+      annotation: { x: target },
+    }),
+  },
+])("normalizes promoted schema fragments: $name", ({ schema }) =>
+  Effect.gen(function* () {
+    const safe = schema({ type: "string" });
+    const valid = yield* runHelper(safe, "ok");
+    expect(valid.code).toBe(0);
+    expect(decodeJson(valid.stdout)).toEqual({ valid: true });
+    const mismatch = yield* runHelper(safe, null);
+    expect(mismatch.code).toBe(0);
+    expect(decodeJson(mismatch.stdout)).toEqual({ valid: false });
+    const unsafe = yield* runHelper(schema({ type: "string", nullable: true }), null);
+    expect(unsafe.code).not.toBe(0);
+    expect(unsafe.stdout).toBe("");
+    expect(unsafe.stderr).toBe("");
+    expect(unsafe.cleanupUnconfirmed).toBe(false);
+  }),
+);
+
+it.live("rejects malformed reference encodings without diagnostic leakage", () =>
+  Effect.gen(function* () {
+    for (const $ref of ["#%", "#/annotation%2", "#%GGanchor", "#/annotation/%C0%AF"]) {
+      const result = yield* runHelper(
+        { $ref, annotation: { type: "string", nullable: true } },
+        null,
+      );
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("");
+    }
+  }),
+);
+
+it.live("conservatively checks matching pointer targets across local resource scopes", () =>
+  Effect.gen(function* () {
+    const result = yield* runHelper(
+      {
+        $id: "https://example.test/root",
+        $ref: "#/x",
+        x: { type: "string" },
+        annotation: { $id: "other", x: { type: "string", nullable: true } },
+      },
+      "valid in the root resource",
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+  }),
+);
+
+it.live("preserves unreferenced literals and validates safe promoted schemas", () =>
+  Effect.gen(function* () {
+    const literal = {
+      nullable: true,
+      $schema: "https://example.test/literal-dialect",
+      $vocabulary: { "https://example.test/literal-vocabulary": true },
+    };
+    const validator = yield* makeJsonSchemaValidator();
+    yield* validator.validateJsonSchema(
+      decodeJson(
+        encodeJson({ const: literal, default: literal, examples: [literal], annotation: literal }),
+      ),
+      literal,
+      "not-sent",
+    );
+    for (const schema of [
+      { $ref: "#/x/a~1b~0c%20d", x: { "a/b~c d": { type: "string" } }, literal },
+      {
+        $id: "https://example.test/root",
+        $ref: "child#/x",
+        annotation: { $id: "child", x: { type: "string" } },
+        literal,
+      },
+      {
+        $id: "https://example.test/root",
+        $ref: "child#value",
+        annotation: { $id: "child", x: { $anchor: "value", type: "string" } },
+        literal,
+      },
+      {
+        $ref: "#/x",
+        x: { type: "object", properties: { child: { $ref: "#/x" } } },
+        literal,
+      },
+    ]) {
+      const recursive = schema.$ref === "#/x";
+      yield* validator.validateJsonSchema(schema, recursive ? { child: {} } : "ok", "not-sent");
+      expect(
+        yield* validator.validateJsonSchema(schema, null, "not-sent").pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input" });
+    }
   }),
 );
 
@@ -329,7 +742,7 @@ it.effect("rejects malformed and oversized helper replies without exposing their
       .pipe(Effect.result);
     expect(malformedResult).toMatchObject({
       _tag: "Failure",
-      failure: { kind: "protocol", outcome: "completed" },
+      failure: { kind: "unavailable", outcome: "completed" },
     });
     expect(encodeUnknown(malformedResult)).not.toContain("secret");
 

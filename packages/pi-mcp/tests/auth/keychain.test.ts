@@ -12,6 +12,29 @@ import { makeKeychainStore, type KeychainEntryFactory } from "../../src/boundary
 
 const identity = "c".repeat(64);
 describe("Keychain native mutation ownership", () => {
+  it.effect("checks live authority after native entry acquisition before mutating", () =>
+    Effect.gen(function* () {
+      let trusted = true;
+      let writes = 0;
+      const store = yield* makeKeychainStore({
+        entryFactory: () => {
+          trusted = false;
+          return Promise.resolve({
+            getPassword: () => Promise.resolve(undefined),
+            setPassword: () => {
+              writes++;
+              return Promise.resolve();
+            },
+            deleteCredential: () => Promise.resolve(true),
+          });
+        },
+      });
+      expect(
+        yield* store.write(identity, "grant", { isCurrent: () => trusted }).pipe(Effect.isFailure),
+      ).toBe(true);
+      expect(writes).toBe(0);
+    }),
+  );
   it.effect(
     "exposes pending and blocked mutation facts without new reads or indefinite joins",
     () =>

@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
+import { CrossProcessLock, CrossProcessLockError, type CrossProcessLease } from "pi-cosmic-core";
 import {
   decodeCredentialRecord,
   encodeCredentialRecord,
@@ -12,23 +13,29 @@ import type { McpCredentialMutation } from "../auth/progress.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { makeKeychainStore, type KeychainOptions } from "./keychain.ts";
 
+import type {
+  CredentialTransactionGuard,
+  McpCredentialTransaction,
+} from "../auth/credential-transaction.ts";
 export interface McpCredentialStoreContract {
   readonly mutation: (identity: string) => Effect.Effect<McpCredentialMutation>;
   readonly readRegistration: (
     identity: string,
   ) => Effect.Effect<McpRegistrationReceipt | undefined, McpBoundaryError>;
-  /** Updates the same credential record without discarding an existing grant. */
   readonly writeRegistration: (
     identity: string,
     registration: McpRegistrationReceipt,
   ) => Effect.Effect<void, McpBoundaryError>;
   readonly read: (identity: string) => Effect.Effect<McpGrant | undefined, McpBoundaryError>;
   readonly write: (identity: string, grant: McpGrant) => Effect.Effect<void, McpBoundaryError>;
-  /** Joins any native mutation before deleting both the grant and registration. */
   readonly remove: (identity: string) => Effect.Effect<void, McpBoundaryError>;
+  /** Acquires ownership before rereading and holds it through the complete callback. */
+  readonly withTransaction: <A>(
+    identity: string,
+    use: (transaction: McpCredentialTransaction) => Effect.Effect<A, McpBoundaryError>,
+    guard?: CredentialTransactionGuard,
+  ) => Effect.Effect<A, McpBoundaryError>;
 }
-// Serialize envelope read/modify/write across replacement runtimes in this process.
-// Native mutation fences remain authoritative after an interrupted waiter releases this lock.
 const nativeNamespace = {};
 const locks = new WeakMap<object, Map<string, Semaphore.Semaphore>>();
 const permitFor = (options: KeychainOptions, identity: string) => {
@@ -48,6 +55,7 @@ const permitFor = (options: KeychainOptions, identity: string) => {
 };
 const invalid = () =>
   boundaryError("unavailable", "not-sent", "Stored OAuth credential identity is invalid.");
+const stale = () => boundaryError("stale", "not-sent", "Credential transaction was revoked.");
 const matches = (identity: string, record: McpCredentialRecord) =>
   (record.grant === undefined || record.grant.identity === identity) &&
   (record.registration === undefined || record.registration.identity === identity);
@@ -61,41 +69,104 @@ export class McpCredentialStore extends Context.Service<
       this,
       Effect.gen(function* () {
         const store = yield* makeKeychainStore(options);
-        const readRecord = (identity: string) =>
-          store.read(identity).pipe(
-            Effect.flatMap((raw) =>
-              raw === undefined
-                ? Effect.succeed<McpCredentialRecord>({ version: 2 })
-                : decodeCredentialRecord(raw),
-            ),
-            Effect.filterOrFail((record) => matches(identity, record), invalid),
-          );
-        const update = (
-          identity: string,
-          change: (record: McpCredentialRecord) => McpCredentialRecord,
+        const coordinator = yield* CrossProcessLock;
+        const withTransaction: McpCredentialStoreContract["withTransaction"] = (
+          identity,
+          use,
+          guard = {},
         ) =>
-          Effect.suspend(() =>
-            readRecord(identity).pipe(
-              Effect.map(change),
-              Effect.filterOrFail((record) => matches(identity, record), invalid),
-              Effect.flatMap(encodeCredentialRecord),
-              Effect.flatMap((raw) => store.write(identity, raw)),
-              permitFor(options, identity).withPermits(1),
-            ),
-          );
+          Effect.suspend(() => {
+            if (!/^[a-f0-9]{64}$/.test(identity)) return Effect.fail(invalid());
+            const check = Effect.andThen(
+              guard.checkCurrent ?? Effect.void,
+              Effect.suspend(() =>
+                guard.isCurrent?.() === false ? Effect.fail(stale()) : Effect.void,
+              ),
+            );
+            const run = (lease?: CrossProcessLease) =>
+              Effect.suspend(() => {
+                let open = true;
+                const current = () => open && guard.isCurrent?.() !== false;
+                const checked = Effect.andThen(
+                  check,
+                  Effect.suspend(() => (current() ? Effect.void : Effect.fail(stale()))),
+                );
+                const owner = lease
+                  ? { lease, isCurrent: current, checkCurrent: checked }
+                  : { isCurrent: current, checkCurrent: checked };
+                const readRecord = Effect.andThen(checked, store.read(identity, owner)).pipe(
+                  Effect.flatMap((raw) =>
+                    raw === undefined
+                      ? Effect.succeed<McpCredentialRecord>({ version: 2 })
+                      : decodeCredentialRecord(raw),
+                  ),
+                  Effect.filterOrFail((record) => matches(identity, record), invalid),
+                  Effect.tap(() => checked),
+                );
+                const update = (change: (record: McpCredentialRecord) => McpCredentialRecord) =>
+                  readRecord.pipe(
+                    Effect.map(change),
+                    Effect.filterOrFail((record) => matches(identity, record), invalid),
+                    Effect.flatMap(encodeCredentialRecord),
+                    Effect.flatMap((raw) =>
+                      Effect.andThen(checked, store.write(identity, raw, owner)),
+                    ),
+                  );
+                return use({
+                  read: readRecord.pipe(Effect.map((record) => record.grant)),
+                  readRegistration: readRecord.pipe(Effect.map((record) => record.registration)),
+                  write: (grant) => update((record) => ({ ...record, grant })),
+                  writeRegistration: (registration) =>
+                    update((record) => ({ ...record, registration })),
+                  remove: Effect.andThen(checked, store.remove(identity, owner)),
+                }).pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      open = false;
+                    }),
+                  ),
+                );
+              });
+            // The namespace is the actual native service/account, shared by all agent directories.
+            const coordinated =
+              options.entryFactory && !options.lockDirectory
+                ? run()
+                : coordinator
+                    .withLock(
+                      `keychain\u0000${options.service ?? "com.cosmic-pi.mcp.oauth.v1"}\u0000${identity}`,
+                      run,
+                      check,
+                    )
+                    .pipe(
+                      Effect.mapError((error) =>
+                        error instanceof CrossProcessLockError
+                          ? boundaryError(
+                              "unavailable",
+                              "not-sent",
+                              error.reason === "recovery-required"
+                                ? "Credential ownership requires recovery. Stop all Pi processes and confirm native Keychain operations have settled before removing retained lock evidence. Then sign in again."
+                                : "Credential coordination is unavailable.",
+                              "oauth-mutation-unresolved",
+                            )
+                          : error,
+                      ),
+                    );
+            return coordinated.pipe(permitFor(options, identity).withPermits(1));
+          });
         return {
-          read: (identity) => readRecord(identity).pipe(Effect.map((record) => record.grant)),
-          readRegistration: (identity) =>
-            readRecord(identity).pipe(Effect.map((record) => record.registration)),
-          write: (identity, grant) => update(identity, (record) => ({ ...record, grant })),
+          withTransaction,
+          read: (identity) => withTransaction(identity, (tx) => tx.read),
+          readRegistration: (identity) => withTransaction(identity, (tx) => tx.readRegistration),
+          write: (identity, grant) => withTransaction(identity, (tx) => tx.write(grant)),
           writeRegistration: (identity, registration) =>
-            update(identity, (record) => ({ ...record, registration })),
-          remove: (identity) =>
-            Effect.suspend(() =>
-              store.remove(identity).pipe(permitFor(options, identity).withPermits(1)),
-            ),
+            withTransaction(identity, (tx) => tx.writeRegistration(registration)),
+          remove: (identity) => withTransaction(identity, (tx) => tx.remove),
           mutation: store.mutation,
         } satisfies McpCredentialStoreContract;
       }),
+    ).pipe(
+      Layer.provide(
+        CrossProcessLock.layer(options.lockDirectory ? { directory: options.lockDirectory } : {}),
+      ),
     );
 }

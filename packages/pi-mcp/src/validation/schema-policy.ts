@@ -14,111 +14,23 @@ export const JSON_SCHEMA_VALIDATOR_LIMITS = Object.freeze({
   cleanupTimeoutMillis: 2_000,
 });
 
+// Match the installed SDK's dialect dispatch, including URI aliases.
+const normalizeDialect = (value: string): string =>
+  value.replace(/^http:/, "https:").replace(/#$/, "");
 const allowedDialects = new Set([
   "https://json-schema.org/draft/2020-12/schema",
-  "https://json-schema.org/draft/2020-12/schema#",
   "https://json-schema.org/draft/2019-09/schema",
-  "https://json-schema.org/draft/2019-09/schema#",
-  "http://json-schema.org/draft-07/schema#",
-  "https://json-schema.org/draft-07/schema#",
-  "http://json-schema.org/draft-06/schema#",
-  "https://json-schema.org/draft-06/schema#",
+  "https://json-schema.org/draft-07/schema",
+  "https://json-schema.org/draft-06/schema",
 ]);
 const legacyTupleDialects = new Set([
-  "http://json-schema.org/draft-07/schema#",
-  "https://json-schema.org/draft-07/schema#",
-  "http://json-schema.org/draft-06/schema#",
-  "https://json-schema.org/draft-06/schema#",
+  "https://json-schema.org/draft/2019-09/schema",
+  "https://json-schema.org/draft-07/schema",
+  "https://json-schema.org/draft-06/schema",
 ]);
 
-const allowedFormats = new Set([
-  "date",
-  "time",
-  "date-time",
-  "iso-time",
-  "iso-date-time",
-  "duration",
-  "uri",
-  "uri-reference",
-  "uri-template",
-  "url",
-  "email",
-  "hostname",
-  "ipv4",
-  "ipv6",
-  "regex",
-  "uuid",
-  "json-pointer",
-  "json-pointer-uri-fragment",
-  "relative-json-pointer",
-  "byte",
-  "int32",
-  "int64",
-  "float",
-  "double",
-  "password",
-  "binary",
-]);
-
-// The SDK provider does not enforce content keywords by default. Refuse them,
-// dynamic vocabularies, and deprecated dependencies instead of accepting a
-// schema whose advertised constraint would be ignored.
-const allowedKeywords = new Set([
-  "$schema",
-  "$id",
-  "$anchor",
-  "$ref",
-  "$defs",
-  "$comment",
-  "definitions",
-  "additionalItems",
-  "prefixItems",
-  "items",
-  "contains",
-  "additionalProperties",
-  "properties",
-  "patternProperties",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-  "propertyNames",
-  "if",
-  "then",
-  "else",
-  "allOf",
-  "anyOf",
-  "oneOf",
-  "not",
-  "dependentSchemas",
-  "type",
-  "enum",
-  "const",
-  "multipleOf",
-  "maximum",
-  "exclusiveMaximum",
-  "minimum",
-  "exclusiveMinimum",
-  "maxLength",
-  "minLength",
-  "pattern",
-  "maxItems",
-  "minItems",
-  "uniqueItems",
-  "maxContains",
-  "minContains",
-  "maxProperties",
-  "minProperties",
-  "required",
-  "dependentRequired",
-  "format",
-  "title",
-  "description",
-  "default",
-  "deprecated",
-  "readOnly",
-  "writeOnly",
-  "examples",
-]);
-
+// Unknown keywords and content keywords are annotations, not executable plugins.
+// The helper uses synchronous compilation with no external schema loader.
 const schemaChildKeywords = new Set([
   "contains",
   "additionalProperties",
@@ -143,12 +55,24 @@ const stringKeywords = new Set([
   "$id",
   "$anchor",
   "$ref",
+  "$dynamicRef",
+  "$dynamicAnchor",
+  "$recursiveRef",
   "$comment",
+  "contentEncoding",
+  "contentMediaType",
+  "format",
   "pattern",
   "title",
   "description",
 ]);
-const booleanKeywords = new Set(["uniqueItems", "deprecated", "readOnly", "writeOnly"]);
+const booleanKeywords = new Set([
+  "uniqueItems",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "$recursiveAnchor",
+]);
 const numberKeywords = new Set([
   "multipleOf",
   "maximum",
@@ -174,7 +98,7 @@ const invalidDocument = Symbol("invalid-json-schema-document");
 type MutableJsonObject = { [key: string]: Schema.Json };
 type MutableJsonArray = Array<Schema.Json>;
 type MutableJsonContainer = MutableJsonObject | MutableJsonArray;
-type SnapshotContext = "json" | "schema" | "schema-array" | "schema-map";
+type SnapshotContext = "json" | "schema" | "schema-array" | "schema-map" | "dependencies";
 
 interface SnapshotSlot {
   readonly source: unknown;
@@ -214,12 +138,9 @@ const schemaSupportsTupleItems = (root: Schema.Json): boolean => {
     descriptor !== undefined &&
     "value" in descriptor &&
     Predicate.isString(descriptor.value) &&
-    legacyTupleDialects.has(descriptor.value)
+    legacyTupleDialects.has(normalizeDialect(descriptor.value))
   );
 };
-
-const isLocalReference = (value: Schema.Json): value is string =>
-  Predicate.isString(value) && value.startsWith("#");
 
 const isFiniteNumber = (value: Schema.Json): value is number =>
   Predicate.isNumber(value) && Number.isFinite(value);
@@ -257,19 +178,23 @@ const schemaChildContext = (
   value: Schema.Json,
   supportsTupleItems: boolean,
 ): SnapshotContext => {
-  if (!allowedKeywords.has(key)) throw invalidDocument;
+  // These are annotations in dialects where the applicator is not defined.
+  if (
+    (key === "prefixItems" && supportsTupleItems) ||
+    (key === "additionalItems" && !supportsTupleItems)
+  )
+    return "json";
   assertKeywordValue(key, value);
-  if (key === "$ref" || key === "$id") {
-    if (!isLocalReference(value)) throw invalidDocument;
-  } else if (key === "$schema") {
-    if (!Predicate.isString(value) || !allowedDialects.has(value)) throw invalidDocument;
-  } else if (key === "format") {
-    if (!Predicate.isString(value) || !allowedFormats.has(value)) throw invalidDocument;
+  if (key === "$schema") {
+    if (!Predicate.isString(value) || !allowedDialects.has(normalizeDialect(value)))
+      throw invalidDocument;
+  } else if (key === "dependencies") {
+    if (!isPlainObject(value)) throw invalidDocument;
+    return "dependencies";
   } else if (schemaChildKeywords.has(key)) {
     if (!isSchemaNode(value)) throw invalidDocument;
     return "schema";
   } else if (schemaArrayKeywords.has(key)) {
-    if (key === "prefixItems" && supportsTupleItems) throw invalidDocument;
     if (!Array.isArray(value)) throw invalidDocument;
     return "schema-array";
   } else if (schemaMapKeywords.has(key)) {
@@ -280,8 +205,7 @@ const schemaChildContext = (
       if (key !== "items" || !supportsTupleItems) throw invalidDocument;
       return "schema-array";
     }
-    if (!isSchemaNode(value) || (key === "additionalItems" && !supportsTupleItems))
-      throw invalidDocument;
+    if (!isSchemaNode(value)) throw invalidDocument;
     return "schema";
   }
   return "json";
@@ -460,6 +384,9 @@ const snapshotJson = <Input>(
       addBytes(key);
       const descriptor = Object.getOwnPropertyDescriptor(source, key);
       if (descriptor === undefined || !("value" in descriptor)) throw invalidDocument;
+      // Reject Ajv's async extension even in annotation objects: a local JSON
+      // Pointer can promote one of those objects to a schema during compilation.
+      if (rootContext === "schema" && key === "$async") throw invalidDocument;
       // The SDK facade does not reliably apply this plain-object key; fail closed
       // rather than silently weakening the remote schema.
       if (slot.context === "schema-map" && key === "__proto__") throw invalidDocument;
@@ -468,7 +395,11 @@ const snapshotJson = <Input>(
           ? schemaChildContext(key, descriptor.value, limits.supportsTupleItems ?? false)
           : slot.context === "schema-map"
             ? "schema"
-            : "json";
+            : slot.context === "dependencies"
+              ? isStringArray(descriptor.value)
+                ? "json"
+                : "schema"
+              : "json";
       stack.push({
         source: descriptor.value,
         parent: target,

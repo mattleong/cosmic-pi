@@ -33,6 +33,7 @@ import {
   type McpInstructions,
 } from "../client/model.ts";
 import { prefixBytes } from "../results/normalize.ts";
+import { negotiationOptions } from "./mcp-protocol/select.ts";
 
 /** Discard oversized optional guidance without rejecting an otherwise useful connection. */
 export const boundedSdkInstructions = (text: string | undefined): McpInstructions | undefined => {
@@ -53,14 +54,14 @@ export const sdkHandshake = (client: Client) =>
   });
 
 /** Keep remote schema compilation out of the SDK's synchronous high-level paths. */
-export const makeSdkClient = () =>
+export const makeSdkClient = (protocol?: "auto" | "legacy", probeTimeoutMs?: number) =>
   Effect.try({
     try: () =>
       new Client(
         { name: "pi-mcp", version: "0.2.0" },
         {
           capabilities: {},
-          versionNegotiation: { mode: "legacy" },
+          versionNegotiation: negotiationOptions(protocol, probeTimeoutMs),
           inputRequired: { autoFulfill: false },
           jsonSchemaValidator: {
             getValidator: () => {

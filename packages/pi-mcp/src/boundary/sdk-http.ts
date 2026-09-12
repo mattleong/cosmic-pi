@@ -2,10 +2,10 @@ import {
   Client,
   isInputRequiredResult,
   StreamableHTTPClientTransport,
-  type FetchLike,
   type StreamableHTTPClientTransportOptions,
 } from "@modelcontextprotocol/client";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -16,8 +16,18 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as Scope from "effect/Scope";
 import { McpBoundaryError, boundaryError } from "../client/errors.ts";
+import { requireSecureBearerDestination } from "../auth/policy.ts";
 import {
-  MCP_BOUNDARY_LIMITS,
+  snapshotOptions,
+  validateToken,
+  invalidHttpOptions,
+  type SdkHttpOptions,
+  type SdkHttpSnapshot,
+  type TokenState,
+} from "./sdk-http-options.ts";
+import { selectProtocol, guardNegotiation } from "./mcp-protocol/select.ts";
+import type { McpProtocolAdapter } from "./mcp-protocol/contract.ts";
+import {
   McpRequestSchema,
   type McpConnection,
   type McpCapabilities,
@@ -48,146 +58,7 @@ import {
   type SdkHttpTransportOperation,
 } from "./sdk-http-transport.ts";
 
-export interface SdkHttpOptions {
-  readonly url: URL;
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly token?: string;
-  readonly connectTimeoutMs?: number;
-  readonly requestTimeoutMs?: number;
-  readonly cleanupTimeoutMs?: number;
-  readonly requestBytes?: number;
-  readonly responseBytes?: number;
-  /** Explicit test/I/O seam. The eventual model-facing gateway does not accept this. */
-  readonly fetch?: FetchLike;
-  /** Installed before acquisition; reports full local cleanup, including failed startup. */
-  readonly onCleanup?: (confirmed: boolean) => void;
-}
-
-interface SdkHttpSnapshot {
-  readonly url: URL;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly token: string | undefined;
-  readonly connectTimeoutMs: number;
-  readonly requestTimeoutMs: number;
-  readonly cleanupTimeoutMs: number;
-  readonly requestBytes: number;
-  readonly responseBytes: number;
-  readonly fetch: FetchLike | undefined;
-  readonly onCleanup: ((confirmed: boolean) => void) | undefined;
-}
-
-interface TokenState {
-  value: string | undefined;
-  readonly headers: Record<string, string>;
-}
-
-const MAX_CONNECT_TIMEOUT_MS = 10 * 60 * 1_000;
-const MAX_REQUEST_TIMEOUT_MS = 60 * 60 * 1_000;
-const MAX_CLEANUP_TIMEOUT_MS = 30 * 1_000;
-const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
-
-const invalidHttpOptions = () =>
-  boundaryError("invalid-input", "not-sent", "Invalid MCP HTTP options.");
-
-const positiveBounded = (
-  value: number | undefined,
-  fallback: number,
-  maximum: number,
-): number | undefined => {
-  if (value === undefined) return fallback;
-  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value < 1 || value > maximum) {
-    return undefined;
-  }
-  return value;
-};
-
-const snapshotOptions = (
-  options: SdkHttpOptions,
-): Effect.Effect<SdkHttpSnapshot, McpBoundaryError> =>
-  Effect.try({
-    try: () => {
-      if (!(options.url instanceof URL)) throw invalidHttpOptions();
-      if (
-        (options.url.protocol !== "http:" && options.url.protocol !== "https:") ||
-        options.url.username !== "" ||
-        options.url.password !== ""
-      ) {
-        throw invalidHttpOptions();
-      }
-      if (options.fetch !== undefined && !Predicate.isFunction(options.fetch)) {
-        throw invalidHttpOptions();
-      }
-
-      const connectTimeoutMs = positiveBounded(
-        options.connectTimeoutMs,
-        MCP_BOUNDARY_LIMITS.connectTimeoutMs,
-        MAX_CONNECT_TIMEOUT_MS,
-      );
-      const requestTimeoutMs = positiveBounded(
-        options.requestTimeoutMs,
-        MCP_BOUNDARY_LIMITS.requestTimeoutMs,
-        MAX_REQUEST_TIMEOUT_MS,
-      );
-      const cleanupTimeoutMs = positiveBounded(
-        options.cleanupTimeoutMs,
-        MCP_BOUNDARY_LIMITS.cleanupTimeoutMs,
-        MAX_CLEANUP_TIMEOUT_MS,
-      );
-      const requestBytes = positiveBounded(
-        options.requestBytes,
-        MCP_BOUNDARY_LIMITS.requestBytes,
-        MAX_MESSAGE_BYTES,
-      );
-      const responseBytes = positiveBounded(
-        options.responseBytes,
-        MCP_BOUNDARY_LIMITS.responseBytes,
-        MAX_MESSAGE_BYTES,
-      );
-      if (
-        connectTimeoutMs === undefined ||
-        requestTimeoutMs === undefined ||
-        cleanupTimeoutMs === undefined ||
-        requestBytes === undefined ||
-        responseBytes === undefined
-      ) {
-        throw invalidHttpOptions();
-      }
-
-      if (options.onCleanup !== undefined && !Predicate.isFunction(options.onCleanup)) {
-        throw invalidHttpOptions();
-      }
-      validateToken(options.token);
-      const sourceHeaders = new Headers(options.headers);
-      const headers: Record<string, string> = {};
-      for (const [name, value] of sourceHeaders.entries()) {
-        const lowerName = name.toLowerCase();
-        if (lowerName === SDK_OPERATION_HEADER) continue;
-        // The SDK's token-only provider is authoritative when a token snapshot exists.
-        if (options.token !== undefined && lowerName === "authorization") continue;
-        headers[name] = value;
-      }
-      return Object.freeze({
-        url: new URL(options.url.href),
-        headers: Object.freeze(headers),
-        token: options.token,
-        connectTimeoutMs,
-        requestTimeoutMs,
-        cleanupTimeoutMs,
-        requestBytes,
-        responseBytes,
-        fetch: options.fetch,
-        onCleanup: options.onCleanup,
-      });
-    },
-    catch: (error) => (error instanceof McpBoundaryError ? error : invalidHttpOptions()),
-  });
-
-const validateToken = (token: string | undefined): void => {
-  if (token === undefined) return;
-  if (!Predicate.isString(token) || token.length > 65_536 || /[\r\n\0]/u.test(token)) {
-    throw invalidHttpOptions();
-  }
-};
+export type { SdkHttpOptions } from "./sdk-http-options.ts";
 
 const requestByteLength = (value: McpRequest): Effect.Effect<number, McpBoundaryError> =>
   Schema.encodeEffect(Schema.fromJsonString(McpRequestSchema))(value).pipe(
@@ -345,20 +216,24 @@ const makeConnection = (
     terminal: events.terminal,
     health: events.health,
     setToken: (value) =>
-      Effect.try({
-        try: () => {
-          if (state.closing || state.closed) {
-            throw boundaryError("unavailable", "not-sent", "MCP connection is unavailable.");
-          }
-          validateToken(value);
-          // Explicit token publication also revokes any configured static authorization.
-          for (const name of Object.keys(token.headers)) {
-            if (name.toLowerCase() === "authorization") delete token.headers[name];
-          }
-          token.value = value;
-        },
-        catch: (error) => (error instanceof McpBoundaryError ? error : invalidHttpOptions()),
-      }),
+      (value === undefined ? Effect.void : requireSecureBearerDestination(snapshot.url.href)).pipe(
+        Effect.andThen(
+          Effect.try({
+            try: () => {
+              if (state.closing || state.closed) {
+                throw boundaryError("unavailable", "not-sent", "MCP connection is unavailable.");
+              }
+              validateToken(value);
+              // Explicit token publication also revokes any configured static authorization.
+              for (const name of Object.keys(token.headers)) {
+                if (name.toLowerCase() === "authorization") delete token.headers[name];
+              }
+              token.value = value;
+            },
+            catch: (error) => (error instanceof McpBoundaryError ? error : invalidHttpOptions()),
+          }),
+        ),
+      ),
   };
 };
 
@@ -368,7 +243,20 @@ export const openSdkHttp = (
 ): Effect.Effect<McpConnection, McpBoundaryError, Scope.Scope> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
+      const started = yield* Clock.currentTimeMillis;
       const snapshot = yield* restore(snapshotOptions(options));
+      if (snapshot.token !== undefined)
+        yield* restore(requireSecureBearerDestination(snapshot.url.href));
+      const deadline = started + snapshot.connectTimeoutMs;
+      const remaining = Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          now < deadline
+            ? Effect.succeed(deadline - now)
+            : Effect.fail(
+                boundaryError("timeout", "not-sent", "MCP acquisition deadline expired."),
+              ),
+        ),
+      );
       const owner = yield* Scope.fork(yield* Effect.scope);
       const registry = new SdkHttpOperationRegistry(1);
       const state: SdkConnectionState = {
@@ -378,6 +266,8 @@ export const openSdkHttp = (
       };
       const token: TokenState = { value: snapshot.token, headers: { ...snapshot.headers } };
       let events: SdkEvents | undefined;
+      let protocol: McpProtocolAdapter | undefined;
+      let acquisition: SdkHttpTransportOperation | undefined;
       let opening: Fiber.Fiber<McpConnection, McpBoundaryError> | undefined;
       let cleanup: Effect.Effect<void, McpBoundaryError> = Effect.void;
       const cachedClose = yield* Effect.cached(
@@ -398,7 +288,8 @@ export const openSdkHttp = (
             Effect.flatMap((exit) => {
               state.closed = true;
               // Full close joins every operation, including any previously timed-out lease.
-              state.cleanupUnconfirmed = Exit.isFailure(exit);
+              state.cleanupUnconfirmed =
+                Exit.isFailure(exit) || state.observationCleanupFailed === true;
               observeSdkCleanup(snapshot.onCleanup, !state.cleanupUnconfirmed);
               const failure = state.cleanupUnconfirmed
                 ? boundaryError("cleanup", "unknown", "MCP transport cleanup failed.")
@@ -431,8 +322,23 @@ export const openSdkHttp = (
           session: registry.traffic,
           beginControl: controls.begin,
           lookupOperation: registry.lookupRequestId,
+          isObservationRequest: (method) => protocol?.isObservationRequest(method) === true,
+          onObservationFailure: () => events?.observationFailed(),
+          onResponse: (status, headers) => {
+            if (!state.closing && protocol?.sessionExpired(status, headers)) {
+              state.closing = true;
+              registry.closeAdmissions();
+              events?.finish(
+                boundaryError(
+                  "connection",
+                  "unknown",
+                  "MCP session expired; a new connection is required.",
+                ),
+              );
+            }
+          },
         });
-        const client = yield* makeSdkClient();
+        const client = yield* makeSdkClient(snapshot.protocol, yield* remaining);
         const acquiredEvents = yield* makeSdkEvents(client, state);
         events = acquiredEvents;
         const transport = yield* Effect.try({
@@ -456,13 +362,15 @@ export const openSdkHttp = (
           catch: () =>
             boundaryError("connection", "not-sent", "Unable to initialize MCP transport."),
         });
-        const decorated = makeSdkHttpTransport(transport, registry);
+        const decorated = makeSdkHttpTransport(transport, registry, () => acquisition);
         cleanup = closeSdkTransport(
           client,
           transport,
           registry,
           controls,
           snapshot.cleanupTimeoutMs,
+          () =>
+            protocol === undefined ? transport.terminateSession() : protocol.terminate(transport),
         );
 
         const connectOperation = registry.begin();
@@ -471,11 +379,13 @@ export const openSdkHttp = (
             boundaryError("connection", "not-sent", "Unable to initialize MCP connection."),
           );
         }
+        acquisition = connectOperation;
+        const connectBudget = yield* remaining;
         const connectCore = Effect.tryPromise({
           try: () =>
-            client.connect(decorated, {
-              timeout: snapshot.connectTimeoutMs,
-              maxTotalTimeout: snapshot.connectTimeoutMs,
+            client.connect(guardNegotiation(decorated), {
+              timeout: connectBudget,
+              maxTotalTimeout: connectBudget,
               signal: connectOperation.signal,
               headers: { [SDK_OPERATION_HEADER]: connectOperation.tag },
             }),
@@ -487,12 +397,13 @@ export const openSdkHttp = (
         }).pipe(
           Effect.raceFirst(connectOperation.awaitFailure()),
           Effect.timeoutOrElse({
-            duration: Duration.millis(snapshot.connectTimeoutMs),
+            duration: Duration.millis(connectBudget),
             orElse: () =>
               Effect.fail(boundaryError("timeout", "unknown", "MCP connection timed out.")),
           }),
         );
         const connectExit = yield* Effect.exit(restore(connectCore));
+        acquisition = undefined;
         const connectCleaned = yield* finalizeOperation(
           connectOperation,
           registry,
@@ -505,6 +416,19 @@ export const openSdkHttp = (
           );
         }
         if (Exit.isFailure(connectExit)) return yield* Effect.failCause(connectExit.cause);
+        protocol = yield* selectProtocol(client);
+        const observationBudget = yield* remaining;
+        yield* restore(
+          protocol.observe(client, acquiredEvents, observationBudget, snapshot.cleanupTimeoutMs),
+        ).pipe(
+          Effect.timeoutOrElse({
+            duration: observationBudget,
+            orElse: () =>
+              Effect.fail(
+                boundaryError("timeout", "not-sent", "MCP metadata observation timed out."),
+              ),
+          }),
+        );
         return makeConnection(
           client,
           registry,

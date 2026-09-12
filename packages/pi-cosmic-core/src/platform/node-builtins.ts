@@ -9,6 +9,28 @@ if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are
 export const nodeFsConstants = nodeFsModule.constants;
 export const nodeFsPromises = nodeFsModule.promises;
 export const nodePath = nodePathModule;
+// Cross-process ownership needs short synchronous commits with no cancellation gap.
+export const nodeLockFs = {
+  mkdirSync: nodeFsModule.mkdirSync,
+  lstatSync: nodeFsModule.lstatSync,
+  openSync: nodeFsModule.openSync,
+  fstatSync: nodeFsModule.fstatSync,
+  readFileSync: nodeFsModule.readFileSync,
+  writeFileSync: nodeFsModule.writeFileSync,
+  fsyncSync: nodeFsModule.fsyncSync,
+  closeSync: nodeFsModule.closeSync,
+  renameSync: nodeFsModule.renameSync,
+  unlinkSync: nodeFsModule.unlinkSync,
+  rmdirSync: nodeFsModule.rmdirSync,
+};
+const nodeCryptoModule = process.getBuiltinModule("node:crypto");
+const nodeOsModule = process.getBuiltinModule("node:os");
+if (!nodeCryptoModule || !nodeOsModule) throw new Error("Node crypto/os builtins are unavailable.");
+export const nodeLockRandomToken = () => nodeCryptoModule.randomBytes(32).toString("hex");
+export const nodeLockHash = (value: string) =>
+  nodeCryptoModule.createHash("sha256").update(value).digest("hex");
+/** OS account lookup, deliberately independent of HOME and Pi's agent directory. */
+export const nodeHomeDirectory = () => nodeOsModule.userInfo().homedir;
 
 const nodeChildProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodeChildProcessModule) throw new Error("Node child-process builtin is unavailable.");

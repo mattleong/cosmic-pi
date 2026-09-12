@@ -63,6 +63,8 @@ export interface McpConnectionStatus {
     readonly scope: "global" | "project";
     readonly enabled: boolean;
     readonly state: "disconnected" | "connecting" | "connected" | "closing" | "blocked";
+    readonly protocolVersion?: string;
+    readonly observation?: "active" | "failed";
     readonly auth: "none" | "unchecked" | "ready" | "required" | "unavailable";
     readonly operationRevision: number;
     readonly active: number;

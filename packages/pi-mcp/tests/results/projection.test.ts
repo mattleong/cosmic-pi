@@ -46,6 +46,41 @@ const encodeExecution = Schema.encodeSync(
 const allow = () => Effect.void;
 
 describe("MCP result projection", () => {
+  it.effect.each(["failed", "unavailable"] as const)(
+    "preserves %s validation evidence under the minimum projection allowance",
+    (outputValidation) =>
+      Effect.gen(function* () {
+        const service = yield* makeMcpResults();
+        const prepared = yield* service.prepare({
+          ...input({ structuredContent: { value: "original".repeat(100) } }),
+          outputValidation,
+          notices: Array.from({ length: 16 }, () => "diagnostic".repeat(100)),
+        });
+        const retention = yield* service.retain(prepared);
+        if (retention.status !== "retained") throw new Error("Expected retention");
+        const options = { maxOutputBytes: MCP_MIN_PROJECTION_BYTES, images: false };
+        const projected = yield* service.project(prepared, retention, options);
+        expect(projected.reply).toMatchObject({
+          outcome: "completed",
+          isError: true,
+          resultId: retention.resultId,
+          data: { origin: { isError: false, outputValidation } },
+        });
+        expect(Buffer.byteLength(encodeExecution(projected))).toBeLessThanOrEqual(512);
+        const read = yield* service.read(
+          { action: "result.read", id: retention.resultId },
+          options,
+          allow,
+        );
+        expect(read.reply).toMatchObject({
+          outcome: "completed",
+          isError: false,
+          data: { origin: { isError: false, outputValidation } },
+        });
+        expect(Buffer.byteLength(encodeExecution(read))).toBeLessThanOrEqual(512);
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
   it.effect("retrieves a large checked image outside the inline text allowance", () =>
     Effect.gen(function* () {
       const service = yield* makeMcpResults();

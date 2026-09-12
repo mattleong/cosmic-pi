@@ -21,7 +21,12 @@ const retained = (
   },
 });
 
-const page = (offset: number, next: number | null, text: string) =>
+const page = (
+  offset: number,
+  next: number | null,
+  text: string,
+  outputValidation: "failed" | "unavailable" = "failed",
+) =>
   resultPage({
     action: "result.read",
     outcome: "completed",
@@ -35,8 +40,8 @@ const page = (offset: number, next: number | null, text: string) =>
       origin: {
         action: "tools.call",
         outcome: "completed",
-        isError: true,
-        outputValidation: "failed",
+        isError: outputValidation === "failed",
+        outputValidation,
       },
     },
   });
@@ -52,6 +57,17 @@ it("successful retrieval preserves originating failure and uses the returned Uni
   expect(navigation.previousOffset).toBe(0);
   navigation.accept(first, "previous");
   expect(navigation.previousOffset).toBeUndefined();
+});
+it("retained output stays navigable when local validation was unavailable", () => {
+  const first = page(0, 7, "a🙂text", "unavailable")!;
+  expect(first.next).toBe(7);
+  expect(first.lines[0]).toMatch(/validation unavailable/i);
+  expect(first.lines[0]).not.toMatch(/failed/i);
+  const navigation = new McpResultNavigation();
+  navigation.accept(first, "current");
+  expect(navigation.nextOffset).toBe(7);
+  navigation.accept(page(7, 20, "another page", "unavailable")!, "next");
+  expect(navigation.previousOffset).toBe(0);
 });
 it("evicted or revoked data is withdrawn rather than revived from page cache", () => {
   const navigation = new McpResultNavigation();

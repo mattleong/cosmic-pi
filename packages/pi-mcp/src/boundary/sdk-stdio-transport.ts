@@ -74,6 +74,9 @@ export interface SdkStdioTransportOptions {
 }
 
 export interface SdkStdioTransport extends Transport {
+  /** Public stdio shape selects SDK local-pipe negotiation policy, not native spawning. */
+  readonly pid: number;
+  readonly stderr: null;
   /** Preserve a fatal transport failure when the SDK rejects requests on close. */
   readonly failure: SdkStdioTransportError | undefined;
 }
@@ -222,6 +225,9 @@ export const makeSdkStdioTransport = (
       );
 
       return {
+        pid: process.pid,
+        // Effect drains stderr; never expose a second native consumer.
+        stderr: null,
         start: () => {
           if (started || closed) return Promise.reject(SdkStdioTransportError.of("closed"));
           started = true;

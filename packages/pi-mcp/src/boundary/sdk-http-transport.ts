@@ -335,6 +335,7 @@ export const closeSdkTransport = (
   registry: SdkHttpOperationRegistry,
   controls: SdkHttpControl,
   cleanupTimeoutMs: number,
+  terminate: () => Promise<void> = () => transport.terminateSession(),
 ): Effect.Effect<void, McpBoundaryError> =>
   Effect.gen(function* () {
     const operations = registry.active();
@@ -355,9 +356,13 @@ export const closeSdkTransport = (
     // DELETE needs a live transport signal. Regardless of its result, revoke all
     // fetch admission and close the client. SDK continuations arriving late then
     // receive an aborted signal without starting another network operation.
-    const terminated = yield* bounded(() => transport.terminateSession());
+    const terminated = yield* bounded(terminate);
     registry.traffic.abort();
-    const closed = yield* bounded(() => client.close());
+    const closed = yield* bounded(() =>
+      Promise.allSettled([client.close(), transport.close()]).then((settled) => {
+        if (settled.some((result) => result.status === "rejected")) throw cleanupFailure();
+      }),
+    );
     const { idle, controlled, requests } = yield* Effect.all(
       {
         controlled: controls.close.pipe(Effect.result),
@@ -448,6 +453,7 @@ const markResponses = (
 export const makeSdkHttpTransport = (
   transport: Transport,
   registry: SdkHttpTransportRegistry,
+  acquisition: () => SdkHttpTransportOperation | undefined = () => undefined,
 ): Transport => {
   const decorated: Transport = {
     get sessionId() {
@@ -460,7 +466,7 @@ export const makeSdkHttpTransport = (
     send: (message, options) =>
       Promise.resolve().then(() => {
         const tag = privateHeader(options?.headers);
-        const operation = tag === undefined ? undefined : registry.lookupTag(tag);
+        const operation = tag === undefined ? acquisition() : registry.lookupTag(tag);
         if (tag !== undefined && (operation === undefined || operation.signal.aborted)) {
           throw new SdkHttpTransportOperationError();
         }

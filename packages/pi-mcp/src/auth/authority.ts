@@ -1,4 +1,19 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import type { McpBoundaryError } from "../client/errors.ts";
+import type { McpEffectiveServer } from "../config/model.ts";
+
+export interface McpAuthLiveAuthority {
+  readonly check: (server: McpEffectiveServer) => Effect.Effect<void, McpBoundaryError>;
+  /** Must contain throwing/absent host trust as false. Used immediately before native dispatch. */
+  readonly isTrusted: () => boolean;
+}
+/** Auth service supplies this to every SDK operation; owned SDK unit tests may omit it. */
+export const AuthRequestCurrent = Context.Reference<Effect.Effect<void, McpBoundaryError>>(
+  "pi-mcp/auth/RequestCurrent",
+  { defaultValue: () => Effect.void },
+);
 import * as Semaphore from "effect/Semaphore";
 
 export interface AuthBlock {
@@ -12,8 +27,8 @@ export interface AuthAuthority {
   blocked: AuthBlock | undefined;
   revoked: Deferred.Deferred<void>;
 }
-// Process-local only. The durable refresh marker also protects sequential restarts;
-// this permit does not coordinate separate running processes.
+// Session revocation and observations are process-local. Credential transactions use
+// the separate OS-user CrossProcessLock before reading or mutating Keychain.
 const authorities = new Map<string, AuthAuthority>();
 export const authorityFor = (identity: string): AuthAuthority => {
   let value = authorities.get(identity);

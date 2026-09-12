@@ -10,7 +10,9 @@ import type { McpGrant, McpRegistrationReceipt } from "../../src/auth/credential
 import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
 import { decodeGrant, encodeGrant } from "../../src/auth/credentials.ts";
 import type { McpLoginOptions, McpLoginUi } from "../../src/auth/model.ts";
-import { makeMcpAuth } from "../../src/auth/service.ts";
+import { transactionStore } from "../fixtures/credential-store.ts";
+import { makeMcpAuth, makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
+import type { McpAuthLiveAuthority } from "../../src/auth/authority.ts";
 import {
   McpCredentialStore,
   type McpCredentialStoreContract,
@@ -61,23 +63,111 @@ const sdk: McpSdkAuthContract = {
   token: () => Effect.succeed("private-token"),
 };
 const make = (
-  store: Omit<McpCredentialStoreContract, "mutation" | "readRegistration" | "writeRegistration"> &
+  store: Omit<
+    McpCredentialStoreContract,
+    "mutation" | "readRegistration" | "writeRegistration" | "withTransaction"
+  > &
     Partial<
       Pick<McpCredentialStoreContract, "mutation" | "readRegistration" | "writeRegistration">
     >,
   auth: McpSdkAuthContract = sdk,
+  live?: McpAuthLiveAuthority,
 ) =>
-  makeMcpAuth.pipe(
-    Effect.provideService(McpCredentialStore, {
-      mutation: () => Effect.succeed("idle"),
-      readRegistration: () => Effect.succeed(undefined),
-      writeRegistration: () => Effect.void,
-      ...store,
-    }),
+  (live ? makeMcpAuthWithAuthority(live) : makeMcpAuth).pipe(
+    Effect.provideService(
+      McpCredentialStore,
+      transactionStore({
+        mutation: () => Effect.succeed("idle"),
+        readRegistration: () => Effect.succeed(undefined),
+        writeRegistration: () => Effect.void,
+        ...store,
+      }),
+    ),
     Effect.provideService(McpSdkAuth, auth),
   );
 
 describe("user-only authentication ownership", () => {
+  it.effect("rejects remote plaintext bearer destinations before environment lookup", () =>
+    Effect.gen(function* () {
+      const current: McpEffectiveServer = {
+        ...server("plaintext"),
+        definition: {
+          transport: "http",
+          url: "http://remote.example/mcp",
+          headers: {},
+          denyTools: [],
+          auth: { type: "env", env: "MISSING_PLAINTEXT_TOKEN" },
+        },
+      };
+      const auth = yield* make({
+        read: () => Effect.die("Unexpected storage lookup"),
+        write: () => Effect.void,
+        remove: () => Effect.void,
+      });
+      expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
+    }),
+  );
+
+  for (const loss of ["trust", "configuration"] as const)
+    it.effect(
+      `rechecks live ${loss} after headless credential waiting before refresh or publication`,
+      () =>
+        Effect.gen(function* () {
+          const current = server(`live-${loss}`);
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let valid = true;
+          const live: McpAuthLiveAuthority = {
+            isTrusted: () => loss !== "trust" || valid,
+            check: () =>
+              Effect.suspend(() =>
+                valid ? Effect.void : Effect.fail(boundaryError("stale", "not-sent", "Revoked")),
+              ),
+          };
+          const forbidden = Effect.die("Revoked headless access reached credentials or network");
+          const auth = yield* make(
+            {
+              read: () =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(grant(current.identity)),
+                ),
+              write: () => forbidden,
+              remove: () => Effect.void,
+            },
+            { ...sdk, refresh: () => forbidden, token: () => forbidden },
+            live,
+          );
+          const access = yield* auth.access(current).pipe(Effect.flip, Effect.forkScoped);
+          yield* Deferred.await(entered);
+          valid = false;
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(access)).toMatchObject({ kind: "stale" });
+        }),
+    );
+
+  it.live("withdraws headless authority while a credential read remains pending", () =>
+    Effect.gen(function* () {
+      const current = server("headless-wait");
+      const entered = yield* Deferred.make<void>();
+      let trusted = true;
+      const auth = yield* make(
+        {
+          read: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          write: () => Effect.die("Revoked write"),
+          remove: () => Effect.void,
+        },
+        sdk,
+        { isTrusted: () => trusted, check: () => Effect.void },
+      );
+      const access = yield* auth.access(current).pipe(Effect.flip, Effect.forkScoped);
+      yield* Deferred.await(entered);
+      trusted = false;
+      expect(yield* Fiber.join(access).pipe(Effect.timeout("1 second"))).toMatchObject({
+        kind: "stale",
+      });
+    }).pipe(Effect.scoped),
+  );
   for (const activation of ["challenge", "user-check", "login"] as const)
     it.effect(`keeps implicit OAuth anonymous until ${activation}, then uses stored grants`, () =>
       Effect.gen(function* () {
@@ -297,7 +387,7 @@ describe("user-only authentication ownership", () => {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let refreshes = 0;
-        const store: McpCredentialStoreContract = {
+        const store = transactionStore({
           mutation: () => Effect.succeed("idle"),
           readRegistration: () => Effect.succeed(undefined),
           writeRegistration: () => Effect.void,
@@ -310,7 +400,7 @@ describe("user-only authentication ownership", () => {
             Effect.sync(() => {
               stored = undefined;
             }),
-        };
+        });
         const auth = yield* make(store, {
           ...sdk,
           refresh: (_server, value) =>

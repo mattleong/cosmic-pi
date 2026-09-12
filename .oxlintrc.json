@@ -39,6 +39,59 @@
   },
   "overrides": [
     {
+      "files": ["**/packages/pi-mcp/src/**/*.ts"],
+      "excludeFiles": [
+        "**/packages/pi-mcp/src/boundary/mcp-protocol/select.ts",
+        "**/packages/pi-mcp/src/boundary/mcp-protocol/modern/**/*.ts",
+        "**/packages/pi-mcp/src/boundary/mcp-protocol/legacy/**/*.ts"
+      ],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/modern", "**/modern/**", "**/legacy", "**/legacy/**"],
+                "message": "Use the MCP protocol contract or selector; protocol-neutral modules must not import era implementations."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/pi-mcp/src/boundary/mcp-protocol/modern/**/*.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/legacy", "**/legacy/**"],
+                "message": "Modern MCP must not depend on the removable legacy adapter."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["**/packages/pi-mcp/src/boundary/mcp-protocol/legacy/**/*.ts"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**/modern", "**/modern/**"],
+                "message": "Legacy MCP must not depend on the modern adapter."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["packages/pi-subagents/src/**/*.ts"],
       "rules": {
         "eslint/complexity": ["error", 20]

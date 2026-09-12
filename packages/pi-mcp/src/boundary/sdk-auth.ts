@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import { NetworkAddresses } from "pi-cosmic-core";
 import type { McpLoginOptions, McpLoginUi } from "../auth/model.ts";
 import { authProgress } from "../auth/progress.ts";
+import { AuthRequestCurrent } from "../auth/authority.ts";
 import type { McpGrant } from "../auth/credentials.ts";
 import {
   authFailure,
@@ -64,6 +65,8 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const login: McpSdkAuthContract["login"] = (server, ui, options) =>
     Effect.gen(function* () {
+      const checkCurrent = yield* AuthRequestCurrent;
+      yield* checkCurrent;
       const deadline = (yield* Clock.currentTimeMillis) + 180_000;
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -150,6 +153,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             yield* authProgress(ui, { phase: "scope-approval", deadline });
           const scopes = yield* approveScopes(ui, proposal, deadline);
           yield* authProgress(ui, { phase: "registration", deadline });
+          yield* checkCurrent;
           const client = yield* loginClient({
             server,
             config,
@@ -198,6 +202,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
           const receive = Effect.suspend(() =>
             listener ? listener.receive : ui.readCallback(authorization.href, deadline),
           );
+          yield* checkCurrent;
           const callback = ui.waitForCallback
             ? yield* ui.waitForCallback(authorization.href, deadline, receive)
             : yield* Effect.gen(function* () {
@@ -209,6 +214,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
               });
           if (!callback)
             return yield* boundaryError("cancelled", "not-sent", "OAuth login was cancelled.");
+          yield* checkCurrent;
           yield* authProgress(ui, { phase: "exchange", deadline });
           const response = yield* consume(callback);
           yield* sdk(() =>
@@ -268,6 +274,7 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
     });
   const refresh: McpSdkAuthContract["refresh"] = (server, grant) =>
     Effect.gen(function* () {
+      yield* yield* AuthRequestCurrent;
       const { metadata, client, tokens } = yield* decode(server, grant);
       if (!tokens.refresh_token) return yield* authFailure();
       const policy = yield* authUrlPolicy(server);
@@ -290,7 +297,10 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
     login,
     refresh,
     token: (server, grant) =>
-      decode(server, grant).pipe(Effect.map(({ tokens }) => tokens.access_token)),
+      decode(server, grant).pipe(
+        Effect.tap(() => Effect.flatMap(AuthRequestCurrent, (check) => check)),
+        Effect.map(({ tokens }) => tokens.access_token),
+      ),
   } satisfies McpSdkAuthContract;
 });
 export class McpSdkAuth extends Context.Service<McpSdkAuth, McpSdkAuthContract>()(

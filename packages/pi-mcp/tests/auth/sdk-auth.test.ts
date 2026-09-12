@@ -25,6 +25,7 @@ import type { McpEffectiveServer, McpOAuthConfig } from "../../src/config/model.
 import { makeMcpSdkAuth } from "../../src/boundary/sdk-auth.ts";
 import { openAuthCallback } from "../../src/boundary/auth-callback.ts";
 import { withAuthFetch } from "../../src/boundary/auth-fetch.ts";
+import { AuthRequestCurrent } from "../../src/auth/authority.ts";
 import { authUrlPolicy } from "../../src/auth/policy.ts";
 import { boundaryError } from "../../src/client/errors.ts";
 import { startOAuthServer } from "../fixtures/oauth-server.ts";
@@ -1164,6 +1165,39 @@ describe("SDK-owned public OAuth", () => {
       );
     }).pipe(Effect.provide(Layer.merge(layers, trace.layer)));
   });
+  it.live("rechecks authority after DNS before sending a refresh credential", () =>
+    Effect.gen(function* () {
+      let current = true;
+      let received = 0;
+      const fixture = yield* startHttpServer(() =>
+        Effect.sync(() => {
+          received++;
+          return HttpServerResponse.empty();
+        }),
+      );
+      const origin = fixture.url.origin;
+      const check = Effect.suspend(() =>
+        current ? Effect.void : Effect.fail(boundaryError("stale", "not-sent", "Revoked")),
+      );
+      const result = yield* withAuthFetch(
+        { privateOrigins: new Set([origin]), localHttpOrigins: new Set([origin]) },
+        (fetch) => fetch(fixture.url, { method: "POST", body: "refresh_token=private" }),
+      ).pipe(
+        Effect.provideService(AuthRequestCurrent, check),
+        Effect.provideService(NetworkAddresses, {
+          resolve: () =>
+            Effect.sync(() => {
+              current = false;
+              return [{ address: "127.0.0.1", family: 4 as const }];
+            }),
+        }),
+        Effect.flip,
+      );
+      expect(result.kind).toBe("stale");
+      expect(received).toBe(0);
+    }).pipe(Effect.provide(layers)),
+  );
+
   it.live("does not let SDK fallback swallow a denied request", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer();

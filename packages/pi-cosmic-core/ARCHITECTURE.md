@@ -37,6 +37,14 @@ Public barrels (`index.ts`, `testing.ts`) re-export these modules; consumers imp
 
 Close revokes input and joins the writer before `duplex-process-close.ts` performs TERM/KILL escalation. Grace, force, root/group confirmation, and native pipe closure share one cleanup deadline. Only root exit, absent process group, and closed native pipes confirm cleanup. A transient macOS EPERM probe is retried within that budget, never treated as absence. Explicit close, concurrent callers, failed acquisition, and scope release reuse the same cached outcome and cleanup observer result. Pipe error guards remain through native close, including late EPIPE after an unconfirmed cleanup. Descendants that deliberately escape the detached group are outside the guarantee. Native errors, argv, environment, and paths never enter process failures or diagnostics.
 
+## Cross-process ownership
+
+`CrossProcessLock` is an opt-in same-host capability, separate from file and network Layers. Callers supply the actual shared resource namespace, not a session or agent directory. The default private root is `.cosmic-pi-locks-v1` beneath the OS account home returned by `os.userInfo()`, independent of `HOME`. The Node boundary validates ownership, permissions, bounded schema records, and no-follow file opens. Short synchronous filesystem commits use `node-builtins.ts`; polling, authority checks, caller work, and cancellation remain Effect-owned and interruptible.
+
+Acquisition builds and fsyncs a complete nonempty candidate before atomically publishing it. A failed post-publication durability check retires that exact quiescent owner before returning failure. Recovery requires positive PID-death evidence and a quiescent journal. No heartbeat or elapsed-time lease can steal a live owner. Release and recovery rename to nonempty token-specific tombstones, which must remain to prevent stale recovery from moving a successor. Pre-publication crash candidates are unreferenced and cannot block acquisition.
+
+A lease can journal native mutation admission before an uncancellable call. Interruption retains ownership until the actual native completion callback clears the journal and releases the exact owner. Death with `native-pending` evidence fails closed: PID death does not prove a separate native service settled. Recovery requires stopping all participating processes and independently establishing native completion before removing retained evidence. Core cannot automate that proof. Callers own credential quarantine, sign-in policy, and actionable recovery messaging. Private metadata contains no credential values.
+
 ## Network addresses and callback listeners
 
 `src/platform/network-addresses.ts` owns bounded native address resolution behind `NetworkAddresses`.

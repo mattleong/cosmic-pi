@@ -52,8 +52,13 @@ const initialized = {
   serverInfo: { name: "fixture", version: "1" },
 };
 const toolResult = { content: [{ type: "text", text: "ok" }] };
-const defaults = { connectTimeoutMs: 1_000, requestTimeoutMs: 1_000, cleanupTimeoutMs: 1_000 };
-const fakeUrl = new URL("http://example.test/mcp");
+const defaults = {
+  protocol: "legacy" as const,
+  connectTimeoutMs: 1_000,
+  requestTimeoutMs: 1_000,
+  cleanupTimeoutMs: 1_000,
+};
+const fakeUrl = new URL("https://example.test/mcp");
 
 const defaultResponse = (method: string | undefined, message: WireMessage | undefined) => {
   if (method === "GET") return new Response(null, { status: 405 });
@@ -189,7 +194,10 @@ describe("scoped SDK HTTP connection", () => {
         if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
         expect(String(result)).not.toContain("private-");
         expect(calls).toBe(1);
-        expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
+        expect(yield* connection.health).toMatchObject({
+          closed: false,
+          cleanupUnconfirmed: false,
+        });
         yield* connection.close;
         expect(cleanup).toEqual([true]);
       }),
@@ -460,7 +468,7 @@ describe("scoped SDK HTTP connection", () => {
           if (init?.method === "GET")
             return Promise.resolve(
               new Response(null, {
-                status: 401,
+                status: 405,
                 headers: { "www-authenticate": 'Bearer scope="PRIVATE_GET"' },
               }),
             );
@@ -574,7 +582,7 @@ describe("scoped SDK HTTP connection", () => {
 
       yield* connection.close;
       expect(cleanup).toEqual([true]);
-      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
       expect(
         fixture.requests
           .filter((request) => request.method === "DELETE")
@@ -640,7 +648,7 @@ describe("scoped SDK HTTP connection", () => {
     }),
   );
 
-  it.live("caches DELETE 404 cleanup uncertainty after an expired-session call", () =>
+  it.live("confirms native cleanup despite DELETE 404 after an expired-session call", () =>
     Effect.gen(function* () {
       const cleanup: boolean[] = [];
       const fixture = yield* realFixture((request, message) =>
@@ -660,12 +668,9 @@ describe("scoped SDK HTTP connection", () => {
         failure: { kind: "transport", outcome: "unknown" },
       });
       const closed = yield* connection.close.pipe(Effect.result);
-      expect(closed).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "cleanup", outcome: "unknown" },
-      });
-      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: true });
-      expect(cleanup).toEqual([false]);
+      expect(closed._tag).toBe("Success");
+      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
+      expect(cleanup).toEqual([true]);
       expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
       expect(
         fixture.requests.filter((request) => parseMessage(request.body)?.method === "initialize"),
@@ -684,7 +689,7 @@ describe("scoped SDK HTTP connection", () => {
         failure: { kind: "unavailable", outcome: "not-sent" },
       });
       expect(fixture.requests).toHaveLength(closedRequestCount);
-      expect(cleanup).toEqual([false]);
+      expect(cleanup).toEqual([true]);
     }),
   );
 
@@ -1216,7 +1221,10 @@ describe("scoped SDK HTTP connection", () => {
         yield* connection.setToken(undefined);
         yield* connection.request({ action: "tools.call", tool: "anonymous" });
         expect(authorization).toEqual(["Bearer old", "Bearer new", null]);
-        expect(yield* connection.health).toEqual({ closed: false, cleanupUnconfirmed: false });
+        expect(yield* connection.health).toMatchObject({
+          closed: false,
+          cleanupUnconfirmed: false,
+        });
         yield* connection.close;
         yield* connection.terminal;
         expect(yield* connection.setToken("late").pipe(Effect.result)).toMatchObject({
@@ -1272,7 +1280,7 @@ describe("scoped SDK HTTP connection", () => {
         result: toolResult,
         cleanupUnconfirmed: true,
       });
-      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: true });
+      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: true });
       expect(
         yield* connection.request({ action: "tools.call", tool: "repeat" }).pipe(Effect.result),
       ).toMatchObject({

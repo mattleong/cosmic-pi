@@ -144,6 +144,10 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     notice(
       "Completed output failed validation. Do not repeat the operation to recover its output.",
     );
+  if (input.outputValidation === "unavailable")
+    notice(
+      "Local output validation was unavailable; no mismatch established. Do not repeat the operation to recover its output.",
+    );
 
   const attachment = (
     block: { readonly [key: string]: Schema.Json },

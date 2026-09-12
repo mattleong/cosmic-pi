@@ -58,13 +58,13 @@ it.live.each(cases)(
           ),
         );
       });
-      const connection = yield* openSdkHttp({ url: fixture.url });
+      const connection = yield* openSdkHttp({ url: fixture.url, protocol: "legacy" });
       expect(connection.instructions).toEqual(expected);
       expect(connection.protocolVersion).toBe(handshake.protocolVersion);
       expect((yield* connection.request({ action: "tools.list" })).result).toEqual({ tools: [] });
       expect(connection.instructions).toEqual(expected);
       yield* connection.close;
-      expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
     }),
 );
 
@@ -88,6 +88,7 @@ it.live.each(cases)(
       });
     `;
           const connection = yield* openSdkStdio({
+            protocol: "legacy",
             command: process.execPath,
             args: ["-e", script],
             environment: {},
@@ -99,6 +100,9 @@ it.live.each(cases)(
           });
           expect(connection.instructions).toEqual(expected);
           yield* connection.close;
-          expect(yield* connection.health).toEqual({ closed: true, cleanupUnconfirmed: false });
+          expect(yield* connection.health).toMatchObject({
+            closed: true,
+            cleanupUnconfirmed: false,
+          });
         }),
 );

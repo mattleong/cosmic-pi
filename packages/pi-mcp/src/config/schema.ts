@@ -111,6 +111,7 @@ const auth = Schema.Union([
   oauth,
 ]);
 const policy = {
+  protocol: Schema.optionalKey(Schema.Literals(["auto", "legacy"])),
   enabled: Schema.optionalKey(Schema.Literal(true)),
   allowTools: Schema.optionalKey(names),
   denyTools: Schema.optionalKey(names),
@@ -200,6 +201,7 @@ export const decodeMcpDocument = (value: Schema.Json) =>
 
 const serverFieldHints = new Map(
   Object.entries({
+    protocol: '"protocol": expected "auto" or "legacy".',
     enabled: '"enabled": expected a boolean.',
     allowTools: '"allowTools": expected an array of tool-name strings.',
     denyTools: '"denyTools": expected an array of tool-name strings.',
@@ -231,8 +233,8 @@ const invalidServerDiagnostic = (value: Schema.Json) =>
         return '"environment" is unsupported. Use "env" with string values for stdio servers.';
       // Arbitrary property names can contain secrets, so only known legacy names are exposed.
       return http
-        ? "Unsupported HTTP server field. Allowed fields: type, url, headers, auth, enabled, allowTools, denyTools."
-        : "Unsupported stdio server field. Allowed fields: type, command, args, cwd, env, enabled, allowTools, denyTools.";
+        ? "Unsupported HTTP server field. Allowed fields: type, url, headers, auth, protocol, enabled, allowTools, denyTools."
+        : "Unsupported stdio server field. Allowed fields: type, command, args, cwd, env, protocol, enabled, allowTools, denyTools.";
     }
     for (const [field, codec] of Object.entries<Schema.Decoder<unknown>>(fields)) {
       if (!Object.hasOwn(value, field)) continue;

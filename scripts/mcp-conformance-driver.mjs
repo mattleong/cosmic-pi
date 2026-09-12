@@ -37,7 +37,11 @@ async function main() {
   await writeFile(
     join(agent, "extensions/pi-mcp.json"),
     JSON.stringify({
-      mcpServers: { conformance: { type: "http", url: target, auth: { type: "none" } } },
+      // The pinned initialize and tools_call scenarios grade only the 2025 protocol era.
+      // They do not implement modern discovery; this runner measures explicit legacy use.
+      mcpServers: {
+        conformance: { type: "http", protocol: "legacy", url: target, auth: { type: "none" } },
+      },
     }),
     { flag: "wx", mode: 0o600 },
   );

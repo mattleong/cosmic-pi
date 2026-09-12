@@ -15,6 +15,27 @@ const globalSource = (document: NonNullable<McpConfigSource["document"]>): McpCo
 
 describe("MCP configuration resolution", () => {
   it.effect(
+    "keeps protocol omission unchanged and binds explicit legacy override to configuration identity",
+    () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const document = { mcpServers: { server: { command: "fixture" } } };
+        const base = { revision: 0, trusted: true, path };
+        const omitted = (yield* resolveMcpConfig({ ...base, global: globalSource(document) }))
+          .servers.server!;
+        const legacy = (yield* resolveMcpConfig({
+          ...base,
+          global: globalSource({
+            mcpServers: { server: { command: "fixture", protocol: "legacy" } },
+          }),
+        })).servers.server!;
+        expect(omitted.definition?.protocol).toBeUndefined();
+        expect(legacy.definition?.protocol).toBe("legacy");
+        expect(legacy.identity).not.toBe(omitted.identity);
+        expect(document.mcpServers.server).toEqual({ command: "fixture" });
+      }).pipe(Effect.provide([Path.layer, NodeCrypto.layer])),
+  );
+  it.effect(
     "distinguishes explicit empty OAuth permissions while preserving omitted and nonempty normalization",
     () =>
       Effect.gen(function* () {

@@ -76,7 +76,11 @@ export const renderMcpResult = <Result>(
         const origin = details.origin;
         const outcome = origin.outcome ?? "outcome unavailable";
         const failure =
-          origin.isError || origin.outputValidationFailed ? "failure" : "no failure reported";
+          origin.isError || origin.outputValidationFailed
+            ? "failure"
+            : origin.outputValidationUnavailable
+              ? "output validation unavailable"
+              : "no failure reported";
         lines.push(theme.fg("muted", `Origin: ${origin.action} · ${outcome} · ${failure}`));
       }
       for (const notice of details.notices) {

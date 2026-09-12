@@ -298,43 +298,45 @@ describe("MCP result retention", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect("keeps retrieval success distinct from original validation and tool failure", () =>
-    Effect.gen(function* () {
-      const service = yield* makeMcpResults();
-      const saved = yield* save(service, {
-        ...input({ isError: false, structuredContent: { value: "invalid" } }),
-        outputValidation: "failed",
-      });
-      const projected = yield* service.project(saved.prepared, saved.retention, options);
-      expect(projected.reply).toMatchObject({
-        action: "tools.call",
-        outcome: "completed",
-        isError: true,
-        data: { origin: { isError: false, outputValidation: "failed" } },
-      });
-      const read = yield* service.read(
-        { action: "result.read", id: idOf(saved.retention) },
-        options,
-        allow,
-      );
-      expect(read.reply).toMatchObject({
-        action: "result.read",
-        outcome: "completed",
-        isError: false,
-        data: {
-          origin: {
-            action: "tools.call",
-            outcome: "completed",
-            isError: false,
-            outputValidation: "failed",
+  it.effect.each(["failed", "unavailable"] as const)(
+    "keeps retrieval success distinct from %s output validation",
+    (outputValidation) =>
+      Effect.gen(function* () {
+        const service = yield* makeMcpResults();
+        const saved = yield* save(service, {
+          ...input({ isError: false, structuredContent: { value: "original" } }),
+          outputValidation,
+        });
+        const projected = yield* service.project(saved.prepared, saved.retention, options);
+        expect(projected.reply).toMatchObject({
+          action: "tools.call",
+          outcome: "completed",
+          isError: true,
+          data: { origin: { isError: false, outputValidation } },
+        });
+        const read = yield* service.read(
+          { action: "result.read", id: idOf(saved.retention) },
+          options,
+          allow,
+        );
+        expect(read.reply).toMatchObject({
+          action: "result.read",
+          outcome: "completed",
+          isError: false,
+          data: {
+            origin: {
+              action: "tools.call",
+              outcome: "completed",
+              isError: false,
+              outputValidation,
+            },
           },
-        },
-      });
-      const data = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
-        read.reply.data,
-      );
-      expect(parse(data.text)).toMatchObject({ structuredContent: { value: "invalid" } });
-    }).pipe(Effect.provide(NodeCrypto.layer)),
+        });
+        const data = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
+          read.reply.data,
+        );
+        expect(parse(data.text)).toMatchObject({ structuredContent: { value: "original" } });
+      }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.effect("normalizes each binary envelope once without changing the validated reply", () =>

@@ -798,6 +798,166 @@ it.effect("failed acquisition cleanup allows a later explicit attempt without re
   }).pipe(Effect.provide(f.layer));
 });
 
+it.effect(
+  "retains observation failure after retirement and clears it on fresh acquisition or config change",
+  () => {
+    const failures: Effect.Effect<void>[] = [];
+    const f = fixture({
+      open: () =>
+        Effect.gen(function* () {
+          const terminal = yield* Deferred.make<void, McpBoundaryError>();
+          let closed = false;
+          let failed = false;
+          failures.push(
+            Effect.sync(() => {
+              failed = true;
+            }).pipe(
+              Effect.andThen(
+                Deferred.fail(
+                  terminal,
+                  boundaryError("transport", "unknown", "Metadata observation failed."),
+                ),
+              ),
+              Effect.asVoid,
+            ),
+          );
+          const close = Effect.sync(() => {
+            closed = true;
+          }).pipe(Effect.andThen(Deferred.succeed(terminal, undefined)), Effect.asVoid);
+          const connection: McpConnection = {
+            capabilities: { tools: true, resources: false, prompts: false },
+            protocolVersion: "2026-07-28",
+            changes: Stream.empty,
+            terminal: Deferred.await(terminal),
+            close,
+            setToken: () => Effect.void,
+            health: Effect.sync(() => ({
+              closed: closed || failed,
+              cleanupUnconfirmed: false,
+              observation: failed ? ("failed" as const) : ("active" as const),
+            })),
+            request: (input) =>
+              Effect.succeed<McpReply>({ action: input.action, outcome: "completed", result: {} }),
+          };
+          return yield* Effect.acquireRelease(Effect.succeed(connection), () => close);
+        }),
+    });
+    return Effect.gen(function* () {
+      const connections = yield* McpConnections;
+      const retired = Effect.gen(function* () {
+        while (
+          (yield* connections.status).servers.find((server) => server.id === "a")?.state !==
+          "disconnected"
+        )
+          yield* Effect.yieldNow;
+      });
+      yield* call(connections);
+      yield* failures[0]!;
+      yield* retired;
+      expect((yield* connections.status).servers.find((server) => server.id === "a")).toMatchObject(
+        { state: "disconnected", observation: "failed" },
+      );
+      yield* call(connections);
+      yield* failures[0]!; // A retired owner's late notification cannot overwrite the new owner.
+      expect((yield* connections.status).servers.find((server) => server.id === "a")).toMatchObject(
+        { state: "connected", protocolVersion: "2026-07-28", observation: "active" },
+      );
+      yield* failures[1]!;
+      yield* retired;
+      yield* f.replace({ ...f.config(), revision: f.config().revision + 1 });
+      expect(
+        (yield* connections.status).servers.find((server) => server.id === "a")?.observation,
+      ).toBeUndefined();
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.live("retires expired HTTP sessions and reconnects only for a later explicit call", () =>
+  Effect.gen(function* () {
+    let initialized = 0;
+    let calls = 0;
+    const cleaned = yield* Deferred.make<void>();
+    const decode = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ method: Schema.String, id: Schema.optionalKey(Schema.Number) }),
+      ),
+    );
+    const http = yield* startHttpServer((request) => {
+      if (request.method === "GET")
+        return Effect.succeed(HttpServerResponse.empty({ status: 405 }));
+      if (request.method === "DELETE")
+        return Effect.succeed(HttpServerResponse.empty({ status: 404 }));
+      const message = decode(request.body);
+      if (message.id === undefined)
+        return Effect.succeed(HttpServerResponse.empty({ status: 202 }));
+      if (message.method === "initialize") {
+        initialized++;
+        return Effect.succeed(
+          HttpServerResponse.text(
+            serialize({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2025-11-25",
+                capabilities: { tools: {} },
+                serverInfo: { name: "fixture", version: "1" },
+              },
+            }),
+            {
+              contentType: "application/json",
+              headers: { "mcp-session-id": `session-${initialized}` },
+            },
+          ),
+        );
+      }
+      calls++;
+      return Effect.succeed(
+        calls === 1
+          ? HttpServerResponse.empty({ status: 404 })
+          : HttpServerResponse.text(
+              serialize({ jsonrpc: "2.0", id: message.id, result: { content: [] } }),
+              { contentType: "application/json" },
+            ),
+      );
+    });
+    const f = fixture({
+      open: () =>
+        openSdkHttp({
+          url: http.url,
+          protocol: "legacy",
+          connectTimeoutMs: 500,
+          cleanupTimeoutMs: 500,
+          onCleanup: (confirmed) => {
+            if (confirmed) Deferred.doneUnsafe(cleaned, Effect.void);
+          },
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const connections = yield* McpConnections;
+      expect(yield* call(connections).pipe(Effect.flip)).toMatchObject({ outcome: "unknown" });
+      yield* Effect.gen(function* () {
+        yield* Deferred.await(cleaned);
+        while (
+          (yield* connections.status).servers.find((server) => server.id === "a")?.state !==
+          "disconnected"
+        )
+          yield* Effect.sleep(1);
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: 1_000,
+          orElse: () => Effect.die("Session was not retired"),
+        }),
+      );
+      expect(calls).toBe(1);
+      expect(initialized).toBe(1);
+      expect((yield* call(connections)).outcome).toBe("completed");
+      expect(calls).toBe(2);
+      expect(initialized).toBe(2);
+      yield* connections.disconnect("a");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
 it.live("preserves static HTTP authorization through request admission and disconnect", () =>
   Effect.gen(function* () {
     const authorization = "Bearer configured-secret";
@@ -859,6 +1019,7 @@ it.live("preserves static HTTP authorization through request admission and disco
         if (definition?.transport !== "http")
           return Effect.die("Expected HTTP fixture configuration.");
         return openSdkHttp({
+          protocol: "legacy",
           url: new URL(definition.url),
           headers: definition.headers,
           ...(token !== undefined && { token }),

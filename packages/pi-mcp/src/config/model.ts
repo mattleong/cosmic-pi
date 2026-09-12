@@ -24,6 +24,8 @@ export type McpHttpAuth =
   | { readonly type: "env"; readonly env: string }
   | McpOAuthConfig;
 interface ToolPolicy {
+  /** Omission selects modern-first SDK negotiation. */
+  readonly protocol?: "auto" | "legacy";
   readonly allowTools?: ReadonlyArray<string>;
   readonly denyTools: ReadonlyArray<string>;
 }

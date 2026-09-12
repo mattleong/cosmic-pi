@@ -12,6 +12,7 @@ import {
   type AuthUrlPolicy,
 } from "../auth/policy.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
+import { AuthRequestCurrent } from "../auth/authority.ts";
 
 export const AUTH_HTTP_LIMITS = {
   maximumBytes: 128 * 1024,
@@ -68,10 +69,13 @@ const request = (
 ): Effect.Effect<Response, McpBoundaryError, NetworkAddresses> =>
   Effect.scoped(
     Effect.gen(function* () {
+      const checkCurrent = yield* AuthRequestCurrent;
+      yield* checkCurrent;
       const url = yield* validateAuthUrl(job.url, policy);
       const network = yield* NetworkAddresses;
       const addresses = yield* network.resolve(url.hostname).pipe(Effect.mapError(unavailable));
       yield* validateAuthAddresses(url, addresses, policy);
+      yield* checkCurrent;
       const method = job.init.method?.toUpperCase() ?? "GET";
       if (method !== "GET" && method !== "POST") return yield* deniedAuth();
       const headers = yield* Effect.try({
@@ -110,10 +114,12 @@ const request = (
           text,
           headers.get("content-type") ?? "application/x-www-form-urlencoded",
         );
+      yield* checkCurrent;
       const response = yield* client.execute(outgoing).pipe(
         Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
         Effect.mapError(unavailable),
       );
+      yield* checkCurrent;
       if (response.status >= 300 && response.status < 400) {
         if (
           method !== "GET" ||

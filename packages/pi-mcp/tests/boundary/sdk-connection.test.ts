@@ -237,6 +237,36 @@ it.effect("resolves explicit HTTP headers and env bearer credentials without acq
 );
 
 it.effect(
+  "rejects remote HTTP bearer destinations before looking up missing environment credentials",
+  () =>
+    Effect.gen(function* () {
+      const opened = vi.spyOn(Http, "openSdkHttp");
+      const connector = yield* makeConnector();
+      const failure = yield* connector
+        .open(
+          {
+            ...server("remote-bearer"),
+            definition: {
+              transport: "http",
+              url: "http://remote.test/mcp",
+              denyTools: [],
+              headers: {},
+              auth: { type: "env", env: "MISSING_SECRET" },
+            },
+          },
+          settings,
+        )
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        kind: "denied",
+        outcome: "not-sent",
+        reason: "oauth-binding-rejected",
+      });
+      expect(opened).not.toHaveBeenCalled();
+    }),
+);
+
+it.effect(
   "holds connection admission across connector and scope replacement until confirmed close",
   () =>
     Effect.gen(function* () {

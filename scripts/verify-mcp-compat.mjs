@@ -153,6 +153,7 @@ async function verifyGateway(filesystem, playwright, fixture, url) {
   const { McpConnector } = await load("boundary/sdk-connection.ts");
   const { McpConfigStore } = await load("config/store.ts");
   const { McpAuth } = await load("auth/service.ts");
+  const { McpActivity } = await load("activity/service.ts");
   const { McpConnections } = await load("connection/service.ts");
   const { McpDiscovery } = await load("discovery/service.ts");
   const { McpResults } = await load("results/service.ts");
@@ -240,10 +241,13 @@ async function verifyGateway(filesystem, playwright, fixture, url) {
         Effect.tap((connection) => Effect.sync(() => connections.set(server.id, connection))),
       ),
   });
+  const activityLayer = McpActivity.layer();
   const connectionLayer = McpConnections.layer({ isTrusted: () => true }).pipe(
-    Layer.provide(Layer.mergeAll(configLayer, authLayer, connectorLayer)),
+    Layer.provide(Layer.mergeAll(configLayer, authLayer, connectorLayer, activityLayer)),
   );
-  const discoveryLayer = McpDiscovery.layer.pipe(Layer.provide(connectionLayer));
+  const discoveryLayer = McpDiscovery.layer.pipe(
+    Layer.provide(Layer.mergeAll(connectionLayer, activityLayer)),
+  );
   const executionLayer = McpExecution.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -429,7 +433,9 @@ async function verifyGateway(filesystem, playwright, fixture, url) {
           console.log(`${server}: negotiated MCP ${connection.protocolVersion}`);
           const disconnected = yield* request({ action: "disconnect", server });
           assert.equal(disconnected.reply.data.result?.cleanup, "confirmed", `${server} cleanup`);
-          assert.deepEqual(yield* connection.health, { closed: true, cleanupUnconfirmed: false });
+          const health = yield* connection.health;
+          assert.equal(health.closed, true, `${server} closed`);
+          assert.equal(health.cleanupUnconfirmed, false, `${server} cleanup confirmed`);
         }
         console.log(
           `Isolated output schemas validated: ${[...outputValidated].join(", ") || "none advertised by the exercised tools; SDK wire-result validation still applies"}`,

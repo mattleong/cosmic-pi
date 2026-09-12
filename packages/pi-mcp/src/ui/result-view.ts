@@ -17,7 +17,7 @@ const PageSchema = Schema.Struct({
     action: Schema.String.check(Schema.isMaxLength(64)),
     outcome: Schema.Literals(["completed", "unknown", "not-sent"]),
     isError: Schema.Boolean,
-    outputValidation: Schema.optionalKey(Schema.Literals(["failed", "passed"])),
+    outputValidation: Schema.optionalKey(Schema.Literals(["failed", "passed", "unavailable"])),
   }),
 });
 export interface McpResultPage {
@@ -35,7 +35,13 @@ export const resultPage = (reply: McpGatewayReply): McpResultPage | undefined =>
   if (Option.isNone(decoded)) return undefined;
   const page = decoded.value;
   if (page.next !== null && page.next <= page.offset) return undefined;
-  const origin = `${page.origin.action}: ${page.origin.outcome}${page.origin.isError ? ", original operation failed" : ""}${page.origin.outputValidation === "failed" ? ", output validation failed" : ""}`;
+  const validation =
+    page.origin.outputValidation === "failed"
+      ? ", output validation failed"
+      : page.origin.outputValidation === "unavailable"
+        ? ", output validation unavailable, no mismatch established"
+        : "";
+  const origin = `${page.origin.action}: ${page.origin.outcome}${page.origin.isError ? ", original operation failed" : ""}${validation}`;
   // Completeness is checked against the original authorized text, before any sanitization.
   // A valid JSON fragment on the first, middle, or final partial page is still only raw text.
   const complete =

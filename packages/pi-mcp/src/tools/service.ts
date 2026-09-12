@@ -227,7 +227,12 @@ export const makeMcpExecution = Effect.gen(function* () {
             ...status,
             servers: status.servers
               .filter((server) => config.trusted || server.scope === "global")
-              .map((server) => ({ ...server, blockedReason: server.blockedReason ?? null })),
+              .map((server) => ({
+                ...server,
+                blockedReason: server.blockedReason ?? null,
+                protocolVersion: server.protocolVersion ?? null,
+                observation: server.observation ?? null,
+              })),
             metadata: known.map((summary) => ({
               ...summary,
               diagnostics: summary.diagnostics.map((diagnostic) => ({ ...diagnostic })),
@@ -312,6 +317,8 @@ export const makeMcpExecution = Effect.gen(function* () {
                     servers: status.servers.map((server) => ({
                       ...server,
                       blockedReason: server.blockedReason ?? null,
+                      protocolVersion: server.protocolVersion ?? null,
+                      observation: server.observation ?? null,
                     })),
                   },
                 },

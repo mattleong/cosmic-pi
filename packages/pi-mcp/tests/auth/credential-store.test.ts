@@ -10,6 +10,7 @@ import {
 import { decodeCredentialRecord } from "../../src/auth/credential-record.ts";
 import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
 import type { KeychainEntryFactory } from "../../src/boundary/keychain.ts";
+import { boundaryError } from "../../src/client/errors.ts";
 
 const identity = "c".repeat(64);
 const grant: McpGrant = {
@@ -54,6 +55,84 @@ const native = (initial?: string) => {
   };
   return { factory, accounts, value: () => password };
 };
+
+it.effect("does not read Keychain after trust is lost while creating the native entry", () =>
+  Effect.gen(function* () {
+    let trusted = true;
+    let reads = 0;
+    const factory: KeychainEntryFactory = () => {
+      trusted = false;
+      return Promise.resolve({
+        getPassword: () => {
+          reads++;
+          return Promise.resolve(undefined);
+        },
+        setPassword: () => Promise.resolve(),
+        deleteCredential: () => Promise.resolve(true),
+      });
+    };
+    const store = yield* McpCredentialStore.pipe(
+      Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
+    );
+    expect(
+      yield* store
+        .withTransaction(identity, (tx) => tx.read, { isCurrent: () => trusted })
+        .pipe(Effect.isFailure),
+    ).toBe(true);
+    expect(reads).toBe(0);
+  }),
+);
+
+for (const operation of ["read", "write", "remove"] as const)
+  it.effect(`rechecks full configuration after entry acquisition before native ${operation}`, () =>
+    Effect.gen(function* () {
+      let valid = true;
+      let factories = 0;
+      let reads = 0;
+      let writes = 0;
+      let deletes = 0;
+      const factory: KeychainEntryFactory = () => {
+        if (++factories === (operation === "write" ? 2 : 1)) valid = false;
+        return Promise.resolve({
+          getPassword: () => {
+            reads++;
+            return Promise.resolve(undefined);
+          },
+          setPassword: () => {
+            writes++;
+            return Promise.resolve();
+          },
+          deleteCredential: () => {
+            deletes++;
+            return Promise.resolve(true);
+          },
+        });
+      };
+      const store = yield* McpCredentialStore.pipe(
+        Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
+      );
+      const checkCurrent = Effect.suspend(() =>
+        valid ? Effect.void : Effect.fail(boundaryError("stale", "not-sent", "Config revoked")),
+      );
+      expect(
+        yield* store
+          .withTransaction(
+            identity,
+            (tx) =>
+              operation === "write"
+                ? tx.write(grant)
+                : operation === "read"
+                  ? Effect.asVoid(tx.read)
+                  : tx.remove,
+            { checkCurrent, isCurrent: () => true },
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "stale" });
+      expect(reads).toBe(operation === "write" ? 1 : 0);
+      expect(writes).toBe(0);
+      expect(deletes).toBe(0);
+    }),
+  );
 
 it.effect(
   "uses one existing Keychain account for legacy grants, checkpoints, rotation, and logout",

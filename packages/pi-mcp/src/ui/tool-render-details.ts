@@ -60,6 +60,7 @@ export interface McpCardOrigin {
   readonly outcome?: McpCardOutcome;
   readonly isError: boolean;
   readonly outputValidationFailed: boolean;
+  readonly outputValidationUnavailable: boolean;
 }
 export interface McpCardPage {
   readonly returned: number;
@@ -189,6 +190,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
       action: safeText(own(rawOrigin, "action").value, 64) ?? "Original operation",
       isError: own(rawOrigin, "isError").value === true,
       outputValidationFailed: own(rawOrigin, "outputValidation").value === "failed",
+      outputValidationUnavailable: own(rawOrigin, "outputValidation").value === "unavailable",
     };
     if (originOutcome) origin = { ...origin, outcome: originOutcome };
   }
@@ -223,6 +225,10 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
       origin.outputValidationFailed
         ? "The original operation completed but output validation failed."
         : "The original operation reported a failure. Reading retained output does not change that outcome.",
+    );
+  if (origin?.outputValidationUnavailable)
+    warnings.push(
+      "The original operation completed but local output validation was unavailable. No mismatch was established. Do not replay the operation to recover its output.",
     );
   for (const notice of notices) {
     if (

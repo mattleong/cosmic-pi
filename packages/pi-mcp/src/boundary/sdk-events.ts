@@ -11,6 +11,7 @@ export interface SdkConnectionState {
   closing: boolean;
   closed: boolean;
   cleanupUnconfirmed: boolean;
+  observationCleanupFailed?: boolean;
 }
 
 /** Native observer errors cannot replace cleanup evidence or skip finalization. */
@@ -54,6 +55,13 @@ export const makeSdkEvents = (client: Client, state: SdkConnectionState) =>
       Queue.endUnsafe(queue);
       Deferred.doneUnsafe(terminal, failure === undefined ? Effect.void : Effect.fail(failure));
     };
+    let observation: "active" | "failed" = "active";
+    const observationFailed = (): void => {
+      if (ended || state.closing) return;
+      observation = "failed";
+      state.closing = true;
+      finish(boundaryError("transport", "unknown", "MCP metadata observation failed."));
+    };
     const changed = (family: McpMetadataFamily): void => {
       if (ended || state.closing || pending.has(family)) return;
       pending.add(family);
@@ -90,8 +98,15 @@ export const makeSdkEvents = (client: Client, state: SdkConnectionState) =>
       health: Effect.sync(() => ({
         closed: state.closing || state.closed,
         cleanupUnconfirmed: state.cleanupUnconfirmed,
+        observation,
       })),
       finish,
+      observationFailed,
+      cleanupFailed: () => {
+        state.observationCleanupFailed = true;
+        state.cleanupUnconfirmed = true;
+        finish(boundaryError("cleanup", "unknown", "MCP observation cleanup failed."));
+      },
     };
   });
 

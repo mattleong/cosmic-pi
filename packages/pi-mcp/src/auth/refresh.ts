@@ -1,9 +1,9 @@
 import * as Effect from "effect/Effect";
-import type { McpCredentialStoreContract } from "../boundary/credential-store.ts";
+import type { McpCredentialTransaction } from "./credential-transaction.ts";
 import type { McpSdkAuthContract } from "../boundary/sdk-auth.ts";
 import { boundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
-import type { AuthAuthority, AuthBlock } from "./authority.ts";
+import { AuthRequestCurrent, type AuthAuthority, type AuthBlock } from "./authority.ts";
 import type { McpGrant } from "./credentials.ts";
 import { authFailure } from "./policy.ts";
 
@@ -13,7 +13,7 @@ export const refreshGrant = (
   grant: McpGrant,
   authority: AuthAuthority,
   current: () => boolean,
-  store: McpCredentialStoreContract,
+  store: McpCredentialTransaction,
   sdk: McpSdkAuthContract,
 ) =>
   Effect.gen(function* () {
@@ -25,8 +25,9 @@ export const refreshGrant = (
     // Never reuse this refresh token after entering consumption, including cancellation
     // or a failed native save. Only this exact owner can clear its local block.
     authority.blocked = owner;
-    yield* store.write(server.identity, { ...grant, quarantine: "refresh" });
+    yield* store.write({ ...grant, quarantine: "refresh" });
     if (!owned()) return yield* stale();
+    yield* yield* AuthRequestCurrent;
     const refreshed = yield* sdk.refresh(server, grant);
     if (!owned()) return yield* stale();
     if (refreshed.quarantine !== undefined) return yield* authFailure();
@@ -35,7 +36,7 @@ export const refreshGrant = (
     // Native waiting is interruptible. Durable replacement and exact-owner publication
     // commit together, so cancellation cannot lose the consumption evidence.
     yield* Effect.uninterruptibleMask((restore) =>
-      restore(store.write(server.identity, refreshed)).pipe(
+      restore(store.write(refreshed)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             if (owned()) authority.blocked = undefined;

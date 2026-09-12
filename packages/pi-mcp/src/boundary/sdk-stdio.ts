@@ -9,6 +9,7 @@ import {
   type Client,
 } from "@modelcontextprotocol/client";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -24,6 +25,8 @@ import {
 } from "pi-cosmic-core";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
+import { selectProtocol } from "./mcp-protocol/select.ts";
+import { negotiateStdio } from "./mcp-protocol/shared/stdio-negotiation.ts";
 import {
   MCP_BOUNDARY_LIMITS,
   type McpCapabilities,
@@ -51,6 +54,7 @@ import {
 } from "./sdk-stdio-transport.ts";
 
 export interface SdkStdioOptions {
+  readonly protocol?: "auto" | "legacy";
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
@@ -73,6 +77,7 @@ const positive = (maximum: number) =>
     Schema.isLessThanOrEqualTo(maximum),
   );
 const OptionsSchema = Schema.Struct({
+  protocol: Schema.optionalKey(Schema.Literals(["auto", "legacy"])),
   command: Schema.String.check(Schema.isMinLength(1)),
   args: Schema.Array(Schema.String),
   cwd: Schema.optionalKey(Schema.String),
@@ -206,7 +211,10 @@ const closeSdk = (
   Effect.gen(function* () {
     const sdk = yield* Effect.tryPromise({
       // Revoke transport admission even if connect failed before SDK ownership.
-      try: () => Promise.all([transport.close(), client.close()]),
+      try: () =>
+        Promise.allSettled([transport.close(), client.close()]).then((settled) => {
+          if (settled.some((result) => result.status === "rejected")) throw cleanupFailure();
+        }),
       catch: cleanupFailure,
     }).pipe(
       // Only the deadline's child wait is interruptible, not cached cleanup.
@@ -286,6 +294,16 @@ export const openSdkStdio = (
     Effect.flatMap((snapshot) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const deadline = (yield* Clock.currentTimeMillis) + snapshot.connectTimeoutMs;
+          const remaining = Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              now < deadline
+                ? Effect.succeed(deadline - now)
+                : Effect.fail(
+                    boundaryError("timeout", "not-sent", "MCP stdio acquisition deadline expired."),
+                  ),
+            ),
+          );
           const owner = yield* Scope.fork(yield* Effect.scope);
           const state: SdkConnectionState = {
             closing: false,
@@ -314,7 +332,8 @@ export const openSdkStdio = (
                 Effect.exit,
                 Effect.flatMap((exit) => {
                   state.closed = true;
-                  state.cleanupUnconfirmed ||= Exit.isFailure(exit);
+                  state.cleanupUnconfirmed ||=
+                    Exit.isFailure(exit) || state.observationCleanupFailed === true;
                   observeSdkCleanup(snapshot.onCleanup, !state.cleanupUnconfirmed);
                   const failure = state.cleanupUnconfirmed ? cleanupFailure() : undefined;
                   events?.finish(failure);
@@ -332,60 +351,99 @@ export const openSdkStdio = (
                 "not-sent",
                 "MCP connection is unavailable.",
               );
-            const processOptions: DuplexProcessOptions = {
-              command: snapshot.command,
-              args: snapshot.args,
-              environment: snapshot.environment,
-              maxBufferBytes: snapshot.responseBytes,
-              maxReadQueueBytes: snapshot.responseBytes,
-              maxStderrBytes: snapshot.stderrBytes,
-              maxStderrQueueBytes: Math.max(1, snapshot.stderrBytes),
-              maxWriteBytes: snapshot.requestBytes,
-              maxWriteQueueBytes: snapshot.requestBytes,
-              writeTimeoutMs: snapshot.requestTimeoutMs,
-              startTimeoutMs: snapshot.connectTimeoutMs,
-              cleanupTimeoutMs: snapshot.cleanupTimeoutMs,
-              onCleanup: (confirmed) => {
-                if (!confirmed) state.cleanupUnconfirmed = true;
-              },
-            };
-            const process = yield* restore(
-              openDuplexProcess(
-                snapshot.cwd === undefined
-                  ? processOptions
-                  : { ...processOptions, cwd: snapshot.cwd },
-              ).pipe(
-                Effect.mapError(processFailure),
-                Effect.tapError((error) =>
-                  Effect.sync(() => {
-                    if (error.kind === "cleanup") state.cleanupUnconfirmed = true;
-                  }),
+            const openNative = Effect.gen(function* () {
+              const budget = yield* remaining;
+              const processOptions: DuplexProcessOptions = {
+                command: snapshot.command,
+                args: snapshot.args,
+                environment: snapshot.environment,
+                maxBufferBytes: snapshot.responseBytes,
+                maxReadQueueBytes: snapshot.responseBytes,
+                maxStderrBytes: snapshot.stderrBytes,
+                maxStderrQueueBytes: Math.max(1, snapshot.stderrBytes),
+                maxWriteBytes: snapshot.requestBytes,
+                maxWriteQueueBytes: snapshot.requestBytes,
+                writeTimeoutMs: snapshot.requestTimeoutMs,
+                startTimeoutMs: budget,
+                cleanupTimeoutMs: snapshot.cleanupTimeoutMs,
+                onCleanup: (confirmed) => {
+                  if (!confirmed) state.cleanupUnconfirmed = true;
+                },
+              };
+              const process = yield* restore(
+                openDuplexProcess(
+                  snapshot.cwd === undefined
+                    ? processOptions
+                    : { ...processOptions, cwd: snapshot.cwd },
+                ).pipe(
+                  Effect.mapError(processFailure),
+                  Effect.tapError((error) =>
+                    Effect.sync(() => {
+                      if (error.kind === "cleanup") state.cleanupUnconfirmed = true;
+                    }),
+                  ),
                 ),
-              ),
-            );
-            cleanup = closeProcess(process);
-            const client = yield* makeSdkClient();
+              );
+              cleanup = closeProcess(process);
+              const client = yield* makeSdkClient(
+                snapshot.protocol,
+                Math.max(1, Math.min(1_000, Math.floor(budget / 3))),
+              );
+              const transport = yield* makeSdkStdioTransport(process, {
+                maxBufferSize: snapshot.responseBytes,
+                maxWriteBytes: snapshot.requestBytes,
+              });
+              const nativeClose = closeSdk(client, transport, process, snapshot.cleanupTimeoutMs);
+              cleanup = nativeClose;
+              return { client, transport, close: nativeClose };
+            });
+            const prior =
+              snapshot.protocol === "legacy"
+                ? { kind: "legacy" as const }
+                : yield* negotiateStdio(openNative, remaining);
+            // negotiateStdio returns only after its scoped child and native cleanup join.
+            if (state.cleanupUnconfirmed) return yield* cleanupFailure();
+            const { client, transport } = yield* openNative;
             const acquiredEvents = yield* makeSdkEvents(client, state);
             events = acquiredEvents;
-            const transport = yield* makeSdkStdioTransport(process, {
-              maxBufferSize: snapshot.responseBytes,
-              maxWriteBytes: snapshot.requestBytes,
-            });
-            cleanup = closeSdk(client, transport, process, snapshot.cleanupTimeoutMs);
+            const budget = yield* remaining;
             yield* restore(
               Effect.tryPromise({
                 try: (signal) =>
-                  client.connect(transport, { signal, timeout: snapshot.connectTimeoutMs }),
+                  client.connect(transport, {
+                    signal,
+                    timeout: budget,
+                    maxTotalTimeout: budget,
+                    prior,
+                  }),
                 catch: (error) => transportFailure(transport.failure ?? error, "not-sent"),
               }).pipe(
                 Effect.timeoutOrElse({
-                  duration: Duration.millis(snapshot.connectTimeoutMs),
+                  duration: Duration.millis(budget),
                   orElse: () =>
                     Effect.fail(
                       boundaryError("timeout", "unknown", "MCP stdio connection timed out."),
                     ),
                 }),
               ),
+            );
+            const protocol = yield* selectProtocol(client);
+            const observationBudget = yield* remaining;
+            yield* restore(
+              protocol.observe(
+                client,
+                acquiredEvents,
+                observationBudget,
+                snapshot.cleanupTimeoutMs,
+              ),
+            ).pipe(
+              Effect.timeoutOrElse({
+                duration: observationBudget,
+                orElse: () =>
+                  Effect.fail(
+                    boundaryError("timeout", "not-sent", "MCP metadata observation timed out."),
+                  ),
+              }),
             );
             return makeConnection(
               client,

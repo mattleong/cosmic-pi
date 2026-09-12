@@ -35,9 +35,9 @@ export function normalizeMcpServer(
   directory: string,
   path: Path.Path,
 ): McpServerDefinition {
-  const policy: Pick<McpServerDefinition, "allowTools" | "denyTools"> = {
-    denyTools: [...new Set(raw.denyTools ?? [])].sort(),
-  };
+  const denyTools = [...new Set(raw.denyTools ?? [])].sort();
+  const policy: Pick<McpServerDefinition, "allowTools" | "denyTools" | "protocol"> =
+    raw.protocol === undefined ? { denyTools } : { denyTools, protocol: raw.protocol };
   const resolvedPolicy =
     raw.allowTools === undefined
       ? policy
