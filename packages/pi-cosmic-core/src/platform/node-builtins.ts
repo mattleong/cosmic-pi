@@ -16,6 +16,7 @@ export const nodeLockFs = {
   openSync: nodeFsModule.openSync,
   fstatSync: nodeFsModule.fstatSync,
   readFileSync: nodeFsModule.readFileSync,
+  readdirSync: nodeFsModule.readdirSync,
   writeFileSync: nodeFsModule.writeFileSync,
   fsyncSync: nodeFsModule.fsyncSync,
   closeSync: nodeFsModule.closeSync,
@@ -42,3 +43,10 @@ const nodeHttpModule = process.getBuiltinModule("node:http");
 if (!nodeDnsModule || !nodeHttpModule) throw new Error("Node DNS/HTTP builtins are unavailable.");
 export const nodeLookup = nodeDnsModule.lookup;
 export const nodeCreateHttpServer = nodeHttpModule.createServer;
+
+/** Open lazily so native-context acquisition owns and redacts availability failures. */
+export const nodeCreateAsyncLocalStorage = <A>() => {
+  const module = process.getBuiltinModule("node:async_hooks");
+  if (!module) throw new Error("Node async-context builtin is unavailable.");
+  return new module.AsyncLocalStorage<A>();
+};

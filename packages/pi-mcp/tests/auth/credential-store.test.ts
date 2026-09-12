@@ -2,6 +2,11 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import { authorityFor, withCredentialPermit } from "../../src/auth/authority.ts";
+import { makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
+import { McpSdkAuth } from "../../src/boundary/sdk-auth.ts";
+import type { McpEffectiveServer } from "../../src/config/model.ts";
 import {
   encodeGrant,
   type McpGrant,
@@ -240,3 +245,113 @@ it.effect("rejects cross-account receipts before mutating the existing grant", (
     }).pipe(Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })));
   }),
 );
+
+for (const stop of ["timeout", "cancel", "trust"] as const)
+  it.effect(`ends local credential admission on ${stop} without ending the admitted callback`, () =>
+    Effect.gen(function* () {
+      const storage = native();
+      const store = yield* McpCredentialStore.pipe(
+        Effect.provide(
+          McpCredentialStore.layer({
+            entryFactory: storage.factory,
+            acquireTimeoutMs: 100,
+            timeoutMs: 10,
+          }),
+        ),
+      );
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      let trusted = true;
+      const holder = yield* store
+        .withTransaction(identity, () =>
+          Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(finish)),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const waiting = yield* store
+        .withTransaction(identity, (tx) => tx.read, { isCurrent: () => trusted })
+        .pipe(Effect.flip, Effect.forkScoped);
+      if (stop === "cancel") {
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(waiting);
+      } else {
+        if (stop === "trust") trusted = false;
+        yield* TestClock.adjust(100);
+        expect(yield* Fiber.join(waiting)).toMatchObject(
+          stop === "timeout"
+            ? { kind: "timeout", reason: "oauth-coordination-timeout", outcome: "not-sent" }
+            : { kind: "stale" },
+        );
+      }
+      expect(storage.accounts.size).toBe(0);
+      yield* TestClock.adjust(10_000);
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(holder);
+      expect(yield* store.read(identity)).toBeUndefined();
+    }),
+  );
+
+for (const operation of ["access", "login", "logout"] as const)
+  it.effect(`bounds the upstream auth authority permit for ${operation}`, () =>
+    Effect.gen(function* () {
+      const configured: McpEffectiveServer = {
+        id: "owned",
+        identity: (operation === "access" ? "1" : operation === "login" ? "2" : "3").repeat(64),
+        enabled: true,
+        scope: "global",
+        directory: "/fixture",
+        definition: {
+          transport: "http",
+          url: grant.resource,
+          headers: {},
+          denyTools: [],
+          auth: { type: "oauth", registration: "pre-registered", clientId: "public", scopes: [] },
+        },
+      };
+      const storage = native();
+      const store = yield* McpCredentialStore.pipe(
+        Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })),
+      );
+      const auth = yield* makeMcpAuthWithAuthority(
+        { check: () => Effect.void, isTrusted: () => true },
+        { acquireTimeoutMs: 100 },
+      ).pipe(
+        Effect.provideService(McpCredentialStore, store),
+        Effect.provideService(McpSdkAuth, {
+          token: () => Effect.die("Must not reach SDK"),
+          refresh: () => Effect.die("Must not reach SDK"),
+          login: () => Effect.die("Must not reach SDK"),
+        }),
+      );
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const holder = yield* withCredentialPermit(
+        authorityFor(configured.identity).permit,
+        Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(finish)),
+        Effect.void,
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const work =
+        operation === "login"
+          ? auth.login(configured, {
+              mode: "manual",
+              openBrowser: () => Effect.void,
+              readCallback: () => Effect.succeed(undefined),
+            })
+          : operation === "logout"
+            ? auth.logout(configured)
+            : auth.access(configured);
+      const waiting = yield* work.pipe(Effect.flip, Effect.forkScoped);
+      yield* TestClock.adjust(100);
+      expect(yield* Fiber.join(waiting)).toMatchObject({
+        kind: "timeout",
+        reason: "oauth-coordination-timeout",
+        outcome: "not-sent",
+      });
+      expect(storage.accounts.size).toBe(0);
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(holder);
+      expect(yield* authorityFor(configured.identity).permit.takeIfAvailable(1)).toBe(true);
+      yield* authorityFor(configured.identity).permit.release(1);
+    }),
+  );

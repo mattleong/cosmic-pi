@@ -33,6 +33,8 @@ const snapshot: McpMetadataSnapshot = {
   identity: "identity",
   configRevision: 1,
   revision: 2,
+  expiresAt: 60_000,
+  cacheScope: "private",
   support: { tools: true, resources: false, templates: false, prompts: true },
   diagnostics: [],
   tools: [

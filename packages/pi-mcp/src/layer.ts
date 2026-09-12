@@ -15,12 +15,15 @@ import { McpConfigStore } from "./config/store.ts";
 import { McpConnections } from "./connection/service.ts";
 import { McpDiscovery } from "./discovery/service.ts";
 import { McpResults } from "./results/service.ts";
+import { McpInteraction } from "./interaction/service.ts";
+import type { McpInteractionHost } from "./interaction/model.ts";
 import { McpExecution } from "./tools/service.ts";
 
 export interface McpLayerInput {
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly isTrusted: () => boolean;
+  readonly interaction?: McpInteractionHost;
 }
 export const makeMcpLayer = (input: McpLayerInput) => {
   const platform = Layer.mergeAll(
@@ -72,6 +75,7 @@ export const makeMcpLayer = (input: McpLayerInput) => {
     discovery,
     results,
     JsonSchemaValidator.layer(),
+    McpInteraction.layer(input.interaction),
     auth,
   );
   const execution = McpExecution.layer.pipe(Layer.provide(dependencies));

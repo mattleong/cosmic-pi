@@ -1,10 +1,10 @@
 import {
   Client,
-  isInputRequiredResult,
   StreamableHTTPClientTransport,
   type StreamableHTTPClientTransportOptions,
 } from "@modelcontextprotocol/client";
 import * as Cause from "effect/Cause";
+import { makeNativeContext } from "pi-cosmic-core";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -31,16 +31,18 @@ import {
   McpRequestSchema,
   type McpConnection,
   type McpCapabilities,
-  type McpReply,
   type McpRequest,
+  type McpDispatchOptions,
 } from "../client/model.ts";
 import {
-  decodeMcpReply,
   decodeMcpRequest,
   executeSdkRequest,
+  preflightSdkHeaders,
   makeSdkClient,
   sdkHandshake,
 } from "./sdk-client.ts";
+import type { McpExchange } from "../interaction/model.ts";
+import { decodeSdkExchange, terminalExchange } from "./sdk-elicitation.ts";
 import { SDK_OPERATION_HEADER, makeSdkFetch } from "./sdk-fetch.ts";
 import {
   makeSdkEvents,
@@ -104,8 +106,12 @@ const makeConnection = (
   events: SdkEvents,
   token: TokenState,
   handshake: Pick<McpConnection, "protocolVersion" | "instructions">,
+  protocol: McpProtocolAdapter,
 ): McpConnection => {
-  const request = (input: McpRequest): Effect.Effect<McpReply, McpBoundaryError> =>
+  const exchange = (
+    input: McpRequest,
+    options?: McpDispatchOptions,
+  ): Effect.Effect<McpExchange, McpBoundaryError> =>
     Effect.suspend(() => {
       if (state.closing || state.closed || state.cleanupUnconfirmed) {
         return Effect.fail(
@@ -113,6 +119,9 @@ const makeConnection = (
         );
       }
       return decodeMcpRequest(input).pipe(
+        Effect.tap((decoded) =>
+          capabilities.parameterHeaders ? preflightSdkHeaders(decoded) : Effect.void,
+        ),
         Effect.flatMap((decoded) =>
           requestByteLength(decoded).pipe(
             Effect.flatMap((bytes) =>
@@ -136,16 +145,26 @@ const makeConnection = (
                         boundaryError("unavailable", "not-sent", "MCP connection is unavailable."),
                       );
                     }
+                    if (options?.logLevel && options.onlog)
+                      operation.logScope = { threshold: options.logLevel, publish: options.onlog };
                     const core = Effect.tryPromise({
                       try: () =>
-                        executeSdkRequest(client, decoded, {
-                          timeout: snapshot.requestTimeoutMs,
-                          maxTotalTimeout: snapshot.requestTimeoutMs,
-                          signal: operation.signal,
-                          headers: {
-                            [SDK_OPERATION_HEADER]: operation.tag,
-                          },
-                        }),
+                        events.withProgress(options, (dispatch) =>
+                          executeSdkRequest(
+                            client,
+                            decoded,
+                            {
+                              timeout: snapshot.requestTimeoutMs,
+                              maxTotalTimeout: snapshot.requestTimeoutMs,
+                              signal: operation.signal,
+                              headers: {
+                                ...options?.parameterHeaders,
+                                [SDK_OPERATION_HEADER]: operation.tag,
+                              },
+                            },
+                            dispatch,
+                          ),
+                        ),
                       catch: (error) =>
                         mapSdkFailure(
                           Predicate.isError(error) ? error : new Error("MCP SDK operation failed."),
@@ -153,17 +172,7 @@ const makeConnection = (
                         ),
                     }).pipe(
                       Effect.raceFirst(operation.awaitFailure()),
-                      Effect.flatMap((result) =>
-                        isInputRequiredResult(result)
-                          ? Effect.fail(
-                              boundaryError(
-                                "unsupported",
-                                "completed",
-                                "MCP input requests are unsupported.",
-                              ),
-                            )
-                          : decodeMcpReply(decoded.action, result),
-                      ),
+                      Effect.flatMap((result) => decodeSdkExchange(decoded.action, result)),
                       Effect.timeoutOrElse({
                         duration: Duration.millis(snapshot.requestTimeoutMs),
                         orElse: () =>
@@ -186,7 +195,14 @@ const makeConnection = (
                                 boundaryError("cleanup", "unknown", "MCP request cleanup failed."),
                               );
                             if (!cleaned && Exit.isSuccess(exit)) {
-                              return Effect.succeed({ ...exit.value, cleanupUnconfirmed: true });
+                              return Effect.succeed(
+                                exit.value.kind === "complete"
+                                  ? {
+                                      ...exit.value,
+                                      reply: { ...exit.value.reply, cleanupUnconfirmed: true },
+                                    }
+                                  : { ...exit.value, cleanupUnconfirmed: true },
+                              );
                             }
                             if (!cleaned) {
                               return Effect.fail(
@@ -208,11 +224,23 @@ const makeConnection = (
     });
 
   return {
-    request,
+    subscribeResource: (uri, identity) =>
+      protocol.subscribeResource(
+        client,
+        events,
+        uri,
+        snapshot.requestTimeoutMs,
+        snapshot.cleanupTimeoutMs,
+        identity,
+      ),
+    exchange,
+    request: (input, options) => exchange(input, options).pipe(Effect.flatMap(terminalExchange)),
     close,
     capabilities,
     ...handshake,
     changes: events.changes,
+    remoteEvents: events.remoteEvents,
+    remoteEventDrops: events.remoteEventDrops,
     terminal: events.terminal,
     health: events.health,
     setToken: (value) =>
@@ -258,7 +286,12 @@ export const openSdkHttp = (
         ),
       );
       const owner = yield* Scope.fork(yield* Effect.scope);
-      const registry = new SdkHttpOperationRegistry(1);
+      const context = yield* makeNativeContext<SdkHttpTransportOperation>().pipe(
+        Effect.mapError(() =>
+          boundaryError("connection", "not-sent", "MCP native transport context is unavailable."),
+        ),
+      );
+      const registry = new SdkHttpOperationRegistry(1, context);
       const state: SdkConnectionState = {
         closing: false,
         closed: false,
@@ -322,6 +355,7 @@ export const openSdkHttp = (
           session: registry.traffic,
           beginControl: controls.begin,
           lookupOperation: registry.lookupRequestId,
+          currentOperation: registry.current,
           isObservationRequest: (method) => protocol?.isObservationRequest(method) === true,
           onObservationFailure: () => events?.observationFailed(),
           onResponse: (status, headers) => {
@@ -339,7 +373,43 @@ export const openSdkHttp = (
           },
         });
         const client = yield* makeSdkClient(snapshot.protocol, yield* remaining);
-        const acquiredEvents = yield* makeSdkEvents(client, state);
+        const acquiredEvents = yield* makeSdkEvents(
+          client,
+          state,
+          () =>
+            Effect.gen(function* () {
+              const owned = registry.begin();
+              if (!owned)
+                return yield* boundaryError(
+                  "connection",
+                  "not-sent",
+                  "MCP subscription ownership is unavailable.",
+                );
+              const close = yield* Effect.cached(
+                Effect.uninterruptible(
+                  finalizeOperation(owned, registry, state, snapshot.cleanupTimeoutMs).pipe(
+                    Effect.flatMap((confirmed) =>
+                      confirmed
+                        ? Effect.void
+                        : Effect.fail(
+                            boundaryError(
+                              "cleanup",
+                              "unknown",
+                              "MCP subscription native cleanup is unconfirmed.",
+                            ),
+                          ),
+                    ),
+                  ),
+                ),
+              );
+              return {
+                options: { signal: owned.signal, headers: { [SDK_OPERATION_HEADER]: owned.tag } },
+                close,
+                run: <A>(callback: () => A): A => registry.run(owned, callback),
+              };
+            }),
+          { timeoutMs: snapshot.cleanupTimeoutMs, requireCancellationWrite: false },
+        );
         events = acquiredEvents;
         const transport = yield* Effect.try({
           try: () => {
@@ -362,7 +432,9 @@ export const openSdkHttp = (
           catch: () =>
             boundaryError("connection", "not-sent", "Unable to initialize MCP transport."),
         });
-        const decorated = makeSdkHttpTransport(transport, registry, () => acquisition);
+        const decorated = acquiredEvents.bindTransport(
+          makeSdkHttpTransport(transport, registry, () => acquisition),
+        );
         cleanup = closeSdkTransport(
           client,
           transport,
@@ -435,10 +507,11 @@ export const openSdkHttp = (
           snapshot,
           state,
           close,
-          yield* sdkCapabilities(client),
+          yield* sdkCapabilities(client, true),
           acquiredEvents,
           token,
           yield* sdkHandshake(client),
+          protocol,
         );
       }).pipe(Effect.provideService(Scope.Scope, owner));
       opening = yield* Effect.forkIn(acquire, owner, { uninterruptible: true });

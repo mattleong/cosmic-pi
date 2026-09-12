@@ -8,6 +8,7 @@ import type { McpOperation } from "../connection/model.ts";
 import type { McpDiscoveryContract } from "../discovery/model.ts";
 import { McpGatewayRequestSchema, type McpGatewayRequest } from "../tools/model.ts";
 import { snapshotBoundedJson } from "../validation/schema-policy.ts";
+import { parameterHeaders } from "./parameter-headers.ts";
 
 const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
   Predicate.isObject(value) && !Array.isArray(value);
@@ -38,7 +39,7 @@ export interface McpInvocationReply {
   readonly notices?: ReadonlyArray<string>;
 }
 
-/** The caller serializes this boundary inside its already admitted operation ticket. */
+/** The caller serializes only each helper validation, never remote work or user waits. */
 export type McpValidate = JsonSchemaValidatorContract["validateJsonSchema"];
 
 export const invokeTool = (
@@ -62,12 +63,27 @@ export const invokeTool = (
     const { inputSchema, outputSchema } = tool;
     const arguments_ = input.arguments ?? {};
     yield* validate(inputSchema, arguments_, "not-sent");
+    const headers =
+      operation.capabilities.parameterHeaders === true
+        ? yield* Effect.try({
+            try: () => parameterHeaders(inputSchema, arguments_),
+            catch: () =>
+              boundaryError(
+                "invalid-input",
+                "not-sent",
+                "MCP parameter headers are invalid or exceed local limits.",
+              ),
+          })
+        : undefined;
     yield* operation.checkCurrent;
-    const reply = yield* operation.request({
-      action: "tools.call",
-      tool: input.tool,
-      arguments: arguments_,
-    });
+    const reply = yield* operation.request(
+      {
+        action: "tools.call",
+        tool: input.tool,
+        arguments: arguments_,
+      },
+      headers === undefined ? undefined : { parameterHeaders: headers },
+    );
     yield* operation.checkCurrent;
     const result = reply.result;
     // Tool-error payloads need not satisfy the tool's successful-output contract.

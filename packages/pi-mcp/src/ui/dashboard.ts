@@ -106,6 +106,8 @@ const metadataExplanation = (row: McpManagerServer): string => {
       return summary ? `${summary} · refreshing` : "Discovering metadata";
     case "refresh-failed":
       return summary ? `${summary} · refresh failed` : "Discovery failed. Retry from Actions.";
+    case "stale":
+      return summary ? `${summary} · stale, inspection only` : "Cached metadata is not fresh.";
     case "unsupported":
       return summary ?? "Tools catalog unavailable";
     case "empty":

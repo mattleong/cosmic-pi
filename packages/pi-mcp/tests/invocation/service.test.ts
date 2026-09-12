@@ -28,7 +28,7 @@ import {
   type McpCodeModeCapability,
 } from "../../src/code-mode/protocol.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
-import type { McpReply, McpRequest } from "../../src/client/model.ts";
+import type { McpRequest } from "../../src/client/model.ts";
 import type { McpEffectiveServer, McpResolvedConfig, McpSettings } from "../../src/config/model.ts";
 import { McpConfigStore } from "../../src/config/store.ts";
 import type { McpConnectionsContract, McpOperation } from "../../src/connection/model.ts";
@@ -104,10 +104,11 @@ const resultId = (execution: McpGatewayExecution) => {
 };
 interface HarnessOptions {
   readonly instructions?: string | undefined;
+  readonly parameterHeaders?: boolean | undefined;
   readonly connections?: McpConnectionsContract;
   readonly discovery?: McpDiscoveryContract;
   readonly validate?: JsonSchemaValidatorContract["validateJsonSchema"];
-  readonly request?: (input: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly request?: McpOperation["request"];
   readonly ensure?: McpDiscoveryContract["ensure"];
   readonly query?: McpDiscoveryContract["query"];
   readonly results?: (service: McpResultsContract) => McpResultsContract;
@@ -206,22 +207,26 @@ const makeHarness = (seams: HarnessOptions = {}) =>
               return yield* boundaryError("denied", "not-sent", "Denied tool.");
             }
           });
+          const capabilities = { tools: true, resources: true, prompts: true };
           const operation: McpOperation = {
             server,
             owner: `connection-${owner}`,
             binding: { server: id, identity: server.identity, configRevision: captured },
             instructions: boundedSdkInstructions(seams.instructions),
-            capabilities: { tools: true, resources: true, prompts: true },
+            capabilities:
+              seams.parameterHeaders === undefined
+                ? capabilities
+                : { ...capabilities, parameterHeaders: seams.parameterHeaders },
             changes: Stream.never,
             checkCurrent,
             commit: (effect) => checkCurrent.pipe(Effect.andThen(effect)),
-            request: (input) =>
+            request: (input, dispatch) =>
               checkCurrent.pipe(
                 Effect.andThen(
                   Effect.suspend(() => {
                     sent.push(input);
                     return (
-                      seams.request?.(input) ??
+                      seams.request?.(input, dispatch) ??
                       Effect.succeed({
                         action: input.action,
                         outcome: "completed" as const,
@@ -410,7 +415,11 @@ const realFixture = (
                                   structuredContent: { value: 1 },
                                   content: [{ type: "text", text: "done" }],
                                 };
-                  return { action: input.action, outcome: "completed" as const, result };
+                  return {
+                    action: input.action,
+                    outcome: "completed" as const,
+                    result: { ttlMs: 60_000, ...result },
+                  };
                 }),
             }),
             () => close,
@@ -686,13 +695,16 @@ it.effect(
       expect(
         yield* connections.withOperation("one", {}, discovery.refresh).pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
-      const preservedInput = { action: "tools.list", server: "one" } as const;
+      const preservedInput = { action: "tools.list" } as const;
       const preserved = yield* execution.execute(preservedInput, options);
       const nestedPreserved = yield* nested(preservedInput);
       expect(nestedPreserved).toMatchObject({ outcome: "completed", isError: false });
       expect(nestedPreserved.notices).toEqual(preserved.reply.notices);
       expect(nestedPreserved.notices).toHaveLength(2);
       expect(nestedPreserved.notices.join("\n")).not.toContain("private-refresh-failure");
+      // Failed refresh preserves passive inspection, never targeted schema authority.
+      failRefresh = false;
+      yield* connections.withOperation("one", {}, discovery.refresh);
       const describe = { action: "tools.describe", server: "one", tool: "run" } as const;
       const complete = yield* nested(describe, 50 * 1024);
       const gatewayComplete = yield* execution.execute(describe, {
@@ -715,7 +727,7 @@ it.effect(
         metadata,
       );
       expect(recovered.notices).toEqual(expect.arrayContaining([...complete.notices]));
-      expect(complete.notices).toHaveLength(2);
+      expect(complete.notices).toHaveLength(1);
       failRefresh = false;
       yield* connections.withOperation("one", {}, discovery.refresh);
       expect((yield* nested(describe, 50 * 1024)).notices).toHaveLength(1);
@@ -1760,3 +1772,132 @@ describe("shared MCP execution", () => {
     },
   );
 });
+
+it.effect.each([true, false, undefined])(
+  "mirrors captured validated parameters only with modern HTTP capability=%s",
+  (parameterHeaders) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const captured: Array<Parameters<McpOperation["request"]>[1]> = [];
+      const h = yield* makeHarness({
+        parameterHeaders,
+        validate: (_schema, _data, outcome) =>
+          outcome === "not-sent"
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(proceed)))
+            : Effect.void,
+        request: (input, dispatch) =>
+          Effect.sync(() => {
+            captured.push(dispatch);
+            return { action: input.action, outcome: "completed", result: { content: [] } };
+          }),
+      });
+      const annotated = {
+        ...initial,
+        tools: [
+          {
+            name: "run",
+            inputSchema: {
+              type: "object",
+              properties: {
+                nested: {
+                  type: "object",
+                  properties: {
+                    value: { type: "string", "x-mcp-header": "Original" },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      };
+      yield* h.setSnapshot(annotated);
+      const call = yield* h.execution
+        .execute({ ...request, arguments: { nested: { value: " padded " } } }, options)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* h.setSnapshot({
+        ...annotated,
+        revision: 2,
+        tools: [
+          {
+            name: "run",
+            inputSchema: {
+              properties: { other: { type: "string", "x-mcp-header": "Replacement" } },
+            },
+          },
+        ],
+      });
+      yield* Deferred.succeed(proceed, undefined);
+      expect((yield* Fiber.join(call)).reply.outcome).toBe("completed");
+      expect(captured).toEqual(
+        parameterHeaders
+          ? [
+              {
+                parameterHeaders: {
+                  "Mcp-Param-Original": "=?base64?IHBhZGRlZCA=?=",
+                },
+              },
+            ]
+          : [undefined],
+      );
+      expect(h.sent).toHaveLength(1);
+      expect(h.sent[0]).not.toHaveProperty("parameterHeaders");
+      expect(
+        yield* decodeGatewayRequest({ ...request, parameterHeaders: { injected: "value" } }).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ kind: "invalid-input" });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);
+
+it.effect(
+  "invalid input and oversized headers never dispatch; a mismatch response is never replayed",
+  () =>
+    Effect.gen(function* () {
+      const schema = {
+        ...initial,
+        tools: [
+          {
+            name: "run",
+            inputSchema: {
+              properties: { value: { type: "string", "x-mcp-header": "Value" } },
+            },
+          },
+        ],
+      };
+      for (const validate of [true, false]) {
+        const h = yield* makeHarness({
+          parameterHeaders: true,
+          validate: () =>
+            validate
+              ? Effect.void
+              : Effect.fail(boundaryError("invalid-input", "not-sent", "Invalid input.")),
+        });
+        yield* h.setSnapshot(schema);
+        expect(
+          yield* h.execution
+            .execute({ ...request, arguments: { value: "x".repeat(20_000) } }, options)
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
+        expect(h.sent).toEqual([]);
+      }
+      let ensures = 0;
+      const h = yield* makeHarness({
+        parameterHeaders: true,
+        ensure: () =>
+          Effect.sync(() => {
+            ensures++;
+            return schema;
+          }),
+        request: () => Effect.fail(boundaryError("protocol", "completed", "Header mismatch.")),
+      });
+      expect(
+        yield* h.execution
+          .execute({ ...request, arguments: { value: "valid" } }, options)
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "protocol", outcome: "completed" });
+      expect(h.sent).toHaveLength(1);
+      expect(ensures).toBe(1);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+);

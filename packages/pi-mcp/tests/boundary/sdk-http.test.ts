@@ -233,7 +233,7 @@ describe("scoped SDK HTTP connection", () => {
       }),
   );
 
-  it.effect("rejects already-accepted input requests without exposing their state", () =>
+  it.effect("headless input-required remains incomplete and never exposes private state", () =>
     Effect.gen(function* () {
       const connection = yield* openSdkHttp({
         url: fakeUrl,
@@ -253,7 +253,7 @@ describe("scoped SDK HTTP connection", () => {
         .pipe(Effect.result);
       expect(result).toMatchObject({
         _tag: "Failure",
-        failure: { kind: "unsupported", outcome: "completed" },
+        failure: { kind: "unsupported", outcome: "unknown" },
       });
       expect(String(result)).not.toContain("private-");
     }),

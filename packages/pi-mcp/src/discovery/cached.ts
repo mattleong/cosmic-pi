@@ -13,6 +13,7 @@ import type {
   McpCatalogState,
 } from "./model.ts";
 import { isToolAllowed } from "./policy.ts";
+import { metadataIsFresh } from "./freshness.ts";
 import {
   compareDiscoveryCandidates,
   compareDiscoveryText,
@@ -66,6 +67,7 @@ export const queryCached = (
   evidence: ReadonlyMap<string, McpCacheEvidence>,
   cursors: McpCursorState,
   namespace: string,
+  now = 0,
 ): McpCachedQueryResult => {
   const limit = request.limit ?? 40;
   if (
@@ -125,14 +127,17 @@ export const queryCached = (
         ? "undiscovered"
         : !snapshot.support[request.family]
           ? "unsupported"
-          : catalog.length === 0
-            ? "empty"
-            : "ready");
+          : !metadataIsFresh(snapshot, now)
+            ? "stale"
+            : catalog.length === 0
+              ? "empty"
+              : "ready");
     const catalogState = {
       server: server.id,
       state,
       count: catalog.length,
       revision: snapshot?.revision,
+      fresh: snapshot !== undefined && metadataIsFresh(snapshot, now) && observed === undefined,
     };
     const diagnostic = snapshot?.diagnostics.find((item) => item.family === request.family);
     return diagnostic ? { ...catalogState, reason: diagnostic.reason } : catalogState;

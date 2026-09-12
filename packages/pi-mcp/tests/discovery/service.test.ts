@@ -22,6 +22,7 @@ import type {
 import type { McpEffectiveServer, McpResolvedConfig } from "../../src/config/model.ts";
 import { McpConfigStore } from "../../src/config/store.ts";
 import { McpConnections } from "../../src/connection/service.ts";
+import type { McpOperation } from "../../src/connection/model.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
 import type { McpDiscoveryQueryResult, McpDiscoveryRequest } from "../../src/discovery/model.ts";
 
@@ -44,10 +45,10 @@ const server = (
   },
 });
 const tool = (name: string): Schema.Json => ({ name, inputSchema: { type: "object" } });
-const reply = (request: McpRequest, result: Schema.Json): McpReply => ({
+const reply = (request: McpRequest, result: Schema.JsonObject): McpReply => ({
   action: request.action,
   outcome: "completed",
-  result,
+  result: { ttlMs: 60_000, ...result },
 });
 type Route = (request: McpRequest, id: string) => Effect.Effect<McpReply, McpBoundaryError>;
 const defaultRoute: Route = (request) =>
@@ -482,11 +483,16 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       expect(
         yield* Effect.result(connections.withOperation("a", {}, discovery.refresh)),
       ).toMatchObject({ _tag: "Failure" });
-      const after = yield* connections.withOperation("a", {}, discovery.ensure);
-      expect(after).toBe(before);
-      expect(after.tools.map((item) => item.name)).not.toContain("changed");
+      expect(
+        yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure" });
+      expect(
+        (yield* discovery.cached({ family: "tools", server: "a" })).entries.map(
+          (item) => item.name,
+        ),
+      ).not.toContain("changed");
       const callsBefore = yield* Ref.get(harness.calls);
-      for (const query of queries) {
+      for (const query of queries.filter((query) => query.server === undefined)) {
         const result = yield* discovery.query(query);
         expect(result.notices).toHaveLength(1);
         expect(result.notices[0]).toContain("a");
@@ -773,4 +779,415 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
       ).toMatchObject({ kind: "stale" });
     }).pipe(Effect.provide(harness.layer));
   }),
+);
+
+it.effect.each([undefined, -1, 0, 1e100])(
+  "TTL %s serves one acquisition but is never a later cache hit",
+  (ttlMs) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed({
+          action: request.action,
+          outcome: "completed",
+          result:
+            ttlMs === undefined
+              ? { tools: [tool("first"), tool("second")] }
+              : { ttlMs, tools: [tool("first"), tool("second")] },
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const first = yield* connections.withOperation("a", {}, discovery.ensure);
+        expect(first.tools).toHaveLength(2);
+        expect(first.cacheScope).toBe("private");
+        const passive = yield* discovery.query({ action: "tools.list", limit: 1 });
+        const old = yield* decodePage(passive);
+        expect(passive.notices).toHaveLength(1);
+        expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("stale");
+        expect(yield* Ref.get(harness.calls)).toHaveLength(1);
+        const next = yield* connections.withOperation("a", {}, discovery.ensure);
+        expect(next.revision).toBeGreaterThan(first.revision);
+        expect(yield* Ref.get(harness.calls)).toHaveLength(2);
+        expect(
+          yield* discovery
+            .query({ action: "tools.list", cursor: old.page.nextCursor! })
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "stale" });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "expiry is access-driven; passive reads stay local and failed refresh cannot authorize calls",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed(
+          reply(request, {
+            ttlMs: 100,
+            tools: [tool("old")],
+            cacheScope: "public",
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const first = yield* connections.withOperation("a", {}, discovery.ensure);
+        expect(first.cacheScope).toBe("public");
+        yield* TestClock.adjust("99 millis");
+        expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(first);
+        yield* TestClock.adjust("1 millis");
+        expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("stale");
+        const passive = yield* discovery.query({ action: "tools.list" });
+        expect(passive.notices).toHaveLength(1);
+        expect((yield* decodePage(passive)).page.items).toHaveLength(1);
+        expect(yield* Ref.get(harness.calls)).toHaveLength(1);
+        yield* Ref.set(harness.route, () =>
+          Effect.fail(boundaryError("transport", "not-sent", "secret")),
+        );
+        expect(
+          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure" });
+        expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe(
+          "refresh-failed",
+        );
+        expect((yield* discovery.query({ action: "tools.list" })).notices.join(" ")).not.toContain(
+          "secret",
+        );
+        expect(yield* Ref.get(harness.calls)).toHaveLength(2);
+        yield* Ref.set(harness.route, defaultRoute);
+        expect(
+          (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
+        ).toBeGreaterThan(first.revision);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "short first-page TTL governs the whole catalog even when later pages arrive after expiry",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      const lastStarted = yield* Deferred.make<void>();
+      const lastAllowed = yield* Deferred.make<void>();
+      yield* Ref.set(harness.route, (request) =>
+        request.action === "tools.list" && request.cursor === undefined
+          ? Effect.succeed(
+              reply(request, {
+                tools: [tool("first")],
+                ttlMs: 10,
+                cacheScope: "public",
+                nextCursor: "last",
+              }),
+            )
+          : Deferred.succeed(lastStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(lastAllowed)),
+              Effect.as(
+                reply(request, { tools: [tool("last")], ttlMs: 60_000, cacheScope: "private" }),
+              ),
+            ),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const collecting = yield* connections
+          .withOperation("a", {}, discovery.ensure)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(lastStarted);
+        yield* TestClock.adjust("11 millis");
+        yield* Deferred.succeed(lastAllowed, undefined);
+        const first = yield* Fiber.join(collecting);
+        expect(first.tools).toHaveLength(2);
+        expect(first.cacheScope).toBe("private");
+        expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("stale");
+        yield* Ref.set(harness.route, defaultRoute);
+        expect(
+          (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
+        ).toBeGreaterThan(first.revision);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect("expired ensure joins an existing metadata refresh, including a zero-TTL result", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ a: server("a") });
+    const started = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const connections = yield* McpConnections;
+      yield* connections.withOperation("a", {}, discovery.ensure);
+      yield* TestClock.adjust("60 seconds");
+      yield* Ref.set(harness.route, (request) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(finish)),
+          Effect.as(reply(request, { ttlMs: 0, tools: [tool("new")] })),
+        ),
+      );
+      const refresh = yield* connections
+        .withOperation("a", {}, discovery.refresh)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const joined = yield* connections
+        .withOperation("a", {}, discovery.ensure)
+        .pipe(Effect.forkChild);
+      // Drain runnable fibers so the ensure waiter has reached shared-refresh admission.
+      yield* TestClock.adjust("0 millis");
+      yield* Deferred.succeed(finish, undefined);
+      expect(yield* Fiber.join(joined)).toBe(yield* Fiber.join(refresh));
+      expect(yield* Ref.get(harness.calls)).toHaveLength(2);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each(["private", "public"] as const)(
+  "never reuses %s metadata across authorization revisions",
+  (cacheScope) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      let epoch = 0;
+      const authorize = (operation: McpOperation): McpOperation => ({
+        ...operation,
+        binding: { ...operation.binding, authorizationRevision: epoch },
+        shared: (key, use) => operation.shared(key, (owner) => use(authorize(owner))),
+      });
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed(reply(request, { cacheScope, tools: [tool("old-user")] })),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const ensure = () =>
+          connections.withOperation("a", {}, (operation) => discovery.ensure(authorize(operation)));
+        const first = yield* ensure();
+        const old = (yield* discovery.cached({ family: "tools" })).entries[0]!.ref;
+        epoch++;
+        yield* Ref.set(harness.route, () =>
+          Effect.fail(boundaryError("transport", "not-sent", "failed")),
+        );
+        expect(yield* ensure().pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+        expect((yield* discovery.cached({ family: "tools" })).entries).toEqual([]);
+        expect(yield* discovery.cachedDetail(old).pipe(Effect.flip)).toMatchObject({
+          kind: "stale",
+        });
+        yield* Ref.set(harness.route, defaultRoute);
+        const next = yield* ensure();
+        expect(next.authorizationRevision).toBe(1);
+        expect(next.revision).toBeGreaterThan(first.revision);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+const continuationRequests = [
+  { action: "tools.list", server: "a", limit: 1 },
+  { action: "tools.search", server: "a", query: "", limit: 1 },
+  { action: "resources.list", server: "a", limit: 1 },
+  { action: "resources.templates", server: "a", limit: 1 },
+  { action: "prompts.list", server: "a", limit: 1 },
+] as const;
+
+it.effect.each(
+  [undefined, 0, 100].flatMap((ttlMs) =>
+    continuationRequests.map((request) => ({ ttlMs, request })),
+  ),
+)(
+  "$request.action continues the captured snapshot after TTL $ttlMs expires",
+  ({ ttlMs, request }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness(
+        { a: server("a") },
+        { tools: true, resources: true, prompts: true },
+      );
+      yield* Ref.set(harness.route, (input) => {
+        const names = ["alpha", "beta", "gamma"];
+        const result =
+          input.action === "tools.list"
+            ? { tools: names.map(tool) }
+            : input.action === "resources.list"
+              ? { resources: names.map((name) => ({ name, uri: `file:///${name}` })) }
+              : input.action === "resources.templates"
+                ? {
+                    resourceTemplates: names.map((name) => ({
+                      name,
+                      uriTemplate: `file:///${name}/{id}`,
+                    })),
+                  }
+                : { prompts: names.map((name) => ({ name })) };
+        return Effect.succeed({
+          action: input.action,
+          outcome: "completed",
+          result: ttlMs === undefined ? result : { ...result, ttlMs },
+        });
+      });
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const first = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
+        const revision = (yield* discovery.known)[0]!.revision;
+        yield* TestClock.adjust("100 millis");
+        const calls = yield* Ref.get(harness.calls);
+        yield* Ref.set(harness.route, () =>
+          Effect.fail(boundaryError("transport", "not-sent", "Fixture refresh failed.")),
+        );
+        const items = [...first.page.items];
+        let cursor = first.page.nextCursor;
+        while (cursor !== undefined) {
+          const next = yield* discovery.query({ ...request, cursor });
+          expect(next.notices).not.toHaveLength(0);
+          const page = yield* decodePage(next);
+          items.push(...page.page.items);
+          cursor = page.page.nextCursor;
+        }
+        expect(
+          items.map(
+            (item) => Schema.decodeUnknownSync(Schema.Struct({ name: Schema.String }))(item).name,
+          ),
+        ).toEqual(["alpha", "beta", "gamma"]);
+        expect((yield* discovery.known)[0]!.revision).toBe(revision);
+        expect(yield* Ref.get(harness.calls)).toEqual(calls);
+        // Snapshot inspection must not make the same revision safe for invocation.
+        expect(
+          yield* connections.withOperation("a", {}, discovery.ensure).pipe(Effect.flip),
+        ).toMatchObject({ kind: "transport", outcome: "not-sent" });
+        expect(
+          yield* discovery
+            .query({ action: "tools.describe", server: "a", tool: "alpha" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "transport" });
+        expect(yield* discovery.query(request).pipe(Effect.flip)).toMatchObject({
+          kind: "transport",
+        });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect.each(["refresh", "notification", "auth", "config", "owner"] as const)(
+  "%s invalidates targeted continuation cursors without refreshing them",
+  (change) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const input = { action: "tools.list", server: "a", limit: 1 } as const;
+        const first = yield* discovery.query(input).pipe(Effect.flatMap(decodePage));
+        if (change === "refresh") yield* connections.withOperation("a", {}, discovery.refresh);
+        else if (change === "auth") yield* connections.withAuth("a", () => Effect.void);
+        else if (change === "config")
+          yield* harness.update((config) => ({ ...config, revision: config.revision + 1 }));
+        else if (change === "owner") yield* connections.disconnect("a");
+        else {
+          yield* harness.notify("a", "tools");
+          // Deliver the notification but keep the debounce refresh pending.
+          yield* TestClock.adjust("0 millis");
+        }
+        const calls = yield* Ref.get(harness.calls);
+        const opened = yield* Ref.get(harness.opened);
+        expect(
+          yield* discovery.query({ ...input, cursor: first.page.nextCursor! }).pipe(Effect.flip),
+        ).toMatchObject({ kind: "stale", outcome: "not-sent" });
+        expect(yield* Ref.get(harness.calls)).toEqual(calls);
+        expect(yield* Ref.get(harness.opened)).toEqual(opened);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect(
+  "continuation inspection needs no admission and checks any supplied operation binding",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ a: server("a") });
+      yield* harness.update((config) => ({
+        ...config,
+        settings: { ...config.settings, maxPerServer: 1 },
+      }));
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed(
+          reply(request, {
+            ttlMs: 0,
+            tools: [tool("alpha"), tool("beta"), tool("gamma")],
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const input = { action: "tools.list", server: "a", limit: 1 } as const;
+        const first = yield* discovery.query(input).pipe(Effect.flatMap(decodePage));
+        const request = { ...input, cursor: first.page.nextCursor! };
+        // Hold the server's only ticket. A continuation that reacquires admission cannot settle.
+        yield* connections.withOperation("a", {}, (operation) =>
+          Effect.gen(function* () {
+            const local = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
+            const admitted = yield* discovery
+              .query(request, operation)
+              .pipe(Effect.flatMap(decodePage));
+            expect(local.page.items).toEqual([expect.objectContaining({ name: "beta" })]);
+            expect(admitted.page.items).toEqual(local.page.items);
+            expect(
+              yield* discovery
+                .query(request, {
+                  ...operation,
+                  binding: {
+                    ...operation.binding,
+                    authorizationRevision: (operation.binding.authorizationRevision ?? 0) + 1,
+                  },
+                })
+                .pipe(Effect.flip),
+            ).toMatchObject({ kind: "stale" });
+          }).pipe(Effect.orDie),
+        );
+        expect(yield* Ref.get(harness.calls)).toHaveLength(1);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
+it.effect.each([true, false])(
+  "filters invalid parameter-header definitions consistently only for modern HTTP=%s",
+  (modern) =>
+    Effect.gen(function* () {
+      const capabilities = { tools: true, resources: false, prompts: false };
+      const harness = yield* makeHarness(
+        { a: server("a") },
+        modern ? { ...capabilities, parameterHeaders: true } : capabilities,
+      );
+      yield* Ref.set(harness.route, (request) =>
+        Effect.succeed(
+          reply(request, {
+            tools: [
+              tool("valid"),
+              {
+                name: "invalid",
+                inputSchema: { properties: { value: { type: "number", "x-mcp-header": "Value" } } },
+              },
+            ],
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* McpDiscovery;
+        const connections = yield* McpConnections;
+        const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
+        expect(snapshot.tools.map((entry) => entry.name)).toEqual(
+          modern ? ["valid"] : ["valid", "invalid"],
+        );
+        const listed = yield* discovery
+          .query({ action: "tools.list", server: "a" })
+          .pipe(Effect.flatMap(decodePage));
+        expect(listed.page.total).toBe(modern ? 1 : 2);
+        const found = yield* discovery
+          .query({ action: "tools.search", query: "invalid" })
+          .pipe(Effect.flatMap(decodePage));
+        expect(found.page.total).toBe(modern ? 0 : 1);
+        const exact = yield* discovery
+          .query({ action: "tools.describe", server: "a", tool: "invalid" })
+          .pipe(Effect.result);
+        expect(exact._tag).toBe(modern ? "Failure" : "Success");
+        expect((yield* discovery.cached({ family: "tools" })).total).toBe(modern ? 1 : 2);
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );

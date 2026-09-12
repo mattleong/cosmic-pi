@@ -1,7 +1,12 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
-import type { McpBoundaryError } from "../client/errors.ts";
+import {
+  CrossProcessLock,
+  CrossProcessLockError,
+  type CrossProcessLockOptions,
+} from "pi-cosmic-core";
+import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 
 export interface McpAuthLiveAuthority {
@@ -15,6 +20,34 @@ export const AuthRequestCurrent = Context.Reference<Effect.Effect<void, McpBound
   { defaultValue: () => Effect.void },
 );
 import * as Semaphore from "effect/Semaphore";
+
+/** Local and filesystem admission share a deadline, never a credential-operation timeout. */
+export const withCredentialPermit = <A>(
+  permit: Semaphore.Semaphore,
+  work: Effect.Effect<A, McpBoundaryError | CrossProcessLockError>,
+  check: Effect.Effect<void, McpBoundaryError>,
+  options: CrossProcessLockOptions = {},
+): Effect.Effect<A, McpBoundaryError> =>
+  CrossProcessLock.withPermit(permit, work, check, options).pipe(
+    Effect.mapError((error) => {
+      if (!(error instanceof CrossProcessLockError)) return error;
+      if (error.reason === "acquire-timeout")
+        return boundaryError(
+          "timeout",
+          "not-sent",
+          "Credential coordination admission timed out. The current owner was not changed.",
+          "oauth-coordination-timeout",
+        );
+      return boundaryError(
+        "unavailable",
+        "not-sent",
+        error.reason === "recovery-required"
+          ? "Credential ownership requires recovery. Stop all Pi processes and confirm native Keychain operations have settled before removing retained lock evidence. Then sign in again."
+          : "Credential coordination is unavailable.",
+        "oauth-mutation-unresolved",
+      );
+    }),
+  );
 
 export interface AuthBlock {
   readonly kind: "refresh" | "rejected" | "logout";

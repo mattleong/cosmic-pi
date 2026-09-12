@@ -16,6 +16,8 @@ import {
   type RequestId,
   type Transport,
 } from "@modelcontextprotocol/client";
+import type { NativeContext } from "pi-cosmic-core";
+import { observeHttpLog, type SdkHttpLogScope } from "./sdk-http-observations.ts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -45,7 +47,9 @@ export interface SdkHttpTransportOperation extends SdkFetchOperation {
   readonly tag: string;
   readonly responseReceivedValue: boolean;
   readonly requestStarted: boolean;
+  readonly logScope?: SdkHttpLogScope | undefined;
   readonly isIdle: boolean;
+  readonly reserveSend: () => void;
   readonly bindRequestId: (requestId: RequestId) => void;
   readonly responseReceived: () => void;
   readonly abort: () => void;
@@ -55,6 +59,8 @@ export interface SdkHttpTransportOperation extends SdkFetchOperation {
 }
 
 export interface SdkHttpTransportRegistry {
+  readonly current?: () => SdkHttpTransportOperation | undefined;
+  readonly run?: <A>(operation: SdkHttpTransportOperation, callback: () => A) => A;
   readonly lookupTag: (tag: string) => SdkHttpTransportOperation | undefined;
   readonly lookupRequestId: (requestId: RequestId) => SdkHttpTransportOperation | undefined;
 }
@@ -83,6 +89,10 @@ export class SdkHttpTraffic implements SdkFetchOwner {
   get isIdle(): boolean {
     return this.resources === 0;
   }
+
+  reserveSend = (): void => {
+    this.resources += 1;
+  };
 
   fetchStarted = (): void => {
     this.started = true;
@@ -133,6 +143,7 @@ export class SdkHttpTraffic implements SdkFetchOwner {
 export class SdkHttpOperation extends SdkHttpTraffic implements SdkHttpTransportOperation {
   readonly generation: number;
   readonly tag: string;
+  logScope: SdkHttpLogScope | undefined;
   private response = false;
   private firstFailure: SdkFetchFailure | undefined;
   private readonly failureWaiters = new Set<(error: SdkFetchFailure) => void>();
@@ -196,9 +207,15 @@ export class SdkHttpOperationRegistry implements SdkHttpTransportRegistry {
   private readonly generation: number;
   private admissionsOpen = true;
 
-  constructor(generation: number) {
+  private readonly context: NativeContext<SdkHttpTransportOperation> | undefined;
+  constructor(generation: number, context?: NativeContext<SdkHttpTransportOperation>) {
     this.generation = generation;
+    this.context = context;
   }
+
+  current = (): SdkHttpTransportOperation | undefined => this.context?.current();
+  run = <A>(operation: SdkHttpTransportOperation, callback: () => A): A =>
+    this.context ? this.context.run(operation, callback) : callback();
 
   begin(): SdkHttpOperation | undefined {
     if (!this.admissionsOpen) return undefined;
@@ -463,37 +480,51 @@ export const makeSdkHttpTransport = (
     setSupportedProtocolVersions: (versions) => transport.setSupportedProtocolVersions?.(versions),
     start: () => transport.start(),
     close: () => transport.close(),
-    send: (message, options) =>
-      Promise.resolve().then(() => {
-        const tag = privateHeader(options?.headers);
-        const operation = tag === undefined ? acquisition() : registry.lookupTag(tag);
-        if (tag !== undefined && (operation === undefined || operation.signal.aborted)) {
-          throw new SdkHttpTransportOperationError();
-        }
-        if (operation !== undefined) bindRequestIds(message, operation);
-        const requestSignal = mergeSignals(options?.requestSignal, operation?.signal);
-        const headers = withoutPrivateHeader(options?.headers);
-        const settleChallenge =
-          operation === undefined ? undefined : beginSdkHttpChallenge(operation);
-        return Promise.resolve()
-          .then(() =>
-            options === undefined && requestSignal === undefined && headers === undefined
-              ? transport.send(message)
-              : transport.send(message, { ...options, requestSignal, headers }),
-          )
-          .then(
-            () => settleChallenge?.(),
-            (error) => {
-              settleChallenge?.(Predicate.isError(error) ? error : undefined);
-              throw error;
-            },
-          );
-      }),
+    send: (message, options) => {
+      // Capture ownership and reserve native send before any Promise turn can race cleanup.
+      const tag = privateHeader(options?.headers);
+      const operation =
+        tag === undefined ? (registry.current?.() ?? acquisition()) : registry.lookupTag(tag);
+      if (operation?.signal.aborted) return Promise.reject(new SdkHttpTransportOperationError());
+      if (operation) {
+        bindRequestIds(message, operation);
+        operation.reserveSend();
+      }
+      return Promise.resolve()
+        .then(() => {
+          if (tag !== undefined && (operation === undefined || operation.signal.aborted)) {
+            throw new SdkHttpTransportOperationError();
+          }
+          const requestSignal = mergeSignals(options?.requestSignal, operation?.signal);
+          const headers = withoutPrivateHeader(options?.headers);
+          const settleChallenge =
+            operation === undefined ? undefined : beginSdkHttpChallenge(operation);
+          return Promise.resolve()
+            .then(() => {
+              const send = () =>
+                options === undefined && requestSignal === undefined && headers === undefined
+                  ? transport.send(message)
+                  : transport.send(message, { ...options, requestSignal, headers });
+              return operation && registry.run ? registry.run(operation, send) : send();
+            })
+            .then(
+              () => settleChallenge?.(),
+              (error) => {
+                settleChallenge?.(Predicate.isError(error) ? error : undefined);
+                throw error;
+              },
+            );
+        })
+        .finally(() => operation?.fetchFinished());
+    },
   };
 
   transport.onclose = () => decorated.onclose?.();
   transport.onerror = (error) => decorated.onerror?.(error);
   transport.onmessage = (message: JSONRPCMessage, extra?: MessageExtraInfo) => {
+    const operation = registry.current?.();
+    if (operation && !operation.signal.aborted && !operation.responseReceivedValue)
+      observeHttpLog(message, operation.logScope);
     markResponses(message, registry);
     decorated.onmessage?.(message, extra);
   };

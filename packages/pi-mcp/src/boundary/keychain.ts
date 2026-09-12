@@ -14,6 +14,8 @@ export interface KeychainOptions {
   readonly entryFactory?: KeychainEntryFactory;
   readonly service?: string;
   readonly timeoutMs?: number;
+  /** Local/OS-lock admission only, separate from the native operation budget. Defaults to 15s. */
+  readonly acquireTimeoutMs?: number;
   /** Private directory override for child-process tests, never derived from agentDir. */
   readonly lockDirectory?: string;
 }

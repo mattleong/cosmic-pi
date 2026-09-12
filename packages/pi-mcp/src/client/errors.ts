@@ -37,6 +37,7 @@ export class McpBoundaryError extends Schema.TaggedError<McpBoundaryError>()("Mc
       "oauth-scope-approval-required",
       "oauth-scope-invalid",
       "oauth-mutation-unresolved",
+      "oauth-coordination-timeout",
       "oauth-browser-open-failed",
       "oauth-callback-timeout",
       "oauth-registration-unsupported",

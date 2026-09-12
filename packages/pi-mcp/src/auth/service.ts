@@ -15,6 +15,7 @@ import type { McpAuthChallenge, McpAuthContract, McpAuthStatus, McpLoginOptions 
 import {
   AuthRequestCurrent,
   authorityFor,
+  withCredentialPermit,
   type AuthBlock,
   type McpAuthLiveAuthority,
 } from "./authority.ts";
@@ -51,7 +52,10 @@ const envToken = (name: string) =>
     ),
   );
 
-export const makeMcpAuthWithAuthority = (live: McpAuthLiveAuthority) =>
+export const makeMcpAuthWithAuthority = (
+  live: McpAuthLiveAuthority,
+  lockOptions: Pick<KeychainOptions, "acquireTimeoutMs"> = {},
+) =>
   Effect.gen(function* () {
     const store = yield* McpCredentialStore;
     const sdk = yield* McpSdkAuth;
@@ -201,7 +205,9 @@ export const makeMcpAuthWithAuthority = (live: McpAuthLiveAuthority) =>
                   }),
                 { checkCurrent: checkServer(server), isCurrent: current },
               )
-              .pipe(authority.permit.withPermits(1));
+              .pipe((work) =>
+                withCredentialPermit(authority.permit, work, checkServer(server), lockOptions),
+              );
           }),
           !anonymous,
         );
@@ -312,7 +318,9 @@ export const makeMcpAuthWithAuthority = (live: McpAuthLiveAuthority) =>
                 }),
               { checkCurrent: checkServer(server), isCurrent: current },
             )
-            .pipe(authority.permit.withPermits(1));
+            .pipe((work) =>
+              withCredentialPermit(authority.permit, work, checkServer(server), lockOptions),
+            );
         }),
         false,
       );
@@ -337,7 +345,9 @@ export const makeMcpAuthWithAuthority = (live: McpAuthLiveAuthority) =>
             checkCurrent: checkServer(server),
             isCurrent: () => !disposed && live.isTrusted(),
           })
-          .pipe(authority.permit.withPermits(1));
+          .pipe((work) =>
+            withCredentialPermit(authority.permit, work, checkServer(server), lockOptions),
+          );
       });
     const status: McpAuthContract["status"] = (server) =>
       Effect.gen(function* () {
@@ -411,7 +421,7 @@ export class McpAuth extends Context.Service<McpAuth, McpAuthContract>()(
   "pi-mcp/auth/service/McpAuth",
 ) {
   static readonly layer = (options: KeychainOptions, authority: McpAuthLiveAuthority) =>
-    Layer.effect(this, makeMcpAuthWithAuthority(authority)).pipe(
+    Layer.effect(this, makeMcpAuthWithAuthority(authority, options)).pipe(
       Layer.provide(
         Layer.merge(
           McpCredentialStore.layer(options),

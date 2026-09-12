@@ -10,6 +10,8 @@ import {
 } from "./model.ts";
 import { freezeMetadata, listMetadata, metadataBudget } from "./pagination.ts";
 import { isToolAllowed } from "./policy.ts";
+import { metadataTime } from "./freshness.ts";
+import { scanParameterHeaders } from "../invocation/parameter-headers.ts";
 
 /** Prepare all families under one owner and budget; only the service may publish the revision. */
 export const collectMetadata = (operation: McpOperation) =>
@@ -56,6 +58,8 @@ export const collectMetadata = (operation: McpOperation) =>
         )
       : undefined;
     const diagnostics: Array<McpDiscoveryDiagnostic> = [];
+    let expiresAt = Number.POSITIVE_INFINITY;
+    let cacheScope: "public" | "private" = "public";
     for (const [family, listing] of [
       ["tools", tools],
       ["resources", resources],
@@ -63,14 +67,31 @@ export const collectMetadata = (operation: McpOperation) =>
       ["prompts", prompts],
     ] as const) {
       if (listing?.supported === false) diagnostics.push({ family, reason: listing.reason });
+      if (listing?.supported) {
+        expiresAt = Math.min(expiresAt, listing.expiresAt);
+        if (listing.cacheScope === "private") cacheScope = "private";
+      }
     }
+    if (!Number.isFinite(expiresAt)) {
+      expiresAt = yield* metadataTime;
+      cacheScope = "private";
+    }
+    const permitted = (tools?.entries ?? []).filter((entry) =>
+      isToolAllowed(operation.server, entry.name),
+    );
+    const accepted =
+      operation.capabilities.parameterHeaders === true
+        ? permitted.filter((entry) => scanParameterHeaders(entry.inputSchema).valid)
+        : permitted;
+    if (accepted.length !== permitted.length)
+      diagnostics.push({ family: "tools", reason: "invalid-parameter-headers" });
     return yield* Effect.try({
       try: () =>
         freezeMetadata(
           structuredClone({
-            tools: (tools?.entries ?? []).filter((entry) =>
-              isToolAllowed(operation.server, entry.name),
-            ),
+            tools: accepted,
+            expiresAt,
+            cacheScope,
             resources: resources?.entries ?? [],
             templates: templates?.entries ?? [],
             prompts: prompts?.entries ?? [],

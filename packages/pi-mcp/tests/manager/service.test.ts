@@ -127,6 +127,7 @@ const fixture = (
                   action: input.action,
                   outcome: "completed" as const,
                   result: {
+                    ttlMs: 60_000,
                     tools: (listing.toolNames ?? ["lookup"]).map((name) => ({
                       name,
                       description: "cached fixture",

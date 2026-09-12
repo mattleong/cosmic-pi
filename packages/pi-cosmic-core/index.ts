@@ -196,6 +196,11 @@ export {
 } from "./src/platform/duplex-process.ts";
 export { synchronousNow } from "./src/platform/native-clock.ts";
 export {
+  makeNativeContext,
+  NativeContextError,
+  type NativeContext,
+} from "./src/platform/native-context.ts";
+export {
   decodeJwtPayloadText,
   extractJwtClaim,
   hasControlCharacter,

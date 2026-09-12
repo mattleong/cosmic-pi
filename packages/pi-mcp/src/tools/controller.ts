@@ -1,6 +1,8 @@
 import { keyText, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
+import { progressData } from "../ui/remote-events.ts";
+import type { McpProgress } from "../observations/model.ts";
 import { renderMcpCall, renderMcpResult } from "../ui/tool-renderer.ts";
 import {
   boundedMcpReply,
@@ -21,6 +23,11 @@ export const McpToolParameters = Type.Object(
           "disconnect",
           "refresh",
           "server.instructions",
+          "completion.complete",
+          "events.read",
+          "resources.subscribe",
+          "resources.unsubscribe",
+          "resources.subscriptions",
           "tools.list",
           "tools.search",
           "tools.describe",
@@ -42,6 +49,28 @@ export const McpToolParameters = Type.Object(
           "Required except for status and result.read; optional for tools.list and tools.search.",
       }),
     ),
+    logLevel: Type.Optional(
+      Type.String({
+        enum: ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"],
+        description:
+          "Optional deprecated modern HTTP-only request logging on tools.call, resources.read, prompts.get, completion.complete only.",
+      }),
+    ),
+    ref: Type.Optional(
+      Type.Union([
+        Type.Object({ type: Type.Literal("ref/prompt"), name: Type.String({ maxLength: 1_024 }) }),
+        Type.Object({ type: Type.Literal("ref/resource"), uri: Type.String({ maxLength: 1_024 }) }),
+      ]),
+    ),
+    argument: Type.Optional(
+      Type.Object({
+        name: Type.String({ maxLength: 1_024 }),
+        value: Type.String({ maxLength: 8_192 }),
+      }),
+    ),
+    context: Type.Optional(
+      Type.Object({ arguments: Type.Record(Type.String(), Type.String({ maxLength: 8_192 })) }),
+    ),
     tool: Type.Optional(
       Type.String({ maxLength: 1_024, description: "Required for tools.describe and tools.call." }),
     ),
@@ -51,7 +80,8 @@ export const McpToolParameters = Type.Object(
     cursor: Type.Optional(
       Type.String({
         maxLength: 8_192,
-        description: "Returned discovery cursor for list/search pages.",
+        description:
+          "Returned discovery cursor for list/search pages, or event cursor for events.read.",
       }),
     ),
     limit: Type.Optional(
@@ -59,7 +89,7 @@ export const McpToolParameters = Type.Object(
         minimum: 1,
         maximum: 50_000,
         description:
-          "List/search: 1 to 100 entries. result.read: 1 to 50,000 UTF-16 code units; output may be smaller.",
+          "List/search and events.read: 1 to 100 entries. result.read: 1 to 50,000 UTF-16 code units; output may be smaller.",
       }),
     ),
     arguments: Type.Optional(
@@ -69,7 +99,10 @@ export const McpToolParameters = Type.Object(
       }),
     ),
     uri: Type.Optional(
-      Type.String({ maxLength: 1_024, description: "Required for resources.read only." }),
+      Type.String({
+        maxLength: 1_024,
+        description: "Required for resources.read, resources.subscribe, resources.unsubscribe.",
+      }),
     ),
     prompt: Type.Optional(
       Type.String({ maxLength: 1_024, description: "Required for prompts.get only." }),
@@ -103,6 +136,7 @@ export interface McpToolControllerOptions {
     signal: AbortSignal | undefined,
     maxOutputBytes: number,
     images: boolean,
+    onProgress?: (progress: McpProgress) => void,
   ) => Promise<McpGatewayExecution>;
 }
 
@@ -135,14 +169,35 @@ export const buildMcpTool = (options: McpToolControllerOptions): McpToolDefiniti
         theme,
         expandHint,
       ),
-    execute: (callId, input, signal) =>
-      options.execute(callId, input, signal, MCP_INLINE_BYTES, true).then((result) => {
-        const reply = boundedMcpReply(result.reply);
-        options.receipts.retain(callId, options.owner, reply);
-        return {
-          content: [{ type: "text", text: JSON.stringify(reply) }, ...result.images],
-          details: reply,
-        };
-      }),
+    execute: (callId, input, signal, onUpdate) =>
+      options
+        .execute(callId, input, signal, MCP_INLINE_BYTES, true, (progress) => {
+          if (signal?.aborted || !onUpdate) return;
+          const data = progressData(progress);
+          try {
+            const result: unknown = onUpdate({
+              content: [{ type: "text", text: "MCP remote progress" }],
+              details: {
+                action: input.action ?? "status",
+                outcome: "unknown",
+                isError: false,
+                data: { progress: data },
+                notices: [],
+              },
+            });
+            // A hostile asynchronous display callback is observational too.
+            void Promise.resolve(result).catch(() => undefined);
+          } catch {
+            /* Display failures do not change execution or trigger replay. */
+          }
+        })
+        .then((result) => {
+          const reply = boundedMcpReply(result.reply);
+          options.receipts.retain(callId, options.owner, reply);
+          return {
+            content: [{ type: "text", text: JSON.stringify(reply) }, ...result.images],
+            details: reply,
+          };
+        }),
   };
 };

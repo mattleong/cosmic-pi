@@ -36,6 +36,7 @@ import {
   type McpRuntimeError,
 } from "../layer.ts";
 import { buildMcpTool, type McpToolDefinition } from "../tools/controller.ts";
+import type { McpProgress } from "../observations/model.ts";
 import type { McpGatewayExecution, McpGatewayReply } from "../tools/model.ts";
 import { McpExecution, type McpExecutionContract } from "../tools/service.ts";
 import { McpManager } from "../manager/service.ts";
@@ -45,6 +46,7 @@ import { managerSelection } from "../ui/manager-state.ts";
 import { McpActivity } from "../activity/service.ts";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { acquireMcpStatusHost, type McpStatusHost } from "../boundary/host-mcp-status.ts";
+import { makeAskUserHost } from "../boundary/host-ask-user.ts";
 import { makeSynchronousIngress } from "pi-cosmic-core";
 
 // Error-label decoding never traverses a rejected argument payload. The shared
@@ -56,6 +58,11 @@ const ErrorActionSchema = Schema.Struct({
     "disconnect",
     "refresh",
     "server.instructions",
+    "completion.complete",
+    "resources.subscribe",
+    "resources.unsubscribe",
+    "resources.subscriptions",
+    "events.read",
     "tools.list",
     "tools.search",
     "tools.describe",
@@ -151,47 +158,55 @@ export const makeMcpLifecycle = (
     signal: AbortSignal | undefined,
     maxOutputBytes: number,
     images: boolean,
+    onProgress?: (progress: McpProgress) => void,
   ): Promise<McpGatewayExecution> => {
     if (!current(input, token))
       return Promise.reject(boundaryError("stale", "not-sent", "MCP session is no longer active."));
     if (signal?.aborted)
       return Promise.reject(boundaryError("cancelled", "not-sent", "MCP operation was cancelled."));
+    const projection = { maxOutputBytes, images };
+    const observedProjection = onProgress
+      ? {
+          ...projection,
+          onProgress: (progress: McpProgress) => {
+            if (current(input, token) && !signal?.aborted) onProgress(progress);
+          },
+        }
+      : projection;
     // Running the Result, not the failing Effect, preserves the typed error rather
     // than exposing Effect's FiberFailure wrapper to Code Mode certainty handling.
-    return slot
-      .run(Effect.result(execution.execute(request, { maxOutputBytes, images })), signal)
-      .then(
-        (result) => {
-          if (Result.isFailure(result)) {
-            const action = invokeHostCallback(
-              () =>
-                Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
-                  ?.action ?? "status",
-              "status",
-            );
-            if (
-              result.failure.kind === "auth-required" ||
-              promptArgumentHint(action, result.failure) !== undefined
-            ) {
-              if (!current(input, token))
-                throw boundaryError("stale", result.failure.outcome, "MCP session was replaced.");
-              // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
-              return { reply: mcpFailureReply(action, result.failure), images: [] };
-            }
-            throw result.failure;
-          }
-          if (!current(input, token))
-            throw boundaryError("stale", result.success.reply.outcome, "MCP session was replaced.");
-          return result.success;
-        },
-        () => {
-          throw boundaryError(
-            signal?.aborted ? "cancelled" : "unavailable",
-            "unknown",
-            "MCP operation did not return a confirmed outcome.",
+    return slot.run(Effect.result(execution.execute(request, observedProjection)), signal).then(
+      (result) => {
+        if (Result.isFailure(result)) {
+          const action = invokeHostCallback(
+            () =>
+              Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
+                ?.action ?? "status",
+            "status",
           );
-        },
-      );
+          if (
+            result.failure.kind === "auth-required" ||
+            promptArgumentHint(action, result.failure) !== undefined
+          ) {
+            if (!current(input, token))
+              throw boundaryError("stale", result.failure.outcome, "MCP session was replaced.");
+            // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
+            return { reply: mcpFailureReply(action, result.failure), images: [] };
+          }
+          throw result.failure;
+        }
+        if (!current(input, token))
+          throw boundaryError("stale", result.success.reply.outcome, "MCP session was replaced.");
+        return result.success;
+      },
+      () => {
+        throw boundaryError(
+          signal?.aborted ? "cancelled" : "unavailable",
+          "unknown",
+          "MCP operation did not return a confirmed outcome.",
+        );
+      },
+    );
   };
 
   const slot = makePiSessionRuntimeSlot<
@@ -234,24 +249,31 @@ export const makeMcpLifecycle = (
           buildMcpTool({
             owner: input.owner,
             receipts,
-            execute: (_callId, request, signal, maxOutputBytes, images) =>
-              rawExecute(input, token, execution, request, signal, maxOutputBytes, images).catch(
-                (error) => {
-                  if (!current(input, token))
-                    throw boundaryError("stale", "unknown", "MCP session was replaced.");
-                  const failure =
-                    error instanceof McpBoundaryError
-                      ? error
-                      : boundaryError("unavailable", "unknown", "MCP operation failed.");
-                  const action = invokeHostCallback(
-                    () =>
-                      Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
-                        ?.action ?? "status",
-                    "status",
-                  );
-                  return { reply: mcpFailureReply(action, failure), images: [] };
-                },
-              ),
+            execute: (_callId, request, signal, maxOutputBytes, images, onProgress) =>
+              rawExecute(
+                input,
+                token,
+                execution,
+                request,
+                signal,
+                maxOutputBytes,
+                images,
+                onProgress,
+              ).catch((error) => {
+                if (!current(input, token))
+                  throw boundaryError("stale", "unknown", "MCP session was replaced.");
+                const failure =
+                  error instanceof McpBoundaryError
+                    ? error
+                    : boundaryError("unavailable", "unknown", "MCP operation failed.");
+                const action = invokeHostCallback(
+                  () =>
+                    Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
+                      ?.action ?? "status",
+                  "status",
+                );
+                return { reply: mcpFailureReply(action, failure), images: [] };
+              }),
           }),
         );
         pi.registerTool(wrapped);
@@ -386,6 +408,17 @@ export const makeMcpLifecycle = (
       );
       return stopping;
     }
+    const owner = Symbol("mcp.activation");
+    const interaction = makeAskUserHost(
+      pi,
+      sessionId,
+      () =>
+        active?.input.owner === owner &&
+        slot.isCurrent(active.token) &&
+        invokeHostCallback(() => ctx.hasUI === true, false) &&
+        isProjectTrusted(ctx) &&
+        toolActive(),
+    );
     return slot
       .start(
         {
@@ -394,7 +427,8 @@ export const makeMcpLifecycle = (
           projectTrusted: isProjectTrusted(ctx),
           isTrusted: () => isProjectTrusted(ctx),
           sessionId,
-          owner: Symbol("mcp.activation"),
+          owner,
+          interaction,
         },
         captured.signal,
       )

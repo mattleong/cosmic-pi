@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpOperation } from "../connection/model.ts";
 import type { McpDataRequest } from "../tools/model.ts";
+import type { McpMetadataFreshness } from "./freshness.ts";
 
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const Description = Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64 * 1024)));
@@ -88,13 +89,15 @@ export type McpTemplateMetadata = typeof McpTemplateMetadataSchema.Type;
 export type McpPromptMetadata = typeof McpPromptMetadataSchema.Type;
 export interface McpDiscoveryDiagnostic {
   readonly family: McpCachedFamily;
-  readonly reason: "rpc-method-not-found";
+  readonly reason: "rpc-method-not-found" | "invalid-parameter-headers";
 }
 export interface McpDiscoveryQueryResult {
   readonly data: Schema.Json;
   readonly notices: ReadonlyArray<string>;
 }
-export interface McpMetadataSnapshot {
+export interface McpMetadataSnapshot extends McpMetadataFreshness {
+  /** Omitted only by fixtures, where the authorization epoch is zero. */
+  readonly authorizationRevision?: number;
   readonly server: string;
   readonly identity: string;
   readonly owner: string;
@@ -157,12 +160,15 @@ export type McpCatalogState =
   | "unsupported"
   | "empty"
   | "ready"
+  | "stale"
   | "refreshing"
   | "refresh-failed"
   | "invalidated";
 export interface McpCachedCatalog {
   readonly server: string;
   readonly state: McpCatalogState;
+  /** Freshness is independent of an unsupported catalog's support evidence. */
+  readonly fresh?: boolean;
   readonly count: number;
   readonly revision: number | undefined;
   readonly reason?: McpDiscoveryDiagnostic["reason"];

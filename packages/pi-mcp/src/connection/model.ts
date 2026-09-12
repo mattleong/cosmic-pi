@@ -2,9 +2,12 @@ import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import type * as Stream from "effect/Stream";
 import type * as Scope from "effect/Scope";
+import type * as Schema from "effect/Schema";
+import type { McpExchange } from "../interaction/model.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type {
   McpCapabilities,
+  McpDispatchOptions,
   McpInstructions,
   McpMetadataFamily,
   McpReply,
@@ -23,6 +26,8 @@ export interface McpOperationBinding {
   readonly server: string;
   readonly identity: string;
   readonly configRevision: number;
+  /** Private credential identity counter, never a token. Omitted fixtures mean zero. */
+  readonly authorizationRevision?: number;
 }
 
 /** Internal capability. The ticket and connection owner are checked at every publication. */
@@ -30,13 +35,24 @@ export interface McpOperation {
   readonly binding: McpOperationBinding;
   readonly server: McpEffectiveServer;
   readonly owner: string;
+  readonly operationId?: string;
   readonly capabilities: McpCapabilities;
   readonly instructions?: McpInstructions | undefined;
   readonly changes: Stream.Stream<McpMetadataFamily>;
   readonly checkCurrent: Effect.Effect<void, McpBoundaryError>;
+  /** New remote/UI work additionally requires an accepting, credential-current owner. */
+  readonly checkContinuation?: Effect.Effect<void, McpBoundaryError>;
   /** Only bounded local publication belongs here, never remote I/O or another owner wait. */
   readonly commit: <A>(publication: Effect.Effect<A>) => Effect.Effect<A, McpBoundaryError>;
-  readonly request: (request: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly request: (
+    request: McpRequest,
+    options?: McpDispatchOptions,
+  ) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly subscribeResource?: (uri: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
+  readonly exchange?: (
+    request: McpRequest,
+    options?: McpDispatchOptions,
+  ) => Effect.Effect<McpExchange, McpBoundaryError>;
   /** One independent, deadline-bounded owner per key and connection. Waiter cancellation is local. */
   readonly shared: <A>(
     key: string,
@@ -82,7 +98,7 @@ export interface McpConnectionsOptions {
   /** Captured host callback is total and reads live session trust. */
   readonly isTrusted: () => boolean;
 }
-export type McpRevocationReason = "authority" | "auth-transition" | "connection";
+export type McpRevocationReason = "authority" | "auth-transition" | "credential" | "connection";
 export type McpRevocationListener = (
   servers: ReadonlyArray<string>,
   /** Omitted reasons retain full authority revocation for existing producers. */
@@ -93,6 +109,16 @@ export interface McpConnectionsContract {
   readonly isAvailable: () => boolean;
   readonly config: Effect.Effect<McpResolvedConfig>;
   readonly status: Effect.Effect<McpConnectionStatus>;
+  readonly resourceSubscriptions?: (server: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
+  readonly unsubscribeResource?: (
+    server: string,
+    uri: string,
+  ) => Effect.Effect<Schema.Json, McpBoundaryError>;
+  readonly readEvents?: (
+    server: string,
+    cursor?: string,
+    limit?: number,
+  ) => Effect.Effect<Schema.Json, McpBoundaryError>;
   readonly requireServer: (id: string) => Effect.Effect<McpEffectiveServer, McpBoundaryError>;
   /** Explicit user authentication only. Serializes auth, suspends execution, and revokes results.
    * Failure/interruption keeps execution suspended until a successful explicit auth retry. */

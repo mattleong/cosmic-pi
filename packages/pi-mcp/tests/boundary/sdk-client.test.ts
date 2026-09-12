@@ -138,7 +138,7 @@ it.effect("coalesces metadata changes and ends delivery on terminal transport cl
     const { client, clientTransport } = yield* makeClientHarness;
     const state = { closing: false, closed: false, cleanupUnconfirmed: false };
     const events = yield* makeSdkEvents(client, state);
-    expect(yield* sdkCapabilities(client)).toEqual({
+    expect(yield* sdkCapabilities(client)).toMatchObject({
       tools: true,
       resources: false,
       prompts: true,

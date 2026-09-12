@@ -9,6 +9,7 @@
     "src/",
     "README.md",
     "ARCHITECTURE.md",
+    "CAPABILITIES.md",
     "LICENSE"
   ],
   "type": "module",
@@ -34,6 +35,7 @@
     "@modelcontextprotocol/core": "catalog:",
     "@napi-rs/keyring": "catalog:",
     "effect": "catalog:",
+    "pi-ask-user": "workspace:*",
     "pi-code-previews": "workspace:*",
     "pi-cosmic-core": "workspace:*",
     "pi-cosmic-ui": "workspace:*",

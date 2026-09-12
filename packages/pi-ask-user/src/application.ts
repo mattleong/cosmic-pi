@@ -23,6 +23,7 @@ import {
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
 import { registerQuestionnaireCapability } from "./boundary/host-proxy.ts";
+import { registerOwnedFormCapability } from "./boundary/host-form-proxy.ts";
 import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
 import { registerAsyncAskUserTools } from "./tools/ask-user-async.ts";
 import { makeAskUserPromptGate } from "./boundary/host-prompt.ts";
@@ -41,6 +42,7 @@ interface AskUserSessionInput {
   active: boolean;
   activity?: QuestionnaireActivityBridge;
   revokeCapability?: () => void;
+  revokeForms?: () => void;
 }
 
 type PreviewSettingsLoader = (
@@ -136,6 +138,36 @@ export function askUserWithDependencies(
           /* Missing host event bus leaves local questionnaires available. */
         }
       }
+      if (
+        sessionId &&
+        ctx.hasUI &&
+        (ctx.mode === "tui" || ctx.mode === "rpc") &&
+        !requiresQuestionnaireRelay()
+      ) {
+        try {
+          const isCurrent = () =>
+            input.active &&
+            slot.isCurrent(token) &&
+            ctx.sessionManager.getSessionId() === sessionId;
+          input.revokeForms = registerOwnedFormCapability({
+            events: pi.events,
+            sessionId,
+            generation: input.generation,
+            isCurrent,
+            canQueue: () => promptGate.canQueue(),
+            run: (effect, signal) =>
+              isCurrent()
+                ? slot.run(effect, signal)
+                : Promise.reject(
+                    new AskUserRuntimeClosedError({
+                      message: "The owned form session was replaced.",
+                    }),
+                  ),
+          });
+        } catch {
+          /* Optional local-extension capability. */
+        }
+      }
       registerAskUserTool(pi, (request, signal) =>
         slot.isCurrent(token)
           ? slot.run(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal)
@@ -177,6 +209,7 @@ export function askUserWithDependencies(
     onDeactivated: (input) => {
       input.active = false;
       input.revokeCapability?.();
+      input.revokeForms?.();
       input.activity?.dispose();
       currentGeneration = undefined;
       bridge.clear();

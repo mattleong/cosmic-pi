@@ -13,8 +13,18 @@ export const modernProtocol: McpProtocolAdapter = {
       };
       return !Object.values(filter).some(Boolean)
         ? Effect.void
-        : ownSubscription(client, filter, events, timeout, cleanupTimeout);
+        : ownSubscription(client, filter, events, timeout, cleanupTimeout).pipe(Effect.asVoid);
     }),
+  subscribeResource: (client, events, uri, timeout, cleanupTimeout, identity) =>
+    ownSubscription(
+      client,
+      { resourceSubscriptions: [uri] },
+      events,
+      timeout,
+      cleanupTimeout,
+      false,
+      identity,
+    ),
   isObservationRequest: (method) => method === "subscriptions/listen",
   sessionExpired: () => false,
   // Stateless modern HTTP has no legacy session to delete.

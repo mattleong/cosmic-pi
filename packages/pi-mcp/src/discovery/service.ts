@@ -24,6 +24,7 @@ import { cacheVisible, describeCached, queryCached, type McpCacheEvidence } from
 import { collectMetadata } from "./collect.ts";
 import { gatewayDiscoveryNotices } from "./diagnostics.ts";
 import { summarizeTool } from "./summary.ts";
+import { metadataIsFresh, metadataTime } from "./freshness.ts";
 import {
   compareDiscoveryCandidates,
   compareDiscoveryText,
@@ -45,7 +46,16 @@ const matches = (
   snapshot !== undefined &&
   snapshot.owner === operation.owner &&
   snapshot.identity === operation.binding.identity &&
-  snapshot.configRevision === operation.binding.configRevision;
+  snapshot.configRevision === operation.binding.configRevision &&
+  (snapshot.authorizationRevision ?? 0) === (operation.binding.authorizationRevision ?? 0);
+const reusable = (state: DiscoveryState, operation: McpOperation, now: number) => {
+  const snapshot = state.snapshots.get(operation.binding.server);
+  return matches(snapshot, operation) &&
+    metadataIsFresh(snapshot, now) &&
+    state.evidence.get(snapshot.server) === undefined
+    ? snapshot
+    : undefined;
+};
 const visibleSnapshots = (state: DiscoveryState, config: McpResolvedConfig) =>
   [...state.snapshots.values()]
     .filter((snapshot) => {
@@ -118,17 +128,22 @@ const makeDiscovery = Effect.gen(function* () {
   ): Effect.Effect<McpMetadataSnapshot, McpBoundaryError> =>
     Effect.gen(function* () {
       yield* observing(operation, "refreshing");
+      const observed = (yield* SynchronizedRef.get(state)).evidence.get(operation.binding.server);
       const prepared = yield* collectMetadata(operation);
       const published = yield* operation.commit(
         SynchronizedRef.modify(
           state,
           (current): readonly [McpMetadataSnapshot | undefined, DiscoveryState] => {
-            if (current.consumers.get(operation.binding.server) !== operation.owner)
+            if (
+              current.consumers.get(operation.binding.server) !== operation.owner ||
+              current.evidence.get(operation.binding.server) !== observed
+            )
               return [undefined, current];
             const snapshot: McpMetadataSnapshot = Object.freeze({
               server: operation.binding.server,
               identity: operation.binding.identity,
               configRevision: operation.binding.configRevision,
+              authorizationRevision: operation.binding.authorizationRevision ?? 0,
               owner: operation.owner,
               revision: current.revision + 1,
               ...prepared,
@@ -181,11 +196,20 @@ const makeDiscovery = Effect.gen(function* () {
       Effect.gen(function* () {
         const admitted = yield* operation.commit(
           SynchronizedRef.modify(state, (current) => {
-            if (current.consumers.get(operation.binding.server) === operation.owner)
-              return [false, current];
+            const server = operation.binding.server;
+            const snapshot = current.snapshots.get(server);
+            const snapshots = new Map(current.snapshots);
+            const evidence = new Map(current.evidence);
+            // Even public metadata never crosses an authorization context in this cache.
+            if (snapshot !== undefined && !matches(snapshot, operation)) {
+              snapshots.delete(server);
+              evidence.delete(server);
+            }
+            const next = { ...current, snapshots, evidence };
+            if (current.consumers.get(server) === operation.owner) return [false, next];
             const consumers = new Map(current.consumers);
-            consumers.set(operation.binding.server, operation.owner);
-            return [true, { ...current, consumers }];
+            consumers.set(server, operation.owner);
+            return [true, { ...next, consumers }];
           }),
         );
         if (!admitted) return;
@@ -193,6 +217,8 @@ const makeDiscovery = Effect.gen(function* () {
         yield* operation
           .forkOwned(
             operation.changes.pipe(
+              // Invalidate on arrival, before debounce or an in-flight shared refresh can finish.
+              Stream.tap(() => observing(operation, "refreshing")),
               Stream.debounce("20 millis"),
               Stream.runForEach(() =>
                 operation.shared("metadata", fetchSnapshot).pipe(Effect.catch(() => Effect.void)),
@@ -213,20 +239,26 @@ const makeDiscovery = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* watch(operation);
       const existing = yield* operation.commit(SynchronizedRef.get(state));
-      const snapshot = existing.snapshots.get(operation.binding.server);
-      if (matches(snapshot, operation)) return snapshot;
-      return yield* operation.shared("metadata", (owner) =>
+      const snapshot = reusable(existing, operation, yield* metadataTime);
+      if (snapshot !== undefined) return snapshot;
+      const acquired = yield* operation.shared("metadata", (owner) =>
         Effect.gen(function* () {
           const latest = yield* owner.commit(SynchronizedRef.get(state));
-          const ready = latest.snapshots.get(owner.binding.server);
-          return matches(ready, owner) ? ready : yield* fetchSnapshot(owner);
+          const ready = reusable(latest, owner, yield* metadataTime);
+          return ready ?? (yield* fetchSnapshot(owner));
         }),
       );
+      yield* operation.checkCurrent;
+      if (!matches(acquired, operation))
+        return yield* boundaryError("stale", "not-sent", "MCP metadata authorization has changed.");
+      // A freshly acquired zero-TTL revision serves this acquisition once. Do not loop on expiry.
+      return acquired;
     });
 
   const page = (
     request: Exclude<McpDiscoveryRequest, { readonly action: "tools.describe" }>,
     config: McpResolvedConfig,
+    now: number,
     targeted?: McpMetadataSnapshot,
   ) =>
     SynchronizedRef.modifyEffect(state, (current) =>
@@ -239,6 +271,11 @@ const makeDiscovery = Effect.gen(function* () {
               "not-sent",
               "MCP metadata changed before the page was published.",
             );
+          if (
+            request.cursor !== undefined &&
+            snapshots.some((snapshot) => current.evidence.has(snapshot.server))
+          )
+            throw boundaryError("stale", "not-sent", "MCP metadata cursor has been invalidated.");
           const search = prepareDiscoverySearch(
             request.action === "tools.search" ? request.query : "",
           );
@@ -305,7 +342,7 @@ const makeDiscovery = Effect.gen(function* () {
                 },
                 undiscovered,
               },
-              notices: gatewayDiscoveryNotices(snapshots, current.evidence),
+              notices: gatewayDiscoveryNotices(snapshots, current.evidence, now),
             },
             { ...current, cursors: result.state },
           ];
@@ -332,7 +369,7 @@ const makeDiscovery = Effect.gen(function* () {
               "MCP discovery requires an enabled trusted session.",
             ),
           );
-        return yield* page(request, config);
+        return yield* page(request, config, yield* metadataTime);
       }
       const server = request.server;
       if (server === undefined || (admitted !== undefined && admitted.binding.server !== server))
@@ -343,6 +380,25 @@ const makeDiscovery = Effect.gen(function* () {
             "MCP discovery server does not match the admitted operation.",
           ),
         );
+      if (request.action !== "tools.describe" && request.cursor !== undefined) {
+        // Continuations inspect the one retained revision, not its invocation freshness.
+        // No ticket or remote acquisition is needed when the caller has not admitted one.
+        yield* connections.requireServer(server);
+        const config = yield* connections.config;
+        const snapshot = (yield* SynchronizedRef.get(state)).snapshots.get(server);
+        if (
+          snapshot === undefined ||
+          !cacheVisible(snapshot, config) ||
+          (admitted !== undefined && !matches(snapshot, admitted))
+        )
+          return yield* boundaryError("stale", "not-sent", "MCP metadata cursor has expired.");
+        const inspection = page(request, config, yield* metadataTime, snapshot);
+        return yield* admitted === undefined
+          ? inspection
+          : admitted
+              .commit(Effect.result(inspection))
+              .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
+      }
       const use = (operation: McpOperation) =>
         Effect.gen(function* () {
           if (request.action === "tools.describe")
@@ -366,7 +422,11 @@ const makeDiscovery = Effect.gen(function* () {
                     );
                   return {
                     data: tool,
-                    notices: gatewayDiscoveryNotices([snapshot], current.evidence),
+                    notices: gatewayDiscoveryNotices(
+                      [snapshot],
+                      current.evidence,
+                      yield* metadataTime,
+                    ),
                   };
                 }).pipe(Effect.result),
               )
@@ -374,7 +434,7 @@ const makeDiscovery = Effect.gen(function* () {
           }
           const config = yield* connections.config;
           return yield* operation
-            .commit(Effect.result(page(request, config, snapshot)))
+            .commit(Effect.result(page(request, config, yield* metadataTime, snapshot)))
             .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
         });
       return yield* admitted === undefined
@@ -399,6 +459,7 @@ const makeDiscovery = Effect.gen(function* () {
     cached: (request) =>
       Effect.gen(function* () {
         const config = yield* connections.config;
+        const now = yield* metadataTime;
         return yield* SynchronizedRef.modifyEffect(state, (current) =>
           Effect.try({
             try: () => {
@@ -409,6 +470,7 @@ const makeDiscovery = Effect.gen(function* () {
                 current.evidence,
                 current.cursors,
                 namespace,
+                now,
               );
               return [result.page, { ...current, cursors: result.cursors }] as const;
             },

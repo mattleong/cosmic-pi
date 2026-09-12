@@ -2,13 +2,13 @@ import { expect, it } from "vitest";
 import type { McpCacheEvidence } from "../../src/discovery/cached.ts";
 import { gatewayDiscoveryNotices } from "../../src/discovery/diagnostics.ts";
 
-const snapshot = { server: "fixture", owner: "current-owner", diagnostics: [] };
+const snapshot = { server: "fixture", owner: "current-owner", diagnostics: [], expiresAt: 60_000 };
 
 it.each([
   { owner: "current-owner", state: "refresh-failed", expected: 1 },
   { owner: "previous-owner", state: "refresh-failed", expected: 0 },
-  { owner: "current-owner", state: "refreshing", expected: 0 },
-  { owner: "current-owner", state: "invalidated", expected: 0 },
+  { owner: "current-owner", state: "refreshing", expected: 1 },
+  { owner: "current-owner", state: "invalidated", expected: 1 },
 ] satisfies ReadonlyArray<McpCacheEvidence & { expected: number }>)(
   "reports failed refresh only for the selected snapshot owner: $owner / $state",
   ({ owner, state, expected }) => {

@@ -554,6 +554,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.112
+      pi-ask-user:
+        specifier: workspace:*
+        version: link:../pi-ask-user
       pi-code-previews:
         specifier: workspace:*
         version: link:../pi-code-previews

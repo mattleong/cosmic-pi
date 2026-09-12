@@ -10,48 +10,98 @@ export const ownSubscription = (
   events: SdkEvents,
   ackTimeoutMs: number,
   cleanupTimeoutMs: number,
+  metadata = true,
+  identity?: symbol,
 ) =>
-  Effect.gen(function* () {
-    const controller = new AbortController();
-    yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()));
-    const subscription = yield* Effect.tryPromise({
-      try: () => client.listen(filter, { signal: controller.signal, timeout: ackTimeoutMs }),
-      catch: () =>
-        boundaryError("connection", "not-sent", "MCP metadata subscription was not acknowledged."),
-    });
-    yield* Effect.addFinalizer(() =>
-      Effect.tryPromise({
-        try: () => subscription.close(),
-        catch: () => boundaryError("cleanup", "unknown", "MCP subscription cleanup failed."),
-      }).pipe(
-        Effect.interruptible,
-        Effect.timeoutOrElse({
-          duration: cleanupTimeoutMs,
-          orElse: () =>
-            Effect.fail(boundaryError("cleanup", "unknown", "MCP subscription cleanup timed out.")),
-        }),
-        Effect.catch(() => Effect.sync(events.cleanupFailed)),
-      ),
-    );
-    const honored = subscription.honoredFilter;
-    if (
-      (filter.toolsListChanged && !honored.toolsListChanged) ||
-      (filter.resourcesListChanged && !honored.resourcesListChanged) ||
-      (filter.promptsListChanged && !honored.promptsListChanged)
-    ) {
-      return yield* boundaryError(
-        "connection",
-        "not-sent",
-        "MCP metadata subscription was not honored.",
-      );
-    }
-    yield* Effect.forkScoped(
-      Effect.promise(() => subscription.closed).pipe(
-        Effect.flatMap((reason) =>
-          Effect.sync(() => {
-            if (reason !== "local") events.observationFailed();
-          }),
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const traffic = yield* events.beginSubscription(identity);
+      const controller = new AbortController();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => traffic.run(() => controller.abort())).pipe(
+          Effect.andThen(traffic.close),
+          Effect.tapError(() => Effect.sync(events.cleanupFailed)),
+          Effect.ignore,
         ),
-      ),
-    );
-  });
+      );
+      const subscription = yield* restore(
+        Effect.tryPromise({
+          try: () =>
+            traffic.run(() =>
+              client.listen(filter, {
+                ...traffic.options,
+                signal: traffic.options.signal
+                  ? AbortSignal.any([controller.signal, traffic.options.signal])
+                  : controller.signal,
+                timeout: ackTimeoutMs,
+              }),
+            ),
+          catch: () =>
+            boundaryError(
+              "connection",
+              "not-sent",
+              "MCP metadata subscription was not acknowledged.",
+            ),
+        }),
+      );
+      const close = yield* Effect.cached(
+        Effect.uninterruptible(
+          Effect.tryPromise({
+            try: () => traffic.run(() => subscription.close()),
+            catch: () => boundaryError("cleanup", "unknown", "MCP subscription cleanup failed."),
+          }).pipe(
+            Effect.interruptible,
+            Effect.timeoutOrElse({
+              duration: cleanupTimeoutMs,
+              orElse: () =>
+                Effect.fail(
+                  boundaryError("cleanup", "unknown", "MCP subscription cleanup timed out."),
+                ),
+            }),
+            Effect.ensuring(
+              traffic.close.pipe(
+                Effect.tapError(() => Effect.sync(events.cleanupFailed)),
+                Effect.ignore,
+              ),
+            ),
+            Effect.andThen(traffic.close),
+            Effect.tapError(() => Effect.sync(events.cleanupFailed)),
+          ),
+        ),
+      );
+      yield* Effect.addFinalizer(() => close.pipe(Effect.ignore));
+      const honored = subscription.honoredFilter;
+      if (
+        !!filter.toolsListChanged !== !!honored.toolsListChanged ||
+        !!filter.resourcesListChanged !== !!honored.resourcesListChanged ||
+        !!filter.promptsListChanged !== !!honored.promptsListChanged ||
+        (honored.resourceSubscriptions?.length ?? 0) !==
+          (filter.resourceSubscriptions?.length ?? 0) ||
+        (filter.resourceSubscriptions?.some(
+          (uri) => !honored.resourceSubscriptions?.includes(uri),
+        ) ??
+          false)
+      ) {
+        return yield* boundaryError(
+          "connection",
+          "not-sent",
+          "MCP metadata subscription was not honored.",
+        );
+      }
+      traffic.acknowledge(honored);
+      yield* Effect.forkScoped(
+        Effect.promise(() => subscription.closed).pipe(
+          Effect.flatMap((reason) =>
+            Effect.sync(() => {
+              if (metadata && reason !== "local") events.observationFailed();
+            }),
+          ),
+        ),
+      );
+      return {
+        identity: traffic.identity,
+        close,
+        closed: Effect.promise(() => subscription.closed).pipe(Effect.asVoid),
+      };
+    }),
+  );

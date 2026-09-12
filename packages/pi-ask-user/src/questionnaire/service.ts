@@ -10,6 +10,8 @@ import type { AskUserRequest, AskUserAsyncControl } from "./schema.ts";
 import type { AskUserHostError, AskUserAsyncError } from "./errors.ts";
 import type { AsyncQuestionnaireResult } from "./async-model.ts";
 import type { QuestionnaireOwner } from "./protocol.ts";
+import type { ExtensionFormOwner, OwnedFormRequest } from "./form-protocol.ts";
+import { makeOwnedForms, type OwnedFormHost } from "./form-service.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
@@ -26,6 +28,12 @@ export interface QuestionnaireActivity {
     cancel: Effect.Effect<void>,
     owner?: QuestionnaireOwner,
   ) => Effect.Effect<void>;
+  readonly admittedForm?: (
+    id: string,
+    request: OwnedFormRequest,
+    cancel: Effect.Effect<void>,
+    owner: ExtensionFormOwner,
+  ) => Effect.Effect<void>;
   readonly presenting: (id: string) => Effect.Effect<void>;
   readonly settled: (
     id: string,
@@ -39,8 +47,10 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   delivery?: AsyncDelivery,
   idPrefix = "ask",
   activity?: QuestionnaireActivity,
+  formHost?: OwnedFormHost,
 ) {
   const queue = yield* makeQuestionnaireQueue;
+  const askForm = yield* makeOwnedForms(queue, formHost, idPrefix, activity);
   const counter = yield* Ref.make(0);
   const async = yield* makeAsyncQuestionnaires(host, queue, delivery, idPrefix, activity);
   const controlAsync: (
@@ -98,6 +108,7 @@ const makeService = Effect.fn("AskUserService.make")(function* (
     );
   });
   return {
+    askForm,
     ask: (request: AskUserRequest) => askRequest(request),
     askOwned: (request: AskUserRequest, owner: QuestionnaireOwner) => askRequest(request, owner),
     startAsync: async.start,
@@ -114,7 +125,8 @@ export class AskUserService extends Context.Service<
     delivery?: AsyncDelivery,
     idPrefix?: string,
     activity?: QuestionnaireActivity,
+    formHost?: OwnedFormHost,
   ): Layer.Layer<AskUserService> {
-    return Layer.effect(this, makeService(host, delivery, idPrefix, activity));
+    return Layer.effect(this, makeService(host, delivery, idPrefix, activity, formHost));
   }
 }

@@ -2,7 +2,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
-import { CrossProcessLock, CrossProcessLockError, type CrossProcessLease } from "pi-cosmic-core";
+import { CrossProcessLock, type CrossProcessLease } from "pi-cosmic-core";
+import { withCredentialPermit } from "../auth/authority.ts";
 import {
   decodeCredentialRecord,
   encodeCredentialRecord,
@@ -131,27 +132,12 @@ export class McpCredentialStore extends Context.Service<
             const coordinated =
               options.entryFactory && !options.lockDirectory
                 ? run()
-                : coordinator
-                    .withLock(
-                      `keychain\u0000${options.service ?? "com.cosmic-pi.mcp.oauth.v1"}\u0000${identity}`,
-                      run,
-                      check,
-                    )
-                    .pipe(
-                      Effect.mapError((error) =>
-                        error instanceof CrossProcessLockError
-                          ? boundaryError(
-                              "unavailable",
-                              "not-sent",
-                              error.reason === "recovery-required"
-                                ? "Credential ownership requires recovery. Stop all Pi processes and confirm native Keychain operations have settled before removing retained lock evidence. Then sign in again."
-                                : "Credential coordination is unavailable.",
-                              "oauth-mutation-unresolved",
-                            )
-                          : error,
-                      ),
-                    );
-            return coordinated.pipe(permitFor(options, identity).withPermits(1));
+                : coordinator.withLock(
+                    `keychain\u0000${options.service ?? "com.cosmic-pi.mcp.oauth.v1"}\u0000${identity}`,
+                    run,
+                    check,
+                  );
+            return withCredentialPermit(permitFor(options, identity), coordinated, check, options);
           });
         return {
           withTransaction,
@@ -166,7 +152,9 @@ export class McpCredentialStore extends Context.Service<
       }),
     ).pipe(
       Layer.provide(
-        CrossProcessLock.layer(options.lockDirectory ? { directory: options.lockDirectory } : {}),
+        CrossProcessLock.layer(
+          options.lockDirectory ? { ...options, directory: options.lockDirectory } : options,
+        ),
       ),
     );
 }

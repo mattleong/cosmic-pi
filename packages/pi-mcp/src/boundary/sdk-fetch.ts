@@ -55,6 +55,8 @@ export interface SdkFetchOptions {
   /** Returns an admitted control owner with its initial fetch lease already held. */
   readonly beginControl: () => SdkFetchOwner;
   readonly lookupOperation: (requestId: RequestId) => SdkFetchOperation | undefined;
+  /** Exact native POST context also owns SDK cancellation-notification cleanup. */
+  readonly currentOperation?: () => SdkFetchOperation | undefined;
   readonly isObservationRequest?: (method: string) => boolean;
   readonly onObservationFailure?: () => void;
   readonly onResponse?: (status: number, requestHeaders: Headers) => void;
@@ -209,8 +211,13 @@ export const makeSdkFetch = (options: SdkFetchOptions): FetchLike => {
   return (url, init) =>
     Promise.resolve().then(() => {
       const request = requestFromBody(init?.body);
-      const operation = request === undefined ? undefined : options.lookupOperation(request.id);
       const method = (init?.method ?? "GET").toUpperCase();
+      const operation =
+        method !== "POST"
+          ? undefined
+          : request === undefined
+            ? options.currentOperation?.()
+            : options.lookupOperation(request.id);
       const observation =
         method === "GET" ||
         (request !== undefined && options.isObservationRequest?.(request.method) === true);

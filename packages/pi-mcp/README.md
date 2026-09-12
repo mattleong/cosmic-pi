@@ -2,7 +2,7 @@
 
 A private, local Pi extension with one `mcp` gateway for configured MCP tools, resources, resource templates, and prompts. Code Mode uses the same execution service through the fixed `tools.mcp.request` adapter. MCP works without Code Mode.
 
-The implementation targets macOS. It supports MCP `2026-07-28` and the official client/core SDK 2.0.0's supported legacy revisions over stdio and Streamable HTTP. Historical HTTP+SSE transport, MCP Apps, sampling, elicitation, roots, and tasks remain out of scope. The [modernization record](../../docs/plans/pi-mcp-modernization.md#implementation-record) records acceptance checks; support is not a claim of full upstream conformance.
+The implementation targets macOS. It supports MCP `2026-07-28` and the official client/core SDK 2.0.0's supported legacy revisions over stdio and Streamable HTTP. See the [capability matrix](./CAPABILITIES.md) for implemented behavior, optional features, and restrictions. Historical HTTP+SSE transport is unsupported; SSE within Streamable HTTP remains supported. Apps and tasks are deferred, not deprecated. Sampling and roots are not added. The [feature follow-up record](../../docs/plans/pi-mcp-features.md) tracks current acceptance separately from the historical [modernization record](../../docs/plans/pi-mcp-modernization.md#implementation-record). Neither is a claim of full upstream conformance.
 
 ## Setup
 
@@ -172,7 +172,22 @@ Credentials use macOS Keychain through `@napi-rs/keyring`. There is no plaintext
 
 Credential access rechecks live trust and configuration after lock waits and before refresh or publication, including headless checks. Managed OAuth and environment bearer tokens cannot be sent to remote plaintext HTTP endpoints. Refresh happens before dispatch when needed. Before the SDK can consume a refresh token, the store must persist a refresh-quarantine marker. Only a validated replacement grant saved without that marker clears quarantine. Failed, uncertain, or cancelled refresh cannot reuse the old token, including after a sequential process restart. Recovery requires explicit sign-in. A rejected managed OAuth token also stops further token use, even when it has no expiry; that block survives runtime replacement until successful explicit sign-in. Rejected dispatched calls are never replayed.
 
-Credential transactions serialize across cooperating Pi processes for the same Keychain service/account in a private OS-user lock namespace, independent of agent directories. The lock covers rereading credentials, refresh quarantine and exchange, registration/grant persistence, and logout. A durable journal marks pending native mutations. A dead quiescent owner can be reclaimed; a dead owner with a pending native mutation fails closed because process death does not prove Keychain settlement. There is no automatic unsafe reset. Explicit sign-in can recover a quarantined grant, but cannot bypass unresolved native mutation evidence. Managed-token rejection evidence remains process-local, unlike durable refresh quarantine.
+Credential transactions serialize across cooperating Pi processes for the same Keychain service/account. The private `.cosmic-pi-locks-v1` namespace is beneath the actual OS user's home, independent of `HOME` and agent directories. The lock covers rereading credentials, refresh quarantine and exchange, registration/grant persistence, and logout. A durable journal marks pending native mutations. A dead quiescent owner can be reclaimed; a dead native-pending owner remains blocked because process death does not prove Keychain settlement. Explicit sign-in can recover a quarantined grant, but cannot bypass unresolved native mutation evidence. Managed-token rejection evidence remains process-local, unlike durable refresh quarantine.
+
+Credential-lock admission has a separate 15-second default. The adapter's `acquireTimeoutMs` accepts positive finite values up to 2,147,483,647 ms; it is not the Keychain operation's `timeoutMs` or an MCP configuration setting. Auth authority, local-store, and filesystem queues inherit one monotonic admission budget. Timeout leaves the owner unchanged. Admitted work and native-pending owners do not expire. Local release notifications wake waiters, without a FIFO or waiter-count guarantee. Synchronous filesystem stalls cannot be preempted by that deadline.
+
+### Credential coordination recovery
+
+Normal release validates and best-effort deletes only its own `.released-<token>` artifact. Successful normal transactions leave no growing release history. Cleanup failure can leave an artifact. Dead-owner recovery barriers named `.retired-<token>`, old `.retired` directories, abandoned candidates, and malformed evidence have no online garbage collector or global storage bound.
+
+If coordination reports recovery required:
+
+1. Stop all participating Pi processes and reclaimers, including other sessions and agent directories for the same OS user. Do not run maintenance alongside a process that can acquire these locks.
+2. Inspect the reported namespace and artifacts individually. Use reviewed terminal artifacts only for routine offline cleanup; do not delete the lock root or bulk-remove active, malformed, or native-pending evidence.
+3. For native-pending evidence, independently establish settlement of the original native Keychain operation before changing any coordination record. PID death, elapsed time, and a fresh login are not settlement proof. If proof is unavailable, leave the evidence in place and seek maintainer-assisted recovery.
+4. Preserve durable refresh quarantine. Removing a lock artifact does not make an old refresh token safe. Once native uncertainty is resolved, use explicit `/mcp auth ID` for a quarantined grant.
+
+There is no reset CLI, automatic unsafe reset, or provider-side revocation through this procedure. Do not paste tokens, Keychain values, or authorization/callback URLs into a model conversation.
 
 OAuth logout revokes local auth and connection authority, removes retained results, and deletes both the grant and registration checkpoint. It does not revoke tokens at the provider. Environment and no-auth servers reject logout as unsupported. Failed Keychain deletion is reported as a failure, not a successful logout. Native Keychain create/read/replace/delete and absence checks passed in a disposable namespace; see the [acceptance record](../../docs/plans/pi-mcp.md#acceptance-record).
 
@@ -180,19 +195,43 @@ OAuth logout revokes local auth and connection authority, removes retained resul
 
 The gateway accepts an explicit `action`; omitting it means `status`. Each action rejects unrelated fields. List/search `limit` is 1 to 100 entries; `result.read` accepts 1 to 50,000 UTF-16 code units and may return less to fit the output allowance. `prompts.get` arguments must be string-valued; `tools.call` arguments follow the described tool schema. For missing required or unexpected prompt arguments, both the gateway and Code Mode suggest `prompts.list` on the same server.
 
-| Action                                                  | Inputs besides `action`                                |
-| ------------------------------------------------------- | ------------------------------------------------------ |
-| `status`                                                | none                                                   |
-| `server.instructions`                                   | `server`                                               |
-| `connect`, `disconnect`, `refresh`                      | `server`                                               |
-| `tools.list`                                            | optional `server`, `cursor`, `limit`                   |
-| `tools.search`                                          | `query`; optional `server`, `cursor`, `limit`          |
-| `tools.describe`                                        | `server`, `tool`                                       |
-| `tools.call`                                            | `server`, `tool`; optional object `arguments`          |
-| `resources.list`, `resources.templates`, `prompts.list` | `server`; optional `cursor`, `limit`                   |
-| `resources.read`                                        | `server`, `uri`                                        |
-| `prompts.get`                                           | `server`, `prompt`; optional string-valued `arguments` |
-| `result.read`                                           | `id`; optional `offset`, `limit`, `attachment`         |
+| Action                                                  | Inputs besides `action`                                            |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `status`                                                | none                                                               |
+| `server.instructions`                                   | `server`                                                           |
+| `connect`, `disconnect`, `refresh`                      | `server`                                                           |
+| `tools.list`                                            | optional `server`, `cursor`, `limit`                               |
+| `tools.search`                                          | `query`; optional `server`, `cursor`, `limit`                      |
+| `tools.describe`                                        | `server`, `tool`                                                   |
+| `tools.call`                                            | `server`, `tool`; optional object `arguments`, `logLevel`          |
+| `resources.list`, `resources.templates`, `prompts.list` | `server`; optional `cursor`, `limit`                               |
+| `resources.read`                                        | `server`, `uri`; optional `logLevel`                               |
+| `prompts.get`                                           | `server`, `prompt`; optional string-valued `arguments`, `logLevel` |
+| `completion.complete`                                   | `server`, `ref`, `argument`; optional `context`, `logLevel`        |
+| `events.read`                                           | `server`; optional string `cursor`, `limit`                        |
+| `resources.subscribe`, `resources.unsubscribe`          | `server`, `uri`                                                    |
+| `resources.subscriptions`                               | `server`                                                           |
+| `result.read`                                           | `id`; optional `offset`, `limit`, `attachment`                     |
+
+`completion.complete` completes an argument for an exact advertised prompt or resource template, when the server advertises completions. The `ref` is either `{ "type": "ref/prompt", "name": "review" }` or `{ "type": "ref/resource", "uri": "files:///{path}" }`. Resource completion uses the template URI, not a fetched resource. For example:
+
+```json
+{
+  "action": "completion.complete",
+  "server": "files",
+  "ref": { "type": "ref/prompt", "name": "review" },
+  "argument": { "name": "language", "value": "ty" },
+  "context": { "arguments": { "style": "brief" } }
+}
+```
+
+Use only names and context arguments from that server's metadata. Results contain at most 100 completion values. `events.read` reads bounded local observations without connecting or sending a remote request, for example `{ "action": "events.read", "server": "files", "limit": 20 }`. Follow its returned decimal-string `next` cursor; numeric cursors are invalid. The default page has 32 events, with `limit` from 1 to 100. The session ring holds at most 128 events and 128 KiB, with log/progress text capped at 4 KiB and progress coalesced per operation. `truncated` reports evicted history. Earlier transport-ingress drops may not appear in that flag. Observations are best-effort evidence, not a durable audit log or operation results.
+
+`resources.subscribe` explicitly subscribes to one URI on a server advertising resource subscriptions. `resources.unsubscribe` closes the matching owned subscription without opening a new connection; `resources.subscriptions` lists local active subscriptions without remote I/O. Repeating an active subscribe returns `existing: true`; an absent unsubscribe returns `existing: false`. Subscriptions hold connection-owned leases, capped at 16 per connection owner and 32 per session. Updates enter `events.read`; they never trigger automatic resource reads. Disconnect, authority loss, or stream closure ends the lease. There is no automatic reconnect or re-listening.
+
+Modern updates must match the SDK-generated subscription ID and acknowledged URI filter. Both eras allocate a private local identity before acquisition and recheck it before publication, so queued updates cannot revive after same-URI replacement. Modern ACK-adjacent staging holds at most 32 updates until SDK/filter acceptance; overflow is reported. One owner finalizer retains only current entries, not every historical subscription. Legacy wire notifications have no generation ID; this check cannot distinguish old server work first received after replacement. HTTP close joins actual source cancellation. Stdio close checks native cancellation-write settlement or exact remote termination, not SDK logical close. A successful write is not a remote acknowledgement. Failed writes retain the lease until child cleanup; uncertain legacy establishment before acknowledgement retires the connection.
+
+`logLevel` is explicit opt-in compatibility for deprecated MCP structured Logging, which is deprecated in `2026-07-28`. Values are `debug`, `info`, `notice`, `warning`, `error`, `critical`, `alert`, or `emergency`. Omitting it does not enable global logging. Per-request logging requires modern Streamable HTTP and advertised logging support. Legacy transports and modern stdio reject `logLevel` before dispatch rather than enabling connection-wide logging. HTTP logs require exact request-stream provenance and severity filtering. Progress works on both transports and reaches bounded live top-level gateway updates as well as local observations. Progress is not deprecated and never establishes completion. There is no OpenTelemetry exporter. The [feature record](../../docs/plans/pi-mcp-features.md) tracks final acceptance.
 
 `server.instructions` returns server-wide guidance captured once during initialization. It may connect the selected server, but it does not list tools or send an application RPC. For example, `mcp({ "action": "server.instructions", "server": "files" })` returns `data.result` with `{ "server": "files", "truncated": false, "instructions": "..." }`. Missing instructions are `null`; an explicitly supplied empty string stays empty. The action is also available through Code Mode.
 
@@ -206,11 +245,29 @@ Search examines full names, titles, and descriptions, including text omitted fro
 
 Invocation needs exact `server` and `tool` fields, without aliases or fuzzy matching. Targeted discovery may connect lazily; unscoped list/search only inspect cached snapshots and report undiscovered servers. An empty page can mean nothing has been discovered yet, not that no tools exist. When `data.result.undiscovered` is nonempty, select a relevant ID as `server` in a targeted list/search. Status never connects. Cursors belong to a frozen metadata revision and become invalid when it changes.
 
-If a refresh fails while an authorized cached snapshot remains available, discovery replies include a server-scoped notice that they are using previous metadata. This does not turn the reply into an error or trigger a retry. A successful refresh clears the warning on new discovery replies; retained results keep their original notices.
+Metadata freshness uses each page's `ttlMs` and `cacheScope`. Missing, zero, negative zero, invalid, negative, or over-limit TTL gives no reusable freshness. Positive safe-integer TTL is bounded to one day. The complete revision takes the earliest page and catalog expiry and the most restrictive scope. A targeted initial lookup reacquires expired or absent-TTL metadata; a newly acquired zero-TTL revision serves that acquisition once without looping. Cursor continuations instead read the current cached revision locally even after TTL expiry, so zero-TTL pagination works. Explicit refresh, list-change notifications, and auth/configuration invalidation invalidate those cursors. This pagination exception does not relax freshness for invocation. This does not introduce polling. Passive dashboard browsing and unscoped list/search stay local and mark stale metadata rather than silently connecting. Observation loss and authority revocation still withdraw content. Even `cacheScope: "public"` cannot cross an auth-context change, configuration identity, or session in this cache.
+
+A failed refresh can leave previous authorized metadata visible to passive browsing with a warning. That warning is not permission to use an expired schema for active dispatch. Successful refresh clears the warning on new replies; retained results keep their original notices. A changed managed credential retires the old connection owner before metadata or dispatch can reuse its schemas. A later fresh request must acquire a new owner after confirmed cleanup; credential refresh does not automatically retry the interrupted operation.
+
+For modern HTTP, `x-mcp-header` annotations mirror validated string, integer, or boolean arguments into `Mcp-Param-*` headers. `number` is rejected even if an SDK accepts it. Invalid annotations exclude the whole tool from discovery and invocation with a bounded diagnostic. Headers must have unique case-insensitive token names and resolvable property paths. There are at most 64 parameter headers and 16 KiB of encoded header data. Values must match their declared string, safe-integer, or boolean type. Invalid UTF-16 is rejected rather than silently replaced. Unsafe HTTP characters use MCP's base64 encoding, with the final encoded bound checked before HTTP send; optional absent values are not mirrored. Stdio and legacy connections do not apply this modern-HTTP requirement.
 
 Code Mode exposes these data actions through `tools.mcp.request`, but excludes `connect`, `disconnect`, `refresh`, auth, configuration writes, and arbitrary protocol methods. It requires exactly one active provider in the same stable Pi session and rechecks that provider on each request. Merely importing the protocol does not load the extension.
 
 Nested MCP calls bypass Pi `tool_call`/`tool_result` middleware, unrelated approval extensions, registered tool overrides, and previews. The shared MCP execution service still applies trust, server policy, validation, admission, and result limits. Only the outer `code_mode` call follows the ordinary Pi middleware path. See the [Code Mode README](../pi-code-mode/README.md#mcp-adapter).
+
+## Private modern user input
+
+Only modern `tools.call`, `resources.read`, and `prompts.get` continue multi-round-trip input-required exchanges through a current same-session `pi-ask-user` TUI/RPC form provider. The same gateway and Code Mode execution path owns the operation; no extra executor or public answer action is added. SDK construction uses empty client capabilities. Elicitation is advertised per request only with a current provider, never for headless or legacy sessions. Legacy server-driven elicitation remains unsupported.
+
+MCP translates only flat object schemas with up to 16 fields into Ask User forms. Supported fields are string, number, integer, boolean, string enum, and string-enum arrays, with bounded defaults and constraints and only `email`, `uri`, `date`, and `date-time` formats. Nested objects, references, unsupported keywords, and type-incompatible constraints are rejected before any form in that batch opens. Ask User checks each form's defaults and constraint consistency before presenting it. The sensitive-field check is a text-pattern heuristic, not a complete secret detector.
+
+An operation allows at most 8 dispatch rounds and 16 input requests. Input-request batches, response batches, and opaque state each have a 64 KiB bound. MCP limits enum choices to 64 total across a form; Ask User itself permits 64 per enum field. Messages/string values have a 4,096-code-unit bound. The client keeps `inputResponses`, opaque `requestState`, and collected answers private to the operation rather than publishing them to model replies, retained results, events, or Activity.
+
+URL elicitation shows the full inert URL and prominent host for user consent, with an 8,192-code-unit limit. URLs require HTTPS, or HTTP on an explicit loopback hostname, and cannot contain credentials, ASCII whitespace, or control characters. Ask User neither fetches nor opens them. MCP rechecks operation and provider authority before private macOS system-browser navigation, then asks the user to continue or cancel. It neither polls the URL nor infers completion from browser opening.
+
+Continuation authority is stricter than completed-result publication authority. After an authentication rejection stops a connection accepting work, no further form, browser action, or continuation can start, while a separately completed reply can still publish under its captured current authority. Cancellation, provider loss, failed cleanup, and round limits never authorize replay.
+
+MCP waits at most one second for exact-owner Ask User cancellation. Timeout or rejection is unconfirmed cleanup, not success. A module-wide process-local fence blocks all later MCP form-provider resolution across runtime and session replacement until that exact cancellation Promise succeeds. Rejection leaves the fence in place; replacing the MCP runtime cannot clear it. Final acceptance remains in the [feature record](../../docs/plans/pi-mcp-features.md).
 
 ## Results and safety
 
@@ -236,7 +293,7 @@ The owned gateway has compact call/result cards under the existing code-preview 
 
 Mode changes perform no reads or execution. Navigation follows original returned offsets, not sanitized text lengths, and preserves the originating outcome. The viewer keeps one authorized page and bounded previous offsets. Eviction or revocation withdraws both views; recovery never reruns the source operation. There is no new result-history store. Display sanitization is not a guarantee that arbitrary remote content contains no sensitive information.
 
-Accepted results are retained before inline projection. Disconnect preserves completed results. Disable, reconfigure, trust loss, logout, eviction, and session replacement revoke them. A retention failure explicitly says the output is not recoverable. Oversized wire responses may never reach retention.
+Accepted results are retained before inline projection. Disconnect preserves completed results. Disable, reconfigure, trust loss, credential changes, logout, eviction, and session replacement revoke them. Local discovery/status retention also binds the current revocation generation, so an unchanged configuration revision cannot revive old local results. A retention failure explicitly says the output is not recoverable. Oversized wire responses may never reach retention.
 
 | Limit                               | Value                                                                  |
 | ----------------------------------- | ---------------------------------------------------------------------- |
@@ -256,6 +313,8 @@ Top-level results can include PNG, JPEG, GIF, and WebP images. Checks cover boun
 Server instructions, descriptions, prompt messages, and resource content are untrusted data. They are not added to the system prompt or treated as commands. Prompt roles remain data, not new user messages or slash commands. Resource reads route only through the selected server. The client never independently fetches returned HTTP links, opens `file://` paths, or follows resource links automatically. These rules reduce accidental authority transfer; they do not make remote content safe from prompt injection.
 
 ## Compatibility and checks
+
+The checks below are historical modernization evidence, not acceptance of the feature follow-up. Current verification and remaining gates belong in the [feature record](../../docs/plans/pi-mcp-features.md); the [matrix](./CAPABILITIES.md) separates owned regressions from external checks.
 
 The modernization macOS real-server smoke passed through `McpExecution` using automatic negotiation, selecting legacy protocol `2025-11-25`:
 
@@ -278,6 +337,6 @@ pnpm validate
 
 This is deliberately not the full conformance suite. OAuth/auth scenarios, elicitation, SSE retry, compatibility, draft, and extension scenarios are excluded. The grader is a development dependency only; it does not change the runtime SDK or add protocol capabilities. The command needs POSIX process groups and is excluded from `pnpm validate`. It was verified on macOS and does not establish conformance for every server, transport, or authorization flow.
 
-The [modernization record](../../docs/plans/pi-mcp-modernization.md#implementation-record) tracks current acceptance separately. The pinned upstream scenarios above do not establish broader modern-protocol conformance. Legacy HTTP expiration handling must preserve the failed call's execution certainty and prohibit replay, even when DELETE 404 confirms remote absence. Native cleanup still needs separate confirmation.
+The [modernization record](../../docs/plans/pi-mcp-modernization.md#implementation-record) preserves its historical acceptance separately. The pinned upstream scenarios above do not establish broader modern-protocol conformance. Legacy HTTP expiration handling must preserve the failed call's execution certainty and prohibit replay, even when DELETE 404 confirms remote absence. Native cleanup still needs separate confirmation.
 
 `mcp:smoke` installs pinned servers and downloads a browser into owned temporary storage. It needs network access and macOS, but no user account credentials. See [ARCHITECTURE.md](./ARCHITECTURE.md) for ownership and cleanup boundaries.

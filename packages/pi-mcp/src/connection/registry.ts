@@ -5,6 +5,9 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import { makeResourceSubscriptions } from "../resources/subscriptions.ts";
+import { makeObservations } from "../observations/service.ts";
 import type { McpActivityContract } from "../activity/service.ts";
 import type { McpActivityHandle, McpActivityFailure } from "../activity/model.ts";
 import type { McpAuthContract, McpAuthRejection } from "../auth/model.ts";
@@ -33,6 +36,10 @@ export interface ConnectionOwner {
   current: boolean;
   accepting: boolean;
   operations: number;
+  leases: number;
+  authorizationRevision: number;
+  /** Credential equality stays private to the actual transport owner. */
+  authorizationToken: string | undefined;
   idleGeneration: number;
   idle?: Fiber.Fiber<void>;
   connection?: McpConnection;
@@ -65,6 +72,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   connector: RegistryConnector,
   activity: McpActivityContract,
 ) {
+  const observations = yield* makeObservations;
   const sessionScope = yield* Effect.scope;
   const resources = yield* Scope.fork(sessionScope);
   const monitors = yield* Scope.fork(sessionScope);
@@ -86,7 +94,11 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   };
   const admission = new McpAdmission(() => config.settings, changed);
   const publishRevocation = (ids: ReadonlyArray<string>, reason: McpRevocationReason) =>
-    Effect.forEach(listeners, (listener) => listener(ids, reason), { discard: true });
+    Effect.sync(() => observations.revoke(ids)).pipe(
+      Effect.andThen(
+        Effect.forEach(listeners, (listener) => listener(ids, reason), { discard: true }),
+      ),
+    );
 
   const cleanup = (owner: ConnectionOwner) =>
     Effect.gen(function* () {
@@ -267,6 +279,17 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     }).pipe(Effect.mapError((error) => boundaryError(error.kind, ticket.outcome, error.message)));
 
   const access = auth.access;
+  const checkTokenLocked = (owner: ConnectionOwner, token: string | undefined) =>
+    Effect.gen(function* () {
+      yield* ownerCheckLocked(owner);
+      if (token === owner.authorizationToken) return;
+      owner.authorizationRevision += 1;
+      // A refreshed credential never inherits schemas or invocation authority. Leave
+      // accepted replies their certainty, but stop all subsequent dispatches.
+      yield* publishRevocation([owner.server.id], "credential");
+      yield* terminalLocked(owner);
+      return yield* stale();
+    });
   const rejectAuthLocked = (owner: ConnectionOwner, evidence: McpAuthRejection) =>
     Effect.gen(function* () {
       if (
@@ -287,7 +310,13 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
 
   const scheduleIdleLocked = (owner: ConnectionOwner): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (!owner.current || owner.operations !== 0 || owner.state !== "connected") return;
+      if (
+        !owner.current ||
+        owner.operations !== 0 ||
+        owner.leases !== 0 ||
+        owner.state !== "connected"
+      )
+        return;
       const generation = ++owner.idleGeneration;
       if (owner.idle) yield* Effect.forkIn(Fiber.interrupt(owner.idle), monitors);
       owner.idle = yield* Effect.forkIn(
@@ -299,6 +328,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                   if (
                     owner.current &&
                     owner.operations === 0 &&
+                    owner.leases === 0 &&
                     owner.idleGeneration === generation &&
                     owners.get(owner.server.id) === owner
                   ) {
@@ -312,6 +342,20 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         owner.scope,
       );
     });
+
+  const resourceSubscriptions = yield* makeResourceSubscriptions({
+    check: (owner) =>
+      withLock(ownerCheckLocked(owner).pipe(Effect.andThen(acceptingLocked(owner)))),
+    lease: (owner, delta) =>
+      withLock(
+        Effect.gen(function* () {
+          owner.leases += delta;
+          owner.idleGeneration += 1;
+          yield* scheduleIdleLocked(owner);
+        }),
+      ),
+    failed: (owner) => withLock(terminalLocked(owner, true)),
+  });
 
   const openOwner = (owner: ConnectionOwner, settings: McpSettings) =>
     Effect.uninterruptibleMask((restore) =>
@@ -330,6 +374,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
                     return yield* stale();
                 }),
               );
+              owner.authorizationToken = token;
               return yield* Scope.provide(
                 connector
                   .open(owner.server, settings, token)
@@ -363,6 +408,38 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
               if (!owner.current) return;
               observationFailures.delete(owner.server.id);
               owner.state = "connected";
+              if (acquired.value.remoteEvents)
+                yield* Effect.forkIn(
+                  Stream.runForEach(acquired.value.remoteEvents, (event) =>
+                    (event.kind === "resource-updated"
+                      ? resourceSubscriptions.awaitReady(owner, event.uri, event.subscription)
+                      : Effect.void
+                    ).pipe(
+                      Effect.andThen(
+                        withLock(
+                          Effect.sync(() => {
+                            if (
+                              !owner.current ||
+                              !owner.accepting ||
+                              !options.isTrusted() ||
+                              event.kind === "log" ||
+                              (event.kind === "resource-updated" &&
+                                !resourceSubscriptions.has(owner, event.uri, event.subscription))
+                            )
+                              return;
+                            observations.publish(
+                              owner.server.id,
+                              event.kind === "resource-updated"
+                                ? { kind: event.kind, uri: event.uri }
+                                : event,
+                            );
+                          }),
+                        ),
+                      ),
+                    ),
+                  ),
+                  owner.scope,
+                );
               yield* activity.finish(owner.activity!, { status: "done" });
               changed();
               Deferred.doneUnsafe(owner.ready, Effect.succeed(acquired.value));
@@ -438,9 +515,13 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
         current: true,
         accepting: true,
         operations: 0,
+        leases: 0,
+        authorizationRevision: sequence,
+        authorizationToken: undefined,
         idleGeneration: 0,
         uncertain: false,
       };
+      yield* resourceSubscriptions.own(owner);
       owners.set(server.id, owner);
       changed();
       yield* Effect.forkIn(Effect.interruptible(openOwner(owner, config.settings)), owner.scope);
@@ -550,6 +631,19 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   );
 
   return {
+    observations,
+    readEvents: (server: string, cursor?: string, limit?: number) =>
+      withLock(
+        Effect.gen(function* () {
+          yield* serverLocked(server);
+          const data = yield* observations.read(server, cursor, limit);
+          const ingressDropped = yield* (
+            owners.get(server)?.connection?.remoteEventDrops ?? Effect.succeed(0)
+          );
+          return { ...data, ingressDropped };
+        }),
+      ),
+    resourceSubscriptions,
     withLock,
     admission,
     changed,
@@ -573,6 +667,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     ownerCheckLocked,
     checkLocked,
     access,
+    checkTokenLocked,
     rejectAuthLocked,
     scheduleIdleLocked,
     configLocked: () => config,

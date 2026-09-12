@@ -12,7 +12,11 @@ import {
 export interface NativeLockOptions {
   /** Owned test boundary only. Production defaults to one private OS-user directory. */
   readonly directory?: string;
+  /** Positive finite milliseconds, at most 2^31 - 1. Defaults to 50. */
   readonly pollMs?: number;
+  /** Positive finite milliseconds, at most 2^31 - 1. Defaults to 15000.
+   * Admission only; never expires an admitted owner or native mutation. */
+  readonly acquireTimeoutMs?: number;
 }
 const Owner = Schema.Struct({
   version: Schema.Literal(1),
@@ -91,6 +95,21 @@ const retire = (directory: string, owner: Owner, root: string) => {
   if (current.token !== owner.token || current.phase !== "quiescent") throw recovery();
   fs.renameSync(directory, `${directory}.retired-${owner.token}`);
   syncDirectory(root);
+};
+
+/** Only normal-release evidence created by this exact live owner can be removed. */
+const cleanReleased = (directory: string, owner: Owner) => {
+  try {
+    const current = readOwner(directory);
+    if (current.token !== owner.token || current.pid !== owner.pid || current.phase !== "quiescent")
+      return;
+    const names = fs.readdirSync(directory);
+    if (names.length !== 1 || names[0] !== "owner.json") return;
+    fs.unlinkSync(path.join(directory, "owner.json"));
+    fs.rmdirSync(directory);
+  } catch {
+    // A partial cleanup is retained for offline inspection. Never retry via the public slot.
+  }
 };
 
 /** Synchronous, bounded filesystem commits keep ownership handoff free of cancellation gaps. */
@@ -178,8 +197,20 @@ export const acquireNativeLock = (
     releaseRequested = true;
     if (released || pending || uncertain) return;
     check();
-    retire(directory, owner, root);
+    const destination = `${directory}.released-${owner.token}`;
+    try {
+      // A dead reclaimer observes PID death BEFORE its final exact-token check.
+      // It cannot pass that check for this live owner. Old reclaimers targeting a
+      // predecessor remain fenced by that predecessor's permanent nonempty retired path.
+      fs.renameSync(directory, destination);
+    } catch (error) {
+      uncertain = true;
+      throw error;
+    }
+    // Relinquishment is final even if durability or owned cleanup fails afterward.
     released = true;
+    syncDirectory(root);
+    cleanReleased(destination, owner);
   };
   return {
     mutationStarted: () => {

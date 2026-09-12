@@ -11,7 +11,7 @@ import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 /** Pi 0.85 done() pops the global overlay stack. Protect unrelated overlays with an owned guard. */
-const finishOwnedOverlay = (tui: TUI, handle: OverlayHandle, done: () => void): void => {
+export const finishOwnedOverlay = (tui: TUI, handle: OverlayHandle, done: () => void): void => {
   handle.hide();
   const guard = tui.showOverlay({ render: () => [], invalidate: () => {} }, { nonCapturing: true });
   try {

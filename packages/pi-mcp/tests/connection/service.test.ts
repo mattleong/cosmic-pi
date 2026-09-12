@@ -1042,15 +1042,22 @@ it.live("preserves static HTTP authorization through request admission and disco
 );
 
 it.effect(
-  "every dispatch refreshes its token and policy denial never reaches auth or the SDK",
+  "credential changes revoke old owner authority and policy denial never reaches auth or SDK",
   () => {
-    let token = 0;
-    const f = fixture({ auth: Effect.sync(() => `private-token-${++token}`) });
+    let token = 1;
+    const f = fixture({ auth: Effect.sync(() => `private-token-${token}`) });
     return Effect.gen(function* () {
       const c = yield* McpConnections;
       yield* call(c);
+      token = 2;
+      expect(yield* call(c).pipe(Effect.flip)).toMatchObject({
+        kind: "stale",
+        outcome: "not-sent",
+      });
+      expect(f.state.requests).toBe(1);
+      yield* c.disconnect("a");
       yield* call(c);
-      expect(f.state.tokens).toEqual(["private-token-2", "private-token-3"]);
+      expect(f.state.tokens).toEqual(["private-token-1", "private-token-2"]);
       const accesses = f.state.accesses;
       expect(
         yield* Effect.result(c.withOperation("a", { tool: "denied" }, () => Effect.void)),

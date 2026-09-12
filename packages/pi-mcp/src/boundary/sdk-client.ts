@@ -1,9 +1,12 @@
 import {
   Client,
+  withInputRequired,
+  type InputRequiredResult,
   type Request,
   type RequestOptions,
   type StandardSchemaV1,
   type CallToolResult,
+  type CompleteResult,
   type GetPromptResult,
   type ListPromptsResult,
   type ListResourcesResult,
@@ -13,6 +16,7 @@ import {
 } from "@modelcontextprotocol/client";
 import {
   CallToolResultSchema,
+  CompleteResultSchema,
   GetPromptResultSchema,
   ListPromptsResultSchema,
   ListResourcesResultSchema,
@@ -31,9 +35,33 @@ import {
   type McpRequest,
   type McpConnection,
   type McpInstructions,
+  type McpDispatchOptions,
 } from "../client/model.ts";
+import { encodeMcpHeaderValue } from "../invocation/parameter-headers.ts";
 import { prefixBytes } from "../results/normalize.ts";
 import { negotiationOptions } from "./mcp-protocol/select.ts";
+
+/** Validate standard identity headers before transport dispatch evidence is recorded. */
+export const preflightSdkHeaders = (input: McpRequest) =>
+  Effect.try({
+    try: () => {
+      const name =
+        input.action === "tools.call"
+          ? input.tool
+          : input.action === "prompts.get"
+            ? input.prompt
+            : input.action === "resources.read"
+              ? input.uri
+              : input.action === "completion.complete"
+                ? input.ref.type === "ref/prompt"
+                  ? input.ref.name
+                  : input.ref.uri
+                : undefined;
+      if (name !== undefined) encodeMcpHeaderValue(name);
+    },
+    catch: () =>
+      boundaryError("invalid-input", "not-sent", "MCP standard header value is invalid."),
+  });
 
 /** Discard oversized optional guidance without rejecting an otherwise useful connection. */
 export const boundedSdkInstructions = (text: string | undefined): McpInstructions | undefined => {
@@ -85,18 +113,39 @@ const requestWithSdkSchema = <Output>(
   client: Client,
   request: Request,
   schema: SdkSchemaHandle,
-  options: RequestOptions,
-): Promise<Output> => {
+  options: RequestOptions & McpDispatchOptions,
+): Promise<Output | InputRequiredResult> => {
   // Both modules are the SDK's public 2.0 schemas. pnpm can expose their identical
   // Standard Schema declarations through two type identities, so only this typed seam
   // bridges the compiler while retaining the SDK schema and validator implementation.
   // SAFETY: each caller passes an SDK 2.0 result schema whose public Standard Schema
   // contract is preserved; this cast only reconciles duplicate declaration identities.
   const clientSchema = schema as StandardSchemaV1<unknown, Output>;
-  return client.request(request, clientSchema, options);
+  const multiRound =
+    client.getNegotiatedProtocolVersion() === "2026-07-28" &&
+    (request.method === "tools/call" ||
+      request.method === "resources/read" ||
+      request.method === "prompts/get");
+  let params = { ...request.params };
+  if (multiRound) params = { ...params, ...options.continuation };
+  let meta = { ...request.params?._meta };
+  if (options.logLevel) meta = { ...meta, "io.modelcontextprotocol/logLevel": options.logLevel };
+  if (multiRound && options.elicitation)
+    meta = {
+      ...meta,
+      "io.modelcontextprotocol/clientCapabilities": { elicitation: { form: {}, url: {} } },
+    };
+  params = { ...params, _meta: meta };
+  return multiRound
+    ? client.request({ ...request, params }, withInputRequired(clientSchema), {
+        ...options,
+        allowInputRequired: true,
+      })
+    : client.request({ ...request, params }, clientSchema, options);
 };
 
 type SdkResult =
+  | CompleteResult
   | ListToolsResult
   | CallToolResult
   | ListResourcesResult
@@ -108,9 +157,23 @@ type SdkResult =
 export const executeSdkRequest = (
   client: Client,
   input: McpRequest,
-  options: RequestOptions,
-): Promise<SdkResult> => {
+  nativeOptions: RequestOptions,
+  dispatchOptions?: McpDispatchOptions,
+): Promise<SdkResult | InputRequiredResult> => {
+  const options = { ...nativeOptions, ...dispatchOptions };
   switch (input.action) {
+    case "completion.complete":
+      return requestWithSdkSchema<CompleteResult>(
+        client,
+        {
+          method: "completion/complete",
+          params: input.context
+            ? { ref: input.ref, argument: input.argument, context: input.context }
+            : { ref: input.ref, argument: input.argument },
+        },
+        CompleteResultSchema,
+        options,
+      );
     case "tools.list":
       return requestWithSdkSchema<ListToolsResult>(
         client,

@@ -1,5 +1,4 @@
 import {
-  isInputRequiredResult,
   MissingRequiredClientCapabilityError,
   SdkError,
   SdkErrorCode,
@@ -24,7 +23,9 @@ import {
   type DuplexProcessOptions,
 } from "pi-cosmic-core";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
+import { decodeSdkExchange, terminalExchange } from "./sdk-elicitation.ts";
 import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
+import type { McpProtocolAdapter } from "./mcp-protocol/contract.ts";
 import { selectProtocol } from "./mcp-protocol/select.ts";
 import { negotiateStdio } from "./mcp-protocol/shared/stdio-negotiation.ts";
 import {
@@ -32,6 +33,7 @@ import {
   type McpCapabilities,
   type McpConnection,
   type McpRequest,
+  type McpDispatchOptions,
 } from "../client/model.ts";
 import {
   makeSdkEvents,
@@ -40,13 +42,7 @@ import {
   type SdkConnectionState,
   type SdkEvents,
 } from "./sdk-events.ts";
-import {
-  decodeMcpReply,
-  decodeMcpRequest,
-  executeSdkRequest,
-  makeSdkClient,
-  sdkHandshake,
-} from "./sdk-client.ts";
+import { decodeMcpRequest, executeSdkRequest, makeSdkClient, sdkHandshake } from "./sdk-client.ts";
 import {
   makeSdkStdioTransport,
   SdkStdioTransportError,
@@ -238,14 +234,9 @@ const makeConnection = (
   capabilities: McpCapabilities,
   events: SdkEvents,
   handshake: Pick<McpConnection, "protocolVersion" | "instructions">,
-): McpConnection => ({
-  capabilities,
-  ...handshake,
-  changes: events.changes,
-  terminal: events.terminal,
-  health: events.health,
-  setToken: () => Effect.void,
-  request: (input: McpRequest) =>
+  protocol: McpProtocolAdapter,
+): McpConnection => {
+  const exchange = (input: McpRequest, options?: McpDispatchOptions) =>
     decodeMcpRequest(input).pipe(
       Effect.flatMap((decoded) =>
         Effect.suspend(() => {
@@ -256,24 +247,21 @@ const makeConnection = (
           }
           return Effect.tryPromise({
             try: (signal) =>
-              executeSdkRequest(client, decoded, {
-                signal,
-                timeout: snapshot.requestTimeoutMs,
-                maxTotalTimeout: snapshot.requestTimeoutMs,
-              }),
+              events.withProgress(options, (dispatch) =>
+                executeSdkRequest(
+                  client,
+                  decoded,
+                  {
+                    signal,
+                    timeout: snapshot.requestTimeoutMs,
+                    maxTotalTimeout: snapshot.requestTimeoutMs,
+                  },
+                  dispatch,
+                ),
+              ),
             catch: (error) => transportFailure(transport.failure ?? error, "unknown"),
           }).pipe(
-            Effect.flatMap((result) =>
-              isInputRequiredResult(result)
-                ? Effect.fail(
-                    boundaryError(
-                      "unsupported",
-                      "completed",
-                      "MCP input requests are unsupported.",
-                    ),
-                  )
-                : decodeMcpReply(decoded.action, result),
-            ),
+            Effect.flatMap((result) => decodeSdkExchange(decoded.action, result)),
             Effect.timeoutOrElse({
               duration: Duration.millis(snapshot.requestTimeoutMs),
               orElse: () =>
@@ -282,9 +270,30 @@ const makeConnection = (
           );
         }),
       ),
-    ),
-  close,
-});
+    );
+  return {
+    capabilities,
+    ...handshake,
+    subscribeResource: (uri, identity) =>
+      protocol.subscribeResource(
+        client,
+        events,
+        uri,
+        snapshot.requestTimeoutMs,
+        snapshot.cleanupTimeoutMs,
+        identity,
+      ),
+    changes: events.changes,
+    remoteEvents: events.remoteEvents,
+    remoteEventDrops: events.remoteEventDrops,
+    terminal: events.terminal,
+    health: events.health,
+    setToken: () => Effect.void,
+    close,
+    exchange,
+    request: (input, options) => exchange(input, options).pipe(Effect.flatMap(terminalExchange)),
+  };
+};
 
 /** Open and initialize one scoped macOS stdio SDK connection. */
 export const openSdkStdio = (
@@ -404,13 +413,16 @@ export const openSdkStdio = (
             // negotiateStdio returns only after its scoped child and native cleanup join.
             if (state.cleanupUnconfirmed) return yield* cleanupFailure();
             const { client, transport } = yield* openNative;
-            const acquiredEvents = yield* makeSdkEvents(client, state);
+            const acquiredEvents = yield* makeSdkEvents(client, state, undefined, {
+              timeoutMs: snapshot.cleanupTimeoutMs,
+              requireCancellationWrite: true,
+            });
             events = acquiredEvents;
             const budget = yield* remaining;
             yield* restore(
               Effect.tryPromise({
                 try: (signal) =>
-                  client.connect(transport, {
+                  client.connect(acquiredEvents.bindTransport(transport), {
                     signal,
                     timeout: budget,
                     maxTotalTimeout: budget,
@@ -454,6 +466,7 @@ export const openSdkStdio = (
               yield* sdkCapabilities(client),
               acquiredEvents,
               yield* sdkHandshake(client),
+              protocol,
             );
           }).pipe(Effect.provideService(Scope.Scope, owner));
           opening = yield* Effect.forkIn(acquire, owner, { uninterruptible: true });

@@ -6,6 +6,7 @@ import {
   renderToolHeader,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
+import { progressLabel } from "./remote-events.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
 
 type CardTheme = Pick<Theme, "fg" | "bold">;
@@ -56,6 +57,8 @@ export const renderMcpResult = <Result>(
               ? "Completed with a problem"
               : "Completed";
     lines.push(toolStatusLine(theme, status, label));
+    const progress = options.isPartial ? progressLabel(result) : undefined;
+    if (progress) lines.push(theme.fg("muted", progress));
     if (details.diagnostic && !options.isPartial)
       lines.push(theme.fg("muted", details.diagnostic.title));
     const counts = [...details.counts];

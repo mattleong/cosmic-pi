@@ -2,6 +2,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
+import type { KeychainEntryFactory } from "../../src/boundary/keychain.ts";
 import {
   nodeFsPromises as fs,
   nodePath as path,
@@ -188,4 +190,54 @@ it.live(
       expect(logout.messages).not.toContain("deleted");
     }).pipe(Effect.scoped),
   30_000,
+);
+
+it.live(
+  "many normal credential transactions do not grow the private lock directory",
+  () =>
+    Effect.gen(function* () {
+      const directory = yield* root;
+      let value: string | undefined;
+      const entryFactory: KeychainEntryFactory = () =>
+        Promise.resolve({
+          getPassword: () => Promise.resolve(value),
+          setPassword: (next) => {
+            value = next;
+            return Promise.resolve();
+          },
+          deleteCredential: () => {
+            value = undefined;
+            return Promise.resolve(true);
+          },
+        });
+      const store = yield* McpCredentialStore.pipe(
+        Effect.provide(
+          McpCredentialStore.layer({
+            entryFactory,
+            lockDirectory: directory,
+          }),
+        ),
+      );
+      const identity = "f".repeat(64);
+      for (let index = 0; index < 40; index++) {
+        yield* store.withTransaction(identity, (tx) =>
+          Effect.gen(function* () {
+            yield* tx.writeRegistration({
+              identity,
+              issuer: "https://issuer.example",
+              resource: "https://resource.example",
+              registration: "dynamic",
+              redirectUri: "http://127.0.0.1/callback",
+              clientInformation: { client_id: "fixture" },
+              scopes: [],
+            });
+            expect(yield* tx.readRegistration).toBeDefined();
+            yield* tx.remove;
+          }),
+        );
+      }
+      expect(value).toBeUndefined();
+      expect(yield* Effect.tryPromise(() => fs.readdir(directory))).toEqual([]);
+    }).pipe(Effect.scoped),
+  15_000,
 );

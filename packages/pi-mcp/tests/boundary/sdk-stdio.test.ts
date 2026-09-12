@@ -16,6 +16,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Core from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -485,7 +486,7 @@ it.effect.each(protocolResponses)(
     }),
 );
 
-it.effect("rejects already-accepted input requests without exposing their state", () =>
+it.effect("headless input-required remains incomplete and never exposes private state", () =>
   Effect.gen(function* () {
     const fake = yield* makeProcess;
     vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
@@ -501,7 +502,7 @@ it.effect("rejects already-accepted input requests without exposing their state"
     const result = yield* call(connection, "unsupported").pipe(Effect.result);
     expect(result).toMatchObject({
       _tag: "Failure",
-      failure: { kind: "unsupported", outcome: "completed" },
+      failure: { kind: "unsupported", outcome: "unknown" },
     });
     expect(String(result)).not.toContain("private-");
   }),
@@ -686,7 +687,11 @@ it.effect("early first-close interruption cannot strand connection cleanup or sc
         ...options,
         onCleanup: (confirmed) => cleanup.push(confirmed),
       }).pipe(Effect.provideService(Scope.Scope, owner));
-      expect(connection.capabilities).toEqual({ tools: true, resources: false, prompts: false });
+      expect(connection.capabilities).toMatchObject({
+        tools: true,
+        resources: false,
+        prompts: false,
+      });
       const paused = pausedScheduler();
       const closing = yield* connection.close.pipe(
         Effect.provideService(Scheduler.MaxOpsBeforeYield, 8),
@@ -778,4 +783,311 @@ it.effect("keeps unconfirmed process cleanup distinct from a request failure", (
     expect(String(result)).not.toContain("private-");
     expect(fake.state.readers).toBe(0);
   }),
+);
+
+it.live(
+  "modern actual stdio carries completion, private MRTR progress and exact subscription IDs through execution",
+  () => {
+    const script = `
+    import readline from "node:readline";
+    const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+    const respond = (id, result) => send({ jsonrpc: "2.0", id, result: { resultType: "complete", ttlMs: 60000, cacheScope: "private", ...result } });
+    const notify = (method, params) => send({ jsonrpc: "2.0", method, params });
+    readline.createInterface({ input: process.stdin }).on("line", (line) => {
+      const m = JSON.parse(line); if (m.id === undefined) return;
+      switch (m.method) {
+        case "server/discover": return respond(m.id, { supportedVersions: ["2026-07-28"], capabilities: { tools: {}, resources: { subscribe: true }, prompts: {}, completions: {}, logging: {} } });
+        case "tools/list": return respond(m.id, { tools: [{ name: "example", inputSchema: { type: "object" } }] });
+        case "resources/list": return respond(m.id, { resources: [{ name: "one", uri: "test://one" }] });
+        case "resources/templates/list": return respond(m.id, { resourceTemplates: [] });
+        case "prompts/list": return respond(m.id, { prompts: [{ name: "example", arguments: [{ name: "value" }] }] });
+        case "completion/complete": return respond(m.id, { completion: { values: ["stdio"] } });
+        case "subscriptions/listen":
+          process.stdout.write([
+            { jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { notifications: m.params.notifications, _meta: { "io.modelcontextprotocol/subscriptionId": m.id } } },
+            ...["listen:wrong", m.id].map(id => ({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { "io.modelcontextprotocol/subscriptionId": id } } })),
+          ].map(value => JSON.stringify(value) + "\\n").join(""));
+          return;
+        case "tools/call":
+          notify("notifications/progress", { progressToken: m.params._meta.progressToken, progress: m.params.requestState ? 0 : 100 });
+          return respond(m.id, m.params.requestState ? { content: [{ type: "text", text: "done" }] } : {
+            resultType: "input_required", requestState: "opaque", inputRequests: { first: { method: "elicitation/create", params: { message: "Choose", requestedSchema: { type: "object", properties: {} } } } },
+          });
+      }
+    });
+  `;
+    return Effect.gen(function* () {
+      const { optionalFixture, projection } = yield* Effect.promise(
+        () => import("../fixtures/optional-features.ts"),
+      );
+      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
+      const seen: number[] = [];
+      let asks = 0;
+      const f = optionalFixture(undefined, {
+        open: openSdkStdio({
+          ...options,
+          protocol: "auto",
+          args: ["--input-type=module", "-e", script],
+        }),
+        interaction: {
+          resolve: Effect.succeed({
+            generation: "stdio",
+            current: Effect.succeed(true),
+            ask: () =>
+              Effect.sync(() => {
+                asks++;
+                return { action: "accept" as const, content: {} };
+              }),
+            openBrowser: () => Effect.succeed(false),
+          }),
+        },
+      });
+      yield* Effect.gen(function* () {
+        const execution = yield* McpExecution;
+        const completion = yield* execution.execute(
+          {
+            action: "completion.complete",
+            server: "fixture",
+            ref: { type: "ref/prompt", name: "example" },
+            argument: { name: "value", value: "" },
+          },
+          projection,
+        );
+        expect(completion.reply.data).toMatchObject({
+          result: { completion: { values: ["stdio"] } },
+        });
+        yield* execution.execute(
+          { action: "tools.call", server: "fixture", tool: "example" },
+          { ...projection, onProgress: (value) => seen.push(value.progress) },
+        );
+        expect(asks).toBe(1);
+        expect(seen).toEqual([100, 0]);
+        expect(
+          yield* execution
+            .execute(
+              { action: "tools.call", server: "fixture", tool: "example", logLevel: "error" },
+              projection,
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "unsupported", outcome: "not-sent" });
+        yield* execution.execute(
+          { action: "resources.subscribe", server: "fixture", uri: "test://one" },
+          projection,
+        );
+        yield* Effect.sleep(80);
+        const events = yield* execution.execute(
+          { action: "events.read", server: "fixture" },
+          projection,
+        );
+        expect(
+          Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(events).match(
+            /resource-updated/g,
+          ),
+        ).toHaveLength(1);
+        yield* execution.execute(
+          { action: "resources.unsubscribe", server: "fixture", uri: "test://one" },
+          projection,
+        );
+      }).pipe(Effect.provide(f.layer));
+    });
+  },
+);
+
+it.live(
+  "legacy actual stdio pre-ack cancellation fences uncertain subscription establishment",
+  () => {
+    const script = `
+    import readline from "node:readline";
+    let waiting = false;
+    const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+    readline.createInterface({ input: process.stdin }).on("line", (line) => {
+      const m = JSON.parse(line); if (m.id === undefined) return;
+      if (m.method === "initialize") return reply(m.id, { protocolVersion: "2025-11-25", capabilities: { tools: {}, resources: { subscribe: true } }, serverInfo: { name: "fixture", version: "1" } });
+      if (m.method === "resources/subscribe") { waiting = true; return; }
+      if (m.method === "tools/list") return reply(m.id, { tools: [{ name: "example", inputSchema: { type: "object" } }] });
+      if (m.method === "resources/list") return reply(m.id, { resources: [] });
+      if (m.method === "resources/templates/list") return reply(m.id, { resourceTemplates: [] });
+      if (m.method === "tools/call") return reply(m.id, { content: [{ type: "text", text: "barrier" }], structuredContent: { waiting } });
+    });
+  `;
+    return Effect.gen(function* () {
+      const { optionalFixture, projection } = yield* Effect.promise(
+        () => import("../fixtures/optional-features.ts"),
+      );
+      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
+      const f = optionalFixture(undefined, {
+        open: openSdkStdio({ ...options, args: ["--input-type=module", "-e", script] }),
+      });
+      yield* Effect.gen(function* () {
+        const execution = yield* McpExecution;
+        const subscription = {
+          action: "resources.subscribe",
+          server: "fixture",
+          uri: "test://one",
+        };
+        const opening = yield* Effect.forkScoped(execution.execute(subscription, projection));
+        const barrier = yield* execution.execute(
+          { action: "tools.call", server: "fixture", tool: "example" },
+          projection,
+        );
+        expect(barrier.reply.data).toMatchObject({
+          result: { structuredContent: { waiting: true } },
+        });
+        expect(
+          yield* execution
+            .execute({ ...subscription, action: "resources.unsubscribe" }, projection)
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "cleanup", outcome: "unknown" });
+        expect(yield* Fiber.join(opening).pipe(Effect.flip)).toMatchObject({ outcome: "unknown" });
+        expect(yield* execution.execute(subscription, projection).pipe(Effect.flip)).toMatchObject({
+          outcome: "not-sent",
+        });
+        expect(f.opens()).toBe(1);
+      }).pipe(Effect.provide(f.layer));
+    });
+  },
+);
+
+it.live(
+  "actual stdio cancellation write failure never releases an acknowledged subscription",
+  () => {
+    const closedInput = Deferred.makeUnsafe<void>();
+    const script = `
+    import readline from "node:readline";
+    import { closeSync } from "node:fs";
+    const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+    readline.createInterface({ input: process.stdin }).on("line", (line) => {
+      const m = JSON.parse(line); if (m.id === undefined) return;
+      if (m.method === "server/discover") return send({ jsonrpc: "2.0", id: m.id, result: { resultType: "complete", supportedVersions: ["2026-07-28"], capabilities: { resources: { subscribe: true } } } });
+      if (m.method === "subscriptions/listen") {
+        setInterval(() => {}, 1000);
+        send({ jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { notifications: m.params.notifications, _meta: { "io.modelcontextprotocol/subscriptionId": m.id } } });
+        setTimeout(() => {
+          process.stdin.on("error", () => {});
+          process.stdin.destroy();
+          try { closeSync(0); } catch {}
+          send({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { "io.modelcontextprotocol/subscriptionId": m.id } } });
+        }, 40);
+      }
+    });
+  `;
+    return Effect.gen(function* () {
+      const { optionalFixture, projection } = yield* Effect.promise(
+        () => import("../fixtures/optional-features.ts"),
+      );
+      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
+      const f = optionalFixture(undefined, {
+        open: openSdkStdio({
+          ...options,
+          protocol: "auto",
+          args: ["--input-type=module", "-e", script],
+        }),
+        mapConnection: (connection) => ({
+          ...connection,
+          remoteEvents: connection.remoteEvents!.pipe(
+            Stream.mapEffect((event) =>
+              Deferred.succeed(closedInput, undefined).pipe(Effect.as(event)),
+            ),
+          ),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const execution = yield* McpExecution;
+        const subscription = {
+          action: "resources.subscribe",
+          server: "fixture",
+          uri: "test://one",
+        };
+        expect((yield* execution.execute(subscription, projection)).reply.isError).toBe(false);
+        yield* Deferred.await(closedInput);
+        expect(
+          yield* execution
+            .execute({ ...subscription, action: "resources.unsubscribe" }, projection)
+            .pipe(Effect.flip),
+        ).toMatchObject({ kind: "cleanup", outcome: "unknown" });
+        expect(yield* execution.execute(subscription, projection).pipe(Effect.flip)).toMatchObject({
+          outcome: "not-sent",
+        });
+        expect(f.opens()).toBe(1);
+      }).pipe(Effect.provide(f.layer));
+    });
+  },
+);
+
+it.live(
+  "legacy stdio queued resource updates keep their original local subscription generation",
+  () => {
+    const script = `
+    import readline from "node:readline";
+    const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+    const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
+    readline.createInterface({ input: process.stdin }).on("line", (line) => {
+      const m = JSON.parse(line); if (m.id === undefined) return;
+      if (m.method === "initialize") return reply(m.id, { protocolVersion: "2025-11-25", capabilities: { tools: {}, resources: { subscribe: true } }, serverInfo: { name: "fixture", version: "1" } });
+      if (m.method === "resources/subscribe" || m.method === "resources/unsubscribe") return reply(m.id, {});
+      if (m.method === "tools/list") return reply(m.id, { tools: [{ name: "example", inputSchema: { type: "object" } }] });
+      if (m.method === "resources/list") return reply(m.id, { resources: [] });
+      if (m.method === "resources/templates/list") return reply(m.id, { resourceTemplates: [] });
+      if (m.method === "tools/call") {
+        send({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one" } });
+        return reply(m.id, { content: [{ type: "text", text: "done" }] });
+      }
+    });
+  `;
+    return Effect.gen(function* () {
+      const captured = yield* Deferred.make<void>();
+      const delivery = yield* Deferred.make<void>();
+      let paused = false;
+      const { optionalFixture, projection } = yield* Effect.promise(
+        () => import("../fixtures/optional-features.ts"),
+      );
+      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
+      const f = optionalFixture(undefined, {
+        open: openSdkStdio({ ...options, args: ["--input-type=module", "-e", script] }),
+        mapConnection: (connection) => ({
+          ...connection,
+          remoteEvents: connection.remoteEvents!.pipe(
+            Stream.mapEffect((event) => {
+              if (paused) return Effect.succeed(event);
+              paused = true;
+              return Deferred.succeed(captured, undefined).pipe(
+                Effect.andThen(Deferred.await(delivery)),
+                Effect.as(event),
+              );
+            }),
+          ),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const execution = yield* McpExecution;
+        const subscription = {
+          action: "resources.subscribe",
+          server: "fixture",
+          uri: "test://one",
+        };
+        const emit = { action: "tools.call", server: "fixture", tool: "example" };
+        yield* execution.execute(subscription, projection);
+        yield* execution.execute(emit, projection);
+        yield* Deferred.await(captured);
+        yield* execution.execute({ ...subscription, action: "resources.unsubscribe" }, projection);
+        yield* execution.execute(subscription, projection);
+        yield* Deferred.succeed(delivery, undefined);
+        yield* Effect.sleep(10);
+        expect(
+          (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
+            .data,
+        ).toMatchObject({ result: { events: [] } });
+        yield* execution.execute(emit, projection);
+        yield* Effect.sleep(10);
+        expect(
+          (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
+            .data,
+        ).toMatchObject({
+          result: {
+            events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
+          },
+        });
+      }).pipe(Effect.ensuring(Deferred.succeed(delivery, undefined)), Effect.provide(f.layer));
+    });
+  },
 );

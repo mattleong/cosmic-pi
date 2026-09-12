@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { stripTerminalControls } from "pi-cosmic-core";
 import {
   registerActivityProvider,
   type ActivityEvents,
@@ -6,6 +7,8 @@ import {
   type ActivityProviderRegistration,
 } from "pi-cosmic-ui/activity";
 import type { QuestionnaireActivity } from "../questionnaire/service.ts";
+import type { AskUserRequest, QuestionnaireOwner } from "../questionnaire/protocol.ts";
+import type { OwnedFormRequest, ExtensionFormOwner } from "../questionnaire/form-protocol.ts";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
@@ -50,26 +53,48 @@ export function makeQuestionnaireActivity(options: {
           message: "Unable to update questionnaire activity.",
         }),
     }).pipe(Effect.ignore);
+  const admitted = (
+    id: string,
+    request: AskUserRequest | OwnedFormRequest,
+    cancel: Effect.Effect<void>,
+    owner?: QuestionnaireOwner | ExtensionFormOwner,
+  ) =>
+    transition(() => {
+      const item: ActivityItem = {
+        id,
+        kind: "question",
+        title: stripTerminalControls(
+          "questions" in request
+            ? request.questions.map((question) => question.title).join(" / ")
+            : owner && "extensionId" in owner
+              ? owner.label
+              : "Extension form",
+        ),
+        status: "pending",
+        revision: "",
+        summary: "queued",
+        detail:
+          "questions" in request
+            ? request.questions.map((question) => question.prompt).join("\n\n")
+            : "Private extension request. Answers return only to the requesting extension.",
+        actions: [cancelAction],
+      };
+      set(id, {
+        cancel,
+        item: owner
+          ? {
+              ...item,
+              parent:
+                "extensionId" in owner
+                  ? { providerId: owner.extensionId, itemId: owner.operationId }
+                  : { providerId: "pi-subagents", itemId: owner.runId },
+            }
+          : item,
+      });
+    });
   const observer: QuestionnaireActivity = {
-    admitted: (id, request, cancel, owner) =>
-      transition(() => {
-        const item: ActivityItem = {
-          id,
-          kind: "question",
-          title: request.questions.map((question) => question.title).join(" / "),
-          status: "pending",
-          revision: "",
-          summary: "queued",
-          detail: request.questions.map((question) => question.prompt).join("\n\n"),
-          actions: [cancelAction],
-        };
-        set(id, {
-          cancel,
-          item: owner
-            ? { ...item, parent: { providerId: "pi-subagents", itemId: owner.runId } }
-            : item,
-        });
-      }),
+    admitted,
+    admittedForm: admitted,
     presenting: (id) =>
       transition(() => {
         options.bridge.setRequest(id);

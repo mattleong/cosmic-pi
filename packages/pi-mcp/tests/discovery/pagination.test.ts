@@ -90,7 +90,12 @@ it.effect("only an explicit first-page missing method becomes an unsupported cat
     );
     const result = yield* traverse({ ...operation, request: () => Effect.fail(failure) });
     expect(result).toEqual({ supported: false, entries: [], reason: "rpc-method-not-found" });
-    expect(yield* traverse(operation)).toEqual({ supported: true, entries: [] });
+    expect(yield* traverse(operation)).toMatchObject({
+      supported: true,
+      entries: [],
+      expiresAt: 0,
+      cacheScope: "private",
+    });
   }),
 );
 

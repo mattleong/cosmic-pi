@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpOperation } from "../connection/model.ts";
 import { MCP_DISCOVERY_LIMITS } from "./model.ts";
+import { metadataFreshness, metadataTime, type McpMetadataFreshness } from "./freshness.ts";
 
 export type McpListAction =
   | "tools.list"
@@ -73,7 +74,10 @@ export const freezeMetadata = <A extends Schema.Json>(value: A): A => {
 };
 
 export type McpMetadataList<A> =
-  | { readonly supported: true; readonly entries: ReadonlyArray<A> }
+  | (Required<McpMetadataFreshness> & {
+      readonly supported: true;
+      readonly entries: ReadonlyArray<A>;
+    })
   | {
       readonly supported: false;
       readonly entries: readonly [];
@@ -93,6 +97,8 @@ export const listMetadata = <A extends Schema.Json>(
     const seenCursors = new Set<string>();
     const seenEntries = new Set<string>();
     let cursor: string | undefined;
+    let expiresAt = Number.POSITIVE_INFINITY;
+    let cacheScope: "public" | "private" = "public";
     const Page = Schema.Struct({
       entries: Schema.Array(entry).check(Schema.isMaxLength(MCP_DISCOVERY_LIMITS.entriesPerFamily)),
       nextCursor: Schema.optionalKey(
@@ -112,6 +118,7 @@ export const listMetadata = <A extends Schema.Json>(
               : Effect.fail(error),
           ),
         );
+      const receivedAt = yield* metadataTime;
       // Later-page failures are inconsistent traversals, not evidence of an absent method.
       if (reply === undefined)
         return { supported: false, entries: [], reason: "rpc-method-not-found" };
@@ -128,6 +135,9 @@ export const listMetadata = <A extends Schema.Json>(
           boundaryError("protocol", "not-sent", "MCP metadata page is invalid."),
         ),
       );
+      const freshness = metadataFreshness(body, receivedAt);
+      expiresAt = Math.min(expiresAt, freshness.expiresAt);
+      if (freshness.cacheScope === "private") cacheScope = "private";
       const input =
         body.nextCursor === undefined
           ? { entries: body[field] }
@@ -149,7 +159,8 @@ export const listMetadata = <A extends Schema.Json>(
         seenEntries.add(identity);
         result.push(item);
       }
-      if (page.nextCursor === undefined) return { supported: true, entries: result };
+      if (page.nextCursor === undefined)
+        return { supported: true, entries: result, expiresAt, cacheScope };
       if (seenCursors.has(page.nextCursor))
         return yield* Effect.fail(
           boundaryError("protocol", "not-sent", "MCP metadata cursor repeated."),

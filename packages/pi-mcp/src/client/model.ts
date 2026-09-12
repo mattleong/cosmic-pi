@@ -1,14 +1,32 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
+import type * as Scope from "effect/Scope";
+import type { McpResourceSubscription } from "../resources/subscription-model.ts";
+import type { McpContinuation, McpExchange } from "../interaction/model.ts";
+import type { McpLogLevel, McpProgress, McpRemoteEvent } from "../observations/model.ts";
 import type { McpBoundaryError } from "./errors.ts";
 
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const Cursor = Schema.optionalKey(Schema.String.check(Schema.isMaxLength(8_192)));
 const Arguments = Schema.Record(Schema.String, Schema.Json);
 
-/** Closed, non-interactive SDK operations. No arbitrary protocol dispatch or auth actions. */
+export const McpCompletionFields = {
+  ref: Schema.Union([
+    Schema.Struct({ type: Schema.Literal("ref/prompt"), name: Name }),
+    Schema.Struct({ type: Schema.Literal("ref/resource"), uri: Name }),
+  ]),
+  argument: Schema.Struct({ name: Name, value: Schema.String.check(Schema.isMaxLength(8_192)) }),
+  context: Schema.optionalKey(
+    Schema.Struct({
+      arguments: Schema.Record(Name, Schema.String.check(Schema.isMaxLength(8_192))),
+    }),
+  ),
+};
+
+/** Closed SDK operations. No arbitrary protocol dispatch or authentication actions. */
 export const McpRequestSchema = Schema.Union([
+  Schema.Struct({ action: Schema.Literal("completion.complete"), ...McpCompletionFields }),
   Schema.Struct({ action: Schema.Literal("tools.list"), cursor: Cursor }),
   Schema.Struct({
     action: Schema.Literal("tools.call"),
@@ -28,6 +46,7 @@ export const McpRequestSchema = Schema.Union([
 
 export const McpReplySchema = Schema.Struct({
   action: Schema.Literals([
+    "completion.complete",
     "tools.list",
     "tools.call",
     "resources.list",
@@ -49,6 +68,21 @@ export interface McpCapabilities {
   readonly tools: boolean;
   readonly resources: boolean;
   readonly prompts: boolean;
+  readonly parameterHeaders?: boolean;
+  readonly completions?: boolean;
+  readonly resourceSubscriptions?: boolean;
+  readonly requestLogging?: boolean;
+  readonly multiRoundTrip?: boolean;
+}
+
+/** Private transport options; never accepted from gateway input. */
+export interface McpDispatchOptions {
+  readonly parameterHeaders?: Readonly<Record<string, string>>;
+  readonly onprogress?: (progress: McpProgress) => void;
+  readonly onlog?: (event: Extract<McpRemoteEvent, { kind: "log" }>) => void;
+  readonly logLevel?: McpLogLevel;
+  readonly continuation?: McpContinuation;
+  readonly elicitation?: boolean;
 }
 export interface McpConnectionHealth {
   readonly closed: boolean;
@@ -70,11 +104,24 @@ export interface McpConnection {
   readonly instructions?: McpInstructions | undefined;
   /** One application consumer; each pending family is coalesced until delivery. */
   readonly changes: Stream.Stream<McpMetadataFamily>;
+  readonly remoteEvents?: Stream.Stream<McpRemoteEvent>;
+  readonly remoteEventDrops?: Effect.Effect<number>;
   /** Settles on local closure or terminal failure, not on individual request failure. */
   readonly terminal: Effect.Effect<void, McpBoundaryError>;
   readonly health: Effect.Effect<McpConnectionHealth>;
   readonly setToken: (token: string | undefined) => Effect.Effect<void, McpBoundaryError>;
-  readonly request: (input: McpRequest) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly request: (
+    input: McpRequest,
+    options?: McpDispatchOptions,
+  ) => Effect.Effect<McpReply, McpBoundaryError>;
+  readonly subscribeResource?: (
+    uri: string,
+    identity?: symbol,
+  ) => Effect.Effect<McpResourceSubscription, McpBoundaryError, Scope.Scope>;
+  readonly exchange?: (
+    input: McpRequest,
+    options?: McpDispatchOptions,
+  ) => Effect.Effect<McpExchange, McpBoundaryError>;
   readonly close: Effect.Effect<void, McpBoundaryError>;
 }
 

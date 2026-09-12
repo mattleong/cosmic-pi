@@ -6,14 +6,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { McpAuth } from "../auth/service.ts";
-import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { McpActivity } from "../activity/service.ts";
 import { McpConnector } from "../boundary/sdk-connection.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
-import type { McpConnection, McpRequest } from "../client/model.ts";
+import { makeOperationFactory } from "./operation.ts";
 import { McpConfigStore } from "../config/store.ts";
 import type { AdmissionTicket } from "./admission.ts";
-import type { McpConnectionsContract, McpConnectionsOptions, McpOperation } from "./model.ts";
+import type { McpConnectionsContract, McpConnectionsOptions } from "./model.ts";
 import { makeRegistry, type AuthSuspension, type ConnectionOwner } from "./registry.ts";
 
 const makeService = Effect.fn("McpConnections.make")(function* (options: McpConnectionsOptions) {
@@ -67,156 +66,7 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
       }),
     );
 
-  const operation = (
-    ticket: AdmissionTicket,
-    owner: ConnectionOwner,
-    connection: McpConnection,
-    revision: number,
-    tool?: string,
-  ): McpOperation => {
-    const checkCurrent = withLock(registry.checkLocked(ticket, owner, tool, revision));
-    const dispatchCheck = (input: McpRequest) =>
-      withLock(
-        Effect.gen(function* () {
-          yield* registry.checkLocked(
-            ticket,
-            owner,
-            input.action === "tools.call" ? input.tool : tool,
-            revision,
-          );
-          yield* registry.acceptingLocked(owner);
-        }),
-      );
-    const request = (input: McpRequest) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          yield* dispatchCheck(input);
-          const waiter = yield* withLock(Effect.sync(() => admission.enqueue(ticket)));
-          return yield* restore(
-            Effect.gen(function* () {
-              yield* Deferred.await(waiter.ready);
-              yield* dispatchCheck(input);
-              const token = yield* registry
-                .access(owner.server)
-                .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
-              yield* dispatchCheck(input);
-              const definition = owner.server.definition;
-              // Static HTTP headers are not managed tokens; clearing would revoke them.
-              if (definition?.transport !== "http" || definition.auth.type !== "none")
-                yield* connection.setToken(token);
-              yield* dispatchCheck(input);
-              const recordsOutcome =
-                input.action === "tools.call" ||
-                input.action === "resources.read" ||
-                input.action === "prompts.get";
-              if (recordsOutcome) ticket.outcome = "unknown";
-              const reply = yield* connection.request(input).pipe(
-                Effect.tapError((error) =>
-                  withLock(
-                    Effect.gen(function* () {
-                      if (recordsOutcome) ticket.outcome = error.outcome;
-                      if (error.kind === "auth-required")
-                        yield* registry.rejectAuthLocked(owner, {
-                          credentialUsed: token !== undefined,
-                          error,
-                        });
-                      if (error.kind === "cleanup") yield* registry.terminalLocked(owner, true);
-                    }),
-                  ),
-                ),
-                Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
-              );
-              yield* withLock(
-                Effect.gen(function* () {
-                  if (recordsOutcome) ticket.outcome = "completed";
-                  if (reply.cleanupUnconfirmed) yield* registry.terminalLocked(owner, true);
-                }),
-              );
-              yield* checkCurrent;
-              return reply;
-            }),
-          ).pipe(Effect.ensuring(withLock(Effect.sync(() => admission.finish(waiter)))));
-        }),
-      );
-
-    const shared: McpOperation["shared"] = <A>(
-      key: string,
-      use: (owned: McpOperation) => Effect.Effect<A, McpBoundaryError>,
-    ) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const now = yield* Clock.currentTimeMillis;
-          const completion = yield* withLock(
-            Effect.gen(function* () {
-              // A notification consumer can use this after the originating ticket ends.
-              // Only its connection authority carries forward, never its deadline or ticket.
-              yield* registry.ownerCheckLocked(owner);
-              yield* registry.acceptingLocked(owner);
-              const existing = owner.shared.get(key);
-              if (existing) return existing;
-              const fresh = admission.issueDependency(owner.server.id, now);
-              if (fresh instanceof McpBoundaryError) return yield* fresh;
-              owner.operations += 1;
-              owner.idleGeneration += 1;
-              const deferred = Deferred.makeUnsafe<unknown, McpBoundaryError>();
-              owner.shared.set(key, deferred);
-              const owned = operation(fresh, owner, connection, registry.configLocked().revision);
-              const run = Effect.uninterruptibleMask((resume) =>
-                Effect.gen(function* () {
-                  const result = yield* Effect.exit(resume(runTicket(fresh, owner, use(owned))));
-                  yield* withLock(
-                    Effect.sync(() => {
-                      if (owner.shared.get(key) === deferred) owner.shared.delete(key);
-                      Deferred.doneUnsafe(
-                        deferred,
-                        Exit.isSuccess(result)
-                          ? Effect.succeed(result.value)
-                          : Effect.failCause(result.cause),
-                      );
-                    }),
-                  );
-                }),
-              ).pipe(Effect.ensuring(release(fresh, owner)));
-              yield* Effect.forkIn(Effect.interruptible(run), owner.scope);
-              return deferred;
-            }),
-          );
-          // SAFETY: each private key belongs to one metadata implementation and one result type.
-          return (yield* restore(Deferred.await(completion))) as A;
-        }),
-      );
-
-    return {
-      binding: {
-        server: owner.server.id,
-        identity: owner.server.identity,
-        configRevision: revision,
-      },
-      server: owner.server,
-      owner: owner.id,
-      capabilities: connection.capabilities,
-      instructions: connection.instructions,
-      changes: connection.changes,
-      checkCurrent,
-      commit: (publication) =>
-        withLock(
-          Effect.gen(function* () {
-            yield* registry.checkLocked(ticket, owner, tool, revision);
-            return yield* publication;
-          }),
-        ),
-      request,
-      shared,
-      forkOwned: (effect) =>
-        withLock(
-          Effect.gen(function* () {
-            yield* registry.checkLocked(ticket, owner, tool, revision);
-            return yield* Effect.forkIn(Effect.interruptible(effect), owner.scope);
-          }),
-        ),
-    };
-  };
-
+  const operation = makeOperationFactory(registry, release, runTicket);
   const withOperation: McpConnectionsContract["withOperation"] = (serverId, intent, use) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -238,6 +88,10 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
         const { ticket, owner, revision } = acquired;
         const work = Effect.gen(function* () {
           const connection = yield* Deferred.await(owner.ready);
+          yield* withLock(registry.checkLocked(ticket, owner, intent.tool, revision));
+          // Resolve refresh before any metadata lookup or schema validation.
+          const token = yield* registry.access(owner.server);
+          yield* withLock(registry.checkTokenLocked(owner, token));
           const current = operation(ticket, owner, connection, revision, intent.tool);
           yield* current.checkCurrent;
           const value = yield* use(current);
@@ -338,6 +192,15 @@ const makeService = Effect.fn("McpConnections.make")(function* (options: McpConn
     isAvailable: registry.isAvailable,
     config: registry.config,
     status: registry.status,
+    resourceSubscriptions: (server) =>
+      registry
+        .requireServer(server)
+        .pipe(Effect.andThen(registry.resourceSubscriptions.status(server))),
+    unsubscribeResource: (server, uri) =>
+      registry
+        .requireServer(server)
+        .pipe(Effect.andThen(registry.resourceSubscriptions.unsubscribe(server, uri))),
+    readEvents: registry.readEvents,
     requireServer: registry.requireServer,
     withAuth,
     withOperation,
