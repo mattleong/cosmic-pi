@@ -240,9 +240,7 @@ export class ProfileWorkspaceComponent
       this.saveSession();
       return true;
     }
-    if (key === "j" || key === "k") {
-      this.pane = key === "j" ? "fields" : "profiles";
-    } else if (key === "m" || key === "e" || key === "r") {
+    if (key === "m" || key === "e" || key === "r") {
       this.selectField(key === "m" ? "model" : key === "e" ? "effort" : "runWith");
       this.pane = "fields";
       this.openSelectedField();

@@ -479,7 +479,7 @@ describe("persistent dashboard", () => {
     disposed.mockRestore();
   });
   effectTest("Tab switches targets from either pane while picker Tab stays local", function* () {
-    for (const paneKey of ["k", "j"]) {
+    for (const paneKey of ["h", "l"]) {
       const f = dashboard();
       f.component.handleInput(paneKey);
       f.component.handleInput("\t"); // One press opens the saved library.

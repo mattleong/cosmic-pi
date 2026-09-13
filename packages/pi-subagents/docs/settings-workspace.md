@@ -16,7 +16,7 @@ One dashboard contains Current Session and Saved profiles tabs. Each tab remembe
 
 Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Move up and Move down reorder candidates. Delete model requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action. Disabled profiles retain an Add model path.
 
-Up/Down navigate rows without writing. Right or j focuses fields; Left or k focuses the profile list. Enter opens the selected editor or picker. Tab and Shift+Tab switch directly between Current Session and Saved profiles, preserving each target's position. Pickers and forms keep their own controls, including j/k row navigation. Esc closes the nearest picker or backs up one level. Persistent footer hints show the other tab's name; `?` opens navigation help. Ordinary cancellation is silent and leaves the route unchanged.
+Up/k and Down/j navigate rows without writing. Right/l focuses fields; Left/h focuses the profile list. Enter opens the selected editor or picker. Tab and Shift+Tab switch directly between Current Session and Saved profiles, preserving each target's position. Pickers and forms keep their own controls, including j/k row navigation. Esc closes the nearest picker or backs up one level. Persistent footer hints show the other tab's name; `?` opens navigation help. Ordinary cancellation is silent and leaves the route unchanged.
 
 - `m`, `e`, and `r` open Model, Reasoning, and Run with.
 - `a` opens Actions. `+` adds a fallback only after model selection; canceling creates nothing.

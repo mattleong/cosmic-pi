@@ -163,10 +163,10 @@ describe("fixed-target profile workspace", () => {
     });
   });
 
-  it("uses j/k and horizontal arrows for panes without moving rows or editing", () => {
+  it("uses h/l and horizontal arrows for panes without moving rows or editing", () => {
     const h = harness();
     const initial = h.component.getPosition();
-    for (const key of ["j", "j", "\u001b[C"]) {
+    for (const key of ["l", "l", "\u001b[C"]) {
       h.component.handleInput(key);
       expect(h.component.getPosition()).toMatchObject({
         initialFocus: "fields",
@@ -174,7 +174,7 @@ describe("fixed-target profile workspace", () => {
         initialField: initial.initialField,
       });
     }
-    for (const key of ["k", "k", "\u001b[D"]) {
+    for (const key of ["h", "h", "\u001b[D"]) {
       h.component.handleInput(key);
       expect(h.component.getPosition()).toMatchObject({
         initialFocus: "profiles",
@@ -183,6 +183,29 @@ describe("fixed-target profile workspace", () => {
       });
     }
     expect(h.close).not.toHaveBeenCalled();
+    expect(h.saveDraft).not.toHaveBeenCalled();
+    expect(h.loadModelPicker).not.toHaveBeenCalled();
+  });
+
+  it("uses j/k to move rows within each pane without editing", () => {
+    const h = harness();
+    const initial = h.component.getPosition();
+    h.component.handleInput("k");
+    expect(h.component.getPosition().initialProfile).not.toBe(initial.initialProfile);
+    expect(h.component.getPosition().initialFocus).toBe("profiles");
+    h.component.handleInput("j");
+    expect(h.component.getPosition().initialProfile).toBe(initial.initialProfile);
+    h.component.handleInput("l");
+    h.component.handleInput("j");
+    expect(h.component.getPosition()).toMatchObject({
+      initialFocus: "fields",
+      initialField: "effort",
+    });
+    h.component.handleInput("k");
+    expect(h.component.getPosition()).toMatchObject({
+      initialFocus: "fields",
+      initialField: "model",
+    });
     expect(h.saveDraft).not.toHaveBeenCalled();
     expect(h.loadModelPicker).not.toHaveBeenCalled();
   });

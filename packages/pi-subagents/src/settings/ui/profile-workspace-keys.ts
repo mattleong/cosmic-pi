@@ -9,8 +9,6 @@ import type {
 /** Screen-owned shortcuts precede configured navigation in FullScreenKeymap. */
 export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "/",
-  "j",
-  "k",
   "s",
   "m",
   "e",
