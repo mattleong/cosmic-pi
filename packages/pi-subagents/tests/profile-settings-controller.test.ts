@@ -314,6 +314,17 @@ describe("profile settings controller", () => {
     },
   );
 
+  effectTest("opens the first profile by default", function* () {
+    const fixture = setup();
+    const running = yield* openDashboard(fixture);
+    press(fixture, "e", "j", "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchSessionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: PROFILE_IDS[0] }),
+    );
+    yield* closeDashboard(fixture, running);
+  });
+
   effectTest("deep links edit the requested Session profile, not a saved default", function* () {
     const fixture = setup();
     const running = yield* openDashboard(fixture, "profiles worker");

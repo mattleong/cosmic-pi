@@ -368,7 +368,7 @@ export function registerSubagentManagerCommand(
       const profile = PROFILE_IDS.find((id) => id === parts[1]);
       if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))
         return openProfileDashboard(pi, ctx, actions, {
-          initialProfile: profile ?? "generalist",
+          initialProfile: profile ?? PROFILE_IDS[0],
           initialFocus: profile ? "fields" : "profiles",
         }).then(() => undefined);
       ctx.ui.notify(

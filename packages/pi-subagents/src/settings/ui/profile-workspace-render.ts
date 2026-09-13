@@ -174,11 +174,16 @@ const editorLines = (
     expanded(state),
     state.target.kind === "session",
   );
+  const labelWidth = Math.max(
+    0,
+    ...rows.filter((row) => row.value.length > 0).map((row) => visibleWidth(row.label)),
+  );
   const lines: string[] = [];
   let selectedLine = 0;
   let previousCandidate = -1;
   rows.forEach((row, index) => {
     if (row.candidateIndex !== previousCandidate) {
+      if (previousCandidate >= 0) lines.push("");
       const candidate = state.draft.candidates[row.candidateIndex];
       const label = profileRouteOptionLabel(row.candidateIndex);
       lines.push(
@@ -197,8 +202,11 @@ const editorLines = (
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
     const selected = index === state.fieldIndex && state.pane !== "profiles";
+    const value = row.value
+      ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${row.value}`
+      : "";
     const text = truncateToWidth(
-      `${selected ? ">" : " "} ${row.label}  ${row.value}${row.fixed ? " · fixed" : ""}`,
+      `${selected ? ">" : " "} ${row.label}${value}${row.fixed ? " · fixed" : ""}`,
       width,
     );
     lines.push(selected ? theme.fg("accent", text) : row.fixed ? theme.fg("muted", text) : text);

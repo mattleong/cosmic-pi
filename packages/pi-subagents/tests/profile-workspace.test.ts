@@ -94,6 +94,7 @@ const baseOptions = (
   inspection: makeInspection(),
   projectTrusted: true,
   target: { kind: "session" },
+  initialProfile: "generalist",
   parentEffort: "high",
   preferredPiModel: () => "openai-codex/gpt-5.6-sol",
   getHeight: () => 30,

@@ -64,6 +64,7 @@ const harness = (overrides: Partial<ProfileWorkspaceOptions> = {}, initial = [fi
     inspection: inspection(),
     projectTrusted: true,
     target: { kind: "session" },
+    initialProfile: "generalist",
     parentEffort: "high",
     preferredPiModel: () => "test/first",
     getHeight: () => 24,

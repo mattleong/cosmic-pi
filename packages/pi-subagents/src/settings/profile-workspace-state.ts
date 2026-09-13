@@ -82,7 +82,7 @@ export abstract class ProfileWorkspaceState {
         expanded: new Set(saved.expanded),
       });
     }
-    this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? "generalist"));
+    this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? PROFILE_IDS[0]));
     this.candidateIndex = options.initialCandidateIndex ?? 0;
     this.pane =
       options.initialFocus === "profiles" || !options.initialFocus ? "profiles" : "fields";
