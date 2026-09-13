@@ -395,7 +395,7 @@ describe("persistent dashboard", () => {
         undefined,
       );
       // Undo remains owned after the rename and restores the originally absent declaration.
-      press("a", "/", ..."Undo", "\r", "\r");
+      press("G", "\r", "\r");
       yield* step(eventLoopTurn);
       expect(f.saveDraft).toHaveBeenLastCalledWith(
         { kind: "profile-set", set: { scope: "project", name: "renamed" } },
@@ -566,6 +566,28 @@ describe("persistent dashboard", () => {
       f.component.dispose();
     },
   );
+  effectTest(
+    "keeps the left-pane save action selected after cancellation and tab switches",
+    function* () {
+      const f = dashboard();
+      for (const key of ["h", "G", "\r"]) f.component.handleInput(key);
+      yield* step(eventLoopTurn);
+      f.component.handleInput("\u001b");
+      yield* step(eventLoopTurn);
+      expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
+      for (const key of ["\t", "\t", "\r"]) f.component.handleInput(key);
+      yield* step(eventLoopTurn);
+      for (const key of [..."snapshot", "\r"]) f.component.handleInput(key);
+      yield* step(eventLoopTurn);
+      expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ profileSet: "snapshot" }),
+      );
+      expect(f.saveDraft).not.toHaveBeenCalled();
+      expect(f.close).not.toHaveBeenCalled();
+      f.component.dispose();
+    },
+  );
+
   effectTest("disposing an internal save form makes its late input inert", function* () {
     const f = dashboard();
     f.component.handleInput("s");

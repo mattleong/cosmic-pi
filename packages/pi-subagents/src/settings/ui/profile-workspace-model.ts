@@ -30,11 +30,9 @@ export type ProfileWorkspaceField =
   | "context"
   | "openaiFastMode"
   | "closeOnReport"
-  | "move-up"
-  | "move-down"
-  | "remove"
   | "actions"
-  | "save-session";
+  | "add"
+  | "reset";
 
 export interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
@@ -257,39 +255,18 @@ export const candidateFieldRows = (
   return [
     ...essential,
     ...(advancedExpanded ? advanced : []),
-    ...(position.count > 1
-      ? [
-          {
-            field: "move-up" as const,
-            label: "Move up",
-            value: "earlier in fallback order",
-            fixed: position.index === 0,
-            ...(position.index === 0 && { fixedReason: "This model is already Primary." }),
-          },
-          {
-            field: "move-down" as const,
-            label: "Move down",
-            value: "later in fallback order",
-            fixed: position.index >= position.count - 1,
-            ...(position.index >= position.count - 1 && {
-              fixedReason: "This model is already last in the fallback order.",
-            }),
-          },
-        ]
-      : []),
     {
-      field: "remove",
-      label: "Delete",
-      value: position.count === 1 ? "disables this profile" : "remove from this profile",
+      field: "actions",
+      label: `Manage ${profileRouteOptionLabel(position.index)}…`,
+      value: "",
       fixed: false,
     },
-    { field: "actions", label: "Actions", value: "manage Primary and fallbacks", fixed: false },
   ];
 };
 
 export type SelectableCandidateField = Exclude<
   ProfileWorkspaceField,
-  "model" | "advanced" | "move-up" | "move-down" | "remove" | "actions" | "save-session"
+  "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
 const RUN_WITH_CHOICES: ReadonlyArray<

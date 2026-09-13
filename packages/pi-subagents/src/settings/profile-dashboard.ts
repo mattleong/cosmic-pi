@@ -46,6 +46,8 @@ export type ProfileEditorPosition = Pick<
   | "initialField"
   | "initialCandidateIndex"
   | "initialFocus"
+  | "initialSaveFocused"
+  | "initialSelections"
   | "initialAdvancedExpanded"
 >;
 

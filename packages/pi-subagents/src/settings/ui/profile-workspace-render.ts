@@ -42,6 +42,7 @@ export interface ProfileWorkspaceRenderState {
   readonly parentModel?: string | undefined;
   readonly pane: ProfileWorkspacePane;
   readonly profileIndex: number;
+  readonly saveFocused?: boolean | undefined;
   readonly candidateIndex: number;
   readonly fieldIndex: number;
   readonly draft: ProfileRouteDraft;
@@ -94,14 +95,11 @@ export const workspaceCandidateSummary = (
 const expanded = (state: ProfileWorkspaceRenderState): ReadonlySet<number> =>
   state.expandedCandidates ?? new Set(state.advancedExpanded ? [state.candidateIndex] : []);
 
-const profileLines = (
+const profileTableLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
-  height: number,
 ): ReadonlyArray<string> => {
-  const count = Math.max(1, height - 1);
-  const start = listWindowStart(PROFILE_IDS.length, state.profileIndex, count);
   const rows = PROFILE_IDS.map((profile, index) => {
     const selected = index === state.profileIndex;
     const draft = selected
@@ -110,7 +108,7 @@ const profileLines = (
     const first = draft.kind === "invalid" ? undefined : draft.candidates[0];
     return {
       profile,
-      selected,
+      selected: selected && !state.saveFocused,
       model: first?.model ?? (draft.kind === "invalid" ? "invalid" : "disabled"),
       effort: first
         ? `${candidateEffortLabel(profile, first, state.parentEffort)}${candidateFastModeApplied(first, state.parentModel) ? " ⚡" : ""}`
@@ -140,22 +138,48 @@ const profileLines = (
     const clipped = truncateToWidth(text, columns);
     return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
   };
+  return rows.map((row) => {
+    const marker = state.editedProfiles?.has(row.profile) ? theme.fg("accent", " ●") : "";
+    const prefix = `${row.selected ? ">" : " "} ${cell(row.profile + marker, profileWidth)} · `;
+    const columns = row.effort
+      ? [
+          ...(modelWidth > 0 ? [cell(row.model, modelWidth)] : []),
+          cell(row.effort, effortWidth),
+          ...(showRuntime ? [cell(row.runtime, runtimeWidth)] : []),
+          ...(showFallbacks ? [row.fallbacks] : []),
+        ]
+      : [row.model];
+    const line = truncateToWidth(prefix + columns.join(" · "), width);
+    return row.selected && state.pane === "profiles" ? theme.fg("accent", line) : line;
+  });
+};
+
+const profileLines = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  width: number,
+  height: number,
+): ReadonlyArray<string> => {
+  const save = truncateToWidth(
+    `${state.saveFocused ? ">" : " "} Save these profiles as a set…`,
+    width,
+  );
+  const lines = [
+    ...profileTableLines(state, theme, width),
+    ...(state.target.kind === "session"
+      ? [
+          "",
+          theme.fg("accent", theme.bold("Current Session")),
+          state.saveFocused && state.pane === "profiles" ? theme.fg("accent", save) : save,
+        ]
+      : []),
+  ];
+  const count = Math.max(1, height - 1);
+  const selected = state.saveFocused ? lines.length - 1 : state.profileIndex;
+  const start = listWindowStart(lines.length, selected, count);
   return [
     theme.fg(state.pane === "profiles" ? "accent" : "muted", theme.bold("Profiles")),
-    ...rows.slice(start, start + count).map((row) => {
-      const marker = state.editedProfiles?.has(row.profile) ? theme.fg("accent", " ●") : "";
-      const prefix = `${row.selected ? ">" : " "} ${cell(row.profile + marker, profileWidth)} · `;
-      const columns = row.effort
-        ? [
-            ...(modelWidth > 0 ? [cell(row.model, modelWidth)] : []),
-            cell(row.effort, effortWidth),
-            ...(showRuntime ? [cell(row.runtime, runtimeWidth)] : []),
-            ...(showFallbacks ? [row.fallbacks] : []),
-          ]
-        : [row.model];
-      const line = truncateToWidth(prefix + columns.join(" · "), width);
-      return row.selected && state.pane === "profiles" ? theme.fg("accent", line) : line;
-    }),
+    ...lines.slice(start, start + count),
   ];
 };
 
@@ -172,7 +196,7 @@ const editorLines = (
     state.parentEffort,
     state.parentModel,
     expanded(state),
-    state.target.kind === "session",
+    state.editedProfiles?.has(profile) ?? false,
   );
   const labelWidth = Math.max(
     0,
@@ -180,25 +204,26 @@ const editorLines = (
   );
   const lines: string[] = [];
   let selectedLine = 0;
-  let previousCandidate = -1;
+  let previousSection: string | undefined;
   rows.forEach((row, index) => {
-    if (row.candidateIndex !== previousCandidate) {
-      if (previousCandidate >= 0) lines.push("");
-      const candidate = state.draft.candidates[row.candidateIndex];
-      const label = profileRouteOptionLabel(row.candidateIndex);
-      lines.push(
-        theme.fg(
-          "accent",
-          theme.bold(
-            candidate
-              ? `${label}  ${workspaceCandidateSummary(candidate, profile, state.parentEffort, Math.max(0, width - visibleWidth(label) - 2), state.parentModel)}`
-              : state.draft.kind === "invalid"
-                ? "Invalid profile, add a model to repair"
-                : "Disabled profile",
+    const section = row.scope === "candidate" ? `candidate:${row.candidateIndex}` : row.scope;
+    if (section !== previousSection) {
+      if (previousSection !== undefined) lines.push("");
+      if (row.scope === "candidate") {
+        const candidate = state.draft.candidates[row.candidateIndex]!;
+        const label = profileRouteOptionLabel(row.candidateIndex);
+        lines.push(
+          theme.fg(
+            "accent",
+            theme.bold(
+              `${label}  ${workspaceCandidateSummary(candidate, profile, state.parentEffort, Math.max(0, width - visibleWidth(label) - 2), state.parentModel)}`,
+            ),
           ),
-        ),
-      );
-      previousCandidate = row.candidateIndex;
+        );
+      } else {
+        lines.push(theme.fg("accent", theme.bold(`Profile: ${profile}`)));
+      }
+      previousSection = section;
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
     const selected = index === state.fieldIndex && state.pane !== "profiles";
@@ -206,7 +231,7 @@ const editorLines = (
       ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${row.value}`
       : "";
     const text = truncateToWidth(
-      `${selected ? ">" : " "} ${row.label}${value}${row.fixed ? " · fixed" : ""}`,
+      `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
       width,
     );
     lines.push(selected ? theme.fg("accent", text) : row.fixed ? theme.fg("muted", text) : text);
@@ -214,12 +239,38 @@ const editorLines = (
   const limit = Math.max(0, height - 1);
   const start = listWindowStart(lines.length, selectedLine, limit);
   return [
-    theme.fg(
-      state.pane === "profiles" ? "muted" : "accent",
-      theme.bold(`${profile} · ${profileRouteOptionLabel(state.candidateIndex)}`),
-    ),
+    theme.fg(state.pane === "profiles" ? "muted" : "accent", theme.bold(profile)),
     ...lines.slice(start, start + limit),
   ];
+};
+
+const compactLines = (state: ProfileWorkspaceRenderState, width: number): ReadonlyArray<string> => {
+  if (state.pane === "profiles" && state.saveFocused)
+    return ["Current Session", "> Save these profiles as a set…"];
+  const profile = selectedProfile(state);
+  const candidate = state.draft.candidates[state.candidateIndex];
+  const scope =
+    state.target.kind === "profile-set"
+      ? `${state.target.set.scope === "project" ? "Project" : "Global"} · `
+      : "";
+  const prefix = `${scope}${profile} · `;
+  const summary = candidate
+    ? workspaceCandidateSummary(
+        candidate,
+        profile,
+        state.parentEffort,
+        Math.max(0, width - visibleWidth(prefix)),
+        state.parentModel,
+      )
+    : state.draft.kind;
+  const selected = profileWorkspaceRows(
+    state.draft,
+    profile,
+    state.parentEffort,
+    state.parentModel,
+    expanded(state),
+  )[state.fieldIndex];
+  return [prefix + summary, ...(selected ? [`${selected.label}  ${selected.value}`] : [])];
 };
 
 export const profileWorkspaceHelpLines = (
@@ -239,7 +290,7 @@ export const profileWorkspaceHelpLines = (
     "Editing",
     `${keys.confirm} Open the selected field or Actions`,
     "m Model · e Reasoning · r Run with",
-    "a Actions · + Add fallback",
+    "a Manage selected candidate · + Add fallback",
     "/ Search profiles",
     "",
     "Changes save automatically to the named editing target.",
@@ -282,7 +333,7 @@ export const renderProfileWorkspace = (
             [
               `${keys.confirm} Open`,
               state.target.kind === "session" ? "Tab Saved profiles" : "Tab Current Session",
-              "m Model · a Actions · ? Help",
+              "m Model · a Manage · ? Help",
               `${keys.cancel} ${back}`,
             ],
             [
@@ -322,38 +373,7 @@ export const renderProfileWorkspace = (
           inner,
         );
       }
-      if (bodyHeight <= 4) {
-        const profile = selectedProfile(state);
-        const candidate = state.draft.candidates[state.candidateIndex];
-        const scope =
-          state.target.kind === "profile-set"
-            ? `${state.target.set.scope === "project" ? "Project" : "Global"} · `
-            : "";
-        const prefix = `${scope}${profile} · `;
-        const summary = candidate
-          ? workspaceCandidateSummary(
-              candidate,
-              profile,
-              state.parentEffort,
-              Math.max(0, inner - visibleWidth(prefix)),
-              state.parentModel,
-            )
-          : state.draft.kind;
-        const selected = profileWorkspaceRows(
-          state.draft,
-          profile,
-          state.parentEffort,
-          state.parentModel,
-          expanded(state),
-          state.target.kind === "session",
-        )[state.fieldIndex];
-        return framedFill(
-          frame,
-          [prefix + summary, ...(selected ? [`${selected.label}  ${selected.value}`] : [])],
-          bodyHeight,
-          inner,
-        );
-      }
+      if (bodyHeight <= 4) return framedFill(frame, compactLines(state, inner), bodyHeight, inner);
       const notices: string[] = [];
       if (state.target.kind === "profile-set")
         notices.push(

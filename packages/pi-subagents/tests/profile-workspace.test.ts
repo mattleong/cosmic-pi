@@ -9,10 +9,7 @@ import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import type { JsonObject } from "pi-cosmic-core";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
-import {
-  candidateFieldRows,
-  type ProfileWorkspaceField,
-} from "../src/settings/ui/profile-workspace-model.ts";
+import type { ProfileWorkspaceDraftAction } from "../src/settings/ui/profile-workspace-actions.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
@@ -124,11 +121,21 @@ const openFields = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("\u001b[C");
 };
 
-const openActions = (component: ProfileWorkspaceComponent): void => component.handleInput("a");
-const chooseDelete = (component: ProfileWorkspaceComponent): void => {
-  openActions(component);
-  component.handleInput("j");
-  component.handleInput("j");
+const chooseAction = (
+  component: ProfileWorkspaceComponent,
+  action: ProfileWorkspaceDraftAction,
+): void => {
+  component.handleInput("a");
+  component.handleInput("/");
+  for (const key of action) component.handleInput(key);
+  component.handleInput("\r");
+};
+const chooseDelete = (component: ProfileWorkspaceComponent): void =>
+  chooseAction(component, "remove");
+
+const openUndo = (component: ProfileWorkspaceComponent): void => {
+  component.handleInput("l");
+  component.handleInput("G");
   component.handleInput("\r");
 };
 
@@ -154,44 +161,30 @@ const modelEditor = (count = 3) => {
     baseOptions({ inspection: inspection(), saveDraft }),
   );
   openFields(component);
-  const selectField = (field: ProfileWorkspaceField): void => {
-    const selected = component.getPosition().initialCandidateIndex;
-    const rows = candidates.flatMap((candidate, candidateIndex) =>
-      candidateFieldRows(candidate, "generalist", "high", undefined, false, {
-        index: candidateIndex,
-        count: candidates.length,
-      }).map((row) => ({ ...row, candidateIndex })),
-    );
-    const index = rows.findIndex((row) => row.field === field && row.candidateIndex === selected);
-    if (index < 0) throw new Error(`Missing field ${field}`);
-    component.handleInput("g");
-    component.handleInput("g");
-    for (let step = 0; step < index; step += 1) component.handleInput("\u001b[B");
-    component.handleInput("\r");
-  };
-  return { component, original, saveDraft, selectField, candidates: () => candidates };
+  const act = (action: ProfileWorkspaceDraftAction): void => chooseAction(component, action);
+  return { component, original, saveDraft, act, candidates: () => candidates };
 };
 
-describe("direct profile model actions", () => {
+describe("candidate menu actions", () => {
   effectTest("keeps the moved model selected across repeated moves and saves", function* () {
     const editor = modelEditor();
     const [first, second, third] = editor.original;
-    editor.selectField("move-down");
+    editor.act("move-down");
     yield* step(settle);
     expect(editor.candidates()).toEqual([second, first, third]);
 
-    editor.component.handleInput("\r");
+    editor.act("move-down");
     yield* step(settle);
     expect(editor.candidates()).toEqual([second, third, first]);
 
-    editor.selectField("move-up");
+    editor.act("move-up");
     yield* step(settle);
     expect(editor.candidates()).toEqual([second, first, third]);
-    editor.component.handleInput("\r");
+    editor.act("move-up");
     yield* step(settle);
     expect(editor.candidates()).toEqual(editor.original);
 
-    editor.selectField("remove");
+    editor.act("remove");
     editor.component.handleInput("\r");
     yield* step(settle);
     expect(editor.candidates()).toEqual([second, third]);
@@ -199,12 +192,14 @@ describe("direct profile model actions", () => {
 
   effectTest("does not save moves beyond the first or last position", function* () {
     const editor = modelEditor(2);
-    editor.selectField("move-up");
+    editor.act("move-up");
     expect(editor.saveDraft).not.toHaveBeenCalled();
-    editor.selectField("move-down");
+    editor.component.handleInput("\u001b");
+    editor.component.handleInput("\u001b");
+    editor.act("move-down");
     yield* step(settle);
     editor.saveDraft.mockClear();
-    editor.component.handleInput("\r");
+    editor.act("move-down");
     expect(editor.saveDraft).not.toHaveBeenCalled();
     expect(editor.candidates()).toEqual([...editor.original].reverse());
   });
@@ -213,19 +208,19 @@ describe("direct profile model actions", () => {
     "requires confirmation, allows cancellation, and selects a remaining model after deletion",
     function* () {
       const editor = modelEditor();
-      editor.selectField("move-down");
+      editor.act("move-down");
       yield* step(settle);
       editor.saveDraft.mockClear();
-      editor.selectField("remove");
+      editor.act("remove");
       expect(editor.saveDraft).not.toHaveBeenCalled();
       editor.component.handleInput("\u001b");
       expect(editor.saveDraft).not.toHaveBeenCalled();
 
-      editor.selectField("remove");
+      editor.act("remove");
       editor.component.handleInput("\r");
       yield* step(settle);
       expect(editor.candidates()).toEqual([editor.original[1], editor.original[2]]);
-      editor.selectField("remove");
+      editor.act("remove");
       editor.component.handleInput("\r");
       yield* step(settle);
       expect(editor.candidates()).toEqual([editor.original[2]]);
@@ -236,11 +231,7 @@ describe("direct profile model actions", () => {
     "omits single-model moves and disables the profile only after confirmed deletion",
     function* () {
       const editor = modelEditor(1);
-      const fields = candidateFieldRows(editor.original[0]!, "generalist").map((row) => row.field);
-      expect(fields).not.toContain("move-up");
-      expect(fields).not.toContain("move-down");
-      expect(fields).toContain("remove");
-      editor.selectField("remove");
+      editor.act("remove");
       expect(editor.saveDraft).not.toHaveBeenCalled();
       editor.component.handleInput("\r");
       yield* step(settle);
@@ -426,14 +417,15 @@ describe("editing visit integration", () => {
       yield* step(settle);
       expect(current.session.overrides.generalist?.candidates).toEqual([]);
       expect(onInspection).toHaveBeenCalledOnce();
-      component.handleInput("a");
-      component.handleInput("j");
-      component.handleInput("\r");
+      openUndo(component);
       expect(saveDraft).toHaveBeenCalledOnce();
       component.handleInput("\r");
       yield* step(settle);
       expect(current.session.overrides.generalist?.candidates).toEqual([candidate]);
       expect(editVisit.isEdited({ kind: "session" }, "generalist", current)).toBe(false);
+      openUndo(component);
+      expect(component.hasOverlay).toBe(false);
+      expect(saveDraft).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -484,9 +476,7 @@ describe("editing visit integration", () => {
       chooseDelete(component);
       component.handleInput("\r");
       yield* step(settle);
-      component.handleInput("a");
-      component.handleInput("j");
-      component.handleInput("\r");
+      openUndo(component);
       component.handleInput("\r");
       yield* step(settle);
       expect(saveDraft.mock.calls[1]?.[3]).toEqual({ sourceVersion: 6, declaration: [raw] });
@@ -506,10 +496,8 @@ describe("editing visit integration", () => {
     component.handleInput("\r");
     yield* step(settle);
     expect(editVisit.isEdited({ kind: "session" }, "generalist", changed)).toBe(false);
-    component.handleInput("a");
-    component.handleInput("j");
-    component.handleInput("\r");
-    expect(component.isBusy).toBe(true);
+    openUndo(component);
+    expect(component.isBusy).toBe(false);
     expect(saveDraft).toHaveBeenCalledOnce();
   });
 });
@@ -641,7 +629,7 @@ describe("profile workspace disposal", () => {
           }),
         );
         component.handleInput(shortcut);
-        component.handleInput(shortcut === "e" ? "\u001b[A" : "\u001b[B");
+        if (shortcut === "e") component.handleInput("\u001b[A");
         component.handleInput("\u001b[C");
         expect(saveDraft).not.toHaveBeenCalled();
         component.handleInput("\r");

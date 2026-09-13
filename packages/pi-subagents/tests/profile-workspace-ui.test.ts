@@ -332,6 +332,8 @@ describe("profile workspace state projection", () => {
     const states: ReadonlyArray<Partial<ProfileWorkspaceRenderState>> = [
       {},
       { pane: "fields", advancedExpanded: true },
+      { pane: "profiles", saveFocused: true },
+      { pane: "fields", saveFocused: true },
       {
         pendingConfirmation: {
           title: "Undo changes?",

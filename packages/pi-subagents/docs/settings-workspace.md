@@ -14,12 +14,14 @@ The header reads `Editing Current Session`, without an origin or change count. S
 
 One dashboard contains Current Session and Saved profiles tabs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. Wide terminals show profiles beside their fields; narrow layouts keep the same editing target and scope visible.
 
-Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Move up and Move down reorder candidates. Delete model requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action. Disabled profiles retain an Add model path.
+Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Each section ends with Manage Primary or Manage Fallback N. Its menu contains only Duplicate, valid Move up/Move down directions, and Delete. Delete requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action.
+
+Add fallback and Undo changes appear once under Profile: name. Disabled profiles show Add model there instead. Undo is unavailable when there are no own undoable changes. Below the profile list in the left pane, a Current Session section contains Save these profiles as a set, which captures all seven profiles. Up/Down selects it and Enter opens the save form; `s` opens the same form from either pane. Moving onto this action preserves the selected profile and its field position. Candidate-field memory is separate from profile/session control selection.
 
 Up/k and Down/j navigate rows without writing. Right/l focuses fields; Left/h focuses the profile list. Enter opens the selected editor or picker. Tab and Shift+Tab switch directly between Current Session and Saved profiles, preserving each target's position. Pickers and forms keep their own controls, including j/k row navigation. Esc closes the nearest picker or backs up one level. Persistent footer hints show the other tab's name; `?` opens navigation help. Ordinary cancellation is silent and leaves the route unchanged.
 
 - `m`, `e`, and `r` open Model, Reasoning, and Run with.
-- `a` opens Actions. `+` adds a fallback only after model selection; canceling creates nothing.
+- `a` opens the selected candidate's Manage menu. It does nothing while a profile/session control is selected. `+` adds a fallback only after model selection; canceling creates nothing.
 - `[` and `]` move between candidates.
 - `/` searches profiles. `/subagents profiles worker` opens worker directly.
 
@@ -43,7 +45,7 @@ The probe preserves aliases and context suffixes such as `[1m]`. Its selector is
 
 The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration.
 
-Enter edits the selected set, `u` opens Use, `a` opens More, and Esc goes Back. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
+Enter edits the selected set, `u` opens Use, `a` opens More, and Esc closes the library. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
 
 More contains Make/clear default, Copy, Rename, and Delete. Clearing the Project default falls back to Global; clearing Global falls back to built-ins. The dashboard keeps editors and internal forms in one custom host lifetime rather than closing and reopening host screens.
 

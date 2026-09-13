@@ -6,7 +6,6 @@ import type {
   CandidateUpdate,
   ProfileRouteDraft,
   ProfileSettingsInspection,
-  ProfileSettingsScope,
   ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 import {
@@ -129,9 +128,6 @@ export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly draft: ProfileRouteDraft;
-  readonly scope: ProfileSettingsScope;
-  readonly hasOwnDeclaration: boolean;
-  readonly canUndo?: boolean | undefined;
   readonly target: ProfileWorkspaceTarget;
   readonly select: (action: ProfileWorkspaceDraftAction, destructive: boolean) => void;
   readonly cancel: () => void;
@@ -144,7 +140,7 @@ export const makeRouteActionsSelector = (
   return new SearchableSelectPage<string>({
     theme: options.theme,
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · Actions`,
-    title: `Profile actions · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)}`,
+    title: `Manage ${profileRouteOptionLabel(options.candidateIndex)} · ${options.profile}`,
     subtitle: targetLabel(options.target),
     choices: choices.map((choice) => ({
       value: choice.action,

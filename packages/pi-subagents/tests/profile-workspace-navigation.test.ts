@@ -124,18 +124,58 @@ describe("fixed-target profile workspace", () => {
     const session = harness();
     session.component.handleInput("s");
     expect(session.close).toHaveBeenCalledWith(expect.objectContaining({ action: "save-session" }));
-    const row = harness({ initialFocus: "fields" });
+    const row = harness({ initialFocus: "profiles" });
     row.component.handleInput("G");
     row.component.handleInput("\r");
     expect(row.close).toHaveBeenCalledWith(expect.objectContaining({ action: "save-session" }));
     const saved = harness({
       target: { kind: "profile-set", set: { scope: "global", name: "default" } },
-      initialFocus: "fields",
+      initialFocus: "profiles",
     });
     saved.component.handleInput("s");
     saved.component.handleInput("G");
     expect(saved.close).not.toHaveBeenCalled();
-    expect(saved.component.getPosition().initialField).not.toBe("save-session");
+    expect(saved.component.getPosition().initialSaveFocused).toBe(false);
+  });
+
+  it("keeps session-save focus separate from the selected profile and candidate field", () => {
+    const h = harness({
+      initialFocus: "fields",
+      initialCandidateIndex: 1,
+      initialField: "context",
+    });
+    h.component.handleInput("h");
+    h.component.handleInput("j"); // Save follows generalist in the profile pane.
+    expect(h.component.getPosition()).toMatchObject({
+      initialSaveFocused: true,
+      initialProfile: "generalist",
+      initialCandidateIndex: 1,
+      initialField: "context",
+    });
+    h.component.handleInput("a");
+    expect(h.component.hasOverlay).toBe(false);
+    h.component.handleInput("l");
+    expect(h.component.getPosition().initialField).toBe("context");
+    expect(h.close).not.toHaveBeenCalled();
+    h.component.handleInput("h");
+    h.component.handleInput("k");
+    expect(h.component.getPosition()).toMatchObject({
+      initialSaveFocused: false,
+      initialProfile: "generalist",
+      initialField: "context",
+    });
+    h.component.handleInput("G");
+    const restored = harness(h.component.getPosition());
+    expect(restored.component.getPosition()).toMatchObject({
+      initialSaveFocused: true,
+      initialField: "context",
+    });
+    restored.component.handleInput("\r");
+    expect(restored.close).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "save-session" }),
+    );
+    expect(h.saveDraft).not.toHaveBeenCalled();
+    expect(restored.saveDraft).not.toHaveBeenCalled();
   });
 
   effectTest("moves candidate identity together with its remembered advanced fields", function* () {
@@ -145,8 +185,8 @@ describe("fixed-target profile workspace", () => {
       initialCandidateIndex: 1,
     });
     h.component.handleInput("a");
-    h.component.handleInput("j");
-    h.component.handleInput("j");
+    h.component.handleInput("/");
+    for (const key of "move-up") h.component.handleInput(key);
     h.component.handleInput("\r");
     yield* step(tick);
     expect(h.candidates()).toEqual([second, first]);
@@ -241,12 +281,44 @@ describe("fixed-target profile workspace", () => {
     });
   });
 
+  it("remembers profile controls separately from each candidate's field", () => {
+    const h = harness({
+      initialFocus: "fields",
+      initialCandidateIndex: 1,
+      initialField: "context",
+    });
+    h.component.handleInput("G");
+    expect(h.component.getPosition()).toMatchObject({
+      initialField: "reset",
+      initialCandidateIndex: 1,
+    });
+    h.component.handleInput("k");
+    expect(h.component.getPosition().initialField).toBe("add");
+    h.component.handleInput("h");
+    h.component.handleInput("k");
+    h.component.handleInput("j");
+    h.component.handleInput("l");
+    expect(h.component.getPosition().initialField).toBe("add");
+    h.component.handleInput("[");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 0,
+      initialField: "model",
+    });
+    h.component.handleInput("]");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 1,
+      initialField: "context",
+      initialAdvancedExpanded: true,
+    });
+    expect(h.saveDraft).not.toHaveBeenCalled();
+  });
+
   it("walks continuously through candidate fields without a candidate page", () => {
     const h = harness({ initialFocus: "fields" });
     h.component.handleInput("G");
     expect(h.component.getPosition()).toMatchObject({
-      initialCandidateIndex: 1,
-      initialField: "save-session",
+      initialCandidateIndex: 0,
+      initialField: "reset",
     });
     h.component.handleInput("g");
     h.component.handleInput("g");
@@ -305,13 +377,27 @@ describe("fixed-target profile workspace", () => {
     },
   );
 
-  effectTest("opens the original Actions menu directly and adds from there", function* () {
+  effectTest("adds from profile controls without exposing Add in candidate menus", function* () {
     const h = harness();
     h.component.handleInput("a");
+    h.component.handleInput("/");
+    for (const key of "add") h.component.handleInput(key);
+    h.component.handleInput("\r");
+    expect(h.loadModelPicker).not.toHaveBeenCalled();
+    expect(h.saveDraft).not.toHaveBeenCalled();
+    h.component.handleInput("\u001b");
+    h.component.handleInput("\u001b");
+    h.component.handleInput("l");
+    h.component.handleInput("G");
+    h.component.handleInput("k");
+    expect(h.component.getPosition().initialField).toBe("add");
+    h.component.handleInput("a"); // A profile control must not manage the last candidate.
+    expect(h.component.hasOverlay).toBe(false);
     h.component.handleInput("\r");
     yield* step(tick);
     expect(h.loadModelPicker).toHaveBeenCalled();
     h.component.handleInput("\u001b");
+    expect(h.component.getPosition().initialField).toBe("add");
     expect(h.saveDraft).not.toHaveBeenCalled();
   });
 

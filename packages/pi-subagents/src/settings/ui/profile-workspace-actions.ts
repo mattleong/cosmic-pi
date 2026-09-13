@@ -34,26 +34,9 @@ export interface ProfileWorkspaceActionChoice {
 export const profileWorkspaceActionChoices = (input: {
   readonly draft: ProfileRouteDraft;
   readonly candidateIndex: number;
-  readonly scope: ProfileSettingsScope;
-  readonly hasOwnDeclaration: boolean;
-  readonly canUndo?: boolean | undefined;
 }): ReadonlyArray<ProfileWorkspaceActionChoice> => {
   const count = input.draft.candidates.length;
-  const resetAvailable = input.canUndo === true;
   return [
-    ...(count < MAX_PROFILE_CANDIDATES
-      ? [
-          {
-            action: "add" as const,
-            label: count === 0 ? "Add Primary" : "Add fallback",
-            description:
-              count === 0
-                ? "Add the first choice for this profile"
-                : "Add a fallback after the existing choices",
-            destructive: false,
-          },
-        ]
-      : []),
     ...(count > 0 && count < MAX_PROFILE_CANDIDATES
       ? [
           {
@@ -90,16 +73,6 @@ export const profileWorkspaceActionChoices = (input: {
             action: "remove" as const,
             label: "Delete",
             description: "Remove it and keep the remaining choices in order",
-            destructive: true,
-          },
-        ]
-      : []),
-    ...(resetAvailable
-      ? [
-          {
-            action: "reset" as const,
-            label: "Undo changes",
-            description: "Restore this profile to the start of this editing visit",
             destructive: true,
           },
         ]

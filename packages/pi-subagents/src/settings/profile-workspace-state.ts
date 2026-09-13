@@ -23,12 +23,14 @@ import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
 
 type Selection = {
+  control: ProfileWorkspaceField | undefined;
   candidateIndex: number;
   fields: Map<number, ProfileWorkspaceField>;
   expanded: Set<number>;
 };
 export interface ProfileWorkspaceSelectionMemory {
   readonly profile: ProfileId;
+  readonly control?: ProfileWorkspaceField | undefined;
   readonly candidateIndex: number;
   readonly fields: ReadonlyArray<readonly [number, ProfileWorkspaceField]>;
   readonly expanded: ReadonlyArray<number>;
@@ -43,6 +45,7 @@ export abstract class ProfileWorkspaceState {
   protected inspection: ProfileSettingsInspection;
   protected readonly scope: ProfileSettingsScope;
   protected pane: "profiles" | "fields" = "profiles";
+  protected saveFocused = false;
   protected profileIndex: number;
   protected candidateIndex = 0;
   protected fieldIndex = 0;
@@ -75,8 +78,10 @@ export abstract class ProfileWorkspaceState {
     this.inspection = options.inspection;
     this.editVisit = options.editVisit ?? new ProfileEditVisit(options.inspection);
     this.scope = profileWorkspaceScope(options.target);
+    this.saveFocused = options.target.kind === "session" && options.initialSaveFocused === true;
     for (const saved of options.initialSelections ?? []) {
       this.selections.set(saved.profile, {
+        control: saved.control,
         candidateIndex: saved.candidateIndex,
         fields: new Map(saved.fields),
         expanded: new Set(saved.expanded),
@@ -118,6 +123,7 @@ export abstract class ProfileWorkspaceState {
       this.selections,
       ([profile, selection]) => ({
         profile,
+        control: selection.control,
         candidateIndex: selection.candidateIndex,
         fields: Array.from(selection.fields, ([index, field]) => [index, field] as const),
         expanded: Array.from(selection.expanded),
@@ -125,6 +131,7 @@ export abstract class ProfileWorkspaceState {
     );
     return {
       initialSelections,
+      initialSaveFocused: this.saveFocused,
       initialProfile: this.profile(),
       initialCandidateIndex: this.candidateIndex,
       initialField: this.rows()[this.fieldIndex]?.field ?? "model",
@@ -167,7 +174,7 @@ export abstract class ProfileWorkspaceState {
   protected selection(): Selection {
     let selection = this.selections.get(this.profile());
     if (!selection) {
-      selection = { candidateIndex: 0, fields: new Map(), expanded: new Set() };
+      selection = { control: undefined, candidateIndex: 0, fields: new Map(), expanded: new Set() };
       this.selections.set(this.profile(), selection);
     }
     return selection;
@@ -186,7 +193,6 @@ export abstract class ProfileWorkspaceState {
       this.options.parentEffort,
       this.options.parentModel,
       this.selection().expanded,
-      this.options.target.kind === "session",
     );
   }
   protected reconcile(): void {
@@ -209,14 +215,19 @@ export abstract class ProfileWorkspaceState {
     const row = this.rows()[this.fieldIndex];
     const selection = this.selection();
     selection.candidateIndex = this.candidateIndex;
-    if (row) selection.fields.set(row.candidateIndex, row.field);
+    if (row?.scope === "candidate") {
+      selection.fields.set(row.candidateIndex, row.field);
+      selection.control = undefined;
+    } else if (row) selection.control = row.field;
   }
   protected selectField(field: ProfileWorkspaceField): void {
     if (["context", "openaiFastMode", "closeOnReport"].includes(field))
       this.advancedExpanded = true;
     const rows = this.rows();
     const index = rows.findIndex(
-      (row) => row.candidateIndex === this.candidateIndex && row.field === field,
+      (row) =>
+        row.field === field &&
+        (row.scope !== "candidate" || row.candidateIndex === this.candidateIndex),
     );
     this.fieldIndex =
       index >= 0
@@ -227,20 +238,36 @@ export abstract class ProfileWorkspaceState {
           );
   }
   protected selectCandidate(index: number): void {
+    this.saveFocused = false;
     this.rememberSelection();
     this.candidateIndex = Math.max(0, Math.min(this.draft().candidates.length - 1, index));
     this.selectField(this.selection().fields.get(this.candidateIndex) ?? "model");
   }
+  protected selectProfileRow(index: number): void {
+    this.rememberSelection();
+    const last = PROFILE_IDS.length - (this.options.target.kind === "session" ? 0 : 1);
+    const selected = Math.max(0, Math.min(last, index));
+    if (selected === PROFILE_IDS.length) {
+      this.saveFocused = true;
+    } else {
+      this.profileIndex = selected;
+      this.resetSelectionForProfile();
+    }
+  }
   protected moveRow(index: number): void {
     this.rememberSelection();
     this.fieldIndex = Math.max(0, Math.min(this.rows().length - 1, index));
-    this.candidateIndex = this.rows()[this.fieldIndex]?.candidateIndex ?? 0;
+    const row = this.rows()[this.fieldIndex];
+    if (row?.scope === "candidate") this.candidateIndex = row.candidateIndex;
     this.rememberSelection();
   }
   protected resetSelectionForProfile(): void {
+    this.saveFocused = false;
     this.candidateIndex = this.selection().candidateIndex;
     this.reconcile();
-    this.selectField(this.selection().fields.get(this.candidateIndex) ?? "model");
+    this.selectField(
+      this.selection().control ?? this.selection().fields.get(this.candidateIndex) ?? "model",
+    );
     this.pendingAction = undefined;
     this.message = undefined;
   }

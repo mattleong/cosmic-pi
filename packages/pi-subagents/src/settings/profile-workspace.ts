@@ -7,7 +7,6 @@ import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchabl
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import {
-  hasOwnProfileRouteDeclaration,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileWorkspaceTarget,
@@ -60,6 +59,7 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly initialField?: ProfileWorkspaceField | undefined;
   readonly initialCandidateIndex?: number | undefined;
   readonly initialFocus?: ProfileWorkspacePane | undefined;
+  readonly initialSaveFocused?: boolean | undefined;
   readonly initialAdvancedExpanded?: boolean | undefined;
   readonly initialSelections?: ReadonlyArray<ProfileWorkspaceSelectionMemory> | undefined;
   readonly preferredPiModel: () => string | undefined;
@@ -93,20 +93,14 @@ export class ProfileWorkspaceComponent
   implements Component, Focusable
 {
   protected openActions(): void {
+    if (this.pane === "profiles" && this.saveFocused) return;
+    if (!this.draft().candidates[this.candidateIndex]) return;
+    if (this.pane === "fields" && this.rows()[this.fieldIndex]?.scope !== "candidate") return;
     this.selectPage = makeRouteActionsSelector({
       theme: this.options.theme,
       profile: this.profile(),
       candidateIndex: this.candidateIndex,
       draft: this.draft(),
-      scope: this.scope,
-      hasOwnDeclaration: hasOwnProfileRouteDeclaration(
-        this.inspection,
-        this.options.target,
-        this.profile(),
-      ),
-      canUndo: !(
-        "error" in this.editVisit.undoDraft(this.options.target, this.profile(), this.inspection)
-      ),
       target: this.options.target,
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
@@ -140,8 +134,20 @@ export class ProfileWorkspaceComponent
   protected openSelectedField(): void {
     const row = this.rows()[this.fieldIndex];
     if (!row || this.busy) return;
-    if (row.field === "save-session") {
-      this.saveSession();
+    if (row.field === "reset") {
+      if (this.editVisit.isEdited(this.options.target, this.profile(), this.inspection))
+        this.arm("reset");
+      else this.setMessage("info", "No undoable changes from this visit.");
+      this.renderSoon();
+      return;
+    }
+    if (row.fixed) {
+      this.setMessage("info", row.fixedReason ?? "Nothing to change");
+      this.renderSoon();
+      return;
+    }
+    if (row.field === "add") {
+      this.performDraftAction("add");
       return;
     }
     if (row.field === "actions") {
@@ -159,23 +165,7 @@ export class ProfileWorkspaceComponent
       if (row.field === "model") this.performDraftAction("add");
       return;
     }
-    if (row.fixed) {
-      this.setMessage(
-        "info",
-        row.fixedReason ?? `${row.label.trim()} cannot be changed for this selection.`,
-      );
-      this.renderSoon();
-      return;
-    }
     const field = row.field;
-    if (field === "move-up" || field === "move-down") {
-      this.performDraftAction(field);
-      return;
-    }
-    if (field === "remove") {
-      this.arm("remove");
-      return;
-    }
     if (field === "model") {
       this.openModelPicker(candidate);
       return;
@@ -206,7 +196,8 @@ export class ProfileWorkspaceComponent
 
   protected forward(): void {
     this.message = undefined;
-    if (this.pane === "profiles") this.pane = "fields";
+    if (this.pane === "profiles" && this.saveFocused) this.saveSession();
+    else if (this.pane === "profiles") this.pane = "fields";
     else this.openSelectedField();
     this.keymap.resetChord();
     this.renderSoon();
@@ -216,9 +207,7 @@ export class ProfileWorkspaceComponent
   protected moveToEndpoint(action: "first" | "last"): void {
     const last = action === "last";
     if (this.pane === "profiles") {
-      this.rememberSelection();
-      this.profileIndex = last ? PROFILE_IDS.length - 1 : 0;
-      this.resetSelectionForProfile();
+      this.selectProfileRow(last ? PROFILE_IDS.length : 0);
     } else this.moveRow(last ? this.rows().length - 1 : 0);
   }
 
@@ -241,6 +230,7 @@ export class ProfileWorkspaceComponent
       return true;
     }
     if (key === "m" || key === "e" || key === "r") {
+      this.saveFocused = false;
       this.selectField(key === "m" ? "model" : key === "e" ? "effort" : "runWith");
       this.pane = "fields";
       this.openSelectedField();
@@ -312,12 +302,7 @@ export class ProfileWorkspaceComponent
     const steps = pageSteps(this.options.getHeight() - 8);
     const move = (offset: number): void => {
       if (this.pane === "profiles") {
-        this.rememberSelection();
-        this.profileIndex = Math.max(
-          0,
-          Math.min(PROFILE_IDS.length - 1, this.profileIndex + offset),
-        );
-        this.resetSelectionForProfile();
+        this.selectProfileRow((this.saveFocused ? PROFILE_IDS.length : this.profileIndex) + offset);
       } else this.moveRow(this.fieldIndex + offset);
       this.message = undefined;
     };
@@ -429,6 +414,7 @@ export class ProfileWorkspaceComponent
         parentModel: this.options.parentModel,
         pane: this.pane,
         profileIndex: this.profileIndex,
+        saveFocused: this.saveFocused,
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,
         draft,
