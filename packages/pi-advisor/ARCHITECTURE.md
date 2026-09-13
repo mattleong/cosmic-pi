@@ -1,5 +1,7 @@
 # Advisor architecture
 
+Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
+
 ## Purpose and behavior
 
 `pi-advisor` runs a bounded read-only second-model review. Off means no automatic work; on means Advisor may intervene on evidence-backed material issues. Explicit one-off review remains available while off. Ordinary progress turns only ingest observations and never synchronously checkpoint or wait. Final review may use a hard 10-second barrier. Conservative trajectory timers may request asynchronous perspectives, and verified safe stalls may use abort/recovery.

@@ -1,5 +1,7 @@
 # Settings workspace
 
+Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
+
 Part of the [pi-subagents](../README.md) architecture documentation. Routing policy is in [routing.md](routing.md).
 
 ## Current Session

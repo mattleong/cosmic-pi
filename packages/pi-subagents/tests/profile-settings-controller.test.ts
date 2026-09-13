@@ -183,7 +183,7 @@ const setup = (
     custom: vi.fn((factory: (...args: unknown[]) => DisposableComponent) => {
       const closed = Deferred.makeUnsafe<OverlayResult>();
       const component = factory(
-        { terminal: { rows: 30 }, requestRender: vi.fn() },
+        { terminal: { columns: 120, rows: 30 }, requestRender: vi.fn() },
         theme,
         {
           matches: (data: string, id: string) =>

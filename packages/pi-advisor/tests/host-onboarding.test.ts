@@ -1,7 +1,8 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, OverlayOptions } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import { vi } from "vitest";
 import { selectAdvisorOnboardingAtHostBoundary } from "../src/boundary/host-onboarding.ts";
 
@@ -22,6 +23,8 @@ const context = (options: {
   const models = [...(options.models ?? [])];
   const scoped = [...(options.scoped ?? [])];
   const stack: Component[] = [];
+  const terminal = { columns: 160, rows: 40 };
+  let viewportOptions: OverlayOptions | undefined;
   const done = vi.fn();
   if (options.cleanupFailure === "done")
     done.mockImplementation(() => {
@@ -51,8 +54,10 @@ const context = (options: {
     Effect.runPromise(
       Effect.callback((resume) => {
         let closed = false;
-        const tuiFixture = { terminal: { rows: 14 }, requestRender: vi.fn(), showOverlay };
-        // SAFETY: The picker reads only terminal rows and requestRender from this TUI fixture.
+        const placement = customOptions?.overlayOptions;
+        viewportOptions = Predicate.isFunction(placement) ? placement() : placement;
+        const tuiFixture = { terminal, requestRender: vi.fn(), showOverlay };
+        // SAFETY: The picker reads terminal dimensions, requestRender, and showOverlay from this TUI fixture.
         const tui = tuiFixture as never;
         const keybindingsFixture = { matches: () => false, getKeys: () => [] };
         // SAFETY: The picker reads only matches and getKeys from this keybinding fixture.
@@ -87,6 +92,10 @@ const context = (options: {
     modelRegistry: { getAvailable: () => models },
     ui: { custom, notify: vi.fn(), select: vi.fn() },
     stack,
+    terminal,
+    get viewportOptions() {
+      return viewportOptions;
+    },
     done,
     showOverlay,
     get mount() {
@@ -104,6 +113,42 @@ const context = (options: {
 };
 
 describe("Advisor model onboarding", () => {
+  it.effect("resizes the mounted picker without losing the selected model", () =>
+    Effect.gen(function* () {
+      const models = Array.from({ length: 40 }, (_, index) => ({
+        provider: "test",
+        id: `model-${String(index).padStart(2, "0")}`,
+      }));
+      const h = context({ inputs: [], models });
+      const pending = Effect.runPromise(selectAdvisorOnboardingAtHostBoundary(h));
+      yield* Effect.promise(() => vi.waitFor(() => expect(h.component).toBeDefined()));
+      const component = h.component!;
+      const viewport = h.viewportOptions!;
+      component.render(144);
+      for (let index = 0; index < 30; index++) component.handleInput?.("j");
+      for (const [columns, rows, width, height] of [
+        [80, 18, 80, 18],
+        [160, 40, 144, 36],
+        [124, 40, 124, 40],
+      ]) {
+        h.terminal.columns = columns!;
+        h.terminal.rows = rows!;
+        expect(viewport.width).toBe(width);
+        expect(viewport.maxHeight).toBe(height);
+        component.invalidate();
+        const lines = component.render(width!);
+        expect(lines.length).toBeLessThanOrEqual(height!);
+        expect(lines.join("\n")).toContain("model-30");
+        expect(h.component).toBe(component);
+      }
+      component.handleInput?.("\r");
+      expect(yield* Effect.promise(() => pending)).toEqual({
+        type: "model",
+        provider: "test",
+        model: "model-30",
+      });
+    }),
+  );
   it.effect("starts scoped and can select from all authenticated models with Tab", () =>
     Effect.gen(function* () {
       const models = [

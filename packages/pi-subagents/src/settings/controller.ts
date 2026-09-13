@@ -4,6 +4,7 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
@@ -112,13 +113,15 @@ function openFleetManager(
     ctx.ui.notify("Subagents are not active. Run /reload, then reopen /subagents.", "warning");
     return Promise.resolve();
   }
+  const viewport = createScreenViewport();
   return ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
+      viewport.attach(() => tui.terminal);
       let unsubscribe = () => {};
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
-        getHeight: () => tui.terminal.rows,
+        getHeight: viewport.getHeight,
         getNow: synchronousNow,
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
         keybindingLabel: (id, fallback) =>
@@ -168,7 +171,7 @@ function openFleetManager(
         },
       };
     },
-    { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
+    { overlay: true, overlayOptions: viewport.overlayOptions },
   );
 }
 

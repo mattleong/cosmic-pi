@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isProjectTrusted } from "pi-cosmic-core";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import { SubagentConfigStoreError } from "../config/store.ts";
@@ -246,6 +247,7 @@ export function openProfileDashboard(
           },
         );
       };
+      const viewport = createScreenViewport();
       return ctx.ui
         .custom<ProfileWorkspaceCloseResult>(
           (tui, theme, keybindings, done) => {
@@ -258,6 +260,7 @@ export function openProfileDashboard(
               dashboard?.dispose();
               done(result);
             };
+            viewport.attach(() => tui.terminal);
             const baseOptions: ProfileWorkspaceOptions = {
               theme,
               inspection,
@@ -266,7 +269,7 @@ export function openProfileDashboard(
               ...position,
               parentEffort,
               preferredPiModel: () => preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
-              getHeight: () => tui.terminal.rows,
+              getHeight: viewport.getHeight,
               requestRender: () => tui.requestRender(),
               matchesKeybinding: (data, id) => keybindings.matches(data, id),
               keybindingLabel: (id, fallback) =>
@@ -330,7 +333,7 @@ export function openProfileDashboard(
           },
           {
             overlay: true,
-            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+            overlayOptions: viewport.overlayOptions,
           },
         )
         .catch(() => {

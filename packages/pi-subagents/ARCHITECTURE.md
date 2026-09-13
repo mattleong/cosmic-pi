@@ -1,5 +1,7 @@
 # Architecture
 
+Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
+
 `pi-subagents` is an Effect-managed extension for session-scoped, profile-routed background subagents across local and Herdr hosts. The root Pi session is depth 0 and owns one managed runtime, coordinator, profile/config state, backend registry, run tree, writer pools, completion outbox, and fleet projection for every descendant. Nested Pi processes are authenticated proxy clients. They never construct independent application services. Replacement or shutdown closes the complete tree leaf-first.
 
 ## Topic documentation

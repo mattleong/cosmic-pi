@@ -2,6 +2,7 @@ import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-work
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import {
@@ -58,6 +59,7 @@ const openAdvisorModelPickerAtHostBoundary = (
   scopedModels: ReadonlyArray<AdvisorPickerModel>,
 ): Effect.Effect<AdvisorPickerResult, PiCommandError> =>
   Effect.suspend(() => {
+    const viewport = createScreenViewport();
     let closing = false;
     let factoryInvoked = false;
     let doneInvoked = false;
@@ -102,6 +104,7 @@ const openAdvisorModelPickerAtHostBoundary = (
         close();
         return neutralComponent();
       }
+      viewport.attach(() => tui.terminal);
       return makeModelPickerPage({
         theme,
         breadcrumb: "/advisor › setup › model",
@@ -118,7 +121,7 @@ const openAdvisorModelPickerAtHostBoundary = (
             select: () => finish({ type: "not-now" }),
           },
         ],
-        getHeight: () => tui.terminal.rows,
+        getHeight: viewport.getHeight,
         requestRender: () => tui.requestRender(),
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
         keybindingLabel: (id, fallback) =>
@@ -148,7 +151,7 @@ const openAdvisorModelPickerAtHostBoundary = (
         ctx.ui
           .custom<AdvisorPickerResult>(factory, {
             overlay: true,
-            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+            overlayOptions: viewport.overlayOptions,
             onHandle: (handle) => {
               overlay = handle;
               if (closing || requested) finish(requested?.result);

@@ -2,10 +2,12 @@ import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-work
 import type { Component, Focusable, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback } from "pi-cosmic-core";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 
 export interface McpOverlayHost<A> {
   readonly tui: TUI;
+  readonly getHeight: () => number;
   readonly theme: Theme;
   readonly keybindings: KeybindingsManager;
   readonly signal: AbortSignal;
@@ -25,6 +27,7 @@ export const openMcpOverlay = <A>(
       return Effect.fail(
         boundaryError("unavailable", "not-sent", "MCP view requires the active TUI session."),
       );
+    const viewport = createScreenViewport();
     const controller = new AbortController();
     let closing = false;
     let factoryInvoked = false;
@@ -86,8 +89,10 @@ export const openMcpOverlay = <A>(
                 close();
                 return neutral();
               }
+              viewport.attach(() => tui.terminal);
               component = factory({
                 tui,
+                getHeight: viewport.getHeight,
                 theme,
                 keybindings,
                 signal: controller.signal,
@@ -119,7 +124,7 @@ export const openMcpOverlay = <A>(
             },
             {
               overlay: true,
-              overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+              overlayOptions: viewport.overlayOptions,
               onHandle: (handle) => {
                 if (doneInvoked) {
                   invokeHostCallback(() => handle.hide(), undefined);

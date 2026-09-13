@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { FormOutcome } from "../questionnaire/form-protocol.ts";
 import type { OwnedFormHost } from "../questionnaire/form-service.ts";
@@ -16,6 +17,7 @@ export const makeOwnedFormTuiHost =
         (gate?.awaitOpen ?? Effect.void).pipe(
           Effect.andThen(
             Effect.suspend(() => {
+              const viewport = createScreenViewport("bottom-center");
               let live = true;
               let finished = false;
               let requested: FormOutcome | undefined;
@@ -81,12 +83,14 @@ export const makeOwnedFormTuiHost =
                         tui = hostTui;
                         done = hostDone;
                         if (!live) return { render: () => [], invalidate: () => {} };
+                        viewport.attach(() => hostTui.terminal);
                         dialog = new OwnedFormDialog({
                           tui,
                           theme,
                           keybindings,
                           request,
                           owner,
+                          getHeight: viewport.getHeight,
                           done: (outcome) => {
                             if (live) finish(outcome);
                           },
@@ -101,12 +105,7 @@ export const makeOwnedFormTuiHost =
                       },
                       {
                         overlay: true,
-                        overlayOptions: {
-                          anchor: "bottom-center",
-                          width: "100%",
-                          maxHeight: "100%",
-                          margin: 0,
-                        },
+                        overlayOptions: viewport.overlayOptions,
                         onHandle: (ownedHandle) => {
                           handle = ownedHandle;
                           if (!live || requested) {

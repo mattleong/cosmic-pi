@@ -4,8 +4,6 @@ import { stripTerminalControls } from "pi-cosmic-core";
 import type { AskUserChoice } from "../questionnaire/schema.ts";
 import { padLine } from "./layout.ts";
 
-const MAX_PREVIEW_LINES = 20;
-
 export class PreviewPane {
   private choice: AskUserChoice | undefined;
   private markdown: Markdown | undefined;
@@ -37,14 +35,7 @@ export class PreviewPane {
     const rendered = this.markdown?.render(innerWidth) ?? [
       this.theme.fg("dim", "Focus a choice with a preview to compare it here."),
     ];
-    const visible = rendered.slice(0, MAX_PREVIEW_LINES);
-    if (rendered.length > MAX_PREVIEW_LINES) {
-      visible[MAX_PREVIEW_LINES - 1] = this.theme.fg(
-        "dim",
-        `… ${rendered.length - MAX_PREVIEW_LINES + 1} more lines`,
-      );
-    }
-    for (const line of visible) {
+    for (const line of rendered) {
       lines.push(`${border("│")} ${padLine(line, innerWidth)} ${border("│")}`);
     }
     lines.push(border(`└${"─".repeat(Math.max(0, boxWidth - 2))}┘`));

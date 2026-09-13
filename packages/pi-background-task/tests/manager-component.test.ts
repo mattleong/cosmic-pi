@@ -56,6 +56,9 @@ const makeManager = (
   });
   return {
     component,
+    setHeight: (next: number) => {
+      height = next;
+    },
     stop,
     clear,
     close,
@@ -64,6 +67,30 @@ const makeManager = (
     },
   };
 };
+
+it("keeps the selected row reachable through live shrinking and growing", () => {
+  const fixture = makeManager(
+    Array.from({ length: 40 }, (_, index) => task(`item-${index}`)),
+    32,
+  );
+  fixture.component.render(128);
+  fixture.component.handleInput("G");
+  for (const [width, height] of [
+    [80, 16],
+    [128, 32],
+    [100, 24],
+  ]) {
+    fixture.setHeight(height!);
+    fixture.component.invalidate();
+    const lines = fixture.component.render(width!);
+    expect(lines.length).toBeLessThanOrEqual(height!);
+    expect(lines.join("\n")).toContain("item-39");
+  }
+  fixture.component.handleInput("x");
+  fixture.component.handleInput("x");
+  expect(fixture.stop).toHaveBeenCalledWith("item-39");
+  expect(fixture.close).not.toHaveBeenCalled();
+});
 
 const ESC = "\x1b";
 const ENTER = "\r";

@@ -2,6 +2,7 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { synchronousNow } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details-schema.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
@@ -117,9 +118,11 @@ export const registerSubagentProxyManagerCommand = (
         );
         return pending;
       };
+      const viewport = createScreenViewport();
       return refresh().then(() =>
         ctx.ui.custom<void>(
           (tui, theme, keybindings, done) => {
+            viewport.attach(() => tui.terminal);
             let closed = false;
             const stopRefresh = startHostUiTicker(750, () => {
               if (closed) return;
@@ -142,7 +145,7 @@ export const registerSubagentProxyManagerCommand = (
               theme,
               visibilityRootId,
               getProjection: () => projection,
-              getHeight: () => tui.terminal.rows,
+              getHeight: viewport.getHeight,
               getNow: synchronousNow,
               matchesKeybinding: (data, id) => keybindings.matches(data, id),
               keybindingLabel: (id, fallback) =>
@@ -172,7 +175,7 @@ export const registerSubagentProxyManagerCommand = (
           },
           {
             overlay: true,
-            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+            overlayOptions: viewport.overlayOptions,
           },
         ),
       );

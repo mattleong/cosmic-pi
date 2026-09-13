@@ -11,6 +11,8 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { stripTerminalControls } from "pi-cosmic-core";
+import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
+import { DialogViewport, SELECTION_MARKER } from "./viewport.ts";
 import { formContent, initialFormValues } from "../questionnaire/form-model.ts";
 import type {
   ExtensionFormOwner,
@@ -28,6 +30,7 @@ import { displayFormValue, formIntroduction, formFieldInstructions } from "./for
 
 interface Options {
   readonly tui: TUI;
+  readonly getHeight?: () => number;
   readonly theme: Theme;
   readonly keybindings: KeybindingsManager;
   readonly request: OwnedFormRequest;
@@ -48,7 +51,8 @@ export class OwnedFormDialog implements Focusable {
   private overlay: OverlayHandle | undefined;
   private closed = false;
   private hidden = false;
-  private textOffset = 0;
+  private readonly viewport = new DialogViewport();
+  private readonly keymap = new FullScreenKeymap();
   private _focused = false;
   constructor(options: Options) {
     this.options = options;
@@ -67,6 +71,7 @@ export class OwnedFormDialog implements Focusable {
       if (!this.error && value !== undefined) {
         this.values.set(field.key, value);
         this.editing = false;
+        this.editor.focused = false;
         this.advance();
       }
       this.options.tui.requestRender();
@@ -81,7 +86,7 @@ export class OwnedFormDialog implements Focusable {
     const theme = this.options.theme;
     return {
       selectedPrefix: (text: string) => theme.fg("accent", text),
-      selectedText: (text: string) => theme.fg("accent", text),
+      selectedText: (text: string) => SELECTION_MARKER + theme.fg("accent", text),
       description: (text: string) => theme.fg("muted", text),
       scrollInfo: (text: string) => theme.fg("dim", text),
       noMatch: (text: string) => theme.fg("warning", text),
@@ -121,6 +126,7 @@ export class OwnedFormDialog implements Focusable {
     return this.fields()[this.fieldIndex];
   }
   private advance(): void {
+    this.viewport.follow();
     this.fieldIndex = Math.min(this.fields().length, this.fieldIndex + 1);
     this.error = undefined;
     this.list = this.makeList();
@@ -240,14 +246,26 @@ export class OwnedFormDialog implements Focusable {
   }
   handleInput(data: string): void {
     if (this.closed || this.hidden) return;
+    if (!this.editing) {
+      const resolution = this.keymap.resolve(data, {
+        mode: "navigation",
+        matchesKeybinding: (input, id) => this.options.keybindings.matches(input, id),
+        reservedKeys: new Set(["b"]),
+      });
+      if (resolution?._tag === "Action" && this.viewport.page(resolution.action)) {
+        this.options.tui.requestRender();
+        return;
+      }
+      this.viewport.follow();
+    }
     if (this.editing) {
       if (this.options.keybindings.matches(data, "tui.select.cancel")) {
         this.editing = false;
+        this.editor.focused = false;
         this.error = undefined;
+        this.viewport.follow();
       } else this.editor.handleInput(data);
     } else if (matchesKey(data, "b")) this.collapse();
-    else if (matchesKey(data, "pageUp")) this.textOffset = Math.max(0, this.textOffset - 6);
-    else if (matchesKey(data, "pageDown")) this.textOffset += 6;
     else if (matchesKey(data, "tab")) this.advance();
     else if (matchesKey(data, "shift+tab")) {
       this.fieldIndex = Math.max(0, this.fieldIndex - 1);
@@ -256,8 +274,9 @@ export class OwnedFormDialog implements Focusable {
     this.options.tui.requestRender();
   }
   render(width: number): string[] {
-    if (this.closed) return [];
-    const w = Math.max(1, width);
+    const height = this.options.getHeight?.() ?? 24;
+    if (this.closed || width < 1 || height < 1) return [];
+    const w = Math.floor(width);
     const field = this.field();
     const intro = formIntroduction(this.options.request, w);
     const selected = this.list.getSelectedItem()?.value;
@@ -270,22 +289,33 @@ export class OwnedFormDialog implements Focusable {
           .split("\n")
           .flatMap((line) => wrapTextWithAnsi(line, w)),
       );
-    this.textOffset = Math.min(this.textOffset, Math.max(0, intro.length - 6));
-    const lines = [
+    if (
+      (field?.type === "enum" || field?.type === "multi-enum") &&
+      selected?.startsWith("option:")
+    ) {
+      const option = field.options[Number(selected.slice(7))];
+      if (option)
+        intro.push(
+          ...wrapTextWithAnsi(
+            stripTerminalControls(`${option.title ?? option.value}\n${option.value}`),
+            w,
+          ),
+        );
+    }
+    const identity = [
       stripTerminalControls(`${this.options.owner.extensionId}: ${this.options.owner.label}`),
-      // Keep the actual target outside the caller-controlled, scrollable prose.
+      // Show the actual target before caller-controlled prose; neither is truncated.
       ...(this.options.request.kind === "url"
         ? wrapTextWithAnsi(
             stripTerminalControls(`Host: ${new URL(this.options.request.url).host}`),
             w,
           )
         : []),
-      ...intro.slice(this.textOffset, this.textOffset + 6),
     ];
-    if (intro.length > 6)
-      lines.push(
-        `PageUp/PageDown: request text ${this.textOffset + 1}-${Math.min(this.textOffset + 6, intro.length)} / ${intro.length}`,
-      );
+    // Pin the complete host when there is still room for content and an action.
+    // Oversized identities join the scrollable text rather than hiding their suffix.
+    const pinned = identity.length <= height - 3 ? identity : [];
+    const lines = [...(pinned.length ? [] : identity), ...intro];
     if (field) {
       lines.push(
         stripTerminalControls(
@@ -294,7 +324,10 @@ export class OwnedFormDialog implements Focusable {
       );
       lines.push(`Current: ${displayFormValue(this.values.get(field.key))}`);
     } else lines.push("Review answers. Select a field to edit it before accepting.");
-    if (this.error) lines.push(this.options.theme.fg("warning", this.error));
+    const errors =
+      this.error && height - pinned.length > 1
+        ? [truncateToWidth(this.options.theme.fg("warning", this.error), w, "")]
+        : [];
     if (this.editing) {
       this.editor.focused = this._focused;
       lines.push(...this.editor.render(w));
@@ -302,9 +335,13 @@ export class OwnedFormDialog implements Focusable {
     lines.push(
       this.editing
         ? "Enter saves value; Escape returns to field"
-        : "Tab/Shift+Tab fields; b hides; /ask-user resumes; Escape cancels",
+        : "PgUp/PgDn scroll; Home/End first/last; Tab/Shift+Tab fields; b hides; Escape cancels",
     );
-    return lines.map((line) => truncateToWidth(line, w));
+    return [
+      ...pinned.map((line) => truncateToWidth(line, w, "")),
+      ...this.viewport.render(lines, w, height - pinned.length - errors.length),
+      ...errors,
+    ];
   }
   invalidate(): void {
     this.editor.invalidate();

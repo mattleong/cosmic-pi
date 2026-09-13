@@ -31,6 +31,7 @@
     ".": "./index.ts",
     "./activity": "./src/activity/protocol.ts",
     "./boundary/host-status": "./src/boundary/host-status.ts",
+    "./boundary/host-viewport": "./src/boundary/host-viewport.ts",
     "./client": "./src/footer/client.ts",
     "./manager": "./src/manager/chrome.ts",
     "./manager/key-labels": "./src/manager/key-labels.ts",
@@ -43,6 +44,7 @@
     "./manager/searchable-select": "./src/manager/searchable-select.ts",
     "./manager/settings-adapter": "./src/manager/settings-adapter.ts",
     "./manager/settings-surface": "./src/manager/settings-surface.ts",
+    "./manager/viewport": "./src/manager/viewport.ts",
     "./protocol": "./src/protocol/protocol.ts",
     "./tool": "./src/tool/presentation.ts"
   },

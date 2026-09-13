@@ -25,6 +25,7 @@ import {
 } from "../activity/service.ts";
 import { renderActivityWidget } from "../activity/widget.ts";
 import { fullScreenKeybindingLabel } from "../manager/key-labels.ts";
+import { createScreenViewport } from "./host-viewport.ts";
 
 const EnvelopeSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -281,6 +282,7 @@ export function makeActivityHost(
         )
           return;
         const owner = {};
+        const viewport = createScreenViewport();
         binding.manager = owner;
         const previousRender = binding.render;
         let closing = false;
@@ -339,6 +341,7 @@ export function makeActivityHost(
                       close();
                       return neutral();
                     }
+                    viewport.attach(() => tui.terminal);
                     binding.render = () => {
                       previousRender();
                       tui.requestRender();
@@ -349,7 +352,7 @@ export function makeActivityHost(
                       presentation: binding.presentation,
                       theme,
                       now: () => MutableRef.get(binding.now),
-                      height: () => Math.max(1, tui.terminal.rows - 2),
+                      height: viewport.getHeight,
                       close: (result) => {
                         if (!closing) finish(result);
                       },
@@ -385,7 +388,7 @@ export function makeActivityHost(
                   },
                   {
                     overlay: true,
-                    overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
+                    overlayOptions: viewport.overlayOptions,
                     onHandle: (handle) => {
                       overlay = handle;
                       if (closing || requested) finish(requested?.action);

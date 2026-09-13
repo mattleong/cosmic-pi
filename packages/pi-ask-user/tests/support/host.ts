@@ -1,5 +1,5 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import { vi } from "vitest";
 import type { makeAskUserPromptGate } from "../../src/boundary/host-prompt.ts";
 import type { AskUserOutcome } from "../../src/questionnaire/model.ts";
@@ -57,6 +57,7 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
     });
   };
   const tui = {
+    terminal: { columns: 200, rows: 60 },
     requestRender: vi.fn(),
     stop: vi.fn(),
     start: vi.fn(),
@@ -69,28 +70,33 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
-    custom: vi.fn((factory: Factory, options: { onHandle: (handle: OverlayHandle) => void }) => {
-      gate?.started();
-      const completed = controlled<AskUserOutcome>();
-      component = factory(
-        opaqueHostFixture(tui),
-        theme,
-        opaqueHostFixture({
-          matches: (data: string, key: string) =>
-            (data === "\r" && key === "tui.select.confirm") ||
-            (data === "external" && key === "app.editor.external") ||
-            (data === "\u001b" && key === "tui.select.cancel"),
-        }),
-        (outcome) => {
-          done(outcome);
-          stack.pop();
-          completed.resolve(outcome);
-        },
-      );
-      const owned = component;
-      mount = () => options.onHandle(showOverlay(owned, ownedHide));
-      return completed.promise.finally(() => gate?.ended());
-    }),
+    custom: vi.fn(
+      (
+        factory: Factory,
+        options: { onHandle: (handle: OverlayHandle) => void; overlayOptions: OverlayOptions },
+      ) => {
+        gate?.started();
+        const completed = controlled<AskUserOutcome>();
+        component = factory(
+          opaqueHostFixture(tui),
+          theme,
+          opaqueHostFixture({
+            matches: (data: string, key: string) =>
+              (data === "\r" && key === "tui.select.confirm") ||
+              (data === "external" && key === "app.editor.external") ||
+              (data === "\u001b" && key === "tui.select.cancel"),
+          }),
+          (outcome) => {
+            done(outcome);
+            stack.pop();
+            completed.resolve(outcome);
+          },
+        );
+        const owned = component;
+        mount = () => options.onHandle(showOverlay(owned, ownedHide));
+        return completed.promise.finally(() => gate?.ended());
+      },
+    ),
   };
   const ctx: ExtensionContext = opaqueHostFixture({
     mode: "tui",

@@ -88,7 +88,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
   // SAFETY: The host only reads these TUI methods and terminal rows in this suite.
   let redraws = 0;
   const tui = tuiFixture({
-    terminal: { rows: 24 },
+    terminal: { columns: 80, rows: 24 },
     requestRender() {
       redraws++;
     },
@@ -99,8 +99,11 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
       return handle;
     },
   });
-  // SAFETY: Activity rendering uses only fg; other Theme methods are not exercised.
-  const theme = { fg: (_color: string, text: string) => text } as Theme;
+  // SAFETY: Activity rendering uses only these theme methods.
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as Theme;
   // SAFETY: Only matches/getKeys are used by the injected manager keymap.
   const keybindings = keybindingsFixture({ matches: () => false, getKeys: () => [] });
   let widget: Widget;
@@ -175,6 +178,7 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     bus,
     host,
     ctx,
+    terminal: tui.terminal,
     stack,
     requests,
     envelopes,
@@ -402,6 +406,30 @@ describe("activity host lifecycle", () => {
       expect(broadcast).not.toContain("hunter2");
       expect(broadcast).not.toContain("do-not-leak");
       provider.dispose();
+    }),
+  );
+  it.effect("resizes an open activity manager using the same frame allocation as its overlay", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      fixture.host.activate(fixture.ctx, yield* fixture.service());
+      const open = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
+      yield* yieldUntil(() => fixture.requests.length === 1);
+      const component = yield* Effect.promise(() => Promise.resolve(fixture.mount(0)));
+      const retained = fixture.requests[0]!.options?.overlayOptions;
+      const options = Predicate.isFunction(retained) ? retained() : retained;
+      for (const [columns, rows, width, height] of [
+        [160, 50, 144, 45],
+        [124, 50, 124, 50],
+        [160, 29, 160, 29],
+        [125, 30, 112, 27],
+      ]) {
+        Object.assign(fixture.terminal, { columns, rows });
+        expect(options?.width).toBe(width);
+        expect(options?.maxHeight).toBe(height);
+        expect(component.render(width!).length).toBe(height);
+      }
+      yield* Fiber.interrupt(open);
+      expect(fixture.stack).toEqual([]);
     }),
   );
   it.effect("admits one manager and closes only its owned overlay beneath a questionnaire", () =>

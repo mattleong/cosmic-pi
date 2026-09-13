@@ -10,6 +10,7 @@ import {
 } from "../questionnaire/schema.ts";
 import type { PreviewPane } from "./preview-pane.ts";
 import { appendWrapped, borderLine, joinColumns } from "./layout.ts";
+import { SELECTION_MARKER } from "./viewport.ts";
 
 export interface DialogInputMode {
   readonly kind: "custom" | "note";
@@ -75,7 +76,7 @@ function renderQuestion(
     const marker =
       question.mode === "multiple" ? `[${selected ? "x" : " "}]` : selected ? "[●]" : "[ ]";
     append(
-      focused ? model.theme.fg("accent", "> ") : "  ",
+      focused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
       model.theme.fg(
         focused ? "accent" : "text",
         `${marker} ${index + 1}. ${stripTerminalControls(choice.label)}`,
@@ -90,7 +91,7 @@ function renderQuestion(
       ? ` — ${truncateToWidth(stripTerminalControls(draft.answer.text), 48)}`
       : "";
   append(
-    customFocused ? model.theme.fg("accent", "> ") : "  ",
+    customFocused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
     model.theme.fg(customFocused ? "accent" : "text", `✎ Write a custom answer${custom}`),
   );
   if (question.mode === "multiple") {
@@ -101,7 +102,7 @@ function renderQuestion(
         ? "→ Continue (custom answer)"
         : `→ Continue (${selectedCount ?? 0} selected)`;
     append(
-      continueFocused ? model.theme.fg("accent", "> ") : "  ",
+      continueFocused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
       model.theme.fg(
         draft.answer ? (continueFocused ? "accent" : "success") : "dim",
         continueLabel,
@@ -145,7 +146,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
   actions.forEach((action, index) => {
     const focused = model.state.reviewCursor === index;
     append(
-      focused ? model.theme.fg("accent", "> ") : "  ",
+      focused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
       model.theme.fg(focused ? "accent" : "text", action),
     );
   });
@@ -227,7 +228,7 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
     const onReview = model.state.currentTab === model.state.request.questions.length;
     const question = onReview ? undefined : model.state.request.questions[model.state.currentTab];
     const help = model.alternateHelp
-      ? "j/k or ↑↓ move • h/l or Tab/←→ questions • n note • b hide (resume from footer) • Esc cancel • ? less"
+      ? "PgUp/PgDn scroll • Home/End first/last • j/k or ↑↓ move • h/l or Tab/←→ questions • n note • b hide (resume from footer) • Esc cancel • ? less"
       : onReview
         ? `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
         : question?.mode === "multiple"
@@ -236,5 +237,6 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
     append(" ", model.theme.fg("dim", help));
   }
   lines.push(borderLine(width, model.theme));
-  return lines.map((line) => truncateToWidth(line, width, ""));
+  // The outer viewport bounds editor lines without losing an off-width cursor marker.
+  return lines;
 }

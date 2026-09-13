@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -32,6 +33,7 @@ export const makeAskUserTuiHost =
       Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
       Effect.flatMap(({ AskUserDialog }) =>
         Effect.suspend(() => {
+          const viewport = createScreenViewport("bottom-center");
           const editorCommand = captureExternalEditorCommand(ctx);
           const authority = new AbortController();
           let requested: AskUserOutcome | undefined;
@@ -126,11 +128,14 @@ export const makeAskUserTuiHost =
                   (tui, theme, keybindings, done) => {
                     hostDone = done;
                     hostTui = tui;
+                    if (authority.signal.aborted) return { render: () => [], invalidate: () => {} };
+                    viewport.attach(() => tui.terminal);
                     dialog = new AskUserDialog({
                       tui,
                       theme,
                       keybindings,
                       request,
+                      getHeight: viewport.getHeight,
                       done: finish,
                       editExternally: (value) => editExternally(tui, value),
                       onCollapse: () => {
@@ -146,12 +151,7 @@ export const makeAskUserTuiHost =
                   },
                   {
                     overlay: true,
-                    overlayOptions: {
-                      anchor: "bottom-center",
-                      width: "100%",
-                      maxHeight: "100%",
-                      margin: { left: 0, right: 0, bottom: 0 },
-                    },
+                    overlayOptions: viewport.overlayOptions,
                     onHandle: (handle) => {
                       overlay = handle;
                       if (authority.signal.aborted || requested) {

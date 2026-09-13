@@ -2,6 +2,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { notifyAtHostBoundary, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
 import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
@@ -79,12 +80,14 @@ function openTaskManager(
       );
     return Promise.resolve();
   }
+  const viewport = createScreenViewport();
   return ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
+      viewport.attach(() => tui.terminal);
       const manager = new TaskManagerComponent({
         theme,
         getProjection: bridge.get,
-        getHeight: () => tui.terminal.rows,
+        getHeight: viewport.getHeight,
         getNow: synchronousNow,
         matchesKeybinding: (data, id) => keybindings.matches(data, id),
         keybindingLabel: (id, fallback) =>
@@ -130,11 +133,7 @@ function openTaskManager(
     },
     {
       overlay: true,
-      overlayOptions: {
-        anchor: "top-left",
-        width: "100%",
-        maxHeight: "100%",
-      },
+      overlayOptions: viewport.overlayOptions,
     },
   );
 }

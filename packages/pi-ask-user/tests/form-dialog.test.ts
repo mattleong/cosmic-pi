@@ -1,6 +1,6 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, expect, it, vi } from "vitest";
-import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { OwnedFormDialog } from "../src/ui/form-dialog.ts";
 import type { FormOutcome, OwnedFormRequest } from "../src/protocol.ts";
 import { opaqueHostFixture, theme } from "./support/host.ts";
@@ -9,12 +9,13 @@ beforeAll(() => initTheme("dark", false));
 const enter = "\r",
   down = "\x1b[B",
   escape = "\x1b";
-const make = (request: OwnedFormRequest) => {
+const make = (request: OwnedFormRequest, getHeight: () => number = () => 24) => {
   const done = vi.fn<(outcome: FormOutcome) => void>();
   const dialog = new OwnedFormDialog({
     request,
+    getHeight,
     owner: { extensionId: "pi-mcp", operationId: "o", requestId: "r", label: "MCP" },
-    tui: opaqueHostFixture({ requestRender: vi.fn() }),
+    tui: opaqueHostFixture({ requestRender: vi.fn(), terminal: { rows: 60, columns: 120 } }),
     theme,
     keybindings: opaqueHostFixture({ matches: (data: string) => matchesKey(data, "escape") }),
     done,
@@ -26,6 +27,111 @@ const acceptReview = (dialog: OwnedFormDialog, fields: number) => {
   for (let i = 0; i < fields; i++) dialog.handleInput(down);
   dialog.handleInput(enter);
 };
+
+it("preserves long private text, editor focus and final review through resize and hide/resume", () => {
+  let height = 7;
+  const { dialog, done } = make(
+    {
+      kind: "form",
+      message: "prose ".repeat(500),
+      fields: [{ key: "text", type: "string", required: true }],
+    },
+    () => height,
+  );
+  dialog.focused = true;
+  dialog.handleInput(enter);
+  const text = "private text ".repeat(100) + "TAIL";
+  dialog.handleInput(`\x1b[200~${text}\x1b[201~`);
+  for (const width of [80, 24, 8, 1]) {
+    height = width <= 8 ? 1 : 7;
+    const lines = dialog.render(width);
+    expect(lines.length).toBeLessThanOrEqual(height);
+    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expect(lines.join("\n")).toContain(CURSOR_MARKER);
+  }
+  dialog.focused = false;
+  expect(dialog.render(24).join("\n")).not.toContain(CURSOR_MARKER);
+  dialog.focused = true;
+  dialog.collapse();
+  dialog.handleInput("ignored");
+  dialog.resume();
+  dialog.handleInput(enter);
+  expect(done).not.toHaveBeenCalled();
+  expect(dialog.render(24).join("\n")).not.toContain(CURSOR_MARKER);
+  height = 30;
+  dialog.handleInput(down);
+  expect(dialog.render(80).length).toBeLessThanOrEqual(height);
+  dialog.handleInput(enter);
+  expect(done).toHaveBeenCalledWith({ action: "accept", content: { text } });
+});
+
+it("allows complete URL review in a tiny viewport before an inert consent result", () => {
+  let height = 5;
+  const { dialog, done } = make(
+    {
+      kind: "url",
+      url: "https://example.test/" + "path/".repeat(80) + "URL-END",
+      message: "prose\n".repeat(30) + "MESSAGE-END",
+    },
+    () => height,
+  );
+  const views: string[] = [];
+  dialog.handleInput("\x1b[H");
+  for (let page = 0; page < 120; page++) {
+    const lines = dialog.render(24);
+    expect(lines.length).toBeLessThanOrEqual(height);
+    views.push(lines.join(""));
+    dialog.handleInput("\x1b[6~");
+  }
+  expect(views.some((view) => view.includes("example.test"))).toBe(true);
+  expect(views.some((view) => view.includes("URL-END"))).toBe(true);
+  expect(views.some((view) => view.includes("MESSAGE-END"))).toBe(true);
+  expect(done).not.toHaveBeenCalled();
+  height = 30;
+  dialog.handleInput("\x1b[H");
+  dialog.render(100);
+  dialog.handleInput(enter);
+  expect(done).toHaveBeenCalledWith({ action: "accept" });
+});
+
+it.each([
+  [0, 10],
+  [10, 0],
+  [1, 1],
+  [2, 2],
+])("bounds a tiny form at %i by %i without granting consent", (width, height) => {
+  const { dialog, done } = make(
+    { kind: "url", url: "https://example.test/", message: "request" },
+    () => height,
+  );
+  const lines = dialog.render(width);
+  expect(lines.length).toBeLessThanOrEqual(height);
+  expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+  expect(done).not.toHaveBeenCalled();
+});
+
+it("keeps validation feedback visible beside a long editor and leaves short forms natural", () => {
+  const { dialog, done } = make(
+    {
+      kind: "form",
+      message: "prose\n".repeat(100),
+      fields: [{ key: "n", type: "integer", required: true }],
+    },
+    () => 5,
+  );
+  dialog.focused = true;
+  dialog.handleInput(enter);
+  dialog.handleInput("invalid");
+  const before = dialog.render(60);
+  dialog.handleInput(enter);
+  const after = dialog.render(60);
+  expect(after).not.toEqual(before);
+  expect(after.length).toBeLessThanOrEqual(5);
+  expect(after.join("\n")).toContain(CURSOR_MARKER);
+  expect(done).not.toHaveBeenCalled();
+  const short = make({ kind: "form", message: "", fields: [] }, () => 100);
+  expect(short.dialog.render(100).length).toBeLessThan(100);
+});
 
 it("requires final review and preserves typed zero, false and empty string", () => {
   const { dialog, done } = make({
@@ -126,7 +232,7 @@ it("shows the actual URL target before a long caller message when acceptance is 
   expect(done).toHaveBeenCalledWith({ action: "accept" });
 });
 
-it("keeps the full normalized host visible while paging long URLs and caller prose at narrow widths", () => {
+it("keeps the full normalized host, URL and caller prose reachable by paging at narrow widths", () => {
   const host = `${"long-subdomain.".repeat(8)}example.test:8443`;
   const { dialog, done } = make({
     kind: "url",
@@ -134,14 +240,17 @@ it("keeps the full normalized host visible while paging long URLs and caller pro
     message: `${"Caller prose\n".repeat(12)}MESSAGE-END`,
   });
   const views: string[] = [];
+  dialog.handleInput("\x1b[H");
   for (let page = 0; page < 20; page++) {
     const lines = dialog.render(24);
     const visible = lines.join("");
     expect(visible).toContain(host);
+    expect(lines.length).toBeLessThanOrEqual(24);
     expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
     views.push(visible);
     dialog.handleInput("\x1b[6~");
   }
+  expect(views[0]).toContain(host);
   expect(views[0]).toContain("https://");
   expect(views.some((view) => view.includes("#"))).toBe(true);
   expect(views.some((view) => view.includes("MESSAGE-END"))).toBe(true);

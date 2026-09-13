@@ -154,12 +154,12 @@ export const runMcpManager = (
               return yield* openMcpOverlay<McpManagerClose>(
                 ctx,
                 current,
-                ({ tui, theme, keybindings, finish }) => {
+                ({ tui, theme, keybindings, getHeight, finish }) => {
                   component = new McpManagerComponent({
                     theme,
                     selection,
                     snapshot: manager.snapshot,
-                    height: () => Math.max(3, tui.terminal.rows - 2),
+                    height: getHeight,
                     requestRender: () => tui.requestRender(),
                     finish,
                     load: (request) => {

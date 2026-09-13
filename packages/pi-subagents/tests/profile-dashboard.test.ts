@@ -251,6 +251,7 @@ const dashboard = () => {
   const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>(() =>
     Promise.resolve({ inspection: f.value }),
   );
+  let height = 35;
   const component = new ProfileDashboardComponent({
     ctx: extensionContextFixture({ isProjectTrusted: f.host.trusted }),
     actions: f.host.actions,
@@ -272,7 +273,7 @@ const dashboard = () => {
       initialFocus: "fields",
       preferredPiModel: () => undefined,
       parentEffort: "high",
-      getHeight: () => 35,
+      getHeight: () => height,
       requestRender: vi.fn(),
       close,
       saveDraft,
@@ -282,7 +283,15 @@ const dashboard = () => {
     },
   });
   component.focused = true;
-  return { ...f, component, close, saveDraft };
+  return {
+    ...f,
+    component,
+    close,
+    saveDraft,
+    setHeight: (next: number) => {
+      height = next;
+    },
+  };
 };
 
 describe("persistent dashboard", () => {
@@ -394,6 +403,13 @@ describe("persistent dashboard", () => {
         expect.objectContaining({ candidates: [expect.objectContaining({ context: "fork" })] }),
         undefined,
       );
+      // Resizing and switching tabs retain the renamed editor and its Undo receipt.
+      f.setHeight(24);
+      expect(f.component.render(100).length).toBeLessThanOrEqual(24);
+      press("\t", "\t");
+      f.setHeight(35);
+      expect(f.component.render(128).length).toBeLessThanOrEqual(35);
+      expect(f.close).not.toHaveBeenCalled();
       // Undo remains owned after the rename and restores the originally absent declaration.
       press("G", "\r", "\r");
       yield* step(eventLoopTurn);

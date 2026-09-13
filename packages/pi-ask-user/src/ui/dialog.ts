@@ -33,6 +33,7 @@ import {
   type AskUserRequest,
 } from "../questionnaire/schema.ts";
 import { PreviewPane } from "./preview-pane.ts";
+import { DialogViewport } from "./viewport.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
 
 const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
@@ -45,6 +46,7 @@ const DIALOG_SHORTCUTS = new Set(["b", "n"]);
 
 interface AskUserDialogOptions {
   readonly tui: TUI;
+  readonly getHeight?: () => number;
   readonly theme: Theme;
   readonly keybindings: KeybindingsManager;
   readonly request: AskUserRequest;
@@ -74,6 +76,7 @@ export class AskUserDialog implements Focusable {
   private readonly editor: Editor;
   private readonly preview: PreviewPane;
   private readonly keymap = new FullScreenKeymap();
+  private readonly viewport = new DialogViewport();
   private _focused = false;
   private overlayHandle: OverlayHandle | undefined;
 
@@ -113,6 +116,7 @@ export class AskUserDialog implements Focusable {
   }
 
   private dispatch(action: QuestionnaireAction): void {
+    this.viewport.follow();
     this.state = reduceQuestionnaire(this.state, action);
   }
 
@@ -252,6 +256,10 @@ export class AskUserDialog implements Focusable {
       return;
     }
     if (resolution?._tag === "Action") {
+      if (this.viewport.page(resolution.action)) {
+        this.refresh();
+        return;
+      }
       if (resolution.action === "cancel") {
         this.options.done(cancelQuestionnaire());
         return;
@@ -374,7 +382,9 @@ export class AskUserDialog implements Focusable {
   }
 
   render(width: number): string[] {
-    return renderQuestionnaireView(
+    const height = this.options.getHeight?.() ?? Infinity;
+    if (width < 1 || height < 1) return [];
+    const lines = renderQuestionnaireView(
       {
         theme: this.options.theme,
         state: this.state,
@@ -386,6 +396,12 @@ export class AskUserDialog implements Focusable {
         preview: this.preview,
       },
       width,
+    );
+    return this.viewport.render(
+      lines,
+      width,
+      height,
+      this.inputError ? this.options.theme.fg("warning", this.inputError) : undefined,
     );
   }
 

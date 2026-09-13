@@ -1,5 +1,7 @@
 # Architecture
 
+Custom screens use the shared live viewport: centered at 90% of terminal width and height at 125×30 or larger, otherwise full bounds. Resize keeps the same component lifetime and selection state.
+
 `pi-background-task` is an Effect-managed Pi extension for session-scoped local background tasks.
 
 ## Source map
