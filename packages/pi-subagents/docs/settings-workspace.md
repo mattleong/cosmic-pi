@@ -14,7 +14,7 @@ The header reads `Editing Current Session`, without an origin or change count. S
 
 ## Profile editor
 
-One dashboard contains Current Session and Saved profiles tabs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. Wide terminals show profiles beside their fields; narrow layouts keep the same editing target and scope visible.
+One dashboard contains Current Session and Saved profiles tabs. A continuous outer border encloses the tabs, status, editor, and internal dialogs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. Wide terminals show profiles beside their fields; narrow layouts keep the same editing target and scope visible.
 
 Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Each section ends with Manage Primary or Manage Fallback N. Its menu contains only Duplicate, valid Move up/Move down directions, and Delete. Delete requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action.
 

@@ -17,7 +17,10 @@ import {
 } from "./profile-set-save-form.ts";
 import { ProfileDashboardDialog } from "./profile-dashboard-dialogs.ts";
 import { runProfileSetAction } from "./profile-set-actions.ts";
-import { renderProfileDashboard } from "./ui/profile-dashboard-render.ts";
+import {
+  profileDashboardChildHeight,
+  renderProfileDashboard,
+} from "./ui/profile-dashboard-render.ts";
 import { profileSetPickerEntries } from "./ui/profile-set-picker-model.ts";
 import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
 
@@ -71,10 +74,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
   private renderSoon = (): void => {
     if (this.current()) this.options.workspace.requestRender();
   };
-  private host() {
+  private host(framed = true) {
     return {
       ...this.options.workspace,
-      getHeight: () => Math.max(0, this.options.workspace.getHeight() - 2),
+      getHeight: () => profileDashboardChildHeight(this.options.workspace.getHeight(), framed),
       requestRender: this.renderSoon,
     };
   }
@@ -258,7 +261,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
           this.dialog<boolean>(
             (close) =>
               new ProfileDashboardDialog({
-                ...this.host(),
+                ...this.host(false),
                 title,
                 body,
                 kind: "confirm",
@@ -269,7 +272,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
           this.dialog<string>(
             (close) =>
               new ProfileDashboardDialog({
-                ...this.host(),
+                ...this.host(false),
                 title,
                 initial,
                 kind: "name",
@@ -400,13 +403,16 @@ export class ProfileDashboardComponent implements Component, Focusable {
   }
   render(width: number): string[] {
     if (!this.current()) return [];
+    const child = this.child();
+    const framedChild = !(child instanceof ProfileDashboardDialog);
     return renderProfileDashboard(
       {
         tab: this.tab,
         message: this.message,
         blocked: this.blocked,
         busy: this.busy && !this.overlay,
-        rows: this.child().render(width),
+        rows: child.render(framedChild ? width : Math.max(0, width - 2)),
+        framedChild,
       },
       { theme: this.options.workspace.theme, width, height: this.options.workspace.getHeight() },
     );

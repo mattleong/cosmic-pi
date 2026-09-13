@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "pi-cosmic-core";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import { describe, expect, it, vi } from "vitest";
@@ -295,6 +296,46 @@ const dashboard = () => {
 };
 
 describe("persistent dashboard", () => {
+  effectTest(
+    "bounds the whole dashboard through child screens and keeps dialog input focused",
+    function* () {
+      const f = dashboard();
+      const checkBounds = () => {
+        for (const width of [0, 1, 2, 3, 40, 100, 144]) {
+          for (const height of [0, 1, 2, 3, 4, 5, 8, 35]) {
+            f.setHeight(height);
+            const rows = f.component.render(width);
+            expect(rows.length).toBeLessThanOrEqual(height);
+            expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+          }
+        }
+        f.setHeight(35);
+      };
+      checkBounds();
+      f.component.handleInput("e");
+      checkBounds();
+      f.component.handleInput("\u001b");
+      f.component.handleInput("\t");
+      checkBounds();
+      for (const key of ["a", "j", "j", "\r"]) f.component.handleInput(key);
+      yield* step(eventLoopTurn);
+      checkBounds();
+      expect(f.component.render(40).some((row) => row.includes(CURSOR_MARKER))).toBe(true);
+      f.component.handleInput("\u001b");
+      yield* step(eventLoopTurn);
+      f.component.handleInput("\t");
+      f.component.handleInput("s");
+      yield* step(eventLoopTurn);
+      checkBounds();
+      f.component.handleInput("\u001b");
+      yield* step(eventLoopTurn);
+      expect(f.saveDraft).not.toHaveBeenCalled();
+      expect(f.calls.renameProfileSet).not.toHaveBeenCalled();
+      expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
+      expect(f.close).not.toHaveBeenCalled();
+      f.component.dispose();
+    },
+  );
   effectTest("conflict refresh advances the editable draft with its write guard", function* () {
     const f = dashboard();
     const worker = f.value.session.effectiveConfig.profiles.worker.candidates[0]!;
