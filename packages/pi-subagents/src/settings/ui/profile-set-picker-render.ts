@@ -39,7 +39,7 @@ const footer = (
   keybindingLabel: SearchableSelectHostOptions["keybindingLabel"],
 ): string => {
   const label = keybindingLabel ?? ((_id, fallback) => fallback);
-  const reserved = new Set(state.actionMenu || state.pendingDeleteLabel ? [] : ["/", "s", "u"]);
+  const reserved = new Set(state.actionMenu || state.pendingDeleteLabel ? [] : ["/", "a", "u"]);
   const confirm = filterReservedKeyLabel(label("tui.select.confirm", "Enter"), reserved, "Enter");
   const cancel = filterReservedKeyLabel(label("tui.select.cancel", "Esc"), reserved, "Esc");
   if (state.pendingDeleteLabel)
@@ -51,8 +51,8 @@ const footer = (
       [`Type to filter · ${confirm} Edit · ${cancel} Clear`],
     ]);
   return renderResponsiveManagerFooter(width, [
-    [`${confirm} Edit`, "u Use", "s Save Current Session", "? More", `${cancel} Back`],
-    [`${confirm} Edit`, "u Use", "? More", `${cancel} Back`],
+    [`${confirm} Edit`, "u Use", "a More", "Tab Current Session", `${cancel} Close`],
+    ["Tab Current Session", "a More", `${cancel} Close`],
   ]);
 };
 
@@ -99,7 +99,6 @@ const libraryRows = (
         ]
       : []),
     theme.fg("muted", 'Saved sets stay separate until you choose "Use in Current Session".'),
-    theme.fg("accent", "s  Save Current Session as a new set"),
     "",
   ].slice(0, Math.max(0, height - 1));
   const logical: Array<{ readonly text: string; readonly entryIndex?: number }> = [];

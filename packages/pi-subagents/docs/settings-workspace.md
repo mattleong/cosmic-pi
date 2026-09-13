@@ -8,26 +8,30 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 Current Session is independent of saved sets. Applying a saved set resolves all seven profiles first, rejects any invalid route, previews the complete replacement, and commits it with one expected session revision. The replacement becomes Current Session and clears earlier per-profile changes in one transition. It never changes a Project or Global document.
 
-The header names what Current Session is based on and how many profiles have changed. Session state survives `/tree` and `/reload` through the bounded handoff. It clears on `/new`, `/resume`, `/fork`, quit, or process restart.
+The header reads `Editing Current Session`, without an origin or change count. Session state survives `/tree` and `/reload` through the bounded application handoff. It clears on `/new`, `/resume`, `/fork`, quit, or process restart. These session snapshots are separate from the editor's visit-only Undo checkpoints.
 
 ## Profile editor
 
-The editor keeps the original framed list/detail presentation. Wide terminals show the selected list beside its details; smaller terminals use the original stacked or compact view. Profiles, Primary/Fallback choices, and candidate fields remain separate pages. A profile with one candidate opens its fields directly and returns directly to Profiles on Back. Multiple candidates keep the choice-order page.
+One dashboard contains Current Session and Saved profiles tabs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. Wide terminals show profiles beside their fields; narrow layouts keep the same editing target and scope visible.
 
-Model, Reasoning, File access, and Run with remain the main fields. Advanced expands Context, OpenAI fast mode, and After reporting only where applicable. Move up and Move down appear only for routes with multiple candidates. Delete model remains a direct field row, including its last-candidate warning, and the original Actions picker contains the full route menu. Field and model pickers keep their framed full-page presentation.
+Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Move up and Move down reorder candidates. Delete model requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action. Disabled profiles retain an Add model path.
 
-Faster paths are available without changing those screens:
+Up/Down navigate rows without writing. Right or j focuses fields; Left or k focuses the profile list. Enter opens the selected editor or picker. Tab and Shift+Tab switch directly between Current Session and Saved profiles, preserving each target's position. Pickers and forms keep their own controls, including j/k row navigation. Esc closes the nearest picker or backs up one level. Persistent footer hints show the other tab's name; `?` opens navigation help. Ordinary cancellation is silent and leaves the route unchanged.
 
-- `m`, `e`, and `r` open Model, Reasoning, and Run with from any workspace page.
-- `a` opens Actions immediately. `+` adds a fallback after choosing its model, using the selected candidate as the starting point. Canceling creates nothing; selecting the model saves one complete candidate and opens its fields.
-- `f` opens the original candidate list. `[` / `]` switch candidates without resetting the selected field.
-- `p` opens saved sets, `s` saves Current Session, and `t` selects the editing target. These are shortcuts, not a new header or tab bar.
-- `?` shows shortcuts. Enter/Right advances; Esc/Left backs out through the original pages. Tab and Shift+Tab navigate pages without opening a field picker.
-- `/subagents profiles worker` opens worker directly.
+- `m`, `e`, and `r` open Model, Reasoning, and Run with.
+- `a` opens Actions. `+` adds a fallback only after model selection; canceling creates nothing.
+- `[` and `]` move between candidates.
+- `/` searches profiles. `/subagents profiles worker` opens worker directly.
 
-The editor remembers candidate, field, and Advanced expansion when returning through pages or reopening after a saved-set action. Inapplicable fields fall back to Model. Candidate moves preserve the selected candidate. Removal and Disable still require confirmation; removing the last candidate warns that it disables the profile.
+Runtime changes that require model selection commit both changes together. Pickers distinguish profile-default reasoning from a pinned level and retain unavailable configured models on cancellation. Edits auto-save serially. Pending, saved, failed, and policy-adjustment status remain separate from change markers. Conflicts refresh without retrying; a failed refresh blocks further edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
 
-Model and profile search start ready to type and cancel with one Esc or configured cancel binding. Picker labels show each default/current status once; the explicit profile-default reasoning choice remains distinct from a pinned level. Help and confirmation hints follow the configured keys. Runtime changes requiring a model selection commit together; canceling leaves the route unchanged. Edits auto-save serially. Routine success shows a small Saved indicator in the existing frame instead of consuming field rows, including on short terminals. Policy-adjustment notices and warnings remain visible. Wide layouts give long model names more list width while keeping at least half the inner width for the divider and detail pane. Conflicts refresh without retrying, and failed refresh blocks further edits until reopening. Catalog cancellation and disposal abort outstanding work and ignore late continuations.
+### Undo during an editor visit
+
+`●` marks this editor visit's own changes that Undo can restore. It does not mean a persistent override or an unsaved edit. Undo changes restores the selected profile's opening declaration, in either Current Session or a saved set. Saved declarations preserve absence, disabled state, optional fields, and candidate order rather than replacing inheritance with resolved candidates. Undo does not reset Current Session to its saved default.
+
+Checkpoints survive tab switches, pickers, and internal forms, but not closing the whole dashboard. Renaming a saved set carries its checkpoint; deleting it drops the checkpoint. A new set gets a checkpoint when first opened. A confirmed Use replacement resets the session checkpoint.
+
+Undo uses checked writes and committed receipts to identify owned changes. An external change to the same route withdraws that route's Undo ownership rather than overwriting it. Unsupported invalid raw declarations cannot be restored and fail safely. Exact-document conflicts, project trust, session revisions, and current activation checks still apply.
 
 ## Native model discovery
 
@@ -37,17 +41,17 @@ The probe preserves aliases and context suffixes such as `[1m]`. Its selector is
 
 ## Saved-set library
 
-`p` opens a separate library grouped as Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration.
+The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration.
 
-Enter edits the selected set directly. `u` previews and confirms replacement of all seven Current Session profiles, then returns to Current Session on success. More contains Make/clear default, Copy, Rename, and Delete. Clearing the Project default falls back to Global; clearing Global falls back to built-ins. Closing the library returns to the target that opened it unless that target was renamed or deleted.
+Enter edits the selected set, `u` opens Use, `a` opens More, and Esc goes Back. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
 
-The dashboard closes each custom screen before opening the next, then reopens the editor on the same page with its profile, candidate, field, and Advanced expansion where possible. Changing targets resets the candidate to Primary.
+More contains Make/clear default, Copy, Rename, and Delete. Clearing the Project default falls back to Global; clearing Global falls back to built-ins. The dashboard keeps editors and internal forms in one custom host lifetime rather than closing and reopening host screens.
 
-Using a set changes only Current Session. Editing a saved set changes only that library value, and the editor header reads `Saved set · Project/name · Current Session unchanged` or its Global equivalent. Making a set default affects new sessions only. Saving and editing no longer ask for reload because saved values are not the active working set.
+A saved editor reads `Editing name · session not affected`, with Project or Global scope always visible separately. Its edits change only that library value. Making a set default affects new sessions only. Saving and editing do not request reload because saved values are not the active working set.
 
 Invalid saved sets remain visible and cannot be used or made default. Project-set status includes routes inherited from the selected Global set. A set with invalid routes remains editable so explicit routes can repair it. A structurally invalid set must be deleted and recreated. A malformed unnamed default appears as a clearable repair row. A selected default must first be replaced or cleared before deletion. Store mutations retain exact-document optimistic conflict checks and preserve unrelated sets and routes.
 
-`s` opens one Save Current Session form containing Project or Global destination and a name, even while editing a saved set. One `createProfileSetFromSnapshot` store action writes all seven effective session routes. Saving does not make the new set a default. The controller refuses to save fail-closed Project or Global routes. The profile service holds its revision lock through the document transaction, so an interleaved session edit either commits first and rejects the save or waits until the reviewed snapshot has been saved.
+Saving is available only from Current Session. The Save Current Session form contains a Project or Global destination and a name. One `createProfileSetFromSnapshot` store action writes all seven effective session routes. Saving changes neither the default nor the editing target. The controller refuses to save fail-closed Project or Global routes. The profile service holds its revision lock through the document transaction, so an interleaved session edit either commits first and rejects the save or waits until the reviewed snapshot has been saved.
 
 ## Nesting settings
 
@@ -55,10 +59,9 @@ Invalid saved sets remain visible and cannot be used or made default. Project-se
 
 ## Module responsibilities
 
-- `src/settings/controller.ts` owns commands and profile deep links, fixed-target editor opening, route saves, optimistic revisions, and host lifecycle callbacks.
-- `src/settings/profile-dashboard.ts` owns the close/reopen screen loop, target switching, Current Session replacement, saved-set mutations, and trust checks.
-- `src/settings/profile-workspace.ts` owns the original page navigation, selection memory, serialized saves, atomic candidate edits, and cancellable catalog loads. It delegates presentation and full-page selectors to `settings/ui/`.
-- `src/settings/profile-set-picker.ts` owns the grouped library and More actions. `profile-target-picker.ts` owns direct target selection; `profile-set-save-form.ts` owns the destination/name form.
-- `src/settings/profile-route-editor.ts` owns fixed-target route drafts and canonical validation messages.
-- `src/settings/profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading.
-- `src/settings/ui/` contains pure selectors, projections, responsive geometry, and rendering.
+- `src/settings/controller.ts` registers commands, deep links, and nesting/workspace settings. Application services retain session snapshots across allowed replacement paths.
+- `profile-dashboard.ts` owns checked route writes, scoped dialog waits, catalog cancellation, and activation-bound UI cleanup. `profile-write-context.ts` shares trust and conflict-token capture. `profile-dashboard-component.ts` owns the single custom host lifetime, tabs, cached fixed-target editors, and internal forms. Refreshes advance editable drafts with their write guards; owned rename transfers all profile/candidate navigation memory before reconciliation. `profile-set-actions.ts` handles library mutations and confirmed replacement; `profile-dashboard-dialogs.ts` owns internal confirmation and name dialogs.
+- `profile-edit-visit.ts` owns pure visit checkpoints and receipt-based Undo ownership. `config/store.ts` owns exact declaration restoration and committed document receipts, with optimistic document and trust checks.
+- `profile-workspace.ts` composes fixed-target editing. Its state, save, and picker modules separate navigation, serialized writes, and cancellable selection work. `profile-set-picker.ts` owns library selection; `profile-set-save-form.ts` owns the destination/name form.
+- `profile-route-editor.ts` owns fixed-target route drafts and canonical validation messages. `profile-model-catalog.ts` owns atomic Pi catalog refresh and runtime-specific picker loading.
+- `src/settings/ui/` contains pure row models, selectors, projections, responsive geometry, and rendering.

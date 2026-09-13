@@ -201,7 +201,7 @@ export const makeProfileModelPickerPage = (options: ProfileModelPickerPageOption
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
   return makeModelPickerPage({
     theme: options.theme,
-    breadcrumb: `/subagents profiles › ${context.profile} › ${optionLabel} › Model`,
+    breadcrumb: `${options.targetLabel ?? "/subagents profiles"} · ${context.profile} · ${optionLabel} · Model`,
     title: `Choose model · ${context.profile} · ${optionLabel}`,
     subtitle: `${options.targetLabel ? `${options.targetLabel} · ` : ""}${host} ${runtimeLabel(context.runtime)}`,
     scopedModels: options.scopedChoices ? projectPickerChoices(options.scopedChoices) : [],

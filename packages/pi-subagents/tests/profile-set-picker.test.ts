@@ -290,20 +290,21 @@ describe("saved profile-set library", () => {
     });
   });
 
-  it("prompts the controller to save the session in an eligible scope", () => {
-    const project = makePicker({ initialScope: "project" });
-    project.component.handleInput("s");
-    expect(project.close).toHaveBeenCalledWith({
-      action: "save-session",
-      preferredScope: "project",
-    });
+  it("never saves Current Session from the library", () => {
+    for (const projectTrusted of [true, false]) {
+      const picker = makePicker({ projectTrusted, initialScope: "project" });
+      picker.component.handleInput("s");
+      expect(picker.close).not.toHaveBeenCalled();
+    }
+  });
 
-    const untrusted = makePicker({ projectTrusted: false, initialScope: "project" });
-    untrusted.component.handleInput("s");
-    expect(untrusted.close).toHaveBeenCalledWith({
-      action: "save-session",
-      preferredScope: "global",
-    });
+  it("opens More through the library action shortcut", () => {
+    const picker = makePicker({ initialScope: "global" });
+    picker.component.handleInput("a");
+    expect(picker.component.hasOverlay).toBe(true);
+    picker.component.handleInput("\u001b");
+    expect(picker.component.hasOverlay).toBe(false);
+    expect(picker.close).not.toHaveBeenCalled();
   });
 
   it("does not activate a saved-set action when filtering has no match", () => {

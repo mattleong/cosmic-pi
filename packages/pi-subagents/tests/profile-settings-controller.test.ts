@@ -15,14 +15,12 @@ import {
   registerSubagentManagerCommand,
   type FleetManagerActions,
 } from "../src/settings/controller.ts";
-import { ProfileWorkspaceComponent } from "../src/settings/profile-workspace.ts";
-import { ProfileSetSaveFormComponent } from "../src/settings/profile-set-save-form.ts";
+import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileSetPickerAction } from "../src/settings/profile-set-picker.ts";
 import type {
   ProfileSettingsInspection,
   ProfileWorkspaceTarget,
 } from "../src/settings/profile-route-editor.ts";
-import { openProfileDashboard, type OpenProfileEditor } from "../src/settings/profile-dashboard.ts";
 import type { ProfileWorkspaceCloseResult } from "../src/settings/profile-workspace.ts";
 import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
 import { effectTest, step } from "./support/effect-test.ts";
@@ -225,32 +223,41 @@ const setup = (
   };
 };
 
-const openLibrary = function* (fixture: ReturnType<typeof setup>) {
-  const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
-  yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
-  expect(fixture.overlays[0]?.render(120).join("\n")).toContain("Current Session");
-  fixture.overlays[0]?.handleInput?.("p");
-  yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(2)));
-  return running;
-};
-
 const settleHostPromises = (): Promise<void> =>
-  Array.from({ length: 12 }).reduce<Promise<void>>(
+  Array.from({ length: 40 }).reduce<Promise<void>>(
     (pending) => pending.then(() => undefined),
     Promise.resolve(),
   );
-
-const closeLibraryAndDashboard = function* (
-  fixture: ReturnType<typeof setup>,
-  running: Promise<void>,
-) {
-  if (!(fixture.overlays.at(-1) instanceof ProfileWorkspaceComponent)) {
-    fixture.overlays.at(-1)?.handleInput?.("\u001b");
-    yield* step(settleHostPromises);
+const press = (fixture: ReturnType<typeof setup>, ...keys: string[]) => {
+  for (const key of keys) {
+    fixture.overlays[0]?.handleInput?.(key);
+    fixture.overlays[0]?.render(120);
   }
-  fixture.overlays.at(-1)?.handleInput?.("\u001b");
-  yield* step(() => running);
 };
+const openDashboard = function* (fixture: ReturnType<typeof setup>, args = "profiles") {
+  const running = fixture.command?.(args, fixture.ctx) ?? Promise.resolve();
+  yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
+  expect(fixture.overlays[0]).toBeInstanceOf(ProfileDashboardComponent);
+  return running;
+};
+const openLibrary = function* (fixture: ReturnType<typeof setup>) {
+  const running = yield* openDashboard(fixture);
+  press(fixture, "\t");
+  return running;
+};
+const closeDashboard = function* (fixture: ReturnType<typeof setup>, running: Promise<void>) {
+  yield* step(settleHostPromises);
+  press(fixture, "\u001b", "\u001b", "\u001b", "\u001b");
+  yield* step(() => running);
+  expect(fixture.ui.custom).toHaveBeenCalledTimes(1);
+};
+const saveSnapshot = function* (fixture: ReturnType<typeof setup>, name = "snapshot") {
+  press(fixture, "s");
+  yield* step(settleHostPromises);
+  press(fixture, ...name, "\r");
+  yield* step(settleHostPromises);
+};
+const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "?", "\r");
 
 describe("profile settings controller", () => {
   effectTest("completes profile deep links and rejects unknown or extra arguments", function* () {
@@ -261,552 +268,389 @@ describe("profile settings controller", () => {
     expect(fixture.completions?.("profiles ")?.map((item) => item.value)).toEqual(
       PROFILE_IDS.map((id) => `profiles ${id}`),
     );
-    for (const args of ["profiles unknown", "profiles worker extra", "profiles WORKER"]) {
+    for (const args of [
+      "profiles unknown",
+      "profiles worker extra",
+      "profiles WORKER",
+      "profiles global",
+    ])
       yield* step(() => fixture.command?.(args, fixture.ctx) ?? Promise.resolve());
-    }
     expect(fixture.overlays).toHaveLength(0);
     expect(fixture.managerActions.inspectProfiles).not.toHaveBeenCalled();
   });
 
-  effectTest(
-    "preserves editor position on cancel and resets only candidate on target changes",
-    function* () {
+  for (const mode of ["rpc", "json"] as const) {
+    effectTest(`rejects profile settings outside the TUI (${mode})`, function* () {
       const fixture = setup();
-      const open = vi
-        .fn<OpenProfileEditor>()
-        .mockResolvedValueOnce({
-          action: "select-target",
-          profile: "worker",
-          field: "effort",
-          candidateIndex: 2,
-        })
-        .mockResolvedValueOnce({
-          action: "sets",
-          profile: "worker",
-          field: "effort",
-          candidateIndex: 1,
-        })
-        .mockResolvedValueOnce({
-          action: "select-target",
-          profile: "worker",
-          field: "effort",
-          candidateIndex: 1,
-        })
-        .mockResolvedValueOnce(false);
-      fixture.ui.custom
-        .mockResolvedValueOnce({ kind: "profile-set", set: { scope: "global", name: "common" } })
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce({ kind: "session" });
-      yield* step(() => openProfileDashboard(fixture.ctx, fixture.managerActions, open, "worker"));
-      expect(open.mock.calls[0]).toEqual([
-        { kind: "session" },
-        { initialProfile: "worker", initialFocus: "fields" },
-      ]);
-      expect(open.mock.calls[1]?.[0]).toEqual({
-        kind: "profile-set",
-        set: { scope: "global", name: "common" },
-      });
-      expect(open.mock.calls[1]?.[1]).toMatchObject({
-        initialProfile: "worker",
-        initialField: "effort",
-        initialCandidateIndex: 0,
-      });
-      expect(open.mock.calls[2]?.[0]).toEqual(open.mock.calls[1]?.[0]);
-      expect(open.mock.calls[2]?.[1]).toMatchObject({
-        initialCandidateIndex: 1,
-        initialField: "effort",
-      });
-      expect(open.mock.calls[3]).toEqual([
-        { kind: "session" },
-        {
-          initialProfile: "worker",
-          initialFocus: "fields",
-          initialField: "effort",
-          initialCandidateIndex: 0,
-        },
-      ]);
-    },
-  );
-
-  for (const action of ["rename", "delete"] as const) {
-    for (const editsActiveTarget of [true, false]) {
-      effectTest(
-        `${action} then cancel keeps a valid editor target (active: ${editsActiveTarget})`,
-        function* () {
-          const fixture = setup();
-          const target = {
-            kind: "profile-set" as const,
-            set: { scope: "global" as const, name: "common" },
-          };
-          const open = vi
-            .fn<OpenProfileEditor>()
-            .mockResolvedValueOnce({ action: "select-target", profile: "worker" })
-            .mockResolvedValueOnce({
-              action: "sets",
-              profile: "worker",
-              field: "effort",
-              candidateIndex: 2,
-            })
-            .mockResolvedValueOnce(false);
-          fixture.ui.input.mockResolvedValueOnce("renamed");
-          fixture.ui.custom
-            .mockResolvedValueOnce(target)
-            .mockResolvedValueOnce({
-              action,
-              target: editsActiveTarget ? target.set : { scope: "project", name: "common" },
-            })
-            .mockResolvedValueOnce(undefined);
-          yield* step(() => openProfileDashboard(fixture.ctx, fixture.managerActions, open));
-          expect(open.mock.calls[2]).toEqual([
-            !editsActiveTarget
-              ? target
-              : action === "rename"
-                ? { kind: "profile-set", set: { scope: "global", name: "renamed" } }
-                : { kind: "session" },
-            {
-              initialProfile: "worker",
-              initialField: "effort",
-              initialFocus: "fields",
-              initialCandidateIndex: editsActiveTarget ? 0 : 2,
-            },
-          ]);
-          expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-        },
+      yield* step(
+        () =>
+          fixture.command?.("profiles worker", { ...fixture.ctx, mode, hasUI: false }) ??
+          Promise.resolve(),
       );
-    }
+      expect(fixture.ui.custom).not.toHaveBeenCalled();
+      expect(fixture.managerActions.inspectProfiles).not.toHaveBeenCalled();
+    });
   }
 
   effectTest(
-    "uses the displayed saved target and returns to Session after replacement",
+    "activation shutdown closes an open dashboard dialog without further input",
     function* () {
       const fixture = setup();
-      const open = vi
-        .fn<OpenProfileEditor>()
-        .mockResolvedValueOnce({ action: "select-target", profile: "scout" })
-        .mockResolvedValueOnce({
-          action: "use-current",
-          profile: "scout",
-          field: "model",
-          candidateIndex: 1,
-        })
-        .mockResolvedValueOnce(false);
-      fixture.ui.custom.mockResolvedValueOnce({
-        kind: "profile-set",
-        set: { scope: "global", name: "common" },
-      });
-      yield* step(() => openProfileDashboard(fixture.ctx, fixture.managerActions, open));
-      expect(fixture.managerActions.replaceSessionProfiles).toHaveBeenCalledWith(
-        expect.objectContaining({ origin: { scope: "global", name: "common" } }),
-      );
-      expect(open.mock.calls[2]?.[0]).toEqual({ kind: "session" });
-      expect(open.mock.calls[2]?.[1]).toMatchObject({
-        initialCandidateIndex: 0,
-        initialProfile: "scout",
-        initialField: "model",
-      });
-    },
-  );
-
-  effectTest(
-    "does not open or refresh an editor after its inspection owner is replaced",
-    function* () {
-      const fixture = setup();
-      const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
-      let current = true;
-      const submitted = vi.fn();
-      const run = <A>(effect: Effect.Effect<A>, signal: AbortSignal) => {
-        submitted();
-        return Effect.runPromise(effect, { signal });
-      };
+      const activation = new AbortController();
       vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
-        isCurrent: () => current,
-        run,
+        isCurrent: () => !activation.signal.aborted,
+        run: (effect, signal) =>
+          Effect.runPromise(effect, {
+            signal: AbortSignal.any([signal, activation.signal]),
+          }),
       });
-      vi.mocked(fixture.managerActions.inspectProfiles).mockImplementation(() =>
-        Effect.runPromise(Deferred.await(pending)),
-      );
-      const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
-      current = false;
-      Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
+      const running = yield* openDashboard(fixture);
+      press(fixture, "s");
+      yield* step(settleHostPromises);
+      activation.abort();
       yield* step(() => running);
-      expect(fixture.overlays).toEqual([]);
-      expect(submitted).not.toHaveBeenCalled();
+      expect(fixture.overlays[0]?.render(80)).toEqual([]);
+      expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
     },
   );
 
-  effectTest("always opens Current Session and rejects legacy scope arguments", function* () {
+  effectTest("deep links edit the requested Session profile, not a saved default", function* () {
     const fixture = setup();
-    const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
-    expect(fixture.overlays[0]?.render(120).join("\n")).toContain("Current Session");
-    fixture.overlays[0]?.handleInput?.("\u001b");
-    yield* step(() => running);
-
-    yield* step(() => fixture.command?.("profiles global", fixture.ctx) ?? Promise.resolve());
-    expect(fixture.ui.notify).toHaveBeenCalledWith(
-      expect.stringContaining("Usage: /subagents [settings | profiles"),
-      "error",
+    const running = yield* openDashboard(fixture, "profiles worker");
+    press(fixture, "e");
+    yield* step(settleHostPromises);
+    press(fixture, "j", "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchSessionProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: "worker" }),
     );
+    expect(fixture.managerActions.patchProfile).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
   });
 
-  effectTest("previews and atomically replaces all seven Current Session profiles", function* () {
+  effectTest("does not open or refresh after its inspection owner is replaced", function* () {
     const fixture = setup();
-    const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("u");
-
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.managerActions.replaceSessionProfiles).toHaveBeenCalled()),
+    const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
+    let current = true;
+    const submitted = vi.fn();
+    const run = <A>(effect: Effect.Effect<A>, signal: AbortSignal) => {
+      submitted();
+      return Effect.runPromise(effect, { signal });
+    };
+    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+      isCurrent: () => current,
+      run,
+    });
+    vi.mocked(fixture.managerActions.inspectProfiles).mockImplementation(() =>
+      Effect.runPromise(Deferred.await(pending)),
     );
-    expect(fixture.ui.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("Use Project/project in Current Session"),
-      expect.stringContaining(
-        "Later changes to Current Session or the saved set will stay separate",
-      ),
-    );
-    const patch = vi.mocked(fixture.managerActions.replaceSessionProfiles).mock.calls[0]?.[0];
-    expect(patch?.expectedRevision).toBe(0);
-    expect(Object.keys(patch?.profiles ?? {})).toEqual(PROFILE_IDS);
-    expect(patch?.origin).toEqual({ scope: "project", name: "project" });
+    const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
+    current = false;
+    Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
+    yield* step(() => running);
+    expect(fixture.overlays).toEqual([]);
+    expect(submitted).not.toHaveBeenCalled();
+  });
 
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    yield* closeLibraryAndDashboard(fixture, running);
+  effectTest("disposal aborts the dashboard model refresh and is idempotent", function* () {
+    const fixture = setup();
+    let signal: AbortSignal | undefined;
+    vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+      isCurrent: () => true,
+      run: <A>(_effect: Effect.Effect<A>, captured: AbortSignal) => {
+        signal = captured;
+        return Effect.runPromise(Effect.never, { signal: captured });
+      },
+    });
+    const running = yield* openDashboard(fixture);
+    expect(signal?.aborted).toBe(false);
+    yield* closeDashboard(fixture, running);
+    expect(signal?.aborted).toBe(true);
+    fixture.overlays[0]?.dispose?.();
+    expect(fixture.managerActions.patchSessionProfile).not.toHaveBeenCalled();
   });
 
   effectTest(
-    "does not apply a Project set when trust is revoked during confirmation",
+    "previews and atomically replaces all seven Session profiles in one host slot",
     function* () {
       const fixture = setup();
-      fixture.ui.confirm.mockImplementationOnce(() => {
-        fixture.setProjectTrusted(false);
-        return Promise.resolve(true);
-      });
       const running = yield* openLibrary(fixture);
-
-      fixture.overlays[1]?.handleInput?.("u");
-
-      yield* step(() =>
-        vi.waitFor(() =>
-          expect(fixture.ui.notify).toHaveBeenCalledWith(
-            expect.stringContaining("This project is no longer trusted"),
-            "warning",
-          ),
-        ),
-      );
+      press(fixture, "u");
+      yield* step(settleHostPromises);
+      fixture.overlays[0]?.render(120);
       expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-
-      yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(fixture, running);
+      press(fixture, "\r");
+      yield* step(settleHostPromises);
+      const patch = vi.mocked(fixture.managerActions.replaceSessionProfiles).mock.calls[0]?.[0];
+      expect(patch?.expectedRevision).toBe(0);
+      expect(Object.keys(patch?.profiles ?? {})).toEqual(PROFILE_IDS);
+      expect(patch?.origin).toEqual({ scope: "project", name: "project" });
+      expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
     },
   );
 
-  effectTest("saves one seven-profile snapshot without changing the default", function* () {
+  effectTest("cancelled replacement leaves Session unchanged", function* () {
     const fixture = setup();
     const running = yield* openLibrary(fixture);
+    press(fixture, "u");
+    yield* step(settleHostPromises);
+    press(fixture, "\u001b");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
 
-    fixture.overlays[1]?.handleInput?.("s");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.overlays.at(-1)).toBeInstanceOf(ProfileSetSaveFormComponent)),
+  effectTest("rechecks Project trust after replacement confirmation", function* () {
+    const fixture = setup();
+    const running = yield* openLibrary(fixture);
+    press(fixture, "u");
+    yield* step(settleHostPromises);
+    fixture.overlays[0]?.render(120);
+    fixture.setProjectTrusted(false);
+    press(fixture, "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
+
+  effectTest("rejects a stale Session replacement without retrying", function* () {
+    const fixture = setup();
+    vi.mocked(fixture.managerActions.replaceSessionProfiles).mockRejectedValueOnce(
+      new SessionProfileConflictError({
+        expectedRevision: 0,
+        actualRevision: 1,
+        message: "conflict",
+      }),
     );
-    for (const key of "session copy") fixture.overlays.at(-1)?.handleInput?.(key);
-    fixture.overlays.at(-1)?.handleInput?.("\r");
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.managerActions.createProfileSetFromSnapshot).toHaveBeenCalled(),
-      ),
+    const running = yield* openLibrary(fixture);
+    press(fixture, "u");
+    yield* step(settleHostPromises);
+    fixture.overlays[0]?.render(120);
+    press(fixture, "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.replaceSessionProfiles).toHaveBeenCalledTimes(1);
+    yield* closeDashboard(fixture, running);
+  });
+
+  effectTest("saves one seven-profile snapshot without changing defaults", function* () {
+    const fixture = setup();
+    const running = yield* openDashboard(fixture);
+    yield* saveSnapshot(fixture);
+    expect(fixture.managerActions.createProfileSetFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "project", profileSet: "snapshot", expectedRevision: 0 }),
     );
     const patch = vi.mocked(fixture.managerActions.createProfileSetFromSnapshot).mock.calls[0]?.[0];
-    expect(patch?.scope).toBe("project");
-    expect(patch?.profileSet).toBe("session copy");
-    expect(patch?.expectedRevision).toBe(0);
     expect(patch).not.toHaveProperty("profiles");
     expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(4)));
-    yield* closeLibraryAndDashboard(fixture, running);
+    yield* closeDashboard(fixture, running);
   });
 
-  effectTest("blocks saving a session with invalid Project or Global profiles", function* () {
-    const fixture = setup({ trusted: false, value: invalidSourceInspection() });
+  for (const value of [invalidSourceInspection, invalidProjectInheritanceInspection]) {
+    effectTest(`blocks snapshots with invalid inherited routes (${value.name})`, function* () {
+      const fixture = setup({ value: value() });
+      const running = yield* openDashboard(fixture);
+      yield* saveSnapshot(fixture);
+      expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
+    });
+  }
+
+  effectTest("Saved profiles cannot save a Session snapshot", function* () {
+    const fixture = setup();
     const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("s");
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.ui.notify).toHaveBeenCalledWith(
-          expect.stringContaining("Fix or disable them in Current Session before saving"),
-          "warning",
-        ),
-      ),
-    );
-    expect(fixture.ui.select).not.toHaveBeenCalled();
+    yield* saveSnapshot(fixture);
     expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    yield* closeLibraryAndDashboard(fixture, running);
+    yield* closeDashboard(fixture, running);
   });
 
-  effectTest("does not save when Current Session changes during the prompts", function* () {
+  effectTest("invalid inherited saved routes cannot replace Session", function* () {
+    const fixture = setup({ value: invalidProjectInheritanceInspection() });
+    const running = yield* openLibrary(fixture);
+    press(fixture, "u");
+    yield* step(settleHostPromises);
+    fixture.overlays[0]?.render(120);
+    press(fixture, "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
+
+  effectTest("does not save when Session changes during the form", function* () {
     const displayed = inspection();
     const fixture = setup({ value: displayed });
-    vi.mocked(fixture.managerActions.inspectProfiles)
-      .mockResolvedValueOnce(displayed)
-      .mockResolvedValueOnce(displayed)
-      .mockResolvedValue(atSessionRevision(displayed, 1));
-    const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("s");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.overlays.at(-1)).toBeInstanceOf(ProfileSetSaveFormComponent)),
+    const running = yield* openDashboard(fixture);
+    vi.mocked(fixture.managerActions.inspectProfiles).mockResolvedValue(
+      atSessionRevision(displayed, 1),
     );
-    for (const key of "stale copy") fixture.overlays.at(-1)?.handleInput?.(key);
-    fixture.overlays.at(-1)?.handleInput?.("\r");
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.ui.notify).toHaveBeenCalledWith(
-          expect.stringContaining("changed while you were choosing where to save it"),
-          "warning",
-        ),
-      ),
-    );
+    yield* saveSnapshot(fixture);
     expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
-    expect(fixture.managerActions.inspectProfiles).toHaveBeenCalledTimes(3);
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(4)));
-    yield* closeLibraryAndDashboard(fixture, running);
+    yield* closeDashboard(fixture, running);
   });
 
-  effectTest("rechecks Project trust after snapshot inspection settles", function* () {
-    const displayed = inspection();
-    const fixture = setup({ value: displayed });
-    const pendingInspection = Deferred.makeUnsafe<ProfileSettingsInspection>();
-    vi.mocked(fixture.managerActions.inspectProfiles)
-      .mockResolvedValueOnce(displayed)
-      .mockResolvedValueOnce(displayed)
-      .mockImplementationOnce(() => Effect.runPromise(Deferred.await(pendingInspection)));
-    const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("s");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.overlays.at(-1)).toBeInstanceOf(ProfileSetSaveFormComponent)),
-    );
-    for (const key of "revoked copy") fixture.overlays.at(-1)?.handleInput?.(key);
-    fixture.overlays.at(-1)?.handleInput?.("\r");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.managerActions.inspectProfiles).toHaveBeenCalledTimes(3)),
-    );
-    fixture.setProjectTrusted(false);
-    Deferred.doneUnsafe(pendingInspection, Effect.succeed(displayed));
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.ui.notify).toHaveBeenCalledWith(
-          expect.stringContaining("This project is no longer trusted"),
-          "warning",
-        ),
-      ),
-    );
-    expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(4)));
-    yield* closeLibraryAndDashboard(fixture, running);
-  });
-
-  effectTest(
-    "makes a saved set default for new sessions without replacing Current Session",
-    function* () {
+  for (const action of ["snapshot", "default"] as const) {
+    effectTest(`rechecks Project trust after ${action} inspection settles`, function* () {
       const fixture = setup();
-      const running = yield* openLibrary(fixture);
-
-      fixture.overlays[1]?.handleInput?.("k");
-      fixture.overlays[1]?.handleInput?.("?");
-      fixture.overlays[1]?.handleInput?.("\r");
-
-      yield* step(() =>
-        vi.waitFor(() => expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalled()),
-      );
-      expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
-        expect.objectContaining({
-          scope: "project",
-          defaultProfileSet: "common",
-        }),
-      );
-      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-      expect(fixture.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining("new sessions. Current Session did not change"),
-        "info",
-      );
-
-      yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(fixture, running);
-    },
-  );
-
-  effectTest("rechecks Project trust after default inspection settles", function* () {
-    const initial = inspection();
-    const fixture = setup({ value: initial });
-    const pendingInspection = Deferred.makeUnsafe<ProfileSettingsInspection>();
-    vi.mocked(fixture.managerActions.inspectProfiles)
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce(initial)
-      .mockImplementationOnce(() => Effect.runPromise(Deferred.await(pendingInspection)));
-    const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("k");
-    fixture.overlays[1]?.handleInput?.("?");
-    fixture.overlays[1]?.handleInput?.("\r");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.managerActions.inspectProfiles).toHaveBeenCalledTimes(3)),
-    );
-    fixture.setProjectTrusted(false);
-    Deferred.doneUnsafe(pendingInspection, Effect.succeed(initial));
-
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.ui.notify).toHaveBeenCalledWith(
-          expect.stringContaining("This project is no longer trusted"),
-          "warning",
-        ),
-      ),
-    );
-    expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    yield* closeLibraryAndDashboard(fixture, running);
-  });
-
-  effectTest(
-    "blocks a refreshed Project default that inherits invalid Global routes",
-    function* () {
-      const initial = inspection();
-      const invalid = invalidProjectInheritanceInspection();
-      const fixture = setup({ value: initial });
-      vi.mocked(fixture.managerActions.inspectProfiles)
-        .mockResolvedValueOnce(initial)
-        .mockResolvedValueOnce(initial)
-        .mockResolvedValue(invalid);
-      const running = yield* openLibrary(fixture);
-
-      fixture.overlays[1]?.handleInput?.("k");
-      fixture.overlays[1]?.handleInput?.("?");
-      fixture.overlays[1]?.handleInput?.("\r");
-
-      yield* step(() =>
-        vi.waitFor(() =>
-          expect(fixture.ui.notify).toHaveBeenCalledWith(
-            expect.stringContaining("saved set is invalid"),
-            "warning",
-          ),
-        ),
-      );
+      const running =
+        action === "snapshot" ? yield* openDashboard(fixture) : yield* openLibrary(fixture);
+      const pending = Deferred.makeUnsafe<ProfileSettingsInspection>();
+      const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
+      inspect.mockClear();
+      inspect.mockImplementationOnce(() => Effect.runPromise(Deferred.await(pending)));
+      if (action === "snapshot") yield* saveSnapshot(fixture);
+      else makeDefault(fixture);
+      yield* step(settleHostPromises);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      fixture.setProjectTrusted(false);
+      Deferred.doneUnsafe(pending, Effect.succeed(inspection()));
+      yield* step(settleHostPromises);
+      expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
       expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
+    });
+  }
 
-      yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(fixture, running);
-    },
-  );
+  effectTest("makes a saved set default without replacing Session", function* () {
+    const fixture = setup();
+    const running = yield* openLibrary(fixture);
+    makeDefault(fixture);
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "project", defaultProfileSet: "common" }),
+    );
+    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
+
+  effectTest("blocks a refreshed default that inherits invalid Global routes", function* () {
+    const fixture = setup();
+    const running = yield* openLibrary(fixture);
+    vi.mocked(fixture.managerActions.inspectProfiles).mockResolvedValue(
+      invalidProjectInheritanceInspection(),
+    );
+    makeDefault(fixture);
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
 
   effectTest(
-    "warns when the Project default takes priority over a new Global default",
+    "writes only Global when making a Global set default under a Project default",
     function* () {
       const fixture = setup();
       const running = yield* openLibrary(fixture);
-
-      fixture.overlays[1]?.handleInput?.("j");
-      fixture.overlays[1]?.handleInput?.("?");
-      fixture.overlays[1]?.handleInput?.("\r");
-
-      yield* step(() =>
-        vi.waitFor(() => expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalled()),
-      );
+      press(fixture, "j", "?", "\r");
+      yield* step(settleHostPromises);
       expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
         expect.objectContaining({ scope: "global", defaultProfileSet: "common" }),
       );
-      expect(fixture.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining("This project's default still takes priority"),
-        "info",
-      );
-
-      yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(fixture, running);
+      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
     },
   );
 
-  effectTest(
-    "clears Project and Global defaults without changing or deleting saved sets",
-    function* () {
-      const project = setup();
-      const projectRunning = yield* openLibrary(project);
-
-      project.overlays[1]?.handleInput?.("?");
-      project.overlays[1]?.handleInput?.("\r");
-      yield* step(() =>
-        vi.waitFor(() => expect(project.managerActions.patchDefaultProfileSet).toHaveBeenCalled()),
-      );
-      const projectPatch = vi.mocked(project.managerActions.patchDefaultProfileSet).mock
-        .calls[0]?.[0];
-      expect(projectPatch).toMatchObject({ scope: "project" });
-      expect(projectPatch).not.toHaveProperty("defaultProfileSet");
-      expect(project.managerActions.deleteProfileSet).not.toHaveBeenCalled();
-      expect(project.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-      expect(project.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "New sessions in this project will use Global, then built-in profiles",
-        ),
-        "info",
-      );
-      expect(project.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining("Project/project is still saved"),
-        "info",
-      );
-      yield* step(() => vi.waitFor(() => expect(project.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(project, projectRunning);
-
-      const global = setup();
-      const globalRunning = yield* openLibrary(global);
-      global.overlays[1]?.handleInput?.("j");
-      global.overlays[1]?.handleInput?.("j");
-      global.overlays[1]?.handleInput?.("?");
-      global.overlays[1]?.handleInput?.("\r");
-      yield* step(() =>
-        vi.waitFor(() => expect(global.managerActions.patchDefaultProfileSet).toHaveBeenCalled()),
-      );
-      const globalPatch = vi.mocked(global.managerActions.patchDefaultProfileSet).mock
-        .calls[0]?.[0];
-      expect(globalPatch).toMatchObject({ scope: "global" });
-      expect(globalPatch).not.toHaveProperty("defaultProfileSet");
-      expect(global.managerActions.deleteProfileSet).not.toHaveBeenCalled();
-      expect(global.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-      expect(global.ui.notify).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "New sessions without a Project default will use built-in profiles",
-        ),
-        "info",
-      );
-      yield* step(() => vi.waitFor(() => expect(global.overlays).toHaveLength(3)));
-      yield* closeLibraryAndDashboard(global, globalRunning);
-    },
-  );
+  for (const scope of ["project", "global"] as const) {
+    effectTest(`clears ${scope} default without changing saved sets or Session`, function* () {
+      const fixture = setup();
+      const running = yield* openLibrary(fixture);
+      if (scope === "global") press(fixture, "j", "j");
+      press(fixture, "?", "\r");
+      yield* step(settleHostPromises);
+      const patch = vi.mocked(fixture.managerActions.patchDefaultProfileSet).mock.calls[0]?.[0];
+      expect(patch).toMatchObject({ scope });
+      expect(patch).not.toHaveProperty("defaultProfileSet");
+      expect(fixture.managerActions.deleteProfileSet).not.toHaveBeenCalled();
+      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+      yield* closeDashboard(fixture, running);
+    });
+  }
 
   effectTest("clears a malformed default by scope without naming a saved set", function* () {
     const fixture = setup({ trusted: false, value: malformedGlobalDefaultInspection() });
     const running = yield* openLibrary(fixture);
+    press(fixture, "?", "\r");
+    yield* step(settleHostPromises);
+    const patch = vi.mocked(fixture.managerActions.patchDefaultProfileSet).mock.calls[0]?.[0];
+    expect(patch).toMatchObject({ scope: "global" });
+    expect(patch).not.toHaveProperty("defaultProfileSet");
+    yield* closeDashboard(fixture, running);
+  });
 
-    fixture.overlays[1]?.handleInput?.("?");
-    fixture.overlays[1]?.handleInput?.("\r");
-    yield* step(() =>
-      vi.waitFor(() => expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalled()),
+  effectTest("keeps Session unchanged while editing a saved set", function* () {
+    const fixture = setup();
+    const running = yield* openLibrary(fixture);
+    press(fixture, "\r", "e");
+    yield* step(settleHostPromises);
+    press(fixture, "j", "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "project", profileSet: "project" }),
     );
-    expect(fixture.managerActions.patchDefaultProfileSet).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "global" }),
-    );
-    const notices = fixture.ui.notify.mock.calls.map(([message]) => String(message));
-    expect(notices.some((message) => message.includes("will no longer use a saved set"))).toBe(
-      true,
-    );
-    expect(notices.some((message) => message.includes("is still saved"))).toBe(false);
+    expect(fixture.managerActions.patchSessionProfile).not.toHaveBeenCalled();
+    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
+    yield* closeDashboard(fixture, running);
+  });
 
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    yield* closeLibraryAndDashboard(fixture, running);
+  for (const outcome of ["refresh", "refresh-failure", "other-error"] as const) {
+    effectTest(`saved-set write handles ${outcome} without retrying the edit`, function* () {
+      const fixture = setup();
+      const running = yield* openLibrary(fixture);
+      press(fixture, "\r");
+      const updated = makeProfileSettingsInspection({
+        globalDocument: inspection().globalDocument,
+        projectDocument: {
+          version: 6,
+          profileSets: { project: { profiles: {} }, external: { profiles: {} } },
+        },
+        projectTrusted: true,
+      });
+      const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
+      inspect.mockClear();
+      if (outcome === "refresh-failure") inspect.mockRejectedValueOnce(new Error("read failed"));
+      else inspect.mockResolvedValue(updated);
+      vi.mocked(fixture.managerActions.patchProfile).mockRejectedValueOnce(
+        new SubagentConfigStoreError({
+          operation: "update",
+          path: "/repo/.pi/subagents.json",
+          message:
+            outcome === "other-error"
+              ? "permission denied"
+              : "Subagents settings changed on disk; reopen /subagents profiles and try again.",
+        }),
+      );
+      const changeEffort = function* () {
+        press(fixture, "e");
+        yield* step(settleHostPromises);
+        press(fixture, "j", "\r");
+        yield* step(settleHostPromises);
+      };
+      yield* changeEffort();
+      expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
+      expect(inspect).toHaveBeenCalledTimes(outcome === "other-error" ? 0 : 1);
+      yield* changeEffort();
+      if (outcome !== "refresh")
+        expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
+      else {
+        expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(2);
+        expect(
+          vi.mocked(fixture.managerActions.patchProfile).mock.calls[1]?.[0].expectedDocument,
+        ).toEqual(updated.projectDocument);
+      }
+      yield* closeDashboard(fixture, running);
+    });
+  }
+
+  effectTest("does not offer Project saved sets to untrusted projects", function* () {
+    const fixture = setup({ trusted: false });
+    const running = yield* openLibrary(fixture);
+    press(fixture, "u");
+    yield* step(settleHostPromises);
+    fixture.overlays[0]?.render(120);
+    press(fixture, "\r");
+    yield* step(settleHostPromises);
+    const patch = vi.mocked(fixture.managerActions.replaceSessionProfiles).mock.calls[0]?.[0];
+    expect(patch?.origin.scope).toBe("global");
+    yield* closeDashboard(fixture, running);
   });
 
   effectTest("saves a writer workspace selection only through the coordinator", function* () {
@@ -940,109 +784,4 @@ describe("profile settings controller", () => {
       );
     });
   }
-
-  effectTest("keeps Current Session unchanged while editing a saved set", function* () {
-    const fixture = setup();
-    const running = yield* openLibrary(fixture);
-    fixture.overlays[1]?.handleInput?.("\r");
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    expect(fixture.overlays[2]).toBeInstanceOf(ProfileWorkspaceComponent);
-    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-    fixture.overlays[2]?.handleInput?.("\u001b");
-    yield* step(() => running);
-  });
-
-  for (const outcome of ["refresh", "refresh-failure", "other-error"] as const) {
-    effectTest(`saved-set write handles ${outcome} without retrying the edit`, function* () {
-      const fixture = setup();
-      const running = yield* openLibrary(fixture);
-      fixture.overlays[1]?.handleInput?.("\r");
-      yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-      const editor = fixture.overlays[2];
-      const updated = makeProfileSettingsInspection({
-        globalDocument: inspection().globalDocument,
-        projectDocument: {
-          version: 6,
-          profileSets: { project: { profiles: {} }, external: { profiles: {} } },
-        },
-        projectTrusted: true,
-      });
-      const inspect = vi.mocked(fixture.managerActions.inspectProfiles);
-      inspect.mockClear();
-      if (outcome === "refresh-failure") inspect.mockRejectedValueOnce(new Error("read failed"));
-      else inspect.mockResolvedValue(updated);
-      vi.mocked(fixture.managerActions.patchProfile).mockRejectedValueOnce(
-        new SubagentConfigStoreError({
-          operation: "update",
-          path: "/repo/.pi/subagents.json",
-          message:
-            outcome === "other-error"
-              ? "permission denied"
-              : "Subagents settings changed on disk; reopen /subagents profiles and try again.",
-        }),
-      );
-      const changeEffort = function* () {
-        editor?.handleInput?.("e");
-        yield* step(settleHostPromises);
-        editor?.handleInput?.("j");
-        editor?.handleInput?.("\r");
-      };
-      yield* changeEffort();
-      yield* step(settleHostPromises);
-      expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
-      expect(inspect).toHaveBeenCalledTimes(outcome === "other-error" ? 0 : 1);
-      yield* changeEffort();
-      yield* step(settleHostPromises);
-      if (outcome !== "refresh") {
-        expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(1);
-      } else {
-        expect(fixture.managerActions.patchProfile).toHaveBeenCalledTimes(2);
-        expect(
-          vi.mocked(fixture.managerActions.patchProfile).mock.calls[1]?.[0].expectedDocument,
-        ).toEqual(updated.projectDocument);
-      }
-      editor?.handleInput?.("\u001b"); // Fields to profiles.
-      editor?.handleInput?.("\u001b"); // Close the original workspace.
-      yield* step(() => running);
-    });
-  }
-
-  effectTest("rejects a stale Current Session update without retrying", function* () {
-    const fixture = setup();
-    vi.mocked(fixture.managerActions.replaceSessionProfiles).mockRejectedValueOnce(
-      new SessionProfileConflictError({
-        expectedRevision: 0,
-        actualRevision: 1,
-        message: "conflict",
-      }),
-    );
-    const running = yield* openLibrary(fixture);
-
-    fixture.overlays[1]?.handleInput?.("u");
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(fixture.ui.notify).toHaveBeenCalledWith(
-          expect.stringContaining("Nothing was replaced"),
-          "warning",
-        ),
-      ),
-    );
-    expect(fixture.managerActions.replaceSessionProfiles).toHaveBeenCalledTimes(1);
-    expect(fixture.ui.notify).not.toHaveBeenCalledWith(
-      expect.stringContaining("Copied Project/project into Current Session"),
-      "info",
-    );
-
-    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(3)));
-    yield* closeLibraryAndDashboard(fixture, running);
-  });
-
-  effectTest("keeps Project saved sets unavailable when the project is untrusted", function* () {
-    const fixture = setup({ trusted: false });
-    const running = yield* openLibrary(fixture);
-    const text = fixture.overlays[1]?.render(120).join("\n");
-    expect(text).toContain("Project sets unavailable");
-    expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
-    yield* closeLibraryAndDashboard(fixture, running);
-  });
 });

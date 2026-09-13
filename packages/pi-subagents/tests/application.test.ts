@@ -539,10 +539,9 @@ describe("subagent Pi registration", () => {
         editorClosed = true;
       });
       yield* step(() => vi.waitFor(() => expect(component).toBeDefined()));
-      component?.handleInput?.("a"); // Open the original Actions menu directly.
-      for (let index = 0; index < 3; index += 1) component?.handleInput?.("j");
-      component?.handleInput?.("\r"); // Select Disable.
-      component?.handleInput?.("\r"); // Confirm.
+      component?.handleInput?.("e"); // Change the selected profile's reasoning.
+      component?.handleInput?.("j");
+      component?.handleInput?.("\r");
       yield* step(() =>
         vi.waitFor(() =>
           Effect.runPromise(hasSessionOverride(ctx)).then((value) => expect(value).toBe(true)),

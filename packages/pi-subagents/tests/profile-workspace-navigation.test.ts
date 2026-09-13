@@ -78,112 +78,183 @@ const harness = (overrides: Partial<ProfileWorkspaceOptions> = {}, initial = [fi
   return { component, close, saveDraft, loadModelPicker, candidates: () => candidates, inspection };
 };
 
-describe("original profile workspace with faster flows", () => {
-  effectTest("skips the candidate page for a single candidate", function* () {
-    const h = harness({}, [first]);
+describe("fixed-target profile workspace", () => {
+  it.each([1, 2])("uses only profiles and fields for %i candidates", (count) => {
+    const h = harness({}, [first, second].slice(0, count));
     h.component.handleInput("\r");
-    h.component.handleInput("\r");
-    yield* step(tick);
-    expect(h.loadModelPicker).toHaveBeenCalledWith("generalist", 0, first, expect.any(AbortSignal));
-    h.component.handleInput("\u001b");
-    h.component.handleInput("\u001b");
+    expect(h.component.getPosition().initialFocus).toBe("fields");
+    h.component.handleInput("\u001b[C");
+    expect(h.loadModelPicker).not.toHaveBeenCalled();
+    h.component.handleInput("\u001b[D");
+    expect(h.component.getPosition().initialFocus).toBe("profiles");
     expect(h.close).not.toHaveBeenCalled();
-    h.component.handleInput("p");
-    expect(h.close).toHaveBeenCalledWith(expect.objectContaining({ pane: "profiles" }));
+    h.component.handleInput("\u001b");
+    expect(h.close).toHaveBeenCalledWith(false);
   });
 
-  it("retains the original candidate page for multi-candidate routes", () => {
-    const h = harness();
-    h.component.handleInput("\r");
-    h.component.handleInput("p");
-    expect(h.close).toHaveBeenCalledWith(expect.objectContaining({ pane: "candidates" }));
+  it("keeps arrows navigation-only even when configured as confirmation", () => {
+    const h = harness({
+      initialFocus: "fields",
+      matchesKeybinding: (_data, id) => id === "tui.select.confirm",
+    });
+    for (const key of ["\u001b[C", "\u001b[B", "\u001b[A", "\u001b[D"])
+      h.component.handleInput(key);
+    expect(h.component.getPosition().initialFocus).toBe("profiles");
+    expect(h.saveDraft).not.toHaveBeenCalled();
     expect(h.loadModelPicker).not.toHaveBeenCalled();
   });
 
-  effectTest("opens model directly from profiles or candidates without extra pages", function* () {
-    for (const pane of ["profiles", "candidates"] as const) {
-      const h = harness({ initialFocus: pane });
+  it("scrolls help on short terminals without moving the editor selection", () => {
+    const h = harness({ getHeight: () => 8 });
+    const position = h.component.getPosition();
+    h.component.handleInput("?");
+    const firstPage = h.component.render(48);
+    h.component.handleInput("G");
+    expect(h.component.render(48)).not.toEqual(firstPage);
+    expect(h.component.getPosition()).toEqual(position);
+    h.component.handleInput("g");
+    h.component.handleInput("g");
+    expect(h.component.render(48)).toEqual(firstPage);
+    h.component.handleInput("\u001b");
+    expect(h.component.hasOverlay).toBe(false);
+  });
+
+  it("offers session saving through a shortcut and a selectable row only for Current Session", () => {
+    const session = harness();
+    session.component.handleInput("s");
+    expect(session.close).toHaveBeenCalledWith(expect.objectContaining({ action: "save-session" }));
+    const row = harness({ initialFocus: "fields" });
+    row.component.handleInput("G");
+    row.component.handleInput("\r");
+    expect(row.close).toHaveBeenCalledWith(expect.objectContaining({ action: "save-session" }));
+    const saved = harness({
+      target: { kind: "profile-set", set: { scope: "global", name: "default" } },
+      initialFocus: "fields",
+    });
+    saved.component.handleInput("s");
+    saved.component.handleInput("G");
+    expect(saved.close).not.toHaveBeenCalled();
+    expect(saved.component.getPosition().initialField).not.toBe("save-session");
+  });
+
+  effectTest("moves candidate identity together with its remembered advanced fields", function* () {
+    const h = harness({
+      initialFocus: "fields",
+      initialField: "context",
+      initialCandidateIndex: 1,
+    });
+    h.component.handleInput("a");
+    h.component.handleInput("j");
+    h.component.handleInput("j");
+    h.component.handleInput("\r");
+    yield* step(tick);
+    expect(h.candidates()).toEqual([second, first]);
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 0,
+      initialField: "context",
+      initialAdvancedExpanded: true,
+    });
+    h.component.handleInput("]");
+    expect(h.component.getPosition().initialAdvancedExpanded).toBe(false);
+    h.component.handleInput("[");
+    expect(h.component.getPosition()).toMatchObject({
+      initialField: "context",
+      initialAdvancedExpanded: true,
+    });
+  });
+
+  it("uses j/k and horizontal arrows for panes without moving rows or editing", () => {
+    const h = harness();
+    const initial = h.component.getPosition();
+    for (const key of ["j", "j", "\u001b[C"]) {
+      h.component.handleInput(key);
+      expect(h.component.getPosition()).toMatchObject({
+        initialFocus: "fields",
+        initialProfile: initial.initialProfile,
+        initialField: initial.initialField,
+      });
+    }
+    for (const key of ["k", "k", "\u001b[D"]) {
+      h.component.handleInput(key);
+      expect(h.component.getPosition()).toMatchObject({
+        initialFocus: "profiles",
+        initialProfile: initial.initialProfile,
+        initialField: initial.initialField,
+      });
+    }
+    expect(h.close).not.toHaveBeenCalled();
+    expect(h.saveDraft).not.toHaveBeenCalled();
+    expect(h.loadModelPicker).not.toHaveBeenCalled();
+  });
+
+  it("remembers each profile and candidate's field and Advanced state", () => {
+    const h = harness({
+      initialFocus: "fields",
+      initialField: "context",
+      initialCandidateIndex: 1,
+    });
+    h.component.handleInput("[");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 0,
+      initialField: "model",
+      initialAdvancedExpanded: false,
+    });
+    h.component.handleInput("]");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 1,
+      initialField: "context",
+      initialAdvancedExpanded: true,
+    });
+    h.component.handleInput("\u001b");
+    h.component.handleInput("\u001b[A");
+    h.component.handleInput("\u001b[B");
+    h.component.handleInput("\r");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 1,
+      initialField: "context",
+      initialAdvancedExpanded: true,
+      initialFocus: "fields",
+    });
+  });
+
+  it("walks continuously through candidate fields without a candidate page", () => {
+    const h = harness({ initialFocus: "fields" });
+    h.component.handleInput("G");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 1,
+      initialField: "save-session",
+    });
+    h.component.handleInput("g");
+    h.component.handleInput("g");
+    expect(h.component.getPosition()).toMatchObject({
+      initialCandidateIndex: 0,
+      initialField: "model",
+    });
+  });
+
+  it("keeps help open until dismissed and consumes shortcuts without edits", () => {
+    const h = harness();
+    const position = h.component.getPosition();
+    h.component.handleInput("?");
+    expect(h.component.hasOverlay).toBe(true);
+    for (const key of ["m", "+", "j", "\t"]) h.component.handleInput(key);
+    expect(h.component.hasOverlay).toBe(true);
+    expect(h.component.getPosition()).toEqual(position);
+    expect(h.loadModelPicker).not.toHaveBeenCalled();
+    h.component.handleInput("\u001b");
+    expect(h.component.hasOverlay).toBe(false);
+    expect(h.close).not.toHaveBeenCalled();
+  });
+
+  effectTest("opens the model picker directly from either focus zone", function* () {
+    for (const initialFocus of ["profiles", "fields"] as const) {
+      const h = harness({ initialFocus });
       h.component.handleInput("m");
       yield* step(tick);
       h.component.handleInput("changed");
       h.component.handleInput("\r");
       yield* step(tick);
       expect(h.candidates()[0]?.model).toBe("test/changed");
-      expect(h.saveDraft).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it("preserves field, Advanced expansion, candidate and pane when leaving for saved sets", () => {
-    const h = harness({
-      initialFocus: "fields",
-      initialField: "context",
-      initialCandidateIndex: 1,
-    });
-    h.component.handleInput("p");
-    expect(h.close).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sets",
-        profile: "generalist",
-        field: "context",
-        candidateIndex: 1,
-        pane: "fields",
-        advancedExpanded: true,
-      }),
-    );
-  });
-
-  it("keeps the focused field when returning through candidate and profile pages", () => {
-    const h = harness({
-      initialFocus: "fields",
-      initialField: "context",
-      initialCandidateIndex: 1,
-    });
-    h.component.handleInput("\u001b");
-    h.component.handleInput("\u001b");
-    h.component.handleInput("k");
-    h.component.handleInput("j");
-    h.component.handleInput("\r");
-    h.component.handleInput("\r");
-    h.component.handleInput("p");
-    expect(h.close).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pane: "fields",
-        field: "context",
-        candidateIndex: 1,
-        advancedExpanded: true,
-      }),
-    );
-  });
-
-  it("retains field identity when switching candidates and endpoint jumping", () => {
-    const h = harness({ initialFocus: "candidates", initialField: "effort" });
-    h.component.handleInput("G");
-    h.component.handleInput("p");
-    expect(h.close).toHaveBeenCalledWith(
-      expect.objectContaining({ field: "effort", candidateIndex: 1 }),
-    );
-    const localContext = harness({ initialFocus: "candidates", initialField: "context" }, [
-      first,
-      { ...second, runtime: "claude" },
-    ]);
-    localContext.component.handleInput("G");
-    localContext.component.handleInput("p");
-    expect(localContext.close).toHaveBeenCalledWith(
-      expect.objectContaining({ field: "model", candidateIndex: 1 }),
-    );
-  });
-
-  it("offers session saving and target selection without new header controls", () => {
-    for (const [key, action] of [
-      ["s", "save-session"],
-      ["t", "select-target"],
-    ]) {
-      const h = harness({ initialField: "effort" });
-      h.component.handleInput(key!);
-      expect(h.close).toHaveBeenCalledWith(
-        expect.objectContaining({ action, pane: "profiles", field: "effort" }),
-      );
-      expect(h.saveDraft).not.toHaveBeenCalled();
     }
   });
 
@@ -202,10 +273,11 @@ describe("original profile workspace with faster flows", () => {
       yield* step(tick);
       expect(h.saveDraft).toHaveBeenCalledTimes(1);
       expect(h.candidates()).toEqual([first, second, { ...first, model: "test/changed" }]);
-      h.component.handleInput("p");
-      expect(h.close).toHaveBeenCalledWith(
-        expect.objectContaining({ pane: "fields", field: "model", candidateIndex: 2 }),
-      );
+      expect(h.component.getPosition()).toMatchObject({
+        initialFocus: "fields",
+        initialField: "model",
+        initialCandidateIndex: 2,
+      });
     },
   );
 
@@ -253,6 +325,7 @@ describe("original profile workspace with faster flows", () => {
     h.component.handleInput("k");
     h.component.handleInput("\r");
     for (const key of ["p", "s", "t", "+", "a", "m"]) h.component.handleInput(key);
+    yield* step(tick);
     expect(saveDraft).toHaveBeenCalledTimes(1);
     expect(h.close).not.toHaveBeenCalled();
     expect(h.loadModelPicker).not.toHaveBeenCalled();

@@ -4,6 +4,7 @@ import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { normalizeProfileSetName } from "../config/schema.ts";
 import { renderProfileSetSaveForm } from "./ui/profile-set-save-form-render.ts";
+import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
 
 export interface ProfileSetSaveDestination {
   readonly scope: "global" | "project";
@@ -58,7 +59,9 @@ export class ProfileSetSaveFormComponent implements Component, Focusable {
     if (this.disposed) return;
     const resolution = this.keymap.resolve(data, {
       mode: this.section === "name" ? "text-input" : "navigation",
-      matchesKeybinding: this.options.matchesKeybinding,
+      matchesKeybinding: isWorkspaceNavigationKey(data)
+        ? undefined
+        : this.options.matchesKeybinding,
     });
     if (resolution?._tag === "Action" && resolution.action === "cancel") {
       this.options.close(undefined);

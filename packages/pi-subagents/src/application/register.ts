@@ -287,17 +287,20 @@ export function registerSubagentApplication(
   ): Promise<A> => {
     const activation = currentActivation;
     return activation
-      ? operation(activation)
+      ? operation(activation).then((result) => {
+          if (currentActivation !== activation) throw new Error("Subagents session was replaced.");
+          return result;
+        })
       : Promise.reject(new Error("Subagents are not active; run /reload and try again."));
   };
 
   const withConfigStore =
-    <Patch, E>(
+    <Patch, A, E>(
       select: (
         store: SubagentConfigStoreContract,
-      ) => (cwd: string, agentDirectory: string, patch: Patch) => Effect.Effect<void, E>,
+      ) => (cwd: string, agentDirectory: string, patch: Patch) => Effect.Effect<A, E>,
     ) =>
-    (patch: Patch): Promise<void> =>
+    (patch: Patch): Promise<A> =>
       withCurrentActivation((activation) =>
         run(
           SubagentConfigStore.use((store) =>
@@ -380,6 +383,8 @@ export function registerSubagentApplication(
         ),
       ),
     patchProfile: withConfigStore((store) => store.patchProfile),
+    patchProfileWithReceipt: withConfigStore((store) => store.patchProfileWithReceipt),
+    restoreProfileDeclaration: withConfigStore((store) => store.restoreProfileDeclaration),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),
     createProfileSetFromSnapshot: (request) =>
       withCurrentActivation((activation) => {
@@ -401,6 +406,14 @@ export function registerSubagentApplication(
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
     patchNesting: withConfigStore((store) => store.patchNesting),
+    patchSessionProfileWithReceipt: (patch) =>
+      withCurrentActivation(() =>
+        run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
+      ),
+    replaceSessionProfilesWithReceipt: (patch) =>
+      withCurrentActivation(() =>
+        run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
+      ),
     patchSessionProfile: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))).then(
         () => undefined,

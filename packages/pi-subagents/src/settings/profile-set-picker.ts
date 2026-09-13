@@ -21,6 +21,7 @@ import {
   type ProfileSetPickerEntry,
 } from "./ui/profile-set-picker-model.ts";
 import { renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
+import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 
 export type ProfileSetPickerAction =
@@ -132,7 +133,7 @@ const actionChoices = (entry: ActionableProfileSetPickerEntry): ReadonlyArray<Sa
       ];
 
 export class ProfileSetPickerComponent implements Component {
-  private readonly allEntries: ReadonlyArray<ProfileSetPickerEntry>;
+  private allEntries: ReadonlyArray<ProfileSetPickerEntry>;
   private selectedIndex: number;
   private query = "";
   private searching = false;
@@ -142,13 +143,32 @@ export class ProfileSetPickerComponent implements Component {
     | { readonly kind: "info" | "warning" | "error"; readonly text: string }
     | undefined;
   private readonly keymap = new FullScreenKeymap();
-  private readonly options: ProfileSetPickerOptions;
+  private options: ProfileSetPickerOptions;
   private disposed = false;
 
   constructor(options: ProfileSetPickerOptions) {
-    this.options = options;
+    this.options = {
+      ...options,
+      matchesKeybinding: (data, id) =>
+        !isWorkspaceNavigationKey(data) && (options.matchesKeybinding?.(data, id) ?? false),
+    };
     this.allEntries = profileSetPickerEntries(options.inspection, options.projectTrusted);
     this.selectedIndex = initialProfileSetPickerIndex(this.allEntries, options.initialScope);
+  }
+
+  get hasOverlay(): boolean {
+    return this.actionMenu !== undefined || this.pendingDelete !== undefined || this.searching;
+  }
+
+  updateInspection(inspection: ProfileSettingsInspection, projectTrusted: boolean): void {
+    if (this.disposed) return;
+    const selected = this.selected()?.key;
+    this.options = { ...this.options, inspection, projectTrusted };
+    this.allEntries = profileSetPickerEntries(inspection, projectTrusted);
+    const index = this.entries().findIndex((entry) => entry.key === selected);
+    this.selectedIndex = index < 0 ? 0 : index;
+    this.actionMenu = undefined;
+    this.pendingDelete = undefined;
   }
 
   private entries(): ReadonlyArray<ProfileSetPickerEntry> {
@@ -233,11 +253,6 @@ export class ProfileSetPickerComponent implements Component {
     else this.options.close({ action: choice.action, target });
   }
 
-  private saveScope(): SubagentConfigScope {
-    const selected = this.selected();
-    return selected?.scope === "project" && this.options.projectTrusted ? "project" : "global";
-  }
-
   private handleConfirmation(data: string): void {
     const pending = this.pendingDelete;
     const resolution = this.keymap.resolve(data, {
@@ -276,7 +291,6 @@ export class ProfileSetPickerComponent implements Component {
     } else
       switch (resolution.action) {
         case "confirm":
-        case "forward":
           this.chooseAction();
           return;
         case "cancel":
@@ -292,6 +306,7 @@ export class ProfileSetPickerComponent implements Component {
         case "next-pane":
         case "previous-pane":
         case "pending-first":
+        case "forward":
           break;
       }
     this.renderSoon();
@@ -372,7 +387,7 @@ export class ProfileSetPickerComponent implements Component {
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
-      reservedKeys: new Set(["/", "s", "u"]),
+      reservedKeys: new Set(["/", "a", "u"]),
     });
     if (!resolution) return;
     if (resolution._tag === "Shortcut") {
@@ -384,8 +399,8 @@ export class ProfileSetPickerComponent implements Component {
       } else if (resolution.key === "u") {
         this.activate("use-current");
         return;
-      } else if (resolution.key === "s") {
-        this.options.close({ action: "save-session", preferredScope: this.saveScope() });
+      } else if (resolution.key === "a") {
+        this.openActions();
         return;
       }
       this.renderSoon();

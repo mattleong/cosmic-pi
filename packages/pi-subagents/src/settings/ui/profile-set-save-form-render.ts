@@ -22,13 +22,13 @@ export const renderProfileSetSaveForm = (
   if (width < 4 || height === 0) return Array.from({ length: height }, () => " ".repeat(width));
   const label = options.keybindingLabel ?? ((_id, fallback) => fallback);
   const frame = listDetailFrame(options.theme);
-  const destination = `${state.section === "destination" ? ">" : " "} Destination: ${state.scope === "project" ? "Project" : "Global"}${state.projectTrusted ? ` (${label("tui.select.up", "↑")}/${label("tui.select.down", "↓")} change)` : " (Project requires trust)"}`;
+  const destination = `${state.section === "destination" ? ">" : " "} Destination: ${state.scope === "project" ? "Project · For this project" : "Global · For all projects"}${state.projectTrusted ? ` (${label("tui.select.up", "↑")}/${label("tui.select.down", "↓")} change)` : " (Project requires trust)"}`;
   const name = [`${state.section === "name" ? ">" : " "} Name`, ...state.nameRows];
   const save = `${state.section === "save" ? ">" : " "} [Save Current Session]`;
   return framedScreen(frame, {
     width,
     height,
-    top: " Save Current Session as a saved set ",
+    top: " Save these profiles as a set · Source: Current Session ",
     bottom: `${options.sectionKeyLabel ?? "Tab"} Section · ${label("tui.select.confirm", "Enter")} ${state.section === "destination" ? "Name" : "Save"} · ${label("tui.select.cancel", "Esc")} Cancel`,
     body: (bodyHeight) => {
       const rows =

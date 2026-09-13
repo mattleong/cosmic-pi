@@ -1,3 +1,4 @@
+import { matchesKey } from "@earendil-works/pi-tui";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { FULL_SCREEN_NAVIGATION_SHORTCUTS } from "pi-cosmic-ui/manager/keymap";
 import type {
@@ -8,18 +9,22 @@ import type {
 /** Screen-owned shortcuts precede configured navigation in FullScreenKeymap. */
 export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "/",
-  "p",
+  "j",
+  "k",
   "s",
-  "t",
   "m",
   "e",
   "r",
   "a",
   "+",
-  "f",
   "[",
   "]",
 ]);
+export const isWorkspaceNavigationKey = (data: string): boolean =>
+  (["up", "down", "left", "right", "tab", "shift+tab"] as const).some((key) =>
+    matchesKey(data, key),
+  );
+
 const navigationKeys = new Set([
   ...PROFILE_WORKSPACE_SHORTCUTS,
   ...FULL_SCREEN_NAVIGATION_SHORTCUTS,

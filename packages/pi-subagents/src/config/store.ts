@@ -16,6 +16,7 @@ import {
   type ProfileRoute,
 } from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
+import { captureRestoreDeclaration } from "./profile-restore.ts";
 import {
   decodeProfileCandidate,
   decodeSubagentConfig,
@@ -65,6 +66,13 @@ export interface SubagentProfilePatch extends SubagentConfigPatchBase {
   readonly profile: ProfileId;
   /** Undefined removes the declaration and reveals the lower-precedence route. */
   readonly route?: DeclaredProfileRoute | undefined;
+}
+
+export interface SubagentProfileRestorePatch extends SubagentConfigPatchBase {
+  readonly profileSet: string;
+  readonly profile: ProfileId;
+  readonly declaration?: JsonObject[string] | undefined;
+  readonly sourceVersion: number;
 }
 
 export interface SubagentDefaultProfileSetPatch extends SubagentConfigPatchBase {
@@ -119,6 +127,16 @@ export interface SubagentConfigStoreContract {
     agentDirectory: string,
     patch: SubagentProfilePatch,
   ) => Effect.Effect<void, SubagentConfigStoreError>;
+  readonly patchProfileWithReceipt: (
+    cwd: string,
+    agentDirectory: string,
+    patch: SubagentProfilePatch,
+  ) => Effect.Effect<JsonObject, SubagentConfigStoreError>;
+  readonly restoreProfileDeclaration: (
+    cwd: string,
+    agentDirectory: string,
+    patch: SubagentProfileRestorePatch,
+  ) => Effect.Effect<JsonObject, SubagentConfigStoreError>;
   readonly patchDefaultProfileSet: (
     cwd: string,
     agentDirectory: string,
@@ -361,6 +379,35 @@ const applyProfilePatch = (
   if (patch.route === undefined) delete profiles[patch.profile];
   else profiles[patch.profile] = routeJson(patch.route);
   sets[patch.profileSet] = { profiles };
+  return { ...upgraded, profileSets: sets };
+};
+
+const applyProfileRestore = (
+  current: JsonObject,
+  patch: SubagentProfileRestorePatch,
+  path: string,
+): JsonObject | SubagentConfigStoreError => {
+  if (!isProfileSetName(patch.profileSet) || !PROFILE_IDS.includes(patch.profile))
+    return mutationError(path, "Invalid profile restore target.");
+  const captured = captureRestoreDeclaration(patch.declaration, patch.sourceVersion);
+  if (!captured)
+    return mutationError(path, "The opening profile declaration cannot be restored safely.");
+  const upgraded = upgradeDocument(current, path);
+  if (upgraded instanceof SubagentConfigStoreError) return upgraded;
+  const sets = { ...currentProfileSets(upgraded) };
+  const selected = sets[patch.profileSet];
+  if (!own(sets, patch.profileSet) || !isRecord(selected))
+    return mutationError(path, "The selected profile set does not exist.");
+  if (own(selected, "profiles") && !isRecord(selected.profiles))
+    return mutationError(path, "The selected profiles container is invalid.");
+  const profiles = isRecord(selected.profiles) ? { ...selected.profiles } : {};
+  if (captured.declaration === undefined) delete profiles[patch.profile];
+  else
+    profiles[patch.profile] =
+      patch.sourceVersion === SUBAGENT_CONFIG_VERSION
+        ? captured.declaration
+        : migrateLegacyRouteJson(captured.declaration);
+  sets[patch.profileSet] = { ...selected, profiles };
   return { ...upgraded, profileSets: sets };
 };
 
@@ -664,7 +711,7 @@ export const subagentConfigStoreLayer = Layer.effect(
     const load: SubagentConfigStoreContract["load"] = (cwd, agentDirectory, projectTrusted) =>
       inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config));
 
-    const patchDocument = <Patch extends SubagentConfigPatchBase>(
+    const patchDocumentWithReceipt = <Patch extends SubagentConfigPatchBase>(
       cwd: string,
       agentDirectory: string,
       patch: Patch,
@@ -674,14 +721,14 @@ export const subagentConfigStoreLayer = Layer.effect(
         path: string,
       ) => JsonObject | SubagentConfigStoreError,
       missingIsNoop = false,
-    ): Effect.Effect<void, SubagentConfigStoreError> =>
+    ): Effect.Effect<JsonObject, SubagentConfigStoreError> =>
       Effect.gen(function* () {
         const locations = yield* paths(cwd, agentDirectory);
         const target = patch.scope === "global" ? locations.global : locations.project;
         if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
         const modifyObject = documents.modifyObject;
         if (!modifyObject) return yield* storeError("update", target)();
-        yield* modifyObject(target, (current) =>
+        return yield* modifyObject(target, (current) =>
           Effect.gen(function* () {
             const currentExists = yield* documents.exists(target);
             const currentIsEmpty = Object.keys(current).length === 0;
@@ -694,13 +741,13 @@ export const subagentConfigStoreLayer = Layer.effect(
             if (!currentIsEmpty && !isAcceptedVersion(current.version))
               return yield* unsupportedVersionError(target);
             if (!currentExists && missingIsNoop)
-              return { value: undefined, document: current, write: false };
+              return { value: structuredClone(current), document: current, write: false };
             const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
             const next = apply(base, patch, target);
             if (next instanceof SubagentConfigStoreError) return yield* next;
             return stableJson(next) === stableJson(current)
-              ? { value: undefined, document: current, write: false }
-              : { value: undefined, document: next };
+              ? { value: structuredClone(current), document: current, write: false }
+              : { value: structuredClone(next), document: next };
           }),
         ).pipe(
           Effect.mapError((error) =>
@@ -709,12 +756,37 @@ export const subagentConfigStoreLayer = Layer.effect(
         );
       });
 
+    const patchDocument = <Patch extends SubagentConfigPatchBase>(
+      cwd: string,
+      agentDirectory: string,
+      patch: Patch,
+      apply: (
+        current: JsonObject,
+        patch: Patch,
+        path: string,
+      ) => JsonObject | SubagentConfigStoreError,
+      missingIsNoop = false,
+    ): Effect.Effect<void, SubagentConfigStoreError> =>
+      patchDocumentWithReceipt(cwd, agentDirectory, patch, apply, missingIsNoop).pipe(
+        Effect.asVoid,
+      );
+
     return SubagentConfigStore.of({
       paths,
       load,
       inspect,
       patchProfile: (cwd, agentDirectory, patch) =>
         patchDocument(cwd, agentDirectory, patch, applyProfilePatch, patch.route === undefined),
+      patchProfileWithReceipt: (cwd, agentDirectory, patch) =>
+        patchDocumentWithReceipt(
+          cwd,
+          agentDirectory,
+          patch,
+          applyProfilePatch,
+          patch.route === undefined,
+        ),
+      restoreProfileDeclaration: (cwd, agentDirectory, patch) =>
+        patchDocumentWithReceipt(cwd, agentDirectory, patch, applyProfileRestore),
       patchDefaultProfileSet: (cwd, agentDirectory, patch) =>
         patchDocument(
           cwd,

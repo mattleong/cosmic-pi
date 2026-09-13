@@ -36,9 +36,10 @@ export const profileWorkspaceActionChoices = (input: {
   readonly candidateIndex: number;
   readonly scope: ProfileSettingsScope;
   readonly hasOwnDeclaration: boolean;
+  readonly canUndo?: boolean | undefined;
 }): ReadonlyArray<ProfileWorkspaceActionChoice> => {
   const count = input.draft.candidates.length;
-  const resetAvailable = input.hasOwnDeclaration;
+  const resetAvailable = input.canUndo === true;
   return [
     ...(count < MAX_PROFILE_CANDIDATES
       ? [
@@ -57,7 +58,7 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "clone" as const,
-            label: "Copy selected choice",
+            label: "Duplicate",
             description: "Insert the copy after the selected choice",
             destructive: false,
           },
@@ -67,7 +68,7 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "move-up" as const,
-            label: "Move earlier",
+            label: "Move up",
             description: "Move the selected choice earlier in the order",
             destructive: false,
           },
@@ -77,7 +78,7 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "move-down" as const,
-            label: "Move later",
+            label: "Move down",
             description: "Move the selected choice later in the order",
             destructive: false,
           },
@@ -87,21 +88,8 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "remove" as const,
-            label: "Remove selected choice",
+            label: "Delete",
             description: "Remove it and keep the remaining choices in order",
-            destructive: true,
-          },
-        ]
-      : []),
-    ...(input.draft.kind !== "disabled"
-      ? [
-          {
-            action: "disable" as const,
-            label: "Disable profile",
-            description:
-              input.scope === "session"
-                ? "Prevent new runs from using this profile in Current Session"
-                : "Disable this profile whenever this saved set is used",
             destructive: true,
           },
         ]
@@ -110,11 +98,8 @@ export const profileWorkspaceActionChoices = (input: {
       ? [
           {
             action: "reset" as const,
-            label: input.scope === "session" ? "Undo changes" : "Remove saved profile settings",
-            description:
-              input.scope === "session"
-                ? "Discard changes to this profile in Current Session"
-                : "Use the next available default whenever this saved set is used",
+            label: "Undo changes",
+            description: "Restore this profile to the start of this editing visit",
             destructive: true,
           },
         ]

@@ -1,5 +1,5 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted, synchronousNow } from "pi-cosmic-core";
@@ -21,7 +21,6 @@ import {
   type SubagentNestingPolicy,
   type WriterWorkspaceMode,
 } from "../config/schema.ts";
-import { SubagentConfigStoreError } from "../config/store.ts";
 import type {
   SubagentCopyProfileSetPatch,
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -31,47 +30,20 @@ import type {
   SubagentProfilePatch,
   SubagentRenameProfileSetPatch,
 } from "../config/store.ts";
-import {
-  normalizeDeclaredProfileRoute,
-  PROFILE_IDS,
-  supportsSubagentFastMode,
-  type ProfileCandidate,
-  type ProfileId,
-} from "../profiles/model.ts";
+import { PROFILE_IDS } from "../profiles/model.ts";
 import {
   type SessionNestingPatch,
   type SessionProfilePatch,
   type SessionProfileSetPatch,
 } from "../profiles/session-overrides.ts";
-import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import { SubagentFleetComponent } from "../ui/fleet.ts";
 import { subagentUiRefreshCadence } from "../ui/refresh.ts";
-import {
-  declaredRouteForDraft,
-  type ProfileRouteDraft,
-  type ProfileSettingsInspection,
-  type ProfileWorkspaceTarget,
-} from "./profile-route-editor.ts";
-import {
-  loadCandidateModelPicker,
-  preferredHerdrPiSelector,
-  ProfileModelCatalog,
-  type ProfileModelCatalogSnapshot,
-} from "./profile-model-catalog.ts";
-import { createProfileModelChoices } from "./ui/model-picker.ts";
-import {
-  ProfileWorkspaceComponent,
-  type ProfileWorkspaceCloseResult,
-  type ProfileWorkspaceOptions,
-  type ProfileWorkspaceSaveResult,
-} from "./profile-workspace.ts";
-import {
-  openProfileDashboard,
-  profileSetPatchBase,
-  isSessionProfileConflict,
-  captureProjectWriteTrust,
-  type ProfileEditorPosition,
-} from "./profile-dashboard.ts";
+import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
+import { openProfileDashboard } from "./profile-dashboard.ts";
+import { captureProjectWriteTrust, profileSetPatchBase } from "./profile-write-context.ts";
+import type { JsonObject } from "pi-cosmic-core";
+import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
+import type { SubagentProfileRestorePatch } from "../config/store.ts";
 
 export interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -94,6 +66,14 @@ export interface FleetManagerActions {
   readonly rename: (id: string, name: string) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
   readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
+  readonly patchProfileWithReceipt?: (patch: SubagentProfilePatch) => Promise<JsonObject>;
+  readonly restoreProfileDeclaration?: (patch: SubagentProfileRestorePatch) => Promise<JsonObject>;
+  readonly patchSessionProfileWithReceipt?: (
+    patch: SessionProfilePatch,
+  ) => Promise<SessionProfileSnapshot>;
+  readonly replaceSessionProfilesWithReceipt?: (
+    patch: SessionProfileSetPatch,
+  ) => Promise<SessionProfileSnapshot>;
   readonly patchDefaultProfileSet: (patch: SubagentDefaultProfileSetPatch) => Promise<void>;
   readonly createProfileSetFromSnapshot: (patch: SessionProfileSetSnapshotWrite) => Promise<void>;
   readonly copyProfileSet: (patch: SubagentCopyProfileSetPatch) => Promise<void>;
@@ -189,243 +169,6 @@ function openFleetManager(
       };
     },
     { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } },
-  );
-}
-
-const projectedParentModel = (
-  snapshot: ProfileModelCatalogSnapshot,
-  parentSelector: string | undefined,
-) =>
-  parentSelector
-    ? snapshot.piModels.find((model) => `${model.provider}/${model.id}` === parentSelector)
-    : undefined;
-
-const supportedPiEfforts = (
-  candidate: ProfileCandidate,
-  snapshot: ProfileModelCatalogSnapshot,
-  parentSelector: string | undefined,
-): ReadonlyArray<SubagentEffort> | undefined => {
-  if (candidate.runtime !== "pi") return undefined;
-  const choices = createProfileModelChoices({
-    models: snapshot.piModels,
-    parentModel: projectedParentModel(snapshot, parentSelector),
-    currentSelector: candidate.model,
-    allowParent: candidate.host === "local",
-  });
-  return choices.find((choice) =>
-    candidate.model === "parent"
-      ? choice.choice.kind === "parent"
-      : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
-  )?.supportedEfforts;
-};
-
-const fastModeAvailable = (
-  candidate: ProfileCandidate,
-  parentSelector: string | undefined,
-): boolean => {
-  if (candidate.runtime === "pi" && candidate.model === "parent")
-    return parentSelector ? supportsSubagentFastMode("pi", parentSelector) : false;
-  return supportsSubagentFastMode(candidate.runtime, candidate.model);
-};
-
-function openProfileEditor(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  actions: FleetManagerActions,
-  target: ProfileWorkspaceTarget,
-  position: ProfileEditorPosition,
-): Promise<ProfileWorkspaceCloseResult> {
-  if (ctx.mode !== "tui" || !ctx.hasUI || !Predicate.isFunction(ctx.ui.custom)) {
-    if (ctx.hasUI)
-      ctx.ui.notify(
-        "Open Pi in an interactive terminal to change agent profiles with /subagents profiles.",
-        "warning",
-      );
-    return Promise.resolve(false);
-  }
-  const projectTrusted = isProjectTrusted(ctx);
-  if (target.kind === "profile-set" && target.set.scope === "project" && !projectTrusted) {
-    ctx.ui.notify("Trust this project to edit its saved profile sets.", "warning");
-    return Promise.resolve(false);
-  }
-  const refreshOwner = actions.captureModelRefresh();
-  return actions.inspectProfiles(projectTrusted).then(
-    (initialInspection) => {
-      if (!refreshOwner.isCurrent()) return false;
-      let inspection = initialInspection;
-      const modelCatalog = new ProfileModelCatalog(
-        ctx.modelRegistry,
-        (ctx.scopedModels ?? []).map(({ model }) => model),
-      );
-      let requestWorkspaceRender: (() => void) | undefined;
-      const modelRefreshController = new AbortController();
-      let refreshWarningSent = false;
-      void refreshOwner.run(modelCatalog.refresh(), modelRefreshController.signal).then(
-        (result) => {
-          if (!refreshOwner.isCurrent()) return;
-          if (result === "updated" && !modelRefreshController.signal.aborted)
-            requestWorkspaceRender?.();
-          if (
-            result === "failed" &&
-            !modelRefreshController.signal.aborted &&
-            !refreshWarningSent
-          ) {
-            refreshWarningSent = true;
-            ctx.ui.notify(
-              "Could not refresh Pi models. Showing the last available list.",
-              "warning",
-            );
-          }
-        },
-        () => undefined,
-      );
-      let parentEffort: SubagentEffort = "high";
-      if (ctx.model) {
-        try {
-          parentEffort = decodeSubagentEffort(pi.getThinkingLevel()) ?? "high";
-        } catch {
-          // Launch resolution uses the same conservative fallback.
-        }
-      }
-      const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-      const refreshInspection = (conflictMessage?: string): Promise<ProfileWorkspaceSaveResult> =>
-        actions.inspectProfiles(isProjectTrusted(ctx)).then(
-          (next): ProfileWorkspaceSaveResult => {
-            inspection = next;
-            return conflictMessage ? { inspection, conflictMessage } : { inspection };
-          },
-          (): ProfileWorkspaceSaveResult => ({
-            refreshError:
-              "The edit may have been saved, but the editor could not refresh. Close and reopen it.",
-          }),
-        );
-      const saveDraft = (
-        editorTarget: ProfileWorkspaceTarget,
-        profile: ProfileId,
-        draft: ProfileRouteDraft,
-      ): Promise<ProfileWorkspaceSaveResult> => {
-        const declaration = declaredRouteForDraft(draft);
-        if (!declaration.valid) return Promise.reject(new Error(declaration.error));
-        if (editorTarget.kind === "session")
-          return actions
-            .patchSessionProfile({
-              profile,
-              ...(declaration.route !== undefined && {
-                route: normalizeDeclaredProfileRoute(declaration.route),
-              }),
-              expectedRevision: inspection.session.revision,
-            })
-            .then(
-              () => refreshInspection(),
-              (error) => {
-                if (isSessionProfileConflict(error))
-                  return refreshInspection(
-                    "Current Session changed while you were editing. The editor now shows the latest profiles. Try again.",
-                  );
-                throw error;
-              },
-            );
-        const scope = editorTarget.set.scope;
-        const writeTrust = captureProjectWriteTrust(
-          ctx,
-          scope,
-          "This project is no longer trusted. Nothing was saved.",
-        );
-        if (!writeTrust) return refreshInspection();
-        return actions
-          .patchProfile({
-            ...profileSetPatchBase(inspection, scope, writeTrust.projectTrusted),
-            profileSet: editorTarget.set.name,
-            profile,
-            ...(declaration.route !== undefined && { route: declaration.route }),
-          })
-          .then(
-            () => refreshInspection(),
-            (error) => {
-              if (
-                error instanceof SubagentConfigStoreError &&
-                error.operation === "update" &&
-                error.message ===
-                  "Subagents settings changed on disk; reopen /subagents profiles and try again."
-              )
-                return refreshInspection(
-                  "Saved settings changed on disk. Your change was not applied. The editor now shows the latest profiles. Try again.",
-                );
-              throw error;
-            },
-          );
-      };
-      return ctx.ui
-        .custom<ProfileWorkspaceCloseResult>(
-          (tui, theme, keybindings, done) => {
-            requestWorkspaceRender = () => tui.requestRender();
-            const baseOptions: ProfileWorkspaceOptions = {
-              theme,
-              inspection,
-              projectTrusted,
-              target,
-              ...position,
-              parentEffort,
-              preferredPiModel: () => preferredHerdrPiSelector(modelCatalog.capture(), parentModel),
-              getHeight: () => tui.terminal.rows,
-              requestRender: () => tui.requestRender(),
-              matchesKeybinding: (data, id) => keybindings.matches(data, id),
-              keybindingLabel: (id, fallback) =>
-                fullScreenKeybindingLabel(
-                  id,
-                  fallback,
-                  Predicate.isFunction(keybindings.getKeys)
-                    ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-                    : undefined,
-                ),
-              close: done,
-              saveDraft,
-              loadModelPicker: (profile, candidateIndex, candidate, signal) => {
-                const baseInput = {
-                  profile,
-                  candidateIndex,
-                  candidate,
-                  listNativeModels: actions.listNativeModels,
-                  piCatalog: modelCatalog.capture(),
-                };
-                const withParent = parentModel
-                  ? { ...baseInput, parentSelector: parentModel }
-                  : baseInput;
-                return loadCandidateModelPicker(signal ? { ...withParent, signal } : withParent);
-              },
-              supportedPiEfforts: (candidate) =>
-                supportedPiEfforts(candidate, modelCatalog.capture(), parentModel),
-              fastModeAvailable: (candidate) => fastModeAvailable(candidate, parentModel),
-              onDispose: () => {
-                requestWorkspaceRender = undefined;
-                modelRefreshController.abort();
-              },
-            };
-            return new ProfileWorkspaceComponent(
-              parentModel ? { ...baseOptions, parentModel } : baseOptions,
-            );
-          },
-          {
-            overlay: true,
-            overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
-          },
-        )
-        .catch(() => {
-          ctx.ui.notify("Could not open Subagents profile settings. Close and try again.", "error");
-          return false as const;
-        })
-        .finally(() => {
-          requestWorkspaceRender = undefined;
-          modelRefreshController.abort();
-        });
-    },
-    (error) => {
-      ctx.ui.notify(
-        error instanceof Error ? error.message : "Could not inspect profile settings.",
-        "error",
-      );
-      return false;
-    },
   );
 }
 
@@ -624,12 +367,10 @@ export function registerSubagentManagerCommand(
       const parts = command.split(/\s+/u);
       const profile = PROFILE_IDS.find((id) => id === parts[1]);
       if (parts[0] === "profiles" && (parts.length === 1 || (parts.length === 2 && profile)))
-        return openProfileDashboard(
-          ctx,
-          actions,
-          (target, position) => openProfileEditor(pi, ctx, actions, target, position),
-          profile,
-        );
+        return openProfileDashboard(pi, ctx, actions, {
+          initialProfile: profile ?? "generalist",
+          initialFocus: profile ? "fields" : "profiles",
+        }).then(() => undefined);
       ctx.ui.notify(
         "Usage: /subagents [settings | profiles [profile]]; use a known profile name. Omit arguments for the fleet inspector.",
         "error",

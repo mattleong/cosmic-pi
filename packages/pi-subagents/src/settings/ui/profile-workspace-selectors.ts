@@ -31,10 +31,15 @@ interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
 }
 
+const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session"
+    ? "Session"
+    : `${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name}`;
+
 const targetLabel = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session"
-    ? "Current Session"
-    : `Saved set · ${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name} · Current Session unchanged`;
+    ? "Editing Current Session"
+    : `${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name} · session not affected`;
 
 export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
@@ -83,7 +88,7 @@ export const makeCandidateFieldSelector = (
   };
   const pageOptions = {
     theme: options.theme,
-    breadcrumb: `/subagents profiles › ${options.profile} › ${profileRouteOptionLabel(options.candidateIndex)} › ${label}`,
+    breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
     title:
       options.field === "closeOnReport"
         ? "Choose what happens after reporting"
@@ -126,6 +131,7 @@ export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
   readonly draft: ProfileRouteDraft;
   readonly scope: ProfileSettingsScope;
   readonly hasOwnDeclaration: boolean;
+  readonly canUndo?: boolean | undefined;
   readonly target: ProfileWorkspaceTarget;
   readonly select: (action: ProfileWorkspaceDraftAction, destructive: boolean) => void;
   readonly cancel: () => void;
@@ -137,8 +143,8 @@ export const makeRouteActionsSelector = (
   const choices = profileWorkspaceActionChoices(options);
   return new SearchableSelectPage<string>({
     theme: options.theme,
-    breadcrumb: `/subagents profiles › ${options.profile} › Actions`,
-    title: "Profile actions",
+    breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · Actions`,
+    title: `Profile actions · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)}`,
     subtitle: targetLabel(options.target),
     choices: choices.map((choice) => ({
       value: choice.action,
@@ -176,7 +182,7 @@ export const makeProfileSearchSelector = (
 ): SearchableSelectPage<string> => {
   const pageOptions = {
     theme: options.theme,
-    breadcrumb: "/subagents profiles › search",
+    breadcrumb: targetLabel(options.target),
     title: "Search profiles",
     subtitle: targetLabel(options.target),
     choices: PROFILE_IDS.map((profile) => {

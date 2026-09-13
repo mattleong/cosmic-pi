@@ -13,8 +13,10 @@ import {
 } from "../src/settings/ui/profile-workspace-model.ts";
 import {
   renderProfileWorkspace,
+  workspaceCandidateSummary,
   type ProfileWorkspaceRenderState,
 } from "../src/settings/ui/profile-workspace-render.ts";
+import { profileWorkspaceRows } from "../src/settings/ui/profile-workspace-rows.ts";
 import { makeProfileSearchSelector } from "../src/settings/ui/profile-workspace-selectors.ts";
 
 // SAFETY: The pure renderer uses only the Theme methods implemented by this fixture.
@@ -137,6 +139,32 @@ const expectBounded = (lines: ReadonlyArray<string>, width: number, height: numb
 };
 
 describe("profile workspace state projection", () => {
+  it("projects one row sequence while keeping per-candidate expansion independent", () => {
+    const rows = profileWorkspaceRows(
+      { kind: "explicit", candidates: route },
+      "worker",
+      "high",
+      undefined,
+      new Set([1]),
+    );
+    expect(rows.filter((row) => row.field === "model").map((row) => row.candidateIndex)).toEqual([
+      0, 1, 2,
+    ]);
+    expect(rows.filter((row) => row.field === "context").map((row) => row.candidateIndex)).toEqual([
+      1,
+    ]);
+    expect(rows.findIndex((row) => row.candidateIndex === 2)).toBeGreaterThan(
+      rows.findIndex((row) => row.candidateIndex === 1),
+    );
+  });
+
+  it("preserves the effective default effort when a long model must be truncated", () => {
+    const candidate = routeOption(`test/${"long".repeat(60)}`, { effort: "default" });
+    const summary = workspaceCandidateSummary(candidate, "worker", "low", 40);
+    expect(visibleWidth(summary)).toBeLessThanOrEqual(40);
+    expect(summary).toContain("high (profile default)");
+    expect(summary).not.toContain(candidate.model);
+  });
   it("keeps the focused model visible after successful saves on short terminals", () => {
     for (const height of [4, 5, 6, 8]) {
       const lines = render(
@@ -186,7 +214,7 @@ describe("profile workspace state projection", () => {
     ]);
   });
 
-  it("exposes advanced state only when the candidate supports or requests it", () => {
+  it("collapses advanced controls without dropping unsupported settings", () => {
     const advancedCandidate = routeOption("openai/primary", {
       host: "herdr",
       openaiFastMode: true,
@@ -221,9 +249,17 @@ describe("profile workspace state projection", () => {
       undefined,
       true,
     ).map((row) => row.field);
-    expect(claudeFields).not.toContain("advanced");
-    expect(claudeFields).not.toContain("openaiFastMode");
-    expect(claudeFields).not.toContain("closeOnReport");
+    expect(claudeFields).toEqual(
+      expect.arrayContaining(["advanced", "context", "openaiFastMode", "closeOnReport"]),
+    );
+    const fixed = candidateFieldRows(
+      routeOption("claude/local", { runtime: "claude" }),
+      "worker",
+      "high",
+      undefined,
+      true,
+    );
+    expect(fixed.find((row) => row.field === "context")?.fixed).toBe(true);
   });
 
   it("uses the edited target rather than the session baseline for route selection and search", () => {

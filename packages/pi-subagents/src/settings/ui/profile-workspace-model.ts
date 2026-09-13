@@ -33,7 +33,8 @@ export type ProfileWorkspaceField =
   | "move-up"
   | "move-down"
   | "remove"
-  | "actions";
+  | "actions"
+  | "save-session";
 
 export interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
@@ -177,7 +178,9 @@ const fastModeFieldRow = (
     ? candidateFastModeApplied(candidate, parentModel)
       ? "on, priority"
       : "off, standard"
-    : "on, but unavailable",
+    : candidate.openaiFastMode
+      ? "on, but unavailable"
+      : "off, unavailable",
   fixed: !fastAvailable && !candidate.openaiFastMode,
   ...(!fastAvailable &&
     !candidate.openaiFastMode && {
@@ -196,33 +199,23 @@ const advancedCandidateRows = (
   const fastAvailable =
     fastModel !== undefined && supportsSubagentFastMode(candidate.runtime, fastModel);
   return [
-    ...(localPi || candidate.context !== "fresh"
-      ? [
-          {
-            field: "context" as const,
-            label: "  Context",
-            value: candidate.context,
-            fixed: !localPi,
-            ...(!localPi && { fixedReason: "Fork is available only with Local Pi." }),
-          },
-        ]
-      : []),
-    ...(fastAvailable || candidate.openaiFastMode
-      ? [fastModeFieldRow(candidate, parentModel, fastAvailable)]
-      : []),
-    ...(retainedAllowed || !candidate.closeOnReport
-      ? [
-          {
-            field: "closeOnReport" as const,
-            label: "  After reporting",
-            value: candidate.closeOnReport ? "close after reporting" : "stay open after reporting",
-            fixed: !retainedAllowed,
-            ...(!retainedAllowed && {
-              fixedReason: "Only Herdr read-only runs can stay open after reporting.",
-            }),
-          },
-        ]
-      : []),
+    {
+      field: "context",
+      label: "  Context",
+      value: candidate.context,
+      fixed: !localPi,
+      ...(!localPi && { fixedReason: "Fork is available only with Local Pi." }),
+    },
+    fastModeFieldRow(candidate, parentModel, fastAvailable),
+    {
+      field: "closeOnReport",
+      label: "  After reporting",
+      value: candidate.closeOnReport ? "close after reporting" : "stay open after reporting",
+      fixed: !retainedAllowed,
+      ...(!retainedAllowed && {
+        fixedReason: "Only Herdr read-only runs can stay open after reporting.",
+      }),
+    },
   ];
 };
 
@@ -250,12 +243,12 @@ export const candidateFieldRows = (
       ? [
           {
             field: "advanced" as const,
-            label: "Advanced",
+            label: advancedExpanded ? "Advanced ▾" : "Advanced ▸",
             value: advancedExpanded
-              ? "hide"
+              ? ""
               : advancedValues.length > 0
                 ? advancedValues.join(", ")
-                : "defaults",
+                : "all standard",
             fixed: false,
           },
         ]
@@ -286,7 +279,7 @@ export const candidateFieldRows = (
       : []),
     {
       field: "remove",
-      label: "Delete model",
+      label: "Delete",
       value: position.count === 1 ? "disables this profile" : "remove from this profile",
       fixed: false,
     },
@@ -296,7 +289,7 @@ export const candidateFieldRows = (
 
 export type SelectableCandidateField = Exclude<
   ProfileWorkspaceField,
-  "model" | "advanced" | "move-up" | "move-down" | "remove" | "actions"
+  "model" | "advanced" | "move-up" | "move-down" | "remove" | "actions" | "save-session"
 >;
 
 const RUN_WITH_CHOICES: ReadonlyArray<
