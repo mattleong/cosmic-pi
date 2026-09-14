@@ -4,6 +4,8 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
 
 `pi-subagents` is an Effect-managed extension for session-scoped, profile-routed background subagents across local and Herdr hosts. The root Pi session is depth 0 and owns one managed runtime, coordinator, profile/config state, backend registry, run tree, writer pools, completion outbox, and fleet projection for every descendant. Nested Pi processes are authenticated proxy clients. They never construct independent application services. Replacement or shutdown closes the complete tree leaf-first.
 
+Compact attention policy stays in the typed tool projections. Static discovery counts eligible, disabled, and unavailable routes and options separately from launch readiness. Valid-source empty routes mean disabled; invalid sources and configured routes without eligible candidates warn. Only clean settled completed/reported cards can demote known static skip history to metadata. Explicit warnings and unknown launch evidence remain notices. Workspace integration facts and list pagination are metadata; only an explicit empty list drops generic orphan-recovery guidance. Expansion retains the original evidence and ordered recovery gates.
+
 ## Topic documentation
 
 - [Routing, candidate planning, and launch](docs/routing.md)

@@ -8,6 +8,12 @@ import { McpBoundaryError } from "../client/errors.ts";
 
 import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
 
+import {
+  canonicalValidationWarning,
+  isOwnedValidationNotice,
+  validationNoticeIdentity,
+} from "./validation-notices.ts";
+
 export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
   readonly value: unknown;
@@ -196,7 +202,17 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     };
     if (originOutcome) origin = { ...origin, outcome: originOutcome };
   }
+  const validationIdentity = validationNoticeIdentity({
+    action: own(details, "action").value,
+    outcome: own(details, "outcome").value,
+    isError: own(details, "isError").value,
+    originAction: own(rawOrigin, "action").value,
+    originOutcome: own(rawOrigin, "outcome").value,
+    originIsError: own(rawOrigin, "isError").value,
+    outputValidation: own(rawOrigin, "outputValidation").value,
+  });
   const notices = list(own(details, "notices").value, 16).flatMap((entry) => {
+    if (validationIdentity && isOwnedValidationNotice(entry, validationIdentity)) return [];
     const text = safeText(entry);
     return text ? [text] : [];
   });
@@ -222,13 +238,14 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     warnings.push(
       "Output is truncated or omitted. This card does not contain the complete result.",
     );
-  if (origin?.isError || origin?.outputValidationFailed)
+  if (origin?.isError)
     warnings.push(
-      origin.outputValidationFailed
-        ? "The original operation completed but output validation failed."
-        : "The original operation reported a failure. Reading retained output does not change that outcome.",
+      "The original operation reported a failure. Reading retained output does not change that outcome.",
     );
-  if (origin?.outputValidationUnavailable)
+  if (validationIdentity) warnings.push(canonicalValidationWarning(validationIdentity));
+  else if (origin?.outputValidationFailed)
+    warnings.push("The original operation completed but output validation failed.");
+  if (!validationIdentity && origin?.outputValidationUnavailable)
     warnings.push(
       "The original operation completed but local output validation was unavailable. No mismatch was established. Do not replay the operation to recover its output.",
     );

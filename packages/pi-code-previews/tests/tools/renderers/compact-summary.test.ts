@@ -28,6 +28,7 @@ import { createLsPreviewTool } from "../../../src/tools/renderers/ls";
 import { createWritePreviewTool } from "../../../src/tools/renderers/write";
 import { createEditPreviewTool } from "../../../src/tools/renderers/edit";
 import { renderComponent, testTheme } from "../../support/render";
+import { allocateCompactHeader } from "../../../src/preview/compact-header";
 
 const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
 const originalPerformance = codePreviewPerformanceConfig;
@@ -358,7 +359,60 @@ describe("notices independent of hidden preview bodies", () => {
     ).toBeUndefined();
   });
 
-  test("grep retains match, byte, and line limits with recovery guidance", () => {
+  test.each([
+    ["grep", "matchLimitReached"],
+    ["find", "resultLimitReached"],
+    ["ls", "entryLimitReached"],
+  ] as const)("%s treats a reached cap as a counter, not a total or recovery", (tool, field) => {
+    const output = result("one result", { [field]: 10 });
+    const before = structuredClone(output);
+    const value = summary(tool, {}, output);
+    expect(value?.outcome).toBe("success");
+    expect(value?.notices).toEqual([]);
+    expect(value?.counters).toEqual(["limit reached: 10"]);
+    expect(value?.metadata).toEqual([]);
+    expect(output).toEqual(before);
+    const sensitive = summary(tool, {}, result(secret, output.details));
+    expect(sensitive?.outcome).toBe("warning");
+    expect(noticeText(sensitive)).toContain("private key");
+    expect(sensitive?.counters).toEqual(value?.counters);
+    const failed = summary(tool, {}, output, "settled", { isError: true });
+    expect(failed?.outcome).not.toBe("success");
+    expect(failed?.failure?.details).toBe("one result");
+  });
+
+  test("reached-cap counters survive long targets before optional metadata and chrome", () => {
+    const value = summary(
+      "grep",
+      { pattern: "value", path: "long-directory/".repeat(20) },
+      result("match", { matchLimitReached: 10 }),
+    );
+    expect(value?.counters).toEqual(["limit reached: 10"]);
+    const row = allocateCompactHeader(
+      "grep",
+      value?.subject ?? "",
+      value?.counters ?? [],
+      ["optional metadata", "12ms", "expand details"],
+      60,
+    );
+    expect(row).toContain("limit reached: 10");
+    expect(row).not.toContain("optional metadata");
+    expect(row).not.toContain("12ms");
+    expect(row).not.toContain("expand details");
+  });
+
+  test("grep preserves partial-line recovery even without a byte cap", () => {
+    const value = summary(
+      "grep",
+      {},
+      result("partial", { matchLimitReached: 10, linesTruncated: true }),
+    );
+    expect(value?.outcome).toBe("warning");
+    expect(noticeText(value)).toContain("read tool");
+    expect(noticeText(value)).not.toContain("limit=");
+  });
+
+  test("grep retains byte and line loss with recovery guidance", () => {
     const value = summary(
       "grep",
       { pattern: "value" },
@@ -368,7 +422,8 @@ describe("notices independent of hidden preview bodies", () => {
         truncation: { truncated: true },
       }),
     );
-    expect(noticeText(value)).toContain("limit=20");
+    expect(value?.counters).toEqual(["limit reached: 10"]);
+    expect(value?.metadata).toEqual([]);
     expect(noticeText(value)).toContain("read tool");
     expect(noticeText(value)).toContain("truncated");
     expect(value?.outcome).toBe("warning");
@@ -383,7 +438,8 @@ describe("notices independent of hidden preview bodies", () => {
         truncation: { truncated: true },
       }),
     );
-    expect(noticeText(value)).toContain("limit=20");
+    expect(value?.counters).toEqual(["limit reached: 10"]);
+    expect(value?.metadata).toEqual([]);
     expect(noticeText(value)).toContain("truncated");
     expect(value?.outcome).toBe("warning");
   });
@@ -407,7 +463,7 @@ describe("write and edit diff limitations", () => {
     }
   });
 
-  test("write preserves skipped snapshot reasons with previews disabled", () => {
+  test("write treats structured size skips as quiet metadata with previews disabled", () => {
     const value = summary(
       "write",
       { path: "file", content: "next" },
@@ -421,8 +477,9 @@ describe("write and edit diff limitations", () => {
         },
       }),
     );
-    expect(noticeText(value)).toContain("previous file too large");
-    expect(value?.outcome).toBe("warning");
+    expect(value?.notices).toEqual([]);
+    expect(value?.metadata).toEqual(["diff skipped: size"]);
+    expect(value?.outcome).toBe("success");
   });
 
   test("write detects byte and complexity guards without producing a diff", () => {
@@ -432,7 +489,9 @@ describe("write and edit diff limitations", () => {
       { content: "new" },
       result("applied", { codePreviewBeforeWrite: { kind: "content", content: huge } }),
     );
-    expect(noticeText(bytes)).toContain("large content");
+    expect(bytes?.notices).toEqual([]);
+    expect(bytes?.metadata).toEqual(["diff skipped: size"]);
+    expect(bytes?.outcome).toBe("success");
     const lineCount =
       Math.ceil(Math.sqrt(codePreviewPerformanceConfig.maxWriteDiffChangedLineCells)) + 1;
     const complex = summary(
@@ -442,7 +501,66 @@ describe("write and edit diff limitations", () => {
         codePreviewBeforeWrite: { kind: "content", content: "old\n".repeat(lineCount) },
       }),
     );
-    expect(noticeText(complex)).toContain("complex rewrite");
+    expect(complex?.notices).toEqual([]);
+    expect(complex?.metadata).toEqual(["diff skipped: complexity"]);
+    expect(complex?.outcome).toBe("success");
+  });
+
+  test("write never infers size skips from prose or hides unavailable history behind large input", () => {
+    for (const before of [
+      undefined,
+      { kind: "skipped", reason: "previous content unavailable", maxBytes: 10 },
+      {
+        kind: "skipped",
+        reason: "previous path is not a regular file",
+        maxBytes: 10,
+        byteLength: 20,
+      },
+      { kind: "skipped", reason: "previous file too large", maxBytes: 10 },
+      { kind: "skipped", reason: "unknown guard", maxBytes: 10 },
+      { kind: "skipped", reason: 42, maxBytes: 10, byteLength: 20, sizeExceeded: true },
+      { kind: "skipped", reason: " ", maxBytes: 10, byteLength: 20, sizeExceeded: true },
+      {
+        kind: "skipped",
+        reason: "bad size evidence",
+        maxBytes: 10,
+        byteLength: 2,
+        sizeExceeded: true,
+      },
+    ]) {
+      for (const content of [
+        "new",
+        "x".repeat(codePreviewPerformanceConfig.maxWriteDiffBytes + 1),
+      ]) {
+        const output = result(
+          "applied",
+          before === undefined ? {} : { codePreviewBeforeWrite: before },
+        );
+        const value = summary("write", { content }, output);
+        expect(value?.outcome).toBe("warning");
+        expect(value?.notices?.length).toBeGreaterThan(0);
+        expect(value?.metadata).toEqual([]);
+      }
+    }
+  });
+
+  test("write guard metadata does not suppress secrets or execution failures", () => {
+    const output = result("applied", {
+      codePreviewBeforeWrite: {
+        kind: "skipped",
+        reason: "size guard",
+        maxBytes: 10,
+        byteLength: 20,
+        sizeExceeded: true,
+      },
+    });
+    const value = summary("write", { content: secret }, output);
+    expect(value?.outcome).toBe("warning");
+    expect(value?.metadata).toEqual(["diff skipped: size"]);
+    expect(noticeText(value)).toContain("private key");
+    const failed = summary("write", {}, output, "settled", { isError: true });
+    expect(failed?.outcome).not.toBe("success");
+    expect(failed?.metadata ?? []).toEqual([]);
   });
 
   test("edit reports unavailable diffs without claiming failure", () => {
@@ -519,6 +637,74 @@ describe("builtin factory compact integration", () => {
       .flatMap((component) => (component ? [renderComponent(component)] : []))
       .join("\n");
     expect(expanded).toContain("hiddenOutputValue");
+  });
+
+  test.each([
+    ["grep", createGrepPreviewTool],
+    ["find", createFindPreviewTool],
+    ["ls", createLsPreviewTool],
+  ] as const)(
+    "%s keeps complete limit instructions in unchanged expanded results",
+    (_name, factory) => {
+      const tool = factory("/project");
+      const ctx = context();
+      const output = result("selectedContent\n\n[Limit reached. Use limit=20 to continue.]", {
+        matchLimitReached: 10,
+        resultLimitReached: 10,
+        entryLimitReached: 10,
+      });
+      const before = structuredClone(output);
+      for (const expanded of [false, true, false, true]) {
+        const renderContext = { ...ctx, expanded };
+        const call = tool.renderCall?.(args, theme, renderContext);
+        const body = tool.renderResult?.(
+          output,
+          { expanded, isPartial: false },
+          theme,
+          renderContext,
+        );
+        const text = [call, body]
+          .flatMap((component) => (component ? [renderComponent(component)] : []))
+          .join("\n");
+        expect(text.includes("limit=20")).toBe(expanded);
+        expect(text.includes("selectedContent")).toBe(expanded);
+      }
+      expect(output).toEqual(before);
+    },
+  );
+
+  test("quiet write size guards preserve the original expanded skip reason and result", () => {
+    const tool = createWritePreviewTool("/project");
+    const ctx = context();
+    // The wrapped host write type still declares undefined details; execution adds this snapshot.
+    const output = result<undefined>("applied");
+    Object.assign(output, {
+      details: {
+        codePreviewBeforeWrite: {
+          kind: "skipped",
+          reason: "previous file too large",
+          maxBytes: 10,
+          byteLength: 20,
+          sizeExceeded: true,
+        },
+      },
+    });
+    const before = structuredClone(output);
+    for (const expanded of [false, true, false, true]) {
+      const renderContext = { ...ctx, expanded };
+      const call = tool.renderCall?.(args, theme, renderContext);
+      const body = tool.renderResult?.(
+        output,
+        { expanded, isPartial: false },
+        theme,
+        renderContext,
+      );
+      const text = [call, body]
+        .flatMap((component) => (component ? [renderComponent(component)] : []))
+        .join("\n");
+      expect(text.includes("previous file too large")).toBe(expanded);
+    }
+    expect(output).toEqual(before);
   });
 
   test("routine read pagination stays in unchanged expanded output, not compact attention", () => {

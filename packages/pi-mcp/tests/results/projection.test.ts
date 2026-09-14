@@ -11,6 +11,8 @@ import {
   type McpPrepareInput,
 } from "../../src/results/model.ts";
 import { makeMcpResults } from "../../src/results/service.ts";
+import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
+import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
 import { MCP_INLINE_BYTES, McpGatewayReplySchema } from "../../src/tools/model.ts";
 
 const png =
@@ -46,6 +48,33 @@ const encodeExecution = Schema.encodeSync(
 const allow = () => Effect.void;
 
 describe("MCP result projection", () => {
+  it.effect.each(["failed", "unavailable"] as const)(
+    "keeps model-facing %s validation notices and payload unchanged by UI consolidation",
+    (outputValidation) =>
+      Effect.gen(function* () {
+        const service = yield* makeMcpResults();
+        const catalog = MCP_VALIDATION_NOTICES[outputValidation];
+        const remote = { structuredContent: { value: "original" }, notices: [catalog.invocation] };
+        const prepared = yield* service.prepare({
+          ...input(remote),
+          outputValidation,
+          notices: [catalog.invocation],
+        });
+        expect(prepared.notices).toEqual([catalog.normalization, catalog.invocation]);
+        const retention = yield* service.retain(prepared);
+        const execution = yield* service.project(prepared, retention, {
+          maxOutputBytes: MCP_INLINE_BYTES,
+          images: false,
+        });
+        const before = encodeExecution(execution);
+        expect(execution.reply.notices).toEqual([catalog.normalization, catalog.invocation]);
+        expect(execution.reply.data).toMatchObject({ result: remote });
+        const card = decodeMcpCardDetails({ details: execution.reply });
+        expect(card.notices).toEqual([]);
+        expect(card.warnings).toHaveLength(1);
+        expect(encodeExecution(execution)).toBe(before);
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
   it.effect.each(["failed", "unavailable"] as const)(
     "preserves %s validation evidence under the minimum projection allowance",
     (outputValidation) =>

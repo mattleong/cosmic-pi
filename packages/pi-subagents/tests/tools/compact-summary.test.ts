@@ -18,7 +18,7 @@ function summarize<DetailsInput>(
   action: string,
   details: DetailsInput,
   phase: "running" | "settled" = "settled",
-  args: { action?: string; runIds?: string[] } = {},
+  args: { action?: string; runIds?: string[]; profile?: string } = {},
   isError = false,
 ) {
   const provider = createSubagentCompactSummary(`subagent_${action}`);
@@ -673,6 +673,161 @@ describe("subagent compact semantic policy", () => {
       runs: [view({ state: "reported" })],
     });
     expect(summarize("status", details)?.metadata).not.toContain("1 report");
+  });
+
+  it("keeps successful integrate facts and empty lists quiet without weakening nonempty recovery", () => {
+    const workspace = (
+      operation: string,
+      receipt: Partial<import("../../src/tools/details-schema.ts").WorkspaceToolDetails>,
+    ) =>
+      summarize(
+        "workspace",
+        {
+          version: 1,
+          action: "workspace",
+          operation,
+          ...receipt,
+        },
+        "settled",
+        { action: operation },
+      );
+    const integrated = workspace("integrate", {
+      workspaceId: "w",
+      revisionId: "r",
+      preparationId: "p",
+    });
+    expect(integrated?.notices).toEqual([]);
+    expect(integrated?.metadata).toEqual([
+      "r",
+      "p",
+      "uncommitted parent edits",
+      "parent index preserved",
+    ]);
+    expect(integrated?.detailsOnExpand).toBe(true);
+    expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.notices).toEqual([]);
+    expect(workspace("list", {})?.notices).toHaveLength(1);
+    const paged = workspace("list", { workspaceCount: 2, listedCount: 1, nextOffset: 1 });
+    expect(paged?.notices).toHaveLength(1);
+    expect(paged?.metadata).toContain("next offset 1");
+  });
+
+  it("counts static mixed profile eligibility without warning for usable alternatives", () => {
+    const candidate = {
+      host: "local",
+      runtime: "pi",
+      model: "provider/model",
+      effort: "default",
+      context: "fresh",
+      writeIntent: "read-only",
+      openaiFastMode: false,
+      closeOnReport: true,
+      status: "eligible",
+      reason: "Static eligibility",
+    };
+    const profile = {
+      id: "scout",
+      description: "Scout",
+      source: "builtin",
+      isDefault: false,
+      defaultContext: "fresh",
+      defaultWriteIntent: "read-only",
+      candidates: [
+        candidate,
+        { ...candidate, status: "skipped", reason: "Unavailable alternative" },
+      ],
+    };
+    const discovery = (profiles: object[], extra = {}) =>
+      summarize("models", {
+        version: 2,
+        action: "models",
+        profiles,
+        fallbackProfile: "generalist",
+        ...extra,
+      });
+    const clean = discovery([profile, { ...profile, id: "worker", candidates: [] }]);
+    expect(clean?.outcome).toBe("success");
+    expect(clean?.notices).toEqual([]);
+    expect(clean?.counters).toEqual([
+      "1 eligible options",
+      "1 eligible profiles",
+      "1 skipped alternatives",
+      "1 disabled profiles",
+    ]);
+    for (const unavailable of [
+      { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
+      { ...profile, source: "global-invalid", candidates: [] },
+      { ...profile, source: "project-invalid" },
+    ]) {
+      const summary = discovery([unavailable]);
+      expect(summary?.outcome).toBe("warning");
+      expect(summary?.notices).toHaveLength(1);
+      expect(summary?.counters).toContain("1 unavailable profiles");
+      expect(summary?.counters?.[0]).toBe("0 eligible options");
+      expect(summary?.counters).not.toContain("1 eligible profiles");
+    }
+    expect(discovery([{ ...profile, candidates: [] }])?.counters).toEqual([
+      "0 eligible options",
+      "1 disabled profiles",
+    ]);
+    expect(
+      summarize(
+        "models",
+        { version: 2, action: "models", profiles: [profile], fallbackProfile: "generalist" },
+        "settled",
+        { profile: "scout" },
+      )?.subject,
+    ).toBe("scout");
+    expect(discovery([profile], { contentOmitted: true })?.outcome).toBe("uncertain");
+    expect(discovery([{ ...profile, source: "unknown" }])).toBeUndefined();
+  });
+
+  it("quiets only clean terminal static skip history and preserves expanded evidence", () => {
+    const skipped = {
+      candidate: "alternative",
+      code: "pi_model_unknown",
+      reason: "Historical missing model",
+    };
+    const selection = { ...view().selection, skippedCandidates: [skipped] };
+    for (const state of ["completed", "reported"] as const) {
+      const details = makeCompactToolDetails({
+        action: "status",
+        runs: [view({ state, selection })],
+      });
+      const summary = summarize("status", details);
+      expect(summary?.notices).toEqual([]);
+      expect(summary?.metadata).toContain("1 skipped alternatives");
+      expect(JSON.stringify(details)).toContain(skipped.reason);
+      expect(summary?.detailsOnExpand).toBe(true);
+      expect(summarize("status", details, "running")?.metadata).toEqual([]);
+      for (const patch of [
+        { warning: "Herdr to local fallback" },
+        { selection: { ...selection, warning: "Explicit selection warning" } },
+        {
+          selection: {
+            ...selection,
+            skippedCandidates: [{ ...skipped, code: "start_failed_before_prompt" }],
+          },
+        },
+        { state: "failed" as const },
+        { error: "Failure evidence" },
+        { writeAdmissionPaused: true },
+      ]) {
+        const unsafe = makeCompactToolDetails({
+          action: "status",
+          runs: [view({ state, selection, ...patch })],
+        });
+        expect(
+          summarize("status", unsafe)?.notices?.some((notice) =>
+            notice.text.includes(skipped.reason),
+          ),
+        ).toBe(true);
+      }
+      expect(
+        summarize("status", { ...details, contentOmitted: true })?.notices?.some((notice) =>
+          notice.text.includes(skipped.reason),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("keeps claim operations and failed launch recovery compact", () => {

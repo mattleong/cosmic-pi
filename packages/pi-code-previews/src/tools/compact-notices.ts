@@ -55,17 +55,25 @@ export function readNotices<Details>(
   return truncated ? undefined : [];
 }
 
-export function outputLimitNotices<Details>(
+interface CompactResultProjection {
+  notices: CompactNotice[];
+  metadata: string[];
+  counters?: string[];
+}
+
+export function outputLimitProjection<Details>(
   tool: "bash" | "grep" | "find" | "ls",
   details: Details,
-): CompactNotice[] {
+): CompactResultProjection {
   const notices: CompactNotice[] = [];
+  const metadata: string[] = [];
+  const counters: string[] = [];
   if (isTruncated(details)) notices.push({ kind: "warning", text: `Output truncated by ${tool}` });
   if (tool === "bash") {
     const path = getObjectValue(details, "fullOutputPath");
     if (Predicate.isString(path) && path)
       notices.push({ kind: "recovery", text: `Full output: ${escapeControlChars(path)}` });
-    return notices;
+    return { notices, metadata };
   }
   const field =
     tool === "grep"
@@ -74,41 +82,60 @@ export function outputLimitNotices<Details>(
         ? "resultLimitReached"
         : "entryLimitReached";
   const limit = getObjectValue(details, field);
-  if (Predicate.isNumber(limit) && Number.isFinite(limit) && limit > 0) {
-    const noun = tool === "grep" ? "matches" : tool === "find" ? "results" : "entries";
-    const recovery = Number.isSafeInteger(limit * 2)
-      ? `Use limit=${limit * 2} for more${tool === "grep" ? ", or refine pattern" : ""}.`
-      : "Increase limit or narrow the search.";
-    notices.push({ kind: "recovery", text: `${limit} ${noun} limit reached. ${recovery}` });
-  }
+  // A reached cap says nothing about the total or how many survived byte truncation.
+  if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
+    counters.push(`limit reached: ${limit}`);
   if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
     notices.push({
       kind: "recovery",
       text: "Some lines truncated. Use read tool to see full lines.",
     });
-  return notices;
+  return { notices, metadata, counters };
 }
 
-export function writeDiffNotices<Before>(before: Before, content: string): CompactNotice[] {
-  // UTF-16 length is a cheap lower bound on UTF-8 bytes. Keep later scans bounded.
-  if (content.length > codePreviewPerformanceConfig.maxWriteDiffBytes)
-    return [{ kind: "warning", text: "Write applied; diff skipped for large content" }];
-  const skipReason = getWriteDiffSkipReason(before, content);
-  if (skipReason)
-    return [
-      { kind: "warning", text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}` },
-    ];
+export function writeDiffProjection<Before>(
+  before: Before,
+  content: string,
+): CompactResultProjection {
+  // Validate the owned skipped-snapshot shape before using its size evidence.
+  // Do not classify prose reasons or let large new content mask missing history.
+  const skipReason = getWriteDiffSkipReason(before, "");
+  if (skipReason !== undefined) {
+    const byteLength = getObjectValue(before, "byteLength");
+    const maxBytes = getObjectValue(before, "maxBytes");
+    const reason = getObjectValue(before, "reason");
+    if (
+      Predicate.isString(reason) &&
+      reason.trim().length > 0 &&
+      getObjectValue(before, "sizeExceeded") === true &&
+      Predicate.isNumber(byteLength) &&
+      Predicate.isNumber(maxBytes) &&
+      byteLength > maxBytes
+    )
+      return { notices: secretNotices([skipReason]), metadata: ["diff skipped: size"] };
+    return {
+      notices: [
+        { kind: "warning", text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}` },
+      ],
+      metadata: [],
+    };
+  }
   const beforeContent = getObjectValue(before, "content");
-  if (!Predicate.isString(beforeContent))
-    return [
-      { kind: "warning", text: "Write applied; diff unavailable: previous content unavailable" },
-    ];
+  if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent))
+    return {
+      notices: [
+        { kind: "warning", text: "Write applied; diff unavailable: previous content unavailable" },
+      ],
+      metadata: [],
+    };
+  // UTF-16 length is a cheap lower bound on UTF-8 bytes. Keep later scans bounded.
   if (
+    content.length > codePreviewPerformanceConfig.maxWriteDiffBytes ||
     beforeContent.length > codePreviewPerformanceConfig.maxWriteDiffBytes ||
     shouldSkipWriteDiffBytes(beforeContent, content)
   )
-    return [{ kind: "warning", text: "Write applied; diff skipped for large content" }];
+    return { notices: [], metadata: ["diff skipped: size"] };
   if (beforeContent !== content && shouldSkipWriteDiffComplexity(beforeContent, content))
-    return [{ kind: "warning", text: "Write applied; diff skipped for complex rewrite" }];
-  return [];
+    return { notices: [], metadata: ["diff skipped: complexity"] };
+  return { notices: [], metadata: [] };
 }

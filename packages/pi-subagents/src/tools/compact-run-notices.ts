@@ -3,13 +3,28 @@ import type { SubagentRunCard } from "./details-schema.ts";
 
 type AddNotice = (text: string, kind?: CompactNotice["kind"]) => void;
 
+// Only static alternative selection is routine history. Unknown launch evidence stays visible.
+const staticSkipCodes = new Set([
+  "pi_model_unknown",
+  "pi_model_ambiguous",
+  "pi_effort_unsupported",
+  "parent_model_missing",
+  "parent_model_unavailable",
+  "parent_model_ambiguous",
+  "fast_mode_unsupported",
+  "fork_context_unavailable",
+]);
+
 /** Card audits are bounded projections, never authority for granting paths. */
 export function compactRunNotices(
   cards: readonly SubagentRunCard[],
   reportsOnlyOmitted = false,
-): CompactNotice[] {
+  quietHistory = false,
+) {
   const notices: CompactNotice[] = [];
+  let skipped = 0;
   for (const card of cards) {
+    const noticeStart = notices.length;
     const id = JSON.stringify(card.id);
     const add = (text: string, kind: CompactNotice["kind"] = "recovery") =>
       notices.push({
@@ -55,8 +70,17 @@ export function compactRunNotices(
       );
     }
     evidenceNotices(card, add, reportsOnlyOmitted);
+    if (
+      !quietHistory ||
+      !["completed", "reported"].includes(card.state) ||
+      notices.length !== noticeStart ||
+      card.selection.skippedCandidates.some((skipped) => !staticSkipCodes.has(skipped.code))
+    )
+      for (const skipped of card.selection.skippedCandidates)
+        add(`${skipped.candidate}: ${skipped.reason}`, "warning");
+    else skipped += card.selection.skippedCandidates.length;
   }
-  return notices;
+  return { notices, skipped };
 }
 
 function evidenceNotices(card: SubagentRunCard, add: AddNotice, reportsOnlyOmitted: boolean): void {
@@ -72,8 +96,6 @@ function evidenceNotices(card: SubagentRunCard, add: AddNotice, reportsOnlyOmitt
     add("Stopped. Inspect full status for cleanup confirmation before replacement or recovery.");
   for (const warning of new Set([card.warning, card.selection.warning]))
     if (warning) add(warning, "warning");
-  for (const skipped of card.selection.skippedCandidates)
-    add(`${skipped.candidate}: ${skipped.reason}`, "warning");
   reportEvidenceNotices(card, add, reportsOnlyOmitted);
 }
 

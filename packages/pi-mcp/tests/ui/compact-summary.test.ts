@@ -83,7 +83,6 @@ describe("MCP compact summaries", () => {
     { truncated: true },
     { omitted: true },
     { result: { undiscovered: ["other"] } },
-    { result: { page: { items: [], total: 1, nextCursor: "next" } } },
     { result: { page: { items: [], total: 1 } } },
     { result: { content: Array.from({ length: 129 }, () => ({ type: "text", text: "x" })) } },
     { origin: { outcome: "completed", isError: false, outputValidation: "unavailable" } },
@@ -95,6 +94,18 @@ describe("MCP compact summaries", () => {
       expandedInResult: true,
     });
     expect(summary?.metadata).not.toContain("retained retained-1");
+  });
+  it("keeps valid discovery pagination quiet with retained recovery in metadata", () => {
+    const details = reply(
+      { result: { page: { items: [], total: 1, nextCursor: "next" } } },
+      { resultId: "retained-1" },
+    );
+    const before = structuredClone(details);
+    const summary = summarize(details);
+    expect(summary?.notices).toEqual([]);
+    expect(summary?.metadata).toEqual(["more metadata available", "retained retained-1"]);
+    expect(summary?.outcome).toBe("success");
+    expect(details).toEqual(before);
   });
   it("does not repeat the retained ID when it already identifies the requested read", () => {
     const summary = summarize(

@@ -8,10 +8,10 @@ import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import { builtinFailure } from "./builtin-failure";
 import {
   bashCommandNotices,
-  outputLimitNotices,
+  outputLimitProjection,
   readNotices,
   secretNotices,
-  writeDiffNotices,
+  writeDiffProjection,
 } from "./compact-notices";
 import { getPathArg, getReadStartLine } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
@@ -30,6 +30,8 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   const inputSources = secretInputSources(tool, args);
   if (!inputSources) return undefined;
   const notices = secretNotices([...inputSources, output]);
+  const metadata: string[] = [];
+  const counters: string[] = [];
   if (tool === "bash") {
     const commandNotices = bashCommandNotices(command);
     if (!commandNotices) return undefined;
@@ -46,7 +48,10 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
       if (!recovery) return undefined;
       notices.push(...recovery);
     } else if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls") {
-      notices.push(...outputLimitNotices(tool, result.details));
+      const projection = outputLimitProjection(tool, result.details);
+      counters.push(...(projection.counters ?? []));
+      notices.push(...projection.notices);
+      metadata.push(...projection.metadata);
     }
   }
   if (context.isError) {
@@ -73,7 +78,11 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
       hasObjectRuntimeType(result.details) &&
       Object.hasOwn(result.details, "codePreviewBeforeWrite") &&
       getObjectValue(result.details, "codePreviewBeforeWrite") === undefined;
-    if (!knownNewFile) notices.push(...writeDiffNotices(before, stringArg(args, "content")));
+    if (!knownNewFile) {
+      const projection = writeDiffProjection(before, stringArg(args, "content"));
+      notices.push(...projection.notices);
+      metadata.push(...projection.metadata);
+    }
   } else if (tool === "edit") {
     const diff = getEditDiff(result.details);
     if (diff) notices.push(...secretNotices([diff]));
@@ -81,6 +90,8 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   }
   return {
     subject,
+    counters,
+    metadata,
     outcome: notices.length > 0 ? "warning" : "success",
     notices: deduplicateNotices(notices),
   };

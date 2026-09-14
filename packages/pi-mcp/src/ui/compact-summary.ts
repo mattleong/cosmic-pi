@@ -64,8 +64,11 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
       !card.displayCuts.length &&
       !card.attachmentsLimited &&
       !card.undiscoveredCount &&
-      !card.page?.hasMore &&
-      !(card.page?.total !== undefined && card.page.returned < card.page.total);
+      !(
+        card.page?.total !== undefined &&
+        card.page.returned < card.page.total &&
+        !card.page.hasMore
+      );
     if (cleanCompleteOutput) {
       if (call.action !== "result.read" || call.target !== card.resultId)
         metadata.push(`retained ${card.resultId}`);

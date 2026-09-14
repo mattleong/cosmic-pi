@@ -21,6 +21,12 @@ function validPagination(details: WorkspaceToolDetails): boolean {
   );
 }
 
+function isEmptyList(details: WorkspaceToolDetails): boolean {
+  return (
+    details.workspaceCount === 0 && details.listedCount === 0 && details.nextOffset === undefined
+  );
+}
+
 function hasOperationReceipt(details: WorkspaceToolDetails): boolean {
   if (details.operation === "list") return true;
   if (!details.workspaceId) return false;
@@ -51,11 +57,11 @@ export function compactWorkspaceSummary<ValueInput>(
       if (details.workspaceCount !== undefined && details.listedCount !== undefined)
         counters.push(`${details.listedCount}/${details.workspaceCount} workspaces shown`);
       else metadata.push("workspace metadata");
-      add(
-        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
-      );
-      if (details.nextOffset !== undefined)
-        add(`More workspaces: call list with offset=${details.nextOffset}.`);
+      if (!isEmptyList(details))
+        add(
+          "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
+        );
+      if (details.nextOffset !== undefined) metadata.push(`next offset ${details.nextOffset}`);
       break;
     case "review":
       counters.push(`diff offset ${details.offset} of ${details.totalChars}`);
@@ -74,9 +80,7 @@ export function compactWorkspaceSummary<ValueInput>(
       );
       break;
     case "integrate":
-      add(
-        "Integrated as uncommitted parent edits; parent index preserved. Do not stage or commit unless requested.",
-      );
+      metadata.push("uncommitted parent edits", "parent index preserved");
       break;
     case "discard":
       break;

@@ -179,6 +179,15 @@ Acceptance:
 - Screenshot follow-up: ordinary read-range and explicitly identified line-pagination continuations no longer produce compact warnings; original output and expanded continuations remain intact. Byte caps, oversized lines, unknown truncation, and secret warnings remain visible. Clean exited log retrieval no longer warns about contractually absent exit codes. It reports retrieval success only; status checks, failed/stopping tasks, output loss, and log truncation retain their existing classification.
 - Multiline Bash command summarization was explicitly skipped. No execution, scheduler, settings, native-image, or host-separator changes were made in this pass.
 
+## Routine information follow-up
+
+- Search caps use whole priority counters without claiming a total or the number of results surviving byte truncation. Actual output cuts, partial grep lines, and secret warnings remain visible.
+- Known write-preview size and complexity guards use quiet metadata. Missing or unclassified previous-file evidence still warns; expansion and model-facing write results are unchanged.
+- Successful integration receipts and workspace-list pagination use metadata. Only explicitly empty lists omit generic orphan guidance. Clean terminal static candidate skips can become a count; actual fallback warnings, missing evidence, and recovery gates remain visible.
+- Model discovery counts static eligible options, disabled profiles, and unavailable profiles. Eligible alternatives do not produce per-candidate warnings. Invalid sources cannot advertise eligible options, and requested profile identity remains visible.
+- Valid MCP next-page replies use ordinary retained-result metadata. Real cuts and short pages without continuation evidence retain recovery. Exact owned validation messages consolidate by validation identity only with coherent completed origin evidence. Original producer strings, remote notices, and retained results are unchanged; contradictory or unknown evidence stays conservative.
+- Actual Pi components passed 18 read-only/render-only cases across all three backgrounds, covering capped search, skipped diffs, empty workspace lists, model alternatives, MCP pagination, and complete validation-warning deduplication. Rendering preserved result contents and did not execute writes, MCP calls, or subagents.
+
 ## Implementation verification
 
 - Code Previews package tests: 330 passed across 40 files.

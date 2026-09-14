@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import { boundaryError } from "../../src/client/errors.ts";
 import { mcpDiagnostic } from "../../src/client/diagnostics.ts";
 import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
-import { normalizeResult } from "../../src/results/normalize.ts";
+import { normalizeResult, prefixBytes } from "../../src/results/normalize.ts";
+import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
 import { projectPrepared } from "../../src/results/projection.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
@@ -260,6 +261,110 @@ describe("MCP card projections", () => {
     expect(display(result)).not.toMatch(/validation failed/i);
     expect(projection.recoveryHint).toContain("/mcp result retained-1");
     expect(display(result, true)).toContain("existing output");
+  });
+
+  it.each(["failed", "unavailable"] as const)(
+    "consolidates exact owned %s notices without changing the result",
+    (outputValidation) => {
+      const producerNotices = Object.values(MCP_VALIDATION_NOTICES[outputValidation]);
+      const notices = producerNotices.flatMap((text) => [text, prefixBytes(text, 128)]);
+      const result = {
+        details: {
+          ...reply().details,
+          action: "result.read",
+          resultId: "retained-1",
+          notices,
+          data: {
+            origin: {
+              action: "tools.call",
+              outcome: "completed",
+              isError: false,
+              outputValidation,
+            },
+            text: "retained output",
+          },
+        },
+        content: [],
+      };
+      const before = JSON.stringify(result);
+      const card = decodeMcpCardDetails(result);
+      expect(card.notices).toEqual([]);
+      expect(card.warnings).toHaveLength(1);
+      expect(card.warnings[0]).toContain("Do not replay the operation to recover its output.");
+      expect(card.warnings[0]).toContain(
+        outputValidation === "failed" ? "captured schema" : "No mismatch was established",
+      );
+      const expanded = display(result, true).replace(/\s+/g, " ");
+      expect(expanded.split(card.warnings[0]!).length - 1).toBe(1);
+      expect(expanded.split("/mcp result retained-1").length - 1).toBe(1);
+      expect(JSON.stringify(result)).toBe(before);
+    },
+  );
+
+  it("preserves near-matches, opposite states and remote prose", () => {
+    const original = MCP_VALIDATION_NOTICES.failed.normalization;
+    const notices = [
+      original + " Extra context.",
+      " " + original,
+      MCP_VALIDATION_NOTICES.unavailable.invocation,
+      "unrelated notice",
+    ];
+    const result = {
+      details: {
+        ...reply().details,
+        isError: true,
+        notices: [original, ...notices],
+        data: {
+          origin: {
+            action: "tools.call",
+            outcome: "completed",
+            isError: false,
+            outputValidation: "failed",
+          },
+          result: { notices: [original] },
+        },
+      },
+      content: [],
+    };
+    const before = JSON.stringify(result);
+    const card = decodeMcpCardDetails(result);
+    // Existing terminal sanitization trims whitespace, but must not suppress this near-match.
+    expect(card.notices).toEqual(notices.map((notice) => notice.trim()));
+    expect(card.preview).toContain(original);
+    expect(card.warnings.some((warning) => warning.includes("captured schema"))).toBe(true);
+    expect(JSON.stringify(result)).toBe(before);
+  });
+
+  it.each([
+    { action: "tools.list" },
+    { outcome: "unknown" },
+    { isError: undefined },
+    { isError: true },
+    { outputValidation: "passed" },
+    { outputValidation: "unknown" },
+  ])("preserves producer notices for contradictory or missing origin evidence: %j", (override) => {
+    const notices = Object.values(MCP_VALIDATION_NOTICES.failed);
+    const card = decodeMcpCardDetails({
+      details: {
+        ...reply().details,
+        isError: true,
+        notices,
+        data: {
+          origin: {
+            action: "tools.call",
+            outcome: "completed",
+            isError: false,
+            outputValidation: "failed",
+            ...override,
+          },
+        },
+      },
+    });
+    expect(card.notices).toEqual(notices);
+    if ("isError" in override && override.isError === true)
+      expect(
+        card.warnings.some((warning) => warning.includes("original operation reported a failure")),
+      ).toBe(true);
   });
 
   it("reports counts and images without copying or touching image bytes", () => {

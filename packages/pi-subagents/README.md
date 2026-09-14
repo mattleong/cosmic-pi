@@ -4,6 +4,8 @@ Session-scoped, profile-routed background subagents for Pi.
 
 The 11 public tools honor Code Previews' opt-in `toolCallCollapsedStyle: "compact"` setting after `/reload`, including local and Herdr Pi proxies. Ordinary calls show a short state/count summary; expansion restores the existing cards. Reports, parent questions, admission problems, retry recovery, and incomplete results keep their detailed views. Separate child-only supervisor acknowledgements and `contact_parent` are unchanged.
 
+Compact discovery counts statically eligible, disabled, and unavailable routes and options, not launch readiness. Skipped alternatives stay in expanded discovery; invalid configuration and routes without eligible candidates still warn. Clean completed or reported runs show static skip history as a count, while explicit warnings, failed launch evidence, omissions, and recovery remain visible. Successful integration shows uncommitted edits and index preservation as metadata. Empty workspace lists are quiet; nonempty or unknown lists retain orphan-recovery guidance, with pagination offsets in metadata. Expansion keeps original receipts, reasons, IDs, and instructions.
+
 ## Architecture documentation
 
 - [Architecture and source map](ARCHITECTURE.md)

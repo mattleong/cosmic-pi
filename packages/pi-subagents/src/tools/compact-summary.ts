@@ -100,6 +100,7 @@ function projectedSubject(
   subject: string,
   targets?: readonly string[],
 ): string {
+  if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
   if (targets?.length === 1) return targets[0]!;
   if (subject || phase !== "settled" || requestedRunIds(input)?.length) return subject;
   if ((details.action === "list" || details.action === "status") && details.cards.length === 1)
@@ -283,6 +284,63 @@ function appendReportMetadata(
   summary.metadata = metadata;
 }
 
+function summarizeModels(
+  details: Extract<CompactSubagentToolDetails, { action: "models" }>,
+  summary: CompactSummary,
+  notices: Notices,
+): CompactSummary {
+  const add = appendNotice(notices);
+  let eligible = 0;
+  let disabled = 0;
+  let unavailable = 0;
+  let eligibleOptions = 0;
+  let unavailableOptions = 0;
+  for (const profile of details.profiles) {
+    const invalid = profile.source === "global-invalid" || profile.source === "project-invalid";
+    // Invalid configuration cannot establish eligibility, even if a historical card says so.
+    const options = invalid
+      ? 0
+      : profile.candidates.filter((candidate) => candidate.status === "eligible").length;
+    eligibleOptions += options;
+    if (!invalid) unavailableOptions += profile.candidates.length - options;
+    if (invalid || (profile.candidates.length > 0 && options === 0)) {
+      unavailable++;
+      add(
+        `${profile.id}: ${invalid ? "invalid profile configuration" : "no statically eligible candidates"}; inspect expanded discovery.`,
+        "warning",
+      );
+    } else if (profile.candidates.length === 0) disabled++;
+    else eligible++;
+  }
+  const counters = [`${eligibleOptions} eligible options`];
+  if (eligible) counters.push(`${eligible} eligible profiles`);
+  if (unavailableOptions) counters.push(`${unavailableOptions} skipped alternatives`);
+  if (disabled) counters.push(`${disabled} disabled profiles`);
+  if (unavailable) counters.push(`${unavailable} unavailable profiles`);
+  summary.counters = counters;
+  summary.metadata = ["static eligibility only"];
+  if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
+    summary.outcome = "warning";
+  return summary;
+}
+
+function appendRunHistory(
+  summary: CompactSummary,
+  notices: Notices,
+  cards: readonly SubagentRunCard[],
+  phase: Phase,
+  reportsOnlyOmitted: boolean,
+): void {
+  const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
+  const { notices: cardNotices, skipped } = compactRunNotices(
+    cards,
+    reportsOnlyOmitted,
+    quietHistory,
+  );
+  notices.push(...cardNotices);
+  if (skipped) summary.metadata = [...(summary.metadata ?? []), `${skipped} skipped alternatives`];
+}
+
 function summarizeDetails(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   phase: Phase,
@@ -301,14 +359,7 @@ function summarizeDetails(
     );
     summary.outcome = "uncertain";
   }
-  if (details.action === "models") {
-    summary.counters = [`${details.profiles.length} profiles`];
-    for (const profile of details.profiles)
-      for (const candidate of profile.candidates) {
-        if (candidate.status !== "eligible") add(`${profile.id}: ${candidate.reason}`, "warning");
-      }
-    return summary;
-  }
+  if (details.action === "models") return summarizeModels(details, summary, notices);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
   summary.metadata = cardMetadata(cards, summary.subject);
   summary.counters = cardCounters(cards);
@@ -326,9 +377,9 @@ function summarizeDetails(
       summary.outcome = "warning";
     else if (cards.some((card) => card.state === "stopped")) summary.outcome = "cancelled";
   }
-  notices.push(...compactRunNotices(cards, details.reportsOnlyOmitted === true));
   if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!, phase);
   else runNotices(details, summary, notices, cards);
+  appendRunHistory(summary, notices, cards, phase, details.reportsOnlyOmitted === true);
   if (phase === "settled") appendReportMetadata(summary, cards, details);
   if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
   else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { MCP_VALIDATION_NOTICES } from "../results/validation-notices.ts";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { JsonSchemaValidatorContract } from "../boundary/schema-validator.ts";
@@ -103,8 +104,8 @@ export const invokeTool = (
       outputValidation: validationResult.failure.kind === "protocol" ? "failed" : "unavailable",
       notices: [
         validationResult.failure.kind === "protocol"
-          ? "Completed MCP output failed its captured schema validation. The operation was not replayed."
-          : "Completed MCP output could not be schema-validated. This is not evidence of an output mismatch. The operation was not replayed.",
+          ? MCP_VALIDATION_NOTICES.failed.invocation
+          : MCP_VALIDATION_NOTICES.unavailable.invocation,
       ],
     };
   });

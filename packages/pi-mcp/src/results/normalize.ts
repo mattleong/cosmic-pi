@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { MCP_VALIDATION_NOTICES } from "./validation-notices.ts";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import {
@@ -140,14 +141,9 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
   const notice = (message: string): void => {
     if (notices.length < 16 && !notices.includes(message)) notices.push(message);
   };
-  if (input.outputValidation === "failed")
-    notice(
-      "Completed output failed validation. Do not repeat the operation to recover its output.",
-    );
+  if (input.outputValidation === "failed") notice(MCP_VALIDATION_NOTICES.failed.normalization);
   if (input.outputValidation === "unavailable")
-    notice(
-      "Local output validation was unavailable; no mismatch established. Do not repeat the operation to recover its output.",
-    );
+    notice(MCP_VALIDATION_NOTICES.unavailable.normalization);
 
   const attachment = (
     block: { readonly [key: string]: Schema.Json },
