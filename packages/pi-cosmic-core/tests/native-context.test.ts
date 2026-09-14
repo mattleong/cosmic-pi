@@ -2,17 +2,18 @@ import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberHandle from "effect/FiberHandle";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { describe, expect, vi } from "vitest";
 import { makeNativeContext, NativeContextError } from "../src/platform/native-context.ts";
 import * as NodeBuiltins from "../src/platform/node-builtins.ts";
 
-// Test-only Promise boundary. The test fiber's signal owns every gate waiter.
+// Test-only Promise boundary. Each gate waiter belongs to the caller's scope.
 const makeNativePromiseGate = Effect.gen(function* () {
   const deferred = yield* Deferred.make<void>();
-  const signal = yield* Effect.abortSignal;
-  const promise = Effect.runPromise(Deferred.await(deferred), { signal });
+  const runPromise = yield* FiberHandle.makeRuntimePromise<never, void, never>();
+  const promise = runPromise(Deferred.await(deferred));
   void promise.catch(() => undefined);
   return { promise, open: Deferred.succeed(deferred, undefined) };
 });
@@ -46,6 +47,33 @@ describe("scoped native callback context", () => {
       yield* resumeFirst.open;
       expect(yield* Effect.promise(() => pendingFirst)).toBe(first);
       expect(context.current()).toBeUndefined();
+    }),
+  );
+
+  it.live("cancels native gate waits with their owner without cancelling another scope", () =>
+    Effect.gen(function* () {
+      const owner = yield* Scope.fork(yield* Effect.scope);
+      const context = yield* makeNativeContext<string>().pipe(
+        Effect.provideService(Scope.Scope, owner),
+      );
+      const gate = yield* makeNativePromiseGate.pipe(Effect.provideService(Scope.Scope, owner));
+      const other = yield* makeNativePromiseGate;
+      let resumed = false;
+      const pending = context.run("closing", () =>
+        gate.promise.then(() => {
+          resumed = true;
+        }),
+      );
+      const settled = pending.then(
+        () => "opened",
+        () => "cancelled",
+      );
+      yield* Scope.close(owner, Exit.void);
+      expect(yield* Effect.promise(() => settled)).toBe("cancelled");
+      expect(resumed).toBe(false);
+      expect(context.current()).toBeUndefined();
+      yield* other.open;
+      yield* Effect.promise(() => other.promise);
     }),
   );
 
