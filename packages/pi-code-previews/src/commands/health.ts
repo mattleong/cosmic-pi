@@ -29,6 +29,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         `Shiki theme: ${codePreviewSettings.shikiTheme}`,
         `Syntax highlighting: ${formatOnOff(codePreviewSettings.syntaxHighlighting)}`,
         `Tool call background: ${codePreviewSettings.toolCallBackground}`,
+        `Configured collapsed style: ${codePreviewSettings.toolCallCollapsedStyle} · changes require /reload`,
         `Tool call timing: ${formatOnOff(codePreviewSettings.toolCallTiming)}`,
         `Read content preview: ${formatOnOff(codePreviewSettings.readContentPreview)}`,
         `Write content preview: ${formatOnOff(codePreviewSettings.writeContentPreview)}`,

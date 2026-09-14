@@ -131,7 +131,12 @@ const cancelledResult = (
   maxOutputBytes: number,
 ): AgentToolResult<CodeModeToolDetails> => ({
   content: [{ type: "text", text: clampModelVisibleText("Execution cancelled.", maxOutputBytes) }],
-  details: { ...details, cancelled: true },
+  details: {
+    ...details,
+    cancelled: true,
+    truncated:
+      clampModelVisibleText("Execution cancelled.", maxOutputBytes) !== "Execution cancelled.",
+  },
 });
 
 export type CodeModeToolExecute = (
@@ -322,13 +327,10 @@ export const makeCodeModeToolExecute =
           if (aborted() || !environment.isCurrent()) {
             return cancelledResult(details, config.maxOutputBytes);
           }
-          environment.retainFailureDetails?.(toolCallId, details);
-          throw new Error(
-            clampModelVisibleText(
-              `code_mode execution did not complete: ${message}`,
-              config.maxOutputBytes,
-            ),
-          );
+          const raw = `code_mode execution did not complete: ${message}`;
+          const text = clampModelVisibleText(raw, config.maxOutputBytes);
+          environment.retainFailureDetails?.(toolCallId, { ...details, truncated: text !== raw });
+          throw new Error(text);
         };
 
         const settleAfterSuccess = (
@@ -337,13 +339,15 @@ export const makeCodeModeToolExecute =
           const settledDetails = settleProgress();
           if (aborted()) return cancelledResult(settledDetails, config.maxOutputBytes);
 
+          const raw = result.ok ? formatCodeModeSuccess(result) : formatCodeModeFailure(result);
+          const text = clampModelVisibleText(raw, config.maxOutputBytes);
           const baseDetails: CodeModeToolDetails =
-            result.truncated === true ? { ...settledDetails, truncated: true } : settledDetails;
+            result.truncated === true || text !== raw
+              ? { ...settledDetails, truncated: true }
+              : settledDetails;
           if (!result.ok) {
             environment.retainFailureDetails?.(toolCallId, baseDetails);
-            throw new Error(
-              clampModelVisibleText(formatCodeModeFailure(result), config.maxOutputBytes),
-            );
+            throw new Error(text);
           }
           const details: CodeModeToolDetails = {
             ...baseDetails,
@@ -353,7 +357,7 @@ export const makeCodeModeToolExecute =
             content: [
               {
                 type: "text",
-                text: clampModelVisibleText(formatCodeModeSuccess(result), config.maxOutputBytes),
+                text,
               },
             ],
             details,

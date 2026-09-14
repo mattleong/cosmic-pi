@@ -13,6 +13,7 @@ import {
 import { ParentContactError, type LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
 import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
+import * as subagentTools from "../src/tools/subagent.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
 
 type Handler = ExtensionHandler<any, any>;
@@ -157,6 +158,30 @@ afterEach(() => {
 });
 
 describe("local Pi child bridge", () => {
+  effectTest("retires compact animation with the child session", function* () {
+    const registration = vi.spyOn(subagentTools, "registerSubagentTools");
+    const harness = makeHarness();
+    try {
+      yield* step(() => harness.start("/old"));
+      const first = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
+      let oldTicks = 0;
+      expect(first?.(1, () => oldTicks++)).toBeTypeOf("function");
+      yield* step(() => vi.waitFor(() => expect(oldTicks).toBeGreaterThan(0)));
+      yield* step(() => harness.start("/new"));
+      const retiredTicks = oldTicks;
+      expect(first?.(1, () => oldTicks++)).toBeUndefined();
+      const second = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
+      let newTicks = 0;
+      expect(second?.(1, () => newTicks++)).toBeTypeOf("function");
+      yield* step(() => vi.waitFor(() => expect(newTicks).toBeGreaterThan(0)));
+      expect(oldTicks).toBe(retiredTicks);
+      yield* step(harness.shutdown);
+      expect(second?.(1, () => newTicks++)).toBeUndefined();
+    } finally {
+      yield* step(harness.shutdown);
+      registration.mockRestore();
+    }
+  });
   effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
     const harness = makeHarness();
     yield* step(() => harness.start("/old"));

@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { makeHerdrBackendDriver } from "./backend/herdr.ts";
 import { makeLocalClaudeBackendDriver } from "./backend/local-claude.ts";
@@ -116,7 +117,14 @@ export const makeSubagentLayer = (options: SubagentLayerOptions) => {
     }),
   ).pipe(Layer.provide(Layer.mergeAll(backend, writerLeases, profiles, workspaces, configStore)));
   // Layer memoization shares both persistence and the backend registry with host preflight/service use.
-  return Layer.mergeAll(service, profiles, configStore, backend, nativeModelCatalog);
+  return Layer.mergeAll(
+    service,
+    profiles,
+    configStore,
+    backend,
+    nativeModelCatalog,
+    CodePreviewSchedulerService.layer,
+  );
 };
 
 export type SubagentApplicationLayer = ReturnType<typeof makeSubagentLayer>;

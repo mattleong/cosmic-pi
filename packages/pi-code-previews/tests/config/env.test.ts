@@ -39,6 +39,7 @@ it.effect("environment overlays settings and publishes local performance project
       assert.equal(service.defaults.shikiTheme, "github-dark");
       assert.equal(service.defaults.diffIntensity, "medium");
       assert.equal(service.defaults.toolCallBackground, "on");
+      assert.equal(service.defaults.toolCallCollapsedStyle, "compact");
       assert.equal(service.defaults.readCollapsedLines, 27);
       assert.equal(service.defaults.readContentPreview, false);
       assert.equal(service.defaults.editCollapsedLines, "all");
@@ -52,6 +53,7 @@ it.effect("environment overlays settings and publishes local performance project
         CODE_PREVIEW_THEME: "github-dark",
         CODE_PREVIEW_DIFF_INTENSITY: "MEDIUM",
         CODE_PREVIEW_TOOL_CALL_BACKGROUND: "yes",
+        CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE: "COMPACT",
         CODE_PREVIEW_READ_LINES: "27",
         CODE_PREVIEW_READ_CONTENT: "off",
         CODE_PREVIEW_EDIT_LINES: "all",
@@ -74,6 +76,22 @@ it.effect("invalid environment themes use the authoritative default", () =>
       CodePreviewEnvironmentService.layerFrom({ CODE_PREVIEW_THEME: "private-theme-token" }),
     ),
   ),
+);
+
+it.effect("missing or invalid collapsed style environment defaults keep previews", () =>
+  Effect.gen(function* () {
+    for (const value of [undefined, "invalid", "", "preview"]) {
+      yield* CodePreviewEnvironmentService.use((service) =>
+        Effect.sync(() => assert.equal(service.defaults.toolCallCollapsedStyle, "preview")),
+      ).pipe(
+        provideBuiltLayer(
+          CodePreviewEnvironmentService.layerFrom({
+            CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE: value,
+          }),
+        ),
+      );
+    }
+  }),
 );
 
 test("boolean environment values recognize explicit true and false forms", () => {

@@ -4,10 +4,17 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
+import {
+  loadCodePreviewSettings,
+  withCodePreviewShell,
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -43,6 +50,7 @@ import { McpManager } from "../manager/service.ts";
 import type { McpManagerContract } from "../manager/model.ts";
 import { runMcpManager } from "../manager/controller.ts";
 import { managerSelection } from "../ui/manager-state.ts";
+import { mcpCompactSummary } from "../ui/compact-summary.ts";
 import { McpActivity } from "../activity/service.ts";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { acquireMcpStatusHost, type McpStatusHost } from "../boundary/host-mcp-status.ts";
@@ -84,13 +92,17 @@ interface McpSessionInput extends McpLayerInput {
 export interface McpApplicationBoundaries {
   readonly makeLayer: typeof makeMcpLayer;
   readonly loadSettings: (cwd: string, trusted: boolean, signal: AbortSignal) => Promise<void>;
-  readonly wrapTool: (tool: McpToolDefinition) => McpToolDefinition;
+  readonly wrapTool: (
+    tool: McpToolDefinition,
+    scheduleAnimation: CompactAnimationScheduler,
+  ) => McpToolDefinition;
 }
 const liveBoundaries: McpApplicationBoundaries = {
   makeLayer: makeMcpLayer,
   loadSettings: (cwd, trusted, signal) =>
     loadCodePreviewSettings(cwd, trusted, signal).then(() => undefined),
-  wrapTool: (tool) => withCodePreviewShell(tool),
+  wrapTool: (tool, scheduleAnimation) =>
+    withCodePreviewShell(tool, { compactSummary: mcpCompactSummary, scheduleAnimation }),
 };
 export interface McpCommandPort {
   readonly run: <A, E>(
@@ -214,13 +226,21 @@ export const makeMcpLifecycle = (
     McpApplication,
     never,
     McpRuntimeError,
-    { readonly execution: McpExecutionContract; readonly manager: McpManagerContract }
+    {
+      readonly execution: McpExecutionContract;
+      readonly manager: McpManagerContract;
+      readonly scheduler: CodePreviewSchedulerServiceContract;
+    }
   >({
     makeRuntime: (input) =>
-      makePiManagedRuntime(pi, boundaries.makeLayer(input), {
-        agentDirectory: getAgentDir,
-        packageName: "pi-mcp",
-      }),
+      makePiManagedRuntime(
+        pi,
+        Layer.merge(boundaries.makeLayer(input), CodePreviewSchedulerService.layer),
+        {
+          agentDirectory: getAgentDir,
+          packageName: "pi-mcp",
+        },
+      ),
     startup: (input) =>
       Effect.gen(function* () {
         const execution = yield* McpExecution;
@@ -228,9 +248,10 @@ export const makeMcpLifecycle = (
         yield* bestEffortHostBootstrap("pi-mcp.preview-settings", (signal) =>
           boundaries.loadSettings(input.cwd, input.projectTrusted && input.isTrusted(), signal),
         );
-        return { execution, manager };
+        const scheduler = yield* CodePreviewSchedulerService;
+        return { execution, manager, scheduler };
       }),
-    onActivated: (input, token, { execution, manager }) => {
+    onActivated: (input, token, { execution, manager, scheduler }) => {
       // Detect a foreign gateway immediately before mutation as well as before startup.
       const conflict = invokeHostCallback(() => visibleTool() !== undefined && !ownsTool(), true);
       if (conflict) {
@@ -275,6 +296,8 @@ export const makeMcpLifecycle = (
                 return { reply: mcpFailureReply(action, failure), images: [] };
               }),
           }),
+          (intervalMs, tick) =>
+            current(input, token) ? scheduler.schedule(intervalMs, tick) : undefined,
         );
         pi.registerTool(wrapped);
         const installed = visibleTool();

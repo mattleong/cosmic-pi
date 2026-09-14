@@ -53,6 +53,7 @@ const ENVIRONMENT_KEYS = [
   "CODE_PREVIEW_DIFF_INTENSITY",
   "CODE_PREVIEW_WORD_EMPHASIS",
   "CODE_PREVIEW_TOOL_CALL_BACKGROUND",
+  "CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE",
   "CODE_PREVIEW_TOOL_CALL_TIMING",
   "CODE_PREVIEW_READ_LINES",
   "CODE_PREVIEW_READ_CONTENT",
@@ -144,6 +145,10 @@ export function defaultsFromEnvironment(environment: CodePreviewEnvironment): Co
     toolCallBackground: environmentField(
       "toolCallBackground",
       parseToolCallBackgroundMode(value("CODE_PREVIEW_TOOL_CALL_BACKGROUND")),
+    ),
+    toolCallCollapsedStyle: environmentField(
+      "toolCallCollapsedStyle",
+      value("CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE")?.toLowerCase(),
     ),
     toolCallTiming: boolean("CODE_PREVIEW_TOOL_CALL_TIMING", "toolCallTiming"),
     readCollapsedLines: integer("CODE_PREVIEW_READ_LINES", "readCollapsedLines"),

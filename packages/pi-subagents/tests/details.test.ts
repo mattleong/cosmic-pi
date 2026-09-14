@@ -670,6 +670,21 @@ describe("persisted subagent details version 2", () => {
     expect(JSON.stringify(details).length).toBeLessThanOrEqual(48_000);
   });
 
+  it("only labels await omissions as report-only without source errors or input uncertainty", () => {
+    const runs = [run(1), run(2)];
+    expect(makeAwaitDetails({ runs, awaitUntil: "all_finished" }).reportsOnlyOmitted).toBe(true);
+    expect(
+      makeAwaitDetails({ runs, awaitUntil: "all_finished", contentOmitted: true })
+        .reportsOnlyOmitted,
+    ).toBeUndefined();
+    expect(
+      makeAwaitDetails({
+        runs: [{ ...runs[0]!, error: "failure" }, runs[1]!],
+        awaitUntil: "all_finished",
+      }).reportsOnlyOmitted,
+    ).toBeUndefined();
+  });
+
   it("preserves omission evidence, capabilities, routes, questions, and cost semantics", () => {
     const details = makeAwaitDetails({
       runs: [run(1, undefined), run(2, 0)],

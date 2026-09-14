@@ -1,4 +1,6 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
+import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
 import { type ToolCallBackgroundMode } from "../config/schema";
 import { createCodePreviewToolShell } from "../preview/tool-shell";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
@@ -33,6 +35,16 @@ type PreviewRenderResult<TTool extends AdaptableToolDefinition> = (
 
 export interface CodePreviewToolRenderers<TTool extends AdaptableToolDefinition> {
   readonly mode?: ToolCallBackgroundMode;
+  readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
+  readonly compactSummary?:
+    | CompactSummaryProvider<
+        Parameters<TTool["execute"]>[1],
+        Awaited<ReturnType<TTool["execute"]>> extends AgentToolResult<infer TDetails>
+          ? TDetails
+          : unknown,
+        Parameters<RenderCall<TTool>>[2]["state"]
+      >
+    | undefined;
   readonly execute?: (
     ...args: Parameters<TTool["execute"]>
   ) => ReturnType<AdaptableToolDefinition["execute"]>;
@@ -50,7 +62,16 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
   tool: TTool,
   renderers: CodePreviewToolRenderers<TTool>,
 ): TTool {
-  const previewShell = createCodePreviewToolShell(renderers.mode);
+  const previewShell = createCodePreviewToolShell(
+    renderers.mode,
+    renderers.compactSummary
+      ? {
+          name: tool.name,
+          compactSummary: renderers.compactSummary,
+        }
+      : undefined,
+    renderers.scheduleAnimation,
+  );
   const renderCall = renderers.renderCall;
   const renderResult = renderers.renderResult;
 
@@ -70,14 +91,18 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
       );
     },
     renderResult(result, options, theme, context) {
-      return previewShell.renderResult(context, theme, (renderContext) =>
-        // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
-        renderResult(
-          result,
-          options,
-          theme,
-          asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(renderContext),
-        ),
+      return previewShell.renderResult(
+        context,
+        theme,
+        (renderContext) =>
+          // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
+          renderResult(
+            result,
+            options,
+            theme,
+            asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(renderContext),
+          ),
+        result,
       );
     },
   } as TTool;

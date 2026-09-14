@@ -1,0 +1,225 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import * as Effect from "effect/Effect";
+import { describe, expect, it } from "vitest";
+import { withCodePreviewShell } from "pi-code-previews";
+import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
+import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
+import {
+  codeModeCompactSummaryAtHost,
+  syncProgressTicker,
+} from "../src/boundary/host-render-ticker.ts";
+import { callEntryDetails } from "../src/tools/format.ts";
+import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import {
+  codeModeStateFixture,
+  extensionContextFixture,
+  opaqueHostFixture,
+} from "./support/host.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+
+const summarize = <Details>(
+  details: Details,
+  options: { phase?: "pending" | "running" | "settled"; isError?: boolean; text?: string } = {},
+) =>
+  codeModeCompactSummary({
+    phase: options.phase ?? "settled",
+    args: { code: "SECRET SOURCE", intent: "Inspect the project" },
+    result: { details, content: [{ type: "text", text: options.text ?? "ordinary output" }] },
+    context: opaqueHostFixture({ isError: options.isError ?? false }),
+  });
+const success = { ...callEntryDetails([]), outputKind: "text" as const };
+
+describe("Code Mode compact outcomes", () => {
+  it("uses intent and exact settled counts without source, output or individual activity", () => {
+    const calls: Array<Parameters<typeof callEntryDetails>[0][number]> = [];
+    for (const tool of ["pi.read", "pi.grep", "pi.find"]) {
+      for (const status of ["queued", "running", "completed"] as const) {
+        const summary = summarize(
+          callEntryDetails([...calls, { tool, status, activity: "SECRET ACTIVITY" }]),
+          { phase: "running" },
+        );
+        expect(summary?.subject).toBe("Inspect the project");
+        expect(summary?.counters).toHaveLength(1);
+        expect(summary?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual([
+          `${calls.length + Number(status === "completed")}/${calls.length + 1}`,
+        ]);
+        expect(summary?.outcome).toBeUndefined();
+        expect(JSON.stringify(summary)).not.toMatch(/SECRET|ordinary output|pi\.(read|grep|find)/u);
+      }
+      calls.push({ tool, status: "completed" });
+    }
+    const final = summarize({ ...callEntryDetails(calls), outputKind: "text" });
+    expect(final?.subject).toBe("Inspect the project");
+    expect(final?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual(["3/3"]);
+    expect(final?.outcome).toBe("success");
+  });
+
+  it("warns when the program handled nested failures or cancellation", () => {
+    for (const status of ["error", "cancelled"] as const) {
+      const details = {
+        ...callEntryDetails([{ tool: "pi.bash", status }]),
+        outputKind: "text",
+      };
+      const live = summarize(details, { phase: "running" });
+      expect(live?.outcome).toBeUndefined();
+      expect(live?.notices?.some((notice) => notice.kind === "warning")).toBe(true);
+      expect(live?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual(["1/1"]);
+      const final = summarize(details);
+      expect(final?.outcome).toBe("warning");
+      expect(final?.notices).toEqual(live?.notices);
+    }
+  });
+
+  it("preserves truncation, cancellation and unsettled operation evidence", () => {
+    expect(summarize({ ...success, truncated: true })?.outcome).toBe("warning");
+    expect(
+      summarize({ ...success, truncated: true })?.notices?.some(
+        (notice) => notice.kind === "recovery",
+      ),
+    ).toBe(true);
+    expect(summarize({ ...callEntryDetails([]), cancelled: true })?.outcome).toBe("cancelled");
+    expect(
+      summarize({
+        ...callEntryDetails([{ tool: "pi.bash", status: "running" }]),
+        outputKind: "text",
+      })?.outcome,
+    ).toBe("uncertain");
+  });
+
+  it("owns full retained failure text once and keeps continuation recovery visible", () => {
+    const text = "Execution failed\nDo not retry before checking side effects.";
+    const summary = summarize(callEntryDetails([]), { isError: true, text });
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.failure?.details).toBe(text);
+    expect(summary?.failure?.cause).toBe(text.split("\n")[0]);
+    expect(summary?.notices?.some((notice) => notice.text.includes("Do not retry"))).toBe(true);
+  });
+
+  it("declines missing, legacy, contradictory and malformed settled details", () => {
+    for (const details of [
+      undefined,
+      {},
+      { toolCalls: [] },
+      callEntryDetails([]),
+      { ...success, truncated: "yes" },
+      { ...success, totalToolCalls: "bad" },
+      { ...success, toolCalls: [{ tool: "pi.read", status: "unknown" }] },
+      { ...success, counts: { ...success.counts, total: 1 } },
+    ])
+      expect(summarize(details)).toBeUndefined();
+    expect(summarize({}, { isError: true })).toBeUndefined();
+  });
+
+  it("does not hide fulfilled adapter failures or uninspected call history behind success", () => {
+    for (const tool of ["mcp.request", "session.backgroundTask"]) {
+      expect(
+        summarize(
+          {
+            ...callEntryDetails([{ tool, status: "completed" }]),
+            outputKind: "structured",
+          },
+          { text: "unknown outcome; do not replay" },
+        ),
+      ).toBeUndefined();
+    }
+    expect(
+      summarize({
+        ...success,
+        totalToolCalls: 1,
+        counts: { ...success.counts, total: 1, succeeded: 1 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("releases expanded-renderer tickers when compact rendering takes over or settles", () => {
+    let stops = 0;
+    const state = {};
+    const startTicker = () => () => {
+      stops++;
+    };
+    const input = {
+      phase: "running" as const,
+      args: { intent: "Inspect" },
+      result: { details: callEntryDetails([{ tool: "pi.read", status: "running" }]), content: [] },
+      context: opaqueHostFixture({
+        state,
+        isPartial: true,
+        isError: false,
+        expanded: true,
+        invalidate: () => undefined,
+      }),
+    };
+    syncProgressTicker(true, input.context, startTicker);
+    codeModeCompactSummaryAtHost(input);
+    expect(stops).toBe(0);
+    codeModeCompactSummaryAtHost({
+      ...input,
+      context: opaqueHostFixture({ state, isPartial: true, isError: false, expanded: false }),
+    });
+    expect(stops).toBe(1);
+    syncProgressTicker(true, input.context, startTicker);
+    codeModeCompactSummaryAtHost({
+      ...input,
+      phase: "settled",
+      result: { details: success, content: [] },
+      context: opaqueHostFixture({ state, isPartial: false, isError: false, expanded: false }),
+    });
+    expect(stops).toBe(2);
+  });
+
+  it("leaves the default preview renderer and expanded source intact", () => {
+    const definition = buildCodeModeToolDefinition({
+      catalogBudget: 0,
+      includePowerShell: false,
+      execute: () => Promise.reject(new Error("not executed")),
+      startUiTicker: () => () => undefined,
+    });
+    const tool = withCodePreviewShell(definition, {
+      mode: "off",
+      compactSummary: codeModeCompactSummary,
+    });
+    const args = { code: "return 'SOURCE_MARKER'", intent: "Inspect" };
+    const theme = opaqueHostFixture({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    });
+    const context = opaqueHostFixture({
+      args,
+      state: {},
+      expanded: true,
+      isPartial: false,
+      isError: false,
+      executionStarted: false,
+      argsComplete: true,
+      invalidate: () => undefined,
+    });
+    expect(tool.renderCall?.(args, theme, context).render(120).join("\n")).toContain(
+      "SOURCE_MARKER",
+    );
+    expect(tool.execute).toBe(definition.execute);
+  });
+
+  it("marks final host clamping even when the runtime reports no truncation", () => {
+    const state = codeModeStateFixture({ maxOutputBytes: 10 });
+    const execute = makeCodeModeToolExecute({
+      isCurrent: () => true,
+      getState: () => state,
+      runInSession: (effect) => Effect.runPromise(effect),
+      definitions: nestedToolDefinitionsFixture({}),
+      events: createEventBus(),
+      sessionId: "compact-test",
+      executeCodeMode: () => Effect.succeed({ ok: true, value: "a".repeat(100), truncated: false }),
+    });
+    return execute(
+      "clamp",
+      { code: "return 1" },
+      undefined,
+      undefined,
+      extensionContextFixture({}),
+    ).then((result) => {
+      expect(result.details?.truncated).toBe(true);
+      expect(summarize(result.details)?.outcome).toBe("warning");
+    });
+  });
+});

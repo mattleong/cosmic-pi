@@ -32,7 +32,7 @@ const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
 
 const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
-const describeCodeModeIntent = <Intent>(intent: Intent): string => {
+export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
   if (!Predicate.isString(intent)) return CODE_MODE_FALLBACK_INTENT;
   const sanitized = sanitizeTerminalLine(intent);
   if (sanitized.length === 0) return CODE_MODE_FALLBACK_INTENT;

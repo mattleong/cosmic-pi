@@ -6,8 +6,15 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
+import {
+  loadCodePreviewSettings,
+  withCodePreviewShell,
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureHostSignal,
@@ -48,6 +55,8 @@ import {
   makeFailureDetailsRetention,
 } from "./tools/retention.ts";
 
+import { codeModeCompactSummaryAtHost } from "./boundary/host-render-ticker.ts";
+
 interface CodeModeSessionInput extends CodeModeLayerInput {
   readonly ctx: ExtensionContext;
   /** Stable Pi session identity captured once; optional capabilities fail closed without it. */
@@ -64,7 +73,10 @@ export interface CodeModeApplicationBoundaries {
     projectTrusted: boolean,
     signal: AbortSignal,
   ) => ReturnType<typeof loadCodePreviewSettings>;
-  readonly wrapTool: (tool: CodeModeToolDefinition) => CodeModeToolDefinition;
+  readonly wrapTool: (
+    tool: CodeModeToolDefinition,
+    scheduleAnimation: CompactAnimationScheduler,
+  ) => CodeModeToolDefinition;
   readonly makeNestedDefinitions: (cwd: string) => NestedPiToolDefinitions;
   /** Package-private lifecycle test seam; production always uses `makeCodeModeLayer`. */
   readonly makeLayer?: typeof makeCodeModeLayer;
@@ -72,7 +84,8 @@ export interface CodeModeApplicationBoundaries {
 
 const LIVE_APPLICATION_BOUNDARIES: CodeModeApplicationBoundaries = {
   loadSettings: loadCodePreviewSettings,
-  wrapTool: (tool) => withCodePreviewShell(tool),
+  wrapTool: (tool, scheduleAnimation) =>
+    withCodePreviewShell(tool, { compactSummary: codeModeCompactSummaryAtHost, scheduleAnimation }),
   makeNestedDefinitions: makeNestedPiToolDefinitions,
 };
 
@@ -123,14 +136,18 @@ export function registerCodeModeApplication(
     CodeModeSessionInput,
     CodeModeApplication,
     never,
-    CodeModeRuntimeError
+    CodeModeRuntimeError,
+    CodePreviewSchedulerServiceContract
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        (boundaries.makeLayer ?? makeCodeModeLayer)(input, (state) => {
-          if (MutableRef.get(input.publicationOwner)) MutableRef.set(stateRef, state);
-        }),
+        Layer.merge(
+          (boundaries.makeLayer ?? makeCodeModeLayer)(input, (state) => {
+            if (MutableRef.get(input.publicationOwner)) MutableRef.set(stateRef, state);
+          }),
+          CodePreviewSchedulerService.layer,
+        ),
         { agentDirectory: getAgentDir, packageName: "pi-code-mode" },
       ),
     startup: (input) =>
@@ -140,8 +157,8 @@ export function registerCodeModeApplication(
               boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
             )
           : Effect.void,
-      ),
-    onActivated: (input, token) => {
+      ).pipe(Effect.andThen(CodePreviewSchedulerService)),
+    onActivated: (input, token, scheduler) => {
       const ownsPublication = () => MutableRef.get(input.publicationOwner);
       const isCurrent = () => ownsPublication() && slot.isCurrent(token);
       if (!isCurrent()) return;
@@ -164,6 +181,7 @@ export function registerCodeModeApplication(
               retainFailureDetails: failureDetails.retain,
             }),
           }),
+          (interval, tick) => (isCurrent() ? scheduler.schedule(interval, tick) : undefined),
         );
       } catch {
         tearDownTool();

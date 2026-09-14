@@ -1,6 +1,11 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
+import {
+  loadCodePreviewSettings,
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CodePreviewSettings,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -51,7 +56,7 @@ export function registerBackgroundTaskApplication(
     BackgroundTaskApplication,
     never,
     BackgroundTaskRuntimeError,
-    { readonly showFooterStatus: boolean }
+    { readonly showFooterStatus: boolean; readonly scheduler: CodePreviewSchedulerServiceContract }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
@@ -70,12 +75,19 @@ export function registerBackgroundTaskApplication(
           boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
         );
         const config = yield* BackgroundTaskConfigStore;
-        return { showFooterStatus: config.showFooterStatus };
+        return {
+          showFooterStatus: config.showFooterStatus,
+          scheduler: yield* CodePreviewSchedulerService,
+        };
       }),
     onActivated: ({ ctx, cwd }, token, prepared) => {
       // Only the current-generation activation reaches this hook, and settings are already
       // loaded, so the cooperative-shell wrapper captures the fresh shell mode here.
-      registerBackgroundTaskTool(pi, { run });
+      registerBackgroundTaskTool(pi, {
+        run,
+        scheduleAnimation: (interval, tick) =>
+          slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
+      });
       codeModeHost.activate({
         sessionId: backgroundTaskCodeModeSessionId(ctx),
         sessionCwd: cwd,

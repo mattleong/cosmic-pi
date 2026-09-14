@@ -1,9 +1,16 @@
+import * as Effect from "effect/Effect";
 import {
   getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
+import {
+  loadCodePreviewSettings,
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CompactAnimationScheduler,
+  type CodePreviewSettings,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -71,7 +78,8 @@ export function askUserWithDependencies(
     AskUserSessionInput,
     AskUserApplication,
     never,
-    AskUserRuntimeError
+    AskUserRuntimeError,
+    CodePreviewSchedulerServiceContract
   >({
     makeRuntime: (input) => {
       input.activity = makeQuestionnaireActivity({
@@ -101,8 +109,10 @@ export function askUserWithDependencies(
     startup: ({ cwd, projectTrusted }) =>
       bestEffortHostBootstrap("pi-ask-user.preview-settings", (signal) =>
         loadPreviewSettings(cwd, projectTrusted, signal),
-      ),
-    onActivated: (input, token) => {
+      ).pipe(Effect.andThen(CodePreviewSchedulerService)),
+    onActivated: (input, token, scheduler) => {
+      const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
+        input.active && slot.isCurrent(token) ? scheduler.schedule(interval, tick) : undefined;
       const { ctx } = input;
       input.active = true;
       currentGeneration = input.generation;
@@ -168,14 +178,17 @@ export function askUserWithDependencies(
           /* Optional local-extension capability. */
         }
       }
-      registerAskUserTool(pi, (request, signal) =>
-        slot.isCurrent(token)
-          ? slot.run(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal)
-          : Promise.reject(
-              new AskUserRuntimeClosedError({
-                message: "The ask-user session runtime is not active.",
-              }),
-            ),
+      registerAskUserTool(
+        pi,
+        (request, signal) =>
+          slot.isCurrent(token)
+            ? slot.run(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal)
+            : Promise.reject(
+                new AskUserRuntimeClosedError({
+                  message: "The ask-user session runtime is not active.",
+                }),
+              ),
+        scheduleAnimation,
       );
       if (ctx.mode === "tui" && !requiresQuestionnaireRelay())
         registerAsyncAskUserTools(
@@ -204,6 +217,7 @@ export function askUserWithDependencies(
                     message: "The ask-user session runtime is not active.",
                   }),
                 ),
+          scheduleAnimation,
         );
     },
     onDeactivated: (input) => {

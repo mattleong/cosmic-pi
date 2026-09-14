@@ -1,4 +1,4 @@
-import { withCodePreviewShell } from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AskUserAsyncParameters,
@@ -11,6 +11,7 @@ import type {
   AsyncQuestionnaireResult,
 } from "../questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
+import { asyncAskUserCompactSummary } from "../ui/compact-summary.ts";
 import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
 import { renderAsyncCall, renderAsyncResult, renderAsyncMessage } from "../ui/async-tool-render.ts";
 
@@ -18,6 +19,7 @@ export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
   start: (input: AskUserAsyncRequest, signal?: AbortSignal) => Promise<AsyncQuestionnaireSnapshot>,
   control: (input: AskUserAsyncControl, signal?: AbortSignal) => Promise<AsyncQuestionnaireResult>,
+  scheduleAnimation?: CompactAnimationScheduler,
 ): void {
   pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAsyncMessage);
   pi.registerTool(
@@ -52,6 +54,10 @@ export function registerAsyncAskUserTools(
           }));
         },
       }),
+      {
+        compactSummary: asyncAskUserCompactSummary,
+        scheduleAnimation,
+      },
     ),
   );
   pi.registerTool(
@@ -83,6 +89,10 @@ export function registerAsyncAskUserTools(
           }));
         },
       }),
+      {
+        compactSummary: asyncAskUserCompactSummary,
+        scheduleAnimation,
+      },
     ),
   );
 }

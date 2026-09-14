@@ -10,8 +10,9 @@ import { type ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { createCodePreviewToolDefinition } from "./renderer-adapter";
+import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
 
-export interface CodePreviewShellOptions {
+export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TState = unknown> {
   /**
    * Shell mode to apply. Defaults to the code-preview setting at wrapping time.
    * The selected mode is captured; later settings reloads do not change the wrapped tool.
@@ -23,9 +24,13 @@ export interface CodePreviewShellOptions {
    * double-framing or overriding custom backgrounds from cooperating extensions.
    */
   preserveSelfShell?: boolean;
-}
 
-type ToolSchema = ToolDefinition["parameters"];
+  /** Opt into compact rendering when enabled by settings. Declining preserves both bodies. */
+  compactSummary?: CompactSummaryProvider<TArgs, TDetails, TState>;
+
+  /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
+  scheduleAnimation?: CompactAnimationScheduler | undefined;
+}
 
 /**
  * Decorate a cooperating tool definition with pi-code-previews' tool-call shell.
@@ -35,13 +40,19 @@ type ToolSchema = ToolDefinition["parameters"];
  * Load trusted project settings before calling this function because shell mode is captured here.
  */
 export function withCodePreviewShell<
-  TParams extends ToolSchema,
+  TParams extends ToolDefinition["parameters"],
   TDetails,
   TState,
   TTool extends ToolDefinition<TParams, TDetails, TState>,
 >(
   tool: ToolDefinition<TParams, TDetails, TState> & TTool,
-  options: CodePreviewShellOptions = {},
+  options: CodePreviewShellOptions<
+    Parameters<TTool["execute"]>[1],
+    Awaited<ReturnType<TTool["execute"]>> extends AgentToolResult<infer TResultDetails>
+      ? TResultDetails
+      : unknown,
+    Parameters<NonNullable<TTool["renderCall"]>>[2]["state"]
+  > = {},
 ): TTool {
   const mode = options.mode ?? codePreviewSettings.toolCallBackground;
   const preserveSelfShell = options.preserveSelfShell ?? true;
@@ -50,8 +61,10 @@ export function withCodePreviewShell<
   const originalRenderCall = tool.renderCall;
   const originalRenderResult = tool.renderResult;
 
-  return createCodePreviewToolDefinition(tool, {
+  return createCodePreviewToolDefinition<TTool>(tool, {
     mode,
+    compactSummary: options.compactSummary,
+    scheduleAnimation: options.scheduleAnimation,
     renderCall: (args, theme, context) =>
       originalRenderCall
         ? originalRenderCall(args, theme, context)

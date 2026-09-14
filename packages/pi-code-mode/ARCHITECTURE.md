@@ -28,7 +28,14 @@ Only runtime source plus its README, legal, and provenance documents ship.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
   renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
-  changing model-visible text.
+  changing model-visible text. `compact-summary.ts` opts only the outer tool into the shared
+  compact shell. It requires consistent current details and explicit execution success evidence,
+  retains failure recovery text, and warns on handled nested failures or output truncation.
+  Final host clamping publishes the truncation flag without changing model-visible content.
+  The shared shell owns compact animation and expansion; nested dispatch remains direct.
+  Nested MCP and Background Tasks payload outcomes are not part of the retained activity
+  projection. Settled adapter calls and incomplete call history therefore retain the original
+  renderer instead of turning Promise fulfillment into compact success.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
@@ -174,7 +181,7 @@ counts carry current lifecycle totals. Tolerant render decoding still accepts hi
 Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
 execution state.
 
-The renderer owns a weak 160 ms ticker. Missing or hostile state, invalidation, keybindings, clock,
+The application composes `CodePreviewSchedulerService.layer` into its own session runtime and passes a token-checked scheduler to the compact shell. It does not depend on the previews extension's isolated module-local runtime; replacement and shutdown cancel remaining compact animations. The original renderer owns a weak 160 ms ticker. The host compact-summary callback releases that ticker when the shared shell hides its rows or the tool settles, even when the original result renderer is not called. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized
 expand keys once when it builds the definition. Pure render code always returns a component, even
 when hostile details force its emergency path.

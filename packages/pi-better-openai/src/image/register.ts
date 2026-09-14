@@ -8,9 +8,10 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { withCodePreviewShell } from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { sanitizeDiagnosticError } from "pi-cosmic-core";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
+import { imageCompactSummary } from "./compact-summary.ts";
 import { OpenAIImageService } from "./service.ts";
 import { TOOL_PARAMS, type CodexImageResult, type ToolParams } from "./types.ts";
 
@@ -66,6 +67,7 @@ export function registerOpenAIImage(
   pi: ExtensionAPI,
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
   updateContext: (ctx: ExtensionContext) => void,
+  scheduleAnimation?: CompactAnimationScheduler,
 ) {
   const generateEffect = (params: ToolParams) =>
     OpenAIImageService.use((service) => service.generate(params));
@@ -202,5 +204,7 @@ export function registerOpenAIImage(
       }));
     },
   });
-  pi.registerTool(withCodePreviewShell(tool));
+  pi.registerTool(
+    withCodePreviewShell(tool, { compactSummary: imageCompactSummary, scheduleAnimation }),
+  );
 }

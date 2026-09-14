@@ -2,6 +2,8 @@
 
 Session-scoped, profile-routed background subagents for Pi.
 
+The 11 public tools honor Code Previews' opt-in `toolCallCollapsedStyle: "compact"` setting after `/reload`, including local and Herdr Pi proxies. Ordinary calls show a short state/count summary; expansion restores the existing cards. Reports, parent questions, admission problems, retry recovery, and incomplete results keep their detailed views. Separate child-only supervisor acknowledgements and `contact_parent` are unchanged.
+
 ## Architecture documentation
 
 - [Architecture and source map](ARCHITECTURE.md)

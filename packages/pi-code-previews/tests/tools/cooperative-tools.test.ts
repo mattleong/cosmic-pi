@@ -16,6 +16,7 @@ import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 
 const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
 const theme = testTheme();
+const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
 
 type ReadDefinition = ReturnType<typeof createReadToolDefinition>;
 type ReadRenderCall = NonNullable<ReadDefinition["renderCall"]>;
@@ -214,46 +215,106 @@ test("fallback result rendering sanitizes terminal controls", () => {
   assert.match(output, /unsafe␛\[2J␍text/);
 });
 
-test("shell reuses call and result slots without recomputing timing-only renders", () => {
+test("preview shell does not hide semantic updates during timing invalidation", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: true });
   const args: ReadToolInput = { path: "README.md" };
-  const state: State = {};
-  let calls = 0;
-  let results = 0;
-  const base = createReadToolDefinition("/project");
-  const renderCall: ReadRenderCall = () => {
-    calls++;
-    return new Text(`call ${calls}`, 0, 0);
+  for (const mode of ["off", "border"] as const) {
+    const state: State = {};
+    const tool = {
+      ...createReadToolDefinition("/project"),
+      renderCall: ((receivedArgs, _theme, _context) =>
+        new Text(`call ${receivedArgs.path}`, 0, 0)) satisfies ReadRenderCall,
+      renderResult: ((value, options, _theme, _context) =>
+        new Text(
+          `${options.expanded ? "expanded" : "collapsed"} ${value.content.map((part) => (part.type === "text" ? part.text : "")).join("")}`,
+          0,
+          0,
+        )) satisfies ReadRenderResult,
+    };
+    const wrapped = withCodePreviewShell(tool, { mode });
+    const context = renderContext(args, state, { executionStarted: true });
+    const firstCall = wrapped.renderCall(args, theme, context);
+    const firstResult = wrapped.renderResult(
+      result("old"),
+      { expanded: false, isPartial: true },
+      theme,
+      context,
+    );
+    state.codePreviewTimingOnlyRenderToken = 1;
+    const nextArgs = { path: "changed.ts" };
+    const secondCall = wrapped.renderCall(nextArgs, theme, {
+      ...context,
+      args: nextArgs,
+      expanded: true,
+      lastComponent: firstCall,
+    });
+    const secondResult = wrapped.renderResult(
+      result("fresh"),
+      { expanded: true, isPartial: true },
+      theme,
+      { ...context, args: nextArgs, expanded: true, lastComponent: firstResult },
+    );
+    const text = [...secondCall.render(100), ...secondResult.render(100)].join("\n");
+    assert.match(text, /changed.ts/u);
+    assert.match(text, /expanded fresh/u);
+    assert.doesNotMatch(text, /old/u);
+  }
+});
+
+test("unknown cooperative renderers retain domain failure output with compact enabled", () => {
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "compact",
+    toolCallTiming: false,
+  });
+  const tool = {
+    ...createReadToolDefinition("/project"),
+    renderResult: ((_value, _options, _theme, _context) =>
+      new Text(
+        "background work failed; inspect recovery receipt",
+        0,
+        0,
+      )) satisfies ReadRenderResult,
   };
-  const renderResult: ReadRenderResult = () => {
-    results++;
-    return new Text(`result ${results}`, 0, 0);
-  };
-  const tool = { ...base, renderCall, renderResult };
   const wrapped = withCodePreviewShell(tool, { mode: "off" });
-  const callContext = renderContext(args, state, { executionStarted: true });
-  const firstCall = wrapped.renderCall?.(args, theme, callContext);
-  const resultOptions = { expanded: false, isPartial: true };
-  const resultContext = renderContext(args, state, { executionStarted: true });
-  const firstResult = wrapped.renderResult?.(
-    result("running"),
-    resultOptions,
+  const context = renderContext({ path: "file" }, {}, { isPartial: false });
+  const output = wrapped.renderResult(
+    result("invocation completed"),
+    { expanded: false, isPartial: false },
     theme,
-    resultContext,
+    context,
   );
-  state.codePreviewTimingOnlyRenderToken = 1;
+  assert.match(renderComponent(output), /background work failed; inspect recovery receipt/u);
+});
 
-  const secondCall = wrapped.renderCall?.(args, theme, {
-    ...callContext,
-    lastComponent: firstCall,
+test("compact style is captured at wrapping and preserves source execution and self-shell identity", () => {
+  const base = createReadToolDefinition("/project");
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "preview",
+    toolCallTiming: false,
   });
-  const secondResult = wrapped.renderResult?.(result("running"), resultOptions, theme, {
-    ...resultContext,
-    lastComponent: firstResult,
+  const preview = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "compact",
+    toolCallTiming: false,
   });
-
-  assert.equal(calls, 1);
-  assert.equal(results, 1);
-  assert.equal(secondCall, firstCall);
-  assert.ok(secondResult);
+  const compact = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
+  const self = { ...base, renderShell: "self" as const };
+  assert.equal(withCodePreviewShell(self, { compactSummary: compactProvider }), self);
+  assert.equal(preview.renderShell, "default");
+  assert.equal(compact.renderShell, "self");
+  assert.equal(compact.execute, base.execute);
+  assert.equal(compact.parameters, base.parameters);
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: "preview",
+    toolCallTiming: false,
+  });
+  const context = renderContext({ path: "file" }, {});
+  const component = compact.renderCall?.(context.args, theme, context);
+  assert.ok(component);
+  assert.equal(component.render(100).length, 1);
+  assert.match(renderComponent(component), /compact-subject/u);
 });

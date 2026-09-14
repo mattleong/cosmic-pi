@@ -3,7 +3,7 @@ import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { withCodePreviewShell } from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
@@ -12,8 +12,10 @@ import { expandKeyHint, renderToolHeader } from "pi-cosmic-ui/tool";
 import { BackgroundTaskService } from "../task/service.ts";
 import { executeBackgroundTaskCommand, type BackgroundTaskToolDetails } from "./command.ts";
 import { BackgroundTaskParameters } from "./schema.ts";
+import { backgroundTaskCompactSummary } from "../ui/compact-summary.ts";
 
 export interface BackgroundTaskToolRunner {
+  readonly scheduleAnimation?: CompactAnimationScheduler;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>,
     signal?: AbortSignal,
@@ -94,9 +96,7 @@ export function registerBackgroundTaskTool(
           text += `\n${snapshot.droppedLogBytes} log bytes discarded`;
         }
       }
-      if (expanded && details?.action === "logs") {
-        text += `\nnext cursor ${details.logs.nextCursor} · earliest ${details.logs.earliestAvailableCursor}`;
-      }
+      // The owned logs producer already includes complete cursor metadata before the logs.
       let rendered = theme.fg(
         isPartial ? "warning" : "toolOutput",
         text || (isPartial ? "Working…" : "Done"),
@@ -105,5 +105,10 @@ export function registerBackgroundTaskTool(
       return new Text(rendered, 0, 0);
     },
   });
-  pi.registerTool(withCodePreviewShell(tool));
+  pi.registerTool(
+    withCodePreviewShell(tool, {
+      compactSummary: backgroundTaskCompactSummary,
+      scheduleAnimation: runner.scheduleAnimation,
+    }),
+  );
 }

@@ -14,6 +14,8 @@ export interface CodeModeRenderDetails {
   readonly totalToolCalls: number;
   readonly counts: CodeModeCallCounts;
   readonly hasExactCounts: boolean;
+  /** Current, internally consistent details eligible for lossless compact projection. */
+  readonly compactEligible: boolean;
   readonly outputKind?: "text" | "structured";
   readonly cancelled: boolean;
   readonly truncated: boolean;
@@ -71,7 +73,8 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     return decoded === undefined ? [] : [decoded];
   });
   const legacyArrayTotal = toolCalls.length === inspectedCalls.length ? rawCalls.length : 0;
-  const suppliedTotal = nonNegativeInteger(record.totalToolCalls) ?? 0;
+  const decodedTotal = nonNegativeInteger(record.totalToolCalls);
+  const suppliedTotal = decodedTotal ?? 0;
   const rawCounts = decodeOption(CallCountsInputSchema, record.counts);
   const hasExactCounts = rawCounts !== undefined;
   const visible = countCallEntries(toolCalls);
@@ -110,6 +113,26 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     totalToolCalls: total,
     counts,
     hasExactCounts,
+    compactEligible:
+      Array.isArray(record.toolCalls) &&
+      rawCalls.length <= MAX_PROGRESS_ENTRIES &&
+      toolCalls.length === rawCalls.length &&
+      toolCalls.every((call) => call.tool.length > 0) &&
+      rawCounts !== undefined &&
+      rawCounts.total === suppliedCountTotal &&
+      rawCounts.total === total &&
+      rawCounts.total ===
+        rawCounts.queued +
+          rawCounts.running +
+          rawCounts.succeeded +
+          rawCounts.failed +
+          rawCounts.cancelled &&
+      (record.totalToolCalls === undefined || decodedTotal === rawCounts.total) &&
+      (record.outputKind === undefined || outputKind !== undefined) &&
+      (record.cancelled === undefined ||
+        decodeOption(Schema.Boolean, record.cancelled) !== undefined) &&
+      (record.truncated === undefined ||
+        decodeOption(Schema.Boolean, record.truncated) !== undefined),
     cancelled: record.cancelled === true,
     truncated: record.truncated === true,
   };

@@ -17,6 +17,7 @@ import { getEditPreviewOperations, getPathArg } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
+import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey } from "./shared/preview-cache-key";
@@ -26,6 +27,7 @@ export function createEditPreviewTool(cwd: string) {
   const originalEdit = createEditToolDefinition(cwd);
 
   return createCodePreviewToolDefinition(originalEdit, {
+    compactSummary: (input) => createBuiltinCompactSummary("edit", input),
     renderCall(args, theme, renderContext) {
       const path = getPathArg(args);
       const operations = getEditPreviewOperations(args);

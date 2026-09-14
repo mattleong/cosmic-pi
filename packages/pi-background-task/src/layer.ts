@@ -1,6 +1,7 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { CodePreviewSchedulerService } from "pi-code-previews";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { LocalProcess } from "./boundary/local-process.ts";
 import { BackgroundTaskConfigStore } from "./config/store.ts";
@@ -32,6 +33,7 @@ export const makeBackgroundTaskLayer = (
   return BackgroundTaskService.layer({ publish: options.publish }).pipe(
     Layer.provideMerge(Layer.merge(config, Path.layer)),
     Layer.provide(LocalProcess.layer),
+    Layer.merge(CodePreviewSchedulerService.layer),
   );
 };
 

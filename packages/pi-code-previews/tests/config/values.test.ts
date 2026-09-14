@@ -27,6 +27,7 @@ test("settings normalization and reset preserve defaults", () => {
     lsResultPreview: false,
     readCollapsedLines: -1,
     toolCallBackground: "off",
+    toolCallCollapsedStyle: "compact",
     tools: ["bash", "not-a-tool", "write", "bash"],
   });
   assert.equal(normalized.syntaxHighlighting, false);
@@ -34,6 +35,7 @@ test("settings normalization and reset preserve defaults", () => {
   assert.equal(normalized.bashWarnings, false);
   assert.equal(normalized.bashResultPreview, false);
   assert.equal(normalized.toolCallBackground, "off");
+  assert.equal(normalized.toolCallCollapsedStyle, "compact");
   assert.equal(normalized.toolCallTiming, false);
   assert.equal(normalized.readContentPreview, false);
   assert.equal(normalized.writeContentPreview, false);
@@ -101,21 +103,25 @@ test("settings recover valid siblings and expose bounded path-only diagnostics",
   const fallback = {
     ...defaultCodePreviewSettings,
     shikiTheme: "github-dark",
+    toolCallCollapsedStyle: "compact" as const,
     tools: ["write" as const],
   };
   const normalized = normalizeSettingsWithDiagnostics(
     {
       shikiTheme: "private-theme-token",
+      toolCallCollapsedStyle: "private-style-token",
       readCollapsedLines: 19,
       tools: ["write", "private-tool"],
     },
     fallback,
   );
   assert.equal(normalized.settings.shikiTheme, "github-dark");
+  assert.equal(normalized.settings.toolCallCollapsedStyle, "compact");
   assert.equal(normalized.settings.readCollapsedLines, 19);
   assert.deepEqual(normalized.settings.tools, ["write"]);
   assert.deepEqual(normalized.diagnostics, [
     { path: "settings.shikiTheme", issue: "invalid" },
+    { path: "settings.toolCallCollapsedStyle", issue: "invalid" },
     { path: "settings.tools", issue: "invalid" },
   ]);
   assert.equal(JSON.stringify(normalized.diagnostics).includes("private"), false);
@@ -178,6 +184,24 @@ test("disabled preview settings keep corresponding tool renderers enabled", () =
     "off",
   );
   assert.ok(withoutGrep.tools.includes("grep"));
+});
+
+test("compact style edits leave background, timing, preview limits, and tool selection alone", () => {
+  const current: CodePreviewSettings = {
+    ...defaultCodePreviewSettings,
+    toolCallBackground: "border",
+    toolCallTiming: false,
+    readCollapsedLines: 40,
+    tools: ["read"],
+  };
+  const compact = updateSetting(current, "toolCallCollapsedStyle", "compact");
+  assert.deepEqual(compact, { ...current, toolCallCollapsedStyle: "compact" });
+  assert.deepEqual(updateSetting(compact, "toolCallCollapsedStyle", "invalid"), compact);
+  assert.deepEqual(updateSetting(compact, "toolCallCollapsedStyle", "preview"), current);
+  assert.deepEqual(
+    updateSetting(compact, "resetToDefaults", "reset now"),
+    defaultCodePreviewSettings,
+  );
 });
 
 test("individual tool toggles update configured previews", () => {

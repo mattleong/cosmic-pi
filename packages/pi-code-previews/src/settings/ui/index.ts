@@ -45,13 +45,14 @@ const SETTINGS_CATEGORY_GROUPS = [
   {
     name: "appearance",
     label: "Appearance",
-    description: "Theme, syntax color, tool frames, timing, line numbers, and path icons.",
+    description: "Theme, syntax color, collapsed style, tool frames, timing, and path decoration.",
     summarize: summarizeAppearance,
     items: (current) =>
       createSettingListItems(current, [
         "shikiTheme",
         "syntaxHighlighting",
         "toolCallBackground",
+        "toolCallCollapsedStyle",
         "toolCallTiming",
         "readLineNumbers",
         "pathIcons",
@@ -60,7 +61,8 @@ const SETTINGS_CATEGORY_GROUPS = [
   {
     name: "outputPreviews",
     label: "Output previews",
-    description: "Collapsed output/code visibility and preview lengths by tool family.",
+    description:
+      "Collapsed output/code visibility and preview lengths in preview style. Compact style hides ordinary previews until expanded.",
     summarize: summarizeOutputPreviews,
     items: (current, getCurrent, onSettingChange) =>
       OUTPUT_PREVIEW_GROUPS.map((group) =>

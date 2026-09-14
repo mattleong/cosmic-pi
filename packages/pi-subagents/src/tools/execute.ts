@@ -6,6 +6,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import type { CompactAnimationScheduler } from "pi-code-previews";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import {
   resolveProfileRetry,
@@ -51,6 +52,7 @@ import type { SubagentToolInput } from "./schema.ts";
 import { claimsOperationError } from "./schema.ts";
 
 export interface SubagentToolRuntime {
+  readonly scheduleAnimation?: CompactAnimationScheduler | undefined;
   readonly environment: SubagentSessionEnvironment;
   /** Private nested-Pi transport. Public/root registrations leave this absent. */
   readonly proxyCall?:

@@ -47,6 +47,19 @@ than escaped JSON. Collapsed hints use the configured `app.tools.expand` keys. A
 is sanitized against terminal control injection. Presentation does not change model-visible
 results or execution limits.
 
+When Code Previews' `toolCallCollapsedStyle` is `compact`, the outer call instead shows the
+intent, lifecycle status, and exact settled/total nested counts. Source, ordinary output, and
+individual activity rows stay hidden until expansion. Caught nested failures produce a warning;
+cancellation, truncation, and retained failure recovery text stay visible. Missing or malformed
+details retain the existing renderer. The default `preview` style is unchanged; reload after
+changing the Code Previews setting.
+
+Nested MCP and Background Tasks replies can report failure even when their calls fulfill.
+Those domain outcomes are not retained in activity details, so completed programs using those
+adapters keep the existing renderer rather than claim compact success. Incomplete call history
+also keeps the original view. Programs must still inspect and return protocol outcome evidence.
+No nested built-in is wrapped or dispatched differently.
+
 ## Supplied tool authority and direct nested dispatch
 
 Tools invoked from inside a Code Mode program are dispatched **directly** against fresh Pi

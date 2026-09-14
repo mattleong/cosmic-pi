@@ -1,6 +1,7 @@
 /** Effect composition root for one Code Mode session runtime. */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
+import type { CodePreviewSchedulerService } from "pi-code-previews";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { CodeModeConfigStore, type CodeModeState } from "./config/store.ts";
 
@@ -24,5 +25,7 @@ export const makeCodeModeLayer = (
   }).pipe(Layer.provide(platform));
 };
 
-export type CodeModeApplication = Layer.Success<ReturnType<typeof makeCodeModeLayer>>;
+export type CodeModeApplication =
+  | Layer.Success<ReturnType<typeof makeCodeModeLayer>>
+  | CodePreviewSchedulerService;
 export type CodeModeRuntimeError = Layer.Error<ReturnType<typeof makeCodeModeLayer>>;

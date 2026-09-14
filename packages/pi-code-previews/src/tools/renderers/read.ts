@@ -13,6 +13,7 @@ import { getPathArg, getReadStartLine } from "../data/args";
 import { getTextContent, isTruncated, splitReadContinuationNotice } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
+import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderContentPreview } from "./shared/content-preview";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
 
@@ -20,6 +21,7 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
   const originalRead = createReadToolDefinition(cwd, options);
 
   return createCodePreviewToolDefinition(originalRead, {
+    compactSummary: (input) => createBuiltinCompactSummary("read", input),
     renderCall(args, theme) {
       const path = getPathArg(args);
       const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });

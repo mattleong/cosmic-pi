@@ -73,6 +73,8 @@ export interface McpCardDetails {
   readonly isError: boolean;
   readonly known: boolean;
   readonly counts: readonly string[];
+  readonly counters: readonly string[];
+  readonly metadata: readonly string[];
   readonly notices: readonly string[];
   readonly warnings: readonly string[];
   readonly truncated: boolean;
@@ -240,6 +242,12 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
       warnings.push(notice);
   }
   const counts: string[] = [];
+  const counters: string[] = [];
+  const metadata: string[] = [];
+  const addCounter = (label: string) => {
+    counts.push(label);
+    counters.push(label);
+  };
   for (const key of [
     "servers",
     "tools",
@@ -252,8 +260,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     "messages",
   ]) {
     const length = arrayLength(own(payload, key).value);
-    if (length !== undefined)
-      counts.push(`${length} ${key === "content" ? "content blocks" : key}`);
+    if (length !== undefined) addCounter(`${length} ${key === "content" ? "content blocks" : key}`);
   }
   const rawPage = own(payload, "page").value;
   const returned = arrayLength(own(rawPage, "items").value);
@@ -268,15 +275,18 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
           hasMore: Predicate.isString(cursor) && cursor.length > 0,
         };
   if (page) {
-    counts.push(
+    addCounter(
       page.total === undefined
         ? `${page.returned} entries returned`
         : `${page.returned} of ${page.total} entries returned`,
     );
-    if (page.hasMore) counts.push("more metadata available");
+    if (page.hasMore) {
+      counts.push("more metadata available");
+      metadata.push("more metadata available");
+    }
   }
   const undiscoveredCount = arrayLength(own(payload, "undiscovered").value) ?? 0;
-  if (undiscoveredCount) counts.push(`${undiscoveredCount} undiscovered servers`);
+  if (undiscoveredCount) addCounter(`${undiscoveredCount} undiscovered servers`);
   const descriptors = attachments(payload);
   const attachmentCount = Math.max(
     descriptors.count,
@@ -298,6 +308,8 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     isError: currentError,
     known: currentOutcome !== undefined && Predicate.isBoolean(own(details, "isError").value),
     counts,
+    counters,
+    metadata,
     notices,
     warnings,
     truncated,

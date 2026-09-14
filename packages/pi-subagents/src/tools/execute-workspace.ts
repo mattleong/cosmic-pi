@@ -13,6 +13,8 @@ import {
   type SubagentWorkspaceInput,
 } from "./schema.ts";
 
+const preparedCwdMetadata = (cwd: string) => (cwd.length <= 1_024 ? { preparedCwd: cwd } : {});
+
 const result = (
   text: string,
   details: Omit<WorkspaceToolDetails, "version" | "action">,
@@ -79,7 +81,13 @@ const executeWorkspaceList = (
           : `More workspaces: call list with offset=${nextOffset}.`,
         "Metadata visibility does not authorize recovery. If ownership/cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
       ].join("\n"),
-      { operation: "list", offset, ...(nextOffset !== undefined && { nextOffset }) },
+      {
+        operation: "list",
+        offset,
+        workspaceCount: records.length,
+        listedCount: lines.length,
+        ...(nextOffset !== undefined && { nextOffset }),
+      },
     );
   });
 
@@ -146,6 +154,7 @@ export const executeWorkspaceAction = (
             ...receipt,
             revisionId: preparation.revisionId,
             preparationId: preparation.preparationId,
+            ...preparedCwdMetadata(preparation.cwd),
           },
         );
       }
@@ -171,7 +180,7 @@ export const executeWorkspaceAction = (
         );
         return result(
           `Revision requested; successor runId=${run.id}. Prior review and preparation are invalid. Await this run, then review its new immutable revision from the beginning before preparing and testing again.`,
-          receipt,
+          { ...receipt, successorRunId: run.id },
         );
       }
     }

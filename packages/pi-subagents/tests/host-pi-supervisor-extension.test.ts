@@ -15,6 +15,7 @@ import {
   type SupervisorMcpToolArgumentsByName as SupervisorToolArgumentsByName,
 } from "../src/supervisor/mcp-contract.ts";
 import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
+import * as subagentTools from "../src/tools/subagent.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 
 type SupervisorToolName = keyof SupervisorToolArgumentsByName;
@@ -123,6 +124,22 @@ const assistantMessage = (text: string, stopReason: "stop" | "aborted" = "stop")
 });
 
 describe("Herdr-hosted Pi bridge extension", () => {
+  effectTest("revokes compact animation when the supervisor session shuts down", function* () {
+    const registration = vi.spyOn(subagentTools, "registerSubagentTools");
+    const harness = yield* step(startBridgeHarness);
+    const shutdown = () => harness.handlers.get("session_shutdown")?.({}, bridgeContext);
+    try {
+      const schedule = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
+      let ticks = 0;
+      expect(schedule?.(1, () => ticks++)).toBeTypeOf("function");
+      yield* step(() => vi.waitFor(() => expect(ticks).toBeGreaterThan(0)));
+      yield* settle(shutdown);
+      expect(schedule?.(1, () => ticks++)).toBeUndefined();
+    } finally {
+      yield* settle(shutdown);
+      registration.mockRestore();
+    }
+  });
   it("injects the priority service tier for eligible fast-mode Pi requests", () => {
     const handlers = new Map<string, BridgeEventHandler>();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.

@@ -93,6 +93,24 @@ describe("workspace tool", () => {
     },
   );
 
+  effectTest("persists bounded empty-list counts without changing orphan guidance", function* () {
+    const response = yield* executeWorkspaceAction({ action: "list" }).pipe(
+      Effect.provideService(SubagentService, {
+        ...subagentServiceDouble({}),
+        workspaceList: () => Effect.succeed([]),
+      }),
+      Effect.orDie,
+    );
+    expect(response.details).toMatchObject({
+      operation: "list",
+      workspaceCount: 0,
+      listedCount: 0,
+    });
+    expect(response.content[0]?.type === "text" && response.content[0].text).toContain(
+      "Do not auto-adopt or delete an orphan.",
+    );
+  });
+
   effectTest("rejects incomplete integration before calling the service", function* () {
     const failed = yield* executeWorkspaceAction({
       action: "integrate",

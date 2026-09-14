@@ -1,4 +1,6 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
+import type { CompactAnimationScheduler } from "../tools/compact-summary";
+import { createCompactToolShell, type CompactShellOptions } from "./compact-shell";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import {
   BorderedToolCall,
@@ -8,7 +10,6 @@ import {
   syncBorderShellChrome,
 } from "./bordered-tool-call";
 import {
-  isToolCallTimingOnlyRender,
   renderTimedResultFooter,
   TimingPreservedComponent,
   timingState,
@@ -31,16 +32,23 @@ export interface CodePreviewToolShell {
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
     render: (context: ToolRenderContext<TState, TArgs>) => Component,
+    result?: AgentToolResult<unknown>,
   ): Component;
 }
 
 export function createCodePreviewToolShell(
   mode: ToolCallBackgroundMode = codePreviewSettings.toolCallBackground,
+  compact?: CompactShellOptions,
+  scheduleAnimation: CompactAnimationScheduler | undefined = compact?.scheduleAnimation,
 ): CodePreviewToolShell {
+  if (compact && codePreviewSettings.toolCallCollapsedStyle === "compact")
+    return createCompactToolShell(mode, { ...compact, scheduleAnimation });
   return {
     renderShell: mode === "on" ? "default" : "self",
-    renderCall: (context, theme, render) => renderCodePreviewCall(mode, context, theme, render),
-    renderResult: (context, theme, render) => renderCodePreviewResult(mode, context, theme, render),
+    renderCall: (context, theme, render) =>
+      renderCodePreviewCall(mode, context, theme, render, scheduleAnimation),
+    renderResult: (context, theme, render) =>
+      renderCodePreviewResult(mode, context, theme, render, scheduleAnimation),
   };
 }
 
@@ -49,17 +57,10 @@ function renderCodePreviewCall<TState, TArgs>(
   context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
+  scheduleAnimation: CompactAnimationScheduler | undefined,
 ): Component {
   if (mode !== "border") {
     const state = timingState(context);
-    if (
-      context.isPartial &&
-      isToolCallTimingOnlyRender(state) &&
-      state.codePreviewTimingCallComponent
-    ) {
-      updateToolCallTiming(context, { animate: false, formatLabel: false });
-      return state.codePreviewTimingCallComponent;
-    }
     const component = render(
       withLastComponent(context, unwrapTimingComponent(context.lastComponent)),
     );
@@ -67,30 +68,26 @@ function renderCodePreviewCall<TState, TArgs>(
     const wrapped =
       previousWrapped instanceof TimingPreservedComponent && previousWrapped.component === component
         ? previousWrapped
-        : new TimingPreservedComponent(component, state);
+        : new TimingPreservedComponent(component);
     state.codePreviewTimingCallComponent = wrapped;
-    updateToolCallTiming(context, { animate: false, formatLabel: false });
+    updateToolCallTiming(context, { animate: false, formatLabel: false, scheduleAnimation });
     return wrapped;
   }
   const state = borderState(context);
-  const timingOnly = context.isPartial === true && isToolCallTimingOnlyRender(state);
   const previousShell = state.codePreviewBorderShell;
   const reuseShell =
     previousShell instanceof BorderedToolCall && state.codePreviewBorderTheme === theme;
-  const reusedCall = timingOnly ? state.codePreviewBorderCallComponent : undefined;
-  const callComponent =
-    reusedCall ??
-    renderWithBorderSlot(state, "call", () =>
-      render(withLastComponent(context, state.codePreviewBorderCallComponent)),
-    );
-  const timing = updateToolCallTiming(context);
+  const callComponent = renderWithBorderSlot(state, "call", () =>
+    render(withLastComponent(context, state.codePreviewBorderCallComponent)),
+  );
+  const timing = updateToolCallTiming(context, { scheduleAnimation });
   state.codePreviewBorderCallComponent = callComponent;
   state.codePreviewBorderLastCallExecutionStarted = context.executionStarted;
   state.codePreviewBorderLastCallPartial = context.isPartial;
-  const shell = reuseShell ? previousShell : new BorderedToolCall(theme, state);
+  const shell = reuseShell ? previousShell : new BorderedToolCall(theme);
   syncBorderShellChrome(shell, state, context, timing?.label);
-  if (!reusedCall || !reuseShell) shell.setCall(callComponent);
-  if (!timingOnly || !reuseShell) shell.setResult(state.codePreviewBorderResultComponent);
+  shell.setCall(callComponent);
+  shell.setResult(state.codePreviewBorderResultComponent);
   state.codePreviewBorderShell = shell;
   state.codePreviewBorderTheme = theme;
   return shell;
@@ -101,29 +98,26 @@ function renderCodePreviewResult<TState, TArgs>(
   context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
   render: (context: ToolRenderContext<TState, TArgs>) => Component,
+  scheduleAnimation: CompactAnimationScheduler | undefined,
 ): Component {
-  const timing = updateToolCallTiming(context);
+  const timing = updateToolCallTiming(context, { scheduleAnimation });
   if (mode !== "border") {
-    if (!timing?.label && !isToolCallTimingOnlyRender(timingState(context))) return render(context);
+    if (!timing?.label) return render(context);
     return renderTimedResultFooter(context, theme, render, timing?.label);
   }
   const state = borderState(context);
-  const timingOnly = context.isPartial === true && isToolCallTimingOnlyRender(state);
-  const reusedResult = timingOnly ? state.codePreviewBorderResultComponent : undefined;
-  const resultComponent =
-    reusedResult ??
-    renderWithBorderSlot(state, "result", () =>
-      render(withLastComponent(context, state.codePreviewBorderResultComponent)),
-    );
+  const resultComponent = renderWithBorderSlot(state, "result", () =>
+    render(withLastComponent(context, state.codePreviewBorderResultComponent)),
+  );
   state.codePreviewBorderResultComponent = resultComponent;
   if (
     state.codePreviewBorderShell instanceof BorderedToolCall &&
     state.codePreviewBorderTheme === theme
   ) {
     syncBorderShellChrome(state.codePreviewBorderShell, state, context, timing?.label);
-    if (!reusedResult) state.codePreviewBorderShell.setResult(resultComponent);
+    state.codePreviewBorderShell.setResult(resultComponent);
   } else {
-    const shell = new BorderedToolCall(theme, state);
+    const shell = new BorderedToolCall(theme);
     syncBorderShellChrome(shell, state, context, timing?.label);
     shell.setCall(state.codePreviewBorderCallComponent);
     shell.setResult(resultComponent);

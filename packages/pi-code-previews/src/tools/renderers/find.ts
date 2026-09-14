@@ -11,6 +11,7 @@ import { createPathListPreviewTool } from "./shared/path-list-tool";
 
 export function createFindPreviewTool(cwd: string) {
   return createPathListPreviewTool(cwd, {
+    name: "find",
     createToolDefinition: createFindToolDefinition,
     renderCall(args, theme, renderCwd) {
       const pattern = Predicate.isString(args.pattern) ? args.pattern : "";

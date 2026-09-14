@@ -17,6 +17,7 @@ import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
+import * as subagentTools from "../src/tools/subagent.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
 
@@ -67,6 +68,32 @@ const deferred = <A>() => {
 };
 
 describe("subagent Pi registration", () => {
+  effectTest("revokes compact animation ownership on replacement and shutdown", function* () {
+    const registration = vi.spyOn(subagentTools, "registerSubagentTools");
+    const { handlers } = applicationFixture({});
+    const ctx = extensionContextFixture({ cwd: process.cwd(), signal: undefined, hasUI: false });
+    const shutdown = () => handlers.get("session_shutdown")?.({}, ctx);
+    try {
+      yield* settle(() => handlers.get("session_start")?.({}, ctx));
+      const first = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
+      let oldTicks = 0;
+      expect(first?.(1, () => oldTicks++)).toBeTypeOf("function");
+      yield* step(() => vi.waitFor(() => expect(oldTicks).toBeGreaterThan(0)));
+      yield* settle(() => handlers.get("session_start")?.({}, ctx));
+      const retiredTicks = oldTicks;
+      expect(first?.(1, () => oldTicks++)).toBeUndefined();
+      const second = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
+      let newTicks = 0;
+      expect(second?.(1, () => newTicks++)).toBeTypeOf("function");
+      yield* step(() => vi.waitFor(() => expect(newTicks).toBeGreaterThan(0)));
+      expect(oldTicks).toBe(retiredTicks);
+      yield* settle(shutdown);
+      expect(second?.(1, () => newTicks++)).toBeUndefined();
+    } finally {
+      yield* settle(shutdown);
+      registration.mockRestore();
+    }
+  });
   for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
     effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;

@@ -1,6 +1,7 @@
 // Pi tool execution is a Promise-shaped host boundary.
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { withCodePreviewShell } from "pi-code-previews";
+import { createSubagentCompactSummary } from "./compact-summary.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { decodeStartAwaitCardDetails } from "./details-schema.ts";
@@ -310,6 +311,34 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     rename,
     claims,
     workspace,
-  ])
-    pi.registerTool(withCodePreviewShell(tool));
+  ]) {
+    const project = createSubagentCompactSummary(tool.name);
+    pi.registerTool(
+      withCodePreviewShell(tool, {
+        ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
+        compactSummary: (input) => {
+          const summary = project(input);
+          const ownsCollapsed =
+            summary &&
+            (summary.outcome === undefined ||
+              summary.outcome === "success" ||
+              summary.outcome === "warning" ||
+              summary.failure !== undefined);
+          // Hidden original renderers cannot retire a ticker started while expanded.
+          if (!input.context.isPartial || (!input.context.expanded && ownsCollapsed))
+            syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
+          // The live panel intentionally empties the original result, not the call heading.
+          if (
+            summary?.expandedResultOwnsCall &&
+            input.context.isPartial &&
+            runtime.toolPresentation?.isLiveHierarchyAvailable() === true
+          ) {
+            const { expandedResultOwnsCall: _ownedCall, ...retained } = summary;
+            return retained;
+          }
+          return summary;
+        },
+      }),
+    );
+  }
 }

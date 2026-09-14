@@ -5,11 +5,13 @@ import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
 export const DIFF_BACKGROUND_INTENSITIES = ["off", "subtle", "medium"] as const;
 export const DIFF_WORD_EMPHASES = ["all", "smart", "off"] as const;
 export const TOOL_CALL_BACKGROUND_MODES = ["on", "border", "off"] as const;
+export const TOOL_CALL_COLLAPSED_STYLES = ["preview", "compact"] as const;
 export const PATH_ICON_MODES = ["unicode", "nerd", "off"] as const;
 
 export const DiffBackgroundIntensitySchema = Schema.Literals(DIFF_BACKGROUND_INTENSITIES);
 export const DiffWordEmphasisSchema = Schema.Literals(DIFF_WORD_EMPHASES);
 export const ToolCallBackgroundModeSchema = Schema.Literals(TOOL_CALL_BACKGROUND_MODES);
+export const ToolCallCollapsedStyleSchema = Schema.Literals(TOOL_CALL_COLLAPSED_STYLES);
 export const PathIconModeSchema = Schema.Literals(PATH_ICON_MODES);
 export const CodePreviewToolNameSchema = Schema.Literals(ALL_CODE_PREVIEW_TOOLS);
 export const BundledShikiThemeSchema = Schema.Literals(Object.keys(bundledThemes));
@@ -27,6 +29,7 @@ export const CodePreviewSettingsSchema = Schema.Struct({
   diffIntensity: DiffBackgroundIntensitySchema,
   wordEmphasis: DiffWordEmphasisSchema,
   toolCallBackground: ToolCallBackgroundModeSchema,
+  toolCallCollapsedStyle: ToolCallCollapsedStyleSchema,
   toolCallTiming: Schema.Boolean,
   readCollapsedLines: PositiveIntegerSchema,
   readContentPreview: Schema.Boolean,
@@ -55,6 +58,7 @@ export type CodePreviewSettings = Omit<Mutable<SchemaSettings>, "tools"> & {
 };
 export type DiffWordEmphasis = typeof DiffWordEmphasisSchema.Type;
 export type ToolCallBackgroundMode = typeof ToolCallBackgroundModeSchema.Type;
+export type ToolCallCollapsedStyle = typeof ToolCallCollapsedStyleSchema.Type;
 export type PathIconMode = typeof PathIconModeSchema.Type;
 export type CodePreviewEditableSettingId = keyof CodePreviewSettings | "resetToDefaults";
 

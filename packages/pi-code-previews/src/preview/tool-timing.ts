@@ -1,7 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { synchronousNow } from "pi-cosmic-core";
-import { deferCodePreview, scheduleCodePreview } from "../application/capability";
+import { captureCodePreviewSessionCapability } from "../application/capability";
+import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
 import type { RendererState } from "../tools/renderers/shared/types";
 
@@ -20,13 +21,14 @@ export type TimingState = RendererState & {
   codePreviewTimingStartedAt?: number | undefined;
   codePreviewTimingEndedAt?: number | undefined;
   codePreviewTimingCancel?: (() => void) | undefined;
-  codePreviewTimingOnlyRenderToken?: number | undefined;
+  codePreviewAnimationFrame?: number;
   codePreviewTimingCallComponent?: Component;
   codePreviewTimingResultComponent?: Component;
 };
 
 type ToolCallTiming = {
   label: string;
+  duration: string;
 };
 
 export function renderTimedResultFooter<TContext extends ToolTimingRenderContext>(
@@ -36,29 +38,34 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
   timingLabel: string | undefined,
 ): Component {
   const state = timingState(context);
-  const reusedResult = isToolCallTimingOnlyRender(state)
-    ? state.codePreviewTimingResultComponent
-    : undefined;
-  const resultComponent =
-    reusedResult ??
-    render(
-      withLastComponent(
-        context,
-        unwrapTimingComponent(state.codePreviewTimingResultComponent ?? context.lastComponent),
-      ),
-    );
+  const resultComponent = render(
+    withLastComponent(
+      context,
+      unwrapTimingComponent(state.codePreviewTimingResultComponent ?? context.lastComponent),
+    ),
+  );
   state.codePreviewTimingResultComponent = resultComponent;
   if (!timingLabel) return resultComponent;
-  return new ToolTimingFooter(resultComponent, theme.fg("muted", `╰─ ${timingLabel}`), state);
+  return new ToolTimingFooter(resultComponent, theme.fg("muted", `╰─ ${timingLabel}`));
 }
 
 export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   context: TContext,
-  options: { animate?: boolean; formatLabel?: boolean } = {},
+  options: {
+    animate?: boolean;
+    formatLabel?: boolean;
+    animateWithoutTiming?: boolean;
+    scheduleAnimation?: CompactAnimationScheduler | undefined;
+  } = {},
 ): ToolCallTiming | undefined {
   const state = timingState(context);
+  if (!context.isPartial) clearToolCallTimingInterval(state);
   if (!codePreviewSettings.toolCallTiming) {
-    clearToolCallTimingInterval(state);
+    if (options.animateWithoutTiming && context.executionStarted && context.isPartial)
+      ensureToolCallAnimation(state, context.invalidate, options.scheduleAnimation);
+    else clearToolCallTimingInterval(state);
+    if (!context.isPartial && state.codePreviewTimingStartedAt !== undefined)
+      state.codePreviewTimingEndedAt ??= synchronousNow();
     return undefined;
   }
   if (
@@ -73,7 +80,7 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   const startedAt = state.codePreviewTimingStartedAt;
   if (startedAt === undefined) return undefined;
   if (context.isPartial === true && options.animate !== false)
-    ensureToolCallTimingInterval(state, context.invalidate);
+    ensureToolCallAnimation(state, context.invalidate, options.scheduleAnimation);
   else if (context.isPartial === false) {
     state.codePreviewTimingEndedAt ??= synchronousNow();
     clearToolCallTimingInterval(state);
@@ -83,16 +90,13 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   const running = context.isPartial === true;
   const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
   const label = running ? "Elapsed" : "Took";
-  return { label: `${label} ${formatToolCallDuration(endTime - startedAt)}` };
+  const duration = formatToolCallDuration(endTime - startedAt);
+  return { label: `${label} ${duration}`, duration };
 }
 
 export function timingState(context: { state: unknown }): TimingState {
   // SAFETY: Pi initializes renderer state as an object shared by the call and result slots.
   return context.state as TimingState;
-}
-
-export function isToolCallTimingOnlyRender(state: TimingState): boolean {
-  return state.codePreviewTimingOnlyRenderToken !== undefined;
 }
 
 export function unwrapTimingComponent(component: Component | undefined): Component | undefined {
@@ -103,37 +107,30 @@ export function withLastComponent<TContext extends ToolTimingRenderContext>(
   context: TContext,
   lastComponent: Component | undefined,
 ): TContext {
-  // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
+  // SAFETY: This copy preserves all context fields except the explicitly replaced slot component.
   return { ...context, lastComponent } as TContext;
 }
 
-function ensureToolCallTimingInterval(state: TimingState, invalidate: () => void): void {
-  state.codePreviewTimingCancel ??= scheduleCodePreview(100, () =>
-    invalidateForToolCallTiming(state, invalidate),
-  );
-}
-
-function invalidateForToolCallTiming(state: TimingState, invalidate: () => void): void {
-  const token = (state.codePreviewTimingOnlyRenderToken ?? 0) + 1;
-  state.codePreviewTimingOnlyRenderToken = token;
-  try {
+function ensureToolCallAnimation(
+  state: TimingState,
+  invalidate: () => void,
+  scheduleAnimation?: CompactAnimationScheduler,
+): void {
+  const schedule = scheduleAnimation ?? captureCodePreviewSessionCapability()?.schedule;
+  if (!schedule) return;
+  state.codePreviewTimingCancel ??= schedule(100, () => {
+    state.codePreviewAnimationFrame = (state.codePreviewAnimationFrame ?? 0) + 1;
     invalidate();
-  } finally {
-    deferCodePreview(() => {
-      if (state.codePreviewTimingOnlyRenderToken === token)
-        state.codePreviewTimingOnlyRenderToken = undefined;
-    });
-  }
+  });
 }
 
 function clearToolCallTimingInterval(state: TimingState): void {
   if (!state.codePreviewTimingCancel) return;
   state.codePreviewTimingCancel();
   state.codePreviewTimingCancel = undefined;
-  state.codePreviewTimingOnlyRenderToken = undefined;
 }
 
-function formatToolCallDuration(ms: number): string {
+export function formatToolCallDuration(ms: number): string {
   const roundedMs = Math.max(0, Math.round(ms));
   if (roundedMs < 1000) return `${roundedMs}ms`;
   if (roundedMs < 60_000) return `${(roundedMs / 1000).toFixed(1)}s`;
@@ -147,11 +144,9 @@ function formatToolCallDuration(ms: number): string {
 
 export class TimingPreservedComponent implements Component {
   readonly component: Component;
-  private readonly state: TimingState;
 
-  constructor(component: Component, state: TimingState) {
+  constructor(component: Component) {
     this.component = component;
-    this.state = state;
   }
 
   render(width: number): string[] {
@@ -159,19 +154,17 @@ export class TimingPreservedComponent implements Component {
   }
 
   invalidate(): void {
-    if (!isToolCallTimingOnlyRender(this.state)) this.component.invalidate?.();
+    this.component.invalidate();
   }
 }
 
 class ToolTimingFooter implements Component {
   private readonly component: Component;
   private readonly footer: string;
-  private readonly state: TimingState;
 
-  constructor(component: Component, footer: string, state: TimingState) {
+  constructor(component: Component, footer: string) {
     this.component = component;
     this.footer = footer;
-    this.state = state;
   }
 
   render(width: number): string[] {
@@ -179,6 +172,6 @@ class ToolTimingFooter implements Component {
   }
 
   invalidate(): void {
-    if (!isToolCallTimingOnlyRender(this.state)) this.component.invalidate?.();
+    this.component.invalidate();
   }
 }

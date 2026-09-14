@@ -6,8 +6,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
+import {
+  loadCodePreviewSettings,
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CodePreviewSettings,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -155,19 +161,25 @@ export function betterOpenAIWithDependencies(
     OpenAIApplication,
     OpenAIConfigError,
     OpenAIRuntimeError,
-    FastInjectionIngress
+    {
+      readonly injectionIngress: FastInjectionIngress;
+      readonly scheduler: CodePreviewSchedulerServiceContract;
+    }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        makeOpenAIApplicationLayer(input, {
-          projection,
-          fastProjection,
-          isUsageVisible,
-          onUsageChange: (context) => {
-            if (currentContext === context) updateFooter(MutableRef.get(context));
-          },
-        }),
+        Layer.merge(
+          makeOpenAIApplicationLayer(input, {
+            projection,
+            fastProjection,
+            isUsageVisible,
+            onUsageChange: (context) => {
+              if (currentContext === context) updateFooter(MutableRef.get(context));
+            },
+          }),
+          CodePreviewSchedulerService.layer,
+        ),
         { agentDirectory: getAgentDir, packageName: "pi-better-openai" },
       ),
     startup: ({ ctx, cwd, projectTrusted }) =>
@@ -181,11 +193,20 @@ export function betterOpenAIWithDependencies(
               .pipe(Effect.as(service.recordInjection)),
           ),
         ),
+        Effect.flatMap((injectionIngress) =>
+          CodePreviewSchedulerService.pipe(
+            Effect.map((scheduler) => ({ injectionIngress, scheduler })),
+          ),
+        ),
       ),
-    onActivated: ({ ctx, context }, _token, injectionIngress) => {
+    onActivated: ({ ctx, context }, token, { injectionIngress, scheduler }) => {
       currentContext = context;
       recordFastInjection = injectionIngress;
-      registerOpenAIImage(pi, run, updateContext);
+      registerOpenAIImage(pi, run, updateContext, (intervalMs, tick) =>
+        currentContext === context && slot.isCurrent(token)
+          ? scheduler.schedule(intervalMs, tick)
+          : undefined,
+      );
       watchCosmicUi();
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);

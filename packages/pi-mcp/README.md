@@ -17,6 +17,10 @@ For a single session, use `pi -e ./packages/pi-mcp`. Disable or remove another e
 
 Pi/Jiti loads the shipped TypeScript source and fixed validator helper. No build or generated `dist/` is required. There is no importer for another MCP extension's configuration.
 
+## Tool display
+
+MCP honors pi-code-previews' `toolCallCollapsedStyle: "compact"` setting. Pending calls show their action and target; completed replies show semantic counts with warnings and recovery guidance kept visible. Expansion retains the existing detailed renderer. Failed, unknown, not-sent, and incomplete historical results keep their existing presentation rather than hide execution uncertainty. The default `"preview"` style, native images, and machine replies are unchanged.
+
 ## Configuration and trust
 
 Configuration loads from these files, in increasing precedence:

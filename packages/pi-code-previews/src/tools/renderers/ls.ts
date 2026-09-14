@@ -10,6 +10,7 @@ import { createPathListPreviewTool } from "./shared/path-list-tool";
 
 export function createLsPreviewTool(cwd: string) {
   return createPathListPreviewTool(cwd, {
+    name: "ls",
     createToolDefinition: createLsToolDefinition,
     renderCall(args, theme, renderCwd) {
       const path = Predicate.isString(args.path) && args.path ? args.path : ".";

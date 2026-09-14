@@ -1,0 +1,699 @@
+import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it } from "vitest";
+import {
+  codePreviewSettings,
+  setCodePreviewSettings,
+} from "../../../pi-code-previews/src/config/state.ts";
+import { registerSubagentTools } from "../../src/tools/subagent.ts";
+import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
+import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import { view } from "./fixtures/tool-harness.ts";
+
+interface AnimationCallback {
+  tick?: () => void;
+}
+
+function summarize<DetailsInput>(
+  action: string,
+  details: DetailsInput,
+  phase: "running" | "settled" = "settled",
+  args: { action?: string; runIds?: string[] } = {},
+  isError = false,
+) {
+  const provider = createSubagentCompactSummary(`subagent_${action}`);
+  return provider({
+    phase,
+    args,
+    result: { content: [{ type: "text", text: "Untrusted success text" }], details },
+    // SAFETY: The provider reads only isError from the renderer context.
+    context: { isError } as Parameters<typeof provider>[0]["context"],
+  });
+}
+
+describe("subagent compact semantic policy", () => {
+  it("keeps a requested target separate from lifecycle operations throughout rendering", () => {
+    const provider = createSubagentCompactSummary("subagent_lifecycle");
+    const args = { action: "interrupt", runIds: ["target-1"] };
+    for (const phase of ["pending", "running", "settled"] as const) {
+      const summary = provider({
+        phase,
+        args,
+        result:
+          phase === "pending"
+            ? undefined
+            : {
+                content: [],
+                details: makeCompactToolDetails({
+                  action: "interrupt",
+                  runs: [view({ id: "target-1", name: "Worker", state: "running" })],
+                }),
+              },
+        // SAFETY: The provider only reads isError from this render context.
+        context: { isError: false } as Parameters<typeof provider>[0]["context"],
+      });
+      expect(summary?.subject).toBe("target-1");
+      expect(summary?.action).toBe("interrupt");
+      expect(summary?.metadata).not.toContain("target-1");
+      expect(summary?.expandedResultOwnsCall).toBeUndefined();
+    }
+  });
+
+  it("retains a retry successor distinct from the requested source without duplicate identity", () => {
+    for (const name of ["Retry worker", "source-1", "successor-2"]) {
+      const summary = summarize(
+        "lifecycle",
+        makeCompactToolDetails({
+          action: "retry",
+          runs: [view({ id: "successor-2", name, state: "running" })],
+        }),
+        "settled",
+        { action: "retry", runIds: ["source-1"] },
+      );
+      expect(summary?.action).toBe("retry");
+      expect(summary?.subject).toBe("source-1");
+      expect(summary?.metadata?.filter((value) => value === "successor-2")).toHaveLength(1);
+      expect(summary?.metadata).not.toContain("source-1");
+      expect(summary?.notices).toEqual([]);
+    }
+  });
+
+  it("animates with the registering owner and releases the ticker on settlement", () => {
+    const settings = { ...codePreviewSettings };
+    setCodePreviewSettings({
+      ...settings,
+      toolCallCollapsedStyle: "compact",
+      toolCallTiming: false,
+    });
+    try {
+      const tools: ToolDefinition<any, any, any>[] = [];
+      const animation: AnimationCallback = {};
+      let stopped = 0;
+      registerSubagentTools(
+        extensionApiFixture({
+          registerTool: (tool: ToolDefinition<any, any, any>) => tools.push(tool),
+        }),
+        {
+          environment: { cwd: "/project", projectTrusted: false },
+          run: () => Promise.reject(new Error("not executed")),
+          scheduleAnimation: (_interval, tick) => {
+            animation.tick = tick;
+            return () => {
+              stopped++;
+            };
+          },
+        },
+      );
+      const tool = tools.find((tool) => tool.name === "subagent_status")!;
+      // SAFETY: The render-only fixture implements the shell's styling callbacks.
+      const theme = {
+        fg: (_color: string, text: string) => text,
+        bg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as Theme;
+      let invalidated = 0;
+      const args = { runIds: ["agent-1"] };
+      const context = {
+        args,
+        state: {},
+        toolCallId: "status",
+        cwd: "/project",
+        lastComponent: undefined,
+        expanded: false,
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: true,
+        isError: false,
+        showImages: false,
+        invalidate: () => {
+          invalidated++;
+        },
+      };
+      tool.renderCall?.(args, theme, context).render(100);
+      expect(animation.tick).toBeTypeOf("function");
+      animation.tick?.();
+      expect(invalidated).toBeGreaterThan(0);
+      tool
+        .renderResult?.(
+          { content: [], details: makeCompactToolDetails({ action: "status", runs: [] }) },
+          { expanded: false, isPartial: false },
+          theme,
+          { ...context, isPartial: false },
+        )
+        .render(100);
+      expect(stopped).toBe(1);
+    } finally {
+      setCodePreviewSettings(settings);
+    }
+  });
+  it("uses decoded run states rather than output text", () => {
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ state: "running" })],
+    });
+    const summary = summarize("status", details);
+    expect(summary?.outcome).toBe("success");
+    expect(summary?.counters).toContain("1 running");
+    expect(summary?.metadata?.join(" ")).not.toContain("Untrusted");
+  });
+
+  it("summarizes stable writer claims without treating them as blocked admission", () => {
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ state: "running", writeIntent: "writer", writeClaims: ["src/a.ts"] })],
+    });
+    expect(summarize("status", details)?.outcome).toBe("success");
+    expect(summarize("status", details)?.metadata).toContain("1 file claims");
+  });
+
+  it("declines missing, mismatched, omitted and old details", () => {
+    for (const details of [
+      undefined,
+      {},
+      { version: 1, action: "status" },
+      makeCompactToolDetails({ action: "list", runs: [] }),
+    ]) {
+      expect(summarize("status", details)).toBeUndefined();
+    }
+  });
+
+  it("keeps attention visible while moving evidence to expansion", () => {
+    for (const overrides of [
+      {
+        state: "waiting_for_parent" as const,
+        question: { message: "May I edit another file?", requestId: "q-1", createdAt: 1 },
+      },
+      { state: "paused" as const },
+      { state: "failed" as const, error: "Cleanup uncertain" },
+      { writeIntent: "writer" as const, writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
+      { warning: "Fallback changed runtime" },
+    ]) {
+      const details = makeCompactToolDetails({ action: "status", runs: [view(overrides)] });
+      expect(summarize("status", details)?.detailsOnExpand).toBe(true);
+      expect(summarize("status", details)?.notices?.length).toBeGreaterThan(0);
+      expect(summarize("status", details, "running")?.detailsOnExpand).toBe(true);
+    }
+  });
+
+  it("reports live launch progress without prematurely classifying success", () => {
+    const details = {
+      version: 2,
+      action: "start",
+      startEntries: [
+        {
+          index: 0,
+          name: "worker",
+          profile: "worker",
+          status: "pending",
+          routeStatus: "resolving",
+        },
+      ],
+    };
+    expect(summarize("start", details, "running")?.counters).toContain("0/1 started");
+    expect(summarize("start", details, "running")?.outcome).toBeUndefined();
+    expect(summarize("start", details)?.outcome).toBe("uncertain");
+  });
+
+  it("does not promote changing launch-entry details into live identity or metadata", () => {
+    for (const changed of [false, true]) {
+      const details = {
+        version: 2,
+        action: "start",
+        startEntries: [
+          {
+            index: 0,
+            name: changed ? "Renamed" : "Worker",
+            profile: "worker",
+            status: "started",
+            routeStatus: "selected",
+            host: "local",
+            runtime: "pi",
+            model: "provider/model",
+            effort: "low",
+            openaiFastMode: false,
+            runId: "started-1",
+            writerWorkspaceMode: changed ? "worktree" : "shared-checkout",
+          },
+          {
+            index: 1,
+            name: "Pending",
+            profile: "worker",
+            status: "pending",
+            routeStatus: "resolving",
+          },
+        ],
+      };
+      const summary = summarize("start", details, "running");
+      expect(summary?.subject).toBe("");
+      expect(summary?.counters).toEqual(["1/2 started"]);
+      expect(summary?.metadata).toEqual([]);
+      expect(summary?.expandedResultOwnsCall).toBeUndefined();
+    }
+  });
+
+  it("promotes the sole listed identity but not a partial multi-target status", () => {
+    for (const action of ["list", "status"] as const) {
+      const details = makeCompactToolDetails({
+        action,
+        runs: [view({ id: "only-1", name: "Worker" })],
+      });
+      expect(summarize(action, details)?.subject).toBe("only-1");
+      expect(summarize(action, details)?.metadata).not.toContain("only-1");
+      expect(summarize(action, details, "settled", { runIds: ["only-1", "other"] })?.subject).toBe(
+        "",
+      );
+    }
+  });
+
+  it("requires target scope before summarizing awaits", () => {
+    expect(
+      summarize("await", { version: 2, action: "await", cards: [], awaitUntil: "all_finished" }),
+    ).toBeUndefined();
+    expect(
+      summarize(
+        "await",
+        {
+          version: 2,
+          action: "await",
+          cards: [],
+          awaitUntil: "all_finished",
+          attentionRequired: true,
+        },
+        "running",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("classifies action failures without claiming incomplete recovery details", () => {
+    const details = makeCompactToolDetails({
+      action: "send",
+      runs: [],
+      actionFailures: [{ id: "agent-1", code: "run_not_found", message: "Run not found" }],
+    });
+    const summary = summarize("send", details);
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.failure).toBeUndefined();
+    expect(summary?.notices?.map((notice) => notice.text).join(" ")).toContain("agent-1");
+  });
+
+  it.each([
+    ["stopped", "cancelled"],
+    ["stopping", "uncertain"],
+    ["paused", "warning"],
+    ["waiting_for_parent", "warning"],
+  ] as const)("classifies %s without a clean success icon", (state, outcome) => {
+    const details = makeCompactToolDetails({ action: "status", runs: [view({ state })] });
+    expect(summarize("status", details)?.outcome).toBe(outcome);
+    expect(summarize("status", details, "settled", {}, true)).toBeUndefined();
+  });
+
+  it("uses requested targets when older await details lack scope", () => {
+    const projected = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ id: "target", state: "completed" }), view({ id: "context", state: "paused" })],
+    });
+    if (projected.action === "models") throw new Error("Expected cards");
+    const summary = summarize(
+      "await",
+      {
+        version: 2,
+        action: "await",
+        cards: projected.cards,
+        awaitUntil: "all_finished",
+      },
+      "settled",
+      { runIds: ["target"] },
+    );
+    expect(summary?.counters).toContain("1/1 finished");
+    expect(summary?.subject).toBe("target");
+    expect(summary?.expandedResultOwnsCall).toBe(true);
+    expect(summary?.metadata).not.toContain("target");
+    expect(summary?.metadata).not.toContain("1 paused");
+  });
+
+  it("keeps quarantine ahead of route-exhaustion replacement advice", () => {
+    const summary = summarize("start", {
+      version: 2,
+      action: "start",
+      startEntries: [
+        {
+          index: 0,
+          name: "worker",
+          profile: "worker",
+          status: "failed",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "provider/model",
+          effort: "low",
+          openaiFastMode: false,
+        },
+      ],
+      startFailures: [
+        {
+          index: 0,
+          message: "Start failed",
+          admittedRun: {
+            runId: "quarantined-run",
+            cleanupDisposition: "quarantined",
+            retryDisposition: "exhausted",
+            hasRemainingCandidate: false,
+            remainingCandidateCount: 0,
+          },
+        },
+      ],
+    });
+    expect(summary?.outcome).toBe("error");
+    const notices = summary?.notices?.map((notice) => notice.text).join(" ");
+    expect(notices).toContain("quarantined-run");
+    expect(notices).toContain("quarantined");
+    expect(notices).toContain("Do not retry or launch a replacement");
+    expect(notices).not.toContain("only now consider");
+  });
+
+  it("matches claims operations to the claims detail family", () => {
+    const details = makeCompactToolDetails({
+      action: "claims",
+      runs: [view({ writeIntent: "writer", writeClaims: ["src/a.ts"] })],
+    });
+    const summary = summarize("claims", details, "settled", { action: "list" });
+    expect(summary?.action).toBe("list");
+    expect(summary?.metadata).toContain("1 file claims");
+    expect(summary?.metadata?.join(" ")).not.toContain("src/a.ts");
+    expect(
+      summarize("claims", makeCompactToolDetails({ action: "list", runs: [] }), "settled", {
+        action: "list",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("branches paused recovery on capabilities", () => {
+    for (const resumable of [true, false]) {
+      const details = makeCompactToolDetails({
+        action: "interrupt",
+        runs: [view({ state: "paused", capabilities: resumable ? ["resume"] : [] })],
+      });
+      const text = summarize("lifecycle", details, "settled", { action: "interrupt" })
+        ?.notices?.map((notice) => notice.text)
+        .join(" ");
+      expect(text).toContain(resumable ? 'action: "resume"' : 'action: "stop"');
+      expect(text).toContain(resumable ? "subagent_await" : "confirm cleanup");
+      if (!resumable) expect(text).not.toContain('action: "resume"');
+    }
+  });
+
+  it("does not grant from projected offender audits or change peer claims", () => {
+    for (const offender of [true, false]) {
+      const details = makeCompactToolDetails({
+        action: "status",
+        runs: [
+          view({
+            state: "paused",
+            writeIntent: "writer",
+            writeAdmissionPaused: true,
+            ...(offender && { writeViolationOffender: true }),
+            writeClaims: ["src/a.ts"],
+            writeAudit: { observedFileWrites: [], violations: [], bashWriteHints: 0 },
+          }),
+        ],
+      });
+      const text =
+        summarize("status", details)
+          ?.notices?.map((notice) => notice.text)
+          .join(" ") ?? "";
+      expect(text).not.toContain("paths:");
+      expect(text).not.toContain("src/a.ts");
+      if (offender) {
+        expect(text).toContain("full audit");
+        expect(text.indexOf('action: "resume_admission"')).toBeLessThan(
+          text.indexOf('action: "resume"'),
+        );
+        expect(text).toContain("outside the workspace");
+        expect(text).toContain("confirm process and writer cleanup");
+      } else {
+        expect(text).toContain("Do not change this peer's claims");
+        expect(text).not.toContain('action: "resume"');
+      }
+    }
+  });
+
+  it("summarizes only await targets and leaves report bodies on expansion", () => {
+    const projected = makeCompactToolDetails({
+      action: "status",
+      runs: [
+        view({ id: "target", state: "completed", finalText: "SECRET REPORT BODY" }),
+        view({ id: "descendant", state: "paused", parentRunId: "target" }),
+      ],
+    });
+    if (projected.action === "models") throw new Error("Expected cards");
+    const details = {
+      version: 2,
+      action: "await",
+      cards: projected.cards,
+      awaitedRunIds: ["target"],
+      awaitUntil: "all_finished",
+    };
+    const summary = summarize("await", details);
+    expect(summary?.metadata).not.toContain("1 completed");
+    expect(summary?.counters).toContain("1/1 finished");
+    expect(summary?.metadata).not.toContain("1 paused");
+    const text = summary?.notices?.map((notice) => notice.text).join(" ");
+    expect(summary?.metadata).toContain("1 report");
+    expect(text).not.toContain("SECRET REPORT BODY");
+    expect(text).not.toContain('action: "resume"');
+    const cancelled = summarize("await", { ...details, cancelled: true });
+    expect(cancelled?.outcome).toBe("cancelled");
+    expect(cancelled?.notices?.some((notice) => notice.text.includes("NOT stopped"))).toBe(true);
+  });
+
+  it("marks omitted details as bounded rather than complete fleet counts", () => {
+    const details = makeCompactToolDetails({ action: "list", runs: [view()] });
+    const summary = summarize("list", { ...details, runCount: 20, contentOmitted: true });
+    expect(summary?.counters).toContain("1/20 shown");
+    expect(summary?.outcome).toBe("uncertain");
+    expect(summary?.notices?.some((notice) => notice.text.includes("subagent_status"))).toBe(true);
+  });
+
+  it("preserves workspace pagination, orphan recovery and exact test gates", () => {
+    const summary = summarize(
+      "workspace",
+      {
+        version: 1,
+        action: "workspace",
+        operation: "review",
+        workspaceId: "w",
+        revisionId: "r",
+        offset: 0,
+        totalChars: 100,
+        nextOffset: 50,
+      },
+      "settled",
+      { action: "review" },
+    );
+    const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
+    for (const required of [
+      "ALL pages",
+      "revisionId=r",
+      "offset=50",
+      "prepare",
+      "tests",
+      "preparationId",
+    ])
+      expect(text).toContain(required);
+    const list = summarize(
+      "workspace",
+      {
+        version: 1,
+        action: "workspace",
+        operation: "list",
+        workspaceCount: 10,
+        listedCount: 8,
+        nextOffset: 8,
+      },
+      "settled",
+      { action: "list" },
+    );
+    expect(list?.counters).toContain("8/10 workspaces shown");
+    expect(
+      list?.notices?.some((notice) =>
+        notice.text.includes("Do not auto-adopt or delete an orphan"),
+      ),
+    ).toBe(true);
+    expect(
+      summarize(
+        "workspace",
+        {
+          version: 1,
+          action: "workspace",
+          operation: "prepare",
+          workspaceId: "w",
+          revisionId: "r",
+          preparationId: "p",
+          preparedCwd: "/combined",
+        },
+        "settled",
+        { action: "prepare" },
+      )?.notices?.[0]?.text,
+    ).toContain("/combined");
+    expect(
+      summarize(
+        "workspace",
+        {
+          version: 1,
+          action: "workspace",
+          operation: "revise",
+          workspaceId: "w",
+          successorRunId: "successor",
+        },
+        "settled",
+        { action: "revise" },
+      )?.notices?.[0]?.text,
+    ).toContain("Await successor successor");
+  });
+
+  it("declines incomplete workspace receipts instead of inventing recovery IDs", () => {
+    for (const details of [
+      { operation: "review", workspaceId: "w", offset: 0, totalChars: 100 },
+      { operation: "prepare", workspaceId: "w", preparedCwd: "/combined" },
+      { operation: "integrate", workspaceId: "w", revisionId: "r" },
+      { operation: "list", workspaceCount: 1, listedCount: 2 },
+    ])
+      expect(
+        summarize("workspace", { version: 1, action: "workspace", ...details }, "settled", {
+          action: details.operation,
+        }),
+      ).toBeUndefined();
+  });
+
+  it("distinguishes proven report omissions from errors and unknown omissions", () => {
+    const reports = makeCompactToolDetails({
+      action: "list",
+      runs: [view({ finalText: "report" })],
+    });
+    expect(summarize("list", reports)?.metadata).toContain("reports via subagent_status");
+    expect(summarize("list", reports)?.notices).toEqual([]);
+    for (const overrides of [{ error: "failure" }, { error: "failure", finalText: "report" }]) {
+      const details = makeCompactToolDetails({ action: "list", runs: [view(overrides)] });
+      expect(summarize("list", details)?.notices?.some((notice) => notice.kind === "warning")).toBe(
+        true,
+      );
+    }
+    if (reports.action === "models") throw new Error("Expected run details");
+    const { reportsOnlyOmitted, ...unknown } = reports;
+    expect(reportsOnlyOmitted).toBe(true);
+    expect(summarize("list", unknown)?.outcome).toBe("uncertain");
+    expect(summarize("list", unknown)?.notices?.some((notice) => notice.kind === "warning")).toBe(
+      true,
+    );
+  });
+
+  it("deduplicates repeated warnings within each run without losing attribution", () => {
+    const warning = "Inspect the changed route";
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: ["agent-a", "agent-b"].map((id) =>
+        view({ id, name: id, warning, selection: { ...view().selection, warning } }),
+      ),
+    });
+    const notices = summarize("status", details)?.notices?.filter((notice) =>
+      notice.text.includes(warning),
+    );
+    expect(notices).toHaveLength(2);
+    for (const id of ["agent-a", "agent-b"])
+      expect(notices?.filter((notice) => notice.text.includes(id))).toHaveLength(1);
+  });
+
+  it("keeps running await counters stable while exposing new safety notices", () => {
+    const snapshot = (reverse: boolean, warning?: string) => {
+      const projected = makeCompactToolDetails({
+        action: "status",
+        runs: [
+          view({
+            id: "a",
+            state: reverse ? "paused" : "running",
+            currentTool: reverse ? "edit" : "read",
+            progress: String(reverse),
+            writeClaims: reverse ? ["a", "b"] : ["a"],
+            warning,
+          }),
+          view({ id: "b", state: "completed" }),
+        ],
+      });
+      if (projected.action === "models") throw new Error("Expected cards");
+      return {
+        version: 2,
+        action: "await",
+        cards: reverse ? [...projected.cards].reverse() : projected.cards,
+        awaitedRunIds: ["a", "b"],
+        awaitUntil: "all_finished",
+      };
+    };
+    const first = summarize("await", snapshot(false), "running");
+    const next = summarize("await", snapshot(true, "new warning"), "running");
+    expect(first?.counters).toEqual(["1/2 finished"]);
+    expect(first?.metadata).toEqual([]);
+    expect(first?.expandedResultOwnsCall).toBe(true);
+    expect(next?.counters).toEqual(first?.counters);
+    expect(next?.notices?.some((notice) => notice.text.includes("new warning"))).toBe(true);
+    const completed = snapshot(false);
+    const finalProgress = summarize(
+      "await",
+      { ...completed, cards: completed.cards.map((card) => ({ ...card, state: "completed" })) },
+      "running",
+    );
+    expect(finalProgress?.subject).toBe(first?.subject);
+    expect(finalProgress?.counters).toEqual(["2/2 finished"]);
+    expect(summarize("await", { ...snapshot(false), timedOut: true })?.outcome).toBe("warning");
+    expect(summarize("await", { ...snapshot(false), cancelled: true })?.outcome).toBe("cancelled");
+    expect(
+      summarize("status", makeCompactToolDetails({ action: "status", runs: [] }), "running", {
+        runIds: ["a", "b", "c"],
+      })?.counters,
+    ).toEqual(["3 targets"]);
+  });
+
+  it("only cautions about report integration for isolated writers", () => {
+    for (const overrides of [
+      { writeIntent: "read-only" as const },
+      { writeIntent: "writer" as const, writerWorkspaceMode: "shared-checkout" as const },
+      { writeIntent: "writer" as const, writerWorkspaceMode: "worktree" as const },
+    ]) {
+      const details = makeCompactToolDetails({
+        action: "status",
+        runs: [view({ ...overrides, state: "reported", finalText: "report" })],
+      });
+      const summary = summarize("status", details);
+      expect(summary?.metadata).toContain("1 report");
+      expect(
+        summary?.notices?.some((notice) => notice.text.includes("workspace integration")),
+      ).toBe(overrides.writerWorkspaceMode === "worktree");
+    }
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ state: "reported" })],
+    });
+    expect(summarize("status", details)?.metadata).not.toContain("1 report");
+  });
+
+  it("keeps claim operations and failed launch recovery compact", () => {
+    expect(
+      summarize("claims", makeCompactToolDetails({ action: "claims", runs: [] }))?.detailsOnExpand,
+    ).toBe(true);
+    expect(
+      summarize("start", {
+        version: 2,
+        action: "start",
+        startEntries: [
+          {
+            index: 0,
+            name: "worker",
+            profile: "worker",
+            status: "failed",
+            routeStatus: "unavailable",
+          },
+        ],
+        startFailures: [{ index: 0, message: "Cleanup not confirmed" }],
+      })?.outcome,
+    ).toBe("error");
+  });
+});

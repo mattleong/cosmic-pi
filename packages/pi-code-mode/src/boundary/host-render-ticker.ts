@@ -8,6 +8,8 @@
  */
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
+import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { codeModeCompactSummary } from "../ui/compact-summary.ts";
 
 const SPINNER_INTERVAL_MS = 160;
 type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
@@ -23,7 +25,7 @@ type RendererContext = {
 export const syncProgressTicker = (
   shouldAnimate: boolean,
   context: RendererContext | undefined,
-  startTicker: StartUiTicker,
+  startTicker: StartUiTicker = startHostUiTicker,
 ): void => {
   try {
     const rawState = context?.state;
@@ -90,6 +92,20 @@ export const syncProgressTicker = (
   } catch {
     // Animation is optional presentation.
   }
+};
+
+/** The shared shell skips hidden result renderers, so it must also release their ticker. */
+export const codeModeCompactSummaryAtHost: typeof codeModeCompactSummary = (input) => {
+  const summary = codeModeCompactSummary(input);
+  const ownsCollapsed =
+    summary &&
+    (summary.outcome === undefined ||
+      summary.outcome === "success" ||
+      summary.outcome === "warning" ||
+      summary.failure !== undefined);
+  if (!input.context.isPartial || (!input.context.expanded && ownsCollapsed))
+    syncProgressTicker(false, input.context);
+  return summary;
 };
 
 export const animationFrame = (): number => {

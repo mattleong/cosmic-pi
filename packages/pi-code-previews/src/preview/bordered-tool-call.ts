@@ -2,12 +2,12 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   Text,
+  type TuiMouseEvent,
   truncateToWidth,
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
 import { hiddenPreviewExpandHint, hiddenPreviewExpandLabel } from "./format";
-import { isToolCallTimingOnlyRender, type TimingState } from "./tool-timing";
 import type { RendererState } from "../tools/renderers/shared/types";
 
 export type BorderSlot = "call" | "result";
@@ -83,6 +83,7 @@ function borderColorKey(context: BorderRenderContext): BorderColorKey {
 const RESET_ANSI = "\x1b[0m";
 
 export class BorderedToolCall implements Component {
+  private readonly body = new Container();
   private callComponent: Component | undefined;
   private borderColorKey: BorderColorKey = "borderMuted";
   private expandLabel: string | undefined;
@@ -91,11 +92,9 @@ export class BorderedToolCall implements Component {
   private cachedWidth: number | undefined;
   private cachedRows: string[] | undefined;
   private readonly theme: Theme;
-  private readonly timingState: TimingState;
 
-  constructor(theme: Theme, timingState: TimingState) {
+  constructor(theme: Theme) {
     this.theme = theme;
-    this.timingState = timingState;
   }
 
   setBorderColor(colorKey: BorderColorKey): void {
@@ -134,9 +133,18 @@ export class BorderedToolCall implements Component {
     return rows;
   }
 
+  handleMouse(event: TuiMouseEvent) {
+    const framed = event.width >= 4;
+    const width = Math.max(1, event.width - (framed ? 4 : 0));
+    const x = event.x - (framed ? 2 : 0);
+    const y = event.y - (framed ? 1 : 0);
+    const height = event.height - (framed ? 2 : 0);
+    if (x < 0 || x >= width || y < 0 || y >= height) return undefined;
+    return this.body.handleMouse({ ...event, x, y, width, height });
+  }
+
   invalidate(): void {
     this.invalidateCache();
-    if (isToolCallTimingOnlyRender(this.timingState)) return;
     this.callComponent?.invalidate?.();
     this.resultComponent?.invalidate?.();
   }
@@ -189,10 +197,10 @@ export class BorderedToolCall implements Component {
   }
 
   private renderBody(width: number): string[] {
-    return [
-      ...(this.callComponent?.render(width) ?? []),
-      ...(this.resultComponent?.render(width) ?? []),
-    ];
+    this.body.clear();
+    if (this.callComponent) this.body.addChild(this.callComponent);
+    if (this.resultComponent) this.body.addChild(this.resultComponent);
+    return this.body.render(width);
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {

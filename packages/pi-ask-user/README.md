@@ -145,6 +145,10 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 
 RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
 
+## Compact tool cards
+
+All three questionnaire tools opt into the shared `pi-code-previews` compact setting. The default `preview` style is unchanged. With `toolCallCollapsedStyle: "compact"` and after `/reload`, submitted results show an answer count; expansion restores the answers. Cancellation keeps its original details and never means approval. Live transcript cards show question titles and counts without changing the separate questionnaire overlay. Known queued or pending results show request IDs and visible await guidance, never an answer or approval. Opening failures and unrecognized replies keep their existing cards. Automatic delivery failures keep status/await recovery guidance visible. Dialogs and automatic answer messages are unchanged.
+
 ## Development
 
 From the repository root:

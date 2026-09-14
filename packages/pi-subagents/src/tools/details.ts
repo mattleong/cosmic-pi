@@ -593,6 +593,12 @@ const awaitCandidate = (
     ...(input.cancelled && { cancelled: true as const }),
     ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
     ...((input.contentOmitted || omitted) && { contentOmitted: true as const }),
+    ...(omitted &&
+      !input.contentOmitted &&
+      density === "full" &&
+      ![...source, ...contextSource].some((run) => run.error !== undefined) && {
+        reportsOnlyOmitted: true as const,
+      }),
   };
 };
 
@@ -614,6 +620,7 @@ interface RunDetailsCandidate {
   readonly runCount: number;
   readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
   readonly contentOmitted?: true | undefined;
+  readonly reportsOnlyOmitted?: true | undefined;
 }
 
 const runDetailsCandidate = (
@@ -634,6 +641,10 @@ const runDetailsCandidate = (
     runCount: input.runs.length,
     ...(failures !== undefined && failures.length > 0 && { actionFailures: failures }),
     ...(omitted && { contentOmitted: true as const }),
+    ...(omitted &&
+      density === "full" &&
+      !input.runs.some((run) => run.error !== undefined) &&
+      !input.actionFailures?.length && { reportsOnlyOmitted: true as const }),
   };
 };
 

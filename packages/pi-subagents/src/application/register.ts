@@ -4,7 +4,11 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { loadCodePreviewSettings } from "pi-code-previews";
+import {
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  loadCodePreviewSettings,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -67,6 +71,7 @@ interface CapturedActivation {
 }
 
 interface PreparedActivation {
+  readonly scheduler: CodePreviewSchedulerServiceContract;
   readonly projection: SubagentProjection;
   readonly toolRuntime: SubagentToolRuntime;
 }
@@ -203,7 +208,9 @@ export function registerSubagentApplication(
             ).then(() => undefined),
           );
           const projection = yield* SubagentService.use((service) => service.projection);
+          const scheduler = yield* CodePreviewSchedulerService;
           return {
+            scheduler,
             projection,
             toolRuntime: {
               environment: {
@@ -218,7 +225,11 @@ export function registerSubagentApplication(
       onActivated: (activation, token, prepared) => {
         if (!slot.isCurrent(token)) return;
         try {
-          registerSubagentTools(pi, prepared.toolRuntime);
+          registerSubagentTools(pi, {
+            ...prepared.toolRuntime,
+            scheduleAnimation: (interval, tick) =>
+              slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
+          });
           const activatedByRegistration = deactivateSubagentTools(pi);
           if (!hasRegisteredTools) rememberDisabledTools(activatedByRegistration);
           hasRegisteredTools = true;

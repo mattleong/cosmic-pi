@@ -6,6 +6,7 @@ const defaults: CodePreviewSettings = {
   diffIntensity: "subtle",
   wordEmphasis: "all",
   toolCallBackground: "on",
+  toolCallCollapsedStyle: "preview",
   toolCallTiming: true,
   readCollapsedLines: 10,
   readContentPreview: true,

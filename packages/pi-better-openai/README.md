@@ -92,6 +92,8 @@ Example config:
 
 ## Image generation
 
+`openai_image` honors pi-code-previews' opt-in `toolCallCollapsedStyle: "compact"` setting after `/reload`. It shows the action, a short prompt or saved path, and the generation outcome. Saved paths and recovery text remain visible. Pi renders native images separately, outside the compact text-row budget. Expansion restores full result text; text-only errors retain their complete error details. The default `preview` presentation is unchanged.
+
 Image requests explicitly select `gpt-image-2.5-sunburst` for the hosted `image_generation` tool. OpenAI describes Sunburst as its [most capable image generation and editing model](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst). Sunburst is the default for every action, including `auto`. Set the tool's `imageModel` to `gpt-image-2.5-flare` for the faster 2.5 variant.
 
 The tool's `model` parameter and `image.defaultModel` still select the mainline Codex model that invokes image generation, not the image model itself. This separation follows OpenAI's [Responses image generation guide](https://developers.openai.com/api/docs/guides/tools-image-generation). Codex subscription availability depends on OpenAI's rollout and your account. Requests do not silently fall back to an older image model if rejected.

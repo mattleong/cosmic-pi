@@ -3,7 +3,7 @@ import { formatOnOff } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
 
 export function summarizeAppearance(settings: CodePreviewSettings): string {
-  return `${settings.shikiTheme} · syntax ${formatOnOff(settings.syntaxHighlighting)} · timing ${formatOnOff(settings.toolCallTiming)}`;
+  return `${settings.shikiTheme} · ${settings.toolCallCollapsedStyle} · syntax ${formatOnOff(settings.syntaxHighlighting)} · timing ${formatOnOff(settings.toolCallTiming)}`;
 }
 
 export function summarizeDiffPreviews(settings: CodePreviewSettings): string {

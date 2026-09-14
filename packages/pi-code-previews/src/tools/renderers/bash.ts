@@ -13,6 +13,7 @@ import { renderHighlightedText } from "../../syntax/render";
 import { getTextContent, isTruncated } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
+import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { shouldHideShellResultByCommand } from "../shell-result-policy";
 import { getBashWarnings } from "../../warnings/bash";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -31,6 +32,7 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
   const originalBash = createBashToolDefinition(cwd, options);
 
   return createCodePreviewToolDefinition(originalBash, {
+    compactSummary: (input) => createBuiltinCompactSummary("bash", input),
     renderCall(args, theme, renderContext) {
       const command = Predicate.isString(args.command) ? args.command : "";
       const timeout = Predicate.isNumber(args.timeout)

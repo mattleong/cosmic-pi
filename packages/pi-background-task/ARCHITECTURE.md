@@ -17,7 +17,17 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
 - `src/task/` — `bounds.ts` is the pure owner of command, resolved-cwd, name, task-id, and session-id character limits used by both schemas and service admission. The directory also owns the task model with its pure projection helpers (`sortTasksByActivity`, `footerStatus`, and `countTaskStates` as the single owner of the failed/timed-out counting policy), typed errors, bounded logs with shared UTF-8 byte accounting, and the scoped service. Bounded `wait` barriers reuse each task's completion and output wake signals, match literal text across retained chunks, and report timeout as data. Each wait owns a scoped reference count on its admitted record under the registry semaphore. The task view publishes `awaited` until the last waiter completes, times out, or is interrupted; Cosmic UI uses the same await marker as subagents. Tool and Code Mode waits share this service-owned tracking without changing task state or stopping the process. One latch-driven worker coalesces output publications onto the configured leading/trailing interval; `totalLogBufferBytes` splits roughly in half between retained logs and per-process ingress buffers divided across `maxRunning`.
 - `src/tools/` owns the shared action executor and schema plus `background_task` registration and
   pure collapsed or expanded log rendering over the shared Cosmic UI tool header and expansion hint. Command details are an action-discriminated union,
-  and the public `pi-code-previews` cooperative shell decorates the registered tool.
+  and the public `pi-code-previews` cooperative shell decorates the registered tool with an explicit
+  `src/ui/compact-summary.ts` provider. This pure projection validates the outcome-bearing details,
+  distinguishes management completion from task state, and preserves failure, cleanup, timeout,
+  and output-loss notices. Decoded summaries opt into expansion-only original bodies, including
+  failed, stopped, and uncertain outcomes. Status and failure causes belong in the subject or
+  notices, not optional metadata; stopped signals remain cancellation rather than failure.
+  Clean exited log slices report successful retrieval, not verified process success; their
+  contractual lack of exit codes is not a warning. Snapshot-based status still requires exit
+  evidence. Failed or stopping tasks, lost logs, and truncated output retain attention.
+  Unknown details and outer tool errors retain the original renderer; no process state,
+  execution, or lifecycle behavior depends on the collapsed style.
 - `src/code-mode/` and the public `src/protocol.ts` re-export own the versioned plain-data query
   contract for `tools.session.backgroundTask` and its bounded Effect codecs. The public protocol
   does not import task models, services, commands, or process adapters. `output.ts` owns output
@@ -37,7 +47,7 @@ Literal output waits match across retained chunks within one stream. Dropped-byt
 
 Session activation is slot-native: `session_start` captures cwd, trust, and stable session identity
 once and starts the managed session-runtime slot with the captured abort signal; the slot
-deactivates and disposes the prior runtime before any new-session work. Runtime startup then loads trusted code-preview settings as its first step (an injectable best-effort boundary for lifecycle tests) and returns only `showFooterStatus` as the activation value. The host bridge owns the empty initial and cleared projections; the service publishes later changes. Superseded starts never reach the settings boundary, and only the current-generation activation registers the wrapped `background_task` tool, so stale, aborted, or shutdown-invalidated starts cannot reactivate an older session. The application runner is additionally gated synchronously on slot activation: while a
+deactivates and disposes the prior runtime before any new-session work. Runtime startup then loads trusted code-preview settings as its first step (an injectable best-effort boundary for lifecycle tests) and returns `showFooterStatus` and the scoped animation scheduler as the activation value. The host bridge owns the empty initial and cleared projections; the service publishes later changes. Superseded starts never reach the settings boundary, and only the current-generation activation registers the wrapped `background_task` tool, so stale, aborted, or shutdown-invalidated starts cannot reactivate an older session. The application runner is additionally gated synchronously on slot activation: while a
 replacement start is still loading settings the slot already holds the unactivated next runtime,
 so stale tool, Code Mode adapter, or `/tasks` calls fail with a typed `PiSessionRuntimeError`
 instead of executing against it. The Code Mode query listener is installed before session start,
@@ -58,3 +68,5 @@ store compacts amortized dead prefixes; consumers retain only cached detached ev
 Appending or evicting logs never changes an earlier slice or its events.
 
 The UI and host footer project immutable service snapshots; neither owns subprocesses. Extensions exchange only the public plain tool-definition protocol.
+
+The application Layer owns `CodePreviewSchedulerService` in the same session runtime as its tools. Startup returns that scheduler to activation, which passes a token-checked scheduling capability to each cooperative wrapper. Replacement and shutdown close animation fibers; retained wrappers cannot schedule against a stale session. No animation depends on another extension's Jiti module instance.

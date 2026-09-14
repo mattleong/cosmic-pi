@@ -8,7 +8,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Type } from "typebox";
-import { loadCodePreviewSettings, type CodePreviewSettings } from "pi-code-previews";
+import {
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  loadCodePreviewSettings,
+  type CodePreviewSettings,
+} from "pi-code-previews";
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
@@ -180,7 +185,9 @@ export function registerSubagentChildBridge(
     rejectPending();
   };
   const isSessionCurrent = (input: ChildSessionInput): boolean => currentSession === input;
-  let slot!: ReturnType<typeof makePiSessionRuntimeSlot<ChildSessionInput, never, never, never>>;
+  let slot!: ReturnType<
+    typeof makePiSessionRuntimeSlot<ChildSessionInput, CodePreviewSchedulerService, never, never>
+  >;
   const isActivationCurrent = (input: ChildSessionInput, token: number): boolean =>
     isSessionCurrent(input) && input.token === token && slot.isCurrent(token);
   const forkContact = (input: ChildSessionInput, contact: LocalPiContact): void => {
@@ -387,7 +394,13 @@ export function registerSubagentChildBridge(
     });
   };
 
-  slot = makePiSessionRuntimeSlot<ChildSessionInput, never, never, never>({
+  slot = makePiSessionRuntimeSlot<
+    ChildSessionInput,
+    CodePreviewSchedulerService,
+    never,
+    never,
+    CodePreviewSchedulerServiceContract
+  >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
@@ -421,13 +434,13 @@ export function registerSubagentChildBridge(
                 ),
               ),
           ).pipe(Effect.asVoid),
-        ),
+        ).pipe(Layer.merge(CodePreviewSchedulerService.layer)),
       ),
     startup: (input) =>
       bestEffortHostBootstrap("pi-subagents.child-preview-settings", (signal) =>
         boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
-      ),
-    onActivated: (input, token) => {
+      ).pipe(Effect.andThen(CodePreviewSchedulerService)),
+    onActivated: (input, token, scheduler) => {
       if (!isSessionCurrent(input) || !slot.isCurrent(token)) return;
       input.token = token;
       const call = (toolInput: SubagentToolInput, signal?: AbortSignal) =>
@@ -441,6 +454,8 @@ export function registerSubagentChildBridge(
             (request, signal) => proxyCall(input, token, request, signal),
           );
         registerSubagentTools(pi, {
+          scheduleAnimation: (interval, tick) =>
+            isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
           environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
           proxyCall: (toolInput, signal) => call(toolInput, signal),
           run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),

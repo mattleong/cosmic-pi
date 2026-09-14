@@ -74,6 +74,10 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   offset: Schema.optionalKey(nonNegativeInteger),
   totalChars: Schema.optionalKey(nonNegativeInteger),
   nextOffset: Schema.optionalKey(nonNegativeInteger),
+  workspaceCount: Schema.optionalKey(nonNegativeInteger),
+  listedCount: Schema.optionalKey(nonNegativeInteger),
+  preparedCwd: Schema.optionalKey(boundedString(1_024, 1)),
+  successorRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>
@@ -325,6 +329,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
   contextOmitted: Schema.optionalKey(Schema.Literal(true)),
+  reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 
@@ -348,6 +353,7 @@ const RunActionDetailsSchema = Schema.Struct({
   runCount: nonNegativeInteger,
   actionFailures: Schema.optionalKey(boundedArray(CompactToolActionFailureSchema, MAX_TARGET_RUNS)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
+  reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
   action: Schema.Literals(RUN_DETAILS_ACTIONS),
 });
 
@@ -572,12 +578,24 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
 
 const validRunCardRelationships = (card: SubagentRunCard): boolean =>
   card.writeViolationOffender !== true ||
-  (card.writeIntent === "writer" &&
-    card.writeAdmissionPaused === true &&
-    (card.writeAudit?.violations.length ?? 0) > 0);
+  // Offender identity is authoritative; bounded audit evidence may be absent.
+  (card.writeIntent === "writer" && card.writeAdmissionPaused === true);
+
+const validReportOmission = (details: {
+  readonly reportsOnlyOmitted?: true;
+  readonly contentOmitted?: true;
+  readonly cards: ReadonlyArray<SubagentRunCard>;
+  readonly actionFailures?: ReadonlyArray<unknown>;
+}): boolean =>
+  details.reportsOnlyOmitted !== true ||
+  (details.contentOmitted === true &&
+    !details.actionFailures?.length &&
+    details.cards.some((card) => card.finalTextTruncated && card.finalText === undefined) &&
+    details.cards.every((card) => card.error === undefined && !card.errorTruncated));
 
 const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
-  if (!details.cards.every(validRunCardRelationships)) return false;
+  if (!validReportOmission(details) || !details.cards.every(validRunCardRelationships))
+    return false;
   const awaitedRunIds = details.awaitedRunIds;
   if (!awaitedRunIds) return true;
   const uniqueTargets = new Set(awaitedRunIds);
@@ -625,5 +643,7 @@ export const decodeCompactToolDetails = <ValueInput>(
   safeDecode(
     CompactSubagentToolDetailsSchema,
     value,
-    (details) => details.action === "models" || details.cards.every(validRunCardRelationships),
+    (details) =>
+      details.action === "models" ||
+      (validReportOmission(details) && details.cards.every(validRunCardRelationships)),
   );

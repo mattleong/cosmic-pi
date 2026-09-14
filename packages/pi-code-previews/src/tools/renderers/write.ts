@@ -20,6 +20,7 @@ import { getPathArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
+import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import {
   getWriteDiffSkipReason,
   readExistingFileForPreview,
@@ -40,6 +41,7 @@ export function createWritePreviewTool(cwd: string) {
   const originalWrite = createWriteToolDefinition(cwd);
 
   return createCodePreviewToolDefinition(originalWrite, {
+    compactSummary: (input) => createBuiltinCompactSummary("write", input),
     execute(toolCallId, params, signal, onUpdate, ctx) {
       const path = getPathArg(params);
       const content = getObjectValue(params, "content");

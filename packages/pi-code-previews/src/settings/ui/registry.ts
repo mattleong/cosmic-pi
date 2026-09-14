@@ -4,6 +4,7 @@ import {
   DIFF_WORD_EMPHASES,
   PATH_ICON_MODES,
   TOOL_CALL_BACKGROUND_MODES,
+  TOOL_CALL_COLLAPSED_STYLES,
   type CodePreviewEditableSettingId,
 } from "../../config/schema";
 
@@ -39,10 +40,16 @@ export const SETTING_ITEM_DEFINITIONS = {
       "Choose Pi's default colored background, no frame, or a border-only frame. Changes take effect after /reload.",
     values: TOOL_CALL_BACKGROUND_MODES,
   },
+  toolCallCollapsedStyle: {
+    label: "Collapsed tool calls",
+    description:
+      "Keep previews or use one-row compact summaries. Compact hides ordinary previews until expanded but keeps important notices visible. Changes take effect after /reload.",
+    values: TOOL_CALL_COLLAPSED_STYLES,
+  },
   toolCallTiming: {
     label: "Tool call timing",
     description:
-      "Show each tool's elapsed duration in the result footer, or in the top-right border when border mode is enabled.",
+      "Show elapsed duration inline in compact summaries, in the result footer, or in the top-right border when border mode is enabled.",
     values: ON_OFF_VALUES,
   },
   readCollapsedLines: {

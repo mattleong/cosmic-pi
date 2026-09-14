@@ -12,6 +12,8 @@ The main Pi footer shows only active tasks, such as `2 background tasks active`,
 
 `background_task` tool calls use the `pi-code-previews` cooperative shell, including its configured background or border treatment and tool-call timing. Log results show a 12-line head/tail preview by default; use `Ctrl+O` (or the configured `app.tools.expand` binding) to reveal the full fetched output. Trusted project preview settings are loaded before the tool is registered for a session.
 
+Set `toolCallCollapsedStyle` to `compact` in `pi-code-previews` settings and reload to hide ordinary output until expansion. Summaries distinguish the management call from the background process state. Failed exits, cancellation, unconfirmed cleanup, wait timeouts, and discarded or truncated output remain visible. Missing or unrecognized details retain the original renderer. The default `preview` style is unchanged.
+
 ## Code Mode adapter
 
 When `pi-code-mode` is also loaded, a Code Mode program can call

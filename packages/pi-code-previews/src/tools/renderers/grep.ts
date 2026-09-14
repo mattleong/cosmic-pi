@@ -16,6 +16,7 @@ import { shouldSkipHighlight } from "../../syntax/render";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
+import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
 
@@ -23,6 +24,7 @@ export function createGrepPreviewTool(cwd: string) {
   const originalGrep = createGrepToolDefinition(cwd);
 
   return createCodePreviewToolDefinition(originalGrep, {
+    compactSummary: (input) => createBuiltinCompactSummary("grep", input),
     renderCall(args, theme) {
       const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
       const path = Predicate.isString(args.path) && args.path ? args.path : ".";

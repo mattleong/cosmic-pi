@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import type { CompactAnimationScheduler } from "pi-code-previews";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { makeMcpLifecycle, type McpApplicationBoundaries } from "../src/application/lifecycle.ts";
 import { McpActivity } from "../src/activity/service.ts";
@@ -103,6 +104,7 @@ const harness = (
     readonly acquire?: Effect.Effect<void, ReturnType<typeof boundaryError>>;
     readonly execute?: () => Effect.Effect<McpGatewayExecution, ReturnType<typeof boundaryError>>;
     readonly loadSettings?: McpApplicationBoundaries["loadSettings"];
+    readonly wrapTool?: McpApplicationBoundaries["wrapTool"];
   } = {},
 ) => {
   let trusted = true;
@@ -153,7 +155,7 @@ const harness = (
   const ctx = contextFixture as ExtensionContext;
   const lifecycle = makeMcpLifecycle(pi, {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
-    wrapTool: (definition) => definition,
+    wrapTool: options.wrapTool ?? ((definition) => definition),
     makeLayer: (input) => {
       const config = {
         revision: 1,
@@ -260,6 +262,47 @@ const harness = (
 };
 
 describe("MCP session ownership", () => {
+  it.live("owns animation ticks until replacement and rejects stale scheduling", () =>
+    Effect.gen(function* () {
+      const schedulers: CompactAnimationScheduler[] = [];
+      const h = harness({
+        wrapTool: (tool, schedule) => {
+          schedulers.push(schedule);
+          return tool;
+        },
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      let oldTicks = 0;
+      const firstTick = yield* Deferred.make<void>();
+      expect(
+        schedulers[0]!(10, () => {
+          oldTicks++;
+          Deferred.doneUnsafe(firstTick, Effect.void);
+          return true;
+        }),
+      ).toBeTypeOf("function");
+      yield* Deferred.await(firstTick);
+      yield* host(() => h.lifecycle.start(h.ctx));
+      const stopped = oldTicks;
+      expect(schedulers[0]!(10, () => true)).toBeUndefined();
+      let replacementTicks = 0;
+      const nextTick = yield* Deferred.make<void>();
+      expect(
+        schedulers[1]!(10, () => {
+          replacementTicks++;
+          Deferred.doneUnsafe(nextTick, Effect.void);
+          return true;
+        }),
+      ).toBeTypeOf("function");
+      yield* Deferred.await(nextTick);
+      expect(oldTicks).toBe(stopped);
+      yield* host(() => h.lifecycle.shutdown());
+      expect(schedulers[1]!(10, () => true)).toBeUndefined();
+      const shutdownTicks = replacementTicks;
+      yield* Effect.sleep("30 millis");
+      expect(replacementTicks).toBe(shutdownTicks);
+    }),
+  );
   it.live("recovers after a failed layer acquisition without publishing stale authority", () =>
     Effect.gen(function* () {
       let failed = true;

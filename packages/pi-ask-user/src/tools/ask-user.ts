@@ -1,7 +1,7 @@
 // Pi tool execution and synchronous rendering are host boundaries.
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { withCodePreviewShell } from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
@@ -15,11 +15,14 @@ import {
   projection,
 } from "../ui/tool-render-projection.ts";
 
+import { askUserCompactSummary } from "../ui/compact-summary.ts";
+
 const decodeOutcomeDetails = projection(outcomeProjection({}));
 
 export function registerAskUserTool(
   pi: ExtensionAPI,
   ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
+  scheduleAnimation?: CompactAnimationScheduler,
 ): void {
   const tool = defineTool({
     name: "ask_user",
@@ -68,5 +71,10 @@ export function registerAskUserTool(
       return new Text(fallbackText(result.content), 0, 0);
     },
   });
-  pi.registerTool(withCodePreviewShell(tool));
+  pi.registerTool(
+    withCodePreviewShell(tool, {
+      compactSummary: askUserCompactSummary,
+      scheduleAnimation,
+    }),
+  );
 }

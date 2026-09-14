@@ -2,6 +2,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Layer from "effect/Layer";
+import type { CodePreviewSchedulerService } from "pi-code-previews";
 import * as Effect from "effect/Effect";
 import { boundaryError } from "./client/errors.ts";
 import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
@@ -85,5 +86,7 @@ export const makeMcpLayer = (input: McpLayerInput) => {
   const flow = McpAuthFlow.layer.pipe(Layer.provide(Layer.mergeAll(execution, activity)));
   return Layer.mergeAll(execution, config, auth, manager, flow, activity);
 };
-export type McpApplication = Layer.Success<ReturnType<typeof makeMcpLayer>>;
+export type McpApplication =
+  | Layer.Success<ReturnType<typeof makeMcpLayer>>
+  | CodePreviewSchedulerService;
 export type McpRuntimeError = Layer.Error<ReturnType<typeof makeMcpLayer>>;

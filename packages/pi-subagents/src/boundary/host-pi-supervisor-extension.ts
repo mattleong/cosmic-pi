@@ -3,9 +3,24 @@ import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { makePiManagedRuntime, makePiSessionRuntimeSlot } from "pi-cosmic-core";
-import { defineTool, type AgentEndEvent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadCodePreviewSettings, withCodePreviewShell } from "pi-code-previews";
+import {
+  bestEffortHostBootstrap,
+  makePiManagedRuntime,
+  makePiSessionRuntimeSlot,
+} from "pi-cosmic-core";
+import {
+  defineTool,
+  type AgentEndEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+  CodePreviewSchedulerService,
+  type CodePreviewSchedulerServiceContract,
+  type CompactAnimationScheduler,
+  loadCodePreviewSettings,
+  withCodePreviewShell,
+} from "pi-code-previews";
 import { herdrAssignmentEpoch } from "../backend/herdr-assignment.ts";
 import {
   isSupervisorMcpMessageArguments,
@@ -98,6 +113,7 @@ class SupervisorBridge extends Context.Service<SupervisorBridge, PiSupervisorBri
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 
 interface SupervisorBridgeSessionInput {
+  readonly ctx: ExtensionContext;
   readonly configPath: string;
 }
 
@@ -118,9 +134,10 @@ export default function registerPiSubagentSupervisorBridge(
   let detachRelay: (() => void) | undefined;
   const slot = makePiSessionRuntimeSlot<
     SupervisorBridgeSessionInput,
-    SupervisorBridge,
+    SupervisorBridge | CodePreviewSchedulerService,
     never,
-    RpcSessionError
+    RpcSessionError,
+    CodePreviewSchedulerServiceContract
   >({
     makeRuntime: ({ configPath }) =>
       makePiManagedRuntime(
@@ -143,9 +160,15 @@ export default function registerPiSubagentSupervisorBridge(
               }
             },
           }),
-        ),
+        ).pipe(Layer.merge(CodePreviewSchedulerService.layer)),
       ),
-    startup: () => SupervisorBridge.use(() => Effect.void),
+    startup: ({ ctx }) =>
+      SupervisorBridge.use(() =>
+        bestEffortHostBootstrap("pi-subagents.supervisor-preview-settings", (signal) =>
+          loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted(), signal),
+        ),
+      ).pipe(Effect.andThen(CodePreviewSchedulerService)),
+    onActivated: ({ ctx }, token, scheduler) => activateTools(ctx, token, scheduler),
   });
   let started = false;
   let shuttingDown = false;
@@ -217,6 +240,137 @@ export default function registerPiSubagentSupervisorBridge(
     return promise;
   };
 
+  const activateTools = (
+    ctx: ExtensionContext,
+    token: number,
+    scheduler: CodePreviewSchedulerServiceContract,
+  ): void => {
+    currentToken = token;
+    if (shuttingDown || !slot.isCurrent(token)) return;
+    const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
+      !shuttingDown && slot.isCurrent(token) ? scheduler.schedule(interval, tick) : undefined;
+
+    const messageTool = (
+      name: (typeof SUPERVISOR_MCP_MESSAGE_TOOL_NAMES)[number],
+      label: string,
+      description: string,
+    ) =>
+      defineTool({
+        name,
+        label,
+        description,
+        parameters: MessageParameters,
+        execute(_id, input, signal) {
+          if (!isSupervisorMcpMessageArguments(input))
+            return Promise.reject(new Error("Supervisor message input is malformed or excessive."));
+          return callBridge(token, name, { message: input.message }, signal).then((text) => ({
+            content: [{ type: "text" as const, text }],
+            details: {},
+          }));
+        },
+      });
+
+    const report = defineTool({
+      name: SUPERVISOR_MCP_TOOL_NAMES[3],
+      label: "Submit Supervisor Report",
+      description:
+        "Submit one complete final report for the current assignment with a fresh stable delivery identity. This is the only completion signal.",
+      promptSnippet: "Submit the complete final report to the parent supervisor",
+      promptGuidelines: [
+        `Call ${SUPERVISOR_MCP_TOOL_NAMES[3]} exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.`,
+      ],
+      parameters: ReportParameters,
+      execute(_id, input, signal) {
+        if (!isSupervisorMcpReportArguments(input))
+          return Promise.reject(new Error("Supervisor report input is malformed or excessive."));
+        return submitReport(token, assignment, input, signal).then((text) => ({
+          content: [{ type: "text" as const, text }],
+          details: {},
+        }));
+      },
+    });
+
+    const proxyCall = (
+      input: import("../tools/schema.ts").SubagentToolInput,
+      signal?: AbortSignal,
+    ) => {
+      const encoded = encodeSubagentProxyInput(input);
+      return callBridge(
+        token,
+        SUPERVISOR_MCP_PROXY_TOOL_NAME,
+        { tool: encoded.tool, arguments_json: encoded.argumentsJson },
+        signal,
+      ).then((source) => {
+        const result = decodeSubagentProxyResult(source);
+        if (!result) throw new Error("Root coordinator returned an invalid response.");
+        return result;
+      });
+    };
+    try {
+      detachRelay = publishChildQuestionnaireRelay(
+        pi.events,
+        ctx.sessionManager.getSessionId(),
+        () => !shuttingDown && slot.isCurrent(token),
+        (request, signal) =>
+          callBridge(
+            token,
+            SUPERVISOR_MCP_PROXY_TOOL_NAME,
+            { tool: request.tool, arguments_json: request.argumentsJson },
+            signal,
+          ).then((source) => {
+            const result = decodeSubagentProxyResult(source);
+            if (!result)
+              throw new Error("Root coordinator returned an invalid questionnaire response.");
+            return result;
+          }),
+      );
+    } catch {
+      /* Missing session discovery disables only the optional questionnaire relay. */
+    }
+    registerSubagentTools(pi, {
+      scheduleAnimation,
+      environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
+      proxyCall: (input, signal) => proxyCall(input, signal),
+      run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
+    });
+    const runId = subagentChildRunId();
+    if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
+
+    const tools = [
+      messageTool(
+        SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
+        "Supervisor Progress",
+        "Send bounded progress to the parent projection without blocking.",
+      ),
+      messageTool(
+        SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
+        "Supervisor Warning",
+        "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
+      ),
+      messageTool(
+        SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
+        "Ask Supervisor",
+        "Ask this assignment's one exact correlated blocking parent question and wait for its reply.",
+      ),
+      report,
+    ];
+    for (const tool of tools) pi.registerTool(withCodePreviewShell(tool, { scheduleAnimation }));
+    pi.setActiveTools([
+      ...new Set([
+        ...pi
+          .getActiveTools()
+          .filter(
+            (name) =>
+              !name.startsWith("subagent_") &&
+              !name.startsWith("herdr_agent_") &&
+              name !== "contact_parent",
+          ),
+        ...tools.map((tool) => tool.name),
+        ...SUBAGENT_TOOL_NAMES,
+      ]),
+    ]);
+  };
+
   registerChildPiFastModeHook(pi, openaiFastMode);
 
   pi.on("session_start", (_event, ctx) => {
@@ -236,141 +390,12 @@ export default function registerPiSubagentSupervisorBridge(
     if (runtimeApi.apiKey && runtimeApi.provider)
       pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
 
-    return slot.start({ configPath: config }).then((token) => {
+    return slot.start({ configPath: config, ctx }).then((token) => {
       if (token === undefined || shuttingDown || !slot.isCurrent(token)) {
         if (!shuttingDown && ctx.hasUI)
           ctx.ui.notify("Unable to open the private subagent supervisor bridge.", "error");
         return;
       }
-      currentToken = token;
-      return loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())
-        .catch(() => undefined)
-        .then(() => {
-          if (shuttingDown || !slot.isCurrent(token)) return;
-
-          const messageTool = (
-            name: (typeof SUPERVISOR_MCP_MESSAGE_TOOL_NAMES)[number],
-            label: string,
-            description: string,
-          ) =>
-            defineTool({
-              name,
-              label,
-              description,
-              parameters: MessageParameters,
-              execute(_id, input, signal) {
-                if (!isSupervisorMcpMessageArguments(input))
-                  return Promise.reject(
-                    new Error("Supervisor message input is malformed or excessive."),
-                  );
-                return callBridge(token, name, { message: input.message }, signal).then((text) => ({
-                  content: [{ type: "text" as const, text }],
-                  details: {},
-                }));
-              },
-            });
-
-          const report = defineTool({
-            name: SUPERVISOR_MCP_TOOL_NAMES[3],
-            label: "Submit Supervisor Report",
-            description:
-              "Submit one complete final report for the current assignment with a fresh stable delivery identity. This is the only completion signal.",
-            promptSnippet: "Submit the complete final report to the parent supervisor",
-            promptGuidelines: [
-              `Call ${SUPERVISOR_MCP_TOOL_NAMES[3]} exactly once after completing the assignment. Use a fresh bounded delivery_id for each later retained assignment.`,
-            ],
-            parameters: ReportParameters,
-            execute(_id, input, signal) {
-              if (!isSupervisorMcpReportArguments(input))
-                return Promise.reject(
-                  new Error("Supervisor report input is malformed or excessive."),
-                );
-              return submitReport(token, assignment, input, signal).then((text) => ({
-                content: [{ type: "text" as const, text }],
-                details: {},
-              }));
-            },
-          });
-
-          const proxyCall = (
-            input: import("../tools/schema.ts").SubagentToolInput,
-            signal?: AbortSignal,
-          ) => {
-            const encoded = encodeSubagentProxyInput(input);
-            return callBridge(
-              token,
-              SUPERVISOR_MCP_PROXY_TOOL_NAME,
-              { tool: encoded.tool, arguments_json: encoded.argumentsJson },
-              signal,
-            ).then((source) => {
-              const result = decodeSubagentProxyResult(source);
-              if (!result) throw new Error("Root coordinator returned an invalid response.");
-              return result;
-            });
-          };
-          try {
-            detachRelay = publishChildQuestionnaireRelay(
-              pi.events,
-              ctx.sessionManager.getSessionId(),
-              () => !shuttingDown && slot.isCurrent(token),
-              (request, signal) =>
-                callBridge(
-                  token,
-                  SUPERVISOR_MCP_PROXY_TOOL_NAME,
-                  { tool: request.tool, arguments_json: request.argumentsJson },
-                  signal,
-                ).then((source) => {
-                  const result = decodeSubagentProxyResult(source);
-                  if (!result)
-                    throw new Error("Root coordinator returned an invalid questionnaire response.");
-                  return result;
-                }),
-            );
-          } catch {
-            /* Missing session discovery disables only the optional questionnaire relay. */
-          }
-          registerSubagentTools(pi, {
-            environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
-            proxyCall: (input, signal) => proxyCall(input, signal),
-            run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
-          });
-          const runId = subagentChildRunId();
-          if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
-
-          const tools = [
-            messageTool(
-              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
-              "Supervisor Progress",
-              "Send bounded progress to the parent projection without blocking.",
-            ),
-            messageTool(
-              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
-              "Supervisor Warning",
-              "Record a bounded non-blocking warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-            ),
-            messageTool(
-              SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
-              "Ask Supervisor",
-              "Ask this assignment's one exact correlated blocking parent question and wait for its reply.",
-            ),
-            report,
-          ];
-          for (const tool of tools) pi.registerTool(withCodePreviewShell(tool));
-          pi.setActiveTools([
-            ...new Set([
-              ...pi
-                .getActiveTools()
-                .filter(
-                  (name) =>
-                    !name.startsWith("subagent_") &&
-                    !name.startsWith("herdr_agent_") &&
-                    name !== "contact_parent",
-                ),
-              ...tools.map((tool) => tool.name),
-              ...SUBAGENT_TOOL_NAMES,
-            ]),
-          ]);
-        });
     });
   });
 

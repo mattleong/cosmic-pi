@@ -4,9 +4,13 @@ import { codePreviewPerformanceConfig } from "../../../config/env";
 import { getSecretWarnings } from "../../../warnings/secrets";
 import { codePreviewSettings } from "../../../config/state";
 
+/** Notice discovery must also run when the preview body is hidden. */
+export function getPreviewSecretWarnings(source: string): string[] {
+  return codePreviewSettings.secretWarnings ? getSecretWarnings(secretScanSample(source)) : [];
+}
+
 export function withSecretWarning(source: string, theme: Theme, preview: string): string {
-  if (!codePreviewSettings.secretWarnings) return preview;
-  const warnings = getSecretWarnings(secretScanSample(source));
+  const warnings = getPreviewSecretWarnings(source);
   if (warnings.length === 0) return preview;
   return `${theme.fg("warning", `⚠ Preview ${countLabel(warnings.length, "warning")}: possible ${warnings.join(", ")}`)}\n${preview}`;
 }
@@ -15,5 +19,7 @@ function secretScanSample(source: string): string {
   const limit = codePreviewPerformanceConfig.secretScanChars;
   if (source.length <= limit) return source;
   const half = Math.floor(limit / 2);
+  // slice(-0) would scan the entire source when the configured budget is one.
+  if (half === 0) return source.slice(0, limit);
   return `${source.slice(0, half)}\n${source.slice(-half)}`;
 }
