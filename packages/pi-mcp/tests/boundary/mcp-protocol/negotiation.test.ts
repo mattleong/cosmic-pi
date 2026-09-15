@@ -57,6 +57,13 @@ it.live.each(["malformed", "exit-before-init", "silent-all"])(
           onCleanup: (value) => cleanup.push(value),
         }).pipe(Effect.result);
         expect(result._tag).toBe("Failure");
+        if (mode === "malformed" && result._tag === "Failure") {
+          expect(result.failure).toMatchObject({
+            kind: "protocol",
+            outcome: "not-sent",
+            reason: "protocol-negotiation-rejected",
+          });
+        }
         expect(cleanup).toEqual([true]);
       }),
     ),

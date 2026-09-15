@@ -18,6 +18,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { boundaryError } from "../../client/errors.ts";
 import { legacyProtocol } from "./legacy/adapter.ts";
+import { SdkNegotiationRejectedError } from "./shared/negotiation-error.ts";
 import { modernProtocol } from "./modern/adapter.ts";
 import type { McpProtocolAdapter } from "./contract.ts";
 
@@ -100,7 +101,7 @@ export const guardNegotiation = (transport: Transport): Transport => {
                   /* Malformed error bodies are not negotiation evidence. */
                 }
               }
-              if (!safe) throw failure();
+              if (!safe) throw new SdkNegotiationRejectedError();
             }
             throw error;
           }),
@@ -135,7 +136,7 @@ export const guardNegotiation = (transport: Transport): Transport => {
     const reject = () => {
       if (pending !== current) return;
       pending = undefined;
-      current.reject(failure());
+      current.reject(new SdkNegotiationRejectedError());
     };
     if (isJSONRPCErrorResponse(message)) {
       // Method-not-found is legacy evidence. A typed version disagreement may

@@ -34,6 +34,12 @@ interface DiagnosticActions {
 const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiagnostic => {
   const signIn: ReadonlyArray<McpRecovery> = actions.canSignIn ? ["sign-in"] : ["inspect-status"];
   switch (error.reason) {
+    case "protocol-negotiation-rejected":
+      return diagnostic(
+        "Protocol negotiation rejected",
+        'The server rejected modern protocol negotiation or returned unusable version evidence. Automatic legacy fallback was not authorized. Review the server\'s supported protocol; a known legacy server can use "protocol": "legacy" in /mcp-settings. Changing protocol changes credential identity and may require a new explicit OAuth sign-in.',
+        ["inspect-settings"],
+      );
     case "auth-not-configured":
       return diagnostic(
         "Managed authentication is not configured",
@@ -319,7 +325,7 @@ export const mcpDiagnostic = (error: Evidence, actions: DiagnosticActions = {}):
       : "The remote operation may have run. Inspect its outcome before starting more work. It was not replayed.";
     return diagnostic(
       discovery ? "Discovery outcome unknown" : "Outcome unknown",
-      error.kind === "auth-required"
+      error.reason !== undefined || error.kind === "auth-required"
         ? `${explanation} ${failureDiagnostic(error, {}).explanation}`
         : explanation,
       ["inspect-operation"],

@@ -1,9 +1,11 @@
 import type { Client, PriorDiscovery, Transport } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Predicate from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import { boundaryError, type McpBoundaryError } from "../../../client/errors.ts";
 import { priorDiscovery, guardNegotiation } from "../select.ts";
+import { isSdkNegotiationRejected } from "./negotiation-error.ts";
 
 export interface OwnedStdioProbe {
   readonly client: Client;
@@ -31,12 +33,19 @@ export const negotiateStdio = (
                       timeout: timeoutMs,
                       maxTotalTimeout: timeoutMs,
                     }),
-                  catch: () =>
-                    boundaryError(
-                      "connection",
-                      "not-sent",
-                      "MCP stdio negotiation failed. Known legacy servers may require protocol: legacy.",
-                    ),
+                  catch: (error) =>
+                    Predicate.isError(error) && isSdkNegotiationRejected(error)
+                      ? boundaryError(
+                          "protocol",
+                          "not-sent",
+                          "MCP protocol negotiation was rejected.",
+                          "protocol-negotiation-rejected",
+                        )
+                      : boundaryError(
+                          "connection",
+                          "not-sent",
+                          "MCP stdio negotiation failed. Known legacy servers may require protocol: legacy.",
+                        ),
                 }).pipe(
                   Effect.andThen(priorDiscovery(probe.client)),
                   Effect.timeoutOrElse({

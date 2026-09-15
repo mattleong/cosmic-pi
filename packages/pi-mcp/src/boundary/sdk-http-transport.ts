@@ -35,6 +35,7 @@ import {
 } from "./sdk-fetch.ts";
 import type { SdkHttpControl } from "./sdk-http-control.ts";
 import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
+import { isSdkNegotiationRejected } from "./mcp-protocol/shared/negotiation-error.ts";
 import {
   beginSdkHttpChallenge,
   sdkHttpChallengeStatus,
@@ -265,6 +266,14 @@ export const mapSdkFailure = (
 ): McpBoundaryError => {
   const outcome = requestOutcome(operation);
   error = operation.failure ?? error;
+  if (isSdkNegotiationRejected(error)) {
+    return boundaryError(
+      "protocol",
+      outcome,
+      "MCP protocol negotiation was rejected.",
+      "protocol-negotiation-rejected",
+    );
+  }
   if (error instanceof SdkFetchResponseLimitError) {
     return boundaryError("output-limit", outcome, "MCP response exceeds its byte limit.");
   }

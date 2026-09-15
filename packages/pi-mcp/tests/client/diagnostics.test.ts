@@ -26,6 +26,7 @@ const reasons = [
   "oauth-binding-rejected",
   "oauth-deletion-failed",
   "oauth-finalization-failed",
+  "protocol-negotiation-rejected",
   "rpc-method-not-found",
   "rpc-invalid-params",
   "rpc-invalid-request",
@@ -128,6 +129,21 @@ describe("fixed diagnostic recovery policy", () => {
       expect(detail.explanation).toContain(cause.explanation);
       expect(detail.recovery).toEqual(["inspect-operation"]);
     }
+  });
+  it("preserves fixed non-auth reasons alongside unknown-outcome warnings", () => {
+    for (const reason of reasons) {
+      const error = boundaryError("protocol", "unknown", "private-server-message", reason);
+      const detail = mcpDiagnostic({ ...error, outcome: "not-sent" });
+      const unknown = mcpDiagnostic(error, { action: "tools.list" });
+      expect(unknown.explanation).toContain(detail.explanation);
+      expect(unknown.recovery).toEqual(["inspect-operation"]);
+      expect(JSON.stringify(mcpFailureReply("tools.list", error))).not.toContain("private-");
+    }
+    const negotiation = mcpDiagnostic(
+      boundaryError("protocol", "not-sent", "", "protocol-negotiation-rejected"),
+      { canSignIn: true },
+    );
+    expect(negotiation.recovery).toEqual(["inspect-settings"]);
   });
   it("gives only local prompt argument rejections a fixed discovery hint", () => {
     const privateText = "private-prompt-argument-value";
