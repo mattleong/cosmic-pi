@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { managerActivityGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   FullScreenKeymap,
   type FullScreenSelectionKeybindingId,
@@ -52,6 +53,9 @@ export class McpAuthPanel implements Component {
       );
   }
   render(width: number): string[] {
+    const safeWidth = Math.max(0, Math.floor(width));
+    if (safeWidth === 0) return [];
+    const inner = Math.max(0, safeWidth - 2);
     const { theme } = this.options;
     const value = this.options.snapshot();
     const now = authPhaseTerminal(value.phase) ? value.updatedAt : this.options.now();
@@ -76,8 +80,6 @@ export class McpAuthPanel implements Component {
             ? "warning"
             : "accent";
     const lines = [
-      theme.bold(`Sign in to ${sanitizeTerminalLine(value.server)}`),
-      "",
       theme.fg(
         color,
         `${managerActivityGlyph(state, Math.floor(now / 200))} ${authPhaseLabel(value.phase)}`,
@@ -108,18 +110,20 @@ export class McpAuthPanel implements Component {
     }
     lines.push("", `${this.selected === 0 ? "> " : "  "}${terminal ? "Close" : "Cancel sign-in"}`);
     if (canReopen) lines.push(`${this.selected === 1 ? "> " : "  "}Reopen browser`);
-    lines.push(
-      "",
-      theme.fg(
-        "dim",
-        renderResponsiveManagerFooter(Math.max(1, width), [
-          [
-            `${this.options.keyLabel("tui.select.confirm", "Enter")} choose`,
-            `${this.options.keyLabel("tui.select.cancel", "Esc")} ${terminal ? "close" : "cancel"}`,
-          ],
-        ]),
-      ),
-    );
-    return new Text(lines.join("\n"), 1, 1).render(Math.max(1, width));
+    const footer = renderResponsiveManagerFooter(Math.max(0, inner - 2), [
+      [
+        `${this.options.keyLabel("tui.select.confirm", "Enter")} choose`,
+        `${this.options.keyLabel("tui.select.cancel", "Esc")} ${terminal ? "close" : "cancel"}`,
+      ],
+    ]);
+    const frame = listDetailFrame(theme);
+    const body = new Text(lines.join("\n"), 1, 1).render(Math.max(1, inner));
+    return framedScreen(frame, {
+      width: safeWidth,
+      height: body.length + 2,
+      top: ` ${theme.bold(`Sign in to ${sanitizeTerminalLine(value.server)}`)} `,
+      bottom: theme.fg("dim", ` ${footer} `),
+      body: (height) => framedFill(frame, body, height, inner),
+    });
   }
 }

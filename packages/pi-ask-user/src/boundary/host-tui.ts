@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { createQuestionnaireDock } from "./host-questionnaire-dock.ts";
+import { createInputDock } from "pi-cosmic-ui/boundary/host-input-dock";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -33,7 +33,7 @@ export const makeAskUserTuiHost =
       Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
       Effect.flatMap(({ AskUserDialog }) =>
         Effect.suspend(() => {
-          const dock = createQuestionnaireDock(ctx.ui);
+          const dock = createInputDock(ctx.ui);
           const editorCommand = captureExternalEditorCommand(ctx);
           const authority = new AbortController();
           let requested: AskUserOutcome | undefined;

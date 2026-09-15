@@ -30,6 +30,7 @@
   "exports": {
     ".": "./index.ts",
     "./activity": "./src/activity/protocol.ts",
+    "./boundary/host-input-dock": "./src/boundary/host-input-dock.ts",
     "./boundary/host-status": "./src/boundary/host-status.ts",
     "./boundary/host-viewport": "./src/boundary/host-viewport.ts",
     "./client": "./src/footer/client.ts",

@@ -13,6 +13,7 @@ type Factory = Parameters<ExtensionContext["ui"]["custom"]>[0];
 type Options = Parameters<ExtensionContext["ui"]["custom"]>[1];
 const harness = () => {
   const stack: OverlayHandle[] = [];
+  const widgets = new Map<string, Component>();
   let factory: Factory | undefined;
   let options: Options;
   let doneCount = 0;
@@ -49,7 +50,10 @@ const harness = () => {
     } as OverlayHandle;
     return owned;
   };
-  const tuiFixture: Pick<TUI, "requestRender" | "showOverlay"> = {
+  const terminal = { columns: 160, rows: 40 };
+  const tuiFixture: Pick<TUI, "requestRender" | "showOverlay" | "terminal"> = {
+    // SAFETY: Dock sizing uses only terminal dimensions.
+    terminal: terminal as TUI["terminal"],
     requestRender() {},
     showOverlay() {
       if (failGuard) throw new Error("PRIVATE_ERROR");
@@ -58,7 +62,7 @@ const harness = () => {
       return owned;
     },
   };
-  // SAFETY: The auth host uses only these two fixture TUI methods.
+  // SAFETY: The auth host uses the fixture methods and terminal dimensions above.
   const tui = tuiFixture as TUI;
   // SAFETY: The pure auth view calls only fg/bold on the injected theme.
   const theme = {
@@ -77,6 +81,10 @@ const harness = () => {
     hasUI: true,
     isProjectTrusted: () => true,
     ui: {
+      setWidget(key: string, factory: (() => Component) | undefined) {
+        if (factory) widgets.set(key, factory());
+        else widgets.delete(key);
+      },
       custom(fn: Factory, settings: Options) {
         factory = fn;
         options = settings;
@@ -108,6 +116,8 @@ const harness = () => {
     ctx,
     attempt,
     stack,
+    widgets,
+    terminal,
     ready: () => factory !== undefined,
     current: () => active,
     revoke: () => {
@@ -149,7 +159,27 @@ const harness = () => {
   };
 };
 
-describe("owned auth overlay", () => {
+describe("owned auth panel", () => {
+  it.effect("draws above the input while the overlay only captures keyboard input", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
+        Effect.forkScoped,
+      );
+      yield* yieldUntil(fixture.ready);
+      const input = fixture.factory();
+      fixture.mount();
+      const widget = [...fixture.widgets.values()][0]!;
+      expect(widget.render(160).length).toBeGreaterThan(0);
+      expect(input.render(160)).toEqual([]);
+      fixture.terminal.columns = 80;
+      expect(widget.render(80).length).toBeGreaterThan(0);
+      expect(input.render(80)).toEqual([]);
+      yield* Fiber.interrupt(panel);
+      expect(fixture.widgets.size).toBe(0);
+      expect(widget.render(80)).toEqual([]);
+    }),
+  );
   for (const mode of ["local", "manual"] as const)
     it.effect(`yields to stock scope consent and restores only its current ${mode} panel`, () =>
       Effect.gen(function* () {
@@ -164,8 +194,11 @@ describe("owned auth overlay", () => {
         fixture.factory();
         fixture.mount();
         expect(fixture.hidden()).toBe(true);
+        const widget = [...fixture.widgets.values()][0]!;
+        expect(widget.render(160)).toEqual([]);
         fixture.update({ phase: "registration" });
         expect(fixture.hidden()).toBe(false);
+        expect(widget.render(160).length).toBeGreaterThan(0);
         fixture.update({ phase: "scope-approval" });
         const foreign = fixture.foreign();
         fixture.revoke();
@@ -258,8 +291,10 @@ describe("owned auth overlay", () => {
           yield* Fiber.interrupt(panel);
           const foreign = fixture.foreign();
           expect(fixture.done()).toBe(0);
+          expect(fixture.widgets.size).toBe(0);
           if (!afterFactory) expect(fixture.factory().render(40)).toEqual([]);
           fixture.mount();
+          expect(fixture.widgets.size).toBe(0);
           expect(fixture.stack).toEqual([foreign]);
           expect(fixture.done()).toBe(1);
           expect(fixture.subscriptions()).toBe(0);
@@ -284,6 +319,7 @@ describe("owned auth overlay", () => {
       expect((yield* Fiber.join(panel))._tag).toBe("Failure");
       expect(fixture.stack).toEqual([foreign]);
       expect(fixture.done()).toBe(0);
+      expect(fixture.widgets.size).toBe(0);
       expect(fixture.subscriptions()).toBe(0);
     }),
   );

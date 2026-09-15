@@ -13,7 +13,7 @@ const request = { kind: "form", message: "private", fields: [] } as const;
 const owner = { extensionId: "pi-mcp", operationId: "o", requestId: "r", label: "MCP" };
 const foreign = { render: () => ["foreign"], invalidate: () => {} };
 
-it.effect("uses live viewport options and allocations in the owned form without remounting", () =>
+it.effect("docks private forms above the input and resizes without losing the mounted dialog", () =>
   Effect.gen(function* () {
     const h = makeTuiHost();
     const bridge = makeAskUserDialogBridge();
@@ -27,23 +27,25 @@ it.effect("uses live viewport options and allocations in the owned form without 
     yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
     h.mount!();
     const component = h.component!;
-    const options = h.ui.custom.mock.calls[0]![1].overlayOptions;
-    expect(options.width).toBe(180);
-    expect(options.anchor).toBe("center");
-    expect(component.render(180).length).toBeLessThanOrEqual(54);
+    const widget = [...h.widgets.values()][0]!;
+    expect(component.render(200)).toEqual([]);
+    expect(widget.render(200).length).toBeGreaterThan(0);
+    expect(widget.render(200).length).toBeLessThan(h.tui.terminal.rows);
     component.handleInput?.("b");
+    expect(widget.render(200)).toEqual([]);
     h.tui.terminal.columns = 160;
     h.tui.terminal.rows = 24;
     expect(bridge.resume()).toBe(true);
     expect(h.component).toBe(component);
-    expect(h.ui.custom.mock.calls[0]![1].overlayOptions).toBe(options);
-    expect(options.width).toBe(160);
-    expect(options.maxHeight).toBe(24);
-    expect(options.anchor).toBe("bottom-center");
-    expect(component.render(160).length).toBeLessThanOrEqual(24);
+    expect([...h.widgets.values()][0]).toBe(widget);
+    expect(component.render(160)).toEqual([]);
+    expect(widget.render(160).length).toBeGreaterThan(0);
+    expect(widget.render(160).length).toBeLessThan(h.tui.terminal.rows);
     controller.abort();
     yield* Effect.promise(() => rejected);
     expect(h.stack).toEqual([]);
+    expect(h.widgets.size).toBe(0);
+    expect(widget.render(160)).toEqual([]);
   }),
 );
 
@@ -82,7 +84,9 @@ it.effect("cleans a late mount without globally popping an unrelated overlay", (
     h.showOverlay(foreign);
     controller.abort();
     yield* Effect.promise(() => rejected);
+    expect(h.widgets.size).toBe(0);
     h.mount!();
+    expect(h.widgets.size).toBe(0);
     expect(h.stack).toEqual([foreign]);
     expect(bridge.resume()).toBe(false);
   }),

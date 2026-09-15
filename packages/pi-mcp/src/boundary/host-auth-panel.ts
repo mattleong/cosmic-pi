@@ -3,6 +3,7 @@ import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback, isProjectTrusted, makeSynchronousIngress } from "pi-cosmic-core";
+import { createInputDock } from "pi-cosmic-ui/boundary/host-input-dock";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
 import type { McpAuthAttempt } from "../auth/flow.ts";
@@ -28,6 +29,7 @@ export const presentMcpAuthPanel = (
         )
       )
         return yield* failed();
+      const dock = createInputDock(ctx.ui);
       const cancellation = yield* Deferred.make<void>();
       let closing = false;
       let cancelled = false;
@@ -59,7 +61,11 @@ export const presentMcpAuthPanel = (
       };
       const close = () => {
         closing = true;
-        finish();
+        try {
+          finish();
+        } finally {
+          invokeHostCallback(() => dock.dispose(), undefined);
+        }
       };
       const active = () => !closing && invokeHostCallback(current, false) && isProjectTrusted(ctx);
       const repaint = () => {
@@ -117,7 +123,7 @@ export const presentMcpAuthPanel = (
                   close();
                   return inert();
                 }
-                return new McpAuthPanel({
+                const panel = new McpAuthPanel({
                   snapshot: attempt.snapshot,
                   now: attempt.now,
                   theme,
@@ -141,12 +147,14 @@ export const presentMcpAuthPanel = (
                     repaint();
                   },
                 });
+                dock.mount(hostTui, panel);
+                return dock.input;
               },
               {
                 overlay: true,
-                overlayOptions: { anchor: "center", width: "85%", maxHeight: "90%" },
+                overlayOptions: { anchor: "top-left", width: 1, maxHeight: 0 },
                 onHandle: (handle) => {
-                  overlay = handle;
+                  overlay = dock.handle(handle);
                   if (closing || requested || !active()) close();
                   else repaint();
                 },

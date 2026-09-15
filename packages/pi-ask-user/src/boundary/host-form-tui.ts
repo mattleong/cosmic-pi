@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
+import { createInputDock } from "pi-cosmic-ui/boundary/host-input-dock";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { FormOutcome } from "../questionnaire/form-protocol.ts";
 import type { OwnedFormHost } from "../questionnaire/form-service.ts";
@@ -17,7 +17,7 @@ export const makeOwnedFormTuiHost =
         (gate?.awaitOpen ?? Effect.void).pipe(
           Effect.andThen(
             Effect.suspend(() => {
-              const viewport = createScreenViewport("bottom-center");
+              const dock = createInputDock(ctx.ui);
               let live = true;
               let finished = false;
               let requested: FormOutcome | undefined;
@@ -49,8 +49,12 @@ export const makeOwnedFormTuiHost =
                   try {
                     finish({ action: "cancel" });
                   } finally {
-                    releasePrompt?.();
-                    if (token !== undefined) bridge.clear(token);
+                    try {
+                      dock.dispose();
+                    } finally {
+                      releasePrompt?.();
+                      if (token !== undefined) bridge.clear(token);
+                    }
                   }
                 },
                 catch: () =>
@@ -83,14 +87,13 @@ export const makeOwnedFormTuiHost =
                         tui = hostTui;
                         done = hostDone;
                         if (!live) return { render: () => [], invalidate: () => {} };
-                        viewport.attach(() => hostTui.terminal);
                         dialog = new OwnedFormDialog({
                           tui,
                           theme,
                           keybindings,
                           request,
                           owner,
-                          getHeight: viewport.getHeight,
+                          getHeight: dock.getHeight,
                           done: (outcome) => {
                             if (live) finish(outcome);
                           },
@@ -101,13 +104,14 @@ export const makeOwnedFormTuiHost =
                         token = bridge.activate(() => {
                           if (live) dialog?.resume();
                         });
-                        return dialog;
+                        dock.mount(hostTui, dialog);
+                        return dock.input;
                       },
                       {
                         overlay: true,
-                        overlayOptions: viewport.overlayOptions,
+                        overlayOptions: { anchor: "top-left", width: 1, maxHeight: 0 },
                         onHandle: (ownedHandle) => {
-                          handle = ownedHandle;
+                          handle = dock.handle(ownedHandle);
                           if (!live || requested) {
                             finish(requested ?? { action: "cancel" });
                             return;
