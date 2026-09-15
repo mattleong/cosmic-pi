@@ -1,6 +1,7 @@
 /** Pure Code Mode projection for the opt-in shared compact shell. */
 import * as Schema from "effect/Schema";
 import type { CompactNotice, CompactSummaryProvider } from "pi-code-previews";
+import { isCompactPiTool } from "../tools/mcp-evidence.ts";
 import { decodeOption } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
@@ -35,6 +36,32 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
         kind: "recovery",
         text: "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.",
       });
+    const evidence = details.mcpEvidence;
+    if (phase === "settled" && evidence !== undefined && evidence.observed !== evidence.mcp)
+      return undefined;
+    if (evidence !== undefined) {
+      notices.push(...evidence.notices.map((text) => ({ kind: "warning" as const, text })));
+      if (evidence.unknown > 0)
+        notices.push({
+          kind: "recovery",
+          text: "MCP execution is uncertain. Check its state; do not replay the operation automatically.",
+        });
+      if (evidence.notSent > 0)
+        notices.push({
+          kind: "warning",
+          text: `${evidence.notSent} MCP operations were not sent.`,
+        });
+      if (evidence.mcp > 0 && failed + cancelled > 0)
+        notices.push({
+          kind: "recovery",
+          text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
+        });
+      if (evidence.errors > 0)
+        notices.push({
+          kind: "warning",
+          text: `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
+        });
+    }
     if (phase !== "settled") return { subject, counters, notices };
     if (running + queued > 0) {
       notices.push({
@@ -65,12 +92,12 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
         ...(text.length > 0 && { failure: { cause: first, details: text } }),
       };
     }
-    // Adapter Promises can fulfill with domain failures or unknown execution. Their payload
-    // outcomes are not retained here. Hidden call history could contain those adapters too.
-    // Preserve the original result instead of turning interpreter completion into success.
+    // Legacy details have no adapter evidence or hidden-call coverage. New evidence must
+    // validate completely before reaching this branch; never infer outcomes from guest output.
     if (
-      total !== details.toolCalls.length ||
-      details.toolCalls.some((call) => !call.tool.startsWith("pi."))
+      evidence === undefined &&
+      (total !== details.toolCalls.length ||
+        details.toolCalls.some((call) => !isCompactPiTool(call.tool)))
     )
       return undefined;
     // outputKind is emitted only by the owned successful execution path, unlike isError=false.
@@ -79,7 +106,14 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
       subject,
       counters: [`${total} ${total === 1 ? "tool" : "tools"}`],
       notices,
-      outcome: failed + cancelled > 0 || details.truncated ? "warning" : "success",
+      detailsOnExpand: true,
+      outcome: evidence?.unknown
+        ? "uncertain"
+        : evidence?.errors || evidence?.notSent
+          ? "error"
+          : failed + cancelled > 0 || details.truncated || notices.length > 0
+            ? "warning"
+            : "success",
     };
   } catch {
     return undefined;

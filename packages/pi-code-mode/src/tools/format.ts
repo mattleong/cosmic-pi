@@ -8,6 +8,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { McpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
@@ -144,6 +145,7 @@ export interface CodeModeCallCounts {
 
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
+  readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */
   readonly counts?: CodeModeCallCounts;

@@ -22,6 +22,7 @@ import {
 } from "../boundary/host-builtin-tools.ts";
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
 import type { CodeModeState } from "../config/store.ts";
+import { makeMcpEvidence } from "./mcp-evidence.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import {
   callEntryDetails,
@@ -169,9 +170,14 @@ export const makeCodeModeToolExecute =
       // indices are unique within an execution; their negative IDs stay disjoint from modern
       // non-negative lifecycle IDs, so settled entries can retain the same map key.
       const counts = emptyCounts();
+      const evidence = makeMcpEvidence();
+      const progress = () => {
+        const result = progressResult(snapshotCalls(calls), counts);
+        return { ...result, details: { ...result.details, mcpEvidence: evidence.snapshot() } };
+      };
       const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
-      const publish = () => publisher.publish(progressResult(snapshotCalls(calls), counts));
-      const publishNow = () => publisher.publishNow(progressResult(snapshotCalls(calls), counts));
+      const publish = () => publisher.publish(progress());
+      const publishNow = () => publisher.publishNow(progress());
       const trackQueued = (id: number, entry: MutableCallEntry): boolean => {
         if (counts.total > config.maxToolCalls) return false;
         if (calls.size >= MAX_TRACKED_CALL_ENTRIES) {
@@ -218,6 +224,7 @@ export const makeCodeModeToolExecute =
           sessionId: environment.sessionId,
           toolCallId,
           maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
+          observe: evidence.observe,
         });
 
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
@@ -233,6 +240,7 @@ export const makeCodeModeToolExecute =
           onToolCallLifecycle: (event) =>
             Effect.sync(() => {
               if (event.status === "queued") {
+                evidence.admit(event.name);
                 counts.total += 1;
                 counts.queued += 1;
                 const entry: MutableCallEntry = {
@@ -275,6 +283,7 @@ export const makeCodeModeToolExecute =
               const id = lifecycleId ?? -(index + 1);
               let current = calls.get(id);
               if (current === undefined && lifecycleId === undefined) {
+                evidence.admit(name);
                 counts.total += 1;
                 counts.running += 1;
                 current = {
@@ -311,15 +320,16 @@ export const makeCodeModeToolExecute =
             }),
         });
 
-        const settleProgress = (): ReturnType<typeof callEntryDetails> => {
+        const settleProgress = (): CodeModeToolDetails => {
           const changed = settlePendingAsCancelled(calls, counts);
           counts.cancelled += counts.queued + counts.running;
           counts.queued = 0;
           counts.running = 0;
           const snapshot = snapshotCalls(calls);
-          if (changed) publisher.publish(progressResult(snapshot, counts));
+          evidence.close();
+          if (changed) publisher.publish(progress());
           publisher.settle();
-          return callEntryDetails(snapshot, counts);
+          return { ...callEntryDetails(snapshot, counts), mcpEvidence: evidence.snapshot() };
         };
 
         const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {

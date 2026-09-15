@@ -1,3 +1,4 @@
+import { copyMcpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeToolDetails } from "./format.ts";
 
 /** Bounded one-shot handoff for details Pi otherwise drops when tool execution throws. */
@@ -19,6 +20,7 @@ export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetent
   const retained = new Map<string, CodeModeToolDetails>();
   const copy = (details: CodeModeToolDetails): CodeModeToolDetails => {
     const copied = { ...details, toolCalls: details.toolCalls.map((row) => ({ ...row })) };
+    if (copied.mcpEvidence !== undefined) copied.mcpEvidence = copyMcpEvidence(copied.mcpEvidence);
     if (copied.counts !== undefined) copied.counts = { ...copied.counts };
     return copied;
   };

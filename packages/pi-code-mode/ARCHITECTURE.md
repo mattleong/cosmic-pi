@@ -34,9 +34,12 @@ Only runtime source plus its README, legal, and provenance documents ship.
   It pairs intent with one exact call count after settlement or a done/total count while running.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
-  Nested MCP and Background Tasks payload outcomes are not part of the retained activity
-  projection. Settled adapter calls and incomplete call history therefore retain the original
-  renderer instead of turning Promise fulfillment into compact success.
+  MCP compact outcomes use versioned, schema-validated execution evidence, not guest return
+  values or Promise fulfillment. The bounded aggregate covers every admitted call independently
+  of display history and preserves MCP certainty, error counts, and sanitized warning/recovery
+  notices, including retained-read origin outcomes and output validation. Missing, malformed,
+  incomplete, or overflowing evidence and unsupported Background Tasks calls keep the original
+  renderer. Compact notices remain shell-owned because guest programs can discard MCP replies.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
@@ -180,7 +183,12 @@ within 32 visible slots, while exact counts include hidden calls and drive the h
 New details retain `totalToolCalls` when rows are hidden so older renderers keep the marker; exact
 counts carry current lifecycle totals. Tolerant render decoding still accepts historical details.
 Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
-execution state.
+execution state. `tools/mcp-evidence.ts` owns the bounded aggregate. The MCP boundary observes each
+validated reply or sanitized rejection in its invocation-local scope without changing dispatch,
+results, or throws. Admission separately partitions exact Pi built-ins, MCP, and unsupported calls.
+Evidence snapshots are copied and deeply frozen, including failure retention; settlement closes
+observation so late completion cannot change published evidence. No MCP payload or request argument
+is retained. Notice overflow declines compact projection rather than dropping recovery text.
 
 The application composes `CodePreviewSchedulerService.layer` into its own session runtime and passes a token-checked scheduler to the compact shell. It does not depend on the previews extension's isolated module-local runtime; replacement and shutdown cancel remaining compact animations. The original renderer owns a weak 160 ms ticker. The host compact-summary callback releases that ticker when the shared shell hides its rows or the tool settles, even when the original result renderer is not called. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized

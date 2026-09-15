@@ -2,6 +2,12 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
+  McpEvidenceSchema,
+  validMcpCoverage,
+  isCompactPiTool,
+  type McpEvidence,
+} from "../tools/mcp-evidence.ts";
+import {
   countCallEntries,
   decodeOption,
   MAX_PROGRESS_ENTRIES,
@@ -10,6 +16,7 @@ import {
 } from "../tools/format.ts";
 
 export interface CodeModeRenderDetails {
+  readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly totalToolCalls: number;
   readonly counts: CodeModeCallCounts;
@@ -28,6 +35,7 @@ const CallEntryInputSchema = Schema.Struct({
   durationMs: Schema.optional(Schema.Unknown),
 });
 const RenderDetailsInputSchema = Schema.Struct({
+  mcpEvidence: Schema.optional(Schema.Unknown),
   toolCalls: Schema.optional(Schema.Unknown),
   totalToolCalls: Schema.optional(Schema.Unknown),
   counts: Schema.optional(Schema.Unknown),
@@ -108,12 +116,20 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     record.outputKind === "text" || record.outputKind === "structured"
       ? record.outputKind
       : undefined;
+  const mcpEvidence = decodeOption(McpEvidenceSchema, record.mcpEvidence);
   const normalized: CodeModeRenderDetails = {
+    ...(mcpEvidence !== undefined && { mcpEvidence }),
     toolCalls,
     totalToolCalls: total,
     counts,
     hasExactCounts,
     compactEligible:
+      (record.mcpEvidence === undefined ||
+        (mcpEvidence !== undefined &&
+          validMcpCoverage(mcpEvidence, total) &&
+          toolCalls.filter((call) => isCompactPiTool(call.tool)).length <= mcpEvidence.pi &&
+          toolCalls.filter((call) => call.tool === "mcp.request").length <= mcpEvidence.mcp &&
+          toolCalls.every((call) => isCompactPiTool(call.tool) || call.tool === "mcp.request"))) &&
       Array.isArray(record.toolCalls) &&
       rawCalls.length <= MAX_PROGRESS_ENTRIES &&
       toolCalls.length === rawCalls.length &&
