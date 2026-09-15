@@ -46,9 +46,7 @@ export function compactWorkspaceSummary<ValueInput>(
   const details = decoded.value;
   // Receipt fields are optional in the transport union, but required by these operations.
   if (!hasOperationReceipt(details) || !validPagination(details)) return undefined;
-  const metadata = [details.revisionId, details.preparationId].filter(
-    (value): value is string => value !== undefined,
-  );
+  const metadata: string[] = [];
   const counters: string[] = [];
   const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
   const add = (text: string) => notices.push({ kind: "recovery", text });
@@ -61,7 +59,9 @@ export function compactWorkspaceSummary<ValueInput>(
         add(
           "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
         );
-      if (details.nextOffset !== undefined) metadata.push(`next offset ${details.nextOffset}`);
+
+      if (details.nextOffset !== undefined)
+        add(`More workspace metadata: list offset=${details.nextOffset}.`);
       break;
     case "review":
       counters.push(`diff offset ${details.offset} of ${details.totalChars}`);
@@ -70,6 +70,7 @@ export function compactWorkspaceSummary<ValueInput>(
       );
       break;
     case "prepare":
+      counters.push("prepared");
       add(
         `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there; do not edit this prepared tree. After passing tests and complete diff review, integrate this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.`,
       );
@@ -80,7 +81,7 @@ export function compactWorkspaceSummary<ValueInput>(
       );
       break;
     case "integrate":
-      metadata.push("uncommitted parent edits", "parent index preserved");
+      counters.push("integrated");
       break;
     case "discard":
       break;

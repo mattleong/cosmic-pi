@@ -41,6 +41,7 @@ import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
+import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
@@ -354,7 +355,13 @@ export default function registerPiSubagentSupervisorBridge(
       ),
       report,
     ];
-    for (const tool of tools) pi.registerTool(withCodePreviewShell(tool, { scheduleAnimation }));
+    for (const tool of tools)
+      pi.registerTool(
+        withCodePreviewShell(tool, {
+          scheduleAnimation,
+          compactSummary: createParentCompactSummary(tool.name),
+        }),
+      );
     pi.setActiveTools([
       ...new Set([
         ...pi

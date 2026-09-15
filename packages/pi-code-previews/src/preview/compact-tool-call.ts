@@ -13,7 +13,6 @@ import {
   type CompactSummary,
 } from "../tools/compact-summary";
 import { allocateCompactHeader } from "./compact-header";
-import { hiddenPreviewExpandLabel } from "./format";
 
 const ACTIVITY_KINDS = {
   pending: "pending",
@@ -47,6 +46,7 @@ export function renderCompactToolCall(
     phase: CompactPhase;
     summary: CompactSummary;
     duration?: string | undefined;
+    elapsedMs?: number | undefined;
     animationFrame?: number | undefined;
     expanded?: boolean;
   },
@@ -71,17 +71,13 @@ export function renderCompactToolCall(
   const action = compactSingleLine(summary.action ?? "");
   const prefix = `${theme.fg(color, glyph)} ${theme.fg("toolTitle", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
   const subject = compactSingleLine(summary.subject);
-  const hint = input.expanded ? undefined : hiddenPreviewExpandLabel(theme);
-  const duration = phase === "pending" ? undefined : compactSingleLine(input.duration ?? "");
+  const duration =
+    phase !== "pending" && (input.name === "bash" || (input.elapsedMs ?? 0) >= 10_000)
+      ? compactSingleLine(input.duration ?? "")
+      : undefined;
   const metadata = summary.metadata?.map(compactSingleLine).filter(Boolean) ?? [];
   const counters = summary.counters?.map(compactSingleLine).filter(Boolean) ?? [];
-  const row = allocateCompactHeader(
-    prefix,
-    subject,
-    counters,
-    [...metadata, duration, hint],
-    width,
-  );
+  const row = allocateCompactHeader(prefix, subject, counters, [...metadata, duration], width);
   return [row, ...renderCompactNotices(summary.notices, theme, width)];
 }
 

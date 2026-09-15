@@ -23,6 +23,7 @@ const State = Schema.Literals(states);
 const Text = Schema.String.check(Schema.isMaxLength(8192));
 const Snapshot = Schema.Struct({
   id: Text,
+  name: Schema.optionalKey(Text),
   command: Text,
   cwd: Text,
   state: State,
@@ -116,10 +117,9 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
       text: "Process exited, but its exit code is unknown; inspect task status.",
     });
   if (value.error) notices.push({ kind: "error", text: sanitizeTerminalLine(value.error) });
-  const metadata: string[] = outcome === "cancelled" ? [] : [value.state];
-  if (value.exitCode != null) metadata.push(`exit ${value.exitCode}`);
-  if (value.signal && outcome !== "cancelled") metadata.push(`signal ${value.signal}`);
-  const subject = sanitizeTerminalLine(value.id);
+  const detail = value.exitCode != null ? `${value.state}, exit ${value.exitCode}` : value.state;
+  const metadata = outcome === "cancelled" ? [] : [detail];
+  const subject = sanitizeTerminalLine(value.name?.trim() || value.id);
   return {
     subject:
       outcome === "cancelled"
@@ -152,7 +152,12 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
   unknown
 > = ({ phase, args, result, context }) => {
   const action = args.action ?? "task";
-  const subject = "id" in args && Predicate.isString(args.id) ? sanitizeTerminalLine(args.id) : "";
+  const subject =
+    args.action === "start"
+      ? sanitizeTerminalLine(args.name?.trim() || args.command || "")
+      : "id" in args && Predicate.isString(args.id)
+        ? sanitizeTerminalLine(args.id)
+        : "";
   if (phase !== "settled") return { action, subject };
   if (context.isError) return undefined;
   const decoded = Schema.decodeUnknownOption(Details)(result?.details);
@@ -195,11 +200,11 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
         const n = details.tasks.filter((task) => task.state === state).length;
         if (n) counters.push(`${n} ${state}`);
       }
-      if (counters.length === 2) counters.shift();
+      if (counters.length > 1) counters.shift();
       return {
         action,
         subject,
-        counters,
+        counters: [counters.join(", ")],
         notices,
         outcome,
         detailsOnExpand: true,
@@ -219,7 +224,7 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
       return {
         ...task,
         action,
-        metadata: [String(details.wait.outcome), ...(task.metadata ?? [])],
+        metadata: [[details.wait.outcome, ...(task.metadata ?? [])].join(", ")],
         notices,
         outcome: timeout && task.outcome === "success" ? "warning" : task.outcome,
       };

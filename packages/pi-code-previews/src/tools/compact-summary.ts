@@ -24,8 +24,11 @@ export interface CompactSummary {
   subject: string;
   /** Operation not already identified by the tool name. Kept separate from target clipping. */
   action?: string;
-  /** Whole, provider-classified counter labels, admitted before optional metadata/chrome. */
+  /** The first nonblank counter owns the single routine-detail slot. Combine related counts
+   * into one label; put warnings and required recovery in notices, never later counters.
+   */
   counters?: readonly string[];
+  /** First nonblank label is used only when no counter is present. */
   metadata?: readonly string[];
   outcome?: CompactOutcome;
   notices?: readonly CompactNotice[];

@@ -2,7 +2,12 @@ import * as Schema from "effect/Schema";
 import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { stripTerminalControls } from "pi-cosmic-core";
-import { decodeCallTitles, outcomeProjection, projection } from "./tool-render-projection.ts";
+import {
+  decodeCallTitles,
+  decodeCompactChoices,
+  outcomeProjection,
+  projection,
+} from "./tool-render-projection.ts";
 
 const Outcome = outcomeProjection({ note: Schema.optional(Schema.String) });
 const outcome = projection(Outcome);
@@ -58,6 +63,36 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
   };
 }
 
+function selectedChoice<Args>(
+  args: Args,
+  value: typeof Outcome.Type | undefined,
+): Partial<CompactSummary> {
+  if (value?.outcome !== "submitted" || value.answers.length !== 1) return {};
+  const questions = decodeCompactChoices(args)?.questions;
+  const question = questions?.length === 1 ? questions[0] : undefined;
+  const answer = value.answers[0]!;
+  if (
+    !question ||
+    !question.key ||
+    answer.key !== question.key ||
+    answer.kind !== "choices" ||
+    answer.labels.length !== 1
+  )
+    return {};
+  const label = answer.labels[0]!;
+  if (
+    !label.trim() ||
+    label.length > 40 ||
+    /[\r\n]/.test(label) ||
+    !question.choices.some((choice) => choice.label === label)
+  )
+    return {};
+  return {
+    subject: `${stripTerminalControls(question.title)} → ${stripTerminalControls(label)}`,
+    counters: [],
+  };
+}
+
 /** Transcript summaries never change the separate questionnaire overlay. */
 export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
   if (context.isError) return undefined;
@@ -65,7 +100,12 @@ export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, res
   const decoded = outcome(result?.details);
   if (!decoded || (decoded.outcome === "submitted" && decoded.answers.length === 0))
     return undefined;
-  return summarize([decoded]);
+  const summary = summarize([decoded]);
+  return {
+    ...summary,
+    subject: liveSummary(args)?.subject || summary.subject,
+    ...selectedChoice(args, decoded),
+  };
 };
 
 export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
@@ -82,7 +122,8 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
   const input = control(args);
   const identity: Partial<CompactSummary> = {};
   if (input) identity.action = input.action;
-  if (rows.length === 1) identity.subject = stripTerminalControls(rows[0]!.requestId);
+  if (rows.length === 1)
+    identity.subject = liveSummary(args)?.subject || stripTerminalControls(rows[0]!.requestId);
   if (
     rows.every(
       (row) =>
@@ -99,7 +140,6 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
       ...identity,
       outcome: "warning",
       counters: [`${rows.length} requests`],
-      metadata: rows.length > 1 ? rows.map((row) => stripTerminalControls(row.requestId)) : [],
       notices: [
         {
           kind: "warning",
@@ -120,7 +160,9 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
     return undefined;
   const summary = summarize(rows.flatMap((row) => (row.outcome ? [row.outcome] : [])));
   Object.assign(summary, identity);
-  if (rows.length > 1) summary.counters = [`${rows.length} requests`, ...(summary.counters ?? [])];
+  if (rows.length === 1) Object.assign(summary, selectedChoice(args, rows[0]!.outcome));
+  if (rows.length > 1)
+    summary.counters = [[`${rows.length} requests`, ...(summary.counters ?? [])].join(", ")];
   if (rows.some((row) => row.delivery === "failed")) {
     return {
       ...summary,

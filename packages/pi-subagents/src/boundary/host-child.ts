@@ -12,6 +12,8 @@ import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   loadCodePreviewSettings,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
   type CodePreviewSettings,
 } from "pi-code-previews";
 import {
@@ -30,6 +32,7 @@ import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/pr
 import type { SubagentToolInput } from "../tools/schema.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
+import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
@@ -314,84 +317,97 @@ export function registerSubagentChildBridge(
       });
   };
 
-  const registerContactParent = (input: ChildSessionInput, token: number): void => {
-    pi.registerTool({
-      name: "contact_parent",
-      label: "Contact Parent",
-      description:
-        "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
-      parameters: ContactParentParameters,
-      executionMode: "sequential",
-      execute(_toolCallId, params, signal) {
-        if (!isActivationCurrent(input, token))
-          return Promise.reject(new Error("Parent contact is unavailable for this session."));
-        const requestId = `contact-${process.pid}-${nextRequest++}`;
-        const envelope: ContactParentEnvelope = {
-          channel: "pi-subagents",
-          type: "contact_parent",
-          requestId,
-          kind: params.kind,
-          message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
-        };
-        if (params.kind !== "question")
-          return slot.run(ipc.sendContact(envelope), signal).then(() => {
+  const registerContactParent = (
+    input: ChildSessionInput,
+    token: number,
+    scheduleAnimation: CompactAnimationScheduler,
+  ): void => {
+    pi.registerTool(
+      withCodePreviewShell(
+        {
+          name: "contact_parent",
+          label: "Contact Parent",
+          description:
+            "Send progress, record a non-blocking warning in parent-visible run status, or ask a blocking parent question. Repeat warnings in the final report; use a question instead when a risk could invalidate work the parent is doing now.",
+          parameters: ContactParentParameters,
+          executionMode: "sequential",
+          execute(_toolCallId, params, signal) {
             if (!isActivationCurrent(input, token))
-              throw new Error("Parent contact is unavailable for this session.");
-            return {
-              content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
-              details: {},
-            };
-          });
-
-        return slot
-          .run(
-            correlate(
-              pending,
+              return Promise.reject(new Error("Parent contact is unavailable for this session."));
+            const requestId = `contact-${process.pid}-${nextRequest++}`;
+            const envelope: ContactParentEnvelope = {
+              channel: "pi-subagents",
+              type: "contact_parent",
               requestId,
-              ipc.sendContact(envelope),
-              () => {
-                if (isActivationCurrent(input, token))
-                  slot.fork(
-                    ipc
-                      .sendContact({ channel: "pi-subagents", type: "contact_cancel", requestId })
-                      .pipe(Effect.ignore),
-                  );
-              },
-              false,
-            ).pipe(
-              Effect.timeoutOrElse({
-                duration: QUESTION_TIMEOUT_MILLIS,
-                orElse: () =>
-                  Effect.fail(
-                    new ParentContactError({
-                      message: "Parent question timed out without a reply.",
-                    }),
-                  ),
-              }),
-            ),
-            signal,
-          )
-          .then(
-            (reply) => {
-              if (!isActivationCurrent(input, token))
-                throw new Error("Parent contact is unavailable for this session.");
-              return {
-                content: [
-                  {
-                    type: "text" as const,
-                    text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
+              kind: params.kind,
+              message: safeTextPrefix(params.message, MAX_PARENT_MESSAGE_CHARS),
+            };
+            if (params.kind !== "question")
+              return slot.run(ipc.sendContact(envelope), signal).then(() => {
+                if (!isActivationCurrent(input, token))
+                  throw new Error("Parent contact is unavailable for this session.");
+                return {
+                  content: [{ type: "text" as const, text: `Parent received ${params.kind}.` }],
+                  details: {},
+                };
+              });
+
+            return slot
+              .run(
+                correlate(
+                  pending,
+                  requestId,
+                  ipc.sendContact(envelope),
+                  () => {
+                    if (isActivationCurrent(input, token))
+                      slot.fork(
+                        ipc
+                          .sendContact({
+                            channel: "pi-subagents",
+                            type: "contact_cancel",
+                            requestId,
+                          })
+                          .pipe(Effect.ignore),
+                      );
                   },
-                ],
-                details: {},
-              };
-            },
-            (error) => {
-              if (signal?.aborted) throw new Error("Parent question was cancelled.");
-              throw error instanceof ParentContactError ? new Error(error.message) : error;
-            },
-          );
-      },
-    });
+                  false,
+                ).pipe(
+                  Effect.timeoutOrElse({
+                    duration: QUESTION_TIMEOUT_MILLIS,
+                    orElse: () =>
+                      Effect.fail(
+                        new ParentContactError({
+                          message: "Parent question timed out without a reply.",
+                        }),
+                      ),
+                  }),
+                ),
+                signal,
+              )
+              .then(
+                (reply) => {
+                  if (!isActivationCurrent(input, token))
+                    throw new Error("Parent contact is unavailable for this session.");
+                  return {
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: `${PARENT_REPLY_PREFIX}${clipToolReply(reply)}`,
+                      },
+                    ],
+                    details: {},
+                  };
+                },
+                (error) => {
+                  if (signal?.aborted) throw new Error("Parent question was cancelled.");
+                  throw error instanceof ParentContactError ? new Error(error.message) : error;
+                },
+              );
+          },
+        },
+        { scheduleAnimation, compactSummary: createParentCompactSummary("contact_parent") },
+      ),
+    );
   };
 
   slot = makePiSessionRuntimeSlot<
@@ -460,7 +476,9 @@ export function registerSubagentChildBridge(
           proxyCall: (toolInput, signal) => call(toolInput, signal),
           run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
         });
-        registerContactParent(input, token);
+        registerContactParent(input, token, (interval, tick) =>
+          isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
+        );
         const runId = subagentChildRunId();
         if (runId) registerSubagentProxyManagerCommand(pi, runId, call);
         if (!isActivationCurrent(input, token)) throw new Error("Stale child activation.");

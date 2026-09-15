@@ -22,7 +22,7 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     const details = decodeCodeModeRenderDetails(result.details);
     if (!details.compactEligible) return undefined;
     const { total, succeeded, failed, cancelled, running, queued } = details.counts;
-    const counters = [`${succeeded + failed + cancelled}/${total} nested settled`];
+    const counters = [`${succeeded + failed + cancelled}/${total} done`];
     const notices: CompactNotice[] = [];
     if (failed > 0) notices.push({ kind: "warning", text: `${failed} nested operations failed.` });
     if (cancelled > 0)
@@ -77,7 +77,7 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     if (details.outputKind === undefined) return undefined;
     return {
       subject,
-      counters,
+      counters: [`${total} calls`],
       notices,
       outcome: failed + cancelled > 0 || details.truncated ? "warning" : "success",
     };

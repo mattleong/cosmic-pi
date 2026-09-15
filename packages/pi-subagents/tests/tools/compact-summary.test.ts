@@ -32,6 +32,31 @@ function summarize<DetailsInput>(
 }
 
 describe("subagent compact semantic policy", () => {
+  it("uses start names or profiles before launch and combines observed state counts", () => {
+    const provider = createSubagentCompactSummary("subagent_start");
+    for (const agent of [{ name: "Review auth", profile: "reviewer" }, { profile: "reviewer" }]) {
+      const summary = provider({
+        args: { agents: [agent] },
+        phase: "running",
+        result: undefined,
+        // SAFETY: The provider only reads isError from this render context.
+        context: { isError: false } as Parameters<typeof provider>[0]["context"],
+      });
+      expect(summary?.subject).toBe("name" in agent ? agent.name : agent.profile);
+      expect(summary?.counters?.join(" ")).not.toContain("finished");
+    }
+    const summary = summarize(
+      "list",
+      makeCompactToolDetails({
+        action: "list",
+        runs: [view({ id: "one", state: "running" }), view({ id: "two", state: "completed" })],
+      }),
+    );
+    expect(summary?.counters).toHaveLength(1);
+    expect(summary?.counters?.[0]).toContain("1 running");
+    expect(summary?.counters?.[0]).toContain("1 completed");
+    expect(summary?.metadata).toEqual([]);
+  });
   it("keeps a requested target separate from lifecycle operations throughout rendering", () => {
     const provider = createSubagentCompactSummary("subagent_lifecycle");
     const args = { action: "interrupt", runIds: ["target-1"] };
@@ -52,7 +77,7 @@ describe("subagent compact semantic policy", () => {
         // SAFETY: The provider only reads isError from this render context.
         context: { isError: false } as Parameters<typeof provider>[0]["context"],
       });
-      expect(summary?.subject).toBe("target-1");
+      expect(summary?.subject).toBe(phase === "pending" ? "target-1" : "Worker");
       expect(summary?.action).toBe("interrupt");
       expect(summary?.metadata).not.toContain("target-1");
       expect(summary?.expandedResultOwnsCall).toBeUndefined();
@@ -72,7 +97,7 @@ describe("subagent compact semantic policy", () => {
       );
       expect(summary?.action).toBe("retry");
       expect(summary?.subject).toBe("source-1");
-      expect(summary?.metadata?.filter((value) => value === "successor-2")).toHaveLength(1);
+      expect(summary?.metadata).not.toContain("successor-2");
       expect(summary?.metadata).not.toContain("source-1");
       expect(summary?.notices).toEqual([]);
     }
@@ -163,7 +188,7 @@ describe("subagent compact semantic policy", () => {
       runs: [view({ state: "running", writeIntent: "writer", writeClaims: ["src/a.ts"] })],
     });
     expect(summarize("status", details)?.outcome).toBe("success");
-    expect(summarize("status", details)?.metadata).toContain("1 file claims");
+    expect(summarize("status", details)?.metadata).toEqual([]);
   });
 
   it("declines missing, mismatched, omitted and old details", () => {
@@ -257,7 +282,7 @@ describe("subagent compact semantic policy", () => {
         action,
         runs: [view({ id: "only-1", name: "Worker" })],
       });
-      expect(summarize(action, details)?.subject).toBe("only-1");
+      expect(summarize(action, details)?.subject).toBe("Worker");
       expect(summarize(action, details)?.metadata).not.toContain("only-1");
       expect(summarize(action, details, "settled", { runIds: ["only-1", "other"] })?.subject).toBe(
         "",
@@ -307,29 +332,36 @@ describe("subagent compact semantic policy", () => {
     expect(summarize("status", details, "settled", {}, true)).toBeUndefined();
   });
 
-  it("uses requested targets when older await details lack scope", () => {
-    const projected = makeCompactToolDetails({
-      action: "status",
-      runs: [view({ id: "target", state: "completed" }), view({ id: "context", state: "paused" })],
-    });
-    if (projected.action === "models") throw new Error("Expected cards");
-    const summary = summarize(
-      "await",
-      {
-        version: 2,
-        action: "await",
-        cards: projected.cards,
-        awaitUntil: "all_finished",
-      },
-      "settled",
-      { runIds: ["target"] },
-    );
-    expect(summary?.counters).toContain("1/1 finished");
-    expect(summary?.subject).toBe("target");
-    expect(summary?.expandedResultOwnsCall).toBe(true);
-    expect(summary?.metadata).not.toContain("target");
-    expect(summary?.metadata).not.toContain("1 paused");
-  });
+  it.each([{}, { awaitedRunIds: ["context"] }])(
+    "uses exact requested targets with absent or conflicting projected scope",
+    (scope) => {
+      const projected = makeCompactToolDetails({
+        action: "status",
+        runs: [
+          view({ id: "target", state: "completed" }),
+          view({ id: "context", state: "paused" }),
+        ],
+      });
+      if (projected.action === "models") throw new Error("Expected cards");
+      const summary = summarize(
+        "await",
+        {
+          version: 2,
+          action: "await",
+          cards: projected.cards,
+          awaitUntil: "all_finished",
+          ...scope,
+        },
+        "settled",
+        { runIds: ["target"] },
+      );
+      expect(summary?.counters).toContain("1/1 finished");
+      expect(summary?.subject).toBe("auth-review");
+      expect(summary?.expandedResultOwnsCall).toBe(true);
+      expect(summary?.metadata).not.toContain("target");
+      expect(summary?.metadata).not.toContain("1 paused");
+    },
+  );
 
   it("keeps quarantine ahead of route-exhaustion replacement advice", () => {
     const summary = summarize("start", {
@@ -378,7 +410,7 @@ describe("subagent compact semantic policy", () => {
     });
     const summary = summarize("claims", details, "settled", { action: "list" });
     expect(summary?.action).toBe("list");
-    expect(summary?.metadata).toContain("1 file claims");
+    expect(summary?.counters).toContain("1 files");
     expect(summary?.metadata?.join(" ")).not.toContain("src/a.ts");
     expect(
       summarize("claims", makeCompactToolDetails({ action: "list", runs: [] }), "settled", {
@@ -458,7 +490,7 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.counters).toContain("1/1 finished");
     expect(summary?.metadata).not.toContain("1 paused");
     const text = summary?.notices?.map((notice) => notice.text).join(" ");
-    expect(summary?.metadata).toContain("1 report");
+    expect(summary?.metadata).toEqual([]);
     expect(text).not.toContain("SECRET REPORT BODY");
     expect(text).not.toContain('action: "resume"');
     const cancelled = summarize("await", { ...details, cancelled: true });
@@ -469,7 +501,7 @@ describe("subagent compact semantic policy", () => {
   it("marks omitted details as bounded rather than complete fleet counts", () => {
     const details = makeCompactToolDetails({ action: "list", runs: [view()] });
     const summary = summarize("list", { ...details, runCount: 20, contentOmitted: true });
-    expect(summary?.counters).toContain("1/20 shown");
+    expect(summary?.counters?.join(" ")).toContain("1/20 shown");
     expect(summary?.outcome).toBe("uncertain");
     expect(summary?.notices?.some((notice) => notice.text.includes("subagent_status"))).toBe(true);
   });
@@ -570,7 +602,7 @@ describe("subagent compact semantic policy", () => {
       action: "list",
       runs: [view({ finalText: "report" })],
     });
-    expect(summarize("list", reports)?.metadata).toContain("reports via subagent_status");
+    expect(summarize("list", reports)?.metadata).toEqual([]);
     expect(summarize("list", reports)?.notices).toEqual([]);
     for (const overrides of [{ error: "failure" }, { error: "failure", finalText: "report" }]) {
       const details = makeCompactToolDetails({ action: "list", runs: [view(overrides)] });
@@ -663,7 +695,7 @@ describe("subagent compact semantic policy", () => {
         runs: [view({ ...overrides, state: "reported", finalText: "report" })],
       });
       const summary = summarize("status", details);
-      expect(summary?.metadata).toContain("1 report");
+      expect(summary?.metadata).toEqual([]);
       expect(
         summary?.notices?.some((notice) => notice.text.includes("workspace integration")),
       ).toBe(overrides.writerWorkspaceMode === "worktree");
@@ -697,18 +729,13 @@ describe("subagent compact semantic policy", () => {
       preparationId: "p",
     });
     expect(integrated?.notices).toEqual([]);
-    expect(integrated?.metadata).toEqual([
-      "r",
-      "p",
-      "uncommitted parent edits",
-      "parent index preserved",
-    ]);
+    expect(integrated?.counters).toEqual(["integrated"]);
+    expect(integrated?.metadata).toEqual([]);
     expect(integrated?.detailsOnExpand).toBe(true);
     expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.notices).toEqual([]);
     expect(workspace("list", {})?.notices).toHaveLength(1);
     const paged = workspace("list", { workspaceCount: 2, listedCount: 1, nextOffset: 1 });
-    expect(paged?.notices).toHaveLength(1);
-    expect(paged?.metadata).toContain("next offset 1");
+    expect(paged?.notices?.some((notice) => notice.text.includes("offset=1"))).toBe(true);
   });
 
   it("counts static mixed profile eligibility without warning for usable alternatives", () => {
@@ -747,12 +774,7 @@ describe("subagent compact semantic policy", () => {
     const clean = discovery([profile, { ...profile, id: "worker", candidates: [] }]);
     expect(clean?.outcome).toBe("success");
     expect(clean?.notices).toEqual([]);
-    expect(clean?.counters).toEqual([
-      "1 eligible options",
-      "1 eligible profiles",
-      "1 skipped alternatives",
-      "1 disabled profiles",
-    ]);
+    expect(clean?.counters).toEqual(["1 statically eligible, 1 disabled profiles"]);
     for (const unavailable of [
       { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
       { ...profile, source: "global-invalid", candidates: [] },
@@ -761,13 +783,12 @@ describe("subagent compact semantic policy", () => {
       const summary = discovery([unavailable]);
       expect(summary?.outcome).toBe("warning");
       expect(summary?.notices).toHaveLength(1);
-      expect(summary?.counters).toContain("1 unavailable profiles");
-      expect(summary?.counters?.[0]).toBe("0 eligible options");
+      expect(summary?.counters?.join(" ")).toContain("1 unavailable profiles");
+      expect(summary?.counters?.join(" ")).toContain("0 statically eligible");
       expect(summary?.counters).not.toContain("1 eligible profiles");
     }
     expect(discovery([{ ...profile, candidates: [] }])?.counters).toEqual([
-      "0 eligible options",
-      "1 disabled profiles",
+      "0 statically eligible, 1 disabled profiles",
     ]);
     expect(
       summarize(
@@ -795,7 +816,7 @@ describe("subagent compact semantic policy", () => {
       });
       const summary = summarize("status", details);
       expect(summary?.notices).toEqual([]);
-      expect(summary?.metadata).toContain("1 skipped alternatives");
+      expect(summary?.metadata).toEqual([]);
       expect(JSON.stringify(details)).toContain(skipped.reason);
       expect(summary?.detailsOnExpand).toBe(true);
       expect(summarize("status", details, "running")?.metadata).toEqual([]);

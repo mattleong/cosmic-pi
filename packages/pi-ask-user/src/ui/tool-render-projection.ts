@@ -49,6 +49,20 @@ export const decodeCallTitles = projection(
     ),
   }),
 );
+/** Compact-only evidence for matching a selected label; expanded replay stays title-only. */
+export const decodeCompactChoices = projection(
+  Schema.Struct({
+    questions: Schema.Array(
+      Schema.Struct({
+        key: Schema.String,
+        title: Schema.String,
+        choices: Schema.Array(Schema.Struct({ label: Schema.String })).check(
+          Schema.isMaxLength(MAX_CHOICES),
+        ),
+      }),
+    ).check(Schema.isMaxLength(MAX_QUESTIONS)),
+  }),
+);
 const parts = projection(Schema.Array(Schema.Unknown));
 const textPart = projection(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }));
 const stringContent = projection(Schema.String);

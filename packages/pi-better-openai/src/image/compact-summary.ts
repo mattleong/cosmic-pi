@@ -52,7 +52,7 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   )
     return undefined;
   const savedPath = Predicate.isString(details.savedPath) ? details.savedPath : undefined;
-  const finalSubject = short(savedPath || String(details.prompt));
+  const finalSubject = savedPath || short(String(details.prompt));
   const notices = savedPath ? [{ kind: "recovery" as const, text: `Saved: ${savedPath}` }] : [];
   switch (details.status) {
     case "completed":

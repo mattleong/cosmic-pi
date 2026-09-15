@@ -56,6 +56,16 @@ describe("image compact summary", () => {
     expect(summary?.failure).toBeUndefined();
   });
 
+  it("preserves literal saved paths rather than shortening or normalizing them", () => {
+    const call = input();
+    const savedPath = "/project/" + "long directory/".repeat(12) + "two  spaces.png";
+    // SAFETY: input() supplies a plain details object for this completed image fixture.
+    call.result!.details = { ...(call.result!.details as object), savedPath };
+    const before = structuredClone(call.result);
+    expect(imageCompactSummary(call)?.subject).toBe(savedPath);
+    expect(call.result).toEqual(before);
+  });
+
   it("declines missing, malformed and unknown details", () => {
     // SAFETY: The fixture above always supplies a plain details object.
     const validDetails = input().result!.details as object;

@@ -55,7 +55,7 @@ it("shares known MCP notices and recovery with the expanded result, retaining di
       for (const notice of [...card.warnings, ...card.notices, card.recoveryHint!]) {
         expect(text.split(notice)).toHaveLength(2);
       }
-      expect(text).toContain("Discovery is incomplete.");
+      expect(text).toContain("Discovery is incomplete");
     }
   }
   expect(result).toEqual(before);

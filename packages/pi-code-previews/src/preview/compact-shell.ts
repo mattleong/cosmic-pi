@@ -56,6 +56,7 @@ class CompactShell implements Component {
   private resultPartial: boolean | undefined;
   private callMounted = false;
   private duration: string | undefined;
+  private elapsedMs: number | undefined;
   private timingLabel: string | undefined;
   private display: Component | undefined;
   private detailBounds: { offset: number; height: number; width: number } | undefined;
@@ -110,6 +111,7 @@ class CompactShell implements Component {
       scheduleAnimation: this.options.scheduleAnimation,
     });
     this.duration = timing?.duration;
+    this.elapsedMs = timing?.elapsedMs;
     this.timingLabel = timing?.label;
   }
 
@@ -158,6 +160,7 @@ class CompactShell implements Component {
         summary,
         failure: summary.failure,
         duration: this.duration,
+        elapsedMs: this.elapsedMs,
         expanded: this.context.expanded,
       };
       if (!this.context.expanded || this.mode === "off")
@@ -196,6 +199,7 @@ class CompactShell implements Component {
           phase,
           summary,
           duration: this.duration,
+          elapsedMs: this.elapsedMs,
           animationFrame: timingState(this.context).codePreviewAnimationFrame,
         },
         this.theme,

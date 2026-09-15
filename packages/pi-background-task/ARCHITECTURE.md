@@ -25,7 +25,9 @@ Custom screens use the shared live viewport: centered at 90% of terminal width a
   notices, not optional metadata; stopped signals remain cancellation rather than failure.
   Clean exited log slices report successful retrieval, not verified process success; their
   contractual lack of exit codes is not a warning. Snapshot-based status still requires exit
-  evidence. Failed or stopping tasks, lost logs, and truncated output retain attention.
+  evidence. Snapshot summaries prefer the optional task name, then ID; live starts use the name
+  or command. One detail combines state/exit or wait evidence, and lists combine state counts.
+  Failed or stopping tasks, lost logs, and truncated output retain attention.
   Unknown details and outer tool errors retain the original renderer; no process state,
   execution, or lifecycle behavior depends on the collapsed style.
 - `src/code-mode/` and the public `src/protocol.ts` re-export own the versioned plain-data query

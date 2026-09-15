@@ -12,6 +12,42 @@ import { stripAnsi, testTheme } from "../support/render";
 
 const theme = testTheme();
 
+test("duration is a last-resort detail using numeric elapsed time", () => {
+  for (const name of ["read", "bash"]) {
+    for (const elapsedMs of [9_999, 10_000]) {
+      for (const counters of [[], ["count"]]) {
+        const row = renderCompactToolCall(
+          {
+            name,
+            phase: "settled",
+            duration: "measured",
+            elapsedMs,
+            summary: { subject: "target", outcome: "success", counters },
+          },
+          theme,
+          200,
+        )[0]!;
+        assert.equal(
+          row.includes("measured"),
+          counters.length === 0 && (name === "bash" || elapsedMs >= 10_000),
+        );
+      }
+    }
+  }
+  const row = renderCompactToolCall(
+    {
+      name: "read",
+      phase: "settled",
+      duration: "10.0s",
+      elapsedMs: 9_999,
+      summary: { subject: "target", outcome: "success" },
+    },
+    theme,
+    200,
+  )[0]!;
+  assert.ok(!row.includes("10.0s"));
+});
+
 test("compact subjects are single-line, inert and width bounded without losing tool identity", () => {
   for (const width of [1, 4, 16, 40, 100]) {
     const rows = renderCompactToolCall(
@@ -52,7 +88,8 @@ test("long subjects retain both ends before duration or detail discovery", () =>
   assert.equal(rows.length, 1);
   assert.match(rows[0]!, /command/u);
   assert.match(rows[0]!, /target\.ts/u);
-  assert.match(rows[0]!, /\+12 · -3/u);
+  assert.match(rows[0]!, /\+12/u);
+  assert.doesNotMatch(rows[0]!, /-3/u);
   assert.doesNotMatch(rows[0]!, /2\.5s|expand/u);
   assert.ok(visibleWidth(rows[0]!) <= 80);
 });
@@ -91,15 +128,12 @@ test("optional lanes use only slack after a complete subject and admitted counte
   );
   assert.equal(
     allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], exact + 7),
-    `${base} · meta`,
+    base,
   );
-  assert.equal(
-    allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], 100),
-    `${base} · meta · 1s · hint`,
-  );
+  assert.equal(allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], 100), base);
   assert.equal(
     allocateCompactHeader("read", "", ["oversized-counter", "+1", "-2"], [], 22),
-    "read · +1 · -2",
+    "read",
   );
 });
 

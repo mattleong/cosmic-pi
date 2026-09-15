@@ -108,6 +108,49 @@ function noticeText(value: CompactSummary | undefined): string {
 
 const tools: BuiltinCompactTool[] = ["read", "bash", "write", "edit", "grep", "find", "ls"];
 
+test("builtin subjects use render cwd and never overflow requested read ranges", () => {
+  expect(summary("read", { path: "/project/src/a.ts", offset: 2, limit: 3 })?.subject).toBe(
+    "src/a.ts:2-4",
+  );
+  const overflow = summary("read", {
+    path: "/project/src/a.ts",
+    offset: Number.MAX_SAFE_INTEGER,
+    limit: 2,
+  });
+  expect(overflow?.subject).toBe(`src/a.ts:${Number.MAX_SAFE_INTEGER}`);
+  expect(summary("find", { path: "/project/src", pattern: "*.ts" })?.subject).toContain("src");
+});
+
+test("write replay needs actual submitted content before describing changes", () => {
+  const details = { codePreviewBeforeWrite: { kind: "content", content: "keep\n" } };
+  for (const content of [undefined, null, 42]) {
+    expect(
+      createBuiltinCompactSummary("write", {
+        phase: "settled",
+        args: { path: "x", content },
+        result: result("applied", details),
+        context: {
+          args: { path: "x", content },
+          state: {},
+          toolCallId: "malformed-write",
+          cwd: "/project",
+          invalidate: () => undefined,
+          lastComponent: undefined,
+          argsComplete: false,
+          executionStarted: false,
+          expanded: false,
+          isPartial: false,
+          isError: false,
+          showImages: true,
+        },
+      }),
+    ).toBeUndefined();
+  }
+  expect(
+    summary("write", { path: "x", content: "" }, result("applied", details))?.counters,
+  ).toEqual(["+0/-1 lines"]);
+});
+
 describe("builtin compact lifecycle", () => {
   test.each(tools)(
     "%s does not mistake pending arguments or running output for success",

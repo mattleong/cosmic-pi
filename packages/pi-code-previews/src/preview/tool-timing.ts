@@ -29,6 +29,7 @@ export type TimingState = RendererState & {
 type ToolCallTiming = {
   label: string;
   duration: string;
+  elapsedMs: number;
 };
 
 export function renderTimedResultFooter<TContext extends ToolTimingRenderContext>(
@@ -90,8 +91,9 @@ export function updateToolCallTiming<TContext extends ToolTimingUpdateContext>(
   const running = context.isPartial === true;
   const endTime = running ? synchronousNow() : (state.codePreviewTimingEndedAt ?? synchronousNow());
   const label = running ? "Elapsed" : "Took";
-  const duration = formatToolCallDuration(endTime - startedAt);
-  return { label: `${label} ${duration}`, duration };
+  const elapsedMs = Math.max(0, endTime - startedAt);
+  const duration = formatToolCallDuration(elapsedMs);
+  return { label: `${label} ${duration}`, duration, elapsedMs };
 }
 
 export function timingState(context: { state: unknown }): TimingState {

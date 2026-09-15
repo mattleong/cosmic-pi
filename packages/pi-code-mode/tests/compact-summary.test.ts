@@ -50,7 +50,8 @@ describe("Code Mode compact outcomes", () => {
     }
     const final = summarize({ ...callEntryDetails(calls), outputKind: "text" });
     expect(final?.subject).toBe("Inspect the project");
-    expect(final?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual(["3/3"]);
+    expect(final?.counters).toHaveLength(1);
+    expect(final?.counters?.join(" ")).toMatch(/3 calls/);
     expect(final?.outcome).toBe("success");
   });
 

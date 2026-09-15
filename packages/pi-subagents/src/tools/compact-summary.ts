@@ -12,40 +12,10 @@ import { compactRunNotices } from "./compact-run-notices.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 
-function cardMetadata(cards: readonly SubagentRunCard[], subject: string): string[] {
-  const metadata: string[] = [];
-  if (cards.length === 1) {
-    const card = cards[0]!;
-    if (card.id !== subject) metadata.push(card.id);
-    if (card.name !== card.id && card.name !== subject) metadata.push(card.name);
-  }
-  return metadata.concat(cardWriterMetadata(cards));
-}
-
 function cardCounters(cards: readonly SubagentRunCard[]): string[] {
   const counts = new Map<string, number>();
   for (const card of cards) counts.set(card.state, (counts.get(card.state) ?? 0) + 1);
-  return [...counts].map(([state, count]) => `${count} ${state}`);
-}
-
-function cardWriterMetadata(cards: readonly SubagentRunCard[]): string[] {
-  const metadata: string[] = [];
-  if (cards.length === 1) {
-    const card = cards[0]!;
-    if (card.writeIntent === "writer") metadata.push(card.writerWorkspaceMode ?? "writer");
-    const claimCount = card.writeClaimCount ?? card.writeClaims?.length;
-    if (claimCount !== undefined) metadata.push(`${claimCount} file claims`);
-    else if (card.writeIntent === "writer")
-      metadata.push(card.writeClaimsOmitted ? "claims omitted" : "exclusive writer");
-  }
-  if (cards.length > 1) {
-    for (const card of cards.filter((card) => card.writeIntent === "writer")) {
-      metadata.push(
-        `${card.id}: ${card.writerWorkspaceMode ?? "writer"}, ${card.writeClaimCount ?? card.writeClaims?.length ?? "unprojected"} file claims`,
-      );
-    }
-  }
-  return metadata;
+  return [[...counts].map(([state, count]) => `${count} ${state}`).join(", ")].filter(Boolean);
 }
 
 interface SummaryArguments {
@@ -55,12 +25,7 @@ interface SummaryArguments {
   workspaceId?: unknown;
   agents?: unknown;
   profile?: unknown;
-}
-
-function argumentMetadata(input: SummaryArguments): string[] {
-  const metadata: string[] = [];
-  if (Predicate.isString(input.profile)) metadata.push(input.profile);
-  return metadata;
+  paths?: unknown;
 }
 
 function requestedRunIds(input: SummaryArguments): string[] | undefined {
@@ -69,13 +34,34 @@ function requestedRunIds(input: SummaryArguments): string[] | undefined {
     : undefined;
 }
 
+function startSubject(input: SummaryArguments): string {
+  if (!Array.isArray(input.agents) || input.agents.length !== 1) return "";
+  const agent: unknown = input.agents[0];
+  if (!Predicate.isObject(agent)) return "";
+  if ("name" in agent && Predicate.isString(agent.name)) return agent.name;
+  return "profile" in agent && Predicate.isString(agent.profile) ? agent.profile : "";
+}
+
+function claimCounters(
+  details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
+): string[] | undefined {
+  const counts = details.cards.map((card) => card.writeClaimCount ?? card.writeClaims?.length);
+  if (!counts.length || !counts.every((count) => count !== undefined)) return undefined;
+  const count = `${counts.reduce((sum, count) => sum + count, 0)} files`;
+  return [
+    details.runCount > details.cards.length
+      ? `${details.cards.length}/${details.runCount} shown, ${count}`
+      : count,
+  ];
+}
+
 function argumentSummary(
   input: SummaryArguments,
   action: string,
   operation: string,
 ): CompactSummary {
   const ids = requestedRunIds(input);
-  const subject =
+  let subject =
     action === "workspace" && Predicate.isString(input.workspaceId)
       ? input.workspaceId
       : Predicate.isString(input.runId)
@@ -83,12 +69,17 @@ function argumentSummary(
         : ids?.length === 1
           ? ids[0]!
           : "";
-  const counters = Array.isArray(input.agents)
-    ? [`${input.agents.length} requested`]
-    : ids && ids.length > 1
-      ? [`${ids.length} targets`]
-      : [];
-  const summary: CompactSummary = { subject, counters, metadata: argumentMetadata(input) };
+  if (action === "start") subject = startSubject(input);
+  if (action === "models" && Predicate.isString(input.profile)) subject = input.profile;
+  const counters =
+    action === "claims" && Array.isArray(input.paths)
+      ? [`${input.paths.length} files requested`]
+      : Array.isArray(input.agents)
+        ? [`${input.agents.length} requested`]
+        : ids && ids.length > 1
+          ? [`${ids.length} targets`]
+          : [];
+  const summary: CompactSummary = { subject, counters, metadata: [] };
   if (operation !== action) summary.action = operation;
   return summary;
 }
@@ -101,11 +92,29 @@ function projectedSubject(
   targets?: readonly string[],
 ): string {
   if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
-  if (targets?.length === 1) return targets[0]!;
+  const requested =
+    targets ?? (Predicate.isString(input.runId) ? [input.runId] : requestedRunIds(input));
+  if (requested?.length === 1 && "cards" in details)
+    return details.cards.find((card) => card.id === requested[0])?.name ?? requested[0]!;
   if (subject || phase !== "settled" || requestedRunIds(input)?.length) return subject;
   if ((details.action === "list" || details.action === "status") && details.cards.length === 1)
-    return details.cards[0]!.id;
+    return details.cards[0]!.name;
   return subject;
+}
+
+function applyArgumentLanes(
+  summary: CompactSummary,
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+  phase: Phase,
+  lanes: CompactSummary,
+): void {
+  if (details.action === "claims")
+    summary.counters = claimCounters(details) ?? summary.counters ?? [];
+  if (lanes.action) summary.action = lanes.action;
+  if (phase !== "settled" && details.action !== "start" && details.action !== "await") {
+    summary.metadata = [];
+    summary.counters = lanes.counters ?? [];
+  }
 }
 
 /** Decoded domain summaries own collapsed attention; original evidence stays on expansion. */
@@ -115,6 +124,7 @@ export function createSubagentCompactSummary(
   return ({ phase, args, result, context }) => {
     if (context.isError) return undefined;
     const action = toolName.replace(/^subagent_/, "");
+    if (!Predicate.isObject(args)) return undefined;
     // SAFETY: Pi owns partial arguments; display fields are narrowed before use.
     const input = args as SummaryArguments;
     const operation = Predicate.isString(input.action) ? input.action : action;
@@ -127,7 +137,7 @@ export function createSubagentCompactSummary(
       return undefined;
     const requestedTargets = requestedRunIds(input);
     const targets =
-      details.action === "await" ? (details.awaitedRunIds ?? requestedTargets) : undefined;
+      details.action === "await" ? (requestedTargets ?? details.awaitedRunIds) : undefined;
     if (details.action === "await" && !targets?.length) return undefined;
     const summary = summarizeDetails(
       details,
@@ -135,11 +145,7 @@ export function createSubagentCompactSummary(
       projectedSubject(details, input, phase, lanes.subject, targets),
       targets,
     );
-    if (lanes.action) summary.action = lanes.action;
-    if (phase !== "settled" && details.action !== "start" && details.action !== "await") {
-      summary.metadata = argumentMetadata(input);
-      summary.counters = lanes.counters ?? [];
-    }
+    applyArgumentLanes(summary, details, phase, lanes);
     return summary;
   };
 }
@@ -194,21 +200,16 @@ function awaitNotices(
   notices: Notices,
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
-  phase: Phase,
+  _phase: Phase,
 ): void {
   const add = appendNotice(notices);
   const finished = cards.filter((card) =>
     ["reported", "completed", "failed", "stopped"].includes(card.state),
   ).length;
-  const settledMetadata = phase === "settled" ? cardMetadata(cards, summary.subject) : [];
+  const settledMetadata: string[] = [];
   summary.expandedResultOwnsCall = true;
   summary.counters = [`${finished}/${targets.length} finished`];
   summary.metadata = settledMetadata;
-  if (phase === "settled" && details.cards.length > cards.length)
-    summary.metadata = [
-      ...summary.metadata,
-      `${details.cards.length - cards.length} descendants in context`,
-    ];
   if (cards.length < targets.length) {
     add(
       "Some requested targets have no projected state; inspect subagent_status before acting.",
@@ -255,8 +256,7 @@ function runNotices(
   const add = appendNotice(notices);
   if (details.runCount > details.cards.length) {
     summary.counters = [
-      `${details.cards.length}/${details.runCount} shown`,
-      ...cardCounters(cards),
+      `${details.cards.length}/${details.runCount} shown, ${cardCounters(cards).join(", ")}`,
     ];
     add(
       "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
@@ -271,30 +271,17 @@ function runNotices(
   }
 }
 
-function appendReportMetadata(
-  summary: CompactSummary,
-  cards: readonly SubagentRunCard[],
-  details: { contentOmitted?: true; reportsOnlyOmitted?: true },
-): void {
-  const metadata = [...(summary.metadata ?? [])];
-  const reports = cards.filter((card) => card.finalText).length;
-  if (reports) metadata.push(`${reports} ${reports === 1 ? "report" : "reports"}`);
-  if (details.contentOmitted && details.reportsOnlyOmitted)
-    metadata.push("reports via subagent_status");
-  summary.metadata = metadata;
-}
-
 function summarizeModels(
   details: Extract<CompactSubagentToolDetails, { action: "models" }>,
   summary: CompactSummary,
   notices: Notices,
 ): CompactSummary {
   const add = appendNotice(notices);
-  let eligible = 0;
+
   let disabled = 0;
   let unavailable = 0;
   let eligibleOptions = 0;
-  let unavailableOptions = 0;
+
   for (const profile of details.profiles) {
     const invalid = profile.source === "global-invalid" || profile.source === "project-invalid";
     // Invalid configuration cannot establish eligibility, even if a historical card says so.
@@ -302,7 +289,7 @@ function summarizeModels(
       ? 0
       : profile.candidates.filter((candidate) => candidate.status === "eligible").length;
     eligibleOptions += options;
-    if (!invalid) unavailableOptions += profile.candidates.length - options;
+
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
       add(
@@ -310,15 +297,13 @@ function summarizeModels(
         "warning",
       );
     } else if (profile.candidates.length === 0) disabled++;
-    else eligible++;
   }
-  const counters = [`${eligibleOptions} eligible options`];
-  if (eligible) counters.push(`${eligible} eligible profiles`);
-  if (unavailableOptions) counters.push(`${unavailableOptions} skipped alternatives`);
+  const counters = [`${eligibleOptions} statically eligible`];
+
   if (disabled) counters.push(`${disabled} disabled profiles`);
   if (unavailable) counters.push(`${unavailable} unavailable profiles`);
-  summary.counters = counters;
-  summary.metadata = ["static eligibility only"];
+  summary.counters = [counters.join(", ")];
+  summary.metadata = [];
   if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
     summary.outcome = "warning";
   return summary;
@@ -332,13 +317,8 @@ function appendRunHistory(
   reportsOnlyOmitted: boolean,
 ): void {
   const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
-  const { notices: cardNotices, skipped } = compactRunNotices(
-    cards,
-    reportsOnlyOmitted,
-    quietHistory,
-  );
+  const { notices: cardNotices } = compactRunNotices(cards, reportsOnlyOmitted, quietHistory);
   notices.push(...cardNotices);
-  if (skipped) summary.metadata = [...(summary.metadata ?? []), `${skipped} skipped alternatives`];
 }
 
 function summarizeDetails(
@@ -361,7 +341,7 @@ function summarizeDetails(
   }
   if (details.action === "models") return summarizeModels(details, summary, notices);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
-  summary.metadata = cardMetadata(cards, summary.subject);
+  summary.metadata = [];
   summary.counters = cardCounters(cards);
   if (summary.outcome === "success") {
     if (cards.some((card) => card.state === "stopping")) summary.outcome = "uncertain";
@@ -380,7 +360,6 @@ function summarizeDetails(
   if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!, phase);
   else runNotices(details, summary, notices, cards);
   appendRunHistory(summary, notices, cards, phase, details.reportsOnlyOmitted === true);
-  if (phase === "settled") appendReportMetadata(summary, cards, details);
   if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
   else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
     summary.outcome = "warning";

@@ -31,6 +31,7 @@ Only runtime source plus its README, legal, and provenance documents ship.
   changing model-visible text. `compact-summary.ts` opts only the outer tool into the shared
   compact shell. It requires consistent current details and explicit execution success evidence,
   retains failure recovery text, and warns on handled nested failures or output truncation.
+  It pairs intent with one exact call count after settlement or a done/total count while running.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
   Nested MCP and Background Tasks payload outcomes are not part of the retained activity

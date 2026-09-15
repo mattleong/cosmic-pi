@@ -77,6 +77,73 @@ describe("questionnaire compact outcome projection", () => {
     }
   });
 
+  it("retains request titles at settlement without disclosing answers or delivery IDs", () => {
+    for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
+      const details = provider === askUserCompactSummary ? submitted : row();
+      const before = structuredClone(details);
+      const summary = provider({
+        phase: "settled",
+        args: { questions: [{ key: "library", title: "Library" }] },
+        result: { content: [], details },
+        // SAFETY: These providers only read isError from the renderer context.
+        context: { isError: false } as Parameters<CompactSummaryProvider>[0]["context"],
+      });
+      expect(summary?.subject).toBe("Library");
+      expect(summary?.counters).toHaveLength(1);
+      expect(JSON.stringify(summary)).not.toMatch(/Keep the current library|No upgrade|delivery-1/);
+      expect(details).toEqual(before);
+    }
+  });
+
+  it("shows only one short selected label verified against the matching question", () => {
+    const question = {
+      key: "style",
+      title: "Preview style",
+      choices: [{ label: "Compact" }, { label: "Full" }],
+    };
+    const answer = { key: "style", kind: "choices", labels: ["Compact"], note: "PRIVATE NOTE" };
+    for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
+      for (const sample of [
+        { questions: [question], answers: [answer], selected: true },
+        { questions: [{ title: question.title }], answers: [answer] },
+        { questions: [question], answers: [{ ...answer, key: "other" }] },
+        { questions: [question], answers: [{ ...answer, labels: ["Unverified"] }] },
+        { questions: [question], answers: [{ ...answer, labels: ["Compact", "Full"] }] },
+        { questions: [question, { ...question, key: "other" }], answers: [answer] },
+        {
+          questions: [question],
+          answers: [{ key: "style", kind: "custom", text: "PRIVATE CUSTOM" }],
+        },
+        {
+          questions: [{ ...question, choices: [{ label: "L".repeat(41) }] }],
+          answers: [{ ...answer, labels: ["L".repeat(41)] }],
+        },
+      ]) {
+        const outcome = { outcome: "submitted", answers: sample.answers };
+        const details = provider === askUserCompactSummary ? outcome : row({ outcome });
+        const before = structuredClone(details);
+        const summary = provider({
+          phase: "settled",
+          args: { questions: sample.questions },
+          result: { content: [], details },
+          // SAFETY: These providers only read isError from the renderer context.
+          context: { isError: false } as Parameters<CompactSummaryProvider>[0]["context"],
+        });
+        expect(summary?.outcome).toBe("success");
+        expect(summary?.subject).toContain(question.title);
+        if (sample.selected) {
+          expect(summary?.subject).toContain("Compact");
+          expect(summary?.counters ?? []).toHaveLength(0);
+        } else {
+          expect(summary?.counters).toHaveLength(1);
+          expect(summary?.subject).not.toMatch(/Compact|Unverified|LLLL/);
+        }
+        expect(JSON.stringify(summary)).not.toMatch(/PRIVATE/);
+        expect(details).toEqual(before);
+      }
+    }
+  });
+
   it("never interprets cancellation as approval or replaces the original cancelled detail", () => {
     for (const summary of [
       summarize(askUserCompactSummary, cancelled),

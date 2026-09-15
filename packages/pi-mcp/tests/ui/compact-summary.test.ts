@@ -48,6 +48,29 @@ describe("MCP compact summaries", () => {
       expect(summary?.notices).toBeUndefined();
     }
   });
+  it("identifies tool searches by their bounded query without invoking getters", () => {
+    for (const server of [undefined, "catalog"]) {
+      const args = {
+        action: "tools.search",
+        query: "Find project files",
+        ...(server && { server }),
+      };
+      const summary = summarize(reply(), "pending", false, args);
+      expect(summary?.subject).toContain(args.query);
+      if (server) expect(summary?.subject).toContain(server);
+    }
+    const args = Object.defineProperty({ action: "tools.search", server: "catalog" }, "query", {
+      get() {
+        throw new Error("must not read query getter");
+      },
+    });
+    expect(summarize(reply(), "pending", false, args)?.subject).toBe("catalog");
+    expect(
+      summarize(reply(), "pending", false, { action: "tools.search", query: "x".repeat(1025) })
+        ?.subject,
+    ).toBe("");
+  });
+
   it("uses domain counts and retains pagination and discovery limitations", () => {
     const summary = summarize(
       reply({
@@ -61,19 +84,19 @@ describe("MCP compact summaries", () => {
     expect(summary?.counters?.join(" ")).toMatch(/1 of 3/);
     expect(summary?.action).toBe("tools.list");
     expect(summary?.subject).toBe("catalog");
-    expect(summary?.counters).not.toContain("more metadata available");
-    expect(summary?.metadata).toContain("more metadata available");
+    expect(summary?.counters).toHaveLength(1);
+    expect(summary?.counters?.join(" ")).toContain("more available");
     expect(
       summary?.notices?.find((notice) => notice.text.startsWith("Discovery is incomplete"))
         ?.expandedInResult,
     ).toBeUndefined();
     expect(summary?.notices?.some((notice) => notice.kind === "recovery")).toBe(true);
   });
-  it("moves only clean retained-result availability into metadata without changing results", () => {
+  it("omits routine retained IDs without changing result access", () => {
     const details = reply({ result: { tools: [] } }, { resultId: "retained-1" });
     const before = structuredClone(details);
     const summary = summarize(details);
-    expect(summary?.metadata).toContain("retained retained-1");
+    expect(JSON.stringify(summary)).not.toContain("retained-1");
     expect(summary?.notices).toEqual([]);
     expect(summary?.outcome).toBe("success");
     expect(details).toEqual(before);
@@ -93,9 +116,9 @@ describe("MCP compact summaries", () => {
       text: "/mcp result retained-1",
       expandedInResult: true,
     });
-    expect(summary?.metadata).not.toContain("retained retained-1");
+    expect(summary?.metadata ?? []).not.toContain("retained retained-1");
   });
-  it("keeps valid discovery pagination quiet with retained recovery in metadata", () => {
+  it("keeps valid discovery pagination in one bounded detail", () => {
     const details = reply(
       { result: { page: { items: [], total: 1, nextCursor: "next" } } },
       { resultId: "retained-1" },
@@ -103,7 +126,9 @@ describe("MCP compact summaries", () => {
     const before = structuredClone(details);
     const summary = summarize(details);
     expect(summary?.notices).toEqual([]);
-    expect(summary?.metadata).toEqual(["more metadata available", "retained retained-1"]);
+    expect(summary?.counters).toHaveLength(1);
+    expect(summary?.counters?.join(" ")).toMatch(/0 of 1.*more available/);
+    expect(JSON.stringify(summary)).not.toContain("retained-1");
     expect(summary?.outcome).toBe("success");
     expect(details).toEqual(before);
   });
@@ -118,7 +143,7 @@ describe("MCP compact summaries", () => {
       { action: "result.read", id: "retained-1" },
     );
     expect(summary?.subject).toContain("retained-1");
-    expect(summary?.metadata?.join(" ")).not.toContain("retained-1");
+    expect(summary?.metadata?.join(" ") ?? "").not.toContain("retained-1");
     expect(summary?.notices).toEqual([]);
   });
   it("preserves remote notices even when they appear routine", () => {

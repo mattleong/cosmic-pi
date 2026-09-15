@@ -1,5 +1,6 @@
 import type { CompactNotice, CompactSummaryProvider } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
 
 // The existing card decoder defaults a missing origin error flag to false.
@@ -19,6 +20,23 @@ const explicitOriginSuccess = <Value>(value: Value): boolean => {
   }
 };
 
+const searchQuery = <Args>(args: Args): string | undefined => {
+  try {
+    if (!Predicate.isObjectOrArray(args)) return undefined;
+    const field = Object.getOwnPropertyDescriptor(args, "query");
+    if (
+      !field ||
+      !("value" in field) ||
+      !Predicate.isString(field.value) ||
+      field.value.length > 1024
+    )
+      return undefined;
+    return sanitizeTerminalLine(field.value).trim().slice(0, 160) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /** Display-only opt-in. Failures keep the existing renderer, including remote recovery details. */
 export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
   phase,
@@ -27,8 +45,11 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
   context,
 }) => {
   const call = mcpCallSummary(args);
-  const subject = call.target;
   const action = call.action;
+  const subject =
+    action === "tools.search"
+      ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
+      : call.target;
   if (phase !== "settled") return context.isError ? undefined : { action, subject };
 
   const card = decodeMcpCardDetails(result);
@@ -45,13 +66,15 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
   )
     return undefined;
 
-  const metadata = [...card.metadata];
-  const counters = [...card.counters];
-  if (card.attachmentCount)
-    counters.push(
-      `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`,
-    );
-  if (card.imageCount) counters.push(`${card.imageCount} native images`);
+  const count = card.page
+    ? `${card.page.returned}${card.page.total === undefined ? "" : ` of ${card.page.total}`} entries${card.page.hasMore ? ", more available" : ""}`
+    : (card.counters[0] ??
+      (card.attachmentCount
+        ? `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`
+        : card.imageCount
+          ? `${card.imageCount} native images`
+          : undefined));
+  const counters = count ? [count] : [];
   const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])].map(
     (text) => ({ kind: "warning", text, expandedInResult: true }),
   );
@@ -69,21 +92,18 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
         card.page.returned < card.page.total &&
         !card.page.hasMore
       );
-    if (cleanCompleteOutput) {
-      if (call.action !== "result.read" || call.target !== card.resultId)
-        metadata.push(`retained ${card.resultId}`);
-    } else notices.push({ kind: "recovery", text: card.recoveryHint, expandedInResult: true });
+    if (!cleanCompleteOutput)
+      notices.push({ kind: "recovery", text: card.recoveryHint, expandedInResult: true });
   }
   if (card.undiscoveredCount)
     notices.push({
       kind: "recovery",
-      text: "Discovery is incomplete. Select an undiscovered server for a targeted list or search.",
+      text: `Discovery is incomplete: ${card.undiscoveredCount} undiscovered servers. Select a server for a targeted list or search.`,
     });
   return {
     action,
     subject,
     counters,
-    metadata,
     outcome:
       card.warnings.length || card.notices.length || card.undiscoveredCount ? "warning" : "success",
     notices,

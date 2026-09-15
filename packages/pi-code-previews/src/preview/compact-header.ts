@@ -43,6 +43,9 @@ export function allocateCompactHeader(
   optional: readonly (string | undefined)[],
   width: number,
 ): string {
+  // Select semantically before measuring: narrow rows must not substitute lower-priority detail.
+  counters = counters.filter((value) => value.trim()).slice(0, 1);
+  optional = counters.length ? [] : optional.filter((value) => value?.trim()).slice(0, 1);
   const remaining = width - visibleWidth(identity);
   if (remaining <= 0) return truncateToWidth(identity, width, "");
   const subjectWidth = visibleWidth(subject);

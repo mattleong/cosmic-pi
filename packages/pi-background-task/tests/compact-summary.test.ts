@@ -60,6 +60,24 @@ describe("background task compact semantics", () => {
     expect(final?.subject).toBe("task-1");
   });
 
+  it("prefers a task name and uses the command only before start settles", () => {
+    for (const name of [undefined, "Build checks"]) {
+      const summary = backgroundTaskCompactSummary({
+        phase: "running",
+        args: { action: "start", command: "pnpm test", ...(name && { name }) },
+        result: undefined,
+        // SAFETY: The provider only reads isError from this render context.
+        context: { isError: false } as Input["context"],
+      });
+      expect(summary?.subject).toBe(name ?? "pnpm test");
+      expect(summary?.outcome).toBeUndefined();
+    }
+    const named = project({ action: "status", snapshot: { ...snapshot, name: "Build checks" } });
+    expect(named?.subject).toBe("Build checks");
+    expect(JSON.stringify(named)).not.toMatch(/task-1|\/tmp|logCursor/);
+    expect(project({ action: "status", snapshot: { ...snapshot, name: 42 } })).toBeUndefined();
+  });
+
   it("declines missing, malformed and unrelated details rather than inventing success", () => {
     for (const details of [
       undefined,
@@ -171,7 +189,8 @@ describe("background task compact semantics", () => {
       "wait",
     );
     expect(result?.outcome).toBe("warning");
-    expect(result?.metadata).toEqual(["timeout", "running"]);
+    expect(result?.metadata).toHaveLength(1);
+    expect(result?.metadata?.join(" ")).toMatch(/timeout.*running/);
     expect(result?.notices?.some((n) => n.text.includes("3 log bytes"))).toBe(true);
     expect(result?.notices?.some((n) => n.text.includes("does not stop"))).toBe(true);
   });
@@ -190,9 +209,30 @@ describe("background task compact semantics", () => {
       },
       "wait",
     );
-    expect(result?.metadata).toEqual(["completed", "exited", "exit 0"]);
+    expect(result?.metadata).toHaveLength(1);
+    expect(result?.metadata?.join(" ")).toMatch(/completed.*exited.*exit 0/);
     expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
   });
+  it("keeps an output match distinct from a finished process", () => {
+    const details = {
+      action: "wait",
+      wait: {
+        id: snapshot.id,
+        snapshot,
+        outcome: "matched",
+        nextCursor: 10,
+        earliestAvailableCursor: 0,
+        droppedBytes: 0,
+      },
+    };
+    const summary = project(details, "wait");
+    expect(summary?.outcome).toBe("success");
+    expect(summary?.metadata).toHaveLength(1);
+    expect(summary?.metadata?.join(" ")).toMatch(/matched.*running/);
+    expect(summary?.metadata?.join(" ")).not.toContain("exit");
+    expect(project({ ...details, wait: { ...details.wait, id: "other" } }, "wait")).toBeUndefined();
+  });
+
   it("preserves dropped output and truncation recovery without copying logs", () => {
     const result = project(
       {
@@ -304,7 +344,9 @@ describe("background task compact semantics", () => {
       "list",
     );
     expect(result?.outcome).toBe("error");
-    expect(result?.counters).toEqual(expect.arrayContaining(["2 tasks", "1 running", "1 failed"]));
+    expect(result?.counters).toHaveLength(1);
+    expect(result?.counters?.join(" ")).toContain("1 running");
+    expect(result?.counters?.join(" ")).toContain("1 failed");
     expect(
       result?.notices?.some(
         (n) => n.kind === "error" && n.text.includes("task-2") && n.text.includes("3"),
