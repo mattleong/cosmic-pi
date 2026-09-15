@@ -51,6 +51,8 @@ const cardView = (card: SubagentRunCard): SubagentRunView => {
   if (card.currentTool) view = { ...view, currentTool: card.currentTool };
   if (card.progress) view = { ...view, progress: card.progress };
   if (card.warning) view = { ...view, warning: card.warning };
+  if (card.warningSource) view = { ...view, warningSource: card.warningSource };
+  if (card.systemWarning) view = { ...view, systemWarning: card.systemWarning };
   if (card.question)
     view = {
       ...view,

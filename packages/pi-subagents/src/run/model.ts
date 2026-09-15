@@ -171,6 +171,8 @@ export interface SubagentRunView {
   readonly currentTool?: string | undefined;
   readonly progress?: string | undefined;
   readonly warning?: string | undefined;
+  readonly warningSource?: "child" | "system" | undefined;
+  readonly systemWarning?: string | undefined;
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;

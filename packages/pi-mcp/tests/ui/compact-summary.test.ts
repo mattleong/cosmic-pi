@@ -102,21 +102,51 @@ describe("MCP compact summaries", () => {
     expect(details).toEqual(before);
     expect(decodeMcpCardDetails({ details }).recoveryHint).toBe("/mcp result retained-1");
   });
-  it.each([
-    { truncated: true },
-    { omitted: true },
-    { result: { undiscovered: ["other"] } },
-    { result: { page: { items: [], total: 1 } } },
-    { result: { content: Array.from({ length: 129 }, () => ({ type: "text", text: "x" })) } },
-    { origin: { outcome: "completed", isError: false, outputValidation: "unavailable" } },
-  ])("keeps full retained-output guidance for incomplete or limited output: %j", (data) => {
-    const summary = summarize(reply(data, { resultId: "retained-1" }));
-    expect(summary?.notices).toContainEqual({
-      kind: "recovery",
-      text: "/mcp result retained-1",
-      expandedInResult: true,
-    });
-    expect(summary?.metadata ?? []).not.toContain("retained retained-1");
+  it("does not treat display limits as output loss", () => {
+    const details = reply(
+      { result: { content: Array.from({ length: 129 }, () => ({ type: "text", text: "x" })) } },
+      { resultId: "retained-1" },
+    );
+    const before = structuredClone(details);
+    expect(decodeMcpCardDetails({ details }).displayCuts.length).toBeGreaterThan(0);
+    expect(summarize(details)?.outcome).toBe("success");
+    expect(summarize(details)?.notices).toEqual([]);
+    expect(details).toEqual(before);
+  });
+  it.each([{ truncated: true }, { omitted: true }])(
+    "keeps actual output loss visible without repeating retained IDs: %j",
+    (data) => {
+      const details = reply(data, { resultId: "retained-1" });
+      const summary = summarize(details);
+      expect(summary?.outcome).toBe("warning");
+      expect(summary?.notices?.some((notice) => notice.kind === "warning")).toBe(true);
+      expect(JSON.stringify(summary)).not.toContain("retained-1");
+      expect(decodeMcpCardDetails({ details }).resultId).toBe("retained-1");
+    },
+  );
+  it("keeps routine stale-cache notices in details, not collapsed attention", () => {
+    const stale = "MCP catalog cached metadata is not fresh; invocation requires current metadata.";
+    for (const action of ["tools.list", "tools.search"]) {
+      const details = reply({}, { action, notices: [stale] });
+      expect(summarize(details)?.outcome).toBe("success");
+      expect(summarize(details)?.notices).toEqual([]);
+      expect(decodeMcpCardDetails({ details }).notices).toContain(stale);
+    }
+    for (const details of [
+      reply(
+        {},
+        {
+          notices: [
+            "MCP catalog metadata refresh failed; previous metadata is a stale inspection-only view.",
+          ],
+        },
+      ),
+      reply({}, { action: "tools.call", notices: [stale] }),
+      reply({}, { notices: [`${stale} Approval required.`] }),
+    ]) {
+      expect(summarize(details)?.outcome).toBe("warning");
+      expect(summarize(details)?.notices?.length).toBeGreaterThan(0);
+    }
   });
   it("keeps valid discovery pagination in one bounded detail", () => {
     const details = reply(
@@ -131,6 +161,17 @@ describe("MCP compact summaries", () => {
     expect(JSON.stringify(summary)).not.toContain("retained-1");
     expect(summary?.outcome).toBe("success");
     expect(details).toEqual(before);
+  });
+  it("does not mistake a final page for missing output", () => {
+    // total describes the whole catalog, not the remaining page.
+    const summary = summarize(
+      reply({ result: { page: { items: [{ name: "last" }], total: 3 } } }),
+      "settled",
+      false,
+      { action: "tools.list", server: "catalog", cursor: "last-page" },
+    );
+    expect(summary?.outcome).toBe("success");
+    expect(summary?.notices).toEqual([]);
   });
   it("does not repeat the retained ID when it already identifies the requested read", () => {
     const summary = summarize(
@@ -153,11 +194,7 @@ describe("MCP compact summaries", () => {
       text: "Remote notice",
       expandedInResult: true,
     });
-    expect(summary?.notices).toContainEqual({
-      kind: "recovery",
-      text: "/mcp result retained-1",
-      expandedInResult: true,
-    });
+    expect(JSON.stringify(summary)).not.toContain("retained-1");
   });
   it("requires explicit success and never clears a Pi error", () => {
     expect(summarize(reply())?.outcome).toBe("success");
@@ -210,7 +247,7 @@ describe("MCP compact summaries", () => {
       )?.outcome,
     ).toBe("success");
   });
-  it("preserves every decoded warning, notice and retained-output recovery hint", () => {
+  it("preserves safety warnings while leaving retained-output access in details", () => {
     const details = reply(
       {
         truncated: true,
@@ -226,8 +263,9 @@ describe("MCP compact summaries", () => {
     const card = decodeMcpCardDetails({ details });
     expect(summary?.outcome).toBe("warning");
     const notices = summary?.notices?.map((notice) => notice.text);
-    for (const text of [...card.warnings, ...card.notices, card.recoveryHint])
-      expect(notices).toContain(text);
+    for (const text of [...card.warnings, ...card.notices]) expect(notices).toContain(text);
+    expect(card.resultId).toBe("retained-1");
+    expect(notices).not.toContain(card.recoveryHint);
     expect(summary?.failure).toBeUndefined();
   });
   it("does not invoke hostile historical getters", () => {

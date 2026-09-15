@@ -12,7 +12,7 @@ import {
 } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
-import { setRunWarning } from "./warnings.ts";
+import { projectRunWarning, setRunWarning } from "./warnings.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 
 const mapWriterLeaseConflict = (error: WriterLeaseConflictError): SubagentWriterConflictError =>
@@ -298,7 +298,7 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
               record.view.state === "failed" && (record.view.remainingCandidateCount ?? 0) > 0
                 ? true
                 : record.view.retryBlocked,
-            warning,
+            ...projectRunWarning(record.warningSlots, "system"),
             writeAdmissionPaused: record.writerPool ? true : record.view.writeAdmissionPaused,
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,

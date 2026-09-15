@@ -6,7 +6,7 @@ import type { SubagentRunView } from "./model.ts";
 import type { AssignmentActivationReplay } from "./settlement.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
-import { setRunWarning } from "./warnings.ts";
+import { projectRunWarning, setRunWarning } from "./warnings.ts";
 
 export interface RunAssignmentDependencies {
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -111,7 +111,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
           record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
           record.view = {
             ...record.view,
-            warning: diagnostic,
+            ...projectRunWarning(record.warningSlots, "system"),
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
               "warning",

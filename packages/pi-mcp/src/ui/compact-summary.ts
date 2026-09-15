@@ -37,6 +37,12 @@ const searchQuery = <Args>(args: Args): string | undefined => {
   }
 };
 
+// Only the gateway's fixed stale-cache notice is routine. Failed refreshes and
+// arbitrary remote notices must not be classified by keywords or tone.
+const isRoutineDiscoveryNotice = (action: string, text: string): boolean =>
+  (action === "tools.list" || action === "tools.search") &&
+  /^MCP \S+ cached metadata is not fresh; invocation requires current metadata\.$/.test(text);
+
 /** Display-only opt-in. Failures keep the existing renderer, including remote recovery details. */
 export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
   phase,
@@ -75,26 +81,9 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
           ? `${card.imageCount} native images`
           : undefined));
   const counters = count ? [count] : [];
-  const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])].map(
-    (text) => ({ kind: "warning", text, expandedInResult: true }),
-  );
-  if (card.recoveryHint) {
-    const cleanCompleteOutput =
-      card.resultId !== undefined &&
-      !card.diagnostic &&
-      !notices.length &&
-      !card.truncated &&
-      !card.displayCuts.length &&
-      !card.attachmentsLimited &&
-      !card.undiscoveredCount &&
-      !(
-        card.page?.total !== undefined &&
-        card.page.returned < card.page.total &&
-        !card.page.hasMore
-      );
-    if (!cleanCompleteOutput)
-      notices.push({ kind: "recovery", text: card.recoveryHint, expandedInResult: true });
-  }
+  const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])]
+    .filter((text) => !isRoutineDiscoveryNotice(card.action, text))
+    .map((text) => ({ kind: "warning", text, expandedInResult: true }));
   if (card.undiscoveredCount)
     notices.push({
       kind: "recovery",
@@ -104,8 +93,7 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
     action,
     subject,
     counters,
-    outcome:
-      card.warnings.length || card.notices.length || card.undiscoveredCount ? "warning" : "success",
+    outcome: notices.length ? "warning" : "success",
     notices,
   };
 };

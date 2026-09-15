@@ -30,7 +30,7 @@ import {
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "./state.ts";
-import { setRunWarning } from "./warnings.ts";
+import { projectRunWarning, setRunWarning } from "./warnings.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
@@ -120,7 +120,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           record.warningSlots = setRunWarning(record.warningSlots, "child", message);
           return {
             ...current,
-            warning: message,
+            ...projectRunWarning(record.warningSlots, "child"),
             lastActivityAt: now,
             sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
           };
@@ -329,7 +329,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
                 ...(writeAudit && { writeAudit }),
                 ...(warning
                   ? {
-                      warning,
+                      ...projectRunWarning(record.warningSlots, "system"),
                       sessionEvents: appendNoticeSessionEvent(
                         sessionEvents,
                         "warning",
@@ -394,7 +394,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
               record.warningSlots = setRunWarning(record.warningSlots, "system", message);
               return {
                 ...current,
-                warning: message,
+                ...projectRunWarning(record.warningSlots, "system"),
                 lastActivityAt: now,
                 sessionEvents: appendNoticeSessionEvent(
                   current.sessionEvents,

@@ -119,6 +119,37 @@ const expectDeeplyFrozen = <ValueInput>(value: ValueInput): void => {
 };
 
 describe("persisted subagent details version 2", () => {
+  it("projects warning provenance and bounds system evidence independently", () => {
+    for (const [density, limit] of [
+      ["full", 512],
+      ["compact", 256],
+      ["minimal", 96],
+    ] as const) {
+      const card = projectSubagentRunCard(
+        {
+          ...run(),
+          warning: "Child advisory",
+          warningSource: "child",
+          systemWarning: "\u001b[31m" + "system ".repeat(500),
+        },
+        density,
+      );
+      expect(card.warning).toBe("Child advisory");
+      expect(card.warningSource).toBe("child");
+      expect(card.systemWarning?.length).toBeLessThanOrEqual(limit);
+      expect(card.systemWarning).not.toContain("\u001b");
+      expect(card.systemWarning).toContain("system");
+    }
+    const projected = makeCompactToolDetails({
+      action: "status",
+      runs: [{ ...run(), warningSource: "child", systemWarning: "System only" }],
+    });
+    const decoded = decodeCompactToolDetails(projected);
+    expect(decoded && decoded.action !== "models" && decoded.cards[0]).toMatchObject({
+      warningSource: "child",
+      systemWarning: "System only",
+    });
+  });
   it("makes and decodes aggregate-bounded, deeply frozen private await cards", () => {
     const details = makeAwaitDetails({
       runs: Array.from({ length: 12 }, (_, index) => run(index + 1)),

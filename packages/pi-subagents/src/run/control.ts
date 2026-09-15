@@ -23,7 +23,7 @@ import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
-import { emptyRunWarningSlots, setRunWarning } from "./warnings.ts";
+import { emptyRunWarningSlots, projectRunWarning, setRunWarning } from "./warnings.ts";
 
 export interface RunControlDependencies {
   readonly ownerScope: Scope.Scope;
@@ -95,7 +95,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
           record.view = {
             ...record.view,
-            warning: diagnostic,
+            ...projectRunWarning(record.warningSlots, "system"),
             sessionEvents: appendNoticeSessionEvent(
               record.view.sessionEvents,
               "warning",
@@ -197,6 +197,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   finalText: undefined,
                   progress: undefined,
                   warning: undefined,
+                  warningSource: undefined,
+                  systemWarning: undefined,
                   error: undefined,
                   lastActivityAt: yield* Clock.currentTimeMillis,
                 };

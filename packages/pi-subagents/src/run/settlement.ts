@@ -26,7 +26,7 @@ import {
   sanitizeOutputText,
   snapshotView,
 } from "./state.ts";
-import { foldRunWarnings, setRunWarning } from "./warnings.ts";
+import { foldRunWarnings, projectRunWarning, setRunWarning } from "./warnings.ts";
 
 export interface RunSettlementDependencies {
   readonly ownerScope: Scope.Scope;
@@ -278,7 +278,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
     record.view = {
       ...record.view,
-      warning,
+      ...projectRunWarning(record.warningSlots, "system"),
       sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "warning", warning, now),
     };
     return snapshotView(record.view);

@@ -335,6 +335,8 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "cancelled-resume-request" }));
+      fake.controls[0]?.offer({ type: "extension_error", error: "Previous system warning" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warningSource === "system");
       expect((yield* service.interrupt(run.id)).state).toBe("paused");
 
       const gate = yield* Deferred.make<void>();
@@ -345,6 +347,9 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
       const resumed = yield* service.status(run.id);
+      expect(resumed.warning).toBeUndefined();
+      expect(resumed.warningSource).toBeUndefined();
+      expect(resumed.systemWarning).toBeUndefined();
       expect(resumed.sessionEvents).toContainEqual(
         expect.objectContaining({
           type: "notice",
@@ -848,6 +853,17 @@ describe("SubagentService", () => {
       expect(status.progress).toBe("Second progress");
       expect(status.warning).toContain("Extension bridge failed");
       expect(status.warning).not.toContain("secret-value");
+      expect(status.warningSource).toBe("system");
+      expect(status.systemWarning).toBe(status.warning);
+      fake.controls[0]?.offerIpc(
+        contactParentFrame("later-warning", "warning", "Later child warning"),
+      );
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Later child warning");
+      expect(yield* service.status(run.id)).toMatchObject({
+        warning: "Later child warning",
+        warningSource: "child",
+        systemWarning: status.warning,
+      });
       expect(
         status.sessionEvents.filter((event) => event.type === "notice" && event.kind === "warning"),
       ).toHaveLength(3);
@@ -877,7 +893,7 @@ describe("SubagentService", () => {
       expect(completion?.type).toBe("completed");
       if (completion?.type === "completed") {
         expect(completion.runs[0]?.warning).toContain("System warning: Extension bridge failed");
-        expect(completion.runs[0]?.warning).toContain("Child warning: Second warning");
+        expect(completion.runs[0]?.warning).toContain("Child warning: Later child warning");
         expect(completion.runs[0]?.warning).not.toContain("First warning");
         expect(completion.runs[0]?.warning).not.toContain("secret-value");
       }

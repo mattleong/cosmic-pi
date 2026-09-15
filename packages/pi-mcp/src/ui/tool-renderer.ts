@@ -70,9 +70,12 @@ export const renderMcpResult = <Result>(
     if (counts.length) lines.push(theme.fg("muted", counts.join(" · ")));
     // Safety warnings wrap rather than clip. Collapse must not conceal uncertainty.
     for (const warning of details.warnings) lines.push(toolStatusLine(theme, "warning", warning));
-    if (details.recoveryHint) lines.push(theme.fg("accent", details.recoveryHint));
+    if (details.recoveryHint && !details.resultId)
+      lines.push(theme.fg("accent", details.recoveryHint));
     lines.push(renderExpansionAffordance("Existing details", options.expanded, theme, expandHint));
     if (options.expanded) {
+      if (details.recoveryHint && details.resultId)
+        lines.push(theme.fg("accent", details.recoveryHint));
       if (details.diagnostic && !details.warnings.includes(details.diagnostic.explanation))
         lines.push(theme.fg("muted", details.diagnostic.explanation));
       if (details.origin) {

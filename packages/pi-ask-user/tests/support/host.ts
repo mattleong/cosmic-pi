@@ -39,6 +39,7 @@ type Factory = (
 // Factory execution and the onHandle mount acknowledgement stay separate.
 export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => {
   const stack: Component[] = [];
+  const widgets = new Map<string, Component>();
   const ownedHide = vi.fn();
   const guardHide = vi.fn();
   const createGuard = vi.fn();
@@ -70,6 +71,10 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
   const ui = {
     notify: vi.fn(),
     setStatus: vi.fn(),
+    setWidget: vi.fn((key: string, factory: (() => Component) | undefined) => {
+      if (factory) widgets.set(key, factory());
+      else widgets.delete(key);
+    }),
     custom: vi.fn(
       (
         factory: Factory,
@@ -110,6 +115,7 @@ export const makeTuiHost = (gate?: ReturnType<typeof makeAskUserPromptGate>) => 
     ui,
     tui,
     stack,
+    widgets,
     showOverlay,
     done,
     ownedHide,

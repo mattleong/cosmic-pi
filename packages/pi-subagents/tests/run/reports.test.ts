@@ -863,6 +863,13 @@ describe("SubagentService", () => {
       });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
+      backend.controls[0]?.offer({
+        type: "warning",
+        source: "runtime-extension",
+        message: "Original system warning",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Original system warning");
+      const previousWarning = projections.at(-1)!.runs[0]!;
       const failureGate = yield* Deferred.make<void>();
       backend.controls[0]?.gateNextStart(failureGate);
       backend.controls[0]?.failNextStart();
@@ -897,7 +904,9 @@ describe("SubagentService", () => {
         reportGeneration: 1,
         finalText: "Preserve this report.",
       });
-      expect(rolledBack.warning).toBeUndefined();
+      expect(rolledBack.warning).toBe(previousWarning.warning);
+      expect(rolledBack.warningSource).toBe(previousWarning.warningSource);
+      expect(rolledBack.systemWarning).toBe(previousWarning.systemWarning);
       expect(
         rolledBack.sessionEvents.filter(
           (event) => event.type === "notice" && event.kind === "warning",
@@ -915,6 +924,10 @@ describe("SubagentService", () => {
       backend.controls[0]?.gateNextStart(nextGate);
       const next = yield* service.send(run.id, "Next valid assignment.").pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 3);
+      const reset = yield* service.status(run.id);
+      expect(reset.warning).toBeUndefined();
+      expect(reset.warningSource).toBeUndefined();
+      expect(reset.systemWarning).toBeUndefined();
       backend.controls[0]?.offer({
         type: "supervisor_contact",
         assignmentEpoch: 2,

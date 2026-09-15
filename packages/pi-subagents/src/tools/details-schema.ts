@@ -204,6 +204,8 @@ export const SubagentRunCardSchema = Schema.Struct({
   currentTool: Schema.optionalKey(boundedString(MAX_CURRENT_TOOL_CHARS, 1)),
   progress: Schema.optionalKey(boundedString(MAX_PROGRESS_CHARS, 1)),
   warning: Schema.optionalKey(boundedString(MAX_WARNING_CHARS, 1)),
+  warningSource: Schema.optionalKey(Schema.Literals(["child", "system"])),
+  systemWarning: Schema.optionalKey(boundedString(MAX_WARNING_CHARS, 1)),
   endedAt: Schema.optionalKey(nonNegativeNumber),
   finalText: Schema.optionalKey(boundedString(MAX_FINAL_TEXT_CHARS, 1)),
   error: Schema.optionalKey(boundedString(MAX_ERROR_CHARS, 1)),

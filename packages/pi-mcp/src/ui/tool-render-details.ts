@@ -318,8 +318,6 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     data ?? details,
     own(data, "result").value !== undefined,
   );
-  if (preview.cuts.length)
-    warnings.push(`Display omitted: ${preview.cuts.join(", ")}. Use retained output if available.`);
   let projection: McpCardDetails = {
     action,
     isError: currentError,

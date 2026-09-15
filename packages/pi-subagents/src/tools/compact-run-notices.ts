@@ -20,6 +20,7 @@ export function compactRunNotices(
   cards: readonly SubagentRunCard[],
   reportsOnlyOmitted = false,
   quietHistory = false,
+  quietChildWarnings = false,
 ) {
   const notices: CompactNotice[] = [];
   let skipped = 0;
@@ -69,7 +70,7 @@ export function compactRunNotices(
         "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
       );
     }
-    evidenceNotices(card, add, reportsOnlyOmitted);
+    evidenceNotices(card, add, reportsOnlyOmitted, quietChildWarnings);
     if (
       !quietHistory ||
       !["completed", "reported"].includes(card.state) ||
@@ -83,7 +84,12 @@ export function compactRunNotices(
   return { notices, skipped };
 }
 
-function evidenceNotices(card: SubagentRunCard, add: AddNotice, reportsOnlyOmitted: boolean): void {
+function evidenceNotices(
+  card: SubagentRunCard,
+  add: AddNotice,
+  reportsOnlyOmitted: boolean,
+  quietChildWarnings: boolean,
+): void {
   if (card.error || card.state === "failed") {
     add(card.error ?? "Run failed; inspect full status.", "error");
     add(
@@ -94,8 +100,11 @@ function evidenceNotices(card: SubagentRunCard, add: AddNotice, reportsOnlyOmitt
     add("Stopping; cleanup is not yet confirmed. Inspect status before replacement or recovery.");
   if (card.state === "stopped")
     add("Stopped. Inspect full status for cleanup confirmation before replacement or recovery.");
-  for (const warning of new Set([card.warning, card.selection.warning]))
-    if (warning) add(warning, "warning");
+  const warning = quietChildWarnings
+    ? (card.systemWarning ?? (card.warningSource === "child" ? undefined : card.warning))
+    : card.warning;
+  for (const notice of new Set([warning, card.selection.warning]))
+    if (notice) add(notice, "warning");
   reportEvidenceNotices(card, add, reportsOnlyOmitted);
 }
 

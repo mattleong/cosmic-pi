@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
+import { createQuestionnaireDock } from "./host-questionnaire-dock.ts";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -33,7 +33,7 @@ export const makeAskUserTuiHost =
       Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
       Effect.flatMap(({ AskUserDialog }) =>
         Effect.suspend(() => {
-          const viewport = createScreenViewport("bottom-center");
+          const dock = createQuestionnaireDock(ctx.ui);
           const editorCommand = captureExternalEditorCommand(ctx);
           const authority = new AbortController();
           let requested: AskUserOutcome | undefined;
@@ -87,8 +87,12 @@ export const makeAskUserTuiHost =
             try {
               finish(cancelQuestionnaire());
             } finally {
-              releasePrompt?.();
-              if (bridgeToken !== undefined) bridge.clear(bridgeToken);
+              try {
+                dock.dispose();
+              } finally {
+                releasePrompt?.();
+                if (bridgeToken !== undefined) bridge.clear(bridgeToken);
+              }
             }
           };
           const cleanup = Effect.try({
@@ -129,13 +133,12 @@ export const makeAskUserTuiHost =
                     hostDone = done;
                     hostTui = tui;
                     if (authority.signal.aborted) return { render: () => [], invalidate: () => {} };
-                    viewport.attach(() => tui.terminal);
                     dialog = new AskUserDialog({
                       tui,
                       theme,
                       keybindings,
                       request,
-                      getHeight: viewport.getHeight,
+                      getHeight: dock.getHeight,
                       done: finish,
                       editExternally: (value) => editExternally(tui, value),
                       onCollapse: () => {
@@ -147,18 +150,19 @@ export const makeAskUserTuiHost =
                       bridgeToken = bridge.activate(() => {
                         if (!authority.signal.aborted) dialog?.resume();
                       });
-                    return dialog;
+                    dock.mount(tui, dialog);
+                    return dock.input;
                   },
                   {
                     overlay: true,
-                    overlayOptions: viewport.overlayOptions,
+                    overlayOptions: { anchor: "top-left", width: 1, maxHeight: 0 },
                     onHandle: (handle) => {
-                      overlay = handle;
+                      overlay = dock.handle(handle);
                       if (authority.signal.aborted || requested) {
                         finish(requested ?? cancelQuestionnaire());
                         return;
                       }
-                      dialog?.setOverlayHandle(handle);
+                      dialog?.setOverlayHandle(overlay);
                       if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
                       if (opened) Deferred.doneUnsafe(opened, Effect.void);
                     },

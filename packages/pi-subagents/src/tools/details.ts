@@ -283,12 +283,17 @@ const projectOptionalCardFields = (
   const currentTool = optionalText(run.currentTool, limits.currentTool);
   const progress = optionalText(run.progress, limits.progress);
   const warning = optionalText(run.warning, limits.warning);
+  const systemWarning = optionalText(run.systemWarning, limits.warning);
   const endedAt = run.endedAt === undefined ? undefined : nonNegative(run.endedAt);
   const question = optionalText(run.question?.message, limits.question);
   return {
     ...(currentTool !== undefined && { currentTool }),
     ...(progress !== undefined && { progress }),
     ...(warning !== undefined && { warning }),
+    ...((run.warningSource === "child" || run.warningSource === "system") && {
+      warningSource: run.warningSource,
+    }),
+    ...(systemWarning !== undefined && { systemWarning }),
     ...(endedAt !== undefined && { endedAt }),
     ...(question !== undefined && { question: { message: question } }),
   };

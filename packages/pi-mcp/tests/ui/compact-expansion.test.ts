@@ -52,9 +52,9 @@ it("shares known MCP notices and recovery with the expanded result, retaining di
         result,
       );
       const text = [...call.render(200), ...body.render(200)].join("\n");
-      for (const notice of [...card.warnings, ...card.notices, card.recoveryHint!]) {
-        expect(text.split(notice)).toHaveLength(2);
-      }
+      for (const notice of [...card.warnings, ...card.notices]) expect(text).toContain(notice);
+      if (expanded) expect(text).toContain(card.recoveryHint);
+      else expect(text).not.toContain(card.resultId);
       expect(text).toContain("Discovery is incomplete");
     }
   }

@@ -29,6 +29,40 @@ const request: AskUserRequest = {
 };
 const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
 
+it.effect(
+  "docks the questionnaire without painting over the editor and retains hidden drafts",
+  () =>
+    Effect.gen(function* () {
+      const h = hostFixture();
+      const bridge = makeAskUserDialogBridge();
+      const controller = new AbortController();
+      const pending = Effect.runPromise(makeAskUserHost(h.ctx, bridge)(request), {
+        signal: controller.signal,
+      });
+      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      h.mount!();
+      const widget = [...h.widgets.values()][0]!;
+      expect(widget.render(200).length).toBeGreaterThan(0);
+      expect(h.component!.render(200)).toEqual([]);
+      h.component!.handleInput?.("1");
+      const draft = widget.render(200);
+      h.component!.handleInput?.("b");
+      expect(widget.render(200)).toEqual([]);
+      h.tui.terminal.columns = 80;
+      h.tui.terminal.rows = 24;
+      expect(bridge.resume()).toBe(true);
+      expect(widget.render(80).length).toBeGreaterThan(0);
+      expect(widget.render(80).length).toBeLessThan(h.tui.terminal.rows);
+      h.tui.terminal.columns = 200;
+      h.tui.terminal.rows = 60;
+      expect(widget.render(200)).toEqual(draft);
+      h.component!.handleInput?.("\r");
+      expect((yield* Effect.promise(() => pending)).outcome).toBe("submitted");
+      expect(h.widgets.size).toBe(0);
+      expect(widget.render(200)).toEqual([]);
+    }),
+);
+
 it.effect("the opening handshake waits for mounting, not just the custom factory", () =>
   Effect.gen(function* () {
     const h = hostFixture();
@@ -63,6 +97,7 @@ it.effect("cancelling a hidden questionnaire preserves an unrelated overlay moun
     controller.abort();
     yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
     expect(h.stack).toEqual([foreign]);
+    expect(h.widgets.size).toBe(0);
     expect(h.done).toHaveBeenCalledOnce();
     expect(bridge.resume()).toBe(false);
   }),
@@ -84,7 +119,9 @@ it.effect(
       yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
       expect(h.done).not.toHaveBeenCalled();
       expect(h.stack).toEqual([foreign]);
+      expect(h.widgets.size).toBe(0);
       h.mount!();
+      expect(h.widgets.size).toBe(0);
       expect(h.stack).toEqual([foreign]);
       expect(h.done).toHaveBeenCalledOnce();
       expect(bridge.resume()).toBe(false);

@@ -241,6 +241,8 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                   question: undefined,
                   currentTool: undefined,
                   warning: undefined,
+                  warningSource: undefined,
+                  systemWarning: undefined,
                   endedAt: undefined,
                   error: undefined,
                   lastActivityAt: now,

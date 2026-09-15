@@ -142,9 +142,9 @@ describe("MCP card projections", () => {
     expect(projection.truncated).toBe(false);
     expect(projection.isError).toBe(false);
     expect(projection.outcome).toBe("completed");
-    for (const warning of projection.warnings)
-      expect(display(retained).replace(/\s+/g, " ")).toContain(warning);
-    expect(projection.warnings.join(" ")).toMatch(/display.*omitt/i);
+    expect(projection.warnings).toEqual([]);
+    expect(display(retained, false)).not.toContain("retained-text");
+    expect(display(retained, true)).toContain("retained-text");
     expect(projection.recoveryHint).toContain("retained-text");
     expect(JSON.stringify(retained)).toBe(before);
   });

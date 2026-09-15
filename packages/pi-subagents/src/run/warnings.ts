@@ -16,6 +16,12 @@ export const setRunWarning = (
   warning: string,
 ): RunWarningSlots => ({ ...slots, [source]: warning });
 
+export const projectRunWarning = (slots: RunWarningSlots, source: RunWarningSource) => ({
+  warning: slots[source],
+  warningSource: source,
+  systemWarning: slots.system,
+});
+
 export const foldRunWarnings = (slots: RunWarningSlots): string | undefined => {
   const child = slots.child;
   const system = slots.system;

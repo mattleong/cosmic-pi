@@ -737,6 +737,46 @@ describe("subagent compact semantic policy", () => {
       expect(notices?.filter((notice) => notice.text.includes(id))).toHaveLength(1);
   });
 
+  it("quiets only child-authored await warnings without dropping safety evidence", () => {
+    for (const phase of ["running", "settled"] as const) {
+      for (const extra of [
+        {},
+        { systemWarning: "System recovery" },
+        { warningSource: undefined },
+        { selection: { ...view().selection, warning: "Route recovery" } },
+        { error: "Execution failed" },
+      ]) {
+        const projected = makeCompactToolDetails({
+          action: "status",
+          runs: [view({ warning: "Child advisory", warningSource: "child", ...extra })],
+        });
+        if (projected.action === "models") throw new Error("Expected cards");
+        const summary = summarize(
+          "await",
+          {
+            version: 2,
+            action: "await",
+            cards: projected.cards,
+            awaitedRunIds: [projected.cards[0]!.id],
+            awaitUntil: "all_finished",
+          },
+          phase,
+        );
+        const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
+        expect(text.includes("Child advisory")).toBe("warningSource" in extra);
+        if ("systemWarning" in extra) expect(text).toContain(extra.systemWarning);
+        if ("selection" in extra) expect(text).toContain("Route recovery");
+        if ("error" in extra) expect(summary?.outcome).toBe("error");
+        for (const action of ["status", "list"] as const) {
+          const other = summarize(action, { ...projected, action }, phase);
+          expect(other?.notices?.some((notice) => notice.text.includes("Child advisory"))).toBe(
+            true,
+          );
+        }
+      }
+    }
+  });
+
   it("keeps running await counters stable while exposing new safety notices", () => {
     const snapshot = (reverse: boolean, warning?: string) => {
       const projected = makeCompactToolDetails({
