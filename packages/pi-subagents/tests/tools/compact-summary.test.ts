@@ -178,8 +178,23 @@ describe("subagent compact semantic policy", () => {
     });
     const summary = summarize("status", details);
     expect(summary?.outcome).toBe("success");
-    expect(summary?.counters).toContain("1 running");
+    expect(summary?.counters).toContain("running");
     expect(summary?.metadata?.join(" ")).not.toContain("Untrusted");
+  });
+
+  it("does not present an incomplete or different target as a single named run", () => {
+    const details = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ id: "visible", name: "Visible", state: "running" })],
+    });
+    for (const sample of [
+      { details, ids: ["visible", "missing"] },
+      { details: { ...details, runCount: 2 }, ids: ["visible"] },
+      { details, ids: ["missing"] },
+    ]) {
+      const summary = summarize("status", sample.details, "settled", { runIds: sample.ids });
+      expect(summary?.counters?.join(" ")).toContain("1 running");
+    }
   });
 
   it("summarizes stable writer claims without treating them as blocked admission", () => {
@@ -309,6 +324,39 @@ describe("subagent compact semantic policy", () => {
     ).toBeUndefined();
   });
 
+  it.each(["send", "reply"] as const)(
+    "counts only accepted %s operations and retains failures",
+    (action) => {
+      for (const accepted of [0, 1, 2]) {
+        const runs = Array.from({ length: accepted }, (_, index) =>
+          view({ id: `accepted-${index}`, state: "running" }),
+        );
+        const details = makeCompactToolDetails({
+          action,
+          runs,
+          actionFailures: [{ id: "missing", code: "run_not_found", message: "Run not found" }],
+        });
+        const summary = summarize(action, details);
+        const receipt = summary?.counters?.join(" ");
+        expect(receipt).toContain(action === "send" ? "sent" : "replied");
+        expect(receipt?.match(/\d+/g) ?? []).toEqual(accepted === 1 ? [] : [String(accepted)]);
+        expect(summary?.outcome).toBe("error");
+        expect(summary?.notices?.some((notice) => notice.text.includes("missing"))).toBe(true);
+        const live = summarize(action, details, "running");
+        expect(live?.counters?.join(" ")).not.toMatch(/sent|replied/);
+      }
+      const success = summarize(action, makeCompactToolDetails({ action, runs: [view()] }));
+      expect(success?.outcome).toBe("success");
+      const bounded = summarize(action, {
+        ...makeCompactToolDetails({ action, runs: [view()] }),
+        runCount: 3,
+      });
+      expect(bounded?.counters?.join(" ")).toContain("3");
+      expect(bounded?.counters?.join(" ")).toContain("1/3");
+      expect(bounded?.notices?.some((notice) => notice.text.includes("Bounded"))).toBe(true);
+    },
+  );
+
   it("classifies action failures without claiming incomplete recovery details", () => {
     const details = makeCompactToolDetails({
       action: "send",
@@ -410,7 +458,7 @@ describe("subagent compact semantic policy", () => {
     });
     const summary = summarize("claims", details, "settled", { action: "list" });
     expect(summary?.action).toBe("list");
-    expect(summary?.counters).toContain("1 files");
+    expect(summary?.counters).toContain("1 file claim");
     expect(summary?.metadata?.join(" ")).not.toContain("src/a.ts");
     expect(
       summarize("claims", makeCompactToolDetails({ action: "list", runs: [] }), "settled", {

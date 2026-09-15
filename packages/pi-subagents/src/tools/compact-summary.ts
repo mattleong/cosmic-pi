@@ -12,7 +12,8 @@ import { compactRunNotices } from "./compact-run-notices.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 
-function cardCounters(cards: readonly SubagentRunCard[]): string[] {
+function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
+  if (cards.length === 1 && singleTarget) return [cards[0]!.state];
   const counts = new Map<string, number>();
   for (const card of cards) counts.set(card.state, (counts.get(card.state) ?? 0) + 1);
   return [[...counts].map(([state, count]) => `${count} ${state}`).join(", ")].filter(Boolean);
@@ -47,7 +48,8 @@ function claimCounters(
 ): string[] | undefined {
   const counts = details.cards.map((card) => card.writeClaimCount ?? card.writeClaims?.length);
   if (!counts.length || !counts.every((count) => count !== undefined)) return undefined;
-  const count = `${counts.reduce((sum, count) => sum + count, 0)} files`;
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  const count = `${total} file ${total === 1 ? "claim" : "claims"}`;
   return [
     details.runCount > details.cards.length
       ? `${details.cards.length}/${details.runCount} shown, ${count}`
@@ -73,7 +75,7 @@ function argumentSummary(
   if (action === "models" && Predicate.isString(input.profile)) subject = input.profile;
   const counters =
     action === "claims" && Array.isArray(input.paths)
-      ? [`${input.paths.length} files requested`]
+      ? [`${input.paths.length} file ${input.paths.length === 1 ? "claim" : "claims"} requested`]
       : Array.isArray(input.agents)
         ? [`${input.agents.length} requested`]
         : ids && ids.length > 1
@@ -110,6 +112,16 @@ function applyArgumentLanes(
 ): void {
   if (details.action === "claims")
     summary.counters = claimCounters(details) ?? summary.counters ?? [];
+  if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
+    // runCount counts accepted operations, not failures or only the bounded visible cards.
+    const receipt = details.action === "send" ? "sent" : "replied";
+    const count = details.runCount === 1 ? receipt : `${details.runCount} ${receipt}`;
+    summary.counters = [
+      details.runCount > details.cards.length
+        ? `${count}, ${details.cards.length}/${details.runCount} shown`
+        : count,
+    ];
+  }
   if (lanes.action) summary.action = lanes.action;
   if (phase !== "settled" && details.action !== "start" && details.action !== "await") {
     summary.metadata = [];
@@ -144,6 +156,7 @@ export function createSubagentCompactSummary(
       phase,
       projectedSubject(details, input, phase, lanes.subject, targets),
       targets,
+      Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
     );
     applyArgumentLanes(summary, details, phase, lanes);
     return summary;
@@ -321,11 +334,23 @@ function appendRunHistory(
   notices.push(...cardNotices);
 }
 
+function isSingleRequestedRun(
+  details: SubagentAwaitDetails | Exclude<CompactSubagentToolDetails, { action: "models" }>,
+  cards: readonly SubagentRunCard[],
+  requested: readonly string[] | undefined,
+): boolean {
+  if (details.action === "await" || details.runCount !== 1) return false;
+  return requested?.length
+    ? requested.length === 1 && cards[0]?.id === requested[0]
+    : details.action === "list" || details.action === "status";
+}
+
 function summarizeDetails(
   details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
   phase: Phase,
   subject: string,
   targets?: readonly string[],
+  requested?: readonly string[],
 ): CompactSummary {
   const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
   const summary: CompactSummary = { subject, metadata: [], notices, detailsOnExpand: true };
@@ -342,7 +367,7 @@ function summarizeDetails(
   if (details.action === "models") return summarizeModels(details, summary, notices);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
   summary.metadata = [];
-  summary.counters = cardCounters(cards);
+  summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   if (summary.outcome === "success") {
     if (cards.some((card) => card.state === "stopping")) summary.outcome = "uncertain";
     else if (

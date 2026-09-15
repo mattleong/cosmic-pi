@@ -49,22 +49,45 @@ describe("questionnaire compact outcome projection", () => {
     }
   });
 
-  it("summarizes queued admissions and pending status with retrieval guidance", () => {
-    const pending = row({
-      status: "pending",
-      outcome: undefined,
-      delivery: "pending",
-      presentation: "queued",
+  it.each(["queued", "open", "hidden"])(
+    "keeps pending %s state and retrieval guidance",
+    (presentation) => {
+      const pending = row({
+        status: "pending",
+        outcome: undefined,
+        delivery: "pending",
+        presentation,
+      });
+      for (const details of [pending, { requests: [pending] }]) {
+        const summary = summarize(asyncAskUserCompactSummary, details);
+        expect(summary?.outcome).toBe("warning");
+        expect(summary?.subject).toBe(pending.requestId);
+        expect(summary?.counters).toHaveLength(1);
+        expect(summary?.counters?.join(" ")).toContain(
+          presentation === "queued" ? "queued" : "awaiting answers",
+        );
+        expect(
+          summary?.notices?.some((notice) => notice.text.includes("ask_user_async_control await")),
+        ).toBe(true);
+      }
+    },
+  );
+  it("preserves queued and awaiting counts for mixed pending requests", () => {
+    const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const summary = summarize(asyncAskUserCompactSummary, {
+      requests: [
+        { ...pending, requestId: "queued-1", presentation: "queued" },
+        { ...pending, requestId: "queued-2", presentation: "queued" },
+        { ...pending, requestId: "open-1", presentation: "open" },
+      ],
     });
-    for (const details of [pending, { requests: [pending] }]) {
-      const summary = summarize(asyncAskUserCompactSummary, details);
-      expect(summary?.outcome).toBe("warning");
-      expect(summary?.subject).toBe(pending.requestId);
-      expect(
-        summary?.notices?.some((notice) => notice.text.includes("ask_user_async_control await")),
-      ).toBe(true);
-    }
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.counters).toHaveLength(1);
+    expect(summary?.counters?.join(" ")).toContain("2 queued");
+    expect(summary?.counters?.join(" ")).toContain("1 awaiting answers");
+    expect(summary?.notices?.length).toBeGreaterThan(0);
   });
+
   it("compacts submitted answers without copying private answer text into the headline", () => {
     for (const summary of [
       summarize(askUserCompactSummary, submitted),

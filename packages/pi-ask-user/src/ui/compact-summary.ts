@@ -37,7 +37,7 @@ function summarize(outcomes: readonly (typeof Outcome.Type)[]): CompactSummary {
   return {
     subject: cancelled ? "Questionnaire cancelled" : "Answers submitted",
     outcome: cancelled ? "cancelled" : "success",
-    counters: cancelled ? [] : [`${answers} answers`],
+    counters: cancelled ? [] : [`${answers} ${answers === 1 ? "answer" : "answers"}`],
   };
 }
 
@@ -53,7 +53,7 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
   if (questions?.length)
     return {
       subject: questions.map((question) => stripTerminalControls(question.title)).join(", "),
-      counters: [`${questions.length} questions`],
+      counters: [`${questions.length} ${questions.length === 1 ? "question" : "questions"}`],
     };
   const input = control(args);
   if (!input || (input.action !== "status" && !input.requestId)) return undefined;
@@ -133,13 +133,19 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
         row.presentation !== "settled",
     )
   ) {
+    const queued = rows.filter((row) => row.presentation === "queued").length;
+    const waiting = rows.length - queued;
+    const statuses = [
+      queued ? `${rows.length === 1 ? "" : `${queued} `}queued` : "",
+      waiting ? `${rows.length === 1 ? "" : `${waiting} `}awaiting answers` : "",
+    ].filter(Boolean);
     return {
       subject: rows.every((row) => row.presentation === "queued")
         ? "Questionnaire queued"
         : "Awaiting answers",
       ...identity,
       outcome: "warning",
-      counters: [`${rows.length} requests`],
+      counters: [statuses.join(", ")],
       notices: [
         {
           kind: "warning",

@@ -117,7 +117,12 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
       text: "Process exited, but its exit code is unknown; inspect task status.",
     });
   if (value.error) notices.push({ kind: "error", text: sanitizeTerminalLine(value.error) });
-  const detail = value.exitCode != null ? `${value.state}, exit ${value.exitCode}` : value.state;
+  const detail =
+    value.exitCode == null
+      ? value.state
+      : value.state === "exited"
+        ? `exit ${value.exitCode}`
+        : `${value.state}, exit ${value.exitCode}`;
   const metadata = outcome === "cancelled" ? [] : [detail];
   const subject = sanitizeTerminalLine(value.name?.trim() || value.id);
   return {
@@ -221,10 +226,16 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
           kind: "warning",
           text: "Wait timed out; this does not stop the background task.",
         });
+      const completedExit =
+        details.wait.outcome === "completed" &&
+        details.wait.snapshot.state === "exited" &&
+        details.wait.snapshot.exitCode != null;
       return {
         ...task,
         action,
-        metadata: [[details.wait.outcome, ...(task.metadata ?? [])].join(", ")],
+        metadata: completedExit
+          ? (task.metadata ?? [])
+          : [[details.wait.outcome, ...(task.metadata ?? [])].join(", ")],
         notices,
         outcome: timeout && task.outcome === "success" ? "warning" : task.outcome,
       };

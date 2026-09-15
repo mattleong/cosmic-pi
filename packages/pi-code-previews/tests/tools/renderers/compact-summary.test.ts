@@ -148,7 +148,7 @@ test("write replay needs actual submitted content before describing changes", ()
   }
   expect(
     summary("write", { path: "x", content: "" }, result("applied", details))?.counters,
-  ).toEqual(["+0/-1 lines"]);
+  ).toEqual(["+0 −1"]);
 });
 
 describe("builtin compact lifecycle", () => {

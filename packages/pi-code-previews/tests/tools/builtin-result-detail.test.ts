@@ -38,7 +38,7 @@ test("grep counts matching lines only for complete recognizable output", () => {
 });
 
 test("write counts require bounded known contents and never infer missing history", () => {
-  expect(writeResultDetail({ kind: "content", content: "a\nb\n" }, "a\nc\n")).toMatch(/\+1\/-1/);
+  expect(writeResultDetail({ kind: "content", content: "a\nb\n" }, "a\nc\n")).toMatch(/\+1\s+−1/);
   for (const before of [undefined, {}, { kind: "skipped", reason: "size" }])
     expect(writeResultDetail(before, "new")).toBeUndefined();
   expect(

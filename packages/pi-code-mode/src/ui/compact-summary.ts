@@ -77,7 +77,7 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     if (details.outputKind === undefined) return undefined;
     return {
       subject,
-      counters: [`${total} calls`],
+      counters: [`${total} ${total === 1 ? "call" : "calls"}`],
       notices,
       outcome: failed + cancelled > 0 || details.truncated ? "warning" : "success",
     };

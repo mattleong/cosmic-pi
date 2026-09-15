@@ -210,28 +210,36 @@ describe("background task compact semantics", () => {
       "wait",
     );
     expect(result?.metadata).toHaveLength(1);
-    expect(result?.metadata?.join(" ")).toMatch(/completed.*exited.*exit 0/);
+    expect(result?.outcome).toBe("success");
+    expect(result?.metadata?.join(" ")).toContain("exit 0");
     expect(project({ action: "list", tasks: [] }, "list")?.counters).toEqual(["0 tasks"]);
   });
-  it("keeps an output match distinct from a finished process", () => {
-    const details = {
-      action: "wait",
-      wait: {
-        id: snapshot.id,
-        snapshot,
-        outcome: "matched",
-        nextCursor: 10,
-        earliestAvailableCursor: 0,
-        droppedBytes: 0,
-      },
-    };
-    const summary = project(details, "wait");
-    expect(summary?.outcome).toBe("success");
-    expect(summary?.metadata).toHaveLength(1);
-    expect(summary?.metadata?.join(" ")).toMatch(/matched.*running/);
-    expect(summary?.metadata?.join(" ")).not.toContain("exit");
-    expect(project({ ...details, wait: { ...details.wait, id: "other" } }, "wait")).toBeUndefined();
-  });
+  it.each([snapshot, { ...snapshot, state: "exited", exitCode: 0 }])(
+    "keeps output-match evidence even when the process exits: %j",
+    (matchedSnapshot) => {
+      const details = {
+        action: "wait",
+        wait: {
+          id: snapshot.id,
+          snapshot: matchedSnapshot,
+          outcome: "matched",
+          nextCursor: 10,
+          earliestAvailableCursor: 0,
+          droppedBytes: 0,
+        },
+      };
+      const summary = project(details, "wait");
+      expect(summary?.outcome).toBe("success");
+      expect(summary?.metadata).toHaveLength(1);
+      expect(summary?.metadata?.join(" ")).toContain("matched");
+      if (matchedSnapshot.state === "running")
+        expect(summary?.metadata?.join(" ")).not.toContain("exit");
+      else expect(summary?.metadata?.join(" ")).toContain("exit 0");
+      expect(
+        project({ ...details, wait: { ...details.wait, id: "other" } }, "wait"),
+      ).toBeUndefined();
+    },
+  );
 
   it("preserves dropped output and truncation recovery without copying logs", () => {
     const result = project(

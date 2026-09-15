@@ -71,7 +71,7 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
         if (change.added) added += change.count ?? 0;
         if (change.removed) removed += change.count ?? 0;
       }
-      detail = `+${added}/-${removed} lines`;
+      detail = `+${added} −${removed}`;
     }
   }
   writeCounts.set(before, { content, detail });

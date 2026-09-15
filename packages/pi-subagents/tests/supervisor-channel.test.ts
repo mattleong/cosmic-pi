@@ -1397,7 +1397,7 @@ describe("private supervisor channel", () => {
       const pending = toolCall(rpc, "saturated-question", "supervisor_question", {
         message: "Question at the reserved boundary?",
       });
-      yield* step(() => wait(10));
+      yield* step(() => waitForEventCount(handle, 63));
       yield* step(() =>
         expect(
           Effect.runPromise(
