@@ -18,7 +18,12 @@ function summarize<DetailsInput>(
   action: string,
   details: DetailsInput,
   phase: "running" | "settled" = "settled",
-  args: { action?: string; runIds?: string[]; profile?: string } = {},
+  args: {
+    action?: string;
+    runIds?: string[];
+    profile?: string;
+    agents?: { name: string; profile: string }[];
+  } = {},
   isError = false,
 ) {
   const provider = createSubagentCompactSummary(`subagent_${action}`);
@@ -249,9 +254,33 @@ describe("subagent compact semantic policy", () => {
         },
       ],
     };
-    expect(summarize("start", details, "running")?.counters).toContain("0/1 started");
-    expect(summarize("start", details, "running")?.outcome).toBeUndefined();
-    expect(summarize("start", details)?.outcome).toBe("uncertain");
+    const args = { agents: [{ name: "worker", profile: "worker" }] };
+    expect(summarize("start", details, "running", args)?.counters).toContain("0/1 started");
+    expect(summarize("start", details, "running", args)?.outcome).toBeUndefined();
+    expect(summarize("start", details, "settled", args)?.outcome).toBe("uncertain");
+    const started = {
+      ...details,
+      startEntries: [
+        {
+          ...details.startEntries[0],
+          status: "started",
+          routeStatus: "selected",
+          host: "local",
+          runtime: "pi",
+          model: "provider/model",
+          effort: "low",
+          openaiFastMode: false,
+          runId: "started-1",
+        },
+      ],
+    };
+    for (const phase of ["running", "settled"] as const) {
+      const summary = summarize("start", started, phase, args);
+      expect(summary?.subject).toBe("worker");
+      expect(summary?.counters).toContain("started");
+      expect(summary?.outcome).toBe(phase === "running" ? undefined : "success");
+    }
+    expect(summarize("start", started)?.counters).toContain("1/1 started");
   });
 
   it("does not promote changing launch-entry details into live identity or metadata", () => {
@@ -403,7 +432,7 @@ describe("subagent compact semantic policy", () => {
         "settled",
         { runIds: ["target"] },
       );
-      expect(summary?.counters).toContain("1/1 finished");
+      expect(summary?.counters).toContain("finished");
       expect(summary?.subject).toBe("auth-review");
       expect(summary?.expandedResultOwnsCall).toBe(true);
       expect(summary?.metadata).not.toContain("target");
@@ -535,7 +564,7 @@ describe("subagent compact semantic policy", () => {
     };
     const summary = summarize("await", details);
     expect(summary?.metadata).not.toContain("1 completed");
-    expect(summary?.counters).toContain("1/1 finished");
+    expect(summary?.counters).toContain("finished");
     expect(summary?.metadata).not.toContain("1 paused");
     const text = summary?.notices?.map((notice) => notice.text).join(" ");
     expect(summary?.metadata).toEqual([]);
@@ -544,6 +573,31 @@ describe("subagent compact semantic policy", () => {
     const cancelled = summarize("await", { ...details, cancelled: true });
     expect(cancelled?.outcome).toBe("cancelled");
     expect(cancelled?.notices?.some((notice) => notice.text.includes("NOT stopped"))).toBe(true);
+  });
+
+  it("does not turn a completed descendant into a missing target's completion", () => {
+    const projected = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ id: "descendant", state: "completed", parentRunId: "target" })],
+    });
+    if (projected.action === "models") throw new Error("Expected cards");
+    const summary = summarize(
+      "await",
+      {
+        version: 2,
+        action: "await",
+        cards: projected.cards,
+        awaitUntil: "all_finished",
+      },
+      "settled",
+      { runIds: ["target"] },
+    );
+    expect(summary?.subject).toBe("target");
+    expect(summary?.counters).toContain("0/1 finished");
+    expect(summary?.outcome).toBe("uncertain");
+    expect(summary?.notices?.some((notice) => notice.text.includes("no projected state"))).toBe(
+      true,
+    );
   });
 
   it("marks omitted details as bounded rather than complete fleet counts", () => {

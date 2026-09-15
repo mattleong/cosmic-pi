@@ -72,6 +72,10 @@ const Details = Schema.Union([
   }),
 ]);
 
+function compactTaskState(state: typeof State.Type): string {
+  return state === "timed_out" ? "timed out" : state;
+}
+
 function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: CompactOutcome } {
   const notices: CompactNotice[] = [];
   let outcome: CompactOutcome = "success";
@@ -119,10 +123,10 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   if (value.error) notices.push({ kind: "error", text: sanitizeTerminalLine(value.error) });
   const detail =
     value.exitCode == null
-      ? value.state
+      ? compactTaskState(value.state)
       : value.state === "exited"
         ? `exit ${value.exitCode}`
-        : `${value.state}, exit ${value.exitCode}`;
+        : `${compactTaskState(value.state)}, exit ${value.exitCode}`;
   const metadata = outcome === "cancelled" ? [] : [detail];
   const subject = sanitizeTerminalLine(value.name?.trim() || value.id);
   return {
@@ -203,7 +207,7 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
       }
       for (const state of states) {
         const n = details.tasks.filter((task) => task.state === state).length;
-        if (n) counters.push(`${n} ${state}`);
+        if (n) counters.push(`${n} ${compactTaskState(state)}`);
       }
       if (counters.length > 1) counters.shift();
       return {
@@ -280,7 +284,7 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
       return {
         action,
         subject: sanitizeTerminalLine(logs.id),
-        metadata: [logs.state],
+        metadata: [compactTaskState(logs.state)],
         outcome,
         notices,
         detailsOnExpand: true,

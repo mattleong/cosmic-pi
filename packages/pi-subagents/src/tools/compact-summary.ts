@@ -12,11 +12,26 @@ import { compactRunNotices } from "./compact-run-notices.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 
+function compactRunState(state: SubagentRunCard["state"], count = 1): string {
+  return state === "waiting_for_parent" ? `${count === 1 ? "needs" : "need"} reply` : state;
+}
+
 function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): string[] {
-  if (cards.length === 1 && singleTarget) return [cards[0]!.state];
-  const counts = new Map<string, number>();
+  if (cards.length === 1 && singleTarget) return [compactRunState(cards[0]!.state)];
+  const counts = new Map<SubagentRunCard["state"], number>();
   for (const card of cards) counts.set(card.state, (counts.get(card.state) ?? 0) + 1);
-  return [[...counts].map(([state, count]) => `${count} ${state}`).join(", ")].filter(Boolean);
+  return [
+    [...counts].map(([state, count]) => `${count} ${compactRunState(state, count)}`).join(", "),
+  ].filter(Boolean);
+}
+
+function progressDetail(
+  count: number,
+  total: number,
+  state: "started" | "finished",
+  subject: string,
+): string {
+  return count === 1 && total === 1 && subject.trim() ? state : `${count}/${total} ${state}`;
 }
 
 interface SummaryArguments {
@@ -178,7 +193,9 @@ function summarizeStart(
 ): CompactSummary {
   const add = appendNotice(notices);
   const started = details.startEntries.filter((entry) => entry.status === "started").length;
-  summary.counters = [`${started}/${details.startEntries.length} started`];
+  summary.counters = [
+    progressDetail(started, details.startEntries.length, "started", summary.subject),
+  ];
   summary.metadata = [];
   for (const entry of details.startEntries) {
     if (entry.routeStatus === "selected" && entry.warning) add(entry.warning, "warning");
@@ -221,7 +238,7 @@ function awaitNotices(
   ).length;
   const settledMetadata: string[] = [];
   summary.expandedResultOwnsCall = true;
-  summary.counters = [`${finished}/${targets.length} finished`];
+  summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
   summary.metadata = settledMetadata;
   if (cards.length < targets.length) {
     add(
