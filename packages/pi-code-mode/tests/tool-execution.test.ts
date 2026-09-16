@@ -1014,7 +1014,7 @@ describe("progress", () => {
           expect.objectContaining({
             tool: "pi.read",
             status: "completed",
-            activity: expect.stringContaining(`legacy-${300 - MAX_PROGRESS_ENTRIES + offset}`),
+            subject: expect.stringContaining(`legacy-${300 - MAX_PROGRESS_ENTRIES + offset}`),
           }),
         ),
       );

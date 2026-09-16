@@ -175,6 +175,50 @@ describe("Code Mode compact outcomes", () => {
       ),
     ).toBe(true);
   });
+  it("counts hidden lifecycle failures independently of visible semantic outcomes", () => {
+    const uncertain = summarize(
+      callEntryDetails([
+        {
+          tool: "mcp.request",
+          status: "error",
+          compact: {
+            version: 1,
+            subject: "remote",
+            outcome: "uncertain",
+            deliveryFailed: false,
+            notices: [{ kind: "warning", text: "Check remote state before retrying." }],
+          },
+        },
+      ]),
+      { phase: "running" },
+    );
+    expect(uncertain?.children?.entries[0]?.status).toBe("uncertain");
+    expect(uncertain?.notices?.some((notice) => notice.text.includes("additional"))).toBe(false);
+
+    const hidden = summarize(
+      {
+        ...callEntryDetails([
+          {
+            tool: "mcp.request",
+            status: "completed",
+            compact: {
+              version: 1,
+              subject: "remote",
+              outcome: "error",
+              deliveryFailed: false,
+              notices: [{ kind: "error", text: "Remote operation failed." }],
+            },
+          },
+        ]),
+        counts: { total: 2, succeeded: 1, failed: 1, cancelled: 0, running: 0, queued: 0 },
+        totalToolCalls: 2,
+      },
+      { phase: "running" },
+    );
+    expect(hidden?.children?.entries[0]?.status).toBe("error");
+    expect(hidden?.notices?.some((notice) => notice.text.includes("1 additional"))).toBe(true);
+  });
+
   it("does not trust mismatched saved provenance to hide unknown diagnostic recovery", () => {
     const details = {
       ...callEntryDetails([]),

@@ -1,11 +1,9 @@
 /**
- * Pure formatting for Code Mode execution results, bounded progress, and the bounded
- * nested-call activity labels persisted alongside them.
+ * Pure formatting for Code Mode execution results and bounded progress snapshots.
  */
 import * as Predicate from "effect/Predicate";
 
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { FailurePresentation } from "./failure-evidence.ts";
@@ -15,9 +13,6 @@ import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runt
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
 export const MAX_INTENT_LENGTH = 160;
-
-/** Display bound (code points) for one path/pattern/query inside an activity label. */
-export const MAX_ACTIVITY_FIELD_LENGTH = 48;
 
 const FOREIGN_REJECTION_FALLBACK = "Unknown rejection";
 
@@ -49,18 +44,6 @@ export const truncateDisplay = (text: string, maxCodePoints: number): string => 
   return `${points.slice(0, Math.max(0, maxCodePoints - 1)).join("")}…`;
 };
 
-const ActivityInputSchema = Schema.Struct({
-  path: Schema.optional(Schema.Unknown),
-  command: Schema.optional(Schema.Unknown),
-  pattern: Schema.optional(Schema.Unknown),
-  query: Schema.optional(Schema.Unknown),
-  action: Schema.optional(Schema.Unknown),
-  id: Schema.optional(Schema.Unknown),
-  name: Schema.optional(Schema.Unknown),
-});
-type ActivityInput = typeof ActivityInputSchema.Type;
-type ActivityField = keyof ActivityInput;
-
 /** Tolerant schema decode of one unknown value; malformed input yields undefined, never a throw. */
 export const decodeOption = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
@@ -70,60 +53,6 @@ export const decodeOption = <S extends Schema.ConstraintDecoder<unknown>, Value>
   return Option.isSome(decoded) ? decoded.value : undefined;
 };
 
-/** One sanitized bounded field read from a schema-decoded nested-call input, if present. */
-const activityField = (input: ActivityInput, key: ActivityField): string | undefined => {
-  const value = input[key];
-  if (!Predicate.isString(value)) return undefined;
-  const sanitized = sanitizeTerminalLine(value);
-  return sanitized.length === 0 ? undefined : truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH);
-};
-
-/**
- * A bounded human-readable activity label for one nested call, derived only from the
- * runtime-decoded input at call start (never from nested output). Unknown names and
- * hostile inputs collapse to a safe bounded fallback; raw objects are never stringified.
- */
-export const describeNestedActivity = <Name, Input>(name: Name, input: Input): string => {
-  const toolName = Predicate.isString(name) ? name : "";
-  const activityInput = decodeOption(ActivityInputSchema, input) ?? {};
-  const at = (fallback: string) => activityField(activityInput, "path") ?? fallback;
-  switch (toolName) {
-    case "pi.read":
-      return `Read ${at("file")}`;
-    case "pi.bash":
-    case "pi.powershell":
-      return `Run ${activityField(activityInput, "command") ?? "command"}`;
-    case "pi.edit":
-      return `Edit ${at("file")}`;
-    case "pi.write":
-      return `Write ${at("file")}`;
-    case "pi.grep":
-      return `Search ${activityField(activityInput, "pattern") ?? "pattern"} in ${at("cwd")}`;
-    case "pi.find":
-      return `Find ${activityField(activityInput, "pattern") ?? "pattern"} in ${at("cwd")}`;
-    case "pi.ls":
-      return `List ${at("cwd")}`;
-    case "session.backgroundTask": {
-      const action = activityField(activityInput, "action") ?? "manage";
-      const target =
-        activityField(activityInput, "id") ??
-        activityField(activityInput, "name") ??
-        activityField(activityInput, "command");
-      return `Background ${action}${target === undefined ? "" : ` ${target}`}`;
-    }
-    case "$codemode.search": {
-      const query = activityField(activityInput, "query");
-      return query === undefined ? "Discover tools" : `Discover tools for ${query}`;
-    }
-    default: {
-      const sanitized = sanitizeTerminalLine(toolName);
-      return sanitized.length === 0
-        ? "Call tool"
-        : `Call ${truncateDisplay(sanitized, MAX_ACTIVITY_FIELD_LENGTH)}`;
-    }
-  }
-};
-
 /** Identity-preserving validation; only the host's live registry grants timing authority. */
 export const LiveChildTimingSchema = Schema.declare(
   Schema.is(Schema.Struct({ _tag: Schema.Literal("CodeModeLiveTiming") })),
@@ -131,13 +60,14 @@ export const LiveChildTimingSchema = Schema.declare(
 export type LiveChildTiming = typeof LiveChildTimingSchema.Type;
 
 /**
- * One bounded nested-call progress entry; never contains nested tool output. `activity` is
- * a bounded, sanitized human-readable label derived from the decoded input at call start.
+ * One bounded nested-call progress entry; never contains nested tool output.
+ * New entries retain only the producer-derived, redacted subject.
  */
 export interface CodeModeCallEntry {
   readonly compact?: CompactReceipt;
   readonly tool: string;
   readonly status: "queued" | "running" | "completed" | "error" | "cancelled";
+  /** Historical activity only. New executions do not produce this field. */
   readonly activity?: string;
   /** Bounded, redacted argument-only target captured at decoded call start. */
   readonly subject?: string;
@@ -160,6 +90,7 @@ export interface CodeModeCallCounts {
 export interface CodeModeToolDetails {
   readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
+  /** Historical MCP-specific ledger. New executions use compactAttention. */
   readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */

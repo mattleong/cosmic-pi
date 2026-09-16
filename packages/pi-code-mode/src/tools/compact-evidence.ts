@@ -246,13 +246,22 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           return;
         }
         const receipt = receipts.get(id);
-        if (receipt === undefined) return;
+        if (receipt === undefined || receipt.deliveryFailed) return;
         const notice = {
           kind: "recovery" as const,
-          text: "An observed nested operation did not deliver its result to the program. It may already have completed; do not replay it to recover output.",
+          text: `Observed nested call ${id} did not deliver its result to the program. It may already have completed; do not replay it to recover output.`,
         };
         attention(notice);
-        const updated = freezeReceipt({ ...receipt, deliveryFailed: true });
+        const duplicate = receipt.notices.some(
+          (old) => old.kind === notice.kind && old.text === notice.text,
+        );
+        const hasCapacity = receipt.notices.length < 32;
+        if (!duplicate && !hasCapacity) incomplete = true;
+        const updated = freezeReceipt({
+          ...receipt,
+          deliveryFailed: true,
+          notices: duplicate || !hasCapacity ? receipt.notices : [...receipt.notices, notice],
+        });
         receipts.set(id, updated);
         publish(id, updated);
       }),

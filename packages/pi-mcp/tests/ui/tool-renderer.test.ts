@@ -183,7 +183,8 @@ describe("MCP card projections", () => {
     const projection = decodeMcpCardDetails(result);
     expect(projection.outcome).toBe("unknown");
     expect(projection.truncated).toBe(true);
-    expect(projection.warnings).toHaveLength(4);
+    expect(projection.warnings.join(" ")).toMatch(/cleanup is unconfirmed/i);
+    expect(projection.warnings.join(" ")).toMatch(/not recoverable/);
     const collapsed = display(result).replace(/\s+/g, " ");
     for (const warning of projection.warnings) expect(collapsed).toContain(warning);
     expect(collapsed).not.toMatch(/retry/i);
@@ -289,7 +290,8 @@ describe("MCP card projections", () => {
       const before = JSON.stringify(result);
       const card = decodeMcpCardDetails(result);
       expect(card.notices).toEqual([]);
-      expect(card.warnings).toHaveLength(1);
+      expect(card.warnings.filter((warning) => warning.includes("validation"))).toHaveLength(1);
+      expect(card.warnings.join(" ")).toContain('result.read id="retained-1"');
       expect(card.warnings[0]).toContain("Do not replay the operation to recover its output.");
       expect(card.warnings[0]).toContain(
         outputValidation === "failed" ? "captured schema" : "No mismatch was established",

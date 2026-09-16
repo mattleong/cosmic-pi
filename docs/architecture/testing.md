@@ -67,6 +67,11 @@ The packed-consumer check executes Better OpenAI's shipped `.mjs` decoder with a
 
 ## Validation order
 
+Workspace tests run at most two packages with four Vitest workers each. Without the worker cap,
+each package independently uses nearly every CPU, multiplying contention and starving real-process
+fixtures within their hang guards. Keep readiness checks event-driven; increasing test timeouts is
+not a substitute for a startup signal or bounded cleanup.
+
 Run the narrow package gate first, then the workspace gate:
 
 ```bash

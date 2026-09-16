@@ -6,8 +6,8 @@ import {
   type CompactNotice,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
-import { isCompactPiTool, mcpAttention } from "../tools/mcp-evidence.ts";
+import { isCompactPiTool } from "../tools/mcp-evidence.ts";
+import { codeModeEvidenceNotices, TRUNCATED_OUTPUT_NOTICE } from "./notices.ts";
 import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
@@ -37,31 +37,20 @@ export const codeModeCompactSummary = (
       `${succeeded + failed + cancelled}/${total} done${failed ? ` · ${failed} failed` : ""}`,
     ];
     const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
-    const notices: CompactNotice[] = (details.compactAttention?.notices ?? []).map((notice) => ({
+    // Keep informational hints parent-owned when an outer failure bypasses details.
+    const notices: CompactNotice[] = codeModeEvidenceNotices(details).map((notice) => ({
       ...notice,
       expandedInResult: true,
     }));
-    // The owned outer-failure shell bypasses the detailed renderer. Keep retained
-    // informational hints parent-owned there, too, even for visible children.
-    for (const call of details.toolCalls) {
-      for (const notice of call.compact?.notices ?? []) {
-        if (
-          !notices.some(
-            (existing) => existing.kind === notice.kind && existing.text === notice.text,
-          )
-        )
-          notices.push({ ...notice, expandedInResult: true });
-      }
-    }
-    if (details.compactAttention?.incomplete)
-      notices.push({ kind: "warning", text: INCOMPLETE_ATTENTION, expandedInResult: true });
     const selectedCalls = context.expanded
       ? children.entries
       : selectCompactChildren(children).entries;
-    const hiddenFailed = Math.max(
-      0,
-      failed - selectedCalls.filter((call) => call.status === "error").length,
-    );
+    // Selection preserves row identity, but semantic display status can differ from
+    // lifecycle status: an errored MCP call may be uncertain, or a completed one an error.
+    const visibleFailed = selectedCalls.filter(
+      (child) => details.toolCalls[children.entries.indexOf(child)]?.status === "error",
+    ).length;
+    const hiddenFailed = Math.max(0, failed - visibleFailed);
     if (hiddenFailed > 0)
       notices.push({
         kind: "warning",
@@ -75,7 +64,7 @@ export const codeModeCompactSummary = (
     if (details.truncated)
       notices.push({
         kind: "recovery",
-        text: "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.",
+        text: TRUNCATED_OUTPUT_NOTICE,
       });
     const evidence = details.mcpEvidence;
     if (
@@ -85,51 +74,6 @@ export const codeModeCompactSummary = (
       evidence.observed !== evidence.mcp
     )
       return undefined;
-    if (evidence !== undefined) {
-      for (const text of mcpAttention(evidence)) {
-        if (!notices.some((notice) => notice.text === text))
-          notices.push({ kind: "warning", text, expandedInResult: true });
-      }
-      if (
-        evidence.unknown > 0 &&
-        !notices.some(
-          (notice) =>
-            notice.text ===
-            "MCP execution is uncertain. Check its state; do not replay the operation automatically.",
-        )
-      )
-        notices.push({
-          kind: "recovery",
-          text: "MCP execution is uncertain. Check its state; do not replay the operation automatically.",
-        });
-      if (
-        evidence.notSent > 0 &&
-        !notices.some(
-          (notice) => notice.text === `${evidence.notSent} MCP operations were not sent.`,
-        )
-      )
-        notices.push({
-          kind: "warning",
-          text: `${evidence.notSent} MCP operations were not sent.`,
-        });
-      if (details.compactAttention === undefined && evidence.mcp > 0 && failed + cancelled > 0)
-        notices.push({
-          kind: "recovery",
-          text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
-        });
-      if (
-        evidence.errors > 0 &&
-        !notices.some(
-          (notice) =>
-            notice.text ===
-            `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
-        )
-      )
-        notices.push({
-          kind: "warning",
-          text: `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
-        });
-    }
     const hasAttention = notices.some(isCompactAttention);
     const visibleNotices = context.expanded
       ? []

@@ -90,10 +90,30 @@ const fixture = () => {
   };
 };
 
+// Layer startup performs real filesystem I/O. Scheduler yields cannot bound when
+// that I/O completes; wait for the fixture's listener registration instead.
+const spawnListenerReady = (child: NodeChildProcess) =>
+  Effect.callback<void>((resume) => {
+    const ready = () => {
+      child.off("newListener", registered);
+      resume(Effect.void);
+    };
+    const registered = (event: string | symbol) => {
+      // Node emits newListener before installing it. Effect may resume synchronously,
+      // so defer until registration completes before the fixture emits spawn.
+      if (event === "spawn") queueMicrotask(ready);
+    };
+    child.on("newListener", registered);
+    if (child.listenerCount("spawn") > 0) ready();
+    return Effect.sync(() => {
+      child.off("newListener", registered);
+    });
+  });
+
 const start = <A, E>(child: NodeChildProcess, acquisition: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(acquisition);
-    yield* yieldUntil(() => child.listenerCount("spawn") > 0);
+    yield* spawnListenerReady(child);
     child.emit("spawn");
     return yield* Fiber.join(fiber);
   });
@@ -130,7 +150,7 @@ describe("shared process transport", () => {
       f.child.on("error", foreign);
       f.stdout.on("error", foreign);
       const pending = yield* Effect.forkChild(acquireNative().pipe(Effect.flip));
-      yield* yieldUntil(() => f.child.listenerCount("spawn") > 0);
+      yield* spawnListenerReady(f.child);
       f.child.emit("error", new Error("spawn failed"));
       expect((yield* Fiber.join(pending)).code).toBe("local_cli_spawn_failed");
       expect(f.child.listeners("error")).toEqual([foreign]);
@@ -264,7 +284,7 @@ describe("shared process transport", () => {
         h.release.pipe(Effect.orDie),
       ).pipe(Effect.provideService(Scope.Scope, scope));
       const pending = yield* Effect.forkChild(acquisition);
-      yield* yieldUntil(() => f.child.listenerCount("spawn") > 0);
+      yield* spawnListenerReady(f.child);
       const interrupted = yield* Effect.forkChild(Fiber.interrupt(pending));
       yield* Effect.yieldNow;
       expect(f.stdin.destroyed).toBe(false);
@@ -339,7 +359,7 @@ describe("Pi transport policy", () => {
         const pending = yield* Effect.forkChild(
           service.spawn(launch).pipe(Effect.provideService(Scope.Scope, scope)),
         );
-        yield* yieldUntil(() => f.child.listenerCount("spawn") > 0);
+        yield* spawnListenerReady(f.child);
         // Child extension registration can report before Node's spawn readiness continuation runs.
         f.child.emit("message", {
           channel: "pi-subagents",

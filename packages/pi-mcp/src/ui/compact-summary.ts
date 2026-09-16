@@ -3,27 +3,10 @@ import {
   type CompactNotice,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
+import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
 import * as Predicate from "effect/Predicate";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
-
-// The existing card decoder defaults a missing origin error flag to false.
-// Compact success needs explicit evidence instead. Never invoke historical getters.
-const explicitOriginSuccess = <Value>(value: Value): boolean => {
-  let current: unknown = value;
-  try {
-    for (const key of ["details", "data", "origin", "isError"]) {
-      if (!Predicate.isObjectOrArray(current)) return false;
-      const field = Object.getOwnPropertyDescriptor(current, key);
-      if (!field || !("value" in field)) return false;
-      current = field.value;
-    }
-    return current === false;
-  } catch {
-    return false;
-  }
-};
 
 const searchQuery = <Args>(args: Args): string | undefined => {
   try {
@@ -36,7 +19,10 @@ const searchQuery = <Args>(args: Args): string | undefined => {
       field.value.length > 1024
     )
       return undefined;
-    return sanitizeTerminalLine(field.value).trim().slice(0, 160) || undefined;
+    return (
+      sanitizeDiagnosticContent(sanitizeTerminalLine(field.value), { maximumLength: 160 }).trim() ||
+      undefined
+    );
   } catch {
     return undefined;
   }
@@ -65,13 +51,12 @@ export const projectMcpCompactSummary = ({
   const card = decodeMcpCardDetails(result);
   // A resolved Pi call is not evidence of remote success. Historical, unknown,
   // not-sent and failed replies remain unowned, never flattened into a cause.
-  if (isError || !card.known || card.outcome !== "completed" || card.isError) return undefined;
   if (
-    card.origin &&
-    (card.origin.outcome !== "completed" ||
-      card.origin.isError ||
-      card.origin.outputValidationFailed ||
-      !explicitOriginSuccess(result))
+    isError ||
+    !card.known ||
+    card.presentation.incomplete ||
+    card.presentation.outcome !== "completed" ||
+    card.presentation.isError
   )
     return undefined;
 
@@ -95,11 +80,6 @@ export const projectMcpCompactSummary = ({
       ? { kind: "recovery", text, expandedOnly: true, expandedInResult: true }
       : { kind: "warning", text, expandedInResult: true };
   });
-  if (card.undiscoveredCount)
-    notices.push({
-      kind: "warning",
-      text: mcpUndiscoveredNotice(card.undiscoveredCount),
-    });
   return {
     action,
     subject,

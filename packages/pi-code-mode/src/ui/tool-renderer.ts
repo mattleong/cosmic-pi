@@ -16,12 +16,10 @@ import {
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
 import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
-import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
-import { mcpAttention } from "../tools/mcp-evidence.ts";
+import { codeModeVisibleNotices } from "./notices.ts";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
   decodeOption,
-  describeNestedActivity,
   MAX_INTENT_LENGTH,
   truncateDisplay,
   type CodeModeCallEntry,
@@ -34,37 +32,8 @@ import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-
 
 /** Neutral headline when the model provided no usable intent. */
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
-const typedVisibleNotices = (
-  details: CodeModeRenderDetails,
-  expanded: boolean,
-): codePreviews.CompactNotice[] => {
-  const notices: codePreviews.CompactNotice[] = [
-    ...mcpAttention(details.mcpEvidence).map(
-      (text): codePreviews.CompactNotice => ({ kind: "warning", text }),
-    ),
-    ...(details.compactAttention?.notices ?? []),
-    ...details.toolCalls.flatMap((call) => call.compact?.notices ?? []),
-    ...(details.compactAttention?.incomplete
-      ? [{ kind: "warning" as const, text: INCOMPLETE_ATTENTION }]
-      : []),
-    ...(expanded && details.truncated
-      ? [
-          {
-            kind: "recovery" as const,
-            text: "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.",
-          },
-        ]
-      : []),
-  ];
-  return notices.filter(
-    (notice, index) =>
-      (expanded || codePreviews.isCompactAttention(notice)) &&
-      notices.findIndex((other) => other.kind === notice.kind && other.text === notice.text) ===
-        index,
-  );
-};
 const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] =>
-  typedVisibleNotices(details, expanded).map((notice) => notice.text);
+  codeModeVisibleNotices(details, expanded).map((notice) => notice.text);
 
 const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
@@ -178,7 +147,12 @@ const activityRow = (entry: CodeModeCallEntry, theme: Theme, animationFrame: num
   const color = managerActivityColor(kind);
   const icon = nestedToolIcon(entry.tool);
   const toolPrefix = icon === undefined ? "" : `${theme.fg("toolTitle", icon)} `;
-  const label = entry.activity ?? describeNestedActivity(entry.tool, undefined);
+  // Current calls retain one redacted producer heading. Activity is replay-only.
+  const subject = entry.compact?.subject ?? entry.subject;
+  const label =
+    subject === undefined
+      ? (entry.activity ?? entry.tool)
+      : [entry.tool, entry.compact?.action, subject].filter(Boolean).join(" ");
   const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_LENGTH);
   const duration =
     entry.durationMs === undefined
@@ -270,7 +244,7 @@ const renderCodeModeToolResultUnsafe = (
                 : details.counts.failed || details.truncated
                   ? "warning"
                   : "success",
-          notices: typedVisibleNotices(details, true),
+          notices: codeModeVisibleNotices(details, true),
         },
       },
     );

@@ -299,6 +299,10 @@ HTTP and stdio JSON-RPC errors retain fixed diagnostic reasons such as `rpc-meth
 
 The owned gateway has compact call/result cards under the existing code-preview shell. Expanded cards show recognized MCP text with its newlines and indentation, alongside sanitized raw JSON. One combined display budget covers both sections. String, collection, depth, node, line, and character cuts are disclosed separately from source truncation or operation failure. Expansion never changes the original JSON, images, error receipts, or execution certainty. Unknown completion, cleanup, truncation, and originating failures remain visible when collapsed. Ordinary cancellations use operation-neutral guidance, not sign-in instructions.
 
+Standalone and nested calls share MCP's outcome and recovery projection, including retained
+origins, output validation, cleanup, and output-loss access instructions. Code Mode retains its
+own call lifecycle and delivery evidence; it does not reinterpret MCP result bodies.
+
 Standalone and nested compact calls share discovery notice relevance. Routine cache freshness
 and missing optional resource/template catalogs stay in expanded details during tool search or
 description. Missing support for a catalog you actually requested, failed refreshes, and unknown

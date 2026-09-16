@@ -71,7 +71,12 @@ describe("MCP result projection", () => {
         expect(execution.reply.data).toMatchObject({ result: remote });
         const card = decodeMcpCardDetails({ details: execution.reply });
         expect(card.notices).toEqual([]);
-        expect(card.warnings).toHaveLength(1);
+        expect(card.warnings.filter((warning) => warning.includes("validation"))).toHaveLength(1);
+        expect(
+          card.warnings.some((warning) =>
+            warning.includes(`result.read id="${execution.reply.resultId}"`),
+          ),
+        ).toBe(true);
         expect(encodeExecution(execution)).toBe(before);
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );

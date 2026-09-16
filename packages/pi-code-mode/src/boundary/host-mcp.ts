@@ -16,9 +16,11 @@ import {
   type McpCodeModeError,
   type McpCodeModeInput,
   type McpCodeModeOutput,
+  projectMcpPresentation,
+  projectMcpFailurePresentation,
+  type McpPresentation,
 } from "pi-mcp/code-mode";
 import { invokeHostCallback } from "pi-cosmic-core";
-import { observeMcpReply, type McpObservation } from "../tools/mcp-evidence.ts";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
 const decodeInput = Schema.decodeUnknownEffect(McpCodeModeInputSchema);
@@ -46,12 +48,11 @@ export const makeMcpDispatch = (options: {
   readonly sessionId: string | undefined;
   readonly toolCallId: string;
   readonly maxOutputBytes: () => number;
-  readonly observe?: (observation: McpObservation) => void;
   readonly observationId?: (fiber: number) => number | undefined;
   readonly observePresentation?: (
     invocationId: number | undefined,
     input: McpCodeModeInput,
-    observation: McpObservation,
+    observation: McpPresentation,
     reply: McpCodeModeOutput | undefined,
   ) => void;
 }): McpDispatch => {
@@ -61,19 +62,15 @@ export const makeMcpDispatch = (options: {
       Effect.suspend(() => {
         const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
         let validatedReply: McpCodeModeOutput | undefined;
-        let observation: McpObservation = {
+        let observation = projectMcpPresentation({
+          action: input.action,
           outcome: "not-sent",
           isError: true,
-          incomplete: false,
+          data: null,
           notices: [],
-        };
+        });
         const failed = (decoded: McpCodeModeInput, error: McpCodeModeError): ToolError => {
-          observation = {
-            outcome: error.outcome,
-            isError: true,
-            incomplete: false,
-            notices: [error.message],
-          };
+          observation = projectMcpFailurePresentation(error);
           return failure(decoded, error);
         };
         const dispatch = Effect.suspend(() => {
@@ -114,7 +111,13 @@ export const makeMcpDispatch = (options: {
               nestedCalls += 1;
               const callId = `${options.toolCallId}/mcp.request/${nestedCalls}`;
               const maxOutputBytes = options.maxOutputBytes();
-              observation = { outcome: "unknown", isError: true, incomplete: false, notices: [] };
+              observation = projectMcpPresentation({
+                action: input.action,
+                outcome: "unknown",
+                isError: true,
+                data: null,
+                notices: [],
+              });
               return Effect.tryPromise((signal) =>
                 capability.execute(callId, decoded, signal, maxOutputBytes),
               ).pipe(
@@ -129,10 +132,11 @@ export const makeMcpDispatch = (options: {
                       reply.action === decoded.action &&
                       !mcpCodeModeHasBinary(reply.data, reply.action)
                         ? Effect.sync(() => {
-                            observation = invokeHostCallback(() => observeMcpReply(reply), {
+                            observation = invokeHostCallback(() => projectMcpPresentation(reply), {
                               outcome: reply.outcome,
                               isError: reply.isError,
                               incomplete: true,
+                              truncated: false,
                               notices: [...reply.notices],
                             });
                             validatedReply = reply;
@@ -152,7 +156,6 @@ export const makeMcpDispatch = (options: {
               const operationObservation = observation;
               if (exit._tag === "Failure" && observation.isError === false)
                 observation = { ...observation, isError: true };
-              invokeHostCallback(() => options.observe?.(observation), undefined);
               invokeHostCallback(
                 () =>
                   options.observePresentation?.(

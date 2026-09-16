@@ -27,12 +27,10 @@ import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts"
 import { makeChildTimings } from "../boundary/host-child-timing.ts";
 import type { CodeModeState } from "../config/store.ts";
 import { projectFailurePresentation } from "./failure-evidence.ts";
-import { makeMcpEvidence } from "./mcp-evidence.ts";
 import { describeNestedSubject } from "./compact-subject.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import {
   callEntryDetails,
-  describeNestedActivity,
   formatCodeModeFailure,
   formatCodeModeSuccess,
   formatForeignRejection,
@@ -85,8 +83,6 @@ interface MutableCallEntry {
   compact?: CompactReceipt;
   tool: string;
   status: CodeModeCallEntry["status"];
-  /** Bounded human-readable label derived from the decoded input; never nested output. */
-  activity: string;
   subject?: string;
   durationMs?: number;
   liveTiming?: LiveChildTiming;
@@ -182,11 +178,18 @@ export const makeCodeModeToolExecute =
       // indices are unique within an execution; their negative IDs stay disjoint from modern
       // non-negative lifecycle IDs, so settled entries can retain the same map key.
       const counts = emptyCounts();
-      const evidence = makeMcpEvidence();
       const compact = makeCompactEvidence((id, receipt) => {
         const call = calls.get(id);
         if (call !== undefined) call.compact = receipt;
       });
+      // Adapter completion is not guest delivery. Only the terminal runtime hook observes
+      // output-schema decoding and the interpreter's stricter data boundary.
+      const returnedOutputs = new Set<number>();
+      const endDelivery = (fiber: number, failed: boolean) => {
+        const id = compact.identity(fiber);
+        if (id !== undefined && returnedOutputs.delete(id) && failed) compact.deliveryFailure(id);
+        compact.end(fiber);
+      };
       const policy = invokeHostCallback(() => captureBuiltinCompactPolicy(), undefined);
       const progress = () => {
         const result = progressResult(snapshotCalls(calls), counts);
@@ -194,7 +197,6 @@ export const makeCodeModeToolExecute =
           ...result,
           details: {
             ...result.details,
-            mcpEvidence: evidence.snapshot(),
             compactAttention: compact.snapshot(),
           },
         };
@@ -271,7 +273,6 @@ export const makeCodeModeToolExecute =
           sessionId: environment.sessionId,
           toolCallId,
           maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
-          observe: evidence.observe,
           observationId: compact.identity,
           observePresentation: (id, args, observation, reply) =>
             compact.observe(id, () => {
@@ -313,6 +314,9 @@ export const makeCodeModeToolExecute =
             includePowerShell: environment.definitions.powershell !== undefined,
             observationId: compact.identity,
             onDeliveryFailure: compact.deliveryFailure,
+            onOutputReturned: (id) => {
+              if (id !== undefined) returnedOutputs.add(id);
+            },
           }),
           limits: {
             timeoutMs: config.timeoutMs,
@@ -322,16 +326,15 @@ export const makeCodeModeToolExecute =
           onToolCallLifecycle: (event) =>
             Effect.flatMap(Effect.fiberId, (fiber) =>
               Effect.sync(() => {
-                if (event.status !== "queued" && event.status !== "running") compact.end(fiber);
+                if (event.status !== "queued" && event.status !== "running")
+                  endDelivery(fiber, event.status !== "succeeded");
                 if (event.status === "queued") {
-                  evidence.admit(event.name);
                   compact.admit(event.name);
                   counts.total += 1;
                   counts.queued += 1;
                   const entry: MutableCallEntry = {
                     tool: event.name,
                     status: "queued",
-                    activity: describeNestedActivity(event.name, undefined),
                   };
                   if (!trackQueued(event.id, entry)) return;
                 } else {
@@ -375,19 +378,16 @@ export const makeCodeModeToolExecute =
                 compact.start(fiber, id);
                 let current = calls.get(id);
                 if (current === undefined && lifecycleId === undefined) {
-                  evidence.admit(name);
                   compact.admit(name);
                   counts.total += 1;
                   counts.running += 1;
                   current = {
                     tool: name,
                     status: "running",
-                    activity: describeNestedActivity(name, input),
                   };
                   trackQueued(id, current);
                 } else if (current !== undefined) {
                   transitionCall(current, "running", counts);
-                  current.activity = describeNestedActivity(name, input);
                 }
                 if (current !== undefined) {
                   if (calls.has(id) && current.liveTiming === undefined) {
@@ -412,7 +412,7 @@ export const makeCodeModeToolExecute =
                 // Modern runtimes emit one authoritative terminal lifecycle event immediately after
                 // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
                 if (lifecycleId !== undefined) return;
-                compact.end(fiber);
+                endDelivery(fiber, outcome !== "success");
                 const id = -(index + 1);
                 const current = calls.get(id);
                 const nextStatus = outcome === "success" ? "completed" : "error";
@@ -433,19 +433,20 @@ export const makeCodeModeToolExecute =
 
         const settleProgress = (): CodeModeToolDetails => {
           childTimings.close();
+          // Legacy hooks cannot prove delivery for interrupted calls that never emit an end.
+          for (const id of returnedOutputs) compact.deliveryFailure(id);
+          returnedOutputs.clear();
           for (const call of calls.values()) delete call.liveTiming;
           const changed = settlePendingAsCancelled(calls, counts);
           counts.cancelled += counts.queued + counts.running;
           counts.queued = 0;
           counts.running = 0;
           const snapshot = snapshotCalls(calls);
-          evidence.close();
           compact.close();
           if (changed) publisher.publish(progress());
           publisher.settle();
           return {
             ...callEntryDetails(snapshot, counts),
-            mcpEvidence: evidence.snapshot(),
             compactAttention: compact.snapshot(),
           };
         };
@@ -505,7 +506,6 @@ export const makeCodeModeToolExecute =
         .finally(() => {
           childTimings.close();
           compact.close();
-          evidence.close();
           publisher.settle();
         });
     });

@@ -90,7 +90,7 @@ describe("MCP compact summaries", () => {
     expect(
       summary?.notices?.find((notice) => notice.text.startsWith("Discovery is incomplete"))
         ?.expandedInResult,
-    ).toBeUndefined();
+    ).toBe(true);
     expect(summary?.notices?.some(isCompactAttention)).toBe(true);
   });
   it("omits routine retained IDs without changing result access", () => {
@@ -115,13 +115,13 @@ describe("MCP compact summaries", () => {
     expect(details).toEqual(before);
   });
   it.each([{ truncated: true }, { omitted: true }])(
-    "keeps actual output loss visible without repeating retained IDs: %j",
+    "keeps actual output loss and essential recovery visible: %j",
     (data) => {
       const details = reply(data, { resultId: "retained-1" });
       const summary = summarize(details);
       expect(summary?.outcome).toBe("warning");
       expect(summary?.notices?.some((notice) => notice.kind === "warning")).toBe(true);
-      expect(JSON.stringify(summary)).not.toContain("retained-1");
+      expect(JSON.stringify(summary)).toContain("retained-1");
       expect(decodeMcpCardDetails({ details }).resultId).toBe("retained-1");
     },
   );

@@ -54,7 +54,8 @@ it("shares known MCP notices and recovery with the expanded result, retaining di
       const text = [...call.render(200), ...body.render(200)].join("\n");
       for (const notice of [...card.warnings, ...card.notices]) expect(text).toContain(notice);
       if (expanded) expect(text).toContain(card.recoveryHint);
-      else expect(text).not.toContain(card.resultId);
+      // Actual output loss keeps access instructions visible, unlike routine retained IDs.
+      expect(text).toContain(card.resultId);
       expect(text).toContain("Discovery is incomplete");
     }
   }

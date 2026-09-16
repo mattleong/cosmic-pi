@@ -44,12 +44,17 @@ Only runtime source plus its README, legal, and provenance documents ship.
   `tools/compact-subject.ts` captures allowlisted paths, read ranges, commands and search targets
   at decoded call start using Code Previews' shared argument-only formatter. It redacts fields
   before clipping, caps subjects at 1024 code points and contains formatting failures. Replay
-  validates subjects without resolving paths again; older rows remain names-only. Input objects,
+  validates subjects without resolving paths again; older rows remain names-only. New calls retain
+  only this redacted heading, not a second argument-derived activity label. Historical activity is
+  redacted before clipping during replay. Input objects,
   write/edit bodies, MCP argument payloads and returned output never enter these subjects.
   Producer-owned argument-only projections supply MCP and Background Tasks headings. Correlated
   receipts supply semantic child statuses; delivery failures override successful operation colors
   without changing the recorded operation outcome. `call-rows.ts` shares this receipt projection
   with `expanded-result.ts`. Expansion renders Program, Calls, and Result sections.
+  `notices.ts` collects evidence for compact, detailed, and emergency views; each view controls
+  visibility and affected-call ownership. Replay normalizes each row once, salvaging bounded valid
+  notices separately when sibling fields invalidate its receipt.
   `sections.ts` owns real spacer rows and width-aware indentation. Calls reuse flat compact
   rows with plain hints beneath each row; the collapsed tree remains unchanged. Aggregate
   recovery has its own Notices section so it cannot appear to belong to the last visible call. `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
@@ -219,7 +224,10 @@ producer projections; Background Tasks v1 presentation callbacks preserve pre-pr
 truncation. Operation outcome is captured before cumulative-output admission. Delivery refusal
 adds separate recovery evidence without rewriting known completion. A received, budget-admitted
 native exception is not delivery loss. Guest conversion refusal, diagnostic clipping, output
-admission refusal, defects, and interruption still preserve loss evidence.
+admission refusal, defects, and interruption still preserve loss evidence. Adapter-returned output
+remains provisional until the interpreter's terminal hook, which also covers later schema/data
+copy rejection without changing the interpreter. Delivery recovery is retained on each affected
+receipt and in aggregate attention; hidden calls and notice overflow retain conservative recovery.
 
 The builtin producer supplies bounded `failureEvidence`, not arbitrary failure bodies. Known
 complete errors such as native edit matching refusals do not imply incomplete presentation.
@@ -229,22 +237,25 @@ error text before folding ordinary source/stack details. It never identifies a c
 order or counts. A matching visible child explanation can replace a redundant root explanation;
 full outer text remains available expanded. Unrecognized errors and historical metadata retain
 conservative recovery. Failed counts live in header metadata, with separate summaries for hidden
-failures.
+failures. Hidden failure counts use selected rows' original lifecycle identities, not semantic
+display colors; an uncertain MCP row can still represent a received lifecycle failure.
 
 Routine complete-line read hints retain their `expandedOnly` marker in per-call receipts and
 replay. They stay outside the aggregate attention ledger and its warning budget. Both detailed
 rendering paths show them only on expansion. The compact parent also retains these hints for
 owned outer-failure rendering, which bypasses the detailed renderer. Their retention ends at
 row eviction; warning and error notices remain attention even if incorrectly flagged.
-MCP's producer-owned discovery notice policy applies before both child projection and aggregate
-collection, so routine freshness and unrelated optional catalogs cannot reappear as parent warnings.
+MCP owns full outcome and recovery interpretation through `projectMcpPresentation` and
+`projectMcpFailurePresentation`. Code Mode consumes that evidence, including retained origins,
+validation, cleanup, discovery relevance, and retained-output access, rather than parsing MCP data.
 
 Only bounded sanitized presentation fields survive. Failure bodies, nested output, diffs and raw
 arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots
 are detached and frozen, including failure retention; settlement revokes late callbacks. The older
-`tools/mcp-evidence.ts` aggregate remains for compatibility and retained-read recovery. Overflow or
-malformed evidence never silently becomes success, and detailed fallback still displays its known
-notices and an explicit incomplete-evidence warning.
+`tools/mcp-evidence.ts` only decodes and renders historical MCP-specific ledgers. New executions
+publish one generic attention ledger. Historical dual-ledger records still validate both because
+older per-call receipts did not contain complete MCP recovery. Overflow or malformed evidence
+never silently becomes success; fallback retains salvaged notices and explicit incompleteness.
 
 The application composes `CodePreviewSchedulerService.layer` into its own session runtime and passes a token-checked scheduler to the compact shell. It does not depend on the previews extension's isolated module-local runtime; replacement and shutdown cancel remaining compact animations. The original renderer owns a weak 160 ms ticker. The host compact-summary callback releases that ticker when the shared shell hides its rows or the tool settles, even when the original result renderer is not called. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import { isCompactAttention } from "pi-code-previews";
-import * as mcpEvidence from "../src/tools/mcp-evidence.ts";
+import * as mcpPresentation from "pi-mcp/code-mode";
 import {
   projectMcpCompactSummary,
   MCP_CODE_MODE_QUERY,
@@ -113,11 +113,11 @@ describe("MCP execution evidence in compact Code Mode results", () => {
             expandedOnly: notice.expandedOnly,
           })),
         );
-        expect(completed.details?.mcpEvidence?.notices).toEqual([]);
+        expect(completed.details?.mcpEvidence).toBeUndefined();
         expect(completed.details?.compactAttention?.notices).toEqual([]);
         expect(summary(completed.details)?.notices?.filter(isCompactAttention)).toEqual([]);
         expect(
-          mcpEvidence.observeMcpReply({
+          mcpPresentation.projectMcpPresentation({
             ...output,
             notices: [...output.notices, "Check remote state."],
           }).notices,
@@ -133,7 +133,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           result: { details: discovery },
           isError: false,
         });
-        expect(mcpEvidence.observeMcpReply(discovery).notices).toEqual(
+        expect(mcpPresentation.projectMcpPresentation(discovery).notices).toEqual(
           direct?.notices?.map((notice) => notice.text),
         );
       }),
@@ -194,7 +194,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         ),
       );
       expect(summary(result.details)?.outcome).toBe(outcome);
-      expect(result.details?.mcpEvidence?.notices.join("\n")).not.toContain("SECRET_CREDENTIAL");
+      expect(
+        result.details?.compactAttention?.notices.map((notice) => notice.text).join("\n"),
+      ).not.toContain("SECRET_CREDENTIAL");
       expect(result.details?.counts?.failed).toBe(1);
       expect(summary(result.details)?.children?.entries).toMatchObject([
         { label: "mcp", status: outcome },
@@ -225,10 +227,10 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       finishers[1]!(reply({ outcome: "unknown" }));
       finishers[0]!(reply());
       const result = yield* Effect.promise(() => pending);
-      expect(result.details?.mcpEvidence).toMatchObject({
+      expect(result.details?.compactAttention).toMatchObject({
         observed: 3,
-        completed: 2,
-        unknown: 1,
+        uncertain: 1,
+        errors: 0,
       });
       expect(summary(result.details)?.outcome).toBe("uncertain");
       expect(summary(result.details)?.children?.entries).toMatchObject([
@@ -250,7 +252,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       expect(summary(result.details)?.children?.entries).toHaveLength(
         result.details!.toolCalls.length,
       );
-      expect(result.details?.mcpEvidence?.observed).toBe(count);
+      expect(result.details?.compactAttention?.observed).toBe(count);
       expect(summary(result.details)?.outcome).toBe("success");
     }),
   );
@@ -261,7 +263,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           'try { await tools.session.backgroundTask({action:"list"}); } catch {} for (let i=0;i<270;i++) await tools.mcp.request({action:"status"}); return 1',
         ),
       );
-      expect(result.details?.mcpEvidence?.unsupported).toBe(1);
+      expect(result.details?.compactAttention?.incomplete).toBe(true);
       expect(summary(result.details)?.outcome).toBe("uncertain");
       expect(
         summary(result.details)?.notices?.some((notice) => notice.text.includes("incomplete")),
@@ -273,7 +275,19 @@ describe("MCP execution evidence in compact Code Mode results", () => {
     () =>
       Effect.gen(function* () {
         const result = yield* Effect.promise(() => harness(() => Promise.resolve(reply())).run());
-        const evidence = result.details!.mcpEvidence!;
+        const evidence = {
+          version: 1,
+          pi: 0,
+          mcp: 1,
+          unsupported: 0,
+          observed: 1,
+          completed: 1,
+          errors: 0,
+          unknown: 0,
+          notSent: 0,
+          incomplete: false,
+          notices: [],
+        }; // Historical dual-ledger result.
         for (const mcpEvidence of [
           null,
           {},
@@ -290,18 +304,24 @@ describe("MCP execution evidence in compact Code Mode results", () => {
   );
   it.effect("retains validated notices when outcome classification fails", () =>
     Effect.gen(function* () {
-      const classifier = vi.spyOn(mcpEvidence, "observeMcpReply").mockImplementation(() => {
-        throw new Error("private classifier failure");
-      });
+      const original = mcpPresentation.projectMcpPresentation;
+      const classifier = vi
+        .spyOn(mcpPresentation, "projectMcpPresentation")
+        .mockImplementation((value) => {
+          const projected = original(value);
+          if (projected.notices.includes("Check retained output before continuing."))
+            throw new Error("private classifier failure");
+          return projected;
+        });
       try {
         const result = yield* Effect.promise(() =>
           harness(() =>
             Promise.resolve(reply({ notices: ["Check retained output before continuing."] })),
           ).run(),
         );
-        expect(result.details?.mcpEvidence).toMatchObject({
+        expect(result.details?.compactAttention).toMatchObject({
           incomplete: true,
-          notices: ["Check retained output before continuing."],
+          notices: [{ text: "Check retained output before continuing." }],
         });
         expect(summary(result.details)?.outcome).toBe("uncertain");
       } finally {
@@ -317,7 +337,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           'for(let i=0;i<40;i++) await tools.mcp.request({action:"status"}); return 1',
         ),
       );
-      expect(result.details?.mcpEvidence?.notices).toHaveLength(32);
+      expect(result.details?.compactAttention?.notices).toHaveLength(32);
       expect(summary(result.details)?.outcome).toBe("uncertain");
       expect(
         summary(result.details)?.notices?.some((notice) => notice.text.includes("warning limit")),
@@ -329,15 +349,15 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       const h = harness(() =>
         Promise.resolve(reply({ notices: ["Keep this recovery instruction"] })),
       );
-      const snapshots: NonNullable<CodeModeToolDetails["mcpEvidence"]>[] = [];
+      const snapshots: NonNullable<CodeModeToolDetails["compactAttention"]>[] = [];
       yield* Effect.promise(() =>
         expect(
           h.run('await tools.mcp.request({action:"status"}); throw "outer failure"', (partial) => {
-            const evidence = partial.details?.mcpEvidence;
+            const evidence = partial.details?.compactAttention;
             if (evidence) {
               snapshots.push(evidence);
               // Simulate a host replacing the evidence object in its own published snapshot.
-              Object.assign(partial.details!, { mcpEvidence: {} });
+              Object.assign(partial.details!, { compactAttention: {} });
             }
           }),
         ).rejects.toThrow(),
@@ -349,7 +369,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       }
       expect(new Set(snapshots).size).toBe(snapshots.length);
       const retained = h.retention.consume("test");
-      expect(retained?.mcpEvidence?.observed).toBe(1);
+      expect(retained?.compactAttention?.observed).toBe(1);
       expect(
         summary(retained, true)?.children?.entries.some((child) =>
           child.notices?.some((notice) => notice.text.includes("Keep this")),
@@ -411,7 +431,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       const result = yield* Effect.promise(() => pending);
       expect(summary(result.details)?.outcome).toBe("warning");
       expect(
-        summary(result.details)?.notices?.some((notice) => notice.text.includes("retained-123")),
+        summary(result.details)?.children?.entries.some((child) =>
+          child.notices?.some((notice) => notice.text.includes("retained-123")),
+        ),
       ).toBe(true);
     }),
   );

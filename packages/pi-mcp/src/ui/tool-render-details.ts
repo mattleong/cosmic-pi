@@ -5,14 +5,11 @@ import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
 import { McpBoundaryError } from "../client/errors.ts";
+import { projectMcpPresentation, type McpPresentation } from "../code-mode/presentation.ts";
 
 import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
 
-import {
-  canonicalValidationWarning,
-  isOwnedValidationNotice,
-  validationNoticeIdentity,
-} from "./validation-notices.ts";
+import { isOwnedValidationNotice, validationNoticeIdentity } from "./validation-notices.ts";
 
 export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
@@ -29,7 +26,7 @@ const own = <Value>(value: Value, key: string): McpRenderField => {
 };
 const safeText = <Value>(value: Value, maximum = 512): string | undefined =>
   Predicate.isString(value)
-    ? sanitizeDiagnosticContent(sanitizeTerminalLine(value.slice(0, maximum)), {
+    ? sanitizeDiagnosticContent(sanitizeTerminalLine(value), {
         maximumLength: maximum,
       })
     : undefined;
@@ -74,6 +71,7 @@ export interface McpCardPage {
   readonly hasMore: boolean;
 }
 export interface McpCardDetails {
+  readonly presentation: McpPresentation;
   readonly action: string;
   readonly outcome?: McpCardOutcome;
   readonly isError: boolean;
@@ -216,48 +214,15 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     const text = safeText(entry);
     return text ? [text] : [];
   });
-  const warnings: string[] = [];
-  if (currentOutcome === "unknown" || originOutcome === "unknown")
-    warnings.push("Execution may have completed. Do not replay this operation automatically.");
-  if (own(data, "kind").value === "cleanup")
-    warnings.push(
-      "Cleanup is not confirmed. Access remains blocked; reconnect is not a safe recovery yet.",
-    );
+  const presentation = projectMcpPresentation(details);
+  const warnings = [...presentation.notices];
   if (
     evidence?.reason === "oauth-mutation-unresolved" ||
     evidence?.reason === "oauth-finalization-failed" ||
     evidence?.reason === "oauth-deletion-failed"
   )
     warnings.push(mcpDiagnostic({ ...evidence, outcome: "not-sent" }).explanation);
-  const truncated =
-    own(data, "truncated").value === true ||
-    own(data, "omitted").value === true ||
-    own(data, "kind").value === "output-limit" ||
-    own(payload, "truncated").value === true;
-  if (truncated)
-    warnings.push(
-      "Output is truncated or omitted. This card does not contain the complete result.",
-    );
-  if (origin?.isError)
-    warnings.push(
-      "The original operation reported a failure. Reading retained output does not change that outcome.",
-    );
-  if (validationIdentity) warnings.push(canonicalValidationWarning(validationIdentity));
-  else if (origin?.outputValidationFailed)
-    warnings.push("The original operation completed but output validation failed.");
-  if (!validationIdentity && origin?.outputValidationUnavailable)
-    warnings.push(
-      "The original operation completed but local output validation was unavailable. No mismatch was established. Do not replay the operation to recover its output.",
-    );
-  for (const notice of notices) {
-    if (
-      /cleanup|unconfirmed|unknown|replay|truncat|omitt|not retain|not recover|output.{0,12}limit/i.test(
-        notice,
-      ) &&
-      !warnings.includes(notice)
-    )
-      warnings.push(notice);
-  }
+  const truncated = presentation.truncated;
   const counts: string[] = [];
   const counters: string[] = [];
   const metadata: string[] = [];
@@ -312,13 +277,14 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   const imageCount = list(own(result, "content").value, 128).filter(
     (item) => own(item, "type").value === "image",
   ).length;
-  const resultId = own(details, "resultId").value;
+  const resultId = presentation.resultId;
   const preview = mcpContentPreview(
     action,
     data ?? details,
     own(data, "result").value !== undefined,
   );
   let projection: McpCardDetails = {
+    presentation,
     action,
     isError: currentError,
     known: currentOutcome !== undefined && Predicate.isBoolean(own(details, "isError").value),
@@ -342,7 +308,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   if (origin) projection = { ...projection, origin };
   if (page) projection = { ...projection, page };
   if (diagnostic) projection = { ...projection, diagnostic };
-  if (Predicate.isString(resultId) && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(resultId))
+  if (resultId !== undefined)
     projection = { ...projection, resultId, recoveryHint: `/mcp result ${resultId}` };
   else if (diagnostic?.recovery.length)
     projection = { ...projection, recoveryHint: "Open /mcp to inspect current server details." };

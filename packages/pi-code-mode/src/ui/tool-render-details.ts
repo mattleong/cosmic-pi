@@ -1,6 +1,7 @@
 /** Pure defensive normalization of current and legacy `code_mode` render details. */
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { FailurePresentationSchema, type FailurePresentation } from "../tools/failure-evidence.ts";
 import {
   CompactReceiptSchema,
@@ -28,6 +29,8 @@ export interface CodeModeRenderDetails {
   readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
+  /** Independently recovered notices, bounded by visible rows times the receipt notice limit. */
+  readonly recoveredNotices?: CompactAttention["notices"];
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly totalToolCalls: number;
   readonly counts: CodeModeCallCounts;
@@ -42,7 +45,7 @@ export interface CodeModeRenderDetails {
 const SubjectSchema = Schema.String.check(Schema.isMaxLength(MAX_NESTED_SUBJECT_LENGTH * 2));
 const CallEntryInputSchema = Schema.Struct({
   compact: Schema.optional(Schema.Unknown),
-  status: Schema.Literals(["queued", "running", "completed", "error", "cancelled"]),
+  status: Schema.optional(Schema.Unknown),
   tool: Schema.optional(Schema.Unknown),
   activity: Schema.optional(Schema.Unknown),
   subject: Schema.optional(Schema.Unknown),
@@ -72,25 +75,46 @@ const CallCountsInputSchema = Schema.Struct({
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
   decodeOption(Schema.Natural, value);
 
-const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => {
+const CallStatusSchema = Schema.Literals(["queued", "running", "completed", "error", "cancelled"]);
+interface NormalizedCallEntry {
+  readonly call?: CodeModeCallEntry;
+  readonly malformed: boolean;
+  readonly notices: CompactAttention["notices"];
+}
+const decodeCallEntry = <Value>(value: Value): NormalizedCallEntry => {
   const entry = decodeOption(CallEntryInputSchema, value);
-  if (entry === undefined) return undefined;
-  const activity = Predicate.isString(entry.activity) ? entry.activity : undefined;
+  if (entry === undefined) return { malformed: true, notices: [] };
+  const compact = decodeOption(CompactReceiptSchema, entry.compact);
+  const notices =
+    compact === undefined
+      ? recoverCompactNotices(entry.compact)
+      : compact.notices.map((notice) => ({
+          ...notice,
+          text: sanitizeDiagnosticContent(notice.text, { maximumLength: Number.MAX_SAFE_INTEGER }),
+        }));
+  const status = decodeOption(CallStatusSchema, entry.status);
+  if (status === undefined) return { malformed: true, notices };
+  const activity = Predicate.isString(entry.activity)
+    ? normalizeNestedSubject(entry.activity)
+    : undefined;
   const durationMs = nonNegativeInteger(entry.durationMs);
   const liveTiming = decodeOption(LiveChildTimingSchema, entry.liveTiming);
   const subject = decodeOption(SubjectSchema, entry.subject);
-  const compact = decodeOption(CompactReceiptSchema, entry.compact);
   const base: CodeModeCallEntry = {
-    ...(compact !== undefined && { compact }),
+    ...(compact !== undefined && { compact: { ...compact, notices } }),
     tool: Predicate.isString(entry.tool) ? entry.tool : "",
-    status: entry.status,
+    status,
   };
   return {
-    ...base,
-    ...(activity !== undefined && { activity }),
-    ...(subject !== undefined && { subject: normalizeNestedSubject(subject) }),
-    ...(durationMs !== undefined && { durationMs }),
-    ...(entry.status === "running" && liveTiming !== undefined && { liveTiming }),
+    malformed: entry.compact !== undefined && compact === undefined,
+    notices: compact === undefined ? notices : [],
+    call: {
+      ...base,
+      ...(activity !== undefined && { activity }),
+      ...(subject !== undefined && { subject: normalizeNestedSubject(subject) }),
+      ...(durationMs !== undefined && { durationMs }),
+      ...(status === "running" && liveTiming !== undefined && { liveTiming }),
+    },
   };
 };
 
@@ -99,10 +123,9 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
   const record = decodeOption(RenderDetailsInputSchema, details) ?? {};
   const rawCalls = Array.isArray(record.toolCalls) ? record.toolCalls : [];
   const inspectedCalls = rawCalls.slice(0, MAX_PROGRESS_ENTRIES);
-  const toolCalls = inspectedCalls.flatMap((entry) => {
-    const decoded = decodeCallEntry(entry);
-    return decoded === undefined ? [] : [decoded];
-  });
+  const normalizedCalls = inspectedCalls.map((entry) => decodeCallEntry(entry));
+  const toolCalls = normalizedCalls.flatMap(({ call }) => (call === undefined ? [] : [call]));
+  const recoveredNotices = normalizedCalls.flatMap(({ notices }) => notices);
   const legacyArrayTotal = toolCalls.length === inspectedCalls.length ? rawCalls.length : 0;
   const decodedTotal = nonNegativeInteger(record.totalToolCalls);
   const suppliedTotal = decodedTotal ?? 0;
@@ -141,13 +164,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
       : undefined;
   const mcpEvidence = decodeOption(McpEvidenceSchema, record.mcpEvidence);
   const decodedAttention = decodeOption(CompactAttentionSchema, record.compactAttention);
-  const malformedReceipt = inspectedCalls.some((entry) => {
-    const decoded = decodeOption(CallEntryInputSchema, entry);
-    return (
-      decoded?.compact !== undefined &&
-      decodeOption(CompactReceiptSchema, decoded.compact) === undefined
-    );
-  });
+  const malformedReceipt = normalizedCalls.some((entry) => entry.malformed);
   const visibleOutcomes = { errors: 0, warnings: 0, cancelled: 0, uncertain: 0 };
   for (const call of toolCalls) {
     const outcome = call.compact?.outcome;
@@ -214,6 +231,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     ...(compactAttention !== undefined && { compactAttention }),
     ...(mcpEvidence !== undefined && { mcpEvidence }),
     toolCalls,
+    recoveredNotices,
     totalToolCalls: total,
     counts,
     hasExactCounts,

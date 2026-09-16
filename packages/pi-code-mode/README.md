@@ -76,12 +76,16 @@ Validated per-call receipts use the same semantic projections as standalone tool
 limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay visible even
 when the program discards its replies. Native writes have no trustworthy before-state and warn
 that previous content is unavailable; they never claim a new file or inferred diff. Completion
-and guest delivery are separate: an output-budget refusal does not erase a completed mutation.
+and guest delivery are separate: output-budget or interpreter-copy rejection does not erase a
+completed mutation. Delivery recovery appears beneath the affected call and survives hidden rows.
+Current rows retain one redacted heading; replay also redacts older activity labels.
 Complete-line read continuation hints, including the 50KB cap, appear only on expansion.
 Retained call rows keep these hints even when the program discards the read result or later throws.
 They do not count as warnings or consume the attention budget.
 An execution-wide attention ledger preserves hidden-call warnings. Incomplete or overflowing
-evidence produces an explicit warning in both compact and detailed views. Historical calls
+evidence produces an explicit warning in both compact and detailed views. Valid recovery notices
+survive malformed sibling fields in saved receipts. MCP supplies its own outcome and recovery
+policy; Code Mode aggregates it without maintaining a second live MCP-specific ledger. Historical calls
 without correlated receipts remain conservative. Programs must still inspect and return protocol
 outcome evidence. No nested built-in is wrapped or dispatched differently.
 

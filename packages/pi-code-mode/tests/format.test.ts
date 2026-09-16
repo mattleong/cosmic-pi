@@ -2,11 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   callEntryDetails,
-  describeNestedActivity,
   formatCodeModeFailure,
   formatCodeModeSuccess,
   formatForeignRejection,
-  MAX_ACTIVITY_FIELD_LENGTH,
   MAX_PROGRESS_ENTRIES,
   progressResult,
   type CodeModeCallEntry,
@@ -22,26 +20,6 @@ describe("defensive formatters", () => {
     expect(formatForeignRejection(new Error("ordinary"))).toBe("ordinary");
     expect(formatForeignRejection("string")).toBe("string");
     expect(formatForeignRejection(hostile)).toBe("Unknown rejection");
-  });
-
-  it("derives categorized, bounded activity from decoded inputs", () => {
-    const cases = [
-      ["pi.read", { path: "src/a.ts" }, /^Read\b/, ["src/a.ts"]],
-      ["pi.grep", { pattern: "TODO" }, /^Search\b/, ["TODO"]],
-      ["pi.powershell", { command: "Get-ChildItem" }, /^Run\b/, ["Get-ChildItem"]],
-      ["session.backgroundTask", { action: "wait", id: "bg-2" }, /^Background\b/, ["wait", "bg-2"]],
-    ] as const;
-    for (const [name, input, category, fields] of cases) {
-      const activity = describeNestedActivity(name, input);
-      expect(activity).toMatch(category);
-      for (const field of fields) expect(activity).toContain(field);
-      expect([...activity].length).toBeLessThanOrEqual(MAX_ACTIVITY_FIELD_LENGTH * 2 + 20);
-    }
-
-    const longPath = "x".repeat(MAX_ACTIVITY_FIELD_LENGTH * 3);
-    const bounded = describeNestedActivity("pi.read", { path: longPath });
-    expect([...bounded].length).toBeLessThanOrEqual(MAX_ACTIVITY_FIELD_LENGTH + "Read ".length);
-    expect(bounded).not.toContain(longPath);
   });
 });
 

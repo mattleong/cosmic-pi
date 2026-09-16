@@ -150,6 +150,8 @@ const mcpTool = (invoke: McpDispatch) =>
 export interface CodeModeCatalogOptions {
   readonly observationId?: (fiber: number) => number | undefined;
   readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
+  /** Adapter output still needs the interpreter's schema and data-boundary decoding. */
+  readonly onOutputReturned?: (invocationId: number | undefined) => void;
   /** True only when the current platform supplied a native PowerShell definition. */
   readonly includePowerShell: boolean;
 }
@@ -214,7 +216,9 @@ export const makeExecutionGuestTools = (
         }),
         Effect.onExit((exit) =>
           Effect.sync(() => {
-            if (exit._tag === "Failure" && !receivedError)
+            if (exit._tag === "Success")
+              invokeHostCallback(() => options.onOutputReturned?.(invocationId), undefined);
+            else if (!receivedError)
               invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
           }),
         ),

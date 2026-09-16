@@ -185,6 +185,44 @@ describe("compact child selection", () => {
     },
   );
 
+  it.each(["tree", "flat"] as const)(
+    "keeps complete multiline recovery at narrow widths in %s calls",
+    (layout) => {
+      const recovery =
+        "Output was truncated.\nRead /tmp/retained-output-1234567890.txt before deciding whether to retry.";
+      for (const width of [1, 2, 4, 6, 7, 8, 12, 20, 40, 80]) {
+        for (const expanded of [false, true]) {
+          const rows = renderCompactChildren(
+            {
+              total: 1,
+              entries: [
+                {
+                  label: "server.with.a.long.tool.name",
+                  subject: "directory/".repeat(40),
+                  status: "warning",
+                  notices: [{ kind: "recovery", text: recovery }],
+                },
+              ],
+            },
+            theme,
+            width,
+            0,
+            true,
+            expanded,
+            layout,
+          ).map(stripAnsi);
+          expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+          expect(
+            rows
+              .slice(1)
+              .join("")
+              .replace(/[\s│╰─]/gu, ""),
+          ).toBe(recovery.replace(/\s/gu, ""));
+        }
+      }
+    },
+  );
+
   it("preserves call identity while eliding long targets like standalone headers", () => {
     const subject = `src/${"long-directory/".repeat(20)}target.ts`;
     for (const width of [40, 60, 80]) {
