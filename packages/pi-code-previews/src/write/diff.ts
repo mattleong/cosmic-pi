@@ -87,14 +87,15 @@ export function readExistingFileForPreview(
 export function getWriteDiffSkipReason<BeforeInput>(
   before: BeforeInput,
   nextContent: string,
+  maxBytes = currentMaxWriteDiffBytes(),
 ): string | undefined {
   const decoded = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
     onExcessProperty: "error",
   })(before);
   if (Option.isNone(decoded)) return undefined;
   const nextBytes = Buffer.byteLength(nextContent, "utf8");
-  if (nextBytes > currentMaxWriteDiffBytes())
-    return formatSkipReason("new content too large", nextBytes, true);
+  if (nextBytes > maxBytes)
+    return formatSkipReason("new content too large", nextBytes, true, maxBytes);
   return formatSkipReason(
     decoded.value.reason,
     decoded.value.byteLength,
@@ -104,15 +105,23 @@ export function getWriteDiffSkipReason<BeforeInput>(
 }
 
 export function shouldSkipWriteDiffBytes(...texts: string[]): boolean {
+  return exceedsWriteDiffBytes(texts, currentMaxWriteDiffBytes());
+}
+
+export function exceedsWriteDiffBytes(texts: readonly string[], maxBytes: number): boolean {
   let total = 0;
   for (const text of texts) {
     total += Buffer.byteLength(text, "utf8");
-    if (total > currentMaxWriteDiffBytes()) return true;
+    if (total > maxBytes) return true;
   }
   return false;
 }
 
-export function shouldSkipWriteDiffComplexity(before: string, after: string): boolean {
+export function shouldSkipWriteDiffComplexity(
+  before: string,
+  after: string,
+  maxCells = currentMaxChangedLineCells(),
+): boolean {
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
   const sharedLimit = Math.min(beforeLines.length, afterLines.length);
@@ -127,7 +136,7 @@ export function shouldSkipWriteDiffComplexity(before: string, after: string): bo
     suffix++;
   const changedBefore = beforeLines.length - prefix - suffix;
   const changedAfter = afterLines.length - prefix - suffix;
-  return changedBefore * changedAfter > currentMaxChangedLineCells();
+  return changedBefore * changedAfter > maxCells;
 }
 
 function skippedExistingFile(

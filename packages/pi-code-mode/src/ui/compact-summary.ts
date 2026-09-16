@@ -1,7 +1,13 @@
 /** Pure Code Mode projection for the opt-in shared compact shell. */
 import * as Schema from "effect/Schema";
-import type { CompactNotice, CompactSummaryProvider } from "pi-code-previews";
-import { isCompactPiTool } from "../tools/mcp-evidence.ts";
+import {
+  selectCompactChildren,
+  type CompactChild,
+  type CompactNotice,
+  type CompactSummaryProvider,
+} from "pi-code-previews";
+import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
+import { isCompactPiTool, mcpAttention } from "../tools/mcp-evidence.ts";
 import { decodeOption } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
@@ -19,12 +25,63 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
 }) => {
   try {
     const subject = describeCodeModeIntent(decodeOption(ArgsSchema, args)?.intent);
-    if (result === undefined) return phase === "settled" ? undefined : { subject };
+    const heading = { subject, showTiming: true as const };
+    if (result === undefined) return phase === "settled" ? undefined : heading;
     const details = decodeCodeModeRenderDetails(result.details);
     if (!details.compactEligible) return undefined;
     const { total, succeeded, failed, cancelled, running, queued } = details.counts;
     const counters = [`${succeeded + failed + cancelled}/${total} done`];
-    const notices: CompactNotice[] = [];
+    const children = {
+      total,
+      entries: details.toolCalls.map(
+        (call): CompactChild => ({
+          label: isCompactPiTool(call.tool)
+            ? call.tool.slice(3)
+            : call.compact !== undefined && call.tool === "mcp.request"
+              ? "mcp"
+              : call.compact !== undefined && call.tool === "session.backgroundTask"
+                ? "background_task"
+                : call.tool,
+          ...(call.subject !== undefined && { subject: call.subject }),
+          ...(call.compact !== undefined && {
+            subject: call.compact.subject,
+            ...(call.compact.action !== undefined && { action: call.compact.action }),
+            ...(call.compact.counters !== undefined && { counters: call.compact.counters }),
+            ...(call.compact.metadata !== undefined && { metadata: call.compact.metadata }),
+            notices: call.compact.notices,
+          }),
+          ...(call.durationMs !== undefined &&
+            call.status !== "queued" &&
+            call.status !== "running" && {
+              durationMs: call.durationMs,
+              showTiming: true as const,
+            }),
+          // Delivery failure takes precedence over a successful operation receipt.
+          status: call.compact?.deliveryFailed
+            ? call.compact.outcome === "uncertain"
+              ? "uncertain"
+              : "error"
+            : call.status === "completed"
+              ? (call.compact?.outcome ??
+                (isCompactPiTool(call.tool) && details.compactAttention === undefined
+                  ? "success"
+                  : "returned"))
+              : call.status === "queued" || call.status === "running"
+                ? phase === "settled"
+                  ? "uncertain"
+                  : call.status === "queued"
+                    ? "pending"
+                    : "running"
+                : call.status,
+        }),
+      ),
+    };
+    const notices: CompactNotice[] = (details.compactAttention?.notices ?? []).map((notice) => ({
+      ...notice,
+      expandedInResult: true,
+    }));
+    if (details.compactAttention?.incomplete)
+      notices.push({ kind: "warning", text: INCOMPLETE_ATTENTION, expandedInResult: true });
     if (failed > 0) notices.push({ kind: "warning", text: `${failed} nested operations failed.` });
     if (cancelled > 0)
       notices.push({
@@ -37,16 +94,36 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
         text: "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.",
       });
     const evidence = details.mcpEvidence;
-    if (phase === "settled" && evidence !== undefined && evidence.observed !== evidence.mcp)
+    if (
+      details.compactAttention === undefined &&
+      phase === "settled" &&
+      evidence !== undefined &&
+      evidence.observed !== evidence.mcp
+    )
       return undefined;
     if (evidence !== undefined) {
-      notices.push(...evidence.notices.map((text) => ({ kind: "warning" as const, text })));
-      if (evidence.unknown > 0)
+      for (const text of mcpAttention(evidence)) {
+        if (!notices.some((notice) => notice.text === text))
+          notices.push({ kind: "warning", text, expandedInResult: true });
+      }
+      if (
+        evidence.unknown > 0 &&
+        !notices.some(
+          (notice) =>
+            notice.text ===
+            "MCP execution is uncertain. Check its state; do not replay the operation automatically.",
+        )
+      )
         notices.push({
           kind: "recovery",
           text: "MCP execution is uncertain. Check its state; do not replay the operation automatically.",
         });
-      if (evidence.notSent > 0)
+      if (
+        evidence.notSent > 0 &&
+        !notices.some(
+          (notice) => notice.text === `${evidence.notSent} MCP operations were not sent.`,
+        )
+      )
         notices.push({
           kind: "warning",
           text: `${evidence.notSent} MCP operations were not sent.`,
@@ -56,19 +133,39 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
           kind: "recovery",
           text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
         });
-      if (evidence.errors > 0)
+      if (
+        evidence.errors > 0 &&
+        !notices.some(
+          (notice) =>
+            notice.text ===
+            `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
+        )
+      )
         notices.push({
           kind: "warning",
           text: `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
         });
     }
-    if (phase !== "settled") return { subject, counters, notices };
+    const hasAttention = notices.length > 0;
+    const visibleNotices = selectCompactChildren(children).entries.flatMap(
+      (child) => child.notices ?? [],
+    );
+    for (let index = notices.length - 1; index >= 0; index--) {
+      const notice = notices[index]!;
+      if (
+        visibleNotices.some(
+          (visible) => visible.kind === notice.kind && visible.text === notice.text,
+        )
+      )
+        notices.splice(index, 1);
+    }
+    if (phase !== "settled") return { ...heading, counters, children, notices };
     if (running + queued > 0) {
       notices.push({
         kind: "warning",
         text: "Nested operations have no confirmed settlement. Check their state before retrying.",
       });
-      return { subject, counters, notices, outcome: "uncertain" };
+      return { ...heading, counters, children, notices, outcome: "uncertain" };
     }
     if (context.isError || details.cancelled) {
       const textParts = decodeOption(TextContentSchema, result.content);
@@ -85,8 +182,9 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
           text: "Execution cancelled; prior side effects are not rolled back.",
         });
       return {
-        subject,
+        ...heading,
         counters,
+        children,
         notices,
         outcome: details.cancelled ? "cancelled" : "error",
         ...(text.length > 0 && { failure: { cause: first, details: text } }),
@@ -96,6 +194,7 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     // validate completely before reaching this branch; never infer outcomes from guest output.
     if (
       evidence === undefined &&
+      details.compactAttention === undefined &&
       (total !== details.toolCalls.length ||
         details.toolCalls.some((call) => !isCompactPiTool(call.tool)))
     )
@@ -103,17 +202,25 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     // outputKind is emitted only by the owned successful execution path, unlike isError=false.
     if (details.outputKind === undefined) return undefined;
     return {
-      subject,
+      ...heading,
       counters: [`${total} ${total === 1 ? "tool" : "tools"}`],
+      children,
       notices,
       detailsOnExpand: true,
-      outcome: evidence?.unknown
-        ? "uncertain"
-        : evidence?.errors || evidence?.notSent
-          ? "error"
-          : failed + cancelled > 0 || details.truncated || notices.length > 0
-            ? "warning"
-            : "success",
+      outcome:
+        details.compactAttention?.incomplete ||
+        details.compactAttention?.uncertain ||
+        evidence?.unknown
+          ? "uncertain"
+          : details.compactAttention?.errors || evidence?.errors || evidence?.notSent
+            ? "error"
+            : failed + cancelled > 0 ||
+                details.compactAttention?.cancelled ||
+                details.compactAttention?.warnings ||
+                details.truncated ||
+                hasAttention
+              ? "warning"
+              : "success",
     };
   } catch {
     return undefined;

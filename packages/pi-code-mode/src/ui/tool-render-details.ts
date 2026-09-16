@@ -2,11 +2,18 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
+  CompactReceiptSchema,
+  CompactAttentionSchema,
+  recoverCompactNotices,
+  type CompactAttention,
+} from "../tools/compact-evidence.ts";
+import {
   McpEvidenceSchema,
   validMcpCoverage,
   isCompactPiTool,
   type McpEvidence,
 } from "../tools/mcp-evidence.ts";
+import { MAX_NESTED_SUBJECT_LENGTH, normalizeNestedSubject } from "../tools/compact-subject.ts";
 import {
   countCallEntries,
   decodeOption,
@@ -16,6 +23,7 @@ import {
 } from "../tools/format.ts";
 
 export interface CodeModeRenderDetails {
+  readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly totalToolCalls: number;
@@ -28,13 +36,17 @@ export interface CodeModeRenderDetails {
   readonly truncated: boolean;
 }
 
+const SubjectSchema = Schema.String.check(Schema.isMaxLength(MAX_NESTED_SUBJECT_LENGTH * 2));
 const CallEntryInputSchema = Schema.Struct({
+  compact: Schema.optional(Schema.Unknown),
   status: Schema.Literals(["queued", "running", "completed", "error", "cancelled"]),
   tool: Schema.optional(Schema.Unknown),
   activity: Schema.optional(Schema.Unknown),
+  subject: Schema.optional(Schema.Unknown),
   durationMs: Schema.optional(Schema.Unknown),
 });
 const RenderDetailsInputSchema = Schema.Struct({
+  compactAttention: Schema.optional(Schema.Unknown),
   mcpEvidence: Schema.optional(Schema.Unknown),
   toolCalls: Schema.optional(Schema.Unknown),
   totalToolCalls: Schema.optional(Schema.Unknown),
@@ -60,13 +72,17 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
   if (entry === undefined) return undefined;
   const activity = Predicate.isString(entry.activity) ? entry.activity : undefined;
   const durationMs = nonNegativeInteger(entry.durationMs);
+  const subject = decodeOption(SubjectSchema, entry.subject);
+  const compact = decodeOption(CompactReceiptSchema, entry.compact);
   const base: CodeModeCallEntry = {
+    ...(compact !== undefined && { compact }),
     tool: Predicate.isString(entry.tool) ? entry.tool : "",
     status: entry.status,
   };
   return {
     ...base,
     ...(activity !== undefined && { activity }),
+    ...(subject !== undefined && { subject: normalizeNestedSubject(subject) }),
     ...(durationMs !== undefined && { durationMs }),
   };
 };
@@ -117,14 +133,84 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
       ? record.outputKind
       : undefined;
   const mcpEvidence = decodeOption(McpEvidenceSchema, record.mcpEvidence);
+  const decodedAttention = decodeOption(CompactAttentionSchema, record.compactAttention);
+  const malformedReceipt = inspectedCalls.some((entry) => {
+    const decoded = decodeOption(CallEntryInputSchema, entry);
+    return (
+      decoded?.compact !== undefined &&
+      decodeOption(CompactReceiptSchema, decoded.compact) === undefined
+    );
+  });
+  const visibleOutcomes = { errors: 0, warnings: 0, cancelled: 0, uncertain: 0 };
+  for (const call of toolCalls) {
+    const outcome = call.compact?.outcome;
+    if (outcome === "error") visibleOutcomes.errors++;
+    else if (outcome === "warning") visibleOutcomes.warnings++;
+    else if (outcome === "cancelled") visibleOutcomes.cancelled++;
+    else if (outcome === "uncertain") visibleOutcomes.uncertain++;
+  }
+  const invalidAttention =
+    decodedAttention !== undefined &&
+    (decodedAttention.errors < visibleOutcomes.errors ||
+      decodedAttention.warnings < visibleOutcomes.warnings ||
+      decodedAttention.cancelled < visibleOutcomes.cancelled ||
+      decodedAttention.uncertain < visibleOutcomes.uncertain ||
+      decodedAttention.admitted !== total ||
+      decodedAttention.started > total ||
+      decodedAttention.observed > decodedAttention.started ||
+      decodedAttention.errors +
+        decodedAttention.warnings +
+        decodedAttention.cancelled +
+        decodedAttention.uncertain >
+        decodedAttention.observed ||
+      decodedAttention.unsupported > 0 ||
+      (counts.running + counts.queued === 0 &&
+        decodedAttention.started !== decodedAttention.observed) ||
+      decodedAttention.observed < toolCalls.filter((call) => call.compact !== undefined).length);
+  const missingReceipt =
+    decodedAttention !== undefined &&
+    toolCalls.some((call) => call.status === "completed" && call.compact === undefined);
+  const malformedMcp =
+    record.mcpEvidence !== undefined &&
+    (mcpEvidence === undefined ||
+      mcpEvidence.incomplete ||
+      (counts.running + counts.queued === 0 && mcpEvidence.observed !== mcpEvidence.mcp) ||
+      !validMcpCoverage(
+        { ...mcpEvidence, unsupported: 0, pi: mcpEvidence.pi + mcpEvidence.unsupported },
+        total,
+      ));
+  const compactAttention =
+    malformedReceipt ||
+    (record.compactAttention !== undefined && malformedMcp) ||
+    invalidAttention ||
+    missingReceipt ||
+    (record.compactAttention !== undefined && decodedAttention === undefined)
+      ? {
+          ...(decodedAttention ?? {
+            version: 1 as const,
+            admitted: total,
+            started: 0,
+            unsupported: 0,
+            observed: 0,
+            errors: 0,
+            warnings: 0,
+            cancelled: 0,
+            uncertain: 0,
+            notices: recoverCompactNotices(record.compactAttention),
+          }),
+          incomplete: true,
+        }
+      : decodedAttention;
   const normalized: CodeModeRenderDetails = {
+    ...(compactAttention !== undefined && { compactAttention }),
     ...(mcpEvidence !== undefined && { mcpEvidence }),
     toolCalls,
     totalToolCalls: total,
     counts,
     hasExactCounts,
     compactEligible:
-      (record.mcpEvidence === undefined ||
+      (compactAttention !== undefined ||
+        record.mcpEvidence === undefined ||
         (mcpEvidence !== undefined &&
           validMcpCoverage(mcpEvidence, total) &&
           toolCalls.filter((call) => isCompactPiTool(call.tool)).length <= mcpEvidence.pi &&

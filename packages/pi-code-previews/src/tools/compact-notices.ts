@@ -6,22 +6,31 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
 import {
   getWriteDiffSkipReason,
-  shouldSkipWriteDiffBytes,
+  exceedsWriteDiffBytes,
   shouldSkipWriteDiffComplexity,
 } from "../write/diff";
 import type { CompactNotice } from "./compact-summary";
 import { isTruncated, splitReadContinuationNotice } from "./data/results";
 import { getPreviewSecretWarnings } from "./renderers/shared/secret-preview";
 
-export function secretNotices(sources: readonly string[]): CompactNotice[] {
-  const warnings = new Set(sources.flatMap(getPreviewSecretWarnings));
+export function secretNotices(
+  sources: readonly string[],
+  enabled = codePreviewSettings.secretWarnings,
+  limit = codePreviewPerformanceConfig.secretScanChars,
+): CompactNotice[] {
+  const warnings = new Set(
+    sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
+  );
   return warnings.size > 0
     ? [{ kind: "warning", text: `Possible ${[...warnings].join(", ")}` }]
     : [];
 }
 
-export function bashCommandNotices(command: string): CompactNotice[] | undefined {
-  if (!codePreviewSettings.bashWarnings) return [];
+export function bashCommandNotices(
+  command: string,
+  enabled = codePreviewSettings.bashWarnings,
+): CompactNotice[] | undefined {
+  if (!enabled) return [];
   // Do not partially scan a command and hide warnings in its unscanned middle.
   if (command.length > 16 * 1024) return undefined;
   return getBashWarnings(command).map((text) => ({ kind: "warning", text }));
@@ -96,10 +105,16 @@ export function outputLimitProjection<Details>(
 export function writeDiffProjection<Before>(
   before: Before,
   content: string,
+  policy = {
+    secretWarnings: codePreviewSettings.secretWarnings,
+    secretScanChars: codePreviewPerformanceConfig.secretScanChars,
+    maxWriteDiffBytes: codePreviewPerformanceConfig.maxWriteDiffBytes,
+    maxWriteDiffChangedLineCells: codePreviewPerformanceConfig.maxWriteDiffChangedLineCells,
+  },
 ): CompactResultProjection {
   // Validate the owned skipped-snapshot shape before using its size evidence.
   // Do not classify prose reasons or let large new content mask missing history.
-  const skipReason = getWriteDiffSkipReason(before, "");
+  const skipReason = getWriteDiffSkipReason(before, "", policy.maxWriteDiffBytes);
   if (skipReason !== undefined) {
     const byteLength = getObjectValue(before, "byteLength");
     const maxBytes = getObjectValue(before, "maxBytes");
@@ -112,7 +127,10 @@ export function writeDiffProjection<Before>(
       Predicate.isNumber(maxBytes) &&
       byteLength > maxBytes
     )
-      return { notices: secretNotices([skipReason]), metadata: ["diff skipped: size"] };
+      return {
+        notices: secretNotices([skipReason], policy.secretWarnings, policy.secretScanChars),
+        metadata: ["diff skipped: size"],
+      };
     return {
       notices: [
         { kind: "warning", text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}` },
@@ -130,12 +148,15 @@ export function writeDiffProjection<Before>(
     };
   // UTF-16 length is a cheap lower bound on UTF-8 bytes. Keep later scans bounded.
   if (
-    content.length > codePreviewPerformanceConfig.maxWriteDiffBytes ||
-    beforeContent.length > codePreviewPerformanceConfig.maxWriteDiffBytes ||
-    shouldSkipWriteDiffBytes(beforeContent, content)
+    content.length > policy.maxWriteDiffBytes ||
+    beforeContent.length > policy.maxWriteDiffBytes ||
+    exceedsWriteDiffBytes([beforeContent, content], policy.maxWriteDiffBytes)
   )
     return { notices: [], metadata: ["diff skipped: size"] };
-  if (beforeContent !== content && shouldSkipWriteDiffComplexity(beforeContent, content))
+  if (
+    beforeContent !== content &&
+    shouldSkipWriteDiffComplexity(beforeContent, content, policy.maxWriteDiffChangedLineCells)
+  )
     return { notices: [], metadata: ["diff skipped: complexity"] };
   return { notices: [], metadata: [] };
 }

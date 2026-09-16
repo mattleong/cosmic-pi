@@ -5,8 +5,12 @@ import { getSecretWarnings } from "../../../warnings/secrets";
 import { codePreviewSettings } from "../../../config/state";
 
 /** Notice discovery must also run when the preview body is hidden. */
-export function getPreviewSecretWarnings(source: string): string[] {
-  return codePreviewSettings.secretWarnings ? getSecretWarnings(secretScanSample(source)) : [];
+export function getPreviewSecretWarnings(
+  source: string,
+  enabled = codePreviewSettings.secretWarnings,
+  limit = codePreviewPerformanceConfig.secretScanChars,
+): string[] {
+  return enabled ? getSecretWarnings(secretScanSample(source, limit)) : [];
 }
 
 export function withSecretWarning(source: string, theme: Theme, preview: string): string {
@@ -15,8 +19,7 @@ export function withSecretWarning(source: string, theme: Theme, preview: string)
   return `${theme.fg("warning", `⚠ Preview ${countLabel(warnings.length, "warning")}: possible ${warnings.join(", ")}`)}\n${preview}`;
 }
 
-function secretScanSample(source: string): string {
-  const limit = codePreviewPerformanceConfig.secretScanChars;
+function secretScanSample(source: string, limit: number): string {
   if (source.length <= limit) return source;
   const half = Math.floor(limit / 2);
   // slice(-0) would scan the entire source when the configured budget is one.

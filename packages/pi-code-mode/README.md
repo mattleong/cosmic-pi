@@ -48,17 +48,27 @@ is sanitized against terminal control injection. Presentation does not change mo
 results or execution limits.
 
 When Code Previews' `toolCallCollapsedStyle` is `compact`, the outer call instead shows the
-intent, lifecycle status, and exact settled/total nested counts. Source, ordinary output, and
-individual activity rows stay hidden until expansion. Caught nested failures produce a warning;
+intent, lifecycle status, and exact settled/total nested counts. A nested tree shows up to five
+calls with their statuses and builtin targets, such as file paths, read ranges, commands and
+search patterns. Targets use the standalone compact format, with bounded credential-redacted
+text; older saved calls without target metadata show names only. Larger batches show an omitted
+call count. With tool timing enabled, the parent shows measured elapsed time beside its count,
+and settled children show their recorded durations. Parallel child timings overlap; they are not
+summed to estimate the parent's duration. Source and ordinary output stay hidden until expansion. Caught nested failures produce a warning;
 cancellation, truncation, and retained failure recovery text stay visible. Missing or malformed
 details retain the existing renderer. The default `preview` style is unchanged; reload after
 changing the Code Previews setting.
 
 Nested MCP and Background Tasks replies can report failure even when their calls fulfill.
-Those domain outcomes are not retained in activity details, so completed programs using those
-adapters keep the existing renderer rather than claim compact success. Incomplete call history
-also keeps the original view. Programs must still inspect and return protocol outcome evidence.
-No nested built-in is wrapped or dispatched differently.
+Validated per-call receipts use the same semantic projections as standalone tools. Builtin
+limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay visible even
+when the program discards its replies. Native writes have no trustworthy before-state and warn
+that previous content is unavailable; they never claim a new file or inferred diff. Completion
+and guest delivery are separate: an output-budget refusal does not erase a completed mutation.
+An execution-wide attention ledger preserves hidden-call warnings. Incomplete or overflowing
+evidence produces an explicit warning in both compact and detailed views. Historical calls
+without correlated receipts remain conservative. Programs must still inspect and return protocol
+outcome evidence. No nested built-in is wrapped or dispatched differently.
 
 ## Supplied tool authority and direct nested dispatch
 

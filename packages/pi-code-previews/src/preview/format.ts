@@ -2,6 +2,18 @@ import type { AppKeybinding, Theme } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { forEachPreviewTextLine } from "./line-counts";
 
+export function formatToolCallDuration(ms: number): string {
+  const roundedMs = Math.max(0, Math.round(ms));
+  if (roundedMs < 1000) return `${roundedMs}ms`;
+  if (roundedMs < 60_000) return `${(roundedMs / 1000).toFixed(1)}s`;
+  const totalSeconds = Math.round(roundedMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m ${seconds}s`;
+}
+
 export type PreviewLineEntry<T> =
   | { kind: "line"; line: T; index: number }
   | { kind: "hidden"; hidden: number };

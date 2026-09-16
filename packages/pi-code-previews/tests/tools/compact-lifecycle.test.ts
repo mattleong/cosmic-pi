@@ -162,6 +162,33 @@ test("one stable compact call carries pending, executing, streaming and final me
   assert.equal(bodyWork, 0, "compact summaries must avoid hidden diff/output computation");
 });
 
+test("nested calls render once in the collapsed shell and yield to expanded details", () => {
+  const h = harness((input) => ({
+    ...summarize(input),
+    subject: "Inspect",
+    children: {
+      entries: [{ label: "CHILD_CALL", status: input.phase === "settled" ? "success" : "running" }],
+      total: 1,
+    },
+  }));
+  h.call({ executionStarted: true });
+  h.result(result("stream"));
+  assert.equal(
+    h
+      .rows()
+      .join("\n")
+      .match(/CHILD_CALL/gu)?.length,
+    1,
+  );
+  const settled = h.update({ isPartial: false }, result("final"));
+  assert.equal(settled.join("\n").match(/CHILD_CALL/gu)?.length, 1);
+  const expanded = h.update({ expanded: true });
+  assert.doesNotMatch(expanded.join("\n"), /CHILD_CALL/u);
+  assert.match(expanded.join("\n"), /BODY final/u);
+  const collapsed = h.update({ expanded: false });
+  assert.equal(collapsed.join("\n").match(/CHILD_CALL/gu)?.length, 1);
+});
+
 test("call-before-final does not promote retained streaming output to a final summary", () => {
   const seen: Array<{ phase: string; text: string }> = [];
   const h = harness((input) => {
@@ -381,6 +408,35 @@ test("timing starts only on observed execution, freezes on final and remains ind
   assert.equal(scheduled.size, 0);
   assert.match(first.rows().join(""), /updated metadata/u);
   assert.match(second.rows().join(""), /second-final/u);
+});
+
+test("the timing preference gates overall and nested measured durations together", () => {
+  for (const timing of [false, true]) {
+    const h = harness(
+      (input) => ({
+        ...summarize(input),
+        subject: "Inspect",
+        showTiming: true,
+        counters: ["3 tools"],
+        children: {
+          entries: [
+            { label: "nested-read", status: "success", showTiming: true, durationMs: 1500 },
+          ],
+          total: 1,
+        },
+      }),
+      "off",
+      { timing },
+    );
+    h.state.codePreviewTimingStartedAt = 100;
+    h.state.codePreviewTimingEndedAt = 350;
+    h.call({ isPartial: false });
+    h.result(result("done"), { isPartial: false });
+    const rendered = h.rows().join("\n");
+    assert.ok(rendered.includes("3 tools"));
+    assert.equal(rendered.includes("250ms"), timing);
+    assert.equal(rendered.includes("1.5s"), timing);
+  }
 });
 
 test("enabling duration display at settlement still cancels an animation-only timer", () => {

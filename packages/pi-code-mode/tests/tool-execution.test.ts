@@ -720,12 +720,50 @@ describe("cancellation", () => {
       expect(textOf(result)).toBe("Execution cancelled.");
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
+      expect(result.details.toolCalls[0]?.subject).toBe("hang");
       expect(calls[0]?.signal?.aborted).toBe(true);
     }),
   );
 });
 
 describe("progress", () => {
+  it.effect("captures distinct argument targets without retaining bodies or output", () =>
+    Effect.gen(function* () {
+      const definitions = fakeDefinitions({
+        read: () => Promise.resolve("PRIVATE OUTPUT"),
+        write: () => Promise.resolve("saved"),
+      });
+      const execute = makeHarness({ definitions });
+      const result = yield* Effect.promise(() =>
+        execute(
+          "call-subjects",
+          `
+        await Promise.all([
+          tools.pi.read({path:"first.ts", offset:2, limit:3}),
+          tools.pi.read({path:"second.ts", limit:1})
+        ]);
+        await tools.pi.write({path:"new.ts", content:"PRIVATE BODY"});
+        return "done";
+      `,
+          undefined,
+          (partial) => {
+            for (const call of partial.details.toolCalls)
+              Reflect.set(call, "subject", "HOST MUTATION");
+          },
+        ),
+      );
+      expect(textOf(result)).toBe("done");
+      expect(result.details.toolCalls.map((call) => call.subject)).toEqual([
+        "first.ts:2-4",
+        "second.ts:1-1",
+        "new.ts",
+      ]);
+      expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(result.details)).not.toMatch(
+        /PRIVATE|HOST MUTATION/u,
+      );
+    }),
+  );
+
   it.effect("keeps high-call cancellation final state isolated from hostile progress updates", () =>
     Effect.gen(function* () {
       const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
@@ -768,6 +806,7 @@ describe("progress", () => {
       });
       expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
       expect(result.details.toolCalls[0]?.tool).toBe("pi.read");
+      expect(result.details.toolCalls[0]?.subject).toBeUndefined();
     }),
   );
 
@@ -1073,6 +1112,7 @@ describe("diagnostics and errors", () => {
       expect(retained).toHaveLength(1);
       expect(retained[0]?.id).toBe("call-retained-failure");
       expect(retained[0]?.details.toolCalls[0]?.status).toBe("error");
+      expect(retained[0]?.details.toolCalls[0]?.subject).toBe("missing");
       expect(retained[0]?.details.counts).toMatchObject({ total: 1, failed: 1 });
     }),
   );

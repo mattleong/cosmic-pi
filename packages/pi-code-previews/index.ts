@@ -28,12 +28,29 @@ export type {
   ToolCallCollapsedStyle,
 } from "./src/config/schema";
 
+/** Argument-only builtin targets for compound/nested call previews. */
+export {
+  describeBuiltinCompactSubject,
+  type BuiltinCompactTool,
+} from "./src/tools/builtin-subject";
+
 /** Semantic compact summaries for cooperating tools. */
 export type {
   CompactAnimationScheduler,
   CompactPhase,
   CompactOutcome,
   CompactNotice,
+  CompactChild,
   CompactSummary,
   CompactSummaryProvider,
 } from "./src/tools/compact-summary";
+
+export {
+  projectBuiltinCompactSummary,
+  type BuiltinCompactPolicy,
+  type BuiltinBeforeWrite,
+  type BuiltinCompactProjectionInput,
+} from "./src/tools/builtin-projection";
+export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary";
+
+export { selectCompactChildren } from "./src/preview/compact-children";

@@ -48,6 +48,36 @@ test("duration is a last-resort detail using numeric elapsed time", () => {
   assert.ok(!row.includes("10.0s"));
 });
 
+test("explicit measured timing accompanies counts without overriding disabled timing or inventing replay time", () => {
+  for (const timingEnabled of [false, true]) {
+    for (const duration of [undefined, "MEASURED"]) {
+      const row = renderCompactToolCall(
+        {
+          name: "code_mode",
+          phase: "settled",
+          timingEnabled,
+          duration,
+          elapsedMs: 12,
+          summary: {
+            subject: "inspect",
+            counters: ["3 tools"],
+            showTiming: true,
+            outcome: "success",
+          },
+        },
+        theme,
+        120,
+      )[0]!;
+      assert.ok(row.includes("3 tools"));
+      assert.equal(row.includes("MEASURED"), timingEnabled && duration !== undefined);
+    }
+  }
+  const row = allocateCompactHeader("mode", "target", ["3 tools"], [], 24, " · ", "MEASURED");
+  assert.ok(row.includes("3 tools"));
+  assert.ok(!row.includes("MEASURED"));
+  assert.ok(visibleWidth(row) <= 24);
+});
+
 test("compact subjects are single-line, inert and width bounded without losing tool identity", () => {
   for (const width of [1, 4, 16, 40, 100]) {
     const rows = renderCompactToolCall(

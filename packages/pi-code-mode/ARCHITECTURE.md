@@ -32,14 +32,27 @@ Only runtime source plus its README, legal, and provenance documents ship.
   compact shell. It requires consistent current details and explicit execution success evidence,
   retains failure recovery text, and warns on handled nested failures or output truncation.
   It pairs intent with one exact call count after settlement or a done/total count while running.
+  It opts into measured parent timing beside that count and passes settled child durations to
+  the shell. Both obey the shared timing setting; no durations are inferred or summed.
+  Its optional compact child tree projects retained call names, lifecycle and builtin targets,
+  with exact totals for the shared shell's omitted-call marker. Duplicate calls remain distinct.
+  `tools/compact-subject.ts` captures allowlisted paths, read ranges, commands and search targets
+  at decoded call start using Code Previews' shared argument-only formatter. It redacts fields
+  before clipping, caps subjects at 1024 code points and contains formatting failures. Replay
+  validates subjects without resolving paths again; older rows remain names-only. Input objects,
+  write/edit bodies, MCP argument payloads and returned output never enter these subjects.
+  Producer-owned argument-only projections supply MCP and Background Tasks headings. Correlated
+  receipts supply semantic child statuses; delivery failures override successful operation colors
+  without changing the recorded operation outcome. Expansion keeps the existing detailed renderer.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
   MCP compact outcomes use versioned, schema-validated execution evidence, not guest return
   values or Promise fulfillment. The bounded aggregate covers every admitted call independently
   of display history and preserves MCP certainty, error counts, and sanitized warning/recovery
-  notices, including retained-read origin outcomes and output validation. Missing, malformed,
-  incomplete, or overflowing evidence and unsupported Background Tasks calls keep the original
-  renderer. Compact notices remain shell-owned because guest programs can discard MCP replies.
+  notices, including retained-read origin outcomes and output validation. New incomplete or
+  overflowing evidence produces explicit attention in both compact and detailed views. Historical
+  unsupported calls keep the original renderer. The shared child selector identifies notices
+  rendered on visible children; hidden and evicted notices remain parent-owned.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
   publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
@@ -183,12 +196,23 @@ within 32 visible slots, while exact counts include hidden calls and drive the h
 New details retain `totalToolCalls` when rows are hidden so older renderers keep the marker; exact
 counts carry current lifecycle totals. Tolerant render decoding still accepts historical details.
 Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
-execution state. `tools/mcp-evidence.ts` owns the bounded aggregate. The MCP boundary observes each
-validated reply or sanitized rejection in its invocation-local scope without changing dispatch,
-results, or throws. Admission separately partitions exact Pi built-ins, MCP, and unsupported calls.
-Evidence snapshots are copied and deeply frozen, including failure retention; settlement closes
-observation so late completion cannot change published evidence. No MCP payload or request argument
-is retained. Notice overflow declines compact projection rather than dropping recovery text.
+execution state. `tools/compact-evidence.ts` owns versioned, schema-validated per-call receipts
+and an execution-wide attention ledger independent of both row caps. Lifecycle start binds the
+current Effect fiber ID to its invocation ID. Adapters capture that invocation ID before host
+dispatch; terminal hooks remove the binding, and outer settlement revokes all observation. No FIFO, name or
+argument-equality correlation is used. Conflicts and missing evidence become explicit incompleteness.
+Builtin results are projected before guest conversion discards details. Native writes always pass
+unknown before-state and do no extra filesystem I/O. MCP validated replies and typed failures use
+producer projections; Background Tasks v1 presentation callbacks preserve pre-projection log
+truncation. Operation outcome is captured before cumulative-output admission. Delivery refusal
+adds separate recovery evidence without rewriting known completion.
+
+Only bounded sanitized presentation fields survive. Failure bodies, nested output, diffs and raw
+arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots
+are detached and frozen, including failure retention; settlement revokes late callbacks. The older
+`tools/mcp-evidence.ts` aggregate remains for compatibility and retained-read recovery. Overflow or
+malformed evidence never silently becomes success, and detailed fallback still displays its known
+notices and an explicit incomplete-evidence warning.
 
 The application composes `CodePreviewSchedulerService.layer` into its own session runtime and passes a token-checked scheduler to the compact shell. It does not depend on the previews extension's isolated module-local runtime; replacement and shutdown cancel remaining compact animations. The original renderer owns a weak 160 ms ticker. The host compact-summary callback releases that ticker when the shared shell hides its rows or the tool settles, even when the original result renderer is not called. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized

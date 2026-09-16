@@ -9,6 +9,7 @@ import {
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { ToolCallBackgroundMode } from "../config/schema";
+import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getTextContent } from "../tools/data/results";
 import {
@@ -161,6 +162,7 @@ class CompactShell implements Component {
         failure: summary.failure,
         duration: this.duration,
         elapsedMs: this.elapsedMs,
+        timingEnabled: codePreviewSettings.toolCallTiming,
         expanded: this.context.expanded,
       };
       if (!this.context.expanded || this.mode === "off")
@@ -200,6 +202,7 @@ class CompactShell implements Component {
           summary,
           duration: this.duration,
           elapsedMs: this.elapsedMs,
+          timingEnabled: codePreviewSettings.toolCallTiming,
           animationFrame: timingState(this.context).codePreviewAnimationFrame,
         },
         this.theme,

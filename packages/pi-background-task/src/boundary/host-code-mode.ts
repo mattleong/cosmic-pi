@@ -1,3 +1,8 @@
+import {
+  projectBackgroundTaskPresentation,
+  observeBackgroundTaskPresentation,
+  type BackgroundTaskPresentationObserver,
+} from "../code-mode/presentation.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
@@ -85,12 +90,14 @@ export const makeBackgroundTaskCodeModeHost = (
       if (sessionId === undefined) return;
       const capability: BackgroundTaskCodeModeCapability = Object.freeze({
         version: BACKGROUND_TASK_CODE_MODE_VERSION,
+        presentationVersion: 1,
         sessionId,
         execute: (
           _callId: string,
           input: BackgroundTaskCodeModeInput,
           signal: AbortSignal,
           maxOutputBytes: number,
+          observePresentation?: BackgroundTaskPresentationObserver,
         ) => {
           if (
             current?.capability !== capability ||
@@ -118,6 +125,10 @@ export const makeBackgroundTaskCodeModeHost = (
                 ),
               ),
               Effect.flatMap((result) => {
+                observeBackgroundTaskPresentation(
+                  observePresentation,
+                  projectBackgroundTaskPresentation(input, result),
+                );
                 const projection = projectBackgroundTaskCodeModeOutput(result, maxOutputBytes);
                 return projection._tag === "Accepted"
                   ? Effect.succeed(projection.output)

@@ -1,3 +1,8 @@
+import {
+  normalizeBackgroundTaskPresentation,
+  observeBackgroundTaskPresentation,
+  type BackgroundTaskPresentationObserver,
+} from "./presentation.ts";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -171,11 +176,13 @@ export type BackgroundTaskCodeModeOutput = typeof BackgroundTaskCodeModeOutputSc
 export interface BackgroundTaskCodeModeCapability {
   readonly version: typeof BACKGROUND_TASK_CODE_MODE_VERSION;
   readonly sessionId: string;
+  readonly presentationVersion?: 1;
   readonly execute: (
     callId: string,
     input: BackgroundTaskCodeModeInput,
     signal: AbortSignal,
     maxOutputBytes: number,
+    observePresentation?: BackgroundTaskPresentationObserver,
   ) => Promise<BackgroundTaskCodeModeOutput>;
 }
 
@@ -255,14 +262,29 @@ export const normalizeBackgroundTaskCodeModeCapability = <Value>(
   const decoded = decodeSafely(CapabilitySchema, value);
   if (!decoded || !Predicate.isFunction(decoded.execute)) return undefined;
   const execute = decoded.execute;
+  let presentationVersion: 1 | undefined;
+  try {
+    const field = Object.getOwnPropertyDescriptor(value, "presentationVersion");
+    if (field && "value" in field && field.value === 1) presentationVersion = 1;
+  } catch {
+    /* Optional observation is unavailable. */
+  }
   return Object.freeze({
     version: decoded.version,
     sessionId: decoded.sessionId,
+    ...(presentationVersion === 1 && { presentationVersion }),
     execute: (
       callId: string,
       input: BackgroundTaskCodeModeInput,
       signal: AbortSignal,
       maxOutputBytes: number,
-    ) => execute(callId, input, signal, maxOutputBytes),
+      observePresentation?: BackgroundTaskPresentationObserver,
+    ) =>
+      presentationVersion === 1 && observePresentation
+        ? execute(callId, input, signal, maxOutputBytes, <Value>(value: Value) => {
+            const receipt = normalizeBackgroundTaskPresentation(value);
+            if (receipt) observeBackgroundTaskPresentation(observePresentation, receipt);
+          })
+        : execute(callId, input, signal, maxOutputBytes),
   });
 };

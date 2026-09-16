@@ -5,6 +5,7 @@ import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
 import type { RendererState } from "../tools/renderers/shared/types";
+import { formatToolCallDuration } from "./format";
 
 type ToolTimingUpdateContext = {
   state: unknown;
@@ -130,18 +131,6 @@ function clearToolCallTimingInterval(state: TimingState): void {
   if (!state.codePreviewTimingCancel) return;
   state.codePreviewTimingCancel();
   state.codePreviewTimingCancel = undefined;
-}
-
-export function formatToolCallDuration(ms: number): string {
-  const roundedMs = Math.max(0, Math.round(ms));
-  if (roundedMs < 1000) return `${roundedMs}ms`;
-  if (roundedMs < 60_000) return `${(roundedMs / 1000).toFixed(1)}s`;
-  const totalSeconds = Math.round(roundedMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m ${seconds}s`;
 }
 
 export class TimingPreservedComponent implements Component {

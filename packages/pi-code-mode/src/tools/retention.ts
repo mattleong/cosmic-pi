@@ -1,3 +1,4 @@
+import { copyCompactAttention, freezeReceipt } from "./compact-evidence.ts";
 import { copyMcpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeToolDetails } from "./format.ts";
 
@@ -19,10 +20,22 @@ export const applyRetainedCodeModeFailureDetails = (
 export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetention => {
   const retained = new Map<string, CodeModeToolDetails>();
   const copy = (details: CodeModeToolDetails): CodeModeToolDetails => {
-    const copied = { ...details, toolCalls: details.toolCalls.map((row) => ({ ...row })) };
+    const copied = {
+      ...details,
+      toolCalls: Object.freeze(
+        details.toolCalls.map((row) =>
+          Object.freeze({
+            ...row,
+            ...(row.compact !== undefined && { compact: freezeReceipt(row.compact) }),
+          }),
+        ),
+      ),
+    };
+    if (copied.compactAttention !== undefined)
+      copied.compactAttention = copyCompactAttention(copied.compactAttention);
     if (copied.mcpEvidence !== undefined) copied.mcpEvidence = copyMcpEvidence(copied.mcpEvidence);
-    if (copied.counts !== undefined) copied.counts = { ...copied.counts };
-    return copied;
+    if (copied.counts !== undefined) copied.counts = Object.freeze({ ...copied.counts });
+    return Object.freeze(copied);
   };
   return {
     retain: (toolCallId, details) => {

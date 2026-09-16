@@ -42,6 +42,8 @@ export function allocateCompactHeader(
   counters: readonly string[],
   optional: readonly (string | undefined)[],
   width: number,
+  separator = " · ",
+  timing?: string,
 ): string {
   // Select semantically before measuring: narrow rows must not substitute lower-priority detail.
   counters = counters.filter((value) => value.trim()).slice(0, 1);
@@ -58,23 +60,30 @@ export function allocateCompactHeader(
   let counterText = "";
   let counterWidth = 0;
   for (const counter of counters) {
-    const token = ` · ${counter}`;
+    const token = `${separator}${counter}`;
     const tokenWidth = visibleWidth(token);
     if (counterWidth + tokenWidth > counterBudget) continue;
     counterText += token;
     counterWidth += tokenWidth;
   }
-  const target = middleElide(subject, remaining - counterWidth - 1);
+  // Explicit timing is secondary to counts and must not replace a counter that cannot fit.
+  const timingToken = timing?.trim() ? `${separator}${timing}` : "";
+  const timingText =
+    (!counters.length || counterText.length > 0) &&
+    counterWidth + visibleWidth(timingToken) <= counterBudget
+      ? timingToken
+      : "";
+  const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
   let row = identity + (target ? ` ${target}` : "") + counterText;
-  if (target !== subject) return row;
-  let used = visibleWidth(row);
+  if (target !== subject) return row + timingText;
+  let used = visibleWidth(row) + visibleWidth(timingText);
   for (const value of optional) {
     if (!value) continue;
-    const token = ` · ${value}`;
+    const token = `${separator}${value}`;
     const tokenWidth = visibleWidth(token);
     if (used + tokenWidth > width) continue;
     row += token;
     used += tokenWidth;
   }
-  return row;
+  return row + timingText;
 }

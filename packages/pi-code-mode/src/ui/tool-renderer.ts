@@ -16,6 +16,8 @@ import {
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
 import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
+import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
+import { mcpAttention } from "../tools/mcp-evidence.ts";
 import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
   decodeOption,
@@ -29,6 +31,16 @@ import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-
 
 /** Neutral headline when the model provided no usable intent. */
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
+const attentionNotices = (details: CodeModeRenderDetails): readonly string[] => [
+  ...new Set([
+    ...mcpAttention(details.mcpEvidence),
+    ...(details.compactAttention?.notices.map((notice) => notice.text) ?? []),
+    ...details.toolCalls.flatMap(
+      (call) => call.compact?.notices.map((notice) => notice.text) ?? [],
+    ),
+    ...(details.compactAttention?.incomplete ? [INCOMPLETE_ATTENTION] : []),
+  ]),
+];
 
 const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
@@ -250,6 +262,8 @@ const renderCodeModeToolResultUnsafe = (
     container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
   }
   container.addChild(new Text(footerLine(details, isPartial, isError, theme), 0, 0));
+  for (const notice of attentionNotices(details))
+    container.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
   if (isPartial) return container;
   if (expanded) {
     for (const component of outputSection(result, details, isError, theme))
@@ -333,6 +347,8 @@ export const renderCodeModeToolResult = (
         component.addChild(new Text(output, 0, 0));
       }
     }
+    for (const notice of attentionNotices(details))
+      component.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
     return { component, shouldAnimate };
   }
 };

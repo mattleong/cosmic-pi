@@ -24,6 +24,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { formatForeignRejection } from "../tools/format.ts";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
@@ -106,6 +107,14 @@ export const nestedResultToGuestData = (
   );
 
 export interface NestedDispatchOptions {
+  readonly observationId?: (fiber: number) => number | undefined;
+  readonly observe?: (
+    invocationId: number | undefined,
+    name: PiGuestToolName,
+    input: PiGuestToolInput,
+    result: AgentToolResult<unknown>,
+    isError: boolean,
+  ) => void;
   readonly definitions: NestedPiToolDefinitions;
   readonly ctx: ExtensionContext;
   /** Outer `code_mode` tool-call id; nested ids derive from it deterministically. */
@@ -128,20 +137,41 @@ export type NestedPiToolDispatch = (
 export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): NestedPiToolDispatch => {
   let nestedCalls = 0;
   return (name, input) =>
-    Effect.suspend(() => {
-      nestedCalls += 1;
-      const callId = `${options.toolCallId}/${name}/${nestedCalls}`;
-      const definition = options.definitions[name];
-      if (definition === undefined) {
-        return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
-      }
-      return Effect.tryPromise((interruptSignal) =>
-        definition.execute(callId, input, interruptSignal, undefined, options.ctx),
-      ).pipe(
-        Effect.mapError((error: Cause.UnknownError) =>
-          toolError(`Nested tool '${name}' failed: ${formatForeignRejection(error.cause)}`),
-        ),
-        Effect.flatMap((result) => nestedResultToGuestData(name, result)),
-      );
-    });
+    Effect.flatMap(Effect.fiberId, (fiber) =>
+      Effect.suspend(() => {
+        const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
+        nestedCalls += 1;
+        const callId = `${options.toolCallId}/${name}/${nestedCalls}`;
+        const definition = options.definitions[name];
+        if (definition === undefined) {
+          return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
+        }
+        return Effect.tryPromise((interruptSignal) =>
+          definition.execute(callId, input, interruptSignal, undefined, options.ctx),
+        ).pipe(
+          Effect.mapError((error: Cause.UnknownError) => {
+            const message = formatForeignRejection(error.cause);
+            invokeHostCallback(
+              () =>
+                options.observe?.(
+                  invocationId,
+                  name,
+                  input,
+                  { content: [{ type: "text", text: message }], details: {} },
+                  true,
+                ),
+              undefined,
+            );
+            return toolError(`Nested tool '${name}' failed: ${message}`);
+          }),
+          Effect.flatMap((result) => {
+            invokeHostCallback(
+              () => options.observe?.(invocationId, name, input, result, false),
+              undefined,
+            );
+            return nestedResultToGuestData(name, result);
+          }),
+        );
+      }),
+    );
 };

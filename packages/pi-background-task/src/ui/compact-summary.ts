@@ -155,11 +155,17 @@ function cursors(value: typeof Cursors.Type, notices: CompactNotice[]): void {
 }
 
 /** Display-only projection. Unknown errors keep their original text, including cleanup guidance. */
-export const backgroundTaskCompactSummary: CompactSummaryProvider<
-  BackgroundTaskToolInput,
-  unknown,
-  unknown
-> = ({ phase, args, result, context }) => {
+export const projectBackgroundTaskCompactSummary = ({
+  phase,
+  args,
+  result,
+  isError,
+}: {
+  phase: "pending" | "running" | "settled";
+  args: Partial<BackgroundTaskToolInput>;
+  result: { details?: unknown } | undefined;
+  isError: boolean;
+}): import("pi-code-previews").CompactSummary | undefined => {
   const action = args.action ?? "task";
   const subject =
     args.action === "start"
@@ -168,7 +174,7 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
         ? sanitizeTerminalLine(args.id)
         : "";
   if (phase !== "settled") return { action, subject };
-  if (context.isError) return undefined;
+  if (isError) return undefined;
   const decoded = Schema.decodeUnknownOption(Details)(result?.details);
   if (Option.isNone(decoded)) return undefined;
   const details = decoded.value;
@@ -294,3 +300,10 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<
       return undefined;
   }
 };
+
+export const backgroundTaskCompactSummary: CompactSummaryProvider<
+  BackgroundTaskToolInput,
+  unknown,
+  unknown
+> = ({ phase, args, result, context }) =>
+  projectBackgroundTaskCompactSummary({ phase, args, result, isError: context.isError });

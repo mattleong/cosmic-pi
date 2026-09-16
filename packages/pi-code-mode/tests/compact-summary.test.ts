@@ -30,7 +30,7 @@ const summarize = <Details>(
 const success = { ...callEntryDetails([]), outputKind: "text" as const };
 
 describe("Code Mode compact outcomes", () => {
-  it("uses intent and exact settled counts without source, output or individual activity", () => {
+  it("includes call names and lifecycle without source, output or individual activity", () => {
     const calls: Array<Parameters<typeof callEntryDetails>[0][number]> = [];
     for (const tool of ["pi.read", "pi.grep", "pi.find"]) {
       for (const status of ["queued", "running", "completed"] as const) {
@@ -44,7 +44,12 @@ describe("Code Mode compact outcomes", () => {
           `${calls.length + Number(status === "completed")}/${calls.length + 1}`,
         ]);
         expect(summary?.outcome).toBeUndefined();
-        expect(JSON.stringify(summary)).not.toMatch(/SECRET|ordinary output|pi\.(read|grep|find)/u);
+        expect(summary?.children?.total).toBe(calls.length + 1);
+        expect(summary?.children?.entries.at(-1)).toEqual({
+          label: tool.slice(3),
+          status: status === "completed" ? "success" : status === "queued" ? "pending" : "running",
+        });
+        expect(JSON.stringify(summary)).not.toMatch(/SECRET|ordinary output/u);
       }
       calls.push({ tool, status: "completed" });
     }
@@ -53,6 +58,26 @@ describe("Code Mode compact outcomes", () => {
     expect(final?.counters).toHaveLength(1);
     expect(final?.counters?.join(" ").match(/\d+/g)).toEqual(["3"]);
     expect(final?.outcome).toBe("success");
+  });
+
+  it("requests overall timing and includes only measured settled child durations", () => {
+    const summary = summarize(
+      {
+        ...callEntryDetails([
+          { tool: "pi.read", status: "completed", durationMs: 0 },
+          { tool: "pi.grep", status: "error", durationMs: 321 },
+          { tool: "pi.bash", status: "running", durationMs: 999 },
+        ]),
+        outputKind: "text",
+      },
+      { phase: "running" },
+    );
+    expect(summary?.showTiming).toBe(true);
+    expect(summary?.children?.entries.map((entry) => entry.durationMs)).toEqual([
+      0,
+      321,
+      undefined,
+    ]);
   });
 
   it("warns when the program handled nested failures or cancellation", () => {
@@ -68,6 +93,7 @@ describe("Code Mode compact outcomes", () => {
       const final = summarize(details);
       expect(final?.outcome).toBe("warning");
       expect(final?.notices).toEqual(live?.notices);
+      expect(final?.children?.entries).toEqual([{ label: "bash", status }]);
     }
   });
 
@@ -85,6 +111,22 @@ describe("Code Mode compact outcomes", () => {
         outputKind: "text",
       })?.outcome,
     ).toBe("uncertain");
+  });
+
+  it("keeps repeated dispatches distinct and never shows settled calls as still running", () => {
+    const calls = [
+      { tool: "pi.read", status: "completed" },
+      { tool: "pi.read", status: "completed" },
+      { tool: "pi.grep", status: "running" },
+      { tool: "pi.find", status: "queued" },
+    ] as const;
+    const summary = summarize({ ...callEntryDetails(calls), outputKind: "text" });
+    expect(summary?.children?.entries).toEqual([
+      { label: "read", status: "success" },
+      { label: "read", status: "success" },
+      { label: "grep", status: "uncertain" },
+      { label: "find", status: "uncertain" },
+    ]);
   });
 
   it("owns full retained failure text once and keeps continuation recovery visible", () => {

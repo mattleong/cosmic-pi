@@ -4,6 +4,7 @@
  * Pi definitions dispatch directly; companion adapters use versioned current-session protocols.
  */
 import * as Effect from "effect/Effect";
+import { invokeHostCallback } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import {
   BackgroundTaskCodeModeInputSchema,
@@ -147,6 +148,8 @@ const mcpTool = (invoke: McpDispatch) =>
   });
 
 export interface CodeModeCatalogOptions {
+  readonly observationId?: (fiber: number) => number | undefined;
+  readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   /** True only when the current platform supplied a native PowerShell definition. */
   readonly includePowerShell: boolean;
 }
@@ -194,17 +197,26 @@ export const makeExecutionGuestTools = (
     serialize: (value: Value) => string,
     refusal?: (value: Value) => string,
   ): Effect.Effect<Value, ToolError> =>
-    effect.pipe(
-      Effect.catchTag("ToolError", (error) =>
-        Effect.fail(toolError(budget.admitFailure(error.message))),
-      ),
-      Effect.flatMap((value) => {
-        const admission = budget.admit(serialize(value));
-        return admission.admitted
-          ? Effect.succeed(value)
-          : Effect.fail(toolError(budget.admitFailure(refusal?.(value) ?? admission.message)));
-      }),
-    );
+    Effect.flatMap(Effect.fiberId, (fiber) => {
+      const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
+      return effect.pipe(
+        Effect.catchTag("ToolError", (error) =>
+          Effect.fail(toolError(budget.admitFailure(error.message))),
+        ),
+        Effect.flatMap((value) => {
+          const admission = budget.admit(serialize(value));
+          return admission.admitted
+            ? Effect.succeed(value)
+            : Effect.fail(toolError(budget.admitFailure(refusal?.(value) ?? admission.message)));
+        }),
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Failure")
+              invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
+          }),
+        ),
+      );
+    });
 
   return makeCodeModeGuestTools(
     (name, input) => admitOutput(dispatchPi(name, input), (value) => value),

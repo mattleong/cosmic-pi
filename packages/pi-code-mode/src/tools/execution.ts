@@ -12,7 +12,10 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { MCP_CODE_MODE_MAX_OUTPUT_BYTES } from "pi-mcp/code-mode";
+import { captureBuiltinCompactPolicy, projectBuiltinCompactSummary } from "pi-code-previews";
+import { makeCompactEvidence, type CompactReceipt } from "./compact-evidence.ts";
+import { invokeHostCallback } from "pi-cosmic-core";
+import { projectMcpCompactSummary, MCP_CODE_MODE_MAX_OUTPUT_BYTES } from "pi-mcp/code-mode";
 import { makeMcpDispatch } from "../boundary/host-mcp.ts";
 import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
@@ -23,6 +26,7 @@ import {
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
 import type { CodeModeState } from "../config/store.ts";
 import { makeMcpEvidence } from "./mcp-evidence.ts";
+import { describeNestedSubject } from "./compact-subject.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import {
   callEntryDetails,
@@ -75,10 +79,12 @@ const MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES = 16 * 1_024 * 1_024;
 type MutableCallCounts = { -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key] };
 
 interface MutableCallEntry {
+  compact?: CompactReceipt;
   tool: string;
   status: CodeModeCallEntry["status"];
   /** Bounded human-readable label derived from the decoded input; never nested output. */
   activity: string;
+  subject?: string;
   durationMs?: number;
 }
 
@@ -165,15 +171,28 @@ export const makeCodeModeToolExecute =
       const { config } = state;
 
       const calls = new Map<number, MutableCallEntry>();
+      const presentationCwd = invokeHostCallback(() => ctx.cwd, undefined);
       // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
       // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
       // indices are unique within an execution; their negative IDs stay disjoint from modern
       // non-negative lifecycle IDs, so settled entries can retain the same map key.
       const counts = emptyCounts();
       const evidence = makeMcpEvidence();
+      const compact = makeCompactEvidence((id, receipt) => {
+        const call = calls.get(id);
+        if (call !== undefined) call.compact = receipt;
+      });
+      const policy = invokeHostCallback(() => captureBuiltinCompactPolicy(), undefined);
       const progress = () => {
         const result = progressResult(snapshotCalls(calls), counts);
-        return { ...result, details: { ...result.details, mcpEvidence: evidence.snapshot() } };
+        return {
+          ...result,
+          details: {
+            ...result.details,
+            mcpEvidence: evidence.snapshot(),
+            compactAttention: compact.snapshot(),
+          },
+        };
       };
       const publisher = makeGuardedToolUpdatePublisher(onUpdate, environment.isCurrent);
       const publish = () => publisher.publish(progress());
@@ -210,6 +229,21 @@ export const makeCodeModeToolExecute =
           definitions: environment.definitions,
           ctx,
           toolCallId,
+          observationId: compact.identity,
+          observe: (id, name, args, result, isError) =>
+            compact.observe(id, () => {
+              if (policy === undefined || presentationCwd === undefined || name === "powershell")
+                return undefined;
+              return projectBuiltinCompactSummary(name, {
+                ...policy,
+                phase: "settled",
+                args,
+                result,
+                cwd: presentationCwd,
+                isError,
+                beforeWrite: { kind: "unknown" },
+              });
+            }),
         });
         const dispatchBackgroundTask = makeBackgroundTaskDispatch({
           events: environment.events,
@@ -217,6 +251,12 @@ export const makeCodeModeToolExecute =
           toolCallId,
           maxOutputBytes: () =>
             Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
+          missingPresentation: compact.missing,
+          observationId: compact.identity,
+          observePresentation: (id, receipt) => {
+            if (receipt.incomplete || receipt.overflow) compact.missing();
+            compact.observe(id, () => receipt.summary);
+          },
         });
 
         const dispatchMcp = makeMcpDispatch({
@@ -225,12 +265,47 @@ export const makeCodeModeToolExecute =
           toolCallId,
           maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
           observe: evidence.observe,
+          observationId: compact.identity,
+          observePresentation: (id, args, observation, reply) =>
+            compact.observe(id, () => {
+              if (observation.incomplete) compact.missing();
+              const projected =
+                reply === undefined
+                  ? undefined
+                  : projectMcpCompactSummary({
+                      phase: "settled",
+                      args,
+                      result: { details: reply },
+                      isError: observation.isError,
+                    });
+              if (projected !== undefined && !observation.incomplete) return projected;
+              // Heading-only projection does not claim operation success.
+              const heading = projectMcpCompactSummary({
+                phase: "running",
+                args,
+                result: undefined,
+                isError: false,
+              });
+              return {
+                action: heading?.action ?? args.action,
+                subject: heading?.subject ?? "MCP",
+                outcome:
+                  observation.incomplete || observation.outcome === "unknown"
+                    ? "uncertain"
+                    : observation.isError || observation.outcome === "not-sent"
+                      ? "error"
+                      : "warning",
+                notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
+              };
+            }),
         });
 
         const execution = (environment.executeCodeMode ?? CodeMode.execute)({
           code: params.code,
           tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, dispatchMcp, budget, {
             includePowerShell: environment.definitions.powershell !== undefined,
+            observationId: compact.identity,
+            onDeliveryFailure: compact.deliveryFailure,
           }),
           limits: {
             timeoutMs: config.timeoutMs,
@@ -238,86 +313,105 @@ export const makeCodeModeToolExecute =
             maxOutputBytes: config.maxOutputBytes,
           },
           onToolCallLifecycle: (event) =>
-            Effect.sync(() => {
-              if (event.status === "queued") {
-                evidence.admit(event.name);
-                counts.total += 1;
-                counts.queued += 1;
-                const entry: MutableCallEntry = {
-                  tool: event.name,
-                  status: "queued",
-                  activity: describeNestedActivity(event.name, undefined),
-                };
-                if (!trackQueued(event.id, entry)) return;
-              } else {
-                const entry = calls.get(event.id);
-                const nextStatus =
-                  event.status === "running"
-                    ? "running"
-                    : event.status === "succeeded"
-                      ? "completed"
-                      : event.status === "failed"
-                        ? "error"
-                        : "cancelled";
-                if (entry !== undefined) {
-                  transitionCall(entry, nextStatus, counts);
-                  if (event.status !== "running") entry.durationMs = event.durationMs;
-                } else if (event.status === "running") {
-                  counts.queued -= 1;
-                  counts.running += 1;
-                  // The start hook immediately follows and publishes the exact hidden counts.
-                  return;
+            Effect.flatMap(Effect.fiberId, (fiber) =>
+              Effect.sync(() => {
+                if (event.status !== "queued" && event.status !== "running") compact.end(fiber);
+                if (event.status === "queued") {
+                  evidence.admit(event.name);
+                  compact.admit(event.name);
+                  counts.total += 1;
+                  counts.queued += 1;
+                  const entry: MutableCallEntry = {
+                    tool: event.name,
+                    status: "queued",
+                    activity: describeNestedActivity(event.name, undefined),
+                  };
+                  if (!trackQueued(event.id, entry)) return;
                 } else {
-                  counts[event.started ? "running" : "queued"] -= 1;
+                  const entry = calls.get(event.id);
+                  const nextStatus =
+                    event.status === "running"
+                      ? "running"
+                      : event.status === "succeeded"
+                        ? "completed"
+                        : event.status === "failed"
+                          ? "error"
+                          : "cancelled";
+                  if (entry !== undefined) {
+                    transitionCall(entry, nextStatus, counts);
+                    if (event.status !== "running") entry.durationMs = event.durationMs;
+                  } else if (event.status === "running") {
+                    counts.queued -= 1;
+                    counts.running += 1;
+                    // The start hook immediately follows and publishes the exact hidden counts.
+                    return;
+                  } else {
+                    counts[event.started ? "running" : "queued"] -= 1;
+                    counts[statusCountKey(nextStatus)] += 1;
+                  }
+                  // The start hook immediately follows a tracked running event and enriches the
+                  // row. Publish that one snapshot instead of two equivalent running updates.
+                  if (event.status === "running") return;
+                }
+                if (event.status === "queued") publishNow();
+                else publish();
+              }),
+            ),
+          onToolCallStart: ({ index, lifecycleId, name, input }) =>
+            Effect.flatMap(Effect.fiberId, (fiber) =>
+              Effect.sync(() => {
+                const id = lifecycleId ?? -(index + 1);
+                compact.start(fiber, id);
+                let current = calls.get(id);
+                if (current === undefined && lifecycleId === undefined) {
+                  evidence.admit(name);
+                  compact.admit(name);
+                  counts.total += 1;
+                  counts.running += 1;
+                  current = {
+                    tool: name,
+                    status: "running",
+                    activity: describeNestedActivity(name, input),
+                  };
+                  trackQueued(id, current);
+                } else if (current !== undefined) {
+                  transitionCall(current, "running", counts);
+                  current.activity = describeNestedActivity(name, input);
+                }
+                if (current !== undefined) {
+                  const subject =
+                    presentationCwd === undefined
+                      ? undefined
+                      : describeNestedSubject(name, input, presentationCwd);
+                  if (subject !== undefined) current.subject = subject;
+                  else delete current.subject;
+                }
+                // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
+                // a render queued, so synchronous delivery lets the row join that next host frame.
+                publishNow();
+              }),
+            ),
+          onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
+            Effect.flatMap(Effect.fiberId, (fiber) =>
+              Effect.sync(() => {
+                // Modern runtimes emit one authoritative terminal lifecycle event immediately after
+                // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
+                if (lifecycleId !== undefined) return;
+                compact.end(fiber);
+                const id = -(index + 1);
+                const current = calls.get(id);
+                const nextStatus = outcome === "success" ? "completed" : "error";
+                if (current !== undefined) {
+                  transitionCall(current, nextStatus, counts);
+                  current.durationMs = durationMs;
+                } else {
+                  // The legacy call was counted but its row exceeded the bounded host-side cap.
+                  counts.running -= 1;
                   counts[statusCountKey(nextStatus)] += 1;
                 }
-                // The start hook immediately follows a tracked running event and enriches the
-                // row. Publish that one snapshot instead of two equivalent running updates.
-                if (event.status === "running") return;
-              }
-              if (event.status === "queued") publishNow();
-              else publish();
-            }),
-          onToolCallStart: ({ index, lifecycleId, name, input }) =>
-            Effect.sync(() => {
-              const id = lifecycleId ?? -(index + 1);
-              let current = calls.get(id);
-              if (current === undefined && lifecycleId === undefined) {
-                evidence.admit(name);
-                counts.total += 1;
-                counts.running += 1;
-                current = {
-                  tool: name,
-                  status: "running",
-                  activity: describeNestedActivity(name, input),
-                };
-                trackQueued(id, current);
-              } else if (current !== undefined) {
-                transitionCall(current, "running", counts);
-                current.activity = describeNestedActivity(name, input);
-              }
-              // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
-              // a render queued, so synchronous delivery lets the row join that next host frame.
-              publishNow();
-            }),
-          onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
-            Effect.sync(() => {
-              // Modern runtimes emit one authoritative terminal lifecycle event immediately after
-              // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
-              if (lifecycleId !== undefined) return;
-              const id = -(index + 1);
-              const current = calls.get(id);
-              const nextStatus = outcome === "success" ? "completed" : "error";
-              if (current !== undefined) {
-                transitionCall(current, nextStatus, counts);
-                current.durationMs = durationMs;
-              } else {
-                // The legacy call was counted but its row exceeded the bounded host-side cap.
-                counts.running -= 1;
-                counts[statusCountKey(nextStatus)] += 1;
-              }
-              publish();
-            }),
+                publish();
+              }),
+            ),
         });
 
         const settleProgress = (): CodeModeToolDetails => {
@@ -327,9 +421,14 @@ export const makeCodeModeToolExecute =
           counts.running = 0;
           const snapshot = snapshotCalls(calls);
           evidence.close();
+          compact.close();
           if (changed) publisher.publish(progress());
           publisher.settle();
-          return { ...callEntryDetails(snapshot, counts), mcpEvidence: evidence.snapshot() };
+          return {
+            ...callEntryDetails(snapshot, counts),
+            mcpEvidence: evidence.snapshot(),
+            compactAttention: compact.snapshot(),
+          };
         };
 
         const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {
@@ -381,6 +480,8 @@ export const makeCodeModeToolExecute =
       return Promise.resolve()
         .then(attempt)
         .finally(() => {
+          compact.close();
+          evidence.close();
           publisher.settle();
         });
     });

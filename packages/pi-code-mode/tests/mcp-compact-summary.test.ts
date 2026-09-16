@@ -87,9 +87,11 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       const result = yield* Effect.promise(() => harness(() => Promise.resolve(output)).run());
       const projected = summary(result.details);
       expect(projected?.outcome).toBe(outcome);
+      expect(projected?.children?.entries).toMatchObject([{ label: "mcp", status: outcome }]);
       expect(projected?.detailsOnExpand).toBe(true);
       expect(projected?.failure).toBeUndefined();
-      expect(projected?.notices?.every((notice) => notice.expandedInResult !== true)).toBe(true);
+      // Detailed rendering owns retained MCP attention, so the shell must not append it again.
+      expect(projected?.notices?.every((notice) => notice.expandedInResult === true)).toBe(true);
     }),
   );
   it.effect.each([
@@ -99,8 +101,8 @@ describe("MCP execution evidence in compact Code Mode results", () => {
     [{ outcome: "not-sent", isError: false }, "error"],
     [{ outcome: "completed", isError: false, outputValidation: "failed" }, "error"],
     [{ outcome: "completed", isError: false, outputValidation: "unavailable" }, "warning"],
-    [{ outcome: "completed" }, undefined],
-    [undefined, undefined],
+    [{ outcome: "completed" }, "uncertain"],
+    [undefined, "uncertain"],
   ] as const)("does not promote retained read success over its origin: %j", ([origin, outcome]) =>
     Effect.gen(function* () {
       const result = yield* Effect.promise(() =>
@@ -111,6 +113,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         ).run('await tools.mcp.request({action:"result.read",id:"retained"}); return 1'),
       );
       expect(summary(result.details)?.outcome).toBe(outcome);
+      expect(summary(result.details)?.children?.entries).toMatchObject([
+        { label: "mcp", status: outcome },
+      ]);
     }),
   );
   it.effect.each([
@@ -127,6 +132,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       expect(summary(result.details)?.outcome).toBe(outcome);
       expect(result.details?.mcpEvidence?.notices.join("\n")).not.toContain("SECRET_CREDENTIAL");
       expect(result.details?.counts?.failed).toBe(1);
+      expect(summary(result.details)?.children?.entries).toMatchObject([
+        { label: "mcp", status: outcome },
+      ]);
     }),
   );
   it.effect("joins parallel mixed outcomes without last-call-wins state", () =>
@@ -159,6 +167,11 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         unknown: 1,
       });
       expect(summary(result.details)?.outcome).toBe("uncertain");
+      expect(summary(result.details)?.children?.entries).toMatchObject([
+        { label: "mcp", status: "success" },
+        { label: "mcp", status: "uncertain" },
+        { label: "mcp", status: "success" },
+      ]);
     }),
   );
   it.effect.each([40, 270])("covers %i calls beyond visible and tracked history", (count) =>
@@ -169,6 +182,10 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         ),
       );
       expect(result.details?.toolCalls).toHaveLength(32);
+      expect(summary(result.details)?.children?.total).toBe(count);
+      expect(summary(result.details)?.children?.entries).toHaveLength(
+        result.details!.toolCalls.length,
+      );
       expect(result.details?.mcpEvidence?.observed).toBe(count);
       expect(summary(result.details)?.outcome).toBe("success");
     }),
@@ -181,7 +198,10 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         ),
       );
       expect(result.details?.mcpEvidence?.unsupported).toBe(1);
-      expect(summary(result.details)).toBeUndefined();
+      expect(summary(result.details)?.outcome).toBe("uncertain");
+      expect(
+        summary(result.details)?.notices?.some((notice) => notice.text.includes("incomplete")),
+      ).toBe(true);
     }),
   );
   it.effect(
@@ -198,8 +218,10 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           { ...evidence, incomplete: true },
           { ...evidence, errors: Number.MAX_SAFE_INTEGER + 1 },
         ])
-          expect(summary({ ...result.details, mcpEvidence })).toBeUndefined();
-        expect(summary({ ...result.details, mcpEvidence: undefined })).toBeUndefined();
+          expect(summary({ ...result.details, mcpEvidence })?.outcome).toBe("uncertain");
+        expect(
+          summary({ ...result.details, compactAttention: undefined, mcpEvidence: undefined }),
+        ).toBeUndefined();
       }),
   );
   it.effect("retains validated notices when outcome classification fails", () =>
@@ -217,7 +239,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           incomplete: true,
           notices: ["Check retained output before continuing."],
         });
-        expect(summary(result.details)).toBeUndefined();
+        expect(summary(result.details)?.outcome).toBe("uncertain");
       } finally {
         classifier.mockRestore();
       }
@@ -232,7 +254,10 @@ describe("MCP execution evidence in compact Code Mode results", () => {
         ),
       );
       expect(result.details?.mcpEvidence?.notices).toHaveLength(32);
-      expect(summary(result.details)).toBeUndefined();
+      expect(summary(result.details)?.outcome).toBe("uncertain");
+      expect(
+        summary(result.details)?.notices?.some((notice) => notice.text.includes("warning limit")),
+      ).toBe(true);
     }),
   );
   it.effect("publishes detached frozen evidence and retains it through outer failure", () =>
@@ -262,7 +287,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       const retained = h.retention.consume("test");
       expect(retained?.mcpEvidence?.observed).toBe(1);
       expect(
-        summary(retained, true)?.notices?.some((notice) => notice.text.includes("Keep this")),
+        summary(retained, true)?.children?.entries.some((child) =>
+          child.notices?.some((notice) => notice.text.includes("Keep this")),
+        ),
       ).toBe(true);
     }),
   );
@@ -315,7 +342,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       yield* Effect.promise(() => started);
       const running = updates.findLast((details) => details.counts?.running === 1);
       expect(summary(running, false, "running")).toBeDefined();
-      expect(summary(running)).toBeUndefined();
+      expect(summary(running)?.outcome).toBe("uncertain");
       finish?.(reply({ resultId: "retained-123", data: { truncated: true, text: "partial" } }));
       const result = yield* Effect.promise(() => pending);
       expect(summary(result.details)?.outcome).toBe("warning");

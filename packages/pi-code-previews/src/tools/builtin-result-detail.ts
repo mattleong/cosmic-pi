@@ -1,10 +1,20 @@
 import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
 import { getObjectValue } from "../shared/helpers";
-import { shouldSkipWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
+import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
+import { codePreviewPerformanceConfig } from "../config/env";
 import { isTruncated } from "./data/results";
 
-const writeCounts = new WeakMap<object, { content: string; detail: string | undefined }>();
+const writeCounts = new WeakMap<
+  object,
+  {
+    content: string;
+    previous: unknown;
+    maxBytes: number;
+    maxCells: number;
+    detail: string | undefined;
+  }
+>();
 
 /** Never turn partially validated operations into a successful operation total. */
 export function editResultDetail<Args>(args: Args): string | undefined {
@@ -51,17 +61,41 @@ export function grepResultDetail<Details>(output: string, details: Details): str
 
 /** Snapshot-keyed, bounded diff work is reused across redraws. */
 export function writeResultDetail<Before>(before: Before, content: string): string | undefined {
+  if (!Predicate.isObject(before)) return undefined;
+  const cached = writeCounts.get(before);
+  const previous = getObjectValue(before, "content");
+  const maxBytes = codePreviewPerformanceConfig.maxWriteDiffBytes;
+  const maxCells = codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
+  if (
+    cached?.content === content &&
+    cached.previous === previous &&
+    cached.maxBytes === maxBytes &&
+    cached.maxCells === maxCells
+  )
+    return cached.detail;
+  const detail = projectWriteResultDetail(before, content, codePreviewPerformanceConfig);
+  writeCounts.set(before, { content, previous, maxBytes, maxCells, detail });
+  return detail;
+}
+
+/** Stateless variant for transient projections with explicit work limits. */
+export function projectWriteResultDetail<Before>(
+  before: Before,
+  content: string,
+  policy: {
+    maxWriteDiffBytes: number;
+    maxWriteDiffChangedLineCells: number;
+  },
+): string | undefined {
   if (!Predicate.isObject(before) || getObjectValue(before, "kind") !== "content") return undefined;
   const previous = getObjectValue(before, "content");
   if (!Predicate.isString(previous)) return undefined;
-  const cached = writeCounts.get(before);
-  if (cached?.content === content) return cached.detail;
   let detail: string | undefined;
   if (
     previous.length <= 64_000 &&
     content.length <= 64_000 &&
-    !shouldSkipWriteDiffBytes(previous, content) &&
-    !shouldSkipWriteDiffComplexity(previous, content)
+    !exceedsWriteDiffBytes([previous, content], policy.maxWriteDiffBytes) &&
+    !shouldSkipWriteDiffComplexity(previous, content, policy.maxWriteDiffChangedLineCells)
   ) {
     const changes = diffLines(previous, content, { maxEditLength: 256 });
     if (changes) {
@@ -74,6 +108,5 @@ export function writeResultDetail<Before>(before: Before, content: string): stri
       detail = `+${added} −${removed}`;
     }
   }
-  writeCounts.set(before, { content, detail });
   return detail;
 }

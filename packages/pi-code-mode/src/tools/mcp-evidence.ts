@@ -170,6 +170,28 @@ export const makeMcpEvidence = () => {
   };
 };
 
+/** Attention remains visible even when incomplete coverage declines compact presentation. */
+export const mcpAttention = (evidence: McpEvidence | undefined): readonly string[] => {
+  if (evidence === undefined) return [];
+  return [
+    ...evidence.notices,
+    ...(evidence.incomplete
+      ? [
+          "MCP presentation evidence is incomplete or exceeded its warning limit. Some recovery information is unavailable; do not replay operations to recover output.",
+        ]
+      : []),
+    ...(evidence.unknown > 0
+      ? ["MCP execution is uncertain. Check its state; do not replay the operation automatically."]
+      : []),
+    ...(evidence.notSent > 0 ? [`${evidence.notSent} MCP operations were not sent.`] : []),
+    ...(evidence.errors > 0
+      ? [
+          `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
+        ]
+      : []),
+  ];
+};
+
 export const validMcpCoverage = (evidence: McpEvidence, total: number): boolean =>
   Number.isSafeInteger(total) &&
   !evidence.incomplete &&

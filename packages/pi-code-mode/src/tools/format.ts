@@ -8,6 +8,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
 import type { McpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 
@@ -127,9 +128,12 @@ export const describeNestedActivity = <Name, Input>(name: Name, input: Input): s
  * a bounded, sanitized human-readable label derived from the decoded input at call start.
  */
 export interface CodeModeCallEntry {
+  readonly compact?: CompactReceipt;
   readonly tool: string;
   readonly status: "queued" | "running" | "completed" | "error" | "cancelled";
   readonly activity?: string;
+  /** Bounded, redacted argument-only target captured at decoded call start. */
+  readonly subject?: string;
   /** Total wall-clock duration from queue admission through settlement. */
   readonly durationMs?: number;
 }
@@ -145,6 +149,7 @@ export interface CodeModeCallCounts {
 
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
+  readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */
@@ -193,11 +198,11 @@ export const callEntryDetails = (
   calls: ReadonlyArray<CodeModeCallEntry>,
   exactCounts: CodeModeCallCounts = countCallEntries(calls),
 ): Pick<CodeModeToolDetails, "toolCalls" | "totalToolCalls" | "counts"> => {
-  const toolCalls = boundedCallEntries(calls);
-  const base = { toolCalls, counts: { ...exactCounts } };
-  return exactCounts.total > toolCalls.length
-    ? { ...base, totalToolCalls: exactCounts.total }
-    : base;
+  const toolCalls = Object.freeze(boundedCallEntries(calls).map((call) => Object.freeze(call)));
+  const base = { toolCalls, counts: Object.freeze({ ...exactCounts }) };
+  return Object.freeze(
+    exactCounts.total > toolCalls.length ? { ...base, totalToolCalls: exactCounts.total } : base,
+  );
 };
 
 const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string => {

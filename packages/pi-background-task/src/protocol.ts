@@ -14,3 +14,13 @@ export {
   type BackgroundTaskCodeModeOutput,
   type BackgroundTaskCodeModeQuery,
 } from "./code-mode/protocol.ts";
+
+export { projectBackgroundTaskCompactSummary } from "./ui/compact-summary.ts";
+
+export {
+  BACKGROUND_TASK_PRESENTATION_VERSION,
+  BackgroundTaskPresentationSchema,
+  normalizeBackgroundTaskPresentation,
+  type BackgroundTaskPresentation,
+  type BackgroundTaskPresentationObserver,
+} from "./code-mode/presentation.ts";

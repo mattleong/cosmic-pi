@@ -19,6 +19,23 @@ export interface CompactNotice {
   expandedInResult?: true;
 }
 
+/** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
+export interface CompactChild {
+  label: string;
+  action?: string;
+  counters?: readonly string[];
+  metadata?: readonly string[];
+  showTiming?: true;
+  outcome?: CompactOutcome;
+  /** Bounded semantic notices; callers retain attention separately from row selection. */
+  notices?: readonly CompactNotice[];
+  /** Argument-only target, laid out like a standalone compact call. Never output or recovery. */
+  subject?: string;
+  /** Measured dispatch duration, not an estimate or a sum of sibling timings. */
+  durationMs?: number;
+  status: "pending" | "running" | "returned" | CompactOutcome;
+}
+
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */
 export interface CompactSummary {
   subject: string;
@@ -30,8 +47,14 @@ export interface CompactSummary {
   counters?: readonly string[];
   /** First nonblank label is used only when no counter is present. */
   metadata?: readonly string[];
+  /** Show measured timing beside the routine detail, including short calls, when enabled. */
+  showTiming?: true;
   outcome?: CompactOutcome;
   notices?: readonly CompactNotice[];
+  /** Optional collapsed-only call tree in admission order. Total includes unretained calls.
+   * The shell bounds displayed rows; warnings and recovery must remain in notices.
+   */
+  children?: { entries: readonly CompactChild[]; total: number };
   /** Opts decoded non-success results into compact collapsed presentation.
    * The provider must completely project attention and recovery information into
    * subject/notices. Expansion retains the original renderers; failure takes precedence.

@@ -105,7 +105,7 @@ Set this in `code-previews.json`, or under `codePreview` in a trusted project's 
 
 You can also choose **Collapsed tool calls** under **Appearance** in `/code-preview-settings`, or start Pi with `CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE=compact`. The default is `preview`, which keeps the existing presentation. The wrapper captures this setting at tool registration; changes require `/reload`.
 
-In compact mode, ordinary collapsed calls use one extension-rendered text row while arguments arrive, during execution, and after settlement. The row prioritizes the status glyph, tool name and optional action, then the target subject and whole counter tokens. Only the first nonempty counter is selected; otherwise the first nonempty metadata item is selected. With long subjects they use at most half the remaining terminal cells while preserving up to 12 subject cells; short or empty subjects let counters use otherwise unused space. Long subjects use grapheme-safe middle elision to retain both ends. There is at most one routine detail. When no counter or metadata is present, enabled timing appears for bash or calls lasting at least ten seconds. Compact rows omit the expand hint. Optional fields disappear before the identity is clipped at very narrow widths. Counters are never partially displayed. Status uses shared icons instead of words. The running icon animates even when `toolCallTiming` is off; it stops after settlement or session shutdown. With timing off, expansion pauses the hidden icon's animation and collapsing resumes it. Pending calls have no execution duration, and restored calls do not gain a fabricated duration.
+In compact mode, ordinary collapsed calls use one extension-rendered text row while arguments arrive, during execution, and after settlement. The row prioritizes the status glyph, tool name and optional action, then the target subject and whole counter tokens. Only the first nonempty counter is selected; otherwise the first nonempty metadata item is selected. With long subjects they use at most half the remaining terminal cells while preserving up to 12 subject cells; short or empty subjects let counters use otherwise unused space. Long subjects use grapheme-safe middle elision to retain both ends. There is at most one routine detail. When no counter or metadata is present, enabled timing appears for bash or calls lasting at least ten seconds. A cooperative provider can set `showTiming: true` to show measured timing beside its routine detail, including short calls. Counts take priority when both cannot fit. Compact rows omit the expand hint. Optional fields disappear before the identity is clipped at very narrow widths. Counters are never partially displayed. Status uses shared icons instead of words. The running icon animates even when `toolCallTiming` is off; it stops after settlement or session shutdown. With timing off, expansion pauses the hidden icon's animation and collapsing resumes it. Pending calls have no execution duration, and restored calls do not gain a fabricated duration.
 
 Ordinary live output and pending write/edit previews stay hidden until expanded. Failures show one header and an indented cause, without the old error card or duplicate error text. Known filesystem and command-status errors get short causes; unrecognized error text stays intact rather than hiding possible recovery instructions. Cancellation uses neutral styling and uncertain outcomes use amber. Important warnings and recovery instructions remain visible and may need extra rows. Routine read-range and known line-pagination hints stay in the original output and expanded details, not compact warning rows. Routine grep/find/ls result caps use a quiet `limit reached: N` counter, prioritized over optional metadata and timing. A reached cap does not establish a total, additional results, or how many survived output truncation. Successful writes use `diff skipped: size` or `diff skipped: complexity` metadata only for structured size evidence or computed guards with known previous contents. Missing history, non-regular previous paths, unclassified skip reasons, missing edit diffs, and secrets still receive attention. Byte caps, partial grep lines, oversized-line recovery, and unknown truncation also remain warnings or recovery rows. Original tool results and expanded continuation instructions are unchanged. Expansion shows complete failure text once, or restores the original detailed presentation for other results, with the configured `toolCallBackground`. Compact mode takes precedence over per-tool collapsed-preview toggles and line limits; those retain their existing meaning in `preview` mode. `toolCallTiming` remains independent.
 
@@ -177,7 +177,7 @@ In `preview` style, when content/result/diff previews are disabled, collapsed su
 
 For expanded calls and noncompact fallbacks, `CODE_PREVIEW_TOOL_CALL_BACKGROUND=off` removes Pi's default colored tool box background for code-preview-owned tools. `CODE_PREVIEW_TOOL_CALL_BACKGROUND=border` replaces the background with a border-only frame. This setting changes the tool render shell, so it takes effect after `/reload`.
 
-`CODE_PREVIEW_TOOL_CALL_TIMING=false` hides tool durations. When enabled, measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
+`CODE_PREVIEW_TOOL_CALL_TIMING=false` hides tool durations, including measured durations in nested compact call trees. When enabled, measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
 
 ## Extension author integration
 
@@ -245,6 +245,30 @@ pi.registerTool(
 ```
 
 Use your tool's authoritative domain result to distinguish success, warnings, cancellation, and uncertainty. `context.isError === false` alone does not prove success. Discover important notices independently of preview-body rendering; do not flatten components, take their first line, or inspect ANSI colors to build summaries. The wrapper changes presentation only and preserves execution, tool schemas, prompt metadata, and result contents.
+
+### Nested builtin summaries
+
+`projectBuiltinCompactSummary(tool, input)` applies the same builtin semantic rules without a renderer context, I/O, or private write-registry lookup. Call it transiently before converting the native result:
+
+```ts
+const summary = projectBuiltinCompactSummary("write", {
+  ...captureBuiltinCompactPolicy(),
+  phase: "settled",
+  args,
+  result,
+  cwd,
+  isError,
+  beforeWrite: { kind: "unknown" },
+});
+```
+
+Both helpers are public exports. The policy snapshot contains `secretWarnings`, `bashWarnings`, `secretScanChars`, `maxWriteDiffBytes`, and `maxWriteDiffChangedLineCells`. Before-write evidence is explicitly `unknown`, `new`, or `{ kind: "snapshot", value }`. Only an observed absent file warrants `new`. Nested execution must not wrap writes or read files merely to obtain preview evidence. Unknown or unsafe projections return `undefined` and require a conservative fallback.
+
+The projector may return complete `failure.details` for standalone expansion. Do not retain that field or raw output in nested activity records. Redact sensitive text and bound all retained subjects, counters, metadata, causes, and notices before storing them.
+
+A summary's `children` contains `{ entries, total }`. Each entry keeps `label`, `subject`, `status`, and measured `durationMs`, with optional `action`, `counters`, `metadata`, `showTiming`, `outcome`, and bounded `notices`. Standalone and child headings share rendering rules, apart from branch indentation. Set `showTiming: true` for short measured child calls; the global timing preference still wins. `status` controls the displayed classification. Preserve operation outcome separately when delivery fails, and never let operation success erase delivery failure or no-replay guidance.
+
+The shell selects five children. `selectCompactChildren(children)` exposes that selection for integrations. Selected children render their notices outside the row budget; place hidden-child attention in parent notices instead of dropping it or duplicating selected notices. Providers own retained notice limits and must preserve uncertainty when complete recovery cannot fit.
 
 ### Prompt for extension authors
 

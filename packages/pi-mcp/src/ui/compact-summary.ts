@@ -44,25 +44,29 @@ const isRoutineDiscoveryNotice = (action: string, text: string): boolean =>
   /^MCP \S+ cached metadata is not fresh; invocation requires current metadata\.$/.test(text);
 
 /** Display-only opt-in. Failures keep the existing renderer, including remote recovery details. */
-export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
+export const projectMcpCompactSummary = ({
   phase,
   args,
   result,
-  context,
-}) => {
+  isError,
+}: {
+  phase: "pending" | "running" | "settled";
+  args: unknown;
+  result: { details?: unknown } | undefined;
+  isError: boolean;
+}): import("pi-code-previews").CompactSummary | undefined => {
   const call = mcpCallSummary(args);
   const action = call.action;
   const subject =
     action === "tools.search"
       ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
       : call.target;
-  if (phase !== "settled") return context.isError ? undefined : { action, subject };
+  if (phase !== "settled") return isError ? undefined : { action, subject };
 
   const card = decodeMcpCardDetails(result);
   // A resolved Pi call is not evidence of remote success. Historical, unknown,
   // not-sent and failed replies remain unowned, never flattened into a cause.
-  if (context.isError || !card.known || card.outcome !== "completed" || card.isError)
-    return undefined;
+  if (isError || !card.known || card.outcome !== "completed" || card.isError) return undefined;
   if (
     card.origin &&
     (card.origin.outcome !== "completed" ||
@@ -97,3 +101,10 @@ export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown
     notices,
   };
 };
+
+export const mcpCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
+  phase,
+  args,
+  result,
+  context,
+}) => projectMcpCompactSummary({ phase, args, result, isError: context.isError });
