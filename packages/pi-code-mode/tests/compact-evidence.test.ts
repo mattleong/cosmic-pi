@@ -291,7 +291,14 @@ describe("compact semantic evidence", () => {
             Promise.resolve(
               result(
                 "private output\n\n[Showing lines 1-2 of 20 (50.0KB limit). Use offset=3 to continue.]",
-                { truncation: { truncated: true, truncatedBy: "bytes" } },
+                {
+                  truncation: {
+                    truncated: true,
+                    truncatedBy: "bytes",
+                    lastLinePartial: false,
+                    firstLineExceedsLimit: false,
+                  },
+                },
               ),
             ),
         },
@@ -479,6 +486,140 @@ describe("compact semantic evidence", () => {
       };
       expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
       expect(project(details)?.outcome).toBe("uncertain");
+    }
+  });
+
+  it.effect(
+    "retains discarded complete-line read hints only on expansion and after outer failure",
+    () =>
+      Effect.gen(function* () {
+        const hint = "[Showing lines 1-2 of 20 (50.0KB limit). Use offset=3 to continue.]";
+        const h = harness(
+          nestedToolDefinitionsFixture({
+            bash: {
+              execute: () =>
+                Promise.resolve(
+                  result("output", {
+                    truncation: { truncated: true },
+                    fullOutputPath: "/tmp/recovery-output",
+                  }),
+                ),
+            },
+            read: {
+              execute: () =>
+                Promise.resolve(
+                  result(`private output\n\n${hint}`, {
+                    truncation: {
+                      truncated: true,
+                      truncatedBy: "bytes",
+                      lastLinePartial: false,
+                      firstLineExceedsLimit: false,
+                    },
+                  }),
+                ),
+            },
+          }),
+        );
+        const completed = yield* Effect.promise(() =>
+          h.run('await tools.pi.read({path:"file"}); return 1'),
+        );
+        expect(completed.content[0]).toMatchObject({ text: "1" });
+        expect(project(completed.details!)?.outcome).toBe("success");
+        expect(completed.details?.compactAttention).toMatchObject({
+          warnings: 0,
+          incomplete: false,
+          notices: [],
+        });
+        const serialized = yield* encode(completed.details);
+        const replay = decodeCodeModeRenderDetails(
+          yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(serialized),
+        );
+        expect(replay.toolCalls[0]?.compact?.notices[0]).toMatchObject({ expandedOnly: true });
+        expect(project(completed.details!)?.notices).toContainEqual(
+          expect.objectContaining({ expandedOnly: true, expandedInResult: true }),
+        );
+        const theme = opaqueHostFixture({
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        });
+        const brokenTheme = opaqueHostFixture({
+          fg: () => {
+            throw new Error("theme");
+          },
+          bold: (text: string) => text,
+        });
+        for (const currentTheme of [theme, brokenTheme]) {
+          for (const expanded of [false, true]) {
+            const text = renderCodeModeToolResult(completed, { isPartial: false }, currentTheme, {
+              expanded,
+            })
+              .component.render(240)
+              .join("\n");
+            expect(text.includes("offset=3")).toBe(expanded);
+          }
+        }
+        yield* Effect.promise(() =>
+          expect(
+            h.run(
+              'await tools.pi.read({path:"file"}); await tools.pi.read({path:"file"}); await tools.pi.bash({command:"example"}); throw new Error("outer failure")',
+            ),
+          ).rejects.toThrow(),
+        );
+        const retained = h.retention.consume("compact")!;
+        const summary = codeModeCompactSummary({
+          phase: "settled",
+          args: {},
+          result: result("outer failure", retained),
+          context: opaqueHostFixture({ isError: true, expanded: true }),
+        });
+        expect(summary?.outcome).toBe("error");
+        expect(summary?.notices).toContainEqual(
+          expect.objectContaining({ expandedOnly: true, expandedInResult: true }),
+        );
+        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(1);
+        expect(
+          summary?.notices?.some((notice) => notice.text.includes("/tmp/recovery-output")),
+        ).toBe(true);
+      }),
+  );
+
+  it("does not spend attention capacity on routine hints or hide flagged warnings", () => {
+    const collector = makeCompactEvidence(() => undefined);
+    for (let id = 0; id < 72; id++) {
+      collector.admit("pi.read");
+      collector.start(id, id);
+      collector.observe(id, () => ({
+        subject: "file",
+        outcome: id < 40 ? "success" : "warning",
+        notices: [
+          { kind: id < 40 ? "recovery" : "warning", text: `Notice ${id}`, expandedOnly: true },
+        ],
+      }));
+      collector.end(id);
+    }
+    collector.close();
+    expect(collector.snapshot()).toMatchObject({ observed: 72, warnings: 32, incomplete: false });
+    expect(collector.snapshot().notices).toHaveLength(32);
+    expect(collector.snapshot().notices[0]?.text).toBe("Notice 40");
+    const details: CodeModeToolDetails = {
+      toolCalls: [],
+      outputKind: "text",
+      counts: { total: 72, succeeded: 72, failed: 0, cancelled: 0, running: 0, queued: 0 },
+      compactAttention: collector.snapshot(),
+    };
+    expect(project(details)?.outcome).toBe("warning");
+    const theme = opaqueHostFixture({
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    });
+    for (const expanded of [false, true]) {
+      const text = renderCodeModeToolResult(result("1", details), { isPartial: false }, theme, {
+        expanded,
+      })
+        .component.render(240)
+        .join("\n");
+      expect(text).toContain("Notice 40");
+      expect(text).not.toContain("Notice 0");
     }
   });
 

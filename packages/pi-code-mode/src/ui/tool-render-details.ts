@@ -18,6 +18,7 @@ import {
   countCallEntries,
   decodeOption,
   MAX_PROGRESS_ENTRIES,
+  LiveChildTimingSchema,
   type CodeModeCallCounts,
   type CodeModeCallEntry,
 } from "../tools/format.ts";
@@ -44,6 +45,7 @@ const CallEntryInputSchema = Schema.Struct({
   activity: Schema.optional(Schema.Unknown),
   subject: Schema.optional(Schema.Unknown),
   durationMs: Schema.optional(Schema.Unknown),
+  liveTiming: Schema.optional(Schema.Unknown),
 });
 const RenderDetailsInputSchema = Schema.Struct({
   compactAttention: Schema.optional(Schema.Unknown),
@@ -72,6 +74,7 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
   if (entry === undefined) return undefined;
   const activity = Predicate.isString(entry.activity) ? entry.activity : undefined;
   const durationMs = nonNegativeInteger(entry.durationMs);
+  const liveTiming = decodeOption(LiveChildTimingSchema, entry.liveTiming);
   const subject = decodeOption(SubjectSchema, entry.subject);
   const compact = decodeOption(CompactReceiptSchema, entry.compact);
   const base: CodeModeCallEntry = {
@@ -84,6 +87,7 @@ const decodeCallEntry = <Value>(value: Value): CodeModeCallEntry | undefined => 
     ...(activity !== undefined && { activity }),
     ...(subject !== undefined && { subject: normalizeNestedSubject(subject) }),
     ...(durationMs !== undefined && { durationMs }),
+    ...(entry.status === "running" && liveTiming !== undefined && { liveTiming }),
   };
 };
 

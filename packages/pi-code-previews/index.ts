@@ -34,6 +34,8 @@ export {
   type BuiltinCompactTool,
 } from "./src/tools/builtin-subject";
 
+export { isCompactAttention } from "./src/tools/compact-summary";
+
 /** Semantic compact summaries for cooperating tools. */
 export type {
   CompactAnimationScheduler,

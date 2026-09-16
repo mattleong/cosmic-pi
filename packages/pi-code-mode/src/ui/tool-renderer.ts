@@ -31,12 +31,17 @@ import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-
 
 /** Neutral headline when the model provided no usable intent. */
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
-const attentionNotices = (details: CodeModeRenderDetails): readonly string[] => [
+const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] => [
   ...new Set([
     ...mcpAttention(details.mcpEvidence),
-    ...(details.compactAttention?.notices.map((notice) => notice.text) ?? []),
+    ...(details.compactAttention?.notices
+      .filter((notice) => expanded || codePreviews.isCompactAttention(notice))
+      .map((notice) => notice.text) ?? []),
     ...details.toolCalls.flatMap(
-      (call) => call.compact?.notices.map((notice) => notice.text) ?? [],
+      (call) =>
+        call.compact?.notices
+          .filter((notice) => expanded || codePreviews.isCompactAttention(notice))
+          .map((notice) => notice.text) ?? [],
     ),
     ...(details.compactAttention?.incomplete ? [INCOMPLETE_ATTENTION] : []),
   ]),
@@ -262,7 +267,7 @@ const renderCodeModeToolResultUnsafe = (
     container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
   }
   container.addChild(new Text(footerLine(details, isPartial, isError, theme), 0, 0));
-  for (const notice of attentionNotices(details))
+  for (const notice of visibleNotices(details, expanded))
     container.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
   if (isPartial) return container;
   if (expanded) {
@@ -347,7 +352,7 @@ export const renderCodeModeToolResult = (
         component.addChild(new Text(output, 0, 0));
       }
     }
-    for (const notice of attentionNotices(details))
+    for (const notice of visibleNotices(details, expanded))
       component.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
     return { component, shouldAnimate };
   }

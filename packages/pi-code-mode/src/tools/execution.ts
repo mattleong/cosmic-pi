@@ -24,6 +24,7 @@ import {
   type NestedPiToolDefinitions,
 } from "../boundary/host-builtin-tools.ts";
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
+import { makeChildTimings } from "../boundary/host-child-timing.ts";
 import type { CodeModeState } from "../config/store.ts";
 import { makeMcpEvidence } from "./mcp-evidence.ts";
 import { describeNestedSubject } from "./compact-subject.ts";
@@ -35,6 +36,7 @@ import {
   formatCodeModeSuccess,
   formatForeignRejection,
   progressResult,
+  type LiveChildTiming,
   type CodeModeCallCounts,
   type CodeModeCallEntry,
   type CodeModeToolDetails,
@@ -86,6 +88,7 @@ interface MutableCallEntry {
   activity: string;
   subject?: string;
   durationMs?: number;
+  liveTiming?: LiveChildTiming;
 }
 
 const snapshotCalls = (
@@ -171,6 +174,7 @@ export const makeCodeModeToolExecute =
       const { config } = state;
 
       const calls = new Map<number, MutableCallEntry>();
+      const childTimings = makeChildTimings();
       const presentationCwd = invokeHostCallback(() => ctx.cwd, undefined);
       // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
       // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
@@ -339,7 +343,11 @@ export const makeCodeModeToolExecute =
                           : "cancelled";
                   if (entry !== undefined) {
                     transitionCall(entry, nextStatus, counts);
-                    if (event.status !== "running") entry.durationMs = event.durationMs;
+                    if (event.status !== "running") {
+                      childTimings.stop(entry.liveTiming);
+                      delete entry.liveTiming;
+                      entry.durationMs = event.durationMs;
+                    }
                   } else if (event.status === "running") {
                     counts.queued -= 1;
                     counts.running += 1;
@@ -379,6 +387,10 @@ export const makeCodeModeToolExecute =
                   current.activity = describeNestedActivity(name, input);
                 }
                 if (current !== undefined) {
+                  if (calls.has(id) && current.liveTiming === undefined) {
+                    const timing = childTimings.start();
+                    if (timing !== undefined) current.liveTiming = timing;
+                  }
                   const subject =
                     presentationCwd === undefined
                       ? undefined
@@ -403,6 +415,8 @@ export const makeCodeModeToolExecute =
                 const nextStatus = outcome === "success" ? "completed" : "error";
                 if (current !== undefined) {
                   transitionCall(current, nextStatus, counts);
+                  childTimings.stop(current.liveTiming);
+                  delete current.liveTiming;
                   current.durationMs = durationMs;
                 } else {
                   // The legacy call was counted but its row exceeded the bounded host-side cap.
@@ -415,6 +429,8 @@ export const makeCodeModeToolExecute =
         });
 
         const settleProgress = (): CodeModeToolDetails => {
+          childTimings.close();
+          for (const call of calls.values()) delete call.liveTiming;
           const changed = settlePendingAsCancelled(calls, counts);
           counts.cancelled += counts.queued + counts.running;
           counts.queued = 0;
@@ -480,6 +496,7 @@ export const makeCodeModeToolExecute =
       return Promise.resolve()
         .then(attempt)
         .finally(() => {
+          childTimings.close();
           compact.close();
           evidence.close();
           publisher.settle();

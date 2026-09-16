@@ -32,8 +32,13 @@ Only runtime source plus its README, legal, and provenance documents ship.
   compact shell. It requires consistent current details and explicit execution success evidence,
   retains failure recovery text, and warns on handled nested failures or output truncation.
   It pairs intent with one exact call count after settlement or a done/total count while running.
-  It opts into measured parent timing beside that count and passes settled child durations to
-  the shell. Both obey the shared timing setting; no durations are inferred or summed.
+  It opts into measured parent timing beside that count. Child timing uses standalone visibility
+  and formatting rules without a nested-only override. `boundary/host-child-timing.ts` records
+  process-local clock tokens at decoded call start and projects live elapsed time on the shared
+  shell's existing refresh cadence, without per-child timers. Execution revokes tokens on child
+  settlement and every outer exit; serialization cannot recreate timing authority. Queued and
+  historical running rows have no live elapsed time. Settled rows retain the runtime's measured
+  admission-to-settlement duration, including queue wait. No child durations are inferred or summed.
   Its optional compact child tree projects retained call names, lifecycle and builtin targets,
   with exact totals for the shared shell's omitted-call marker. Duplicate calls remain distinct.
   `tools/compact-subject.ts` captures allowlisted paths, read ranges, commands and search targets
@@ -206,6 +211,12 @@ unknown before-state and do no extra filesystem I/O. MCP validated replies and t
 producer projections; Background Tasks v1 presentation callbacks preserve pre-projection log
 truncation. Operation outcome is captured before cumulative-output admission. Delivery refusal
 adds separate recovery evidence without rewriting known completion.
+
+Routine complete-line read hints retain their `expandedOnly` marker in per-call receipts and
+replay. They stay outside the aggregate attention ledger and its warning budget. Both detailed
+rendering paths show them only on expansion. The compact parent also retains these hints for
+owned outer-failure rendering, which bypasses the detailed renderer. Their retention ends at
+row eviction; warning and error notices remain attention even if incorrectly flagged.
 
 Only bounded sanitized presentation fields survive. Failure bodies, nested output, diffs and raw
 arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots

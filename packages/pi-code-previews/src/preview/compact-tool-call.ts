@@ -37,7 +37,7 @@ export function renderCompactToolCall(
         input.animationFrame,
         input.timingEnabled,
       );
-  return [row, ...children, ...renderCompactNotices(summary.notices, theme, width)];
+  return [row, ...children, ...renderCompactNotices(summary.notices, theme, width, input.expanded)];
 }
 
 /** An explicit failure owns both compact and expanded text. Never stack the original card. */
@@ -69,5 +69,5 @@ export function renderCompactFailure(
   const notices = summary.notices?.filter(
     (notice) => !visibleText.includes(compactPlainText(notice.text)),
   );
-  return [...header, ...body, ...renderCompactNotices(notices, theme, width)];
+  return [...header, ...body, ...renderCompactNotices(notices, theme, width, expanded)];
 }

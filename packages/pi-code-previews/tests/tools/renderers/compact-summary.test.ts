@@ -336,7 +336,7 @@ describe("notices independent of hidden preview bodies", () => {
     expect(value?.outcome).toBe("warning");
   });
 
-  test("read treats requested ranges and known line pagination as ordinary retrieval", () => {
+  test("read keeps complete-line pagination expanded-only, including byte caps", () => {
     for (const page of [
       {
         args: { path: "file", limit: 5 },
@@ -348,17 +348,49 @@ describe("notices independent of hidden preview bodies", () => {
           truncation: { truncated: true, truncatedBy: "lines" },
         }),
       },
+      {
+        args: { path: "file" },
+        output: result(
+          "slice\n\n[Showing lines 1-142 of 180 (50.0KB limit). Use offset=143 to continue.]",
+          {
+            truncation: { truncated: true, truncatedBy: "bytes", lastLinePartial: false },
+          },
+        ),
+      },
     ]) {
       const value = summary("read", page.args, page.output);
       expect(value?.outcome).toBe("success");
-      expect(value?.notices).toEqual([]);
+      expect(value?.notices).toEqual([
+        expect.objectContaining({ kind: "recovery", expandedOnly: true, expandedInResult: true }),
+      ]);
       const sensitive = summary("read", page.args, {
         ...page.output,
         content: [{ type: "text", text: secret }, ...page.output.content],
       });
       expect(sensitive?.outcome).toBe("warning");
       expect(noticeText(sensitive)).toContain("private key");
-      expect(noticeText(sensitive)).not.toContain("offset=");
+      expect(noticeText(sensitive)).toContain("offset=");
+    }
+  });
+
+  test("read does not hide partial lines or unrecognized byte-limit annotations", () => {
+    for (const truncatedBy of ["bytes", "lines"]) {
+      for (const lastLinePartial of [true, false, undefined]) {
+        for (const suffix of ["", " (50.0KB limit)", " (inspect missing content)"]) {
+          const value = summary(
+            "read",
+            { path: "file" },
+            result(`slice\n\n[Showing lines 1-2 of 10${suffix}. Use offset=3 to continue.]`, {
+              truncation: { truncated: true, truncatedBy, lastLinePartial },
+            }),
+          );
+          const routine =
+            (truncatedBy === "lines" && !suffix && lastLinePartial !== true) ||
+            (truncatedBy === "bytes" && suffix === " (50.0KB limit)" && lastLinePartial === false);
+          expect(value?.outcome).toBe(routine ? "success" : "warning");
+          expect(value?.notices?.[0]?.expandedOnly === true).toBe(routine);
+        }
+      }
     }
   });
 
@@ -750,34 +782,56 @@ describe("builtin factory compact integration", () => {
     expect(output).toEqual(before);
   });
 
-  test("routine read pagination stays in unchanged expanded output, not compact attention", () => {
-    for (const mode of ["on", "off", "border"] as const) {
-      setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-      const tool = createReadPreviewTool("/project");
-      const readArgs = { ...args, limit: 5 };
-      const ctx = context({ args: readArgs });
-      const output = result<undefined>(
-        "selectedContent\n\n[73 more lines in file. Use offset=6 to continue.]",
-      );
-      const before = structuredClone(output);
-      for (const expanded of [false, true, false, true]) {
-        const renderContext = { ...ctx, expanded };
-        const call = tool.renderCall?.(readArgs, theme, renderContext);
-        const body = tool.renderResult?.(
-          output,
-          { expanded, isPartial: false },
-          theme,
-          renderContext,
-        );
-        const text = [call, body]
-          .flatMap((component) => (component ? [renderComponent(component)] : []))
-          .join("\n");
-        expect(text.includes("offset=6")).toBe(expanded);
-        expect(text.includes("selectedContent")).toBe(expanded);
+  test.each([false, true])(
+    "routine read pagination stays expanded-only, byte cap: %s",
+    (byteCap) => {
+      for (const mode of ["on", "off", "border"] as const) {
+        setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
+        const tool = createReadPreviewTool("/project");
+        const readArgs = { ...args, limit: 5 };
+        const ctx = context({ args: readArgs });
+        const output = byteCap
+          ? result(
+              "selectedContent\n\n[Showing lines 1-142 of 180 (50.0KB limit). Use offset=143 to continue.]",
+              {
+                truncation: {
+                  content: "selectedContent",
+                  truncated: true,
+                  truncatedBy: "bytes" as const,
+                  lastLinePartial: false,
+                  firstLineExceedsLimit: false,
+                  totalLines: 180,
+                  totalBytes: 60000,
+                  outputLines: 142,
+                  outputBytes: 51000,
+                  maxLines: 2000,
+                  maxBytes: 51200,
+                },
+              },
+            )
+          : result<undefined>(
+              "selectedContent\n\n[73 more lines in file. Use offset=6 to continue.]",
+            );
+        const before = structuredClone(output);
+        for (const expanded of [false, true, false, true]) {
+          const renderContext = { ...ctx, expanded };
+          const call = tool.renderCall?.(readArgs, theme, renderContext);
+          const body = tool.renderResult?.(
+            output,
+            { expanded, isPartial: false },
+            theme,
+            renderContext,
+          );
+          const text = [call, body]
+            .flatMap((component) => (component ? [renderComponent(component)] : []))
+            .join("\n");
+          expect(text.match(/offset=/gu)?.length ?? 0).toBe(expanded ? 1 : 0);
+          expect(text.includes("selectedContent")).toBe(expanded);
+        }
+        expect(output).toEqual(before);
       }
-      expect(output).toEqual(before);
-    }
-  });
+    },
+  );
 
   test.each([
     ["read", createReadPreviewTool],

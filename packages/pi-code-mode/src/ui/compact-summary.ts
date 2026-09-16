@@ -1,6 +1,7 @@
 /** Pure Code Mode projection for the opt-in shared compact shell. */
 import * as Schema from "effect/Schema";
 import {
+  isCompactAttention,
   selectCompactChildren,
   type CompactChild,
   type CompactNotice,
@@ -8,7 +9,7 @@ import {
 } from "pi-code-previews";
 import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
 import { isCompactPiTool, mcpAttention } from "../tools/mcp-evidence.ts";
-import { decodeOption } from "../tools/format.ts";
+import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
 
@@ -17,12 +18,12 @@ const TextContentSchema = Schema.Array(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
 );
 
-export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, unknown> = ({
-  phase,
-  args,
-  result,
-  context,
-}) => {
+type SummaryProvider = CompactSummaryProvider<unknown, unknown, unknown>;
+
+export const codeModeCompactSummary = (
+  { phase, args, result, context }: Parameters<SummaryProvider>[0],
+  liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
+): ReturnType<SummaryProvider> => {
   try {
     const subject = describeCodeModeIntent(decodeOption(ArgsSchema, args)?.intent);
     const heading = { subject, showTiming: true as const };
@@ -33,8 +34,16 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
     const counters = [`${succeeded + failed + cancelled}/${total} done`];
     const children = {
       total,
-      entries: details.toolCalls.map(
-        (call): CompactChild => ({
+      entries: details.toolCalls.map((call): CompactChild => {
+        const durationMs =
+          call.status === "running"
+            ? phase === "running"
+              ? liveElapsed?.(call)
+              : undefined
+            : call.status === "queued"
+              ? undefined
+              : call.durationMs;
+        return {
           label: isCompactPiTool(call.tool)
             ? call.tool.slice(3)
             : call.compact !== undefined && call.tool === "mcp.request"
@@ -50,12 +59,7 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
             ...(call.compact.metadata !== undefined && { metadata: call.compact.metadata }),
             notices: call.compact.notices,
           }),
-          ...(call.durationMs !== undefined &&
-            call.status !== "queued" &&
-            call.status !== "running" && {
-              durationMs: call.durationMs,
-              showTiming: true as const,
-            }),
+          ...(durationMs !== undefined && { durationMs }),
           // Delivery failure takes precedence over a successful operation receipt.
           status: call.compact?.deliveryFailed
             ? call.compact.outcome === "uncertain"
@@ -73,13 +77,26 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
                     ? "pending"
                     : "running"
                 : call.status,
-        }),
-      ),
+        };
+      }),
     };
     const notices: CompactNotice[] = (details.compactAttention?.notices ?? []).map((notice) => ({
       ...notice,
       expandedInResult: true,
     }));
+    // The owned outer-failure shell bypasses the detailed renderer. Keep retained
+    // informational hints parent-owned there, too, even for visible children.
+    for (const call of details.toolCalls) {
+      for (const notice of call.compact?.notices ?? []) {
+        if (
+          !isCompactAttention(notice) &&
+          !notices.some(
+            (existing) => existing.kind === notice.kind && existing.text === notice.text,
+          )
+        )
+          notices.push({ ...notice, expandedInResult: true });
+      }
+    }
     if (details.compactAttention?.incomplete)
       notices.push({ kind: "warning", text: INCOMPLETE_ATTENTION, expandedInResult: true });
     if (failed > 0) notices.push({ kind: "warning", text: `${failed} nested operations failed.` });
@@ -146,13 +163,16 @@ export const codeModeCompactSummary: CompactSummaryProvider<unknown, unknown, un
           text: `${evidence.errors} MCP operations reported errors. Completed operations must not be replayed to recover output.`,
         });
     }
-    const hasAttention = notices.length > 0;
-    const visibleNotices = selectCompactChildren(children).entries.flatMap(
-      (child) => child.notices ?? [],
-    );
+    const hasAttention = notices.some(isCompactAttention);
+    const visibleNotices = context.expanded
+      ? []
+      : selectCompactChildren(children).entries.flatMap(
+          (child) => child.notices?.filter(isCompactAttention) ?? [],
+        );
     for (let index = notices.length - 1; index >= 0; index--) {
       const notice = notices[index]!;
       if (
+        isCompactAttention(notice) &&
         visibleNotices.some(
           (visible) => visible.kind === notice.kind && visible.text === notice.text,
         )

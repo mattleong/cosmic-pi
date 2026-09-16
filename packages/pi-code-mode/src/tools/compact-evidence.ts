@@ -1,6 +1,6 @@
 /** Execution-local, bounded presentation receipts. Raw arguments and results never persist. */
 import * as Schema from "effect/Schema";
-import type { CompactSummary } from "pi-code-previews";
+import { isCompactAttention, type CompactSummary } from "pi-code-previews";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { decodeOption } from "./format.ts";
 
@@ -10,6 +10,7 @@ const Labels = Schema.Array(Text).check(Schema.isMaxLength(8));
 const Notice = Schema.Struct({
   kind: Schema.Literals(["warning", "error", "recovery"]),
   text: Text,
+  expandedOnly: Schema.optionalKey(Schema.Literal(true)),
 });
 export const CompactReceiptSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -92,6 +93,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
     }
   };
   const attention = (notice: typeof Notice.Type) => {
+    if (!isCompactAttention(notice)) return;
     if (notices.some((old) => old.kind === notice.kind && old.text === notice.text)) return;
     if (notices.length >= 32) {
       incomplete = true;
@@ -162,7 +164,11 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
         }
         // Preserve valid notices independently of malformed or oversized sibling fields.
         for (const notice of summary.notices ?? []) {
-          const decoded = decodeOption(Notice, { kind: notice.kind, text: clean(notice.text) });
+          const decoded = decodeOption(Notice, {
+            kind: notice.kind,
+            text: clean(notice.text),
+            ...(notice.expandedOnly === true && { expandedOnly: true }),
+          });
           if (decoded === undefined) incomplete = true;
           else attention(decoded);
         }
@@ -188,6 +194,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           notices: (summary.notices ?? []).map((notice) => ({
             kind: notice.kind,
             text: clean(notice.text),
+            ...(notice.expandedOnly === true && { expandedOnly: true }),
           })),
           deliveryFailed: false,
         };

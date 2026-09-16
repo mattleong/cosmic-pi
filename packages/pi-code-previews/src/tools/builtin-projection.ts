@@ -6,7 +6,7 @@ import {
 } from "./builtin-result-detail";
 import { getObjectValue } from "../shared/helpers";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { CompactSummary, CompactPhase } from "./compact-summary";
+import { isCompactAttention, type CompactSummary, type CompactPhase } from "./compact-summary";
 import { builtinFailure } from "./builtin-failure";
 import {
   bashCommandNotices,
@@ -129,7 +129,7 @@ export function projectBuiltinCompactSummary(
     subject,
     counters,
     metadata,
-    outcome: notices.length > 0 ? "warning" : "success",
+    outcome: notices.some(isCompactAttention) ? "warning" : "success",
     notices: deduplicateNotices(notices),
   };
 }

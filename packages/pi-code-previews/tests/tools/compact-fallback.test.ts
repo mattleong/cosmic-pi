@@ -319,6 +319,43 @@ test("owned failure keeps independent notices even when marked for original resu
   }
 });
 
+test("expanded-only hints render once on expansion, including renderer fallback", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const fails of [false, true]) {
+      const tool: Definition = withCodePreviewShell(
+        {
+          ...createReadToolDefinition("/project"),
+          renderCall: () => new Text("call", 0, 0),
+          renderResult: () => {
+            if (fails) throw new Error("failed renderer");
+            return new Text("Continue at offset=143", 0, 0);
+          },
+        },
+        {
+          mode,
+          compactSummary: () => ({
+            subject: "file",
+            outcome: "success",
+            notices: [
+              {
+                kind: "recovery",
+                text: "Continue at offset=143",
+                expandedOnly: true,
+                expandedInResult: true,
+              },
+            ],
+          }),
+        },
+      );
+      const state = {};
+      for (const expanded of [false, true, false, true]) {
+        const text = paint(tool, context({ state, expanded })).rows.join("\n");
+        assert.equal(text.match(/offset=143/gu)?.length ?? 0, expanded ? 1 : 0);
+      }
+    }
+  }
+});
+
 test("result-only rows share notices only after their original result succeeds", () => {
   for (const fails of [false, true]) {
     const tool: Definition = withCodePreviewShell(

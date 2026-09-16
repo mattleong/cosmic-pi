@@ -2,12 +2,54 @@ import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { selectCompactChildren, renderCompactChildren } from "../../src/preview/compact-children";
 import { renderCompactFailure } from "../../src/preview/compact-tool-call";
-import type { CompactChild } from "../../src/tools/compact-summary";
+import {
+  isCompactAttention,
+  type CompactChild,
+  type CompactNotice,
+} from "../../src/tools/compact-summary";
 import { stripAnsi, testTheme } from "../support/render";
 
 const theme = testTheme();
 
 describe("compact child selection", () => {
+  it("hides only informational recovery in collapsed children and preserves expanded failure notices", () => {
+    const notices: CompactNotice[] = [
+      {
+        kind: "recovery",
+        text: "Continue at offset=143",
+        expandedOnly: true,
+        expandedInResult: true,
+      },
+      { kind: "warning", text: "Sensitive content", expandedOnly: true },
+      { kind: "error", text: "Independent error", expandedOnly: true },
+    ];
+    expect(notices.map(isCompactAttention)).toEqual([false, true, true]);
+    const children = renderCompactChildren(
+      { entries: [{ label: "read", status: "success", notices }], total: 1 },
+      theme,
+      100,
+    ).join("\n");
+    expect(children).not.toContain("offset=143");
+    expect(children).toContain("Sensitive content");
+    expect(children).toContain("Independent error");
+    for (const expanded of [false, true]) {
+      const text = renderCompactFailure(
+        {
+          name: "read",
+          phase: "settled",
+          expanded,
+          summary: { subject: "file", outcome: "error", notices },
+          failure: { cause: "Failed", details: "Complete failure" },
+        },
+        theme,
+        100,
+      ).join("\n");
+      expect(text.includes("offset=143")).toBe(expanded);
+      expect(text).toContain("Sensitive content");
+      expect(text).toContain("Independent error");
+    }
+  });
+
   it("preserves repeated calls and input order without mutating provider data", () => {
     const entries: readonly CompactChild[] = Object.freeze([
       Object.freeze({ label: "read", status: "success" as const }),

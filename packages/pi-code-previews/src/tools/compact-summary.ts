@@ -13,10 +13,17 @@ export type CompactOutcome = "success" | "warning" | "error" | "cancelled" | "un
 export interface CompactNotice {
   kind: "warning" | "error" | "recovery";
   text: string;
+  /** Informational recovery shown only on expansion. Ignored for warnings and errors. */
+  expandedOnly?: true;
   /** The original expanded result renders this complete notice. Defaults to shell-owned.
    * Ignored for owned failures, collapsed views, or a failed original result renderer.
    */
   expandedInResult?: true;
+}
+
+/** Warnings and errors always require attention, even if marked expanded-only. */
+export function isCompactAttention(notice: CompactNotice): boolean {
+  return notice.kind !== "recovery" || notice.expandedOnly !== true;
 }
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */

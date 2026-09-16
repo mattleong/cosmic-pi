@@ -3,6 +3,7 @@ import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works
 import { escapeControlChars } from "../shared/terminal-text";
 import {
   compactStatus,
+  isCompactAttention,
   type CompactNotice,
   type CompactPhase,
   type CompactSummary,
@@ -69,10 +70,13 @@ export function renderCompactNotices(
   notices: readonly CompactNotice[] | undefined,
   theme: Theme,
   width: number,
+  expanded = false,
 ): string[] {
   if (width <= 0) return [];
   return (notices ?? []).flatMap((notice) => {
-    const color = notice.kind === "error" ? "error" : "warning";
+    const attention = isCompactAttention(notice);
+    if (!expanded && !attention) return [];
+    const color = notice.kind === "error" ? "error" : attention ? "warning" : "muted";
     // Preserve every notice line, including continuation and recovery instructions.
     return indentedCompactText(notice.text, "  ╰─ ", color, theme, width);
   });

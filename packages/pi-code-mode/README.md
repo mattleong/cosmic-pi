@@ -52,9 +52,12 @@ intent, lifecycle status, and exact settled/total nested counts. A nested tree s
 calls with their statuses and builtin targets, such as file paths, read ranges, commands and
 search patterns. Targets use the standalone compact format, with bounded credential-redacted
 text; older saved calls without target metadata show names only. Larger batches show an omitted
-call count. With tool timing enabled, the parent shows measured elapsed time beside its count,
-and settled children show their recorded durations. Parallel child timings overlap; they are not
-summed to estimate the parent's duration. Source and ordinary output stay hidden until expansion. Caught nested failures produce a warning;
+call count. With tool timing enabled, the parent shows measured elapsed time beside its count.
+Running children update their elapsed time on the same refresh cadence as standalone calls.
+Child timing follows standalone visibility rules: bash, or calls lasting at least ten seconds,
+when no counter or metadata takes priority. Queued and replayed running calls never acquire a
+live timer. Settlement preserves the runtime's recorded duration, which includes queue wait.
+Parallel child timings overlap; they are not summed to estimate the parent's duration. Source and ordinary output stay hidden until expansion. Caught nested failures produce a warning;
 cancellation, truncation, and retained failure recovery text stay visible. Missing or malformed
 details retain the existing renderer. The default `preview` style is unchanged; reload after
 changing the Code Previews setting.
@@ -65,6 +68,9 @@ limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay
 when the program discards its replies. Native writes have no trustworthy before-state and warn
 that previous content is unavailable; they never claim a new file or inferred diff. Completion
 and guest delivery are separate: an output-budget refusal does not erase a completed mutation.
+Complete-line read continuation hints, including the 50KB cap, appear only on expansion.
+Retained call rows keep these hints even when the program discards the read result or later throws.
+They do not count as warnings or consume the attention budget.
 An execution-wide attention ledger preserves hidden-call warnings. Incomplete or overflowing
 evidence produces an explicit warning in both compact and detailed views. Historical calls
 without correlated receipts remain conservative. Programs must still inspect and return protocol

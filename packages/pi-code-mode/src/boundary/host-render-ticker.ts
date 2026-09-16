@@ -10,6 +10,7 @@ import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { codeModeCompactSummary } from "../ui/compact-summary.ts";
+import { liveChildElapsed } from "./host-child-timing.ts";
 
 const SPINNER_INTERVAL_MS = 160;
 type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
@@ -96,7 +97,10 @@ export const syncProgressTicker = (
 
 /** The shared shell skips hidden result renderers, so it must also release their ticker. */
 export const codeModeCompactSummaryAtHost: typeof codeModeCompactSummary = (input) => {
-  const summary = codeModeCompactSummary(input);
+  const summary = codeModeCompactSummary(
+    input,
+    input.phase === "running" ? liveChildElapsed() : undefined,
+  );
   const ownsCollapsed =
     summary &&
     (summary.outcome === undefined ||

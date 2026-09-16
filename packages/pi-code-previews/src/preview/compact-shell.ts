@@ -240,7 +240,7 @@ class CompactShell implements Component {
       context.expanded && resultBody !== undefined && resultBody === this.resultComponent;
     const notices = summary?.notices?.filter((notice) => !resultOwns || !notice.expandedInResult);
     const noticeBody: Component = {
-      render: (width) => renderCompactNotices(notices, this.theme, width),
+      render: (width) => renderCompactNotices(notices, this.theme, width, context.expanded),
       invalidate: () => undefined,
     };
     const details = new Container();

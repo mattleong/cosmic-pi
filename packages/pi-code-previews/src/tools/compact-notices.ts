@@ -50,14 +50,31 @@ export function readNotices<Details>(
   if (!truncated && !hasLimit) return [];
   const { notice } = splitReadContinuationNotice(output);
   if (notice) {
-    // Ordinary range/line pagination is informational. Keep it in the original output,
-    // not the compact attention rows. Byte caps and unknown truncation remain visible.
-    const requestedRange = !truncated && /^\d+ more lines in file\./u.test(notice);
+    const lastLinePartial = getObjectValue(truncation, "lastLinePartial");
+    const requestedRange =
+      !truncated && /^\d+ more lines in file\. Use offset=\d+ to continue\.$/u.test(notice);
     const linePage =
       truncated &&
       getObjectValue(truncation, "truncatedBy") === "lines" &&
       /^Showing lines \d+-\d+ of \d+\. Use offset=\d+ to continue\.$/u.test(notice);
-    if (requestedRange || linePage) return [];
+    // Byte pagination is safe only when the host confirms complete returned lines.
+    // Do not classify arbitrary parenthetical recovery text as a size-limit footer.
+    const bytePage =
+      truncated &&
+      getObjectValue(truncation, "truncatedBy") === "bytes" &&
+      lastLinePartial === false &&
+      /^Showing lines \d+-\d+ of \d+ \(\d+(?:\.\d+)?(?:B|KB|MB) limit\)\. Use offset=\d+ to continue\.$/u.test(
+        notice,
+      );
+    if (lastLinePartial !== true && (requestedRange || linePage || bytePage))
+      return [
+        {
+          kind: "recovery",
+          text: escapeControlChars(notice),
+          expandedOnly: true,
+          expandedInResult: true,
+        },
+      ];
     return [{ kind: "recovery", text: escapeControlChars(notice) }];
   }
   // An unrecognized host continuation may contain recovery detail we cannot summarize.

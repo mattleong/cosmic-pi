@@ -49,6 +49,47 @@ describe("shared semantic row", () => {
       }
   });
 
+  it("uses standalone live timing thresholds, settings, and detail priority", () => {
+    for (const name of ["bash", "read", "mcp", "background_task"])
+      for (const elapsedMs of [900, 9999, 10000, 12500])
+        for (const timingEnabled of [false, true])
+          for (const detail of [undefined, "counter", "metadata"]) {
+            const summary: CompactSummary = {
+              subject: "target",
+              ...(detail === "counter" && { counters: ["result count"] }),
+              ...(detail === "metadata" && { metadata: ["result detail"] }),
+            };
+            const duration = formatToolCallDuration(elapsedMs);
+            const standalone = renderCompactToolCall(
+              {
+                name,
+                phase: "running",
+                summary,
+                duration,
+                elapsedMs,
+                timingEnabled,
+                animationFrame: 3,
+              },
+              theme,
+              100,
+            )[0]!;
+            const child = renderCompactChildren(
+              {
+                entries: [{ ...summary, label: name, status: "running", durationMs: elapsedMs }],
+                total: 1,
+              },
+              theme,
+              105,
+              3,
+              timingEnabled,
+            )[0]!;
+            expect(stripAnsi(child).slice(5)).toBe(stripAnsi(standalone));
+            expect(child.includes(duration)).toBe(
+              timingEnabled && detail === undefined && (name === "bash" || elapsedMs >= 10000),
+            );
+          }
+  });
+
   it("preserves every recovery character when subtree indentation must yield", () => {
     const text = "abcdefghijklmnopqrstuvwxyz";
     for (const width of [1, 2, 5, 6, 7, 12, 40]) {

@@ -123,6 +123,12 @@ export const describeNestedActivity = <Name, Input>(name: Name, input: Input): s
   }
 };
 
+/** Identity-preserving validation; only the host's live registry grants timing authority. */
+export const LiveChildTimingSchema = Schema.declare(
+  Schema.is(Schema.Struct({ _tag: Schema.Literal("CodeModeLiveTiming") })),
+);
+export type LiveChildTiming = typeof LiveChildTimingSchema.Type;
+
 /**
  * One bounded nested-call progress entry; never contains nested tool output. `activity` is
  * a bounded, sanitized human-readable label derived from the decoded input at call start.
@@ -136,6 +142,8 @@ export interface CodeModeCallEntry {
   readonly subject?: string;
   /** Total wall-clock duration from queue admission through settlement. */
   readonly durationMs?: number;
+  /** Opaque, process-local running clock. Never interpreted from serialized replay. */
+  readonly liveTiming?: LiveChildTiming;
 }
 
 export interface CodeModeCallCounts {
