@@ -51,6 +51,24 @@ describe("failure details retention", () => {
     expect(retention.consume("owned")).toBeUndefined();
   });
 
+  it("detaches semantic failure provenance and its recovery notices", () => {
+    const retention = makeFailureDetailsRetention();
+    const failurePresentation = {
+      version: 1 as const,
+      tool: "bash" as const,
+      evidence: { code: "shell-exit", cause: "Exited with code 1", coverage: "complete" as const },
+      notices: [{ kind: "recovery" as const, text: "Read retained output." }],
+    };
+    retention.retain("owned", { ...details("pi.bash"), failurePresentation });
+    failurePresentation.evidence.cause = "mutated";
+    failurePresentation.notices[0]!.text = "mutated";
+    const value = retention.consume("owned")?.failurePresentation;
+    expect(value?.evidence.cause).toBe("Exited with code 1");
+    expect(value?.notices[0]?.text).toBe("Read retained output.");
+    Reflect.set(value?.evidence ?? {}, "cause", "replaced");
+    expect(value?.evidence.cause).toBe("Exited with code 1");
+  });
+
   it("evicts the oldest entry at capacity", () => {
     const retention = makeFailureDetailsRetention(2);
     retention.retain("a", details("a"));

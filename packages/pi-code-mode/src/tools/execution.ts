@@ -26,6 +26,7 @@ import {
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
 import { makeChildTimings } from "../boundary/host-child-timing.ts";
 import type { CodeModeState } from "../config/store.ts";
+import { projectFailurePresentation } from "./failure-evidence.ts";
 import { makeMcpEvidence } from "./mcp-evidence.ts";
 import { describeNestedSubject } from "./compact-subject.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
@@ -234,6 +235,7 @@ export const makeCodeModeToolExecute =
           ctx,
           toolCallId,
           observationId: compact.identity,
+          onDeliveryFailure: compact.deliveryFailure,
           observe: (id, name, args, result, isError) =>
             compact.observe(id, () => {
               if (policy === undefined || presentationCwd === undefined || name === "powershell")
@@ -257,6 +259,7 @@ export const makeCodeModeToolExecute =
             Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
           missingPresentation: compact.missing,
           observationId: compact.identity,
+          onDeliveryFailure: compact.deliveryFailure,
           observePresentation: (id, receipt) => {
             if (receipt.incomplete || receipt.overflow) compact.missing();
             compact.observe(id, () => receipt.summary);
@@ -471,7 +474,11 @@ export const makeCodeModeToolExecute =
               ? { ...settledDetails, truncated: true }
               : settledDetails;
           if (!result.ok) {
-            environment.retainFailureDetails?.(toolCallId, baseDetails);
+            const failurePresentation = projectFailurePresentation(result);
+            environment.retainFailureDetails?.(toolCallId, {
+              ...baseDetails,
+              ...(failurePresentation && { failurePresentation }),
+            });
             throw new Error(text);
           }
           const details: CodeModeToolDetails = {

@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import {
   isCompactAttention,
   selectCompactChildren,
-  type CompactChild,
   type CompactNotice,
   type CompactSummaryProvider,
 } from "pi-code-previews";
@@ -12,6 +11,9 @@ import { isCompactPiTool, mcpAttention } from "../tools/mcp-evidence.ts";
 import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
+
+import { verifiedFailurePresentation } from "./failure-presentation.ts";
+import { codeModeCallRows } from "./call-rows.ts";
 
 const ArgsSchema = Schema.Struct({ intent: Schema.optional(Schema.Unknown) });
 const TextContentSchema = Schema.Array(
@@ -31,55 +33,10 @@ export const codeModeCompactSummary = (
     const details = decodeCodeModeRenderDetails(result.details);
     if (!details.compactEligible) return undefined;
     const { total, succeeded, failed, cancelled, running, queued } = details.counts;
-    const counters = [`${succeeded + failed + cancelled}/${total} done`];
-    const children = {
-      total,
-      entries: details.toolCalls.map((call): CompactChild => {
-        const durationMs =
-          call.status === "running"
-            ? phase === "running"
-              ? liveElapsed?.(call)
-              : undefined
-            : call.status === "queued"
-              ? undefined
-              : call.durationMs;
-        return {
-          label: isCompactPiTool(call.tool)
-            ? call.tool.slice(3)
-            : call.compact !== undefined && call.tool === "mcp.request"
-              ? "mcp"
-              : call.compact !== undefined && call.tool === "session.backgroundTask"
-                ? "background_task"
-                : call.tool,
-          ...(call.subject !== undefined && { subject: call.subject }),
-          ...(call.compact !== undefined && {
-            subject: call.compact.subject,
-            ...(call.compact.action !== undefined && { action: call.compact.action }),
-            ...(call.compact.counters !== undefined && { counters: call.compact.counters }),
-            ...(call.compact.metadata !== undefined && { metadata: call.compact.metadata }),
-            notices: call.compact.notices,
-          }),
-          ...(durationMs !== undefined && { durationMs }),
-          // Delivery failure takes precedence over a successful operation receipt.
-          status: call.compact?.deliveryFailed
-            ? call.compact.outcome === "uncertain"
-              ? "uncertain"
-              : "error"
-            : call.status === "completed"
-              ? (call.compact?.outcome ??
-                (isCompactPiTool(call.tool) && details.compactAttention === undefined
-                  ? "success"
-                  : "returned"))
-              : call.status === "queued" || call.status === "running"
-                ? phase === "settled"
-                  ? "uncertain"
-                  : call.status === "queued"
-                    ? "pending"
-                    : "running"
-                : call.status,
-        };
-      }),
-    };
+    const counters = [
+      `${succeeded + failed + cancelled}/${total} done${failed ? ` · ${failed} failed` : ""}`,
+    ];
+    const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
     const notices: CompactNotice[] = (details.compactAttention?.notices ?? []).map((notice) => ({
       ...notice,
       expandedInResult: true,
@@ -89,7 +46,6 @@ export const codeModeCompactSummary = (
     for (const call of details.toolCalls) {
       for (const notice of call.compact?.notices ?? []) {
         if (
-          !isCompactAttention(notice) &&
           !notices.some(
             (existing) => existing.kind === notice.kind && existing.text === notice.text,
           )
@@ -99,8 +55,19 @@ export const codeModeCompactSummary = (
     }
     if (details.compactAttention?.incomplete)
       notices.push({ kind: "warning", text: INCOMPLETE_ATTENTION, expandedInResult: true });
-    if (failed > 0) notices.push({ kind: "warning", text: `${failed} nested operations failed.` });
-    if (cancelled > 0)
+    const selectedCalls = context.expanded
+      ? children.entries
+      : selectCompactChildren(children).entries;
+    const hiddenFailed = Math.max(
+      0,
+      failed - selectedCalls.filter((call) => call.status === "error").length,
+    );
+    if (hiddenFailed > 0)
+      notices.push({
+        kind: "warning",
+        text: `${hiddenFailed} additional nested operations failed.`,
+      });
+    if (cancelled > 0 && !details.cancelled)
       notices.push({
         kind: "warning",
         text: `${cancelled} nested operations cancelled; prior side effects are not rolled back.`,
@@ -145,7 +112,7 @@ export const codeModeCompactSummary = (
           kind: "warning",
           text: `${evidence.notSent} MCP operations were not sent.`,
         });
-      if (evidence.mcp > 0 && failed + cancelled > 0)
+      if (details.compactAttention === undefined && evidence.mcp > 0 && failed + cancelled > 0)
         notices.push({
           kind: "recovery",
           text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
@@ -191,11 +158,37 @@ export const codeModeCompactSummary = (
       const textParts = decodeOption(TextContentSchema, result.content);
       if (textParts === undefined) return undefined;
       const text = textParts.map((part) => part.text).join("\n");
-      // Retained Code Mode failure content is complete model-visible diagnostic text. Keep
-      // every continuation visible as recovery evidence rather than classify arbitrary prose.
+      const known = verifiedFailurePresentation(text, details.failurePresentation);
       const [first = "", ...rest] = text.split("\n");
-      if (rest.some((line) => line.trim().length > 0))
+      // Unclassified history may contain recovery instructions. Only verified producer
+      // coverage lets ordinary source/stack output move exclusively to expanded details.
+      if (!known && rest.some((line) => line.trim().length > 0))
         notices.push({ kind: "recovery", text: rest.join("\n") });
+      for (const notice of known?.notices ?? [])
+        if (
+          !notices.some((other) => other.kind === notice.kind && other.text === notice.text) &&
+          !visibleNotices.some((other) => other.kind === notice.kind && other.text === notice.text)
+        )
+          notices.push(notice);
+      // This only omits a redundant root explanation, never attributes the root to a
+      // particular invocation. Independent child failures and their identities stay intact.
+      const rootAlreadyExplained =
+        !context.expanded &&
+        known !== undefined &&
+        selectedCalls.some(
+          (child) =>
+            child.label === known.tool &&
+            child.failureEvidence?.code === known.evidence.code &&
+            child.failureEvidence?.coverage === "complete" &&
+            child.notices?.some(
+              (notice) => notice.kind === "error" && notice.text === known.evidence.cause,
+            ),
+        );
+      if (known) {
+        for (let index = notices.length - 1; index >= 0; index--)
+          if (notices[index]?.kind === "error" && notices[index]?.text === known.evidence.cause)
+            notices.splice(index, 1);
+      }
       if (details.cancelled)
         notices.push({
           kind: "warning",
@@ -207,7 +200,12 @@ export const codeModeCompactSummary = (
         children,
         notices,
         outcome: details.cancelled ? "cancelled" : "error",
-        ...(text.length > 0 && { failure: { cause: first, details: text } }),
+        ...(text.length > 0 && {
+          failure: {
+            cause: rootAlreadyExplained ? "" : (known?.evidence.cause ?? first),
+            details: text,
+          },
+        }),
       };
     }
     // Legacy details have no adapter evidence or hidden-call coverage. New evidence must
@@ -223,7 +221,9 @@ export const codeModeCompactSummary = (
     if (details.outputKind === undefined) return undefined;
     return {
       ...heading,
-      counters: [`${total} ${total === 1 ? "tool" : "tools"}`],
+      counters: [
+        `${total} ${total === 1 ? "tool" : "tools"}${failed ? ` · ${failed} failed` : ""}`,
+      ],
       children,
       notices,
       detailsOnExpand: true,

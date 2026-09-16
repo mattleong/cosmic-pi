@@ -2,8 +2,10 @@ import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
+import { isCompactAttention } from "pi-code-previews";
 import * as mcpEvidence from "../src/tools/mcp-evidence.ts";
 import {
+  projectMcpCompactSummary,
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
   normalizeMcpCodeModeQuery,
@@ -74,6 +76,68 @@ const harness = (provider: McpCodeModeCapability["execute"], maxOutputBytes = 10
   };
 };
 describe("MCP execution evidence in compact Code Mode results", () => {
+  it.effect(
+    "uses the same discovery notice relevance standalone and nested without resurrecting routine attention",
+    () =>
+      Effect.gen(function* () {
+        const args = { action: "tools.describe" as const, server: "catalog", tool: "inspect" };
+        const output = reply({
+          action: args.action,
+          resultId: "retained-1",
+          notices: [
+            "MCP catalog resources catalog is unavailable because its listing method was not found.",
+            "MCP catalog templates catalog is unavailable because its listing method was not found.",
+            "MCP catalog cached metadata is not fresh; invocation requires current metadata.",
+          ],
+        });
+        const standalone = projectMcpCompactSummary({
+          phase: "settled",
+          args,
+          result: { details: output },
+          isError: false,
+        });
+        const completed = yield* Effect.promise(() =>
+          harness(() => Promise.resolve(output)).run(
+            'await tools.mcp.request({action:"tools.describe",server:"catalog",tool:"inspect"}); return 1',
+          ),
+        );
+        expect(summary(completed.details)?.outcome).toBe(standalone?.outcome);
+        expect(
+          completed.details?.toolCalls[0]?.compact?.notices.map((notice) => ({
+            text: notice.text,
+            expandedOnly: notice.expandedOnly,
+          })),
+        ).toEqual(
+          standalone?.notices?.map((notice) => ({
+            text: notice.text,
+            expandedOnly: notice.expandedOnly,
+          })),
+        );
+        expect(completed.details?.mcpEvidence?.notices).toEqual([]);
+        expect(completed.details?.compactAttention?.notices).toEqual([]);
+        expect(summary(completed.details)?.notices?.filter(isCompactAttention)).toEqual([]);
+        expect(
+          mcpEvidence.observeMcpReply({
+            ...output,
+            notices: [...output.notices, "Check remote state."],
+          }).notices,
+        ).toContain("Check remote state.");
+        const discovery = reply({
+          action: "tools.search",
+          resultId: "retained-search",
+          data: { result: { undiscovered: ["other"] } },
+        });
+        const direct = projectMcpCompactSummary({
+          phase: "settled",
+          args: { action: "tools.search", query: "x" },
+          result: { details: discovery },
+          isError: false,
+        });
+        expect(mcpEvidence.observeMcpReply(discovery).notices).toEqual(
+          direct?.notices?.map((notice) => notice.text),
+        );
+      }),
+  );
   it.effect.each([
     [reply(), "success"],
     [reply({ isError: true }), "error"],

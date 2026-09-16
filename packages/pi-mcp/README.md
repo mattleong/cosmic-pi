@@ -299,6 +299,11 @@ HTTP and stdio JSON-RPC errors retain fixed diagnostic reasons such as `rpc-meth
 
 The owned gateway has compact call/result cards under the existing code-preview shell. Expanded cards show recognized MCP text with its newlines and indentation, alongside sanitized raw JSON. One combined display budget covers both sections. String, collection, depth, node, line, and character cuts are disclosed separately from source truncation or operation failure. Expansion never changes the original JSON, images, error receipts, or execution certainty. Unknown completion, cleanup, truncation, and originating failures remain visible when collapsed. Ordinary cancellations use operation-neutral guidance, not sign-in instructions.
 
+Standalone and nested compact calls share discovery notice relevance. Routine cache freshness
+and missing optional resource/template catalogs stay in expanded details during tool search or
+description. Missing support for a catalog you actually requested, failed refreshes, and unknown
+notices remain visible. Cached searches still disclose undiscovered servers.
+
 Successful discovery pages with a next cursor show counts and more-metadata availability without a recovery warning solely for pagination. Short pages missing a cursor and actual output limits still show recovery guidance. Cards consolidate recognized local validation notices into one complete warning without changing model-facing output. Failed validation and unavailable validation remain distinct, and neither permits replay to recover output.
 
 `/mcp result ID` opens an authorized local retained-output viewer. A complete JSON page containing recognized tool, resource, or prompt text defaults to readable text; `v` toggles sanitized raw JSON. Partial pages stay raw, even when a fragment happens to parse as JSON. The viewer keeps its existing 8,192-character read allowance and never assembles pages to enable readable mode. Raw view retains page-sized strings and collections rather than applying the card's smaller cuts.

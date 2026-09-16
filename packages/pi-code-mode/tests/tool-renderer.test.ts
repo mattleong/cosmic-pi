@@ -1,10 +1,17 @@
-import { setKeybindings } from "@earendil-works/pi-tui";
+import * as codePreviews from "pi-code-previews";
+import {
+  codePreviewSettings,
+  setCodePreviewSettings,
+} from "../../pi-code-previews/src/config/state.ts";
+import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import { MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
+import { renderCodeModeToolResult } from "../src/ui/tool-renderer.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
 import { opaqueHostFixture } from "./support/host.ts";
 
+const { withCodePreviewShell } = codePreviews;
 const theme = {
   bold: (text: string) => text,
   fg: (_color: string, text: string) => text,
@@ -254,5 +261,229 @@ describe("registered code mode renderers", () => {
         }),
       ),
     ).not.toThrow();
+  });
+});
+
+describe("expanded retained presentation", () => {
+  it.each(["off", "on", "border"] as const)(
+    "owns one expanded source/header in %s mode and keeps every bounded child before the result",
+    (mode) => {
+      const previous = codePreviewSettings;
+      try {
+        setCodePreviewSettings({
+          ...previous,
+          toolCallCollapsedStyle: "compact",
+          toolCallTiming: false,
+        });
+        const owned = definition();
+        const tool = withCodePreviewShell(owned, {
+          mode,
+          compactSummary: owned.compactSummary,
+        });
+        const args = {
+          code: "const marker = 1; return {answer: marker};",
+          intent: "Inspect retained calls",
+        };
+        const context = opaqueHostFixture({
+          args,
+          state: {},
+          expanded: true,
+          isPartial: false,
+          isError: false,
+          executionStarted: true,
+          argsComplete: true,
+          invalidate() {},
+        });
+        const hostTheme = opaqueHostFixture({
+          ...theme,
+          bg: (_color: string, text: string) => text,
+        });
+        const call = tool.renderCall?.(args, hostTheme, context);
+        const value = {
+          content: [{ type: "text" as const, text: '{"answer":1}' }],
+          details: {
+            outputKind: "structured",
+            toolCalls: Array.from({ length: 8 }, (_, id) => ({
+              tool: "pi.read",
+              subject: `file-${id}`,
+              status: "completed",
+              durationMs: 25000,
+              compact: {
+                version: 1,
+                subject: `file-${id}`,
+                outcome: "success",
+                deliveryFailed: false,
+                notices: [{ kind: "recovery", text: `CONTINUE_${id}`, expandedOnly: true }],
+              },
+            })),
+            totalToolCalls: 8,
+            counts: { total: 8, succeeded: 8, failed: 0, cancelled: 0, running: 0, queued: 0 },
+          },
+        };
+        expect(
+          owned.compactSummary({ phase: "settled", args, result: value, context })
+            ?.expandedResultOwnsCall,
+        ).toBe(true);
+        tool.renderResult?.(
+          opaqueHostFixture(value),
+          { isPartial: false, expanded: true },
+          hostTheme,
+          context,
+        );
+        const text = call!.render(160).join("\n");
+        expect(text.split("const marker")).toHaveLength(2);
+        expect(text.split("Inspect retained calls")).toHaveLength(2);
+        expect(text.indexOf("const marker")).toBeLessThan(text.indexOf("file-0"));
+        expect(text.indexOf("file-7")).toBeLessThan(text.indexOf('"answer"'));
+        expect(text).not.toMatch(/\b25(?:\.0)?s\b/u);
+        expect(text).toContain('  "answer": 1');
+        for (let id = 0; id < 8; id += 1) {
+          expect(text.split(`CONTINUE_${id}`)).toHaveLength(2);
+          expect(text.indexOf(`CONTINUE_${id}`)).toBeGreaterThan(text.indexOf(`file-${id}`));
+          if (id < 7)
+            expect(text.indexOf(`CONTINUE_${id}`)).toBeLessThan(text.indexOf(`file-${id + 1}`));
+        }
+        for (const width of [8, 16, 80]) {
+          expect(call!.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
+        }
+      } finally {
+        setCodePreviewSettings(previous);
+      }
+    },
+  );
+  it("declines expanded ownership when presentation capture fails", () => {
+    const previous = codePreviewSettings;
+    let policy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      setCodePreviewSettings({ ...previous, toolCallCollapsedStyle: "compact" });
+      const owned = definition();
+      const tool = withCodePreviewShell(owned, {
+        mode: "off",
+        compactSummary: owned.compactSummary,
+      });
+      const args = { code: "return 'SOURCE_OWNERSHIP';", intent: "Capture failure" };
+      const context = opaqueHostFixture({
+        args,
+        state: {},
+        expanded: true,
+        isPartial: false,
+        isError: false,
+        executionStarted: true,
+        argsComplete: true,
+        invalidate() {},
+      });
+      const value = {
+        ...result(),
+        details: { ...result().details, outputKind: "text", truncated: true },
+      };
+      const summary = owned.compactSummary({ phase: "settled", args, result: value, context });
+      expect(summary?.expandedResultOwnsCall).toBe(true);
+      const hostTheme = opaqueHostFixture({ ...theme, bg: (_color: string, text: string) => text });
+      const call = tool.renderCall?.(args, hostTheme, context);
+      tool.renderResult?.(value, { isPartial: false, expanded: true }, hostTheme, context);
+      policy = vi
+        .spyOn(codePreviews, "captureCodePreviewPresentationPolicy")
+        .mockImplementation(() => {
+          throw new Error("policy capture");
+        });
+      const text = call!.render(240).join("\n");
+      expect(text.split("SOURCE_OWNERSHIP")).toHaveLength(2);
+      expect(text).toContain("safe output");
+      for (const notice of summary?.notices ?? []) expect(text).toContain(notice.text);
+    } finally {
+      policy?.mockRestore();
+      setCodePreviewSettings(previous);
+    }
+  });
+
+  it("preserves aggregate failure status without an owned expanded header", () => {
+    const value = {
+      ...result(),
+      details: {
+        toolCalls: [],
+        counts: {
+          total: 1,
+          failed: 1,
+          succeeded: 0,
+          cancelled: 0,
+          running: 0,
+          queued: 0,
+        },
+      },
+    };
+    const text = renderCodeModeToolResult(value, { isPartial: false }, opaqueHostFixture(theme), {
+      expanded: true,
+    })
+      .component.render(120)
+      .join("\n");
+    expect(text).toMatch(/1 failed/u);
+    expect(text).toContain("safe output");
+  });
+
+  it("does not claim completion in emergency rendering of unsettled or cancelled records", () => {
+    for (const value of [
+      result("running"),
+      { ...result(), details: { ...result().details, cancelled: true } },
+    ]) {
+      const text = renderCodeModeToolResult(
+        value,
+        { isPartial: false },
+        opaqueHostFixture({
+          fg: () => {
+            throw new Error("theme");
+          },
+        }),
+        { expanded: true },
+      )
+        .component.render(120)
+        .join("\n");
+      expect(text).not.toContain("completed");
+      expect(text).toContain("safe output");
+    }
+  });
+
+  it("preserves raw text and errors and retains source/recovery when expanded drawing fails", () => {
+    const raw = '{"answer":1}';
+    for (const [outputKind, isError, truncated] of [
+      ["text", false, false],
+      ["structured", true, false],
+      ["structured", false, true],
+    ] as const) {
+      const rendered = renderCodeModeToolResult(
+        {
+          content: [{ type: "text", text: raw }],
+          details: { ...result().details, outputKind, truncated },
+        },
+        { isPartial: false },
+        opaqueHostFixture(theme),
+        { expanded: true, isError },
+      );
+      expect(rendered.component.render(120).join("\n")).toContain(raw);
+    }
+    const rendered = renderCodeModeToolResult(
+      result(),
+      { isPartial: false },
+      opaqueHostFixture({
+        ...theme,
+        fg: () => {
+          throw new Error("theme failed");
+        },
+      }),
+      { expanded: true },
+      0,
+      [],
+      {
+        ownsCall: true,
+        source: "return 'SOURCE_RECOVERY';",
+        summary: {
+          subject: "Inspect",
+          notices: [{ kind: "recovery", text: "Check state first.\nNever replay automatically." }],
+        },
+      },
+    );
+    const text = rendered.component.render(120).join("\n");
+    expect(text).toContain("SOURCE_RECOVERY");
+    expect(text).toContain("safe output");
+    expect(text).toContain("Never replay automatically.");
   });
 });

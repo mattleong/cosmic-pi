@@ -1,6 +1,7 @@
 /** Pure defensive normalization of current and legacy `code_mode` render details. */
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { FailurePresentationSchema, type FailurePresentation } from "../tools/failure-evidence.ts";
 import {
   CompactReceiptSchema,
   CompactAttentionSchema,
@@ -24,6 +25,7 @@ import {
 } from "../tools/format.ts";
 
 export interface CodeModeRenderDetails {
+  readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
@@ -48,6 +50,7 @@ const CallEntryInputSchema = Schema.Struct({
   liveTiming: Schema.optional(Schema.Unknown),
 });
 const RenderDetailsInputSchema = Schema.Struct({
+  failurePresentation: Schema.optional(Schema.Unknown),
   compactAttention: Schema.optional(Schema.Unknown),
   mcpEvidence: Schema.optional(Schema.Unknown),
   toolCalls: Schema.optional(Schema.Unknown),
@@ -205,7 +208,9 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
           incomplete: true,
         }
       : decodedAttention;
+  const failurePresentation = decodeOption(FailurePresentationSchema, record.failurePresentation);
   const normalized: CodeModeRenderDetails = {
+    ...(failurePresentation !== undefined && { failurePresentation }),
     ...(compactAttention !== undefined && { compactAttention }),
     ...(mcpEvidence !== undefined && { mcpEvidence }),
     toolCalls,

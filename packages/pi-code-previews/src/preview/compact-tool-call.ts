@@ -62,7 +62,10 @@ export function renderCompactFailure(
         ? "warning"
         : "error";
   const text = expanded ? failure.details : failure.cause;
-  const body = indentedCompactText(text, expanded ? "  " : "  ╰─ ", color, theme, width);
+  const body =
+    text.length === 0
+      ? []
+      : indentedCompactText(text, expanded ? "  " : "  ╰─ ", color, theme, width);
   // Compare semantic plain text only, never rendered components. A contained notice is
   // already visible in full, including on the conservative unknown-error path.
   const visibleText = compactPlainText(text);

@@ -1,4 +1,5 @@
 import { copyCompactAttention, freezeReceipt } from "./compact-evidence.ts";
+import { copyFailurePresentation } from "./failure-evidence.ts";
 import { copyMcpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeToolDetails } from "./format.ts";
 
@@ -31,6 +32,8 @@ export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetent
         ),
       ),
     };
+    if (copied.failurePresentation !== undefined)
+      copied.failurePresentation = copyFailurePresentation(copied.failurePresentation);
     if (copied.compactAttention !== undefined)
       copied.compactAttention = copyCompactAttention(copied.compactAttention);
     if (copied.mcpEvidence !== undefined) copied.mcpEvidence = copyMcpEvidence(copied.mcpEvidence);

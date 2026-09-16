@@ -107,6 +107,7 @@ export const nestedResultToGuestData = (
   );
 
 export interface NestedDispatchOptions {
+  readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   readonly observationId?: (fiber: number) => number | undefined;
   readonly observe?: (
     invocationId: number | undefined,
@@ -169,7 +170,14 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
               () => options.observe?.(invocationId, name, input, result, false),
               undefined,
             );
-            return nestedResultToGuestData(name, result);
+            return nestedResultToGuestData(name, result).pipe(
+              Effect.onExit((exit) =>
+                Effect.sync(() => {
+                  if (exit._tag === "Failure")
+                    invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
+                }),
+              ),
+            );
           }),
         );
       }),

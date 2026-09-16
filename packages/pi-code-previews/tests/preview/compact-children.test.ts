@@ -12,6 +12,63 @@ import { stripAnsi, testTheme } from "../support/render";
 const theme = testTheme();
 
 describe("compact child selection", () => {
+  it.each(["tree", "flat"] as const)(
+    "expands every retained child in %s view while collapsed selection stays capped at five",
+    (layout) => {
+      const entries: CompactChild[] = Array.from({ length: 8 }, (_, index) => ({
+        label: `retained-${index}`,
+        status: "success",
+      }));
+      const children = { entries, total: 12 };
+      const expanded = renderCompactChildren(children, theme, 80, 0, true, true, layout).map(
+        stripAnsi,
+      );
+      expect(expanded.slice(0, -1).map((row) => row.match(/retained-\d/u)?.[0])).toEqual(
+        entries.map((entry) => entry.label),
+      );
+      expect(expanded.at(-1)).toContain("4 more");
+      const collapsed = renderCompactChildren(children, theme, 80);
+      expect(collapsed).toEqual(renderCompactChildren(children, theme, 80, 0, true, false));
+      expect(selectCompactChildren(children).entries).toEqual(entries.slice(3));
+      expect(collapsed).toHaveLength(6);
+      expect(stripAnsi(collapsed.at(-1)!)).toContain("7 more");
+    },
+  );
+
+  it.each(["tree", "flat"] as const)(
+    "keeps %s informational hints beneath their child and wraps complete warnings",
+    (layout) => {
+      const warning = "Sensitive content requires review before sharing with another recipient.";
+      const children = {
+        entries: [
+          {
+            label: "first",
+            status: "success" as const,
+            notices: [
+              { kind: "recovery" as const, text: "Continue at offset=143", expandedOnly: true },
+              { kind: "warning" as const, text: warning, expandedOnly: true },
+            ],
+          },
+          { label: "second", status: "success" as const },
+        ],
+        total: 2,
+      } satisfies { entries: CompactChild[]; total: number };
+      for (const expanded of [false, true]) {
+        const rows = renderCompactChildren(children, theme, 35, 0, true, expanded, layout).map(
+          stripAnsi,
+        );
+        expect(rows.every((row) => visibleWidth(row) <= 35)).toBe(true);
+        const text = rows.join("\n");
+        expect(text.includes("offset=143")).toBe(expanded);
+        const warningRows = rows.slice(1, -1).filter((row) => !row.includes("offset=143"));
+        expect(warningRows.length).toBeGreaterThan(1);
+        expect(warningRows.map((row) => row.replace(/[│╰─]/gu, "").trim()).join(" ")).toBe(warning);
+        expect(rows[0]).toContain("first");
+        expect(rows.at(-1)).toContain("second");
+      }
+    },
+  );
+
   it("hides only informational recovery in collapsed children and preserves expanded failure notices", () => {
     const notices: CompactNotice[] = [
       {
@@ -99,27 +156,34 @@ describe("compact child selection", () => {
     expect(selectCompactChildren({ entries: [], total: 40 })).toEqual({ entries: [], omitted: 40 });
   });
 
-  it("renders untrusted child names as inert width-bounded text", () => {
-    for (const width of [1, 4, 16, 40, 100]) {
-      const rows = renderCompactChildren(
-        {
-          entries: [
-            {
-              label: "read\n日本語\t\u001b[2J\r".repeat(30),
-              subject: "path\n日本語\t\u001b[2J\r".repeat(30),
-              status: "returned",
-            },
-          ],
-          total: 1,
-        },
-        theme,
-        width,
-      );
-      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-      expect(rows.join("")).not.toContain("\u001b[2J");
-      expect(stripAnsi(rows.join(""))).not.toMatch(/[\n\r\t]/u);
-    }
-  });
+  it.each(["tree", "flat"] as const)(
+    "renders untrusted %s child names as inert width-bounded text",
+    (layout) => {
+      for (const width of [1, 4, 16, 40, 100]) {
+        const rows = renderCompactChildren(
+          {
+            entries: [
+              {
+                label: "read\n日本語\t\u001b[2J\r".repeat(30),
+                subject: "path\n日本語\t\u001b[2J\r".repeat(30),
+                status: "returned",
+              },
+            ],
+            total: 1,
+          },
+          theme,
+          width,
+          0,
+          true,
+          true,
+          layout,
+        );
+        expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+        expect(rows.join("")).not.toContain("\u001b[2J");
+        expect(stripAnsi(rows.join(""))).not.toMatch(/[\n\r\t]/u);
+      }
+    },
+  );
 
   it("preserves call identity while eliding long targets like standalone headers", () => {
     const subject = `src/${"long-directory/".repeat(20)}target.ts`;
@@ -139,42 +203,47 @@ describe("compact child selection", () => {
     }
   });
 
-  it("shows measured settled durations only when timing is enabled", () => {
-    for (const status of [
-      "pending",
-      "running",
-      "success",
-      "error",
-      "cancelled",
-      "returned",
-    ] as const) {
-      for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, 123]) {
-        for (const timingEnabled of [false, true]) {
-          const rows = renderCompactChildren(
-            {
-              entries: [
-                {
-                  label: "read",
-                  status,
-                  showTiming: true,
-                  ...(durationMs !== undefined && { durationMs }),
-                },
-              ],
-              total: 1,
-            },
-            theme,
-            80,
-            0,
-            timingEnabled,
-          );
-          expect(rows.join("").includes("123ms")).toBe(
-            timingEnabled && status !== "pending" && durationMs === 123,
-          );
-          expect(rows.join("")).not.toMatch(/NaN|Infinity|-1ms/u);
+  it.each(["tree", "flat"] as const)(
+    "shows measured %s durations only when timing is enabled",
+    (layout) => {
+      for (const status of [
+        "pending",
+        "running",
+        "success",
+        "error",
+        "cancelled",
+        "returned",
+      ] as const) {
+        for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, 123]) {
+          for (const timingEnabled of [false, true]) {
+            const rows = renderCompactChildren(
+              {
+                entries: [
+                  {
+                    label: "read",
+                    status,
+                    showTiming: true,
+                    ...(durationMs !== undefined && { durationMs }),
+                  },
+                ],
+                total: 1,
+              },
+              theme,
+              80,
+              0,
+              timingEnabled,
+              true,
+              layout,
+            );
+            expect(rows.join("").includes("123ms")).toBe(
+              timingEnabled && status !== "pending" && durationMs === 123,
+            );
+            expect(rows.join("")).not.toMatch(/NaN|Infinity|-1ms/u);
+          }
         }
       }
-    }
-  });
+    },
+  );
 
   it("does not let child limits consume owned failure or recovery text", () => {
     const rows = renderCompactFailure(

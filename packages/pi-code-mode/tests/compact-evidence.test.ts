@@ -73,6 +73,109 @@ const harness = (
 
 describe("compact semantic evidence", () => {
   it.effect(
+    "keeps received native failures distinct from delivery loss and puts known diagnostics only in expanded details",
+    () =>
+      Effect.gen(function* () {
+        const diagnostic =
+          "SOURCE_MARKER\nError: missing import\n  at stack-marker\nCommand exited with code 1";
+        const editError =
+          "Found 4 occurrences of edits[3] in file. Each oldText must be unique. Please provide more context to make it unique.";
+        for (const [name, error, code] of [
+          ["bash", diagnostic, 'await tools.pi.bash({command:"run"})'],
+          [
+            "edit",
+            editError,
+            'await tools.pi.edit({path:"file",edits:[{oldText:"a",newText:"b"}]})',
+          ],
+        ] as const) {
+          const h = harness(
+            nestedToolDefinitionsFixture({
+              [name]: { execute: () => Promise.reject(new Error(error)) },
+            }),
+          );
+          yield* Effect.promise(() => expect(h.run(code)).rejects.toThrow(error));
+          const details = h.retention.consume("compact")!;
+          expect(details.compactAttention).toMatchObject({
+            observed: 1,
+            errors: 1,
+            incomplete: false,
+          });
+          expect(details.toolCalls[0]?.compact).toMatchObject({
+            outcome: "error",
+            deliveryFailed: false,
+          });
+          expect(details.failurePresentation?.evidence.coverage).toBe("complete");
+          const serialized = yield* encode(details);
+          expect(serialized).not.toMatch(/SOURCE_MARKER|stack-marker|may already have completed/u);
+          const text = `[ToolFailure] Nested tool '${name}' failed: ${error}`;
+          const compact = codeModeCompactSummary({
+            phase: "settled",
+            args: {},
+            result: result(text, details),
+            context: opaqueHostFixture({ isError: true, expanded: false }),
+          });
+          expect(compact?.failure?.details).toBe(text);
+          expect(compact?.failure?.cause).toBe("");
+          expect(
+            compact?.children?.entries[0]?.notices?.filter((notice) => notice.kind === "error"),
+          ).toHaveLength(1);
+          expect(
+            compact?.notices?.some((notice) =>
+              /SOURCE_MARKER|stack-marker|nested operations failed|delivery|incomplete/u.test(
+                notice.text,
+              ),
+            ),
+          ).toBe(false);
+          const caught = yield* Effect.promise(() => h.run(`try { ${code}; } catch {} return 1;`));
+          expect(caught.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(false);
+          expect(project(caught.details!)?.outcome).toBe("error");
+        }
+      }),
+  );
+
+  it.effect("preserves actual diagnostic clipping and native result-conversion loss", () =>
+    Effect.gen(function* () {
+      const failure = harness(
+        nestedToolDefinitionsFixture({
+          bash: {
+            execute: () =>
+              Promise.reject(new Error(`${"diagnostic ".repeat(60)}\nCommand exited with code 1`)),
+          },
+        }),
+        { budget: 20 },
+      );
+      const clipped = yield* Effect.promise(() =>
+        failure.run('try { await tools.pi.bash({command:"run"}); } catch {} return 1;'),
+      );
+      expect(clipped.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
+      expect(
+        clipped.details?.compactAttention?.notices.some((notice) =>
+          notice.text.includes("do not replay"),
+        ),
+      ).toBe(true);
+      const h = harness(
+        nestedToolDefinitionsFixture({
+          write: {
+            execute: () =>
+              Promise.resolve({
+                content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+                details: {},
+              }),
+          },
+        }),
+      );
+      const conversion = yield* Effect.promise(() =>
+        h.run('try { await tools.pi.write({path:"file",content:"private"}); } catch {} return 1;'),
+      );
+      expect(conversion.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
+      expect(
+        conversion.details?.compactAttention?.notices.some((notice) =>
+          notice.text.includes("do not replay"),
+        ),
+      ).toBe(true);
+    }),
+  );
+  it.effect(
     "correlates identical concurrent calls in reverse completion order through the real runtime",
     () =>
       Effect.gen(function* () {
@@ -226,6 +329,50 @@ describe("compact semantic evidence", () => {
     expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
     expect(project(details)?.outcome).toBe("uncertain");
   });
+
+  it.effect("retains lost companion replies after observed completion", () =>
+    Effect.gen(function* () {
+      const events = createEventBus();
+      events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) =>
+        normalizeBackgroundTaskCodeModeQuery(value)?.respond({
+          version: 1,
+          presentationVersion: 1,
+          sessionId: "compact",
+          execute: (_id, _input, _signal, _budget, observe) => {
+            observe?.({
+              version: 1,
+              incomplete: false,
+              overflow: false,
+              summary: {
+                action: "start",
+                subject: "task",
+                outcome: "success",
+                metadata: [],
+                counters: [],
+                notices: [],
+                detailsOnExpand: true,
+              },
+            });
+            return Promise.reject(new Error("Reply projection failed"));
+          },
+        } satisfies BackgroundTaskCodeModeCapability),
+      );
+      const completed = yield* Effect.promise(() =>
+        harness(nestedToolDefinitionsFixture({}), { events }).run(
+          'try { await tools.session.backgroundTask({action:"start",command:"work"}); } catch {} return 1;',
+        ),
+      );
+      expect(completed.details?.toolCalls[0]?.compact).toMatchObject({
+        outcome: "success",
+        deliveryFailed: true,
+      });
+      expect(
+        completed.details?.compactAttention?.notices.some((notice) =>
+          notice.text.includes("do not replay"),
+        ),
+      ).toBe(true);
+    }),
+  );
 
   it.effect("captures BG presentation before output projection and revokes late callbacks", () =>
     Effect.gen(function* () {

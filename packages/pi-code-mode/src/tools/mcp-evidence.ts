@@ -2,7 +2,11 @@
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
-import type { McpCodeModeOutput } from "pi-mcp/code-mode";
+import {
+  classifyMcpDiscoveryNotice,
+  mcpUndiscoveredNotice,
+  type McpCodeModeOutput,
+} from "pi-mcp/code-mode";
 import { decodeOption } from "./format.ts";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
@@ -59,7 +63,15 @@ const Payload = Schema.Struct({
 
 /** Called only after the producer envelope and bounded JSON have been validated. */
 export const observeMcpReply = (reply: McpCodeModeOutput): McpObservation => {
-  const notices = [...reply.notices];
+  const notices = reply.notices.filter(
+    (notice) =>
+      classifyMcpDiscoveryNotice({
+        action: reply.action,
+        outcome: reply.outcome,
+        isError: reply.isError,
+        notice,
+      }).visibility === "attention",
+  );
   let outcome = reply.outcome;
   let isError = reply.isError;
   let incomplete = false;
@@ -73,13 +85,16 @@ export const observeMcpReply = (reply: McpCodeModeOutput): McpObservation => {
         ? decodeOption(Payload, data.result)
         : {};
   if (data?.result !== undefined && payload === undefined) incomplete = true;
-  if (data?.truncated || data?.omitted || data?.kind === "output-limit" || payload?.truncated)
+  let needsRetainedRecovery = Boolean(
+    data?.truncated || data?.omitted || data?.kind === "output-limit" || payload?.truncated,
+  );
+  if (needsRetainedRecovery)
     notices.push(
       "MCP output is truncated or omitted. Do not replay the operation to recover output.",
     );
   const discovery = decodeOption(Payload, data?.result ?? reply.data);
   if (discovery?.undiscovered?.length)
-    notices.push("MCP discovery is incomplete. Select a server for a targeted list or search.");
+    notices.push(mcpUndiscoveredNotice(discovery.undiscovered.length));
   if (data?.kind === "cleanup")
     notices.push("MCP cleanup is unconfirmed. Reconnection is not safe recovery yet.");
   if (reply.action === "result.read" || data?.origin !== undefined) {
@@ -93,13 +108,18 @@ export const observeMcpReply = (reply: McpCodeModeOutput): McpObservation => {
         notices.push(
           "The original MCP operation reported an error or failed output validation. Reading retained output does not change that outcome.",
         );
-      if (origin.outputValidation === "unavailable")
+      if (origin.outputValidation === "unavailable") {
+        needsRetainedRecovery = true;
         notices.push(
           "Original MCP output validation was unavailable. Do not replay the operation to recover output.",
         );
+      }
     }
   }
-  if (reply.resultId !== undefined && (notices.length > 0 || isError || outcome !== "completed")) {
+  if (
+    reply.resultId !== undefined &&
+    (needsRetainedRecovery || isError || outcome !== "completed")
+  ) {
     if (/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(reply.resultId))
       notices.push(
         `Read retained MCP output with result.read id="${reply.resultId}". Reading output does not authorize replay.`,

@@ -1,6 +1,71 @@
 import { expect, it } from "vitest";
 import type { McpCacheEvidence } from "../../src/discovery/cached.ts";
-import { gatewayDiscoveryNotices } from "../../src/discovery/diagnostics.ts";
+import {
+  gatewayDiscoveryNotices,
+  classifyMcpDiscoveryNotice,
+} from "../../src/discovery/diagnostics.ts";
+
+it("classifies exact producer notices by requested action without demoting unrelated recovery", () => {
+  const notices = gatewayDiscoveryNotices(
+    [
+      {
+        server: "catalog",
+        owner: "owner",
+        expiresAt: 0,
+        diagnostics: [
+          { family: "resources", reason: "rpc-method-not-found" },
+          { family: "templates", reason: "rpc-method-not-found" },
+        ],
+      },
+    ],
+    new Map(),
+  );
+  for (const action of ["tools.list", "tools.search", "tools.describe"]) {
+    for (const notice of notices) {
+      const input = { action, outcome: "completed", isError: false, notice };
+      expect(classifyMcpDiscoveryNotice(input).visibility).toBe("expanded-only");
+      for (const changed of [
+        { ...input, isError: true },
+        { ...input, outcome: "unknown" },
+        { ...input, action: "tools.call" },
+        { ...input, action: "result.read" },
+        { ...input, notice: `${notice} Check state first.` },
+        { ...input, notice: notice.replace("catalog", "bad/server") },
+      ])
+        expect(classifyMcpDiscoveryNotice(changed).visibility).toBe("attention");
+    }
+  }
+  for (const action of ["resources.list", "resources.templates"]) {
+    for (const notice of notices.slice(1))
+      expect(
+        classifyMcpDiscoveryNotice({ action, outcome: "completed", isError: false, notice })
+          .visibility,
+      ).toBe("attention");
+  }
+  const important = gatewayDiscoveryNotices(
+    [
+      {
+        server: "catalog",
+        owner: "owner",
+        expiresAt: 0,
+        diagnostics: [
+          { family: "tools", reason: "invalid-parameter-headers" },
+          { family: "prompts", reason: "rpc-method-not-found" },
+        ],
+      },
+    ],
+    new Map([["catalog", { owner: "owner", state: "refresh-failed" }]]),
+  );
+  for (const notice of important)
+    expect(
+      classifyMcpDiscoveryNotice({
+        action: "tools.search",
+        outcome: "completed",
+        isError: false,
+        notice,
+      }).visibility,
+    ).toBe("attention");
+});
 
 const snapshot = { server: "fixture", owner: "current-owner", diagnostics: [], expiresAt: 60_000 };
 

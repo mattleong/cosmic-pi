@@ -268,9 +268,14 @@ Both helpers are public exports. The policy snapshot contains `secretWarnings`, 
 
 The projector may return complete `failure.details` for standalone expansion. Do not retain that field or raw output in nested activity records. Redact sensitive text and bound all retained subjects, counters, metadata, causes, and notices before storing them.
 
+`projectBuiltinFailure` is the shared producer for native failure explanations. Its optional
+`failureEvidence` contains a semantic `code`, safe `cause`, and `coverage`. Only explicit complete
+coverage permits treating the remaining diagnostic body as expanded details. Unknown errors keep
+conservative recovery. Never retain arbitrary `failure.cause` or `failure.details` as evidence.
+
 A summary's `children` contains `{ entries, total }`. Each entry keeps `label`, `subject`, `status`, and measured `durationMs`, with optional `action`, `counters`, `metadata`, `showTiming`, `outcome`, and bounded `notices`. Standalone and child headings share rendering rules, apart from branch indentation. Set `showTiming: true` for short measured child calls; the global timing preference still wins. `status` controls the displayed classification. Preserve operation outcome separately when delivery fails, and never let operation success erase delivery failure or no-replay guidance.
 
-The shell selects five children. `selectCompactChildren(children)` exposes that selection for integrations. Selected children render their notices outside the row budget; place hidden-child attention in parent notices instead of dropping it or duplicating selected notices. Providers own retained notice limits and must preserve uncertainty when complete recovery cannot fit.
+The collapsed shell selects five children. `selectCompactChildren(children)` exposes that selection for integrations. Public `renderCompactRow` and `renderCompactNotices` share standalone heading and notice policy. `renderCompactChildren(children, theme, width, animationFrame = 0, timingEnabled = true, expanded = false, layout = "tree")` uses the same five-child selection by default. With `expanded = true`, it renders every supplied retained entry and each child's informational hints, with an omitted count of total minus retained entries. Callers must bound retained entries. Use `layout = "flat"` for standalone-style rows and plain hints without tree branches. `renderCompactNotices` accepts an optional fifth `decoration = "plain"` argument for the same unbranched hints; its default remains `"branch"`. `captureCodePreviewPresentationPolicy()` returns a detached `{ toolCallTiming, toolCallCollapsedStyle }` snapshot without I/O. Capture collapsed style at registration to match the shell, and read timing again when rendering. Selected children render their notices outside the row budget; place hidden-child attention in parent notices instead of dropping it or duplicating selected notices. Providers own retained notice limits and must preserve uncertainty when complete recovery cannot fit.
 
 ### Prompt for extension authors
 

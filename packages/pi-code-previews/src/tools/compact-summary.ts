@@ -28,6 +28,7 @@ export function isCompactAttention(notice: CompactNotice): boolean {
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
 export interface CompactChild {
+  failureEvidence?: CompactFailureEvidence;
   label: string;
   action?: string;
   counters?: readonly string[];
@@ -41,6 +42,13 @@ export interface CompactChild {
   /** Measured dispatch duration, not an estimate or a sum of sibling timings. */
   durationMs?: number;
   status: "pending" | "running" | "returned" | CompactOutcome;
+}
+
+/** Producer-authored semantic explanation. Never an arbitrary diagnostic body. */
+export interface CompactFailureEvidence {
+  readonly code: string;
+  readonly cause: string;
+  readonly coverage: "complete" | "unknown";
 }
 
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */
@@ -78,6 +86,7 @@ export interface CompactSummary {
    * Notices contain independent safety/recovery information, not another error copy.
    */
   failure?: { cause: string; details: string };
+  failureEvidence?: CompactFailureEvidence;
 }
 
 export type CompactSummaryProvider<

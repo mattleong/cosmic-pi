@@ -31,6 +31,7 @@ export const makeBackgroundTaskDispatch = (options: {
   /** Current per-call allowance, already capped by the Code Mode host. */
   readonly maxOutputBytes: () => number;
   readonly observationId?: (fiber: number) => number | undefined;
+  readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   readonly observePresentation?: (
     invocationId: number | undefined,
     receipt: BackgroundTaskPresentation,
@@ -121,6 +122,14 @@ export const makeBackgroundTaskDispatch = (options: {
                     ),
               ),
             ),
+          ),
+          Effect.onExit((exit) =>
+            Effect.sync(() => {
+              // A presentation receipt precedes companion output projection. Rejection after
+              // that receipt is loss of the reply, unlike a received native tool exception.
+              if (observed && exit._tag === "Failure")
+                invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
+            }),
           ),
           Effect.ensuring(
             Effect.sync(() => {

@@ -8,6 +8,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { FailurePresentation } from "./failure-evidence.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
 import type { McpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
@@ -157,6 +158,7 @@ export interface CodeModeCallCounts {
 
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
+  readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;

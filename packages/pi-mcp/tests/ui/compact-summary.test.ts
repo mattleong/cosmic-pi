@@ -1,3 +1,4 @@
+import { isCompactAttention } from "pi-code-previews";
 import { describe, expect, it } from "vitest";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
@@ -90,7 +91,7 @@ describe("MCP compact summaries", () => {
       summary?.notices?.find((notice) => notice.text.startsWith("Discovery is incomplete"))
         ?.expandedInResult,
     ).toBeUndefined();
-    expect(summary?.notices?.some((notice) => notice.kind === "recovery")).toBe(true);
+    expect(summary?.notices?.some(isCompactAttention)).toBe(true);
   });
   it("omits routine retained IDs without changing result access", () => {
     const details = reply({ result: { tools: [] } }, { resultId: "retained-1" });
@@ -129,7 +130,13 @@ describe("MCP compact summaries", () => {
     for (const action of ["tools.list", "tools.search"]) {
       const details = reply({}, { action, notices: [stale] });
       expect(summarize(details)?.outcome).toBe("success");
-      expect(summarize(details)?.notices).toEqual([]);
+      expect(summarize(details)?.notices?.some(isCompactAttention)).toBe(false);
+      expect(summarize(details)?.notices).toContainEqual({
+        kind: "recovery",
+        text: stale,
+        expandedOnly: true,
+        expandedInResult: true,
+      });
       expect(decodeMcpCardDetails({ details }).notices).toContain(stale);
     }
     for (const details of [
@@ -147,6 +154,27 @@ describe("MCP compact summaries", () => {
       expect(summarize(details)?.outcome).toBe("warning");
       expect(summarize(details)?.notices?.length).toBeGreaterThan(0);
     }
+  });
+  it("preserves optional catalog diagnostics expanded without marking tool inspection as failed", () => {
+    const notices = ["resources", "templates"].map(
+      (family) =>
+        `MCP catalog ${family} catalog is unavailable because its listing method was not found.`,
+    );
+    for (const action of ["tools.search", "tools.describe"]) {
+      const details = reply({}, { action, notices, resultId: "retained-1" });
+      const before = structuredClone(details);
+      const compact = summarize(details);
+      expect(compact?.outcome).toBe("success");
+      expect(compact?.notices?.filter(isCompactAttention)).toEqual([]);
+      expect(compact?.notices?.map((notice) => notice.text)).toEqual(notices);
+      expect(details).toEqual(before);
+      expect(
+        summarize(reply({}, { action, notices: [...notices, "Access must be reviewed."] }))
+          ?.outcome,
+      ).toBe("warning");
+    }
+    for (const action of ["resources.list", "resources.templates"])
+      expect(summarize(reply({}, { action, notices }))?.outcome).toBe("warning");
   });
   it("keeps valid discovery pagination in one bounded detail", () => {
     const details = reply(

@@ -20,6 +20,70 @@ const base: BuiltinCompactProjectionInput = {
 };
 
 describe("transient builtin projection", () => {
+  it("provides bounded semantic failure evidence only for recognized complete native errors", () => {
+    for (const [tool, text, code] of [
+      [
+        "bash",
+        "SOURCE_SNIPPET\nError: diagnostic\n  at some stack\nCommand exited with code 1",
+        "shell-exit",
+      ],
+      [
+        "edit",
+        "Found 4 occurrences of edits[3] in secret-file. Each oldText must be unique. Please provide more context to make it unique.",
+        "edit-ambiguous",
+      ],
+      [
+        "edit",
+        "Could not find edits[2] in secret-file. The oldText must match exactly including all whitespace and newlines.",
+        "edit-no-match",
+      ],
+      [
+        "edit",
+        "edits[0] and edits[1] overlap in secret-file. Merge them into one edit or target disjoint regions.",
+        "edit-overlap",
+      ],
+    ] as const) {
+      const summary = projectBuiltinCompactSummary(tool, {
+        ...base,
+        isError: true,
+        result: { content: [{ type: "text", text }], details: {} },
+      });
+      expect(summary?.failureEvidence).toMatchObject({ code, coverage: "complete" });
+      expect(summary?.failureEvidence?.cause).not.toMatch(
+        /SOURCE_SNIPPET|secret-file|at some stack/u,
+      );
+      expect(summary?.failure?.details).toBe(text);
+    }
+    const unknown = projectBuiltinCompactSummary("edit", {
+      ...base,
+      isError: true,
+      result: {
+        content: [
+          { type: "text", text: "Unrecognized failure. Inspect remote state before retrying." },
+        ],
+        details: {},
+      },
+    });
+    expect(unknown?.failureEvidence).toBeUndefined();
+    expect(unknown?.failure?.cause).toContain("Inspect remote state");
+    const continuation = projectBuiltinCompactSummary("read", {
+      ...base,
+      isError: true,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "ENOENT: no such file or directory, file\nPartial changes may exist. Verify state.",
+          },
+        ],
+        details: {},
+      },
+    });
+    expect(continuation?.failureEvidence?.coverage).toBe("unknown");
+    expect(continuation?.notices?.some((notice) => notice.text.includes("Verify state"))).toBe(
+      true,
+    );
+  });
   it("distinguishes unknown before-write history from explicit absent-file evidence", () => {
     const unknown = projectBuiltinCompactSummary("write", base)!;
     expect(unknown.counters).not.toContain("new file");

@@ -26,26 +26,45 @@ import {
   truncateDisplay,
   type CodeModeCallEntry,
 } from "../tools/format.ts";
-import { codeModeOutputText, projectStructuredCodeModeOutput } from "./result-output.ts";
+import { renderExpandedCodeModeResult, type ExpandedPresentation } from "./expanded-result.ts";
+import { formatCodeModeProgram } from "./program-source.ts";
+import { codeModeOutputText } from "./result-output.ts";
+import { addCodeModeSection } from "./sections.ts";
 import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
 
 /** Neutral headline when the model provided no usable intent. */
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
-const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] => [
-  ...new Set([
-    ...mcpAttention(details.mcpEvidence),
-    ...(details.compactAttention?.notices
-      .filter((notice) => expanded || codePreviews.isCompactAttention(notice))
-      .map((notice) => notice.text) ?? []),
-    ...details.toolCalls.flatMap(
-      (call) =>
-        call.compact?.notices
-          .filter((notice) => expanded || codePreviews.isCompactAttention(notice))
-          .map((notice) => notice.text) ?? [],
+const typedVisibleNotices = (
+  details: CodeModeRenderDetails,
+  expanded: boolean,
+): codePreviews.CompactNotice[] => {
+  const notices: codePreviews.CompactNotice[] = [
+    ...mcpAttention(details.mcpEvidence).map(
+      (text): codePreviews.CompactNotice => ({ kind: "warning", text }),
     ),
-    ...(details.compactAttention?.incomplete ? [INCOMPLETE_ATTENTION] : []),
-  ]),
-];
+    ...(details.compactAttention?.notices ?? []),
+    ...details.toolCalls.flatMap((call) => call.compact?.notices ?? []),
+    ...(details.compactAttention?.incomplete
+      ? [{ kind: "warning" as const, text: INCOMPLETE_ATTENTION }]
+      : []),
+    ...(expanded && details.truncated
+      ? [
+          {
+            kind: "recovery" as const,
+            text: "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.",
+          },
+        ]
+      : []),
+  ];
+  return notices.filter(
+    (notice, index) =>
+      (expanded || codePreviews.isCompactAttention(notice)) &&
+      notices.findIndex((other) => other.kind === notice.kind && other.text === notice.text) ===
+        index,
+  );
+};
+const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] =>
+  typedVisibleNotices(details, expanded).map((notice) => notice.text);
 
 const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
@@ -81,7 +100,7 @@ const intentHeadline = <Args>(args: Args, theme: Theme): string => {
   return renderToolHeader({ title: "Code Mode", subtitle: `· ${intent}` }, theme);
 };
 
-const sourceOf = <Args>(args: Args): string | undefined => {
+export const codeModeSource = <Args>(args: Args): string | undefined => {
   const code = decodeOption(CodeModeArgumentsInputSchema, args)?.code;
   return Predicate.isString(code) ? code : undefined;
 };
@@ -106,18 +125,21 @@ export const renderCodeModeToolCall = <Args>(
   if (!expanded) return header;
   const container = new Container();
   container.addChild(header);
-  container.addChild(new Text(theme.fg("muted", "Program"), 0, 0));
-  const source = sourceOf(args);
+  const program = addCodeModeSection(container, "Program", theme);
+  const source = codeModeSource(args);
   if (source === undefined) {
-    container.addChild(new Text(theme.fg("dim", "(program not available)"), 0, 0));
+    program.addChild(new Text(theme.fg("dim", "(program not available)"), 0, 0));
     return container;
   }
-  const sanitized = truncateDisplay(stripTerminalControls(source), MAX_SOURCE_DISPLAY_LENGTH);
+  const sanitized = truncateDisplay(
+    stripTerminalControls(formatCodeModeProgram(source)),
+    MAX_SOURCE_DISPLAY_LENGTH,
+  );
   const body = sanitized
     .split("\n")
     .map((line) => theme.fg("toolOutput", line))
     .join("\n");
-  container.addChild(new Text(body, 0, 0));
+  program.addChild(new Text(body, 0, 0));
   return container;
 };
 
@@ -199,37 +221,6 @@ const footerLine = (
   return theme.fg("muted", `${status}${truncatedNote}`);
 };
 
-const coloredLines = (text: string, color: "error" | "toolOutput", theme: Theme): string =>
-  text
-    .split("\n")
-    .map((line) => theme.fg(color, line))
-    .join("\n");
-
-const outputSection = (
-  result: AgentToolResult<unknown>,
-  details: CodeModeRenderDetails,
-  isError: boolean,
-  theme: Theme,
-): ReadonlyArray<Component> => {
-  const raw = textContentOf(result);
-  if (raw.length === 0) return [];
-  const color = isError ? "error" : "toolOutput";
-  const components: Component[] = [new Text(theme.fg("muted", isError ? "Error" : "Output"), 0, 0)];
-  const fields =
-    !isError && details.outputKind === "structured"
-      ? projectStructuredCodeModeOutput(raw)
-      : undefined;
-  if (fields === undefined) {
-    components.push(new Text(coloredLines(codeModeOutputText(raw), color, theme), 0, 0));
-    return components;
-  }
-  for (const field of fields) {
-    components.push(new Text(theme.fg("muted", field.label), 0, 0));
-    components.push(new Text(coloredLines(field.body, color, theme), 0, 0));
-  }
-  return components;
-};
-
 /** Collapsed hint using bounded key labels captured by the host controller. */
 const expandHintLine = (
   isError: boolean,
@@ -252,9 +243,37 @@ const renderCodeModeToolResultUnsafe = (
   context: CodeModeRenderContext,
   animationFrame: number,
   expandKeys: ReadonlyArray<string>,
+  presentation: ExpandedPresentation,
 ): Component => {
   const isError = context?.isError === true;
   const expanded = context?.expanded === true;
+  if (expanded)
+    return renderExpandedCodeModeResult(
+      details,
+      textContentOf(result),
+      isPartial,
+      isError,
+      theme,
+      animationFrame,
+      {
+        ...presentation,
+        fallbackStatus: presentation.ownsCall ? "" : footerLine(details, isPartial, isError, theme),
+        summary: presentation.summary ?? {
+          subject: "Tool orchestration",
+          counters: [`${details.totalToolCalls} tools`],
+          outcome: isError
+            ? "error"
+            : details.cancelled
+              ? "cancelled"
+              : details.mcpEvidence?.unknown || details.compactAttention?.incomplete
+                ? "uncertain"
+                : details.counts.failed || details.truncated
+                  ? "warning"
+                  : "success",
+          notices: typedVisibleNotices(details, true),
+        },
+      },
+    );
   const container = new Container();
   const hidden = details.totalToolCalls - details.toolCalls.length;
   if (hidden > 0 && details.hasExactCounts) {
@@ -270,11 +289,6 @@ const renderCodeModeToolResultUnsafe = (
   for (const notice of visibleNotices(details, expanded))
     container.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
   if (isPartial) return container;
-  if (expanded) {
-    for (const component of outputSection(result, details, isError, theme))
-      container.addChild(component);
-    return container;
-  }
   if (stripTerminalControls(textContentOf(result)).length > 0) {
     container.addChild(new Text(expandHintLine(isError, theme, expandKeys), 0, 0));
   }
@@ -302,6 +316,7 @@ export const renderCodeModeToolResult = (
   context: CodeModeRenderContext | undefined,
   animationFrame = 0,
   expandKeys: ReadonlyArray<string> = [],
+  presentation: ExpandedPresentation = {},
 ): CodeModeResultRender => {
   const guarded = <Value>(read: () => Value): boolean => {
     try {
@@ -321,25 +336,27 @@ export const renderCodeModeToolResult = (
     details = decodeCodeModeRenderDetails(undefined);
   }
   const shouldAnimate = isPartial && details.toolCalls.some((call) => call.status === "running");
-  try {
-    return {
-      component: renderCodeModeToolResultUnsafe(
-        result,
-        details,
-        isPartial,
-        theme,
-        { isError, expanded },
-        animationFrame,
-        expandKeys,
-      ),
-      shouldAnimate,
-    };
-  } catch {
+  const emergency = (): Component => {
     const output = emergencyResultText(result);
     const component = new Container();
+    if (expanded && presentation.ownsCall) {
+      component.addChild(new Text("Program", 0, 0));
+      component.addChild(
+        new Text(
+          truncateDisplay(
+            stripTerminalControls(
+              formatCodeModeProgram(presentation.source ?? "(program not available)"),
+            ),
+            MAX_SOURCE_DISPLAY_LENGTH,
+          ),
+          0,
+          0,
+        ),
+      );
+    }
     component.addChild(
       new Text(
-        isPartial ? "Code Mode running" : isError ? "Code Mode failed" : "Code Mode completed",
+        isPartial ? "Code Mode running" : isError ? "Code Mode failed" : "Code Mode result",
         0,
         0,
       ),
@@ -352,8 +369,40 @@ export const renderCodeModeToolResult = (
         component.addChild(new Text(output, 0, 0));
       }
     }
-    for (const notice of visibleNotices(details, expanded))
-      component.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
-    return { component, shouldAnimate };
+    for (const notice of new Set([
+      ...visibleNotices(details, expanded),
+      ...(presentation.summary?.notices
+        ?.filter((notice) => expanded || codePreviews.isCompactAttention(notice))
+        .map((notice) => notice.text) ?? []),
+    ]))
+      component.addChild(new Text(stripTerminalControls(notice), 0, 0));
+    return component;
+  };
+  try {
+    const component = renderCodeModeToolResultUnsafe(
+      result,
+      details,
+      isPartial,
+      theme,
+      { isError, expanded },
+      animationFrame,
+      expandKeys,
+      presentation,
+    );
+    return {
+      component: {
+        render: (width) => {
+          try {
+            return component.render(width);
+          } catch {
+            return emergency().render(width);
+          }
+        },
+        invalidate: () => component.invalidate(),
+      },
+      shouldAnimate,
+    };
+  } catch {
+    return { component: emergency(), shouldAnimate };
   }
 };

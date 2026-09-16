@@ -29,12 +29,16 @@ export function renderCompactChildren(
   width: number,
   animationFrame = 0,
   timingEnabled = true,
+  expanded = false,
+  layout: "tree" | "flat" = "tree",
 ): string[] {
   if (!children || width <= 0) return [];
-  const { entries, omitted } = selectCompactChildren(children);
+  const { entries, omitted } = expanded
+    ? { entries: children.entries, omitted: Math.max(0, children.total - children.entries.length) }
+    : selectCompactChildren(children);
   const rows = entries.flatMap((entry, index) => {
     const branch = index === entries.length - 1 && omitted === 0 ? "╰─" : "├─";
-    const prefix = theme.fg("dim", `  ${branch} `);
+    const prefix = layout === "flat" ? "" : theme.fg("dim", `  ${branch} `);
     const duration =
       entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0
         ? formatToolCallDuration(entry.durationMs)
@@ -61,15 +65,22 @@ export function renderCompactChildren(
     const noticeIndent = width - visibleWidth(prefix) >= 2 ? visibleWidth(prefix) : 0;
     const continuation = noticeIndent ? theme.fg("dim", branch === "├─" ? "  │  " : "     ") : "";
     return [truncateToWidth(`${prefix}${row}`, width, "")].concat(
-      renderCompactNotices(entry.notices, theme, width - noticeIndent).map(
-        (notice) => `${continuation}${notice}`,
-      ),
+      renderCompactNotices(
+        entry.notices,
+        theme,
+        width - noticeIndent,
+        expanded,
+        layout === "flat" ? "plain" : "branch",
+      ).map((notice) => `${continuation}${notice}`),
     );
   });
   if (omitted > 0)
     rows.push(
       truncateToWidth(
-        theme.fg("dim", `  ╰─ … ${omitted} more ${omitted === 1 ? "call" : "calls"}`),
+        theme.fg(
+          "dim",
+          `${layout === "flat" ? "" : "  ╰─ "}… ${omitted} more ${omitted === 1 ? "call" : "calls"}`,
+        ),
         width,
         "",
       ),

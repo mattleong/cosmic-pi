@@ -71,6 +71,7 @@ export function renderCompactNotices(
   theme: Theme,
   width: number,
   expanded = false,
+  decoration: "branch" | "plain" = "branch",
 ): string[] {
   if (width <= 0) return [];
   return (notices ?? []).flatMap((notice) => {
@@ -78,7 +79,13 @@ export function renderCompactNotices(
     if (!expanded && !attention) return [];
     const color = notice.kind === "error" ? "error" : attention ? "warning" : "muted";
     // Preserve every notice line, including continuation and recovery instructions.
-    return indentedCompactText(notice.text, "  ╰─ ", color, theme, width);
+    return indentedCompactText(
+      notice.text,
+      decoration === "plain" ? "  " : "  ╰─ ",
+      color,
+      theme,
+      width,
+    );
   });
 }
 

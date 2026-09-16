@@ -48,7 +48,14 @@ Only runtime source plus its README, legal, and provenance documents ship.
   write/edit bodies, MCP argument payloads and returned output never enter these subjects.
   Producer-owned argument-only projections supply MCP and Background Tasks headings. Correlated
   receipts supply semantic child statuses; delivery failures override successful operation colors
-  without changing the recorded operation outcome. Expansion keeps the existing detailed renderer.
+  without changing the recorded operation outcome. `call-rows.ts` shares this receipt projection
+  with `expanded-result.ts`. Expansion renders Program, Calls, and Result sections.
+  `sections.ts` owns real spacer rows and width-aware indentation. Calls reuse flat compact
+  rows with plain hints beneath each row; the collapsed tree remains unchanged. Aggregate
+  recovery has its own Notices section so it cannot appear to belong to the last visible call. `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
+  prints only complete successful structured output. The controller captures shell style with
+  its definition-owned summary provider. Compact expansion owns one header/source; preview style
+  keeps the call slot. Render failures retain bounded source and independent recovery text.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
   MCP compact outcomes use versioned, schema-validated execution evidence, not guest return
@@ -210,13 +217,27 @@ Builtin results are projected before guest conversion discards details. Native w
 unknown before-state and do no extra filesystem I/O. MCP validated replies and typed failures use
 producer projections; Background Tasks v1 presentation callbacks preserve pre-projection log
 truncation. Operation outcome is captured before cumulative-output admission. Delivery refusal
-adds separate recovery evidence without rewriting known completion.
+adds separate recovery evidence without rewriting known completion. A received, budget-admitted
+native exception is not delivery loss. Guest conversion refusal, diagnostic clipping, output
+admission refusal, defects, and interruption still preserve loss evidence.
+
+The builtin producer supplies bounded `failureEvidence`, not arbitrary failure bodies. Known
+complete errors such as native edit matching refusals do not imply incomplete presentation.
+`tools/failure-evidence.ts` projects only recognized native outer diagnostics into bounded
+semantic provenance. `ui/failure-presentation.ts` checks that saved provenance against the current
+error text before folding ordinary source/stack details. It never identifies a culprit by call
+order or counts. A matching visible child explanation can replace a redundant root explanation;
+full outer text remains available expanded. Unrecognized errors and historical metadata retain
+conservative recovery. Failed counts live in header metadata, with separate summaries for hidden
+failures.
 
 Routine complete-line read hints retain their `expandedOnly` marker in per-call receipts and
 replay. They stay outside the aggregate attention ledger and its warning budget. Both detailed
 rendering paths show them only on expansion. The compact parent also retains these hints for
 owned outer-failure rendering, which bypasses the detailed renderer. Their retention ends at
 row eviction; warning and error notices remain attention even if incorrectly flagged.
+MCP's producer-owned discovery notice policy applies before both child projection and aggregate
+collection, so routine freshness and unrelated optional catalogs cannot reappear as parent warnings.
 
 Only bounded sanitized presentation fields survive. Failure bodies, nested output, diffs and raw
 arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots

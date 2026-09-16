@@ -199,10 +199,13 @@ export const makeExecutionGuestTools = (
   ): Effect.Effect<Value, ToolError> =>
     Effect.flatMap(Effect.fiberId, (fiber) => {
       const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
+      let receivedError = false;
       return effect.pipe(
-        Effect.catchTag("ToolError", (error) =>
-          Effect.fail(toolError(budget.admitFailure(error.message))),
-        ),
+        Effect.catchTag("ToolError", (error) => {
+          const admitted = budget.admitFailure(error.message);
+          receivedError = admitted === error.message;
+          return Effect.fail(toolError(admitted));
+        }),
         Effect.flatMap((value) => {
           const admission = budget.admit(serialize(value));
           return admission.admitted
@@ -211,7 +214,7 @@ export const makeExecutionGuestTools = (
         }),
         Effect.onExit((exit) =>
           Effect.sync(() => {
-            if (exit._tag === "Failure")
+            if (exit._tag === "Failure" && !receivedError)
               invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
           }),
         ),

@@ -39,13 +39,14 @@ In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>`. The 
 with `Starting…`, then shows bounded activity rows derived from nested inputs. Rows reuse built-in
 tool icons and show queued, running, succeeded, failed, or cancelled status plus settled duration.
 
-Beyond 32 rows, visible slots prioritize active, failed, cancelled, and recent calls under a
-`+N earlier` marker. Exact counts still include hidden calls. Expanding the call shows the program
-source, while expanding the result shows the model-visible output or error. Successful objects
-with top-level string fields and at least one multiline value render as labeled sections rather
-than escaped JSON. Collapsed hints use the configured `app.tools.expand` keys. All displayed text
-is sanitized against terminal control injection. Presentation does not change model-visible
-results or execution limits.
+Beyond 32 rows, visible slots prioritize active, failed, cancelled, and recent calls. Exact
+counts and an omitted-call marker still include hidden calls. Expansion shows the formatted
+Program first, a Calls section of flat compact rows with hints beneath them, then Result.
+Blank lines separate the sections; collapsed calls keep their compact tree. Successful structured
+results use bounded pretty JSON; text, errors, and truncated output keep their original text.
+Outer execution failures keep the shared error view and recovery text. Collapsed hints use the
+configured `app.tools.expand` keys. All displayed text is sanitized against terminal control
+injection. Presentation does not change model-visible results or execution limits.
 
 When Code Previews' `toolCallCollapsedStyle` is `compact`, the outer call instead shows the
 intent, lifecycle status, and exact settled/total nested counts. A nested tree shows up to five
@@ -59,8 +60,16 @@ when no counter or metadata takes priority. Queued and replayed running calls ne
 live timer. Settlement preserves the runtime's recorded duration, which includes queue wait.
 Parallel child timings overlap; they are not summed to estimate the parent's duration. Source and ordinary output stay hidden until expansion. Caught nested failures produce a warning;
 cancellation, truncation, and retained failure recovery text stay visible. Missing or malformed
-details retain the existing renderer. The default `preview` style is unchanged; reload after
+details retain the existing renderer. Expanded compact calls use one semantic header and keep the
+selected frame. The default `preview` style keeps separate call/source ownership; reload after
 changing the Code Previews setting.
+
+Known native failures use the same concise explanation as standalone tools. Received errors do
+not imply lost results. Source excerpts and stacks stay expanded when the producer can account
+for recovery information; unknown and historical errors remain conservative. Visible child
+explanations are not repeated at the parent, while hidden failures and independent recovery stay
+visible. Routine MCP cache freshness and unrelated resource/template capability notices stay
+expanded. Incomplete discovery coverage, failed refreshes, and actual output loss still need attention.
 
 Nested MCP and Background Tasks replies can report failure even when their calls fulfill.
 Validated per-call receipts use the same semantic projections as standalone tools. Builtin

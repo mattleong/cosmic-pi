@@ -88,7 +88,9 @@ describe("Code Mode compact outcomes", () => {
       };
       const live = summarize(details, { phase: "running" });
       expect(live?.outcome).toBeUndefined();
-      expect(live?.notices?.some((notice) => notice.kind === "warning")).toBe(true);
+      expect(live?.notices?.some((notice) => notice.kind === "warning")).toBe(
+        status === "cancelled",
+      );
       expect(live?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual(["1/1"]);
       const final = summarize(details);
       expect(final?.outcome).toBe("warning");
@@ -138,6 +140,58 @@ describe("Code Mode compact outcomes", () => {
     expect(summary?.notices?.some((notice) => notice.text.includes("Do not retry"))).toBe(true);
   });
 
+  it("retains hidden failures and independent program errors rather than deduplicating by failure count", () => {
+    const details = {
+      ...callEntryDetails([{ tool: "pi.bash", status: "error" }]),
+      counts: { total: 8, succeeded: 0, failed: 8, cancelled: 0, running: 0, queued: 0 },
+      totalToolCalls: 8,
+    };
+    expect(
+      summarize(details, { isError: true, text: "Program failed" })?.notices?.some((notice) =>
+        notice.text.includes("7 additional"),
+      ),
+    ).toBe(true);
+    const calls = callEntryDetails([
+      {
+        tool: "pi.bash",
+        status: "completed",
+        compact: {
+          version: 1,
+          subject: "run",
+          outcome: "warning",
+          deliveryFailed: false,
+          notices: [{ kind: "recovery", text: "Output truncated. Read retained output." }],
+        },
+      },
+    ]);
+    const projected = summarize(calls, {
+      isError: true,
+      text: "[ExecutionFailure] JSON.parse received invalid JSON",
+    });
+    expect(projected?.failure?.cause).toContain("JSON.parse");
+    expect(
+      projected?.children?.entries[0]?.notices?.some((notice) =>
+        notice.text.includes("Output truncated"),
+      ),
+    ).toBe(true);
+  });
+  it("does not trust mismatched saved provenance to hide unknown diagnostic recovery", () => {
+    const details = {
+      ...callEntryDetails([]),
+      failurePresentation: {
+        version: 1,
+        tool: "bash",
+        evidence: { code: "shell-exit", cause: "Exited with code 1", coverage: "complete" },
+        notices: [],
+      },
+    };
+    const text = "[ToolFailure] Unfamiliar failure\nCheck partial changes before retrying.";
+    const projected = summarize(details, { isError: true, text });
+    expect(
+      projected?.notices?.some((notice) => notice.text.includes("Check partial changes")),
+    ).toBe(true);
+    expect(projected?.failure?.details).toBe(text);
+  });
   it("declines missing, legacy, contradictory and malformed settled details", () => {
     for (const details of [
       undefined,

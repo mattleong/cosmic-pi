@@ -4,9 +4,17 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
+import { codeModeCompactSummary } from "../ui/compact-summary.ts";
+import { liveChildElapsed } from "../boundary/host-child-timing.ts";
+import { codeModeCompactSummaryAtHost } from "../boundary/host-render-ticker.ts";
 import { Type } from "typebox";
 import { animationFrame, syncProgressTicker } from "../boundary/host-render-ticker.ts";
-import { renderCodeModeToolCall, renderCodeModeToolResult } from "../ui/tool-renderer.ts";
+import {
+  codeModeSource,
+  renderCodeModeToolCall,
+  renderCodeModeToolResult,
+} from "../ui/tool-renderer.ts";
 import { describeCodeModeCatalog } from "./catalog.ts";
 import type { CodeModeToolExecute } from "./execution.ts";
 import { MAX_INTENT_LENGTH, truncateDisplay } from "./format.ts";
@@ -78,7 +86,18 @@ export interface CodeModeToolDefinitionInput {
 
 export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) {
   const capturedExpandKeys = expandKeys();
-  return defineTool({
+  const ownsExpanded = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
+  const compactSummary: typeof codeModeCompactSummaryAtHost = (input) => {
+    const summary = codeModeCompactSummaryAtHost(input);
+    return summary && ownsExpanded && codeModeSource(input.args) !== undefined
+      ? {
+          ...summary,
+          expandedResultOwnsCall: true,
+          notices: (summary.notices ?? []).map((notice) => ({ ...notice, expandedInResult: true })),
+        }
+      : summary;
+  };
+  const definition = defineTool({
     name: CODE_MODE_TOOL_NAME,
     label: "Code Mode",
     description: `${descriptionHeader(input.includePowerShell)}\n\n${describeCodeModeCatalog(
@@ -108,6 +127,29 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     execute: input.execute,
     renderCall: (args, theme, context) => renderCodeModeToolCall(args, theme, context),
     renderResult: (result, options, theme, context) => {
+      const presentation = (() => {
+        try {
+          const summary = codeModeCompactSummary({
+            phase: options.isPartial ? "running" : "settled",
+            args: context.args,
+            result,
+            context,
+          });
+          return {
+            ownsCall:
+              ownsExpanded && summary !== undefined && codeModeSource(context.args) !== undefined,
+            source: context.args?.code,
+            summary,
+            timingEnabled: captureCodePreviewPresentationPolicy().toolCallTiming,
+            liveElapsed: options.isPartial ? liveChildElapsed() : undefined,
+          };
+        } catch {
+          // The compact shell may already have promised call/notice ownership. Reject the
+          // result slot so its fallback keeps the original call and all recovery notices.
+          if (ownsExpanded) throw new Error("Code Mode expanded presentation unavailable");
+          return {};
+        }
+      })();
       const rendered = renderCodeModeToolResult(
         result,
         options,
@@ -115,11 +157,13 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
         context,
         animationFrame(),
         capturedExpandKeys,
+        presentation,
       );
       syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker ?? startHostUiTicker);
       return rendered.component;
     },
   });
+  return Object.assign(definition, { compactSummary });
 }
 export type CodeModeToolDefinition = ReturnType<typeof buildCodeModeToolDefinition>;
 

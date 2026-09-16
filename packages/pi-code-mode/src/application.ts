@@ -55,8 +55,6 @@ import {
   makeFailureDetailsRetention,
 } from "./tools/retention.ts";
 
-import { codeModeCompactSummaryAtHost } from "./boundary/host-render-ticker.ts";
-
 interface CodeModeSessionInput extends CodeModeLayerInput {
   readonly ctx: ExtensionContext;
   /** Stable Pi session identity captured once; optional capabilities fail closed without it. */
@@ -85,7 +83,10 @@ export interface CodeModeApplicationBoundaries {
 const LIVE_APPLICATION_BOUNDARIES: CodeModeApplicationBoundaries = {
   loadSettings: loadCodePreviewSettings,
   wrapTool: (tool, scheduleAnimation) =>
-    withCodePreviewShell(tool, { compactSummary: codeModeCompactSummaryAtHost, scheduleAnimation }),
+    Object.assign(
+      withCodePreviewShell(tool, { compactSummary: tool.compactSummary, scheduleAnimation }),
+      { compactSummary: tool.compactSummary },
+    ),
   makeNestedDefinitions: makeNestedPiToolDefinitions,
 };
 

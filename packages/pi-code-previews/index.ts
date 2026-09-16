@@ -34,6 +34,7 @@ export {
   type BuiltinCompactTool,
 } from "./src/tools/builtin-subject";
 
+export { builtinFailure as projectBuiltinFailure } from "./src/tools/builtin-failure";
 export { isCompactAttention } from "./src/tools/compact-summary";
 
 /** Semantic compact summaries for cooperating tools. */
@@ -44,6 +45,7 @@ export type {
   CompactNotice,
   CompactChild,
   CompactSummary,
+  CompactFailureEvidence,
   CompactSummaryProvider,
 } from "./src/tools/compact-summary";
 
@@ -55,4 +57,6 @@ export {
 } from "./src/tools/builtin-projection";
 export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary";
 
-export { selectCompactChildren } from "./src/preview/compact-children";
+export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
+export { renderCompactRow, renderCompactNotices } from "./src/preview/compact-row";
+export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";

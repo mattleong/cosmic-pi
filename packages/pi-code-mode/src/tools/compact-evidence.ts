@@ -12,7 +12,13 @@ const Notice = Schema.Struct({
   text: Text,
   expandedOnly: Schema.optionalKey(Schema.Literal(true)),
 });
+export const FailureEvidenceSchema = Schema.Struct({
+  code: Text,
+  cause: Text,
+  coverage: Schema.Literals(["complete", "unknown"]),
+});
 export const CompactReceiptSchema = Schema.Struct({
+  failureEvidence: Schema.optionalKey(FailureEvidenceSchema),
   version: Schema.Literal(1),
   subject: Text,
   action: Schema.optional(Text),
@@ -44,6 +50,9 @@ const clean = (text: string) =>
 export const freezeReceipt = (receipt: CompactReceipt): CompactReceipt =>
   Object.freeze({
     ...receipt,
+    ...(receipt.failureEvidence && {
+      failureEvidence: Object.freeze({ ...receipt.failureEvidence }),
+    }),
     ...(receipt.counters && { counters: Object.freeze([...receipt.counters]) }),
     ...(receipt.metadata && { metadata: Object.freeze([...receipt.metadata]) }),
     notices: Object.freeze(receipt.notices.map((notice) => Object.freeze({ ...notice }))),
@@ -162,6 +171,12 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           incomplete = true;
           return;
         }
+        const failureEvidence = decodeOption(FailureEvidenceSchema, summary.failureEvidence);
+        if (failureEvidence && summary.outcome !== "cancelled") {
+          const cause = decodeOption(Notice, { kind: "error", text: clean(failureEvidence.cause) });
+          if (cause) attention(cause);
+          else incomplete = true;
+        }
         // Preserve valid notices independently of malformed or oversized sibling fields.
         for (const notice of summary.notices ?? []) {
           const decoded = decodeOption(Notice, {
@@ -172,26 +187,35 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           if (decoded === undefined) incomplete = true;
           else attention(decoded);
         }
-        // Failure bodies are not persisted. Make any lost diagnostic detail explicit.
-        if (summary.failure !== undefined) {
-          if (summary.failure.cause !== summary.failure.details) {
-            const cause = decodeOption(Notice, {
-              kind: "error",
-              text: clean(summary.failure.cause),
-            });
-            if (cause !== undefined) attention(cause);
-            else incomplete = true;
-          } else incomplete = true;
-        }
+        // Only producer-authored semantic causes survive; diagnostic bodies never persist.
+        if (summary.failure !== undefined && failureEvidence?.coverage !== "complete")
+          incomplete = true;
+        if (summary.failureEvidence !== undefined && failureEvidence === undefined)
+          incomplete = true;
+        const semanticNotices = [
+          ...(failureEvidence && summary.outcome !== "cancelled"
+            ? [{ kind: "error" as const, text: clean(failureEvidence.cause) }]
+            : []),
+          ...(summary.notices ?? []),
+        ];
+        const uniqueNotices = semanticNotices.filter(
+          (notice, index) =>
+            semanticNotices.findIndex(
+              (other) => other.kind === notice.kind && other.text === notice.text,
+            ) === index,
+        );
         // Failure.details may contain arbitrary output. Only bounded semantic fields survive.
         const candidate = {
           version: 1 as const,
+          ...(failureEvidence && {
+            failureEvidence: { ...failureEvidence, cause: clean(failureEvidence.cause) },
+          }),
           subject: clean(summary.subject),
           ...(summary.action !== undefined && { action: clean(summary.action) }),
           ...(summary.counters !== undefined && { counters: summary.counters.map(clean) }),
           ...(summary.metadata !== undefined && { metadata: summary.metadata.map(clean) }),
           ...(summary.outcome !== undefined && { outcome: summary.outcome }),
-          notices: (summary.notices ?? []).map((notice) => ({
+          notices: uniqueNotices.map((notice) => ({
             kind: notice.kind,
             text: clean(notice.text),
             ...(notice.expandedOnly === true && { expandedOnly: true }),

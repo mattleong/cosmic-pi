@@ -1,4 +1,9 @@
-import type { CompactNotice, CompactSummaryProvider } from "pi-code-previews";
+import {
+  isCompactAttention,
+  type CompactNotice,
+  type CompactSummaryProvider,
+} from "pi-code-previews";
+import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import * as Predicate from "effect/Predicate";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
@@ -36,12 +41,6 @@ const searchQuery = <Args>(args: Args): string | undefined => {
     return undefined;
   }
 };
-
-// Only the gateway's fixed stale-cache notice is routine. Failed refreshes and
-// arbitrary remote notices must not be classified by keywords or tone.
-const isRoutineDiscoveryNotice = (action: string, text: string): boolean =>
-  (action === "tools.list" || action === "tools.search") &&
-  /^MCP \S+ cached metadata is not fresh; invocation requires current metadata\.$/.test(text);
 
 /** Display-only opt-in. Failures keep the existing renderer, including remote recovery details. */
 export const projectMcpCompactSummary = ({
@@ -85,19 +84,27 @@ export const projectMcpCompactSummary = ({
           ? `${card.imageCount} native images`
           : undefined));
   const counters = count ? [count] : [];
-  const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])]
-    .filter((text) => !isRoutineDiscoveryNotice(card.action, text))
-    .map((text) => ({ kind: "warning", text, expandedInResult: true }));
+  const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])].map((text) => {
+    const policy = classifyMcpDiscoveryNotice({
+      action: card.action ?? "",
+      outcome: card.outcome ?? "unknown",
+      isError: card.isError,
+      notice: text,
+    });
+    return policy.visibility === "expanded-only"
+      ? { kind: "recovery", text, expandedOnly: true, expandedInResult: true }
+      : { kind: "warning", text, expandedInResult: true };
+  });
   if (card.undiscoveredCount)
     notices.push({
-      kind: "recovery",
-      text: `Discovery is incomplete: ${card.undiscoveredCount} undiscovered servers. Select a server for a targeted list or search.`,
+      kind: "warning",
+      text: mcpUndiscoveredNotice(card.undiscoveredCount),
     });
   return {
     action,
     subject,
     counters,
-    outcome: notices.length ? "warning" : "success",
+    outcome: notices.some(isCompactAttention) ? "warning" : "success",
     notices,
   };
 };
