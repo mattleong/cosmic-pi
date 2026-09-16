@@ -12,6 +12,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import { captureBuiltinCompactPolicy, projectBuiltinCompactSummary } from "pi-code-previews";
 import { makeCompactEvidence, type CompactReceipt } from "./compact-evidence.ts";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -232,203 +233,206 @@ export const makeCodeModeToolExecute =
         // snapshots are frame-coalesced, with the newest state flushed on settlement.
         publisher.publish(progressResult([], counts));
         const budget = makeCumulativeOutputBudget(config.maxCumulativeChildOutputBytes);
-        const dispatch = makeNestedPiToolDispatch({
-          definitions: environment.definitions,
-          ctx,
-          toolCallId,
-          observationId: compact.identity,
-          onDeliveryFailure: compact.deliveryFailure,
-          observe: (id, name, args, result, isError) =>
-            compact.observe(id, () => {
-              if (policy === undefined || presentationCwd === undefined || name === "powershell")
-                return undefined;
-              return projectBuiltinCompactSummary(name, {
-                ...policy,
-                phase: "settled",
-                args,
-                result,
-                cwd: presentationCwd,
-                isError,
-                beforeWrite: { kind: "unknown" },
-              });
-            }),
-        });
-        const dispatchBackgroundTask = makeBackgroundTaskDispatch({
-          events: environment.events,
-          sessionId: environment.sessionId,
-          toolCallId,
-          maxOutputBytes: () =>
-            Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
-          missingPresentation: compact.missing,
-          observationId: compact.identity,
-          onDeliveryFailure: compact.deliveryFailure,
-          observePresentation: (id, receipt) => {
-            if (receipt.incomplete || receipt.overflow) compact.missing();
-            compact.observe(id, () => receipt.summary);
-          },
-        });
-
-        const dispatchMcp = makeMcpDispatch({
-          events: environment.events,
-          sessionId: environment.sessionId,
-          toolCallId,
-          maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
-          observationId: compact.identity,
-          observePresentation: (id, args, observation, reply) =>
-            compact.observe(id, () => {
-              if (observation.incomplete) compact.missing();
-              const projected =
-                reply === undefined
-                  ? undefined
-                  : projectMcpCompactSummary({
-                      phase: "settled",
-                      args,
-                      result: { details: reply },
-                      isError: observation.isError,
-                    });
-              if (projected !== undefined && !observation.incomplete) return projected;
-              // Heading-only projection does not claim operation success.
-              const heading = projectMcpCompactSummary({
-                phase: "running",
-                args,
-                result: undefined,
-                isError: false,
-              });
-              return {
-                action: heading?.action ?? args.action,
-                subject: heading?.subject ?? "MCP",
-                outcome:
-                  observation.incomplete || observation.outcome === "unknown"
-                    ? "uncertain"
-                    : observation.isError || observation.outcome === "not-sent"
-                      ? "error"
-                      : "warning",
-                notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
-              };
-            }),
-        });
-
-        const execution = (environment.executeCodeMode ?? CodeMode.execute)({
-          code: params.code,
-          tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, dispatchMcp, budget, {
-            includePowerShell: environment.definitions.powershell !== undefined,
+        const execution = Effect.flatMap(Clock.currentTimeMillis, (startedAt) => {
+          const dispatch = makeNestedPiToolDispatch({
+            definitions: environment.definitions,
+            ctx,
+            toolCallId,
             observationId: compact.identity,
             onDeliveryFailure: compact.deliveryFailure,
-            onOutputReturned: (id) => {
-              if (id !== undefined) returnedOutputs.add(id);
+            observe: (id, name, args, result, isError) =>
+              compact.observe(id, () => {
+                if (policy === undefined || presentationCwd === undefined || name === "powershell")
+                  return undefined;
+                return projectBuiltinCompactSummary(name, {
+                  ...policy,
+                  phase: "settled",
+                  args,
+                  result,
+                  cwd: presentationCwd,
+                  isError,
+                  beforeWrite: { kind: "unknown" },
+                });
+              }),
+          });
+          const dispatchBackgroundTask = makeBackgroundTaskDispatch({
+            deadlineMillis: startedAt + config.timeoutMs,
+            events: environment.events,
+            sessionId: environment.sessionId,
+            toolCallId,
+            maxOutputBytes: () =>
+              Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
+            missingPresentation: compact.missing,
+            observationId: compact.identity,
+            onDeliveryFailure: compact.deliveryFailure,
+            observePresentation: (id, receipt) => {
+              if (receipt.incomplete || receipt.overflow) compact.missing();
+              compact.observe(id, () => receipt.summary);
             },
-          }),
-          limits: {
-            timeoutMs: config.timeoutMs,
-            maxToolCalls: config.maxToolCalls,
-            maxOutputBytes: config.maxOutputBytes,
-          },
-          onToolCallLifecycle: (event) =>
-            Effect.flatMap(Effect.fiberId, (fiber) =>
-              Effect.sync(() => {
-                if (event.status !== "queued" && event.status !== "running")
-                  endDelivery(fiber, event.status !== "succeeded");
-                if (event.status === "queued") {
-                  compact.admit(event.name);
-                  counts.total += 1;
-                  counts.queued += 1;
-                  const entry: MutableCallEntry = {
-                    tool: event.name,
-                    status: "queued",
-                  };
-                  if (!trackQueued(event.id, entry)) return;
-                } else {
-                  const entry = calls.get(event.id);
-                  const nextStatus =
-                    event.status === "running"
-                      ? "running"
-                      : event.status === "succeeded"
-                        ? "completed"
-                        : event.status === "failed"
-                          ? "error"
-                          : "cancelled";
-                  if (entry !== undefined) {
-                    transitionCall(entry, nextStatus, counts);
-                    if (event.status !== "running") {
-                      childTimings.stop(entry.liveTiming);
-                      delete entry.liveTiming;
-                      entry.durationMs = event.durationMs;
-                    }
-                  } else if (event.status === "running") {
-                    counts.queued -= 1;
-                    counts.running += 1;
-                    // The start hook immediately follows and publishes the exact hidden counts.
-                    return;
+          });
+
+          const dispatchMcp = makeMcpDispatch({
+            events: environment.events,
+            sessionId: environment.sessionId,
+            toolCallId,
+            maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
+            observationId: compact.identity,
+            observePresentation: (id, args, observation, reply) =>
+              compact.observe(id, () => {
+                if (observation.incomplete) compact.missing();
+                const projected =
+                  reply === undefined
+                    ? undefined
+                    : projectMcpCompactSummary({
+                        phase: "settled",
+                        args,
+                        result: { details: reply },
+                        isError: observation.isError,
+                      });
+                if (projected !== undefined && !observation.incomplete) return projected;
+                // Heading-only projection does not claim operation success.
+                const heading = projectMcpCompactSummary({
+                  phase: "running",
+                  args,
+                  result: undefined,
+                  isError: false,
+                });
+                return {
+                  action: heading?.action ?? args.action,
+                  subject: heading?.subject ?? "MCP",
+                  outcome:
+                    observation.incomplete || observation.outcome === "unknown"
+                      ? "uncertain"
+                      : observation.isError || observation.outcome === "not-sent"
+                        ? "error"
+                        : "warning",
+                  notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
+                };
+              }),
+          });
+
+          return (environment.executeCodeMode ?? CodeMode.execute)({
+            code: params.code,
+            tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, dispatchMcp, budget, {
+              includePowerShell: environment.definitions.powershell !== undefined,
+              observationId: compact.identity,
+              onDeliveryFailure: compact.deliveryFailure,
+              onOutputReturned: (id) => {
+                if (id !== undefined) returnedOutputs.add(id);
+              },
+            }),
+            limits: {
+              timeoutMs: config.timeoutMs,
+              maxToolCalls: config.maxToolCalls,
+              maxOutputBytes: config.maxOutputBytes,
+            },
+            onToolCallLifecycle: (event) =>
+              Effect.flatMap(Effect.fiberId, (fiber) =>
+                Effect.sync(() => {
+                  if (event.status !== "queued" && event.status !== "running")
+                    endDelivery(fiber, event.status !== "succeeded");
+                  if (event.status === "queued") {
+                    compact.admit(event.name);
+                    counts.total += 1;
+                    counts.queued += 1;
+                    const entry: MutableCallEntry = {
+                      tool: event.name,
+                      status: "queued",
+                    };
+                    if (!trackQueued(event.id, entry)) return;
                   } else {
-                    counts[event.started ? "running" : "queued"] -= 1;
+                    const entry = calls.get(event.id);
+                    const nextStatus =
+                      event.status === "running"
+                        ? "running"
+                        : event.status === "succeeded"
+                          ? "completed"
+                          : event.status === "failed"
+                            ? "error"
+                            : "cancelled";
+                    if (entry !== undefined) {
+                      transitionCall(entry, nextStatus, counts);
+                      if (event.status !== "running") {
+                        childTimings.stop(entry.liveTiming);
+                        delete entry.liveTiming;
+                        entry.durationMs = event.durationMs;
+                      }
+                    } else if (event.status === "running") {
+                      counts.queued -= 1;
+                      counts.running += 1;
+                      // The start hook immediately follows and publishes the exact hidden counts.
+                      return;
+                    } else {
+                      counts[event.started ? "running" : "queued"] -= 1;
+                      counts[statusCountKey(nextStatus)] += 1;
+                    }
+                    // The start hook immediately follows a tracked running event and enriches the
+                    // row. Publish that one snapshot instead of two equivalent running updates.
+                    if (event.status === "running") return;
+                  }
+                  if (event.status === "queued") publishNow();
+                  else publish();
+                }),
+              ),
+            onToolCallStart: ({ index, lifecycleId, name, input }) =>
+              Effect.flatMap(Effect.fiberId, (fiber) =>
+                Effect.sync(() => {
+                  const id = lifecycleId ?? -(index + 1);
+                  compact.start(fiber, id);
+                  let current = calls.get(id);
+                  if (current === undefined && lifecycleId === undefined) {
+                    compact.admit(name);
+                    counts.total += 1;
+                    counts.running += 1;
+                    current = {
+                      tool: name,
+                      status: "running",
+                    };
+                    trackQueued(id, current);
+                  } else if (current !== undefined) {
+                    transitionCall(current, "running", counts);
+                  }
+                  if (current !== undefined) {
+                    if (calls.has(id) && current.liveTiming === undefined) {
+                      const timing = childTimings.start();
+                      if (timing !== undefined) current.liveTiming = timing;
+                    }
+                    const subject =
+                      presentationCwd === undefined
+                        ? undefined
+                        : describeNestedSubject(name, input, presentationCwd);
+                    if (subject !== undefined) current.subject = subject;
+                    else delete current.subject;
+                  }
+                  // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
+                  // a render queued, so synchronous delivery lets the row join that next host frame.
+                  publishNow();
+                }),
+              ),
+            onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
+              Effect.flatMap(Effect.fiberId, (fiber) =>
+                Effect.sync(() => {
+                  // Modern runtimes emit one authoritative terminal lifecycle event immediately after
+                  // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
+                  if (lifecycleId !== undefined) return;
+                  endDelivery(fiber, outcome !== "success");
+                  const id = -(index + 1);
+                  const current = calls.get(id);
+                  const nextStatus = outcome === "success" ? "completed" : "error";
+                  if (current !== undefined) {
+                    transitionCall(current, nextStatus, counts);
+                    childTimings.stop(current.liveTiming);
+                    delete current.liveTiming;
+                    current.durationMs = durationMs;
+                  } else {
+                    // The legacy call was counted but its row exceeded the bounded host-side cap.
+                    counts.running -= 1;
                     counts[statusCountKey(nextStatus)] += 1;
                   }
-                  // The start hook immediately follows a tracked running event and enriches the
-                  // row. Publish that one snapshot instead of two equivalent running updates.
-                  if (event.status === "running") return;
-                }
-                if (event.status === "queued") publishNow();
-                else publish();
-              }),
-            ),
-          onToolCallStart: ({ index, lifecycleId, name, input }) =>
-            Effect.flatMap(Effect.fiberId, (fiber) =>
-              Effect.sync(() => {
-                const id = lifecycleId ?? -(index + 1);
-                compact.start(fiber, id);
-                let current = calls.get(id);
-                if (current === undefined && lifecycleId === undefined) {
-                  compact.admit(name);
-                  counts.total += 1;
-                  counts.running += 1;
-                  current = {
-                    tool: name,
-                    status: "running",
-                  };
-                  trackQueued(id, current);
-                } else if (current !== undefined) {
-                  transitionCall(current, "running", counts);
-                }
-                if (current !== undefined) {
-                  if (calls.has(id) && current.liveTiming === undefined) {
-                    const timing = childTimings.start();
-                    if (timing !== undefined) current.liveTiming = timing;
-                  }
-                  const subject =
-                    presentationCwd === undefined
-                      ? undefined
-                      : describeNestedSubject(name, input, presentationCwd);
-                  if (subject !== undefined) current.subject = subject;
-                  else delete current.subject;
-                }
-                // Do not place a newly admitted/enriched row behind our frame timer: Pi already has
-                // a render queued, so synchronous delivery lets the row join that next host frame.
-                publishNow();
-              }),
-            ),
-          onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
-            Effect.flatMap(Effect.fiberId, (fiber) =>
-              Effect.sync(() => {
-                // Modern runtimes emit one authoritative terminal lifecycle event immediately after
-                // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
-                if (lifecycleId !== undefined) return;
-                endDelivery(fiber, outcome !== "success");
-                const id = -(index + 1);
-                const current = calls.get(id);
-                const nextStatus = outcome === "success" ? "completed" : "error";
-                if (current !== undefined) {
-                  transitionCall(current, nextStatus, counts);
-                  childTimings.stop(current.liveTiming);
-                  delete current.liveTiming;
-                  current.durationMs = durationMs;
-                } else {
-                  // The legacy call was counted but its row exceeded the bounded host-side cap.
-                  counts.running -= 1;
-                  counts[statusCountKey(nextStatus)] += 1;
-                }
-                publish();
-              }),
-            ),
+                  publish();
+                }),
+              ),
+          });
         });
 
         const settleProgress = (): CodeModeToolDetails => {

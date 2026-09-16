@@ -441,7 +441,6 @@ describe("early-path clamp wiring", () => {
         readonly source?: string;
         readonly returned?: boolean;
         readonly abort?: boolean;
-        readonly calls?: number;
       }
       const cases: readonly Case[] = [
         {
@@ -475,7 +474,6 @@ describe("early-path clamp wiring", () => {
             runInSession: () => Promise.reject(new Error(failure)),
           },
           expected: clampModelVisibleText(`code_mode execution did not complete: ${failure}`, 31),
-          calls: 1,
         },
         {
           name: "zero",
@@ -488,10 +486,11 @@ describe("early-path clamp wiring", () => {
         let runtimeCalls = 0;
         const execute = makeHarness({
           ...options,
-          executeCodeMode: (runtimeOptions) => {
-            runtimeCalls += 1;
-            return CodeMode.execute(runtimeOptions);
-          },
+          executeCodeMode: (runtimeOptions) =>
+            Effect.suspend(() => {
+              runtimeCalls += 1;
+              return CodeMode.execute(runtimeOptions);
+            }),
         });
         const controller = new AbortController();
         if (testCase.abort === true) controller.abort();
@@ -508,7 +507,7 @@ describe("early-path clamp wiring", () => {
         const text = settled._tag === "returned" ? textOf(settled.result) : settled.message;
         expect(text, name).toBe(expected);
         expect(text, name).not.toContain("�");
-        expect(runtimeCalls, name).toBe(testCase.calls ?? 0);
+        expect(runtimeCalls, name).toBe(0);
         if (settled._tag === "returned") expect(settled.result.details.cancelled).toBe(true);
       }
     }),

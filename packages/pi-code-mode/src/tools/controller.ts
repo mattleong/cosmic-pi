@@ -118,6 +118,14 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       "Prefer a concise distilled string when structure is unnecessary; otherwise return a " +
         "small object containing only the requested fields, never raw nested tool results or " +
         "whole files.",
+      "Nested reads accept text only; use top-level read for images. MCP images remain " +
+        "descriptors in Code Mode, including attachment reads. Use top-level mcp result.read " +
+        "with the retained result ID and attachment index to view a supported image.",
+      "Nested background-task waits and explicit log long polls are capped by the remaining " +
+        "Code Mode execution time minus a one-second delivery reserve. With one second or less " +
+        "remaining, they inspect immediately. Shorter requested waits and provider limits still " +
+        "apply. A wait timeout does not stop the task; the reserve does not guarantee delivery " +
+        "if scheduling or subsequent guest work exhausts the outer deadline.",
       "Batch formed MCP requests with Promise.all(requests.map(input => tools.mcp.request(input))). " +
         "Use bounded discovery before exact server/tool calls, and result.read for retained output. " +
         "Check outcome and isError. Never replay an unknown or completed operation to recover its output. " +

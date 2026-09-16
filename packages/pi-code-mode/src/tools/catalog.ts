@@ -66,8 +66,8 @@ const LsInput = Schema.Struct({
 });
 const GUEST_TOOL_DESCRIPTIONS = {
   read:
-    "Read one text file (same behavior and filesystem authority as the top-level read tool; " +
-    "absolute paths are allowed). Returns the file text; image files are refused.",
+    "Read text files only; images are refused. Paths have the same unrestricted filesystem " +
+    "authority as top-level read.",
   bash:
     "Execute a command through Pi's default local Bash implementation with full local-user " +
     "process, filesystem, environment, and network authority. This does not inherit registered " +

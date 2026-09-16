@@ -38,6 +38,7 @@ describe("explicit Background Tasks guest adapter", () => {
         }),
         sessionId: undefined,
         toolCallId: "outer",
+        deadlineMillis: 30_000,
         maxOutputBytes: () => 1_024,
       });
       const error = yield* dispatch({ action: "list" }).pipe(Effect.flip);
@@ -65,6 +66,7 @@ describe("explicit Background Tasks guest adapter", () => {
       for (const testCase of cases) {
         const dispatch = makeBackgroundTaskDispatch({
           events: eventsFor(testCase.candidates),
+          deadlineMillis: 30_000,
           sessionId: "session-1",
           toolCallId: "outer",
           maxOutputBytes: () => 1_024,
@@ -90,6 +92,7 @@ describe("explicit Background Tasks guest adapter", () => {
       }));
       const dispatch = makeBackgroundTaskDispatch({
         events: eventsFor([capability({ action: "list", text: "tasks", tasks })]),
+        deadlineMillis: 30_000,
         sessionId: "session-1",
         toolCallId: "outer",
         maxOutputBytes: () => 1_000,
@@ -102,6 +105,7 @@ describe("explicit Background Tasks guest adapter", () => {
   it.effect("contains hostile provider rejection coercion", () =>
     Effect.gen(function* () {
       const dispatch = makeBackgroundTaskDispatch({
+        deadlineMillis: 30_000,
         events: eventsFor([
           {
             version: BACKGROUND_TASK_CODE_MODE_VERSION,
@@ -130,6 +134,7 @@ describe("explicit Background Tasks guest adapter", () => {
     Effect.gen(function* () {
       const dispatch = makeBackgroundTaskDispatch({
         events: eventsFor([capability({ secret: "DO-NOT-LEAK" })]),
+        deadlineMillis: 30_000,
         sessionId: "session-1",
         toolCallId: "outer",
         maxOutputBytes: () => 1_024,
@@ -140,6 +145,7 @@ describe("explicit Background Tasks guest adapter", () => {
 
       const invalidNumber = makeBackgroundTaskDispatch({
         events: eventsFor([capability({ action: "clear", text: "bad", removed: Number.NaN })]),
+        deadlineMillis: 30_000,
         sessionId: "session-1",
         toolCallId: "outer",
         maxOutputBytes: () => 1_024,

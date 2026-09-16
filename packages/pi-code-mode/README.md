@@ -115,6 +115,15 @@ The provider must be loaded, current, and active. A started task may outlive the
 Background Tasks owns it and terminates it at Pi session shutdown. Deactivating the top-level
 `background_task` tool also makes the nested adapter unavailable. See the [Background Tasks architecture](../pi-background-task/ARCHITECTURE.md).
 
+Nested `wait` calls and explicit `logs.waitSeconds` long polls are capped by Code Mode's
+remaining execution time, with one second reserved for reply delivery. The cap is recalculated
+after queueing, so sequential and parallel calls share the same deadline. The provider's
+configured maximum and any shorter requested wait still apply. Omitted log waits remain
+nonblocking. With one second or less remaining, waits become immediate inspections and may
+return `timeout` while the task continues running. The reserve is best effort, not a guarantee
+against scheduling delays or substantial guest work after the wait; the outer timeout and
+cancellation remain authoritative.
+
 ## MCP adapter
 
 `tools.mcp.request(input)` queries the active `pi-mcp` provider on every invocation. It requires

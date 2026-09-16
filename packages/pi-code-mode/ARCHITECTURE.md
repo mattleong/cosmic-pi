@@ -164,7 +164,13 @@ numbers and may be fractional. Invalid numeric input fails before a fresh Pi def
 Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and `tool_result`
 middleware, approvals, previews, registered overrides, and session-specific operations.
 Background Tasks calls query one stable-session, token-checked Promise capability on each
-invocation. They never dispatch the registered top-level definition.
+invocation. They never dispatch the registered top-level definition. The execution Effect captures
+one Clock-based deadline before starting the interpreter. After queue admission and provider
+discovery, the Background Tasks adapter caps `wait` and explicit log long polls to the remaining
+time minus a one-second settlement reserve, clamped at zero. Shorter requested waits and the
+provider's configured maximum still apply; omitted log waits stay nonblocking. This is a
+best-effort delivery margin, not a replacement for outer timeout or cancellation, and it never
+changes the background process lifetime or the versioned provider protocol.
 
 `boundary/host-mcp.ts` queries exactly one active stable-session provider per request through
 `pi-mcp/code-mode`. That import loads codecs, not an extension or runtime. The provider owns

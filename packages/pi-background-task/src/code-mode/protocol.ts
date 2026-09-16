@@ -111,14 +111,25 @@ export const BackgroundTaskCodeModeInputSchema = Schema.Struct({
     Schema.String.check(Schema.isMaxLength(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxIdChars)),
   ),
   state: Schema.optionalKey(Schema.Literals(["active", "completed", "all"])),
-  until: Schema.optionalKey(Schema.Literals(["exit", "output"])),
+  until: Schema.optionalKey(
+    Schema.Literals(["exit", "output"]).annotate({
+      description:
+        'Required for wait. Use "exit" for process completion or "output" for a literal text match.',
+    }),
+  ),
   contains: Schema.optionalKey(
     Schema.String.check(
       Schema.isMinLength(1),
       Schema.isMaxLength(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxContainsChars),
-    ),
+    ).annotate({
+      description: 'Literal text required for until="output"; invalid for until="exit".',
+    }),
   ),
-  afterCursor: Schema.optionalKey(NonNegativeInteger),
+  afterCursor: Schema.optionalKey(
+    NonNegativeInteger.annotate({
+      description: 'Read logs or match output after this cursor; invalid for until="exit".',
+    }),
+  ),
   tailLines: Schema.optionalKey(
     NonNegativeInteger.check(
       Schema.isBetween({

@@ -48,16 +48,24 @@ export const BackgroundTaskParameters = Type.Object({
   state: Type.Optional(
     StringEnum(["active", "completed", "all"] as const, { description: "List filter" }),
   ),
-  until: Type.Optional(StringEnum(["exit", "output"] as const, { description: "Wait condition" })),
+  until: Type.Optional(
+    StringEnum(["exit", "output"] as const, {
+      description:
+        'Required for wait. Use "exit" for process completion or "output" for a literal text match.',
+    }),
+  ),
   contains: Type.Optional(
     Type.String({
       minLength: 1,
       maxLength: BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars,
-      description: "Literal output text required when waiting for output",
+      description: 'Literal text required for until="output"; invalid for until="exit".',
     }),
   ),
   afterCursor: Type.Optional(
-    Type.Integer({ minimum: 0, description: "Read or match output after this cursor" }),
+    Type.Integer({
+      minimum: 0,
+      description: 'Read logs or match output after this cursor; invalid for until="exit".',
+    }),
   ),
   tailLines: Type.Optional(
     Type.Integer({
