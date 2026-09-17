@@ -1,10 +1,6 @@
 import * as Predicate from "effect/Predicate";
 
-import {
-  getSettingsListTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import {
@@ -16,6 +12,7 @@ import {
   type CapturedHostSignal,
 } from "pi-cosmic-core";
 import {
+  managerSettingsTheme,
   createSettingsListSurface,
   settingsItemsFromDescriptors,
   settingsRowGenerations,
@@ -106,7 +103,7 @@ export function registerSettingsController(
           header: new Text(theme.fg("accent", theme.bold("Better xAI Settings")), 1, 1),
           items,
           height: Math.min(12, items.length + 2),
-          listTheme: getSettingsListTheme(),
+          listTheme: managerSettingsTheme(theme),
           // SettingsList displays the cycled value optimistically, so both apply outcomes route
           // through the same display update: success shows the committed value and failure
           // restores the persisted projection value.

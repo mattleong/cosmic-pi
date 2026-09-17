@@ -1,3 +1,4 @@
+import { focusedField, managerTone } from "../manager/style.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "../manager/chrome.ts";
@@ -366,11 +367,8 @@ export class ActivityComponent {
         const list = entries.slice(window.start, window.end).map((entry) => {
           const isSelected = entry.row.key === selected?.row.key;
           const prefix = `${isSelected ? "> " : "  "}${entry.history ? "H " : ""}`;
-          const content = `${prefix}${activityRowLine(entry, Math.max(0, listWidth - prefix.length), this.options.now?.(), isSelected ? undefined : this.options.theme)}`;
-          return padListDetailRow(
-            isSelected ? this.options.theme.fg("accent", content) : content,
-            listWidth,
-          );
+          const content = `${prefix}${activityRowLine(entry, Math.max(0, listWidth - prefix.length), this.options.now?.(), this.options.theme, "manager", isSelected && listFocused ? (text) => focusedField(this.options.theme, text) : undefined)}`;
+          return padListDetailRow(content, listWidth);
         });
         if (!list.length) list.push("No activity");
         if (showNeedsYou)
@@ -410,6 +408,7 @@ export class ActivityComponent {
                 this.options.theme,
                 activityOwnerLabel(this.options.snapshot(), row),
                 !listFocused,
+                managerTone.identity,
               ),
               ...detailFieldRows(this.options.theme, [
                 {
@@ -463,7 +462,13 @@ export class ActivityComponent {
             height: bodyHeight,
             inner,
           });
-        return framedFill(frame, this.shell.state.details ? detailRows : list, bodyHeight, inner);
+        return framedFill(
+          frame,
+          this.shell.state.details ? detailRows : list,
+          bodyHeight,
+          inner,
+          this.shell.state.pane,
+        );
       },
     }).map((line) => truncateToWidth(line, width, ""));
   }

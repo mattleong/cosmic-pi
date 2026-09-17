@@ -1,3 +1,4 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import type { LoadSettingsOptions } from "../config/document-store";
 import type { CodePreviewSettings } from "../config/schema";
@@ -12,6 +13,7 @@ import { initializeShiki } from "../syntax/shiki";
 import { createSettingsCategoryItems, isSettingsGroupItemId } from "./ui/index";
 
 interface SettingsListControllerOptions {
+  theme?: Theme;
   notify: (message: string, level: "info" | "warning") => void;
   done: () => void;
   loadOptions: LoadSettingsOptions;
@@ -53,6 +55,7 @@ export function createCodePreviewSettingsModel({
   notify,
   done,
   loadOptions,
+  theme,
 }: SettingsListControllerOptions): CodePreviewSettingsModel {
   let activeList: SettingsList | undefined;
   let draftSettings = cloneCodePreviewSettings(codePreviewSettings);
@@ -93,7 +96,7 @@ export function createCodePreviewSettingsModel({
     if (activeList) handleSettingChange(activeList, id, value);
   };
   return {
-    items: createSettingsCategoryItems(draftSettings, () => draftSettings, routeBoundChange),
+    items: createSettingsCategoryItems(draftSettings, () => draftSettings, routeBoundChange, theme),
     bind: (list) => {
       activeList = list;
     },

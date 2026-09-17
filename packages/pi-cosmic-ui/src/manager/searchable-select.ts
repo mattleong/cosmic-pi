@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalControls } from "pi-cosmic-core";
 import {
   fuzzyFilter,
   Input,
@@ -20,6 +21,15 @@ import {
 } from "./keymap.ts";
 import { filterReservedKeyLabel, filterTextInputKeyLabel } from "./key-labels.ts";
 import { fullScreenSettingsHint } from "./settings-adapter.ts";
+import { focusedField } from "./style.ts";
+
+export const managerSelectTheme = (theme: Theme): ConstructorParameters<typeof SelectList>[2] => ({
+  selectedPrefix: (text) => focusedField(theme, text),
+  selectedText: (text) => focusedField(theme, text),
+  description: (text) => theme.fg("muted", text),
+  scrollInfo: (text) => theme.fg("dim", text),
+  noMatch: (text) => theme.fg("warning", text),
+});
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
@@ -30,6 +40,7 @@ export interface SearchableSelectPageChoice<A> {
   readonly disabledReason?: string | undefined;
   /** Short caller-owned reason shown beside an unavailable choice. */
   readonly disabledHint?: string | undefined;
+  readonly tone?: Parameters<Theme["fg"]>[0] | undefined;
 }
 
 export type SettingsSelectKeybindingId = FullScreenSelectionKeybindingId;
@@ -150,14 +161,22 @@ export class SearchableSelectPage<A> implements Component, Focusable {
                 `${item.label ?? item.value}${choice.disabledHint ? ` · ${choice.disabledHint}` : ""}`,
               ),
             }
-          : item;
+          : { ...item, label: theme.fg(choice.tone ?? "text", item.label ?? item.value) };
       }),
       this.listHeight,
       {
-        selectedPrefix: (text: string) => theme.fg("accent", text),
-        selectedText: (text: string) => theme.fg("accent", text),
-        description: (text: string) => theme.fg("muted", text),
-        scrollInfo: (text: string) => theme.fg("dim", text),
+        ...managerSelectTheme(theme),
+        selectedPrefix: (text: string) =>
+          this.searchMode ? theme.fg("muted", text) : focusedField(theme, text),
+        selectedText: (text: string) => {
+          if (this.searchMode) return text;
+          // Disabled rows retain their dim warning affordance under the selection background.
+          if (this.selectedChoice()?.enabled === false) {
+            const disabled = theme.bold(theme.fg("dim", stripTerminalControls(text)));
+            return theme.bg?.("selectedBg", disabled) ?? disabled;
+          }
+          return focusedField(theme, stripTerminalControls(text));
+        },
         noMatch: (_text: string) =>
           theme.fg("warning", `  ${this.options.emptyText ?? "No matching options"}`),
       },
@@ -314,7 +333,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const theme = this.options.theme;
     const inner = safeWidth - 2;
     const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
-    const frame = listDetailFrame(theme);
+    const frame = listDetailFrame(theme, "list");
     if (height === 1)
       return framedScreen(frame, {
         width: safeWidth,
@@ -331,7 +350,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         ? theme.fg("warning", truncateToWidth(activeNotice, inner, "…"))
         : undefined;
       const inputLine = this.searchMode
-        ? this.input.render(Math.max(1, inner)).slice(0, 1)[0]
+        ? this.input
+            .render(Math.max(1, inner))
+            .slice(0, 1)
+            .map((line) => focusedField(theme, line))[0]
         : undefined;
       if (bodyHeight === 1) {
         const single = inputLine ?? noticeLine;
@@ -368,7 +390,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       const searchLines = this.searchMode
         ? [
             theme.fg("dim", fullScreenSettingsHint({ searching: true })),
-            ...this.input.render(Math.max(1, inner)),
+            ...this.input.render(Math.max(1, inner)).map((line) => focusedField(theme, line)),
           ]
         : [];
       const header = [
@@ -388,7 +410,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       height,
       top: title,
       bottom: this.footer(inner),
-      body: (bodyHeight) => framedFill(frame, body, bodyHeight, inner),
+      body: (bodyHeight) => framedFill(frame, body, bodyHeight, inner, "list"),
     });
   }
 

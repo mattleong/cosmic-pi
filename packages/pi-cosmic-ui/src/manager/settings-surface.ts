@@ -13,7 +13,9 @@ import {
   type Focusable,
   type SettingItem,
 } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SettingsOptionDescriptor } from "pi-cosmic-core";
+import { focusedField, managerTone } from "./style.ts";
 import type { FullScreenKeymapOptions } from "./keymap.ts";
 import {
   settingsHintRenderer,
@@ -23,6 +25,16 @@ import {
 } from "./settings-adapter.ts";
 
 export type SettingsListTheme = ConstructorParameters<typeof SettingsList>[2];
+
+/** Public SettingsList callbacks only; focus and navigation remain owned by Pi. */
+export const managerSettingsTheme = (theme: Theme): SettingsListTheme => ({
+  label: (text, selected) => (selected ? focusedField(theme, text) : theme.fg("text", text)),
+  value: (text, selected) =>
+    selected ? focusedField(theme, text) : theme.fg(managerTone.value, text),
+  description: (text) => theme.fg("muted", text),
+  cursor: theme.fg("accent", "› "),
+  hint: (text) => theme.fg("dim", text),
+});
 
 export type SettingsSurfaceItem = SettingItem & {
   /** "group" marks navigation/summary rows whose submenu completions never reach `onChange`. */

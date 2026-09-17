@@ -45,6 +45,7 @@
     "./manager/searchable-select": "./src/manager/searchable-select.ts",
     "./manager/settings-adapter": "./src/manager/settings-adapter.ts",
     "./manager/settings-surface": "./src/manager/settings-surface.ts",
+    "./manager/style": "./src/manager/style.ts",
     "./manager/viewport": "./src/manager/viewport.ts",
     "./protocol": "./src/protocol/protocol.ts",
     "./tool": "./src/tool/presentation.ts"

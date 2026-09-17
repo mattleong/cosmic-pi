@@ -23,6 +23,7 @@ import { makeProfileSearchSelector } from "../src/settings/ui/profile-workspace-
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
+  bg: (_: string, text: string) => text,
 } as Theme;
 
 const routeOption = (

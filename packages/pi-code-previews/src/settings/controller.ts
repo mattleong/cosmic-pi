@@ -1,9 +1,12 @@
 import * as Predicate from "effect/Predicate";
 
-import { getSettingsListTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { isProjectTrusted } from "pi-cosmic-core";
-import { createSettingsListSurface } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  managerSettingsTheme,
+  createSettingsListSurface,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { createCodePreviewSettingsModel } from "./panel";
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
@@ -20,6 +23,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
       }
       return ctx.ui.custom((tui, theme, keybindings, done) => {
         const model = createCodePreviewSettingsModel({
+          theme,
           notify: (message, level) => ctx.ui.notify(message, level),
           done: () => done(undefined),
           loadOptions: { projectCwd: ctx.cwd, projectTrusted: isProjectTrusted(ctx) },
@@ -28,7 +32,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
           header: new Text(theme.fg("accent", theme.bold("Code Preview Settings")), 1, 1),
           items: model.items,
           height: model.items.length + 2,
-          listTheme: getSettingsListTheme(),
+          listTheme: managerSettingsTheme(theme),
           onChange: model.onChange,
           onCancel: model.onCancel,
           matchesKeybinding: Predicate.isFunction(keybindings?.matches)

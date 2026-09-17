@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { managerTone } from "../manager/style.ts";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   managerActivityColor,
@@ -89,6 +90,7 @@ export function activityRowLine(
   now?: number,
   theme?: Pick<Theme, "fg">,
   presentation: "manager" | "widget" = "manager",
+  focusedStyle?: (text: string) => string,
 ): string {
   const row = entry.row;
   const interactive = presentation === "manager";
@@ -106,7 +108,7 @@ export function activityRowLine(
   const typeColor = !interactive
     ? widgetTypeColors[row.kind]
     : row.kind === "agent"
-      ? "accent"
+      ? managerTone.identity
       : row.kind === "question"
         ? "warning"
         : "muted";
@@ -138,8 +140,11 @@ export function activityRowLine(
       ? paint("muted", truncateToWidth(row.route, Math.floor(leftWidth / 2), "…"))
       : "";
   const routeWidth = route ? visibleWidth(route) + 2 : 0;
+  const name = focusedStyle
+    ? focusedStyle(`${kind} ${profile}${row.title}`)
+    : `${paint(typeColor, kind)} ${paint(interactive ? managerTone.identity : "muted", profile)}${paint(interactive ? managerTone.identity : "text", row.title)}`;
   const identity = truncateToWidth(
-    `${guide}${paint("accent", awaited)}${glyph} ${paint(typeColor, kind)} ${paint("muted", profile)}${paint("text", row.title)}${paint("dim", omitted)}`,
+    `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
     Math.max(0, leftWidth - routeWidth),
     "…",
   );

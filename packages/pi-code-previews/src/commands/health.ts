@@ -60,6 +60,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
       return ctx.ui.custom(
         (_tui, theme, _kb, done) =>
           new TextPanelComponent({
+            theme,
             title: theme.bold(lines[0] ?? "Code preview health"),
             lines: lines.slice(1),
             done: () => done(undefined),

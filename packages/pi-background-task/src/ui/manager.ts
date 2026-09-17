@@ -1,3 +1,4 @@
+import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import {
@@ -307,14 +308,23 @@ export class TaskManagerComponent implements Component {
 
   private taskLine(task: BackgroundTaskView, index: number, width: number): string {
     const selected = index === this.shell.state.selected;
-    const prefix = selected ? this.options.theme.fg("accent", ">") : " ";
+    const prefix = selected
+      ? this.options.theme.fg(this.shell.state.pane === "list" ? "accent" : "muted", ">")
+      : " ";
     const frame = Math.floor(this.options.getNow() / 160);
     const presentation = statePresentation(task, frame);
     const glyph = this.options.theme.fg(presentation.color, presentation.glyph);
     const label = sanitizeTerminalLine(
       `${displayName(task)} · ${presentation.label} · ${duration(task, this.options.getNow())}`,
     );
-    const text = selected ? this.options.theme.fg("accent", label) : label;
+    const text =
+      selected && this.shell.state.pane === "list"
+        ? focusedField(this.options.theme, label)
+        : this.options.theme.fg(managerTone.identity, sanitizeTerminalLine(displayName(task))) +
+          this.options.theme.fg(
+            "muted",
+            ` · ${sanitizeTerminalLine(`${presentation.label} · ${duration(task, this.options.getNow())}`)}`,
+          );
     return padListDetailRow(`${prefix} ${glyph} ${text}`, width);
   }
 
@@ -350,7 +360,12 @@ export class TaskManagerComponent implements Component {
     if (!task) return [this.options.theme.fg("dim", "No background tasks.")];
     const presentation = statePresentation(task, Math.floor(this.options.getNow() / 160));
     const lines = [
-      listDetailHeading(this.options.theme, displayName(task), this.shell.state.pane === "detail"),
+      listDetailHeading(
+        this.options.theme,
+        displayName(task),
+        this.shell.state.pane === "detail",
+        managerTone.identity,
+      ),
       ...detailFieldRows(this.options.theme, [
         {
           label: "Status",
@@ -362,12 +377,13 @@ export class TaskManagerComponent implements Component {
     if (this.showTechnicalDetails) {
       lines.push(
         ...detailFieldRows(this.options.theme, [
-          { label: "ID", value: sanitizeTerminalLine(task.id) },
+          { label: "ID", value: sanitizeTerminalLine(task.id), tone: managerTone.identity },
           {
             label: "Directory",
+            tone: managerTone.value,
             value: sanitizeTerminalLine(`${task.cwd}${task.pid ? ` · pid ${task.pid}` : ""}`),
           },
-          { label: "Command", value: sanitizeTerminalLine(task.command) },
+          { label: "Command", value: sanitizeTerminalLine(task.command), tone: managerTone.value },
         ]),
       );
     }
@@ -445,7 +461,7 @@ export class TaskManagerComponent implements Component {
             )
           : [this.options.theme.fg("dim", "No background tasks.")];
     if (!this.shell.state.details) this.shell.resetDetailWindow();
-    return framedFill(this.frame, lines, height, inner);
+    return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }
 
   invalidate(): void {

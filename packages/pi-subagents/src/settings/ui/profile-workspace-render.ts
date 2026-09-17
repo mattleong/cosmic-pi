@@ -1,12 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
-import {
-  framedFill,
-  framedScreen,
-  framedWideRows,
-  listDetailFrame,
-} from "pi-cosmic-ui/manager/list-detail-shell";
+import { framedFill, framedScreen } from "pi-cosmic-ui/manager/list-detail-shell";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
@@ -24,7 +19,13 @@ import {
   targetProfileRouteDraft,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
-import { profileWorkspaceRows } from "./profile-workspace-rows.ts";
+import { profileWorkspaceRows, type ProfileWorkspaceRow } from "./profile-workspace-rows.ts";
+import {
+  focusedProfileField,
+  profileFrame,
+  profilePaneRows,
+  profileTone,
+} from "./profile-style.ts";
 import type { SettingsSelectKeybindingId } from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
 
@@ -85,11 +86,16 @@ export const workspaceCandidateSummary = (
   parentEffort: SubagentEffort,
   width: number,
   parentModel?: string,
+  theme?: Theme,
 ): string => {
-  const metadata = `${candidateEffortLabel(profile, candidate, parentEffort)}${candidateFastModeApplied(candidate, parentModel) ? " ⚡" : ""}`;
+  const effort = candidateEffortLabel(profile, candidate, parentEffort);
+  const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
+  const metadata = theme
+    ? `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`
+    : effort + fast;
   const modelWidth = Math.max(0, width - visibleWidth(metadata) - 3);
   return modelWidth > 0
-    ? `${truncateToWidth(candidate.model, modelWidth)} · ${metadata}`
+    ? `${theme ? theme.fg(profileTone.model, truncateToWidth(candidate.model, modelWidth)) : truncateToWidth(candidate.model, modelWidth)} · ${metadata}`
     : truncateToWidth(metadata, width);
 };
 const expanded = (state: ProfileWorkspaceRenderState): ReadonlySet<number> =>
@@ -109,9 +115,12 @@ const profileTableLines = (
     return {
       profile,
       selected: selected && !state.saveFocused,
-      model: first?.model ?? (draft.kind === "invalid" ? "invalid" : "disabled"),
+      model: theme.fg(
+        first ? profileTone.model : draft.kind === "invalid" ? "error" : "muted",
+        first?.model ?? (draft.kind === "invalid" ? "invalid" : "disabled"),
+      ),
       effort: first
-        ? `${candidateEffortLabel(profile, first, state.parentEffort)}${candidateFastModeApplied(first, state.parentModel) ? " ⚡" : ""}`
+        ? `${theme.fg("muted", candidateEffortLabel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
         : "",
       runtime: first ? runWithLabel(first) : "",
       fallbacks:
@@ -139,18 +148,18 @@ const profileTableLines = (
     return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
   };
   return rows.map((row) => {
-    const marker = state.editedProfiles?.has(row.profile) ? theme.fg("accent", " ●") : "";
-    const prefix = `${row.selected ? ">" : " "} ${cell(row.profile + marker, profileWidth)} · `;
+    const marker = state.editedProfiles?.has(row.profile) ? theme.fg("warning", " ●") : "";
+    const prefix = `${row.selected ? ">" : " "} ${cell(theme.fg(profileTone.profile, row.profile) + marker, profileWidth)} · `;
     const columns = row.effort
       ? [
           ...(modelWidth > 0 ? [cell(row.model, modelWidth)] : []),
           cell(row.effort, effortWidth),
-          ...(showRuntime ? [cell(row.runtime, runtimeWidth)] : []),
-          ...(showFallbacks ? [row.fallbacks] : []),
+          ...(showRuntime ? [theme.fg("muted", cell(row.runtime, runtimeWidth))] : []),
+          ...(showFallbacks ? [theme.fg("muted", row.fallbacks)] : []),
         ]
       : [row.model];
     const line = truncateToWidth(prefix + columns.join(" · "), width);
-    return row.selected && state.pane === "profiles" ? theme.fg("accent", line) : line;
+    return row.selected && state.pane === "profiles" ? theme.bold(line) : line;
   });
 };
 
@@ -169,8 +178,8 @@ const profileLines = (
     ...(state.target.kind === "session"
       ? [
           "",
-          theme.fg("accent", theme.bold("Current Session")),
-          state.saveFocused && state.pane === "profiles" ? theme.fg("accent", save) : save,
+          theme.fg(profileTone.session, theme.bold("Current Session")),
+          state.saveFocused && state.pane === "profiles" ? focusedProfileField(theme, save) : save,
         ]
       : []),
   ];
@@ -181,6 +190,24 @@ const profileLines = (
     theme.fg(state.pane === "profiles" ? "accent" : "muted", theme.bold("Profiles")),
     ...lines.slice(start, start + count),
   ];
+};
+
+const fieldValue = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  row: ProfileWorkspaceRow,
+): string => {
+  if (row.fixed) return theme.fg("muted", row.value);
+  if (state.draft.kind === "invalid") return theme.fg("error", row.value);
+  if (row.scope !== "candidate") return row.value;
+  const candidate = state.draft.candidates[row.candidateIndex];
+  if (row.field === "model") return theme.fg(profileTone.model, row.value);
+  if (row.field === "openaiFastMode" && candidate?.openaiFastMode)
+    return theme.fg("warning", row.value);
+  return theme.fg(
+    row.field === "effort" && candidate?.effort === "default" ? "muted" : "text",
+    row.value,
+  );
 };
 
 const editorLines = (
@@ -214,46 +241,58 @@ const editorLines = (
         const label = profileRouteOptionLabel(row.candidateIndex);
         lines.push(
           theme.fg(
-            "accent",
+            "muted",
             theme.bold(
-              `${label}  ${workspaceCandidateSummary(candidate, profile, state.parentEffort, Math.max(0, width - visibleWidth(label) - 2), state.parentModel)}`,
+              `${label}  ${workspaceCandidateSummary(candidate, profile, state.parentEffort, Math.max(0, width - visibleWidth(label) - 2), state.parentModel, theme)}`,
             ),
           ),
         );
       } else {
-        lines.push(theme.fg("accent", theme.bold(`Profile: ${profile}`)));
+        lines.push(
+          theme.fg("muted", "Profile: ") + theme.fg(profileTone.profile, theme.bold(profile)),
+        );
       }
       previousSection = section;
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
     const selected = index === state.fieldIndex && state.pane !== "profiles";
     const value = row.value
-      ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${row.value}`
+      ? `${" ".repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2)}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
       : "";
     const text = truncateToWidth(
       `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
       width,
     );
-    lines.push(selected ? theme.fg("accent", text) : row.fixed ? theme.fg("muted", text) : text);
+    lines.push(
+      selected && !row.fixed
+        ? focusedProfileField(theme, text)
+        : row.fixed
+          ? theme.fg("muted", text)
+          : text,
+    );
   });
   const limit = Math.max(0, height - 1);
   const start = listWindowStart(lines.length, selectedLine, limit);
-  return [
-    theme.fg(state.pane === "profiles" ? "muted" : "accent", theme.bold(profile)),
-    ...lines.slice(start, start + limit),
-  ];
+  return [theme.fg(profileTone.profile, theme.bold(profile)), ...lines.slice(start, start + limit)];
 };
 
-const compactLines = (state: ProfileWorkspaceRenderState, width: number): ReadonlyArray<string> => {
+const compactLines = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  width: number,
+): ReadonlyArray<string> => {
   if (state.pane === "profiles" && state.saveFocused)
-    return ["Current Session", "> Save these profiles as a set…"];
+    return [
+      theme.fg(profileTone.session, "Current Session"),
+      focusedProfileField(theme, "> Save these profiles as a set…"),
+    ];
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
   const scope =
     state.target.kind === "profile-set"
       ? `${state.target.set.scope === "project" ? "Project" : "Global"} · `
       : "";
-  const prefix = `${scope}${profile} · `;
+  const prefix = `${theme.fg("muted", scope)}${theme.fg(profileTone.profile, profile)} · `;
   const summary = candidate
     ? workspaceCandidateSummary(
         candidate,
@@ -261,8 +300,9 @@ const compactLines = (state: ProfileWorkspaceRenderState, width: number): Readon
         state.parentEffort,
         Math.max(0, width - visibleWidth(prefix)),
         state.parentModel,
+        theme,
       )
-    : state.draft.kind;
+    : theme.fg(state.draft.kind === "invalid" ? "error" : "muted", state.draft.kind);
   const selected = profileWorkspaceRows(
     state.draft,
     profile,
@@ -270,7 +310,21 @@ const compactLines = (state: ProfileWorkspaceRenderState, width: number): Readon
     state.parentModel,
     expanded(state),
   )[state.fieldIndex];
-  return [prefix + summary, ...(selected ? [`${selected.label}  ${selected.value}`] : [])];
+  const field = selected
+    ? `${selected.label}  ${state.pane !== "profiles" && !selected.fixed ? selected.value : fieldValue(state, theme, selected)}`
+    : "";
+  return [
+    prefix + summary,
+    ...(selected
+      ? [
+          selected.fixed
+            ? theme.fg("muted", field)
+            : state.pane !== "profiles"
+              ? focusedProfileField(theme, field)
+              : field,
+        ]
+      : []),
+  ];
 };
 
 export const profileWorkspaceHelpLines = (
@@ -308,7 +362,7 @@ export const renderProfileWorkspace = (
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const inner = width - 2;
   const { theme } = options;
-  const frame = listDetailFrame(theme);
+  const frame = profileFrame(theme, true);
   const keys = profileWorkspaceKeys(
     options.keybindingLabel,
     Boolean(state.pendingConfirmation) || state.busy,
@@ -345,7 +399,10 @@ export const renderProfileWorkspace = (
   return framedScreen(frame, {
     width,
     height,
-    top: truncateToWidth(` ${targetHeading(state.target)} `, inner, ""),
+    top: theme.fg(
+      state.target.kind === "session" ? profileTone.session : profileTone.saved,
+      truncateToWidth(` ${targetHeading(state.target)} `, inner, ""),
+    ),
     bottom: truncateToWidth(bottom, inner, ""),
     body: (bodyHeight) => {
       if (state.helpOpen) {
@@ -357,6 +414,7 @@ export const renderProfileWorkspace = (
           [context, ...content.slice(start, start + limit)],
           bodyHeight,
           inner,
+          "list",
         );
       }
       if (state.pendingConfirmation) {
@@ -371,13 +429,15 @@ export const renderProfileWorkspace = (
           ].flatMap((line) => wrapTextWithAnsi(theme.fg("warning", line), inner)),
           bodyHeight,
           inner,
+          "list",
         );
       }
-      if (bodyHeight <= 4) return framedFill(frame, compactLines(state, inner), bodyHeight, inner);
+      if (bodyHeight <= 4)
+        return framedFill(frame, compactLines(state, theme, inner), bodyHeight, inner, "list");
       const notices: string[] = [];
       if (state.target.kind === "profile-set")
         notices.push(
-          theme.fg("muted", state.target.set.scope === "project" ? "Project" : "Global"),
+          theme.fg(profileTone.saved, state.target.set.scope === "project" ? "Project" : "Global"),
         );
       if (state.message && state.message.kind !== "success")
         notices.push(
@@ -394,7 +454,8 @@ export const renderProfileWorkspace = (
       if (width >= 100) {
         const listWidth = Math.min(64, Math.floor(inner * 0.4));
         const detailWidth = inner - listWidth - 1;
-        body = framedWideRows(frame, {
+        body = profilePaneRows(theme, {
+          focused: state.pane === "profiles" ? "list" : "detail",
           left: profileLines(state, theme, listWidth, available),
           right: editorLines(state, theme, detailWidth, available),
           height: available,
@@ -409,6 +470,7 @@ export const renderProfileWorkspace = (
             : editorLines(state, theme, inner, available),
           available,
           inner,
+          "list",
         );
       }
       return [

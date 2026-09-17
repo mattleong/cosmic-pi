@@ -127,6 +127,7 @@ const structurallyInvalidInspection = (): ProfileSettingsInspection => {
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
+  bg: (_: string, text: string) => text,
 } as Theme;
 
 const makePicker = (

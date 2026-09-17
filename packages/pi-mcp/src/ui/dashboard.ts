@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
@@ -76,14 +77,14 @@ export const dashboardTable = (
       const status = dashboardStatus(row);
       const name = cell(sanitizeTerminalLine(row.id), nameWidth);
       const line = padListDetailRow(
-        `${selected ? theme.fg("accent", "> ") : "  "}${fields(
-          selected ? theme.fg("accent", theme.bold(name)) : theme.fg("text", name),
-          theme.fg("dim", cell(row.scope, scopeWidth)),
+        `${selected ? theme.fg(focused ? "accent" : "muted", "> ") : "  "}${fields(
+          selected && focused ? focusedField(theme, name) : theme.fg(managerTone.identity, name),
+          theme.fg(managerTone.saved, cell(row.scope, scopeWidth)),
           theme.fg(status.tone, cell(status.label, statusWidth)),
         )}`,
         width,
       );
-      return selected ? theme.bg("selectedBg", line) : line;
+      return selected && focused ? theme.bg("selectedBg", line) : line;
     },
   };
 };
@@ -131,9 +132,9 @@ export const dashboardDetail = (
     ),
   ];
   return [
-    listDetailHeading(theme, sanitizeTerminalLine(row.id), focused),
+    listDetailHeading(theme, sanitizeTerminalLine(row.id), focused, managerTone.identity),
     theme.fg(
-      "dim",
+      managerTone.saved,
       row.transport === "invalid" ? row.scope : `${row.scope} · ${row.transport.toUpperCase()}`,
     ),
     "",

@@ -1,10 +1,6 @@
 import * as Predicate from "effect/Predicate";
 
-import {
-  getSettingsListTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -21,7 +17,11 @@ import {
   type HostCallbackBoundaryContract,
 } from "../boundary/host-callback.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import { createSettingsListSurface, settingsRowGenerations } from "../manager/settings-surface.ts";
+import {
+  managerSettingsTheme,
+  createSettingsListSurface,
+  settingsRowGenerations,
+} from "../manager/settings-surface.ts";
 import { decodeUnknownOrUndefined } from "../schema/decode.ts";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
@@ -173,7 +173,7 @@ export function registerSettingsCommand(
                 header: new Text(theme.fg("accent", theme.bold("Cosmic UI")), 1, 1),
                 items,
                 height: Math.min(14, items.length + 2),
-                listTheme: getSettingsListTheme(),
+                listTheme: managerSettingsTheme(theme),
                 onChange: (id, value, list) => {
                   const change = decodeCosmicUiSettingChange(id, value);
                   if (!change) return;

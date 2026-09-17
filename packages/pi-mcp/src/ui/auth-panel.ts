@@ -116,7 +116,11 @@ export class McpAuthPanel implements Component {
         `${this.options.keyLabel("tui.select.cancel", "Esc")} ${terminal ? "close" : "cancel"}`,
       ],
     ]);
-    const frame = listDetailFrame(theme);
+    // Docked sign-in panels keep their existing chrome, outside the manager color rules.
+    const frame = {
+      ...listDetailFrame(theme),
+      outer: (text: string) => theme.fg("borderAccent", text),
+    };
     const body = new Text(lines.join("\n"), 1, 1).render(Math.max(1, inner));
     return framedScreen(frame, {
       width: safeWidth,

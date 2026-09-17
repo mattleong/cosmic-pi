@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { managerTone } from "pi-cosmic-ui/manager/style";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import type {
@@ -42,10 +43,18 @@ export const browserDetail = (
 ): ReadonlyArray<string> => {
   if (!entry) return ["Select cached metadata. Browsing never invokes it."];
   return [
-    listDetailHeading(theme, sanitizeTerminalLine(entry.ref.server), focused),
+    listDetailHeading(theme, sanitizeTerminalLine(entry.ref.server), focused, managerTone.identity),
     ...detailFieldRows(theme, [
-      { label: "Exact identifier", value: sanitizeTerminalLine(entry.ref.id) },
-      { label: "Family", value: `${entry.ref.family} / revision ${entry.ref.revision}` },
+      {
+        label: "Exact identifier",
+        value: sanitizeTerminalLine(entry.ref.id),
+        tone: managerTone.identity,
+      },
+      {
+        label: "Family",
+        value: `${entry.ref.family} / revision ${entry.ref.revision}`,
+        tone: managerTone.value,
+      },
     ]),
     "",
     stripTerminalControls(detail?.description ?? entry.description),

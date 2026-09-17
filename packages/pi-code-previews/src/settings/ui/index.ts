@@ -1,7 +1,8 @@
-import { getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingItem } from "@earendil-works/pi-tui";
 import {
   createSettingsGroupSubmenu,
+  managerSettingsTheme,
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
@@ -36,6 +37,7 @@ type SettingsGroupDefinition = {
     current: CodePreviewSettings,
     getCurrent: SettingsProvider,
     onSettingChange: SettingChangeHandler,
+    theme?: Theme,
   ) => SettingItem[];
 };
 
@@ -47,16 +49,20 @@ const SETTINGS_CATEGORY_GROUPS = [
     label: "Appearance",
     description: "Theme, syntax color, collapsed style, tool frames, timing, and path decoration.",
     summarize: summarizeAppearance,
-    items: (current) =>
-      createSettingListItems(current, [
-        "shikiTheme",
-        "syntaxHighlighting",
-        "toolCallBackground",
-        "toolCallCollapsedStyle",
-        "toolCallTiming",
-        "readLineNumbers",
-        "pathIcons",
-      ]),
+    items: (current, _getCurrent, _onSettingChange, theme) =>
+      createSettingListItems(
+        current,
+        [
+          "shikiTheme",
+          "syntaxHighlighting",
+          "toolCallBackground",
+          "toolCallCollapsedStyle",
+          "toolCallTiming",
+          "readLineNumbers",
+          "pathIcons",
+        ],
+        theme,
+      ),
   },
   {
     name: "outputPreviews",
@@ -64,9 +70,9 @@ const SETTINGS_CATEGORY_GROUPS = [
     description:
       "Collapsed output/code visibility and preview lengths in preview style. Compact style hides ordinary previews until expanded.",
     summarize: summarizeOutputPreviews,
-    items: (current, getCurrent, onSettingChange) =>
+    items: (current, getCurrent, onSettingChange, theme) =>
       OUTPUT_PREVIEW_GROUPS.map((group) =>
-        createSettingsGroupItemFromDefinition(group, current, getCurrent, onSettingChange),
+        createSettingsGroupItemFromDefinition(group, current, getCurrent, onSettingChange, theme),
       ),
   },
   {
@@ -89,9 +95,10 @@ export function createSettingsCategoryItems(
   current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
+  theme?: Theme,
 ): SettingItem[] {
   const groupItem = (definition: SettingsGroupDefinition) =>
-    createSettingsGroupItemFromDefinition(definition, current, getCurrent, onSettingChange);
+    createSettingsGroupItemFromDefinition(definition, current, getCurrent, onSettingChange, theme);
   return [
     groupItem(SETTINGS_CATEGORY_GROUPS[0]),
     groupItem(SETTINGS_CATEGORY_GROUPS[1]),
@@ -102,7 +109,7 @@ export function createSettingsCategoryItems(
         "Toggle tool previews individually. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
       currentValue: summarizeTools(current),
       submenu: (_currentValue, done) =>
-        new ToolPreviewSettingsSubmenu(formatSettingValue(getCurrent(), "tools"), done),
+        new ToolPreviewSettingsSubmenu(formatSettingValue(getCurrent(), "tools"), done, theme),
     },
     groupItem(SETTINGS_CATEGORY_GROUPS[2]),
     groupItem(SETTINGS_CATEGORY_GROUPS[3]),
@@ -114,6 +121,7 @@ function createSettingsGroupItemFromDefinition(
   current: CodePreviewSettings,
   getCurrent: SettingsProvider,
   onSettingChange: SettingChangeHandler,
+  theme?: Theme,
 ): SettingsSurfaceItem {
   return {
     kind: "group",
@@ -125,11 +133,11 @@ function createSettingsGroupItemFromDefinition(
       createSettingsGroupSubmenu({
         title: definition.label,
         description: definition.description,
-        items: () => definition.items(getCurrent(), getCurrent, onSettingChange),
+        items: () => definition.items(getCurrent(), getCurrent, onSettingChange, theme),
         onChange: onSettingChange,
         done,
         summary: () => definition.summarize(getCurrent()),
-        listTheme: getSettingsListTheme(),
+        listTheme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
       }),
   };
 }
@@ -194,11 +202,16 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
 function createSettingListItems(
   current: CodePreviewSettings,
   ids: readonly SettingsUiItemId[],
+  theme?: Theme,
 ): SettingItem[] {
-  return ids.map((id) => createSettingItem(current, id));
+  return ids.map((id) => createSettingItem(current, id, theme));
 }
 
-function createSettingItem(current: CodePreviewSettings, id: SettingsUiItemId): SettingItem {
+function createSettingItem(
+  current: CodePreviewSettings,
+  id: SettingsUiItemId,
+  theme?: Theme,
+): SettingItem {
   // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
   const definition = SETTING_ITEM_DEFINITIONS[id] as SettingItemDefinition;
   const item: SettingItem = {
@@ -209,6 +222,6 @@ function createSettingItem(current: CodePreviewSettings, id: SettingsUiItemId): 
   };
   if (definition.values) item.values = [...definition.values];
   if (id === "shikiTheme")
-    item.submenu = (currentValue, done) => new ThemeSelectSubmenu(currentValue, done);
+    item.submenu = (currentValue, done) => new ThemeSelectSubmenu(currentValue, done, theme);
   return item;
 }

@@ -1,8 +1,4 @@
-import {
-  getSettingsListTheme,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
@@ -17,6 +13,7 @@ import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import {
   createSettingsGroupSubmenu,
+  managerSettingsTheme,
   createSettingsListSurface,
   settingsItemsFromDescriptors,
   type SettingsSurfaceItem,
@@ -151,6 +148,7 @@ export function registerSettingsController(
               );
             const textPanel = (title: string, lines: string[], complete: () => void) =>
               new TextPanelComponent({
+                theme,
                 title,
                 lines,
                 done: complete,
@@ -207,7 +205,7 @@ export function registerSettingsController(
                 onChange: writeSetting,
                 done: complete,
                 summary,
-                listTheme: getSettingsListTheme(),
+                listTheme: managerSettingsTheme(theme),
               });
             const settingsGroups = [
               {
@@ -310,7 +308,7 @@ export function registerSettingsController(
               })(),
               items: sections(),
               height: 8,
-              listTheme: getSettingsListTheme(),
+              listTheme: managerSettingsTheme(theme),
               onChange: reconcilePicker,
               onCancel: () => safeHostUi(() => done(undefined)),
               search: true,

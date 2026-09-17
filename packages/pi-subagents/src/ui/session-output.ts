@@ -28,6 +28,13 @@ export interface SessionOutputRenderOptions {
   readonly showTechnicalDetails?: boolean;
   /** Pure presentation hook for the fleet pane; transcript output keeps its own heading. */
   readonly renderHeading?: (sanitizedName: string) => string;
+  readonly renderSubtitle?: (parts: {
+    readonly policy: string;
+    readonly profile: string;
+    readonly context: string;
+    readonly model: string;
+    readonly duration: string;
+  }) => string;
 }
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
@@ -355,7 +362,23 @@ export function renderSubagentSessionOutput(
       0,
     ),
   );
-  container.addChild(new Text(theme.fg("dim", subtitle), 0, 0));
+  container.addChild(
+    new Text(
+      options.renderSubtitle
+        ? options.renderSubtitle({
+            policy: sanitizeTerminalLine(
+              `${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`,
+            ),
+            profile: sanitizeTerminalLine(run.profile ?? ""),
+            context: sanitizeTerminalLine(run.context),
+            model: sanitizeTerminalLine(`${run.model}:${run.effort}`),
+            duration: sanitizeTerminalLine(duration),
+          })
+        : theme.fg("dim", subtitle),
+      0,
+      0,
+    ),
+  );
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Task")), 0, 0));
   container.addChild(

@@ -1,4 +1,10 @@
-import { getSelectListTheme, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import {
+  getSelectListTheme,
+  getSettingsListTheme,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { managerSettingsTheme } from "pi-cosmic-ui/manager/settings-surface";
+import { managerSelectTheme } from "pi-cosmic-ui/manager/searchable-select";
 import {
   Container,
   SelectList,
@@ -28,13 +34,13 @@ export class ToolPreviewSettingsSubmenu extends Container {
   private readonly selectedTools: Set<CodePreviewToolName>;
   private readonly settingsList: SettingsList;
 
-  constructor(currentValue: string, done: (selectedValue?: string) => void) {
+  constructor(currentValue: string, done: (selectedValue?: string) => void, theme?: Theme) {
     super();
     this.selectedTools = parseCodePreviewTools(currentValue) ?? new Set(ALL_CODE_PREVIEW_TOOLS);
     this.settingsList = new SettingsList(
       createToolToggleItems(this.selectedTools, getCodePreviewToolStatuses()),
       ALL_CODE_PREVIEW_TOOLS.length + 2,
-      getSettingsListTheme(),
+      theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
       (id, value) => {
         const tool = parseToolToggleId(id);
         if (!tool) return;
@@ -102,19 +108,24 @@ function createToolToggleItems(
 export class ThemeSelectSubmenu extends Container {
   private readonly selectList: SelectList;
 
-  constructor(currentTheme: string, done: (selectedValue?: string) => void) {
+  constructor(currentTheme: string, done: (selectedValue?: string) => void, theme?: Theme) {
     super();
 
     const themes: SelectItem[] = Object.keys(bundledThemes)
       .toSorted()
-      .map((theme) => ({ value: theme, label: theme }));
+      .map((name) => ({ value: name, label: name }));
 
-    this.selectList = new SelectList(themes, 12, getSelectListTheme(), {
-      minPrimaryColumnWidth: 16,
-      maxPrimaryColumnWidth: 48,
-    });
+    this.selectList = new SelectList(
+      themes,
+      12,
+      theme ? managerSelectTheme(theme) : getSelectListTheme(),
+      {
+        minPrimaryColumnWidth: 16,
+        maxPrimaryColumnWidth: 48,
+      },
+    );
 
-    const currentIndex = themes.findIndex((theme) => theme.value === currentTheme);
+    const currentIndex = themes.findIndex((item) => item.value === currentTheme);
     if (currentIndex >= 0) this.selectList.setSelectedIndex(currentIndex);
 
     this.selectList.onSelect = (item) => done(item.value);

@@ -7,6 +7,7 @@ import {
   type SelectItem,
 } from "@earendil-works/pi-tui";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { managerTone } from "./style.ts";
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
@@ -85,6 +86,7 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
       item: modelItem(model, current),
       searchText: sanitizeTerminalLine(model.searchText ?? `${selector} ${model.name ?? ""}`),
       payload: model,
+      tone: managerTone.value,
       enabled: model.available !== false,
       disabledReason:
         model.available === false

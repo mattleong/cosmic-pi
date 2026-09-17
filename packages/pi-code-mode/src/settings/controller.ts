@@ -1,9 +1,5 @@
 // Pi command and custom-UI handlers are Promise-shaped host boundaries.
-import {
-  getSettingsListTheme,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -15,6 +11,7 @@ import {
   type HostNotificationLevel,
 } from "pi-cosmic-core";
 import {
+  managerSettingsTheme,
   createSettingsListSurface,
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
@@ -239,7 +236,7 @@ export function registerCodeModeSettingsController(
               ),
               items,
               height: Math.min(12, items.length + 2),
-              listTheme: getSettingsListTheme(),
+              listTheme: managerSettingsTheme(theme),
               onChange: (id, value, list) => {
                 if (signalAborted(surfaceSignal)) return;
                 if (value === CUSTOM_VALUE) {

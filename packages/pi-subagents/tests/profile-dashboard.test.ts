@@ -24,6 +24,7 @@ const theme = {
   fg: (_color: string, value: string) => value,
   bg: (_color: string, value: string) => value,
   bold: (value: string) => value,
+  underline: (value: string) => value,
 } as Theme;
 const inspection = () =>
   makeProfileSettingsInspection({

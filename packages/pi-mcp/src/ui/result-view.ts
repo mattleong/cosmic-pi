@@ -1,3 +1,5 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { managerTone } from "pi-cosmic-ui/manager/style";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { McpGatewayReply } from "../tools/model.ts";
@@ -27,6 +29,8 @@ export interface McpResultPage {
   /** Sanitized raw output, never source bytes or cursor coordinates. */
   readonly lines: ReadonlyArray<string>;
   readonly readableLines?: ReadonlyArray<string>;
+  readonly originTone?: "text" | "error" | "warning";
+  readonly headerLength?: number;
 }
 export const resultPage = (reply: McpGatewayReply): McpResultPage | undefined => {
   if (reply.action !== "result.read" || reply.isError || reply.outcome !== "completed")
@@ -65,6 +69,13 @@ export const resultPage = (reply: McpGatewayReply): McpResultPage | undefined =>
     offset: page.offset,
     next: page.next ?? undefined,
     total: page.total,
+    originTone:
+      page.origin.isError || page.origin.outputValidation === "failed"
+        ? "error"
+        : page.origin.outcome !== "completed" || page.origin.outputValidation === "unavailable"
+          ? "warning"
+          : "text",
+    headerLength: header.length,
     lines: [...header, ...(preview?.raw ?? mcpRawTextPreview(page.text)).split("\n")],
   };
   if (preview?.readable !== undefined)
@@ -88,6 +99,15 @@ export class McpResultNavigation {
   }
   get lines(): ReadonlyArray<string> | undefined {
     return this.mode === "readable" ? this.current?.readableLines : this.current?.lines;
+  }
+  /** Style only owned page metadata, never infer meaning from untrusted result text. */
+  renderLines(theme: Theme): ReadonlyArray<string> | undefined {
+    return this.lines?.map((line, index) => {
+      if (index === 0) return theme.fg(this.current?.originTone ?? "text", line);
+      if (index === 1) return theme.fg(managerTone.value, line);
+      if (index < (this.current?.headerLength ?? 0) - 1) return theme.fg("warning", line);
+      return line;
+    });
   }
   toggleMode(): boolean {
     if (!this.hasReadable) return false;

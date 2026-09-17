@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import {
   Input,
   truncateToWidth,
@@ -441,7 +442,15 @@ export class McpManagerComponent implements Component, Focusable {
     if (this.menu) return this.menu.render(width);
     if (this.disposed || width < 4) return [];
     const theme = this.options.theme;
-    const frame = listDetailFrame(theme, this.shell.state.pane);
+    const listFocused = !this.searching && this.shell.state.pane === "list";
+    const frame = listDetailFrame(
+      theme,
+      this.searching
+        ? undefined
+        : this.selection.screen === "result"
+          ? "detail"
+          : this.shell.state.pane,
+    );
     const snapshot = this.options.snapshot();
     if (!snapshot.trusted || !snapshot.enabled) {
       this.generation += 1;
@@ -514,7 +523,12 @@ export class McpManagerComponent implements Component, Focusable {
       top: truncateToWidth(header, inner, ""),
       bottom: footer,
       body: (height) => {
-        const search = this.searching ? this.input.render(inner).slice(0, 1) : [];
+        const search = this.searching
+          ? this.input
+              .render(inner)
+              .slice(0, 1)
+              .map((line) => focusedField(theme, line))
+          : [];
         const selectedServer = this.page?.entries[this.shell.state.selected]?.ref.server;
         const catalog =
           this.selection.screen === "browse"
@@ -533,16 +547,19 @@ export class McpManagerComponent implements Component, Focusable {
                 snapshot.servers,
                 wide ? geometry.listWidth : inner,
                 theme,
-                this.shell.state.pane === "list",
+                listFocused,
               )
             : undefined;
         const columnHeader = table && bodyHeight > 1 ? [table.header] : [];
         const labels =
           this.selection.screen === "browse"
             ? (this.page?.entries.map((entry, index) =>
-                index === this.shell.state.selected
-                  ? theme.fg("accent", `> ${browserLabel(entry)}`)
-                  : `  ${browserLabel(entry)}`,
+                index === this.shell.state.selected && listFocused
+                  ? focusedField(theme, `> ${browserLabel(entry)}`)
+                  : theme.fg(
+                      managerTone.identity,
+                      `${index === this.shell.state.selected ? "> " : "  "}${browserLabel(entry)}`,
+                    ),
               ) ?? [])
             : table
               ? this.selectedRows().map((row, index) =>
@@ -572,7 +589,7 @@ export class McpManagerComponent implements Component, Focusable {
                   theme,
                   this.shell.state.pane === "detail",
                 )
-              : (this.result.lines ?? [
+              : (this.result.renderLines(theme) ?? [
                   this.unavailable
                     ? "Result unavailable. It may have been evicted or revoked. The source operation was not replayed."
                     : "Reading authorized retained output locally.",
@@ -604,6 +621,7 @@ export class McpManagerComponent implements Component, Focusable {
                 : left,
               bodyHeight,
               inner,
+              this.selection.screen === "result" ? "detail" : this.shell.state.pane,
             );
         return [...framedFill(frame, prefix, prefix.length, inner), ...body];
       },

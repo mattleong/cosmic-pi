@@ -13,7 +13,11 @@ import type { ProfileCandidate } from "../src/profiles/model.ts";
 import type { ProfileRouteDraft } from "../src/settings/profile-route-editor.ts";
 
 // SAFETY: Renderer fixture implements the Theme methods used by these components.
-const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
+const theme = {
+  fg: (_: string, text: string) => text,
+  bg: (_: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
 const first: ProfileCandidate = {
   host: "local",
   runtime: "pi",

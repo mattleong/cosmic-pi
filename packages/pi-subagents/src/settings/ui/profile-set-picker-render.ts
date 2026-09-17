@@ -6,15 +6,19 @@ import { padListDetailRow, wideListDetailGeometry } from "pi-cosmic-ui/manager/l
 import {
   framedFill,
   framedScreen,
-  framedWideRows,
   framedStackedRows,
-  listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
 } from "./profile-set-picker-model.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
+import {
+  focusedProfileField,
+  profileFrame,
+  profilePaneRows,
+  profileTone,
+} from "./profile-style.ts";
 
 export interface ProfileSetPickerRenderState {
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
@@ -74,12 +78,17 @@ const menuRows = (
   const start = windowStart(menu.choices.length, menu.selectedIndex, limit);
   const selected = menu.choices[menu.selectedIndex];
   return [
-    theme.fg("accent", theme.bold(menu.label)),
+    theme.fg(profileTone.saved, theme.bold(menu.label)),
     theme.fg("muted", "Choose an action"),
     "",
     ...menu.choices.slice(start, start + limit).map((choice, offset) => {
       const index = start + offset;
-      return `${index === menu.selectedIndex ? ">" : " "} ${choice.label}${choice.enabled ? "" : " · unavailable"}`;
+      const text = `${index === menu.selectedIndex ? ">" : " "} ${choice.label}${choice.enabled ? "" : " · unavailable"}`;
+      return !choice.enabled
+        ? theme.fg("muted", text)
+        : index === menu.selectedIndex
+          ? focusedProfileField(theme, text)
+          : text;
     }),
     ...(selected && height >= 6 ? ["", theme.fg("muted", selected.description)] : []),
   ];
@@ -91,7 +100,7 @@ const libraryRows = (
   height: number,
 ): ReadonlyArray<string> => {
   const header = [
-    theme.fg("accent", theme.bold("Saved profile sets")),
+    theme.fg(profileTone.saved, theme.bold("Saved profile sets")),
     ...(state.searching ? [theme.fg("muted", `Search /${state.query}`)] : []),
     ...(state.message
       ? [
@@ -115,7 +124,7 @@ const libraryRows = (
     if (!entry) continue;
     if (entry.scope !== scope) {
       scope = entry.scope;
-      logical.push({ text: theme.fg("accent", entry.scope === "project" ? "Project" : "Global") });
+      logical.push({ text: theme.fg("muted", entry.scope === "project" ? "Project" : "Global") });
     }
     const selected = index === state.selectedIndex;
     const invalid =
@@ -130,7 +139,7 @@ const libraryRows = (
         : "";
     logical.push({
       entryIndex: index,
-      text: `${selected ? ">" : " "} ${entry.label}${defaultLabel}${invalid}${selected ? ` · ${entry.description}` : ""}`,
+      text: `${selected ? ">" : " "} ${theme.fg(profileTone.saved, selected ? theme.bold(entry.label) : entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
     });
   }
   const listHeight = Math.max(1, height - header.length);
@@ -150,21 +159,35 @@ const previewRows = (
 ): ReadonlyArray<string> => {
   const entry = state.entries[state.selectedIndex];
   if (!entry) return [theme.fg("muted", "No saved sets match this search.")];
-  if (entry.kind !== "set") return wrapTextWithAnsi(entry.description, width);
-  const rows = [theme.fg("accent", theme.bold(qualifiedProfileSetLabel(entry.ref)))];
+  if (entry.kind !== "set")
+    return wrapTextWithAnsi(
+      theme.fg(entry.kind === "invalid-default" ? "error" : "muted", entry.description),
+      width,
+    );
+  const rows = [theme.fg(profileTone.saved, theme.bold(qualifiedProfileSetLabel(entry.ref)))];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
   const profiles = entry.preview.map((profile) => ({
     ...profile,
-    label: `${profile.id}${profile.inherited ? ` · inherited ${profile.source.replace("-invalid", "")}` : ""}`,
+    label: `${theme.fg(profileTone.profile, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${profile.source.replace("-invalid", "")}`) : ""}`,
     cells:
       profile.status === "configured"
         ? profile.candidates.map((candidate, index) => [
-            index === 0 ? "Primary" : `Fallback ${index}`,
-            `${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""}`,
-            candidate.effort === "default" ? "profile default" : candidate.effort,
-            `${candidate.host}/${candidate.runtime}`,
+            theme.fg("muted", index === 0 ? "Primary" : `Fallback ${index}`),
+            `${theme.fg(profileTone.model, candidate.model)}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
+            theme.fg(
+              "muted",
+              candidate.effort === "default" ? "profile default" : candidate.effort,
+            ),
+            theme.fg("muted", `${candidate.host}/${candidate.runtime}`),
           ])
-        : [[profile.status, "", "", ""]],
+        : [
+            [
+              theme.fg(profile.status === "invalid" ? "error" : "muted", profile.status),
+              "",
+              "",
+              "",
+            ],
+          ],
   }));
   // Measure the whole preview so candidate and profile changes do not shift later columns.
   const profileWidth = Math.max(0, ...profiles.map((profile) => visibleWidth(profile.label)));
@@ -203,9 +226,7 @@ const previewRows = (
       visible[budget - 1] =
         truncateToWidth(visible[budget - 1] ?? "", Math.max(0, width - 1), "") + "…";
     }
-    rows.push(
-      ...visible.map((line) => theme.fg(profile.status === "invalid" ? "warning" : "text", line)),
-    );
+    rows.push(...visible);
   }
   if (rows.length < height)
     rows.push(theme.fg("dim", "Enter edits the full routes. Current Session is unchanged."));
@@ -225,14 +246,14 @@ export const renderProfileSetPicker = (
   if (width === 0 || height === 0) return [];
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const theme = options.theme;
-  const frame = listDetailFrame(theme);
+  const frame = profileFrame(theme, true);
   const inner = width - 2;
   const title = truncateToWidth(" /subagents profiles › Profile sets ", inner, "");
   const bottom = truncateToWidth(footer(state, inner, options.keybindingLabel), inner, "");
   return framedScreen(frame, {
     width,
     height,
-    top: title,
+    top: theme.fg(profileTone.saved, title),
     bottom,
     body: (bodyHeight) => {
       const rows = state.pendingDeleteLabel
@@ -251,7 +272,7 @@ export const renderProfileSetPicker = (
             ? bodyHeight === 1
               ? [`> ${selectedAction.label}${selectedAction.enabled ? "" : " · unavailable"}`]
               : [
-                  theme.fg("accent", theme.bold(state.actionMenu.label)),
+                  theme.fg(profileTone.saved, theme.bold(state.actionMenu.label)),
                   `> ${selectedAction.label}${selectedAction.enabled ? "" : " · unavailable"}`,
                   theme.fg("muted", selectedAction.description),
                 ]
@@ -264,18 +285,33 @@ export const renderProfileSetPicker = (
                 (() => {
                   const entry = state.entries[state.selectedIndex];
                   return entry
-                    ? `> ${entry.kind === "set" ? qualifiedProfileSetLabel(entry.ref) : entry.label}`
+                    ? theme.fg(
+                        entry.kind === "invalid-default" || (entry.kind === "set" && entry.invalid)
+                          ? "error"
+                          : profileTone.saved,
+                        theme.bold(
+                          `> ${entry.kind === "set" ? qualifiedProfileSetLabel(entry.ref) : entry.label}`,
+                        ),
+                      )
                     : "No saved sets";
                 })(),
-                ...(state.message ? [state.message.text] : []),
+                ...(state.message
+                  ? [
+                      theme.fg(
+                        state.message.kind === "info" ? "muted" : state.message.kind,
+                        state.message.text,
+                      ),
+                    ]
+                  : []),
                 theme.fg("dim", footer(state, inner, options.keybindingLabel)),
               ];
-        return framedFill(frame, safety.slice(0, bodyHeight), bodyHeight, inner);
+        return framedFill(frame, safety.slice(0, bodyHeight), bodyHeight, inner, "list");
       }
       if (!state.actionMenu && !state.pendingDeleteLabel) {
         if (width >= 100) {
           const { listWidth, detailWidth } = wideListDetailGeometry(width, 30, 0.35);
-          return framedWideRows(frame, {
+          return profilePaneRows(theme, {
+            focused: "list",
             left: rows,
             right: previewRows(state, theme, detailWidth, bodyHeight),
             height: bodyHeight,
@@ -285,15 +321,16 @@ export const renderProfileSetPicker = (
         }
         if (bodyHeight >= 14) {
           const listHeight = Math.max(4, Math.min(8, Math.floor(bodyHeight / 3)));
-          return framedStackedRows(frame, {
-            list: libraryRows(state, theme, listHeight),
+          const list = libraryRows(state, theme, listHeight);
+          return framedStackedRows(profileFrame(theme, true), {
+            list,
             detail: previewRows(state, theme, inner, bodyHeight - listHeight - 1),
             height: bodyHeight,
             inner,
           });
         }
       }
-      return framedFill(frame, rows.slice(0, bodyHeight), bodyHeight, inner);
+      return framedFill(frame, rows.slice(0, bodyHeight), bodyHeight, inner, "list");
     },
   });
 };

@@ -1,3 +1,4 @@
+import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { managerNoticeGlyph, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import {
@@ -588,7 +589,9 @@ export class SubagentFleetComponent implements Component, Focusable {
   ): string {
     const { run } = row;
     const selected = index === this.shell.state.selected;
-    const selection = selected ? this.options.theme.fg("accent", ">") : " ";
+    const selection = selected
+      ? this.options.theme.fg(this.shell.state.pane === "list" ? "accent" : "muted", ">")
+      : " ";
     const branch = this.options.theme.fg("dim", runTreeBranch(row));
     const disclosure = row.hasChildren
       ? this.options.theme.fg("muted", row.expanded ? "▾" : "▸")
@@ -614,7 +617,13 @@ export class SubagentFleetComponent implements Component, Focusable {
     );
     return padListDetailRow(
       `${selection} ${branch}${disclosure} ${glyph} ${
-        selected ? this.options.theme.fg("accent", label) : label
+        selected && this.shell.state.pane === "list"
+          ? focusedField(this.options.theme, label)
+          : this.options.theme.fg(managerTone.identity, sanitizeTerminalLine(identity)) +
+            this.options.theme.fg(
+              "muted",
+              ` · ${sanitizeTerminalLine(`${state} · ${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`)}`,
+            )
       }`,
       width,
     );
@@ -723,7 +732,20 @@ export class SubagentFleetComponent implements Component, Focusable {
       now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
       renderHeading: (name) =>
-        listDetailHeading(this.options.theme, name, this.shell.state.pane === "detail"),
+        listDetailHeading(
+          this.options.theme,
+          name,
+          this.shell.state.pane === "detail",
+          managerTone.identity,
+        ),
+      renderSubtitle: ({ policy, profile, context, model, duration }) =>
+        [
+          this.options.theme.fg("muted", policy),
+          ...(profile ? [this.options.theme.fg(managerTone.identity, profile)] : []),
+          this.options.theme.fg(managerTone.value, context),
+          this.options.theme.fg(managerTone.value, model),
+          this.options.theme.fg("muted", duration),
+        ].join(" · "),
     }).render(Math.max(1, width));
   }
 
@@ -811,7 +833,7 @@ export class SubagentFleetComponent implements Component, Focusable {
               ),
             ];
     if (!this.shell.state.details) this.shell.resetDetailWindow();
-    return framedFill(this.frame, lines, height, inner);
+    return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }
 
   invalidate(): void {

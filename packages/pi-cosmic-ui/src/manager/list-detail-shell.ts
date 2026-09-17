@@ -136,6 +136,7 @@ export class ListDetailShell {
 export interface ListDetailFrame {
   readonly outer: (text: string) => string;
   readonly inner: (text: string) => string;
+  readonly pane?: (pane: ListDetailPane, text: string) => string;
 }
 
 /** Derive from the current pane each render; omitted focus preserves neutral single-pane frames. */
@@ -143,8 +144,9 @@ export const listDetailFrame = (
   theme: Pick<Theme, "fg">,
   focusedPane?: ListDetailPane,
 ): ListDetailFrame => ({
-  outer: (text) => theme.fg("borderAccent", text),
-  inner: (text) => theme.fg(focusedPane === "detail" ? "borderAccent" : "borderMuted", text),
+  outer: (text) => theme.fg("borderMuted", text),
+  inner: (text) => theme.fg(focusedPane ? "borderAccent" : "borderMuted", text),
+  pane: (pane, text) => theme.fg(focusedPane === pane ? "borderAccent" : "borderMuted", text),
 });
 
 /** Caller-sanitized heading with a stable marker gutter as focus moves between panes. */
@@ -152,12 +154,13 @@ export const listDetailHeading = (
   theme: Pick<Theme, "fg" | "bold">,
   text: string,
   focused: boolean,
-): string => theme.fg(focused ? "accent" : "muted", `${focused ? "› " : "  "}${theme.bold(text)}`);
+  tone: Parameters<Theme["fg"]>[0] = "muted",
+): string => theme.fg(focused ? "accent" : tone, `${focused ? "› " : "  "}${theme.bold(text)}`);
 
 export interface ListDetailField {
   readonly label: string;
   readonly value: string;
-  readonly tone?: "text" | "muted" | "dim" | "accent" | "success" | "warning" | "error";
+  readonly tone?: Parameters<Theme["fg"]>[0];
 }
 
 /** Align a group of caller-sanitized fields. Callers retain wrapping and disclosure policy. */
@@ -176,17 +179,25 @@ export const detailFieldRows = (
   );
 };
 
-export const framedRow = (frame: ListDetailFrame, line: string, inner: number) =>
-  `${frame.outer("│")}${padListDetailRow(line, inner)}${frame.outer("│")}`;
+export const framedRow = (
+  frame: ListDetailFrame,
+  line: string,
+  inner: number,
+  pane?: ListDetailPane,
+) => {
+  const edge = pane && frame.pane ? frame.pane(pane, "│") : frame.outer("│");
+  return `${edge}${padListDetailRow(line, inner)}${edge}`;
+};
 
 export const framedFill = (
   frame: ListDetailFrame,
   rows: ReadonlyArray<string>,
   height: number,
   inner: number,
+  pane?: ListDetailPane,
 ) =>
   Array.from({ length: Math.max(0, height) }, (_, index) =>
-    framedRow(frame, rows[index] ?? "", inner),
+    framedRow(frame, rows[index] ?? "", inner, pane),
   );
 
 export const framedWideRows = (
@@ -202,9 +213,9 @@ export const framedWideRows = (
   Array.from(
     { length: options.height },
     (_, index) =>
-      `${frame.outer("│")}${padListDetailRow(options.left[index] ?? "", options.listWidth)}${frame.inner(
+      `${frame.pane?.("list", "│") ?? frame.outer("│")}${padListDetailRow(options.left[index] ?? "", options.listWidth)}${frame.inner(
         "│",
-      )}${padListDetailRow(options.right[index] ?? "", options.detailWidth)}${frame.outer("│")}`,
+      )}${padListDetailRow(options.right[index] ?? "", options.detailWidth)}${frame.pane?.("detail", "│") ?? frame.outer("│")}`,
   );
 
 export const framedStackedRows = (
@@ -218,13 +229,13 @@ export const framedStackedRows = (
 ) => {
   const divider = `${frame.outer("├")}${frame.inner("─".repeat(options.inner))}${frame.outer("┤")}`;
   const rows = [
-    ...options.list.map((line) => framedRow(frame, line, options.inner)),
+    ...options.list.map((line) => framedRow(frame, line, options.inner, "list")),
     divider,
-    ...options.detail.map((line) => framedRow(frame, line, options.inner)),
+    ...options.detail.map((line) => framedRow(frame, line, options.inner, "detail")),
   ].slice(0, Math.max(0, options.height));
   return [
     ...rows,
-    ...framedFill(frame, [], Math.max(0, options.height - rows.length), options.inner),
+    ...framedFill(frame, [], Math.max(0, options.height - rows.length), options.inner, "detail"),
   ];
 };
 
