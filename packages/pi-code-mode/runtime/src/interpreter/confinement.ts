@@ -273,7 +273,7 @@ const CHOICE_FACTOR_HINT =
 const ALTERNATION_HINT =
   "Repeated groups containing alternation, like (a|b)+, can backtrack exponentially; rewrite single-character alternatives as a character class ([ab]+) or match each alternative separately.";
 const AMBIGUOUS_ALTERNATION_HINT =
-  "Ambiguous alternation branches, like (a|ab), multiply backtracking into every match attempt; make each alternative start with a distinct character, rewrite single-character alternatives as a character class ([ab]), or match each alternative separately.";
+  "Ambiguous alternation branches, like (a|ab), multiply backtracking into every match attempt; make each alternative start with a distinct character, rewrite single-character alternatives as a character class ([ab]), or match each alternative separately. For literal substring searches, use terms.some(term => text.includes(term)) instead.";
 const BACKREFERENCE_HINT =
   "Backreference matching can backtrack exponentially; restructure the pattern to match without backreferences and compare the captured groups in code.";
 const MODIFIER_GROUP_HINT =

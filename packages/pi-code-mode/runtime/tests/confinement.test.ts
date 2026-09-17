@@ -71,6 +71,25 @@ describe("regex confinement: hostile patterns are refused fast", () => {
     }),
   );
 
+  it.effect("supports literal log filtering without relaxing ambiguous-regex confinement", () =>
+    Effect.gen(function* () {
+      const error = yield* failure('return /Test Files|Tests |Done/.test("Tests 12 passed");');
+      expect(error.kind).toBe("UnsupportedSyntax");
+      const result = yield* run(
+        `
+        const terms = ["Test Files", "Tests ", "Done"];
+        const lines = ["starting", "Test Files 2 passed", "Tests 12 passed", "Done", "unrelated"];
+        return lines.filter(line => terms.some(term => line.includes(term)));
+      `,
+        { maxOutputBytes: 256 },
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        value: ["Test Files 2 passed", "Tests 12 passed", "Done"],
+      });
+    }),
+  );
+
   it.live("backreferences and named backreferences are rejected", () =>
     Effect.gen(function* () {
       for (const code of [`return /(a)\\1/.test("aa")`, `return /(?<x>a)\\k<x>/.test("aa")`]) {

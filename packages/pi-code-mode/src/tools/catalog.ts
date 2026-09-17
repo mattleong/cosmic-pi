@@ -86,8 +86,8 @@ const GUEST_TOOL_DESCRIPTIONS = {
     "Create or overwrite one unrestricted relative, absolute, or home-relative file, creating " +
     "parent directories. The write runs immediately without nested approval or preview middleware.",
   grep:
-    "Search file contents for a regex pattern (ripgrep-backed, respects .gitignore). " +
-    "Optional path, glob filter, ignoreCase, literal, context lines, and match limit.",
+    "Search file contents with ripgrep (respects .gitignore). Use literal: true for literal text, " +
+    "otherwise pattern is a regex. Optional path, glob, ignoreCase, context lines, and match limit.",
   find: "Find files by glob pattern (respects .gitignore). Optional search path and result limit.",
   ls: "List directory contents. Optional path (defaults to the session cwd) and entry limit.",
 } satisfies Readonly<Record<PiGuestToolName, string>>;

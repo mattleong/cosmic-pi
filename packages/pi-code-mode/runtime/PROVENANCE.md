@@ -105,7 +105,9 @@ mutation and async semantics; their behavior and remaining limits are documented
 7. Runtime public semantics and fixed constants are preserved: tool-call
    concurrency 8, data-boundary depth 32, no defaults for
    `timeoutMs`/`maxToolCalls`/`maxOutputBytes`, catalog budget default 2000.
-   No Pi-specific source-size or cumulative-output limits were added.
+   No Pi-specific source-size or cumulative-output limits were added. Local catalog
+   instructions encourage bounded batching of known work while retaining decision evidence,
+   and document literal string filtering and unsupported labeled statements.
 8. **In-process confinement (deliberate, security-motivated).** Because this
    interpreter executes model-written programs in the host process, every
    synchronous native operation it delegates to must be bounded before it runs -
@@ -145,7 +147,9 @@ mutation and async semantics; their behavior and remaining limits are documented
      conservative (it rejects some safe patterns) and does **not** claim
      mathematical preemption of native matching: the wall-clock deadline below
      remains cooperative, and an admitted native operation still runs to
-     completion - the caps exist to keep that completion short.
+     completion - the caps exist to keep that completion short. Ambiguous-alternation
+     diagnostics suggest literal string predicates as a supported alternative; refusal
+     rules and caps are unchanged.
    - **Amplification limits.** Fixed maxima for guest string length (4,194,304),
      collection entries (262,144), and captured log output (256 entries ×
      8,192 chars), enforced by preflight guards that project the output size and

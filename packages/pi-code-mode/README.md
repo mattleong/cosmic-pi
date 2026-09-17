@@ -53,6 +53,39 @@ Blocked property names and allocation/deadline limits still apply. `Promise.race
 losers; `Promise.any` does not cancel them on fulfillment, but execution teardown can cancel
 pending work. Await work you need completed before returning.
 
+## Choosing and sizing a batch
+
+Group already-known independent operations and mechanical dependent steps, such as a search
+followed by bounded excerpts at the returned locations. Use parallel calls only for independent
+work. Ordinary concurrent tools are also appropriate. Stop when the next action needs source
+interpretation, user authorization, worker coordination, or top-level middleware and previews.
+Do not move operations into Code Mode to bypass those boundaries.
+
+Return enough evidence for the next decision, including paths, relevant source, outcomes, and
+failures. Complete files can be useful when small and needed. Bound both nested tool output and
+the combined return; the default final-output limit is 51,200 bytes, including formatting. Several
+individually valid reads can exceed that limit when combined. Split oversized work rather than
+silently omitting evidence. Inspect process exit codes and per-operation outcomes, not just whether
+the outer call completed. Do not replay mutations to recover missing output.
+
+For literal file searches, use `tools.pi.grep({ pattern: "describe(", literal: true, path: "tests" })`
+rather than adding unnecessary regex escaping. For literal log markers, use string predicates:
+
+```js
+const terms = ["Test Files", "Tests ", "Duration", "Error"];
+const log = await tools.pi.read({ path: "/tmp/check.log", offset: 1, limit: 120 });
+return log
+  .split("\n")
+  .filter((line) => terms.some((term) => line.includes(term)))
+  .join("\n");
+```
+
+The excerpt must cover the relevant log section; an empty match does not prove the check passed.
+Keyword filtering is useful for summaries, but keep source context when interpretation requires it.
+The interpreter conservatively rejects some safe regex alternations. String patterns also require
+JavaScript backslash escaping. Use the documented subset rather than adding unsupported syntax,
+such as labeled statements, to otherwise simple programs.
+
 ## TUI presentation
 
 In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>`. The optional

@@ -109,15 +109,17 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     promptSnippet:
       "Run one confined script over Pi built-ins, background tasks, and bounded MCP requests",
     promptGuidelines: [
-      "Use code_mode for several dependent or parallel Pi, background-task, or MCP calls whose " +
-        "intermediate results you would otherwise echo through the transcript; write one small " +
-        "program and return only the distilled result.",
+      "Use code_mode to batch already-known independent work and mechanical dependent steps " +
+        "in one bounded program. Parallelize only independent calls. Stop for judgment, new " +
+        "authorization, worker coordination, or required top-level middleware and previews. " +
+        "Ordinary concurrent tool calls are also valid.",
       "Always pass the optional code_mode intent parameter: a short human-readable phrase " +
         'describing what the program is for (e.g. "Inspect the extension"); the UI shows it ' +
         "in place of the raw program source.",
-      "Prefer a concise distilled string when structure is unnecessary; otherwise return a " +
-        "small object containing only the requested fields, never raw nested tool results or " +
-        "whole files.",
+      "Return enough evidence for the next decision: relevant paths, excerpts, outcomes, and " +
+        "failures. Prefer concise text or a small object. Bound nested output and the combined " +
+        "return; complete files are appropriate when needed and they fit. Split oversized " +
+        "work rather than dropping necessary evidence.",
       "Nested reads accept text only; use top-level read for images. MCP images remain " +
         "descriptors in Code Mode, including attachment reads. Use top-level mcp result.read " +
         "with the retained result ID and attachment index to view a supported image.",
@@ -126,7 +128,7 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
         "remaining, they inspect immediately. Shorter requested waits and provider limits still " +
         "apply. A wait timeout does not stop the task; the reserve does not guarantee delivery " +
         "if scheduling or subsequent guest work exhausts the outer deadline.",
-      "Batch formed MCP requests with Promise.all(requests.map(input => tools.mcp.request(input))). " +
+      "Batch independent, already-formed MCP requests with Promise.all(requests.map(input => tools.mcp.request(input))). " +
         "Use bounded discovery before exact server/tool calls, and result.read for retained output. " +
         "Check outcome and isError. Never replay an unknown or completed operation to recover its output. " +
         "MCP management, authentication, config writes, and arbitrary protocol methods are unavailable.",
