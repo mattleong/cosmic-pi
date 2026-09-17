@@ -89,6 +89,7 @@ export interface McpCardDetails {
   readonly page?: McpCardPage;
   readonly undiscoveredCount: number;
   readonly preview: string;
+  readonly failurePreview: string;
   readonly resultId?: string;
   readonly origin?: McpCardOrigin;
   readonly recoveryHint?: string;
@@ -299,6 +300,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     attachmentsLimited: descriptors.limited,
     imageCount,
     undiscoveredCount,
+    failurePreview: preview.readable ?? preview.combined,
     preview:
       details === undefined
         ? "Details are unavailable for this historical result."

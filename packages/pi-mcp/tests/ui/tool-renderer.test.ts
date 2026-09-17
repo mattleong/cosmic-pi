@@ -25,6 +25,40 @@ const display = <Result>(result: Result, expanded = false, isPartial = false) =>
     .join("\n");
 
 describe("MCP card projections", () => {
+  it("keeps remote error text visible in the collapsed fallback without changing the reply", () => {
+    const text = "The element is no longer attached to the page.";
+    const result = {
+      details: {
+        ...reply().details,
+        isError: true,
+        data: { result: { isError: true, content: [{ type: "text", text }] } },
+      },
+      content: [],
+    };
+    const before = structuredClone(result);
+    expect(display(result)).toContain(text);
+    expect(display(result, true)).toContain(text);
+    expect(display(result, false, true)).not.toContain(text);
+    expect(display({ ...result, details: { ...result.details, isError: false } })).not.toContain(
+      text,
+    );
+    expect(result).toEqual(before);
+  });
+
+  it("keeps a retained operation's failure body visible without treating the read itself as failed", () => {
+    const text = "The requested element was not found.";
+    const result = reply({
+      origin: { action: "tools.call", outcome: "completed", isError: true },
+      text,
+    });
+    result.details.action = "result.read";
+    const card = decodeMcpCardDetails(result);
+    expect(card.isError).toBe(false);
+    expect(card.presentation.isError).toBe(true);
+    expect(display(result).replace(/\s+/g, " ")).toContain(text);
+    expect(result.details.isError).toBe(false);
+  });
+
   it("preserves auth recovery and discovery context when reconstructing historical error cards", () => {
     const error = boundaryError("auth-required", "unknown", "private-token", "auth-not-configured");
     const details = mcpFailureReply("tools.search", error);

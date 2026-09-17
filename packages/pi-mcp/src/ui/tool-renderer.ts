@@ -33,7 +33,7 @@ export const renderMcpResult = <Result>(
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const lines: string[] = [];
-    const failed = details.isError || options.isError === true;
+    const failed = details.presentation.isError || options.isError === true;
     const status = options.isPartial
       ? "running"
       : details.outcome === "unknown" || details.outcome === "not-sent"
@@ -68,6 +68,10 @@ export const renderMcpResult = <Result>(
       );
     if (details.imageCount) counts.push(`${details.imageCount} native images`);
     if (counts.length) lines.push(theme.fg("muted", counts.join(" · ")));
+    // Failed calls use this renderer even in compact mode. Keep the bounded,
+    // sanitized error body visible rather than requiring expansion to find the cause.
+    if (failed && !options.isPartial && !options.expanded)
+      lines.push(theme.fg("error", details.failurePreview));
     // Safety warnings wrap rather than clip. Collapse must not conceal uncertainty.
     for (const warning of details.warnings) lines.push(toolStatusLine(theme, "warning", warning));
     if (details.recoveryHint && !details.resultId)
