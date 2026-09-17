@@ -62,6 +62,14 @@ export const managerActivityColor = (kind: ManagerActivityKind): ManagerStatusCo
   return "muted";
 };
 
+/** Keep the active tab visible when the complete strip cannot fit. Labels may contain ANSI. */
+export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
+  const full = `  ${tabs.join("  ")}`;
+  return visibleWidth(full) <= width
+    ? full
+    : truncateToWidth(`  ${tabs[active] ?? ""}`, Math.max(0, width), "");
+};
+
 export type ManagerFooterGroup = string | undefined;
 
 export const managerFooterLine = (groups: ReadonlyArray<ManagerFooterGroup>): string =>

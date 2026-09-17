@@ -42,6 +42,8 @@ The v1 client in `src/activity/protocol.ts` carries exact session ID, host activ
 
 `settings-surface.ts` supplies public theme callbacks for focused controls and cyan values, without extending the private settings adapter. Generic selectors keep choices neutral; model pickers explicitly mark model values. Diagnostics panels stay read-only with neutral frames. Manager roles do not change transcript, tool, footer, widget, questionnaire, or docked-auth presentation. `settings-surface.ts` composes caller headers, Pi `SettingsList`, `VimSettingsAdapter`, and the focus/render bridge; it also owns reusable row generations and submenu composition. Host guards remain injected and caller-owned. `settings-adapter.ts` deliberately couples to pinned pi-tui private `searchInput`, its `setValue`, `applyFilter`, and `submenuComponent`. Esc leaving search clears and reapplies the filter without closing the child. Review this bridge directly on pi-tui upgrades.
 
+`manager/table.ts` measures complete caller-supplied datasets using display widths, reserves columns by priority, and renders stable two-space gaps. Callers retain column policy and cell tones. `managerTabs` keeps the active tab visible when the full strip cannot fit. Full-screen lists focus identity cells separately from status and warning cells; technical inspectors wrap content before calculating scroll windows.
+
 `src/tool/presentation.ts` renders semantic tool headers and bounded plain sections. It does not own code-preview shells, highlighting, caching, or scheduling. The package root exports only the extension; named subpaths expose shared protocols and presentation components.
 
 ## Working timer and prompt identity

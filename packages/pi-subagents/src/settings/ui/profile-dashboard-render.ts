@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn } from "@earendil-works/pi-tui";
+import { managerTabs } from "pi-cosmic-ui/manager";
 import { framedFill, framedScreen } from "pi-cosmic-ui/manager/list-detail-shell";
 import { profileFrame, profileTone } from "./profile-style.ts";
 
@@ -30,7 +31,11 @@ export function renderProfileDashboard(
       active ? options.theme.bold(options.theme.underline(text)) : text,
     );
   };
-  const header = ` ${tab("session", "Current Session")}  ${tab("saved", "Saved profiles")}`;
+  const header = managerTabs(
+    [tab("session", "Current Session"), tab("saved", "Saved profiles")],
+    state.tab === "session" ? 0 : 1,
+    inner,
+  );
   const status = state.blocked
     ? "Close and reopen to continue editing."
     : state.message || (state.busy ? "Saving…" : "");

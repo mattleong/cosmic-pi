@@ -116,13 +116,38 @@ it.each(["first", "last"])(
     h.replace({ ...snapshot, servers });
     h.component.render(160);
     if (target === "last") h.component.handleInput("G");
-    for (const width of [50, 90, 160]) h.component.render(width);
+    for (const width of [59, 60, 80, 99, 100, 160]) h.component.render(width);
     h.component.handleInput("a");
     h.component.handleInput("\r");
     expect(h.finishes[0]).toMatchObject({
       action: "refresh",
       row: { id: target === "first" ? "server-0" : "server-39" },
     });
+    expect(h.requests).toEqual([]);
+  },
+);
+
+it.each([59, 60, 80, 99, 100])(
+  "inspector navigation preserves long details across resize at %s columns",
+  (width) => {
+    const h = harness();
+    const diagnostic = "工具".repeat(500) + " diagnostic-end";
+    h.replace({ ...snapshot, servers: [{ ...snapshot.servers[0]!, diagnostic }] });
+    h.component.render(width);
+    h.component.handleInput("\r");
+    let seen = h.component.render(width).join("\n");
+    h.component.handleInput("g");
+    h.component.handleInput("g");
+    for (let index = 0; index < 100; index += 1) {
+      seen += h.component.render(width).join("\n");
+      h.component.handleInput("j");
+    }
+    expect(seen).toContain("diagnostic-end");
+    h.component.render(width === 59 ? 100 : 59);
+    h.component.handleInput("\x1b");
+    expect(h.finishes).toEqual([]);
+    h.component.handleInput("\x1b");
+    expect(h.finishes).toHaveLength(1);
     expect(h.requests).toEqual([]);
   },
 );

@@ -1,6 +1,6 @@
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import {
   brailleSpinnerFrame,
   managerStateGlyph,
@@ -193,11 +193,8 @@ export class TaskManagerComponent implements Component {
     }
 
     if (resolution.action === "confirm") {
-      // Enter policy stays local: only the narrow layout toggles the expanded inspector.
-      if (this.shell.state.layout === "narrow" && selected) {
-        this.shell.enterPane();
-        this.follow = true;
-      }
+      if (selected)
+        this.shell.applyMotion("forward", { rowCount: tasks.length, hasSelection: true });
       this.options.requestRender();
       return;
     }
@@ -266,6 +263,8 @@ export class TaskManagerComponent implements Component {
       : undefined;
     const navigation = configuredNavigation ? `j/k · ${configuredNavigation}` : "j/k";
     const escape = key("tui.select.cancel", "Esc");
+    const inspect = `${key("tui.select.confirm", "Enter")} Inspect`;
+    const back = `${escape} ${this.shell.state.pane === "detail" ? "Back" : "Close"}`;
     if (this.pendingStop)
       return renderResponsiveManagerFooter(contentWidth, [
         [`x Confirm stop ${sanitizeTerminalLine(this.pendingStop)}`, `${escape}/q Cancel`],
@@ -284,25 +283,23 @@ export class TaskManagerComponent implements Component {
         [
           `${navigation} Move · h/l Panes · C-u/d Half · PgUp/PgDn Page · gg/G Ends`,
           joinedActions ?? "No actions",
-          `? Back · ${escape}/q Close`,
+          `? Back · ${back} · q Close`,
         ],
         [
           `${navigation} · h/l · C-u/d · PgUp/PgDn · gg/G`,
           joinedActions ?? "No actions",
-          `? · ${escape}/q`,
+          `? · ${back}`,
         ],
-        [`${navigation} · PgUp/PgDn · gg/G`, `? · ${escape}/q`],
+        [`${navigation} · PgUp/PgDn · gg/G`, `? · ${back}`],
       ]);
     return renderResponsiveManagerFooter(contentWidth, [
       [
-        `${navigation} Move · C-u/d Scroll · h/l Panes`,
+        `${navigation} Move · ${inspect} · h/l Panes`,
         joinedActions,
-        `t Technical · ? More · ${escape}/q Close`,
+        `t Technical · ? More · ${back} · q Close`,
       ],
-      [`${navigation} · C-u/d · h/l`, joinedActions, `t Tech · ? · ${escape}/q`],
-      width >= 60
-        ? [`${navigation} Select · h/l Panes`, "C-u/d · gg/G", `? More · ${escape}/q`]
-        : [`${navigation} · l Details`, "gg/G", `? More · ${escape}/q`],
+      [`${navigation} · ${inspect}`, joinedActions, `t Tech · ? · ${back}`],
+      [inspect, "t Tech · ?", back],
     ]);
   }
 
@@ -314,17 +311,13 @@ export class TaskManagerComponent implements Component {
     const frame = Math.floor(this.options.getNow() / 160);
     const presentation = statePresentation(task, frame);
     const glyph = this.options.theme.fg(presentation.color, presentation.glyph);
-    const label = sanitizeTerminalLine(
-      `${displayName(task)} · ${presentation.label} · ${duration(task, this.options.getNow())}`,
-    );
+    const identity = displayName(task);
     const text =
-      selected && this.shell.state.pane === "list"
-        ? focusedField(this.options.theme, label)
-        : this.options.theme.fg(managerTone.identity, sanitizeTerminalLine(displayName(task))) +
-          this.options.theme.fg(
-            "muted",
-            ` · ${sanitizeTerminalLine(`${presentation.label} · ${duration(task, this.options.getNow())}`)}`,
-          );
+      (selected && this.shell.state.pane === "list"
+        ? focusedField(this.options.theme, identity)
+        : this.options.theme.fg(managerTone.identity, identity)) +
+      this.options.theme.fg(presentation.color, ` · ${presentation.label}`) +
+      this.options.theme.fg("muted", ` · ${duration(task, this.options.getNow())}`);
     return padListDetailRow(`${prefix} ${glyph} ${text}`, width);
   }
 
@@ -398,7 +391,8 @@ export class TaskManagerComponent implements Component {
   }
 
   private detailWindow(lines: string[], height: number, width: number): string[] {
-    const window = this.shell.detailWindow(lines, height, this.follow);
+    const wrapped = lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+    const window = this.shell.detailWindow(wrapped, height, this.follow);
     if (!window.overflow) return [...window.visible];
     return [
       this.options.theme.fg("dim", detailWindowPositionLabel(window.overflow)),
@@ -460,7 +454,7 @@ export class TaskManagerComponent implements Component {
               this.taskLine(task, index, inner),
             )
           : [this.options.theme.fg("dim", "No background tasks.")];
-    if (!this.shell.state.details) this.shell.resetDetailWindow();
+    // Keep the hidden inspector's line count so unfollow stays anchored when reopened.
     return framedFill(this.frame, lines, height, inner, this.shell.state.pane);
   }
 

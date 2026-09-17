@@ -1,5 +1,5 @@
 // Behavior-first component tests for the /tasks manager: two-press stop, stale-selection
-// safety, sticky unfollow, narrow-only Enter policy, and selection reconciliation.
+// safety, sticky unfollow, inspector navigation, and selection reconciliation.
 // Assertions use transitions, callbacks, and coarse content markers — never exact
 // copy, colors, or layout.
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -188,10 +188,14 @@ describe("/tasks follow", () => {
     expect(component.render(120).join("\n")).toContain("line-20");
 
     component.handleInput("f");
+    component.handleInput(ENTER);
+    component.handleInput(ENTER);
     setTasks([task("a", { logs: logEvents(25) })]);
     const anchored = component.render(120).join("\n");
     expect(anchored).toContain("line-20");
     expect(anchored).not.toContain("line-25");
+    component.handleInput(ENTER);
+    expect(component.render(120).join("\n")).toContain("line-20");
 
     component.handleInput("f");
     expect(component.render(120).join("\n")).toContain("line-25");
@@ -199,6 +203,41 @@ describe("/tasks follow", () => {
 });
 
 describe("/tasks narrow layout", () => {
+  it.each([
+    ["Esc/Enter", ESC, ENTER],
+    ["h/l", "h", "l"],
+  ])("preserves unfollowed output across %s pane transitions", (_label, back, inspect) => {
+    const { component, setTasks } = makeManager([task("a", { logs: logEvents(25) })]);
+    const visibleLogs = () =>
+      component
+        .render(50)
+        .join("\n")
+        .match(/line-\d+/g) ?? [];
+    component.render(50);
+    component.handleInput(ENTER);
+    const viewed = visibleLogs();
+    expect(viewed).toContain("line-25");
+    component.handleInput("f");
+    expect(visibleLogs()).toEqual(viewed);
+
+    component.handleInput(back);
+    expect(visibleLogs()).toEqual([]);
+    component.handleInput(inspect);
+    expect(visibleLogs()).toEqual(viewed);
+
+    component.handleInput(back);
+    visibleLogs();
+    setTasks([task("a", { logs: logEvents(30) })]);
+    expect(visibleLogs()).toEqual([]);
+    component.handleInput(inspect);
+    expect(visibleLogs()).toEqual(viewed);
+    setTasks([task("a", { logs: logEvents(35) })]);
+    expect(visibleLogs()).toEqual(viewed);
+
+    component.handleInput("f");
+    expect(visibleLogs()).toContain("line-35");
+  });
+
   it("opens the inspector on Enter, returns on Esc, and closes on the next Esc", () => {
     const { component, close } = makeManager([task("a", { logs: logEvents(3) })]);
     expect(component.render(50).join("\n")).not.toContain("line-3");
@@ -214,17 +253,41 @@ describe("/tasks narrow layout", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Enter inert outside the narrow layout while pane focus still uses h/l", () => {
-    const focus = makeManager([task("a")]);
-    focus.component.render(120);
-    focus.component.handleInput("l");
-    focus.component.handleInput(ESC);
-    expect(focus.close).not.toHaveBeenCalled();
+  it.each([59, 60, 80, 99, 100])(
+    "Enter inspects and Esc returns across resize at %s columns",
+    (width) => {
+      const { component, close, stop } = makeManager([task("a"), task("b")], 20);
+      component.render(width);
+      component.handleInput("j");
+      component.handleInput(ENTER);
+      component.handleInput(ENTER);
+      component.render(width === 59 ? 100 : 59);
+      component.handleInput(ESC);
+      expect(close).not.toHaveBeenCalled();
+      component.render(59);
+      component.handleInput("x");
+      component.handleInput("x");
+      expect(stop).toHaveBeenCalledWith("b");
+      component.handleInput(ESC);
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
 
-    const inert = makeManager([task("a")]);
-    inert.component.render(120);
-    inert.component.handleInput(ENTER);
-    inert.component.handleInput(ESC);
-    expect(inert.close).toHaveBeenCalledTimes(1);
+  it.each([59, 60, 80, 99, 100])("makes long metadata reachable at %s columns", (width) => {
+    const command = "工具".repeat(100) + "COMMAND-END";
+    const cwd = "/" + "路径/".repeat(100) + "DIRECTORY-END";
+    const { component } = makeManager([task("a", { command, cwd })], 16);
+    component.render(width);
+    component.handleInput(ENTER);
+    component.handleInput("t");
+    let seen = component.render(width).join("\n");
+    component.handleInput("g");
+    component.handleInput("g");
+    for (let index = 0; index < 100; index += 1) {
+      seen += component.render(width).join("\n");
+      component.handleInput("j");
+    }
+    expect(seen).toContain("COMMAND-END");
+    expect(seen).toContain("DIRECTORY-END");
   });
 });

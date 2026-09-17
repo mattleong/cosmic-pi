@@ -14,7 +14,7 @@ The header reads `Editing Current Session`, without an origin or change count. S
 
 ## Profile editor
 
-One dashboard contains Current Session and Saved profiles tabs. A continuous outer border encloses the tabs, status, editor, and internal dialogs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. Wide terminals show profiles beside their fields; narrow layouts keep the same editing target and scope visible.
+One dashboard contains Current Session and Saved profiles tabs. A continuous outer border encloses the tabs, status, editor, and internal dialogs. Each tab remembers its position. Fixed-target editors retain the selected profile, candidate, field, and Advanced expansion during internal navigation. The shared manager tiers show profiles beside their fields at 100+ columns, stacked at 60–99 when height permits, and the focused pane below 60. Narrow tabs retain the active tab label. Tables measure the full dataset through Cosmic UI's shared priority-based columns; selected identities use its focus treatment without recoloring status or warning cells.
 
 Model and Reasoning appear together. Candidate sections spell out Primary and Fallback order. File access and Run with remain main fields; Advanced exposes applicable Context, OpenAI fast mode, and After reporting controls. Each section ends with Manage Primary or Manage Fallback N. Its menu contains only Duplicate, valid Move up/Move down directions, and Delete. Delete requires confirmation and warns when removing the last model will disable the profile. There is no standalone Disable action.
 
@@ -45,7 +45,7 @@ The probe preserves aliases and context suffixes such as `[1m]`. Its selector is
 
 ## Saved-set library
 
-The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, ordered candidate models and effort, including inherited, disabled, and invalid routes. Wide screens show the preview beside the list; narrower screens stack it below when height permits. Long routes are abbreviated in the preview and remain available in the editor.
+The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, ordered candidate models and effort, including inherited, disabled, and invalid routes. Wide screens show the preview beside the list; stacked screens show it below when height permits. Narrow screens keep the library visible and Enter opens the editor. Long routes are abbreviated in the preview and remain available in the editor.
 
 Enter edits the selected set, `u` opens Use, `a` opens More, and Esc closes the library. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
 

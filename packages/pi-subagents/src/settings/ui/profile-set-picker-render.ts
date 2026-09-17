@@ -1,12 +1,14 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { managerLayoutTier, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { managerTable } from "pi-cosmic-ui/manager/table";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
-import { padListDetailRow, wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
+import { wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
 import {
   framedFill,
   framedScreen,
   framedStackedRows,
+  listDetailHeading,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   qualifiedProfileSetLabel,
@@ -100,7 +102,7 @@ const libraryRows = (
   height: number,
 ): ReadonlyArray<string> => {
   const header = [
-    theme.fg(profileTone.saved, theme.bold("Saved profile sets")),
+    listDetailHeading(theme, "Saved profile sets", true, profileTone.saved),
     ...(state.searching ? [theme.fg("muted", `Search /${state.query}`)] : []),
     ...(state.message
       ? [
@@ -139,7 +141,7 @@ const libraryRows = (
         : "";
     logical.push({
       entryIndex: index,
-      text: `${selected ? ">" : " "} ${theme.fg(profileTone.saved, selected ? theme.bold(entry.label) : entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
+      text: `${selected ? ">" : " "} ${selected && !state.searching ? focusedProfileField(theme, entry.label) : theme.fg(profileTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
     });
   }
   const listHeight = Math.max(1, height - header.length);
@@ -164,7 +166,9 @@ const previewRows = (
       theme.fg(entry.kind === "invalid-default" ? "error" : "muted", entry.description),
       width,
     );
-  const rows = [theme.fg(profileTone.saved, theme.bold(qualifiedProfileSetLabel(entry.ref)))];
+  const rows = [
+    listDetailHeading(theme, qualifiedProfileSetLabel(entry.ref), false, profileTone.saved),
+  ];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
   const profiles = entry.preview.map((profile) => ({
     ...profile,
@@ -189,22 +193,22 @@ const previewRows = (
             ],
           ],
   }));
-  // Measure the whole preview so candidate and profile changes do not shift later columns.
-  const profileWidth = Math.max(0, ...profiles.map((profile) => visibleWidth(profile.label)));
-  const widths = [0, 1, 2, 3].map((column) =>
-    Math.max(
-      0,
-      ...profiles.flatMap((profile) =>
-        profile.cells.map((cells) => visibleWidth(cells[column] ?? "")),
-      ),
-    ),
+  const table = managerTable(
+    profiles.flatMap((profile) => profile.cells.map((cells) => [profile.label, ...cells])),
+    [
+      { minWidth: 10, priority: 5 },
+      { minWidth: 7, priority: 2 },
+      { minWidth: 16, priority: 4 },
+      { minWidth: 7, priority: 3 },
+      { minWidth: 8, priority: 1 },
+    ],
+    width,
   );
-  const modelWidth = Math.min(
-    widths[1] ?? 0,
-    width - profileWidth - (widths[0] ?? 0) - (widths[2] ?? 0) - (widths[3] ?? 0) - 8,
-  );
-  const aligned = modelWidth >= Math.min(16, widths[1] ?? 0);
-  widths[1] = Math.max(0, modelWidth);
+  const aligned =
+    table.widths.every((size) => size > 0) &&
+    profiles.every((profile) =>
+      profile.cells.every((cells) => visibleWidth(cells[1] ?? "") <= (table.widths[2] ?? 0)),
+    );
   for (const profile of profiles) {
     const lines = profile.cells.flatMap((cells, index) => {
       const label = index === 0 ? profile.label : "";
@@ -212,14 +216,7 @@ const previewRows = (
         const detail = cells.filter(Boolean).join(" · ");
         return wrapTextWithAnsi(`${label ? `${label}: ` : "  "}${detail}`, width);
       }
-      return [
-        [
-          padListDetailRow(label, profileWidth),
-          ...cells.map((cell, column) =>
-            padListDetailRow(truncateToWidth(cell, widths[column] ?? 0), widths[column] ?? 0),
-          ),
-        ].join("  "),
-      ];
+      return [table.row([label, ...cells])];
     });
     const visible = lines.slice(0, budget);
     if (lines.length > budget) {
@@ -308,7 +305,7 @@ export const renderProfileSetPicker = (
         return framedFill(frame, safety.slice(0, bodyHeight), bodyHeight, inner, "list");
       }
       if (!state.actionMenu && !state.pendingDeleteLabel) {
-        if (width >= 100) {
+        if (managerLayoutTier(width) === "wide") {
           const { listWidth, detailWidth } = wideListDetailGeometry(width, 30, 0.35);
           return profilePaneRows(theme, {
             focused: "list",
@@ -319,7 +316,7 @@ export const renderProfileSetPicker = (
             detailWidth,
           });
         }
-        if (bodyHeight >= 14) {
+        if (managerLayoutTier(width) === "stacked" && bodyHeight >= 6) {
           const listHeight = Math.max(4, Math.min(8, Math.floor(bodyHeight / 3)));
           const list = libraryRows(state, theme, listHeight);
           return framedStackedRows(profileFrame(theme, true), {

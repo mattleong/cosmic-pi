@@ -1,8 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
-import { framedFill, framedScreen } from "pi-cosmic-ui/manager/list-detail-shell";
-import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import {
+  framedFill,
+  framedScreen,
+  framedStackedRows,
+  listDetailHeading,
+  listDetailFrame,
+} from "pi-cosmic-ui/manager/list-detail-shell";
+import { managerLayoutTier, renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
+import { managerTable } from "pi-cosmic-ui/manager/table";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import type {
@@ -20,12 +27,7 @@ import {
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import { profileWorkspaceRows, type ProfileWorkspaceRow } from "./profile-workspace-rows.ts";
-import {
-  focusedProfileField,
-  profileFrame,
-  profilePaneRows,
-  profileTone,
-} from "./profile-style.ts";
+import { focusedProfileField, profilePaneRows, profileTone } from "./profile-style.ts";
 import type { SettingsSelectKeybindingId } from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
 
@@ -129,37 +131,30 @@ const profileTableLines = (
           : "",
     };
   });
-  // Measure every profile so scrolling never shifts the columns. Reserve the edit marker too.
-  const profileWidth = Math.max(...PROFILE_IDS.map(visibleWidth)) + 2;
-  const remaining = Math.max(0, width - profileWidth - 5);
-  const effortWidth = Math.min(remaining, Math.max(...rows.map((row) => visibleWidth(row.effort))));
-  const modelWidth = Math.min(
-    Math.max(...rows.map((row) => visibleWidth(row.model))),
-    Math.max(0, remaining - effortWidth - 3),
+  const table = managerTable(
+    rows.map((row) => [row.profile + " ●", row.model, row.effort, row.runtime, row.fallbacks]),
+    [
+      { minWidth: 12, priority: 5 },
+      { minWidth: 8, priority: 3 },
+      { minWidth: 7, priority: 4 },
+      { minWidth: 8, priority: 2 },
+      { minWidth: 11, priority: 1 },
+    ],
+    width - 2,
   );
-  const spare = Math.max(0, remaining - modelWidth - effortWidth - 3);
-  const runtimeWidth = Math.max(...rows.map((row) => visibleWidth(row.runtime)));
-  const showRuntime = runtimeWidth > 0 && spare >= runtimeWidth + 3;
-  const fallbackWidth = Math.max(...rows.map((row) => visibleWidth(row.fallbacks)));
-  const showFallbacks =
-    fallbackWidth > 0 && spare - (showRuntime ? runtimeWidth + 3 : 0) >= fallbackWidth + 3;
-  const cell = (text: string, columns: number): string => {
-    const clipped = truncateToWidth(text, columns);
-    return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
-  };
   return rows.map((row) => {
+    const identity =
+      row.selected && state.pane === "profiles"
+        ? focusedProfileField(theme, row.profile)
+        : theme.fg(profileTone.profile, row.profile);
     const marker = state.editedProfiles?.has(row.profile) ? theme.fg("warning", " ●") : "";
-    const prefix = `${row.selected ? ">" : " "} ${cell(theme.fg(profileTone.profile, row.profile) + marker, profileWidth)} · `;
-    const columns = row.effort
-      ? [
-          ...(modelWidth > 0 ? [cell(row.model, modelWidth)] : []),
-          cell(row.effort, effortWidth),
-          ...(showRuntime ? [theme.fg("muted", cell(row.runtime, runtimeWidth))] : []),
-          ...(showFallbacks ? [theme.fg("muted", row.fallbacks)] : []),
-        ]
-      : [row.model];
-    const line = truncateToWidth(prefix + columns.join(" · "), width);
-    return row.selected && state.pane === "profiles" ? theme.bold(line) : line;
+    return `${row.selected ? ">" : " "} ${table.row([
+      identity + marker,
+      row.model,
+      row.effort,
+      theme.fg("muted", row.runtime),
+      theme.fg("muted", row.fallbacks),
+    ])}`;
   });
 };
 
@@ -187,7 +182,7 @@ const profileLines = (
   const selected = state.saveFocused ? lines.length - 1 : state.profileIndex;
   const start = listWindowStart(lines.length, selected, count);
   return [
-    theme.fg(state.pane === "profiles" ? "accent" : "muted", theme.bold("Profiles")),
+    listDetailHeading(theme, "Profiles", state.pane === "profiles"),
     ...lines.slice(start, start + count),
   ];
 };
@@ -273,7 +268,10 @@ const editorLines = (
   });
   const limit = Math.max(0, height - 1);
   const start = listWindowStart(lines.length, selectedLine, limit);
-  return [theme.fg(profileTone.profile, theme.bold(profile)), ...lines.slice(start, start + limit)];
+  return [
+    listDetailHeading(theme, profile, state.pane !== "profiles", profileTone.profile),
+    ...lines.slice(start, start + limit),
+  ];
 };
 
 const compactLines = (
@@ -362,7 +360,7 @@ export const renderProfileWorkspace = (
   if (width < 4) return Array.from({ length: height }, () => " ".repeat(width));
   const inner = width - 2;
   const { theme } = options;
-  const frame = profileFrame(theme, true);
+  const frame = listDetailFrame(theme, state.pane === "profiles" ? "list" : "detail");
   const keys = profileWorkspaceKeys(
     options.keybindingLabel,
     Boolean(state.pendingConfirmation) || state.busy,
@@ -451,7 +449,7 @@ export const renderProfileWorkspace = (
         );
       const available = Math.max(0, bodyHeight - notices.length - 1);
       let body: ReadonlyArray<string>;
-      if (width >= 100) {
+      if (managerLayoutTier(width) === "wide") {
         const listWidth = Math.min(64, Math.floor(inner * 0.4));
         const detailWidth = inner - listWidth - 1;
         body = profilePaneRows(theme, {
@@ -462,6 +460,14 @@ export const renderProfileWorkspace = (
           listWidth,
           detailWidth,
         });
+      } else if (managerLayoutTier(width) === "stacked" && available >= 6) {
+        const listHeight = Math.max(2, Math.floor(available * 0.4));
+        body = framedStackedRows(frame, {
+          list: profileLines(state, theme, inner, listHeight),
+          detail: editorLines(state, theme, inner, available - listHeight - 1),
+          height: available,
+          inner,
+        });
       } else {
         body = framedFill(
           frame,
@@ -470,7 +476,7 @@ export const renderProfileWorkspace = (
             : editorLines(state, theme, inner, available),
           available,
           inner,
-          "list",
+          state.pane === "profiles" ? "list" : "detail",
         );
       }
       return [

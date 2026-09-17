@@ -15,12 +15,15 @@ import {
 import { filterReservedKeyLabel, filterTextInputKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import {
   listDetailMotionFromAction,
+  detailWindowPositionLabel,
+  stackedListHeight,
   wideListDetailGeometry,
 } from "pi-cosmic-ui/manager/list-detail";
 import {
   ListDetailShell,
   framedFill,
   framedScreen,
+  framedStackedRows,
   framedWideRows,
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -219,7 +222,7 @@ export class McpManagerComponent implements Component, Focusable {
     });
   }
   private inspect(): void {
-    this.shell.enterPane();
+    this.shell.applyMotion("forward", { rowCount: this.ids().length, hasSelection: true });
     if (this.selection.screen === "browse") {
       const entry = this.page?.entries[this.shell.state.selected];
       if (!entry) return;
@@ -539,7 +542,13 @@ export class McpManagerComponent implements Component, Focusable {
           ...(catalog ? [truncateToWidth(browserCatalogStatus(catalog), inner, "")] : []),
         ].slice(0, height);
         const bodyHeight = Math.max(0, height - prefix.length);
-        const wide = layout !== "narrow" && this.selection.screen !== "result";
+        const wide = layout === "wide" && this.selection.screen !== "result";
+        const stacked =
+          layout === "stacked" && bodyHeight >= 6 && this.selection.screen !== "result";
+        const listHeight = stacked
+          ? Math.min(bodyHeight, stackedListHeight(bodyHeight, this.ids().length))
+          : bodyHeight;
+        const detailHeight = stacked ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight;
         const geometry = wideListDetailGeometry(width, 24, 0.45);
         const table =
           this.selection.screen === "dashboard"
@@ -550,7 +559,7 @@ export class McpManagerComponent implements Component, Focusable {
                 listFocused,
               )
             : undefined;
-        const columnHeader = table && bodyHeight > 1 ? [table.header] : [];
+        const columnHeader = table && listHeight > 1 ? [table.header] : [];
         const labels =
           this.selection.screen === "browse"
             ? (this.page?.entries.map((entry, index) =>
@@ -566,7 +575,7 @@ export class McpManagerComponent implements Component, Focusable {
                   table.row(row, index === this.shell.state.selected),
                 )
               : [];
-        const window = this.shell.visibleWindow(labels.length, bodyHeight - columnHeader.length);
+        const window = this.shell.visibleWindow(labels.length, listHeight - columnHeader.length);
         const left = [...columnHeader, ...labels.slice(window.start, window.end)];
         if (!labels.length)
           left.push(
@@ -601,9 +610,17 @@ export class McpManagerComponent implements Component, Focusable {
             ? this.expandedId !== undefined && !this.detail
             : this.selection.screen === "result" && !this.result.page && !this.unavailable;
         // Loading/withdrawal placeholders must not clamp the authorized viewport to zero.
-        const right = awaitingDetail
-          ? lines.slice(0, bodyHeight)
-          : this.shell.detailWindow(lines, bodyHeight, false).visible;
+        const detailWindow = awaitingDetail
+          ? undefined
+          : this.shell.detailWindow(lines, detailHeight, false);
+        const right = detailWindow
+          ? [
+              ...(detailWindow.overflow
+                ? [theme.fg("dim", detailWindowPositionLabel(detailWindow.overflow))]
+                : []),
+              ...detailWindow.visible,
+            ]
+          : lines.slice(0, detailHeight);
         const body = wide
           ? framedWideRows(frame, {
               left,
@@ -612,17 +629,19 @@ export class McpManagerComponent implements Component, Focusable {
               listWidth: geometry.listWidth,
               detailWidth,
             })
-          : framedFill(
-              frame,
-              this.shell.state.details ||
-                this.shell.state.pane === "detail" ||
-                this.selection.screen === "result"
-                ? right
-                : left,
-              bodyHeight,
-              inner,
-              this.selection.screen === "result" ? "detail" : this.shell.state.pane,
-            );
+          : stacked
+            ? framedStackedRows(frame, { list: left, detail: right, height: bodyHeight, inner })
+            : framedFill(
+                frame,
+                this.shell.state.details ||
+                  this.shell.state.pane === "detail" ||
+                  this.selection.screen === "result"
+                  ? right
+                  : left,
+                bodyHeight,
+                inner,
+                this.selection.screen === "result" ? "detail" : this.shell.state.pane,
+              );
         return [...framedFill(frame, prefix, prefix.length, inner), ...body];
       },
     });

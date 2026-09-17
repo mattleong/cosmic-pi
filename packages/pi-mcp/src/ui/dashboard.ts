@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { managerTable } from "pi-cosmic-ui/manager/table";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -48,40 +48,29 @@ export const dashboardTable = (
   theme: Theme,
   focused: boolean,
 ) => {
-  const scopeWidth = width >= 34 ? 7 : 0;
-  const statusWidth =
-    width >= 20
-      ? Math.min(
-          Math.max(13, ...rows.map((row) => visibleWidth(dashboardStatus(row).label))),
-          width - 12 - (scopeWidth ? scopeWidth + 2 : 0),
-        )
-      : 0;
-  const nameWidth = Math.max(
-    0,
-    Math.min(
-      Math.max(18, ...rows.map((row) => visibleWidth(sanitizeTerminalLine(row.id)))),
-      width - 2 - (scopeWidth ? scopeWidth + 2 : 0) - (statusWidth ? statusWidth + 2 : 0),
-    ),
+  const table = managerTable(
+    [
+      ["Server", "Scope", "Status"],
+      ...rows.map((row) => [sanitizeTerminalLine(row.id), row.scope, dashboardStatus(row).label]),
+    ],
+    [
+      { minWidth: 8, priority: 3 },
+      { minWidth: 7, priority: 1 },
+      { minWidth: 13, priority: 2 },
+    ],
+    width - 2,
   );
-  const cell = (value: string, size: number) =>
-    padListDetailRow(truncateToWidth(value, size), size);
-  const fields = (name: string, scope: string, status: string) =>
-    `${name}${scopeWidth ? `  ${scope}` : ""}${statusWidth ? `  ${status}` : ""}`;
   return {
-    header: listDetailHeading(
-      theme,
-      fields(cell("Server", nameWidth), cell("Scope", scopeWidth), cell("Status", statusWidth)),
-      focused,
-    ),
+    header: listDetailHeading(theme, table.row(["Server", "Scope", "Status"]), focused),
     row: (row: McpManagerServer, selected: boolean) => {
       const status = dashboardStatus(row);
-      const name = cell(sanitizeTerminalLine(row.id), nameWidth);
+      const name = table.cell(sanitizeTerminalLine(row.id), 0);
       const line = padListDetailRow(
-        `${selected ? theme.fg(focused ? "accent" : "muted", "> ") : "  "}${fields(
+        `${selected ? theme.fg(focused ? "accent" : "muted", "> ") : "  "}${table.row([
           selected && focused ? focusedField(theme, name) : theme.fg(managerTone.identity, name),
-          theme.fg(managerTone.saved, cell(row.scope, scopeWidth)),
-          theme.fg(status.tone, cell(status.label, statusWidth)),
-        )}`,
+          theme.fg(managerTone.saved, row.scope),
+          theme.fg(status.tone, status.label),
+        ])}`,
         width,
       );
       return selected && focused ? theme.bg("selectedBg", line) : line;
