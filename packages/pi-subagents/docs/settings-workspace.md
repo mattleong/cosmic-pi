@@ -45,7 +45,7 @@ The probe preserves aliases and context suffixes such as `[1m]`. Its selector is
 
 ## Saved-set library
 
-The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration.
+The Saved profiles tab groups the library by Project and Global. Session is not a library scope. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, ordered candidate models and effort, including inherited, disabled, and invalid routes. Wide screens show the preview beside the list; narrower screens stack it below when height permits. Long routes are abbreviated in the preview and remain available in the editor.
 
 Enter edits the selected set, `u` opens Use, `a` opens More, and Esc closes the library. Use previews all seven resolved profiles and requires confirmation before replacing Current Session. Success returns to Current Session and resets its visit checkpoint. Opening or editing a set never applies it implicitly or makes it a default.
 

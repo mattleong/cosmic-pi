@@ -151,6 +151,95 @@ const makePicker = (
 };
 
 describe("saved profile-set library", () => {
+  const candidate = (model: string, effort = "high") => ({
+    host: "local",
+    runtime: "pi",
+    model,
+    effort,
+    context: "fresh",
+    writeIntent: "read-only",
+    closeOnReport: true,
+  });
+
+  it("previews resolved routes with ordered models, inheritance, disabled and invalid states", () => {
+    const value = makeProfileSettingsInspection({
+      globalDocument: {
+        version: 6,
+        defaultProfileSet: "base",
+        profileSets: {
+          base: {
+            profiles: {
+              scout: [candidate("test/primary"), candidate("test/fallback", "low")],
+              worker: "disabled",
+              reviewer: [candidate("test/broken", "impossible")],
+            },
+          },
+        },
+      },
+      projectDocument: { version: 6, profileSets: { partial: { profiles: {} } } },
+      projectTrusted: true,
+    });
+    const entry = profileSetPickerEntries(value, true).find(
+      (entry) => entry.key === "project:partial",
+    );
+    if (entry?.kind !== "set") throw new Error("Missing project set");
+    expect(entry.preview.find((profile) => profile.id === "scout")).toMatchObject({
+      source: "global",
+      inherited: true,
+      status: "configured",
+      candidates: [
+        { model: "test/primary", effort: "high" },
+        { model: "test/fallback", effort: "low" },
+      ],
+    });
+    expect(entry.preview.find((profile) => profile.id === "worker")).toMatchObject({
+      inherited: true,
+      status: "disabled",
+      candidates: [],
+    });
+    expect(entry.preview.find((profile) => profile.id === "reviewer")).toMatchObject({
+      source: "global-invalid",
+      status: "invalid",
+      candidates: [],
+    });
+    expect(entry.preview.find((profile) => profile.id === "planner")).toMatchObject({
+      source: "builtin",
+      inherited: true,
+      status: "configured",
+    });
+  });
+
+  it("updates the preview on navigation, search and inspection refresh without activating a set", () => {
+    const value = (model: string) =>
+      makeProfileSettingsInspection({
+        globalDocument: {
+          version: 6,
+          profileSets: {
+            alpha: { profiles: { scout: [candidate("test/alpha-model")] } },
+            beta: { profiles: { scout: [candidate(model)] } },
+          },
+        },
+        projectTrusted: false,
+      });
+    const { component, close } = makePicker({
+      value: value("test/beta-model"),
+      projectTrusted: false,
+    });
+    expect(component.render(150).join("\n")).toContain("test/alpha-model");
+    component.handleInput("j");
+    expect(component.render(150).join("\n")).toContain("test/beta-model");
+    expect(component.render(150).join("\n")).not.toContain("test/alpha-model");
+    component.handleInput("/");
+    for (const key of "alpha") component.handleInput(key);
+    expect(component.render(150).join("\n")).toContain("test/alpha-model");
+    component.handleInput("\u001b");
+    component.handleInput("j");
+    component.updateInspection(value("test/refreshed-model"), false);
+    expect(component.render(180).join("\n")).toContain("test/refreshed-model");
+    expect(component.render(80).join("\n")).toContain("test/refreshed-model");
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("keeps untrusted Project entries visible but unavailable", () => {
     const entries = profileSetPickerEntries(inspection(), false);
     expect(entries[0]).toMatchObject({ kind: "scope-note", key: "project:locked" });

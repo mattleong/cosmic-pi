@@ -1,8 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderResponsiveManagerFooter } from "pi-cosmic-ui/manager";
 import { filterReservedKeyLabel } from "pi-cosmic-ui/manager/key-labels";
-import { framedFill, framedScreen, listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
+import { padListDetailRow, wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
+import {
+  framedFill,
+  framedScreen,
+  framedWideRows,
+  framedStackedRows,
+  listDetailFrame,
+} from "pi-cosmic-ui/manager/list-detail-shell";
 import {
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
@@ -135,6 +142,76 @@ const libraryRows = (
   return [...header, ...logical.slice(start, start + listHeight).map((row) => row.text)];
 };
 
+const previewRows = (
+  state: ProfileSetPickerRenderState,
+  theme: Theme,
+  width: number,
+  height: number,
+): ReadonlyArray<string> => {
+  const entry = state.entries[state.selectedIndex];
+  if (!entry) return [theme.fg("muted", "No saved sets match this search.")];
+  if (entry.kind !== "set") return wrapTextWithAnsi(entry.description, width);
+  const rows = [theme.fg("accent", theme.bold(qualifiedProfileSetLabel(entry.ref)))];
+  const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
+  const profiles = entry.preview.map((profile) => ({
+    ...profile,
+    label: `${profile.id}${profile.inherited ? ` · inherited ${profile.source.replace("-invalid", "")}` : ""}`,
+    cells:
+      profile.status === "configured"
+        ? profile.candidates.map((candidate, index) => [
+            index === 0 ? "Primary" : `Fallback ${index}`,
+            `${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""}`,
+            candidate.effort === "default" ? "profile default" : candidate.effort,
+            `${candidate.host}/${candidate.runtime}`,
+          ])
+        : [[profile.status, "", "", ""]],
+  }));
+  // Measure the whole preview so candidate and profile changes do not shift later columns.
+  const profileWidth = Math.max(0, ...profiles.map((profile) => visibleWidth(profile.label)));
+  const widths = [0, 1, 2, 3].map((column) =>
+    Math.max(
+      0,
+      ...profiles.flatMap((profile) =>
+        profile.cells.map((cells) => visibleWidth(cells[column] ?? "")),
+      ),
+    ),
+  );
+  const modelWidth = Math.min(
+    widths[1] ?? 0,
+    width - profileWidth - (widths[0] ?? 0) - (widths[2] ?? 0) - (widths[3] ?? 0) - 8,
+  );
+  const aligned = modelWidth >= Math.min(16, widths[1] ?? 0);
+  widths[1] = Math.max(0, modelWidth);
+  for (const profile of profiles) {
+    const lines = profile.cells.flatMap((cells, index) => {
+      const label = index === 0 ? profile.label : "";
+      if (!aligned) {
+        const detail = cells.filter(Boolean).join(" · ");
+        return wrapTextWithAnsi(`${label ? `${label}: ` : "  "}${detail}`, width);
+      }
+      return [
+        [
+          padListDetailRow(label, profileWidth),
+          ...cells.map((cell, column) =>
+            padListDetailRow(truncateToWidth(cell, widths[column] ?? 0), widths[column] ?? 0),
+          ),
+        ].join("  "),
+      ];
+    });
+    const visible = lines.slice(0, budget);
+    if (lines.length > budget) {
+      visible[budget - 1] =
+        truncateToWidth(visible[budget - 1] ?? "", Math.max(0, width - 1), "") + "…";
+    }
+    rows.push(
+      ...visible.map((line) => theme.fg(profile.status === "invalid" ? "warning" : "text", line)),
+    );
+  }
+  if (rows.length < height)
+    rows.push(theme.fg("dim", "Enter edits the full routes. Current Session is unchanged."));
+  return rows;
+};
+
 export const renderProfileSetPicker = (
   state: ProfileSetPickerRenderState,
   options: Pick<SearchableSelectHostOptions, "keybindingLabel"> & {
@@ -194,6 +271,27 @@ export const renderProfileSetPicker = (
                 theme.fg("dim", footer(state, inner, options.keybindingLabel)),
               ];
         return framedFill(frame, safety.slice(0, bodyHeight), bodyHeight, inner);
+      }
+      if (!state.actionMenu && !state.pendingDeleteLabel) {
+        if (width >= 100) {
+          const { listWidth, detailWidth } = wideListDetailGeometry(width, 30, 0.35);
+          return framedWideRows(frame, {
+            left: rows,
+            right: previewRows(state, theme, detailWidth, bodyHeight),
+            height: bodyHeight,
+            listWidth,
+            detailWidth,
+          });
+        }
+        if (bodyHeight >= 14) {
+          const listHeight = Math.max(4, Math.min(8, Math.floor(bodyHeight / 3)));
+          return framedStackedRows(frame, {
+            list: libraryRows(state, theme, listHeight),
+            detail: previewRows(state, theme, inner, bodyHeight - listHeight - 1),
+            height: bodyHeight,
+            inner,
+          });
+        }
       }
       return framedFill(frame, rows.slice(0, bodyHeight), bodyHeight, inner);
     },

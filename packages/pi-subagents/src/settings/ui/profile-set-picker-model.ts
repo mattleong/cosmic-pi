@@ -1,9 +1,23 @@
 import { resolveNamedProfileSet } from "../../config/options.ts";
+import {
+  PROFILE_IDS,
+  type ProfileId,
+  type ProfileCandidate,
+  type ProfileRouteSource,
+} from "../../profiles/model.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
 import type {
   ProfileSettingsInspection,
   PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
+
+export interface ProfileSetPreviewProfile {
+  readonly id: ProfileId;
+  readonly source: ProfileRouteSource;
+  readonly inherited: boolean;
+  readonly status: "configured" | "disabled" | "invalid";
+  readonly candidates: ReadonlyArray<ProfileCandidate>;
+}
 
 export type ProfileSetPickerEntry =
   | {
@@ -16,6 +30,7 @@ export type ProfileSetPickerEntry =
       readonly repairable: boolean;
       readonly invalidProfileCount: number;
       readonly profileCount: number;
+      readonly preview: ReadonlyArray<ProfileSetPreviewProfile>;
       readonly label: string;
       readonly description: string;
     }
@@ -95,6 +110,21 @@ const scopeEntries = (
         repairable,
         invalidProfileCount,
         profileCount,
+        preview: PROFILE_IDS.map((id) => {
+          const source = resolved.profileSources[id];
+          const candidates = resolved.profiles[id].candidates;
+          return {
+            id,
+            source,
+            inherited: source !== scope && source !== `${scope}-invalid`,
+            status: resolved.invalidProfiles.includes(id)
+              ? "invalid"
+              : candidates.length === 0
+                ? "disabled"
+                : "configured",
+            candidates,
+          };
+        }),
         label: name,
         description: status.join(" · "),
       };
