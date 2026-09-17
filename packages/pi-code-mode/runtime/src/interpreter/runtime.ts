@@ -99,6 +99,7 @@ import { dateMethods, dateStatics, invokeDateMethod, invokeDateStatic } from "..
 import { clipEpochMillis, epochFromLocalParts, epochNow } from "../stdlib/epoch.js";
 import { invokeJson } from "./json.js";
 import { invokeGroupBy } from "./group-by.js";
+import { invokeSetOperation } from "./set-operations.js";
 import { invokeMathMethod, mathConstant, mathConstants } from "../stdlib/math.js";
 import {
   invokeNumberMethod,
@@ -3352,12 +3353,7 @@ class Interpreter<R> {
     if (ref.receiver instanceof SandboxPromise)
       return this.invokePromiseChain(ref.receiver, ref.name, args, node);
     if (Predicate.isString(ref.receiver)) {
-      if (
-        (ref.name === "replace" || ref.name === "replaceAll") &&
-        (args[1] instanceof CodeModeFunction ||
-          args[1] instanceof CoercionFunction ||
-          args[1] instanceof UriFunction)
-      ) {
+      if ((ref.name === "replace" || ref.name === "replaceAll") && isCallableReference(args[1])) {
         return this.invokeStringReplacer(ref.receiver, ref.name, args, node);
       }
       return Effect.succeed(invokeStringMethod(ref.receiver, ref.name, args, node));
@@ -3475,24 +3471,19 @@ class Interpreter<R> {
 
   // Runs a collection callback accepting a user function or supported builtin callable,
   // mirroring the array-method callback contract.
-  private applyCollectionCallback<CallbackInput>(
-    callback: CallbackInput,
+  private applyCollectionCallback(
+    callback: InterpreterValue,
     name: string,
     node: AstNode,
   ): (args: InterpreterArray) => Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-    if (
-      !(callback instanceof CodeModeFunction) &&
-      !(callback instanceof CoercionFunction) &&
-      !(callback instanceof UriFunction)
-    ) {
+    if (!isCallableReference(callback)) {
       throw new InterpreterRuntimeError(`${name} expects a function callback.`, node);
     }
     return (callbackArgs) =>
-      callback instanceof CoercionFunction
-        ? Effect.succeed(invokeCoercion(callback, callbackArgs, node))
-        : callback instanceof UriFunction
-          ? Effect.succeed(invokeUriFunction(callback, callbackArgs, node))
-          : this.invokeFunction(callback, callbackArgs);
+      Effect.suspend(() => {
+        this.deadline.check(node);
+        return this.invokeCallable(callback, callbackArgs, node);
+      });
   }
 
   private invokeMapMethod(
@@ -3553,6 +3544,14 @@ class Interpreter<R> {
     node: AstNode,
   ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
     switch (name) {
+      case "union":
+      case "intersection":
+      case "difference":
+      case "symmetricDifference":
+      case "isSubsetOf":
+      case "isSupersetOf":
+      case "isDisjointFrom":
+        return Effect.sync(() => invokeSetOperation(target, name, args[0], this.deadline, node));
       case "has":
         return Effect.succeed(target.set.has(args[0]));
       case "add":
@@ -3725,11 +3724,7 @@ class Interpreter<R> {
         boundedData(invokeArrayStatic("from", [args[0]], node), "Array.from result"),
       );
     }
-    if (
-      !(callback instanceof CodeModeFunction) &&
-      !(callback instanceof CoercionFunction) &&
-      !(callback instanceof UriFunction)
-    ) {
+    if (!isCallableReference(callback)) {
       throw new InterpreterRuntimeError("Array.from expects a function mapper.", node);
     }
 
@@ -3786,12 +3781,7 @@ class Interpreter<R> {
         if (next.done) return values;
         assertBoundedCollectionSize(values.length + 1, "Array.from result", node);
         const callbackArgs: InterpreterArray = [next.value, values.length];
-        const mapped =
-          callback instanceof CoercionFunction
-            ? invokeCoercion(callback, callbackArgs, node)
-            : callback instanceof UriFunction
-              ? invokeUriFunction(callback, callbackArgs, node)
-              : yield* this.invokeFunction(callback, callbackArgs);
+        const mapped = yield* this.invokeCallable(callback, callbackArgs, node);
         // Keep promises and functions as interpreter values, just as Array.map does.
         values.push(mapped);
       }
@@ -3998,25 +3988,7 @@ class Interpreter<R> {
         );
     }
 
-    const callback = args[0];
-    if (
-      !(callback instanceof CodeModeFunction) &&
-      !(callback instanceof CoercionFunction) &&
-      !(callback instanceof UriFunction)
-    ) {
-      throw new InterpreterRuntimeError(`Array.${name} expects a function callback.`, node);
-    }
-    // Accept a user function or supported builtin callable, so idioms such as
-    // `filter(Boolean)`, `map(String)`, and `map(encodeURIComponent)` work as in JS. Builtins
-    // are synchronous; only CodeModeFunctions can await tool calls.
-    const apply = (
-      callbackArgs: InterpreterArray,
-    ): Effect.Effect<InterpreterValue, RuntimeFailure, R> =>
-      callback instanceof CoercionFunction
-        ? Effect.succeed(invokeCoercion(callback, callbackArgs, node))
-        : callback instanceof UriFunction
-          ? Effect.succeed(invokeUriFunction(callback, callbackArgs, node))
-          : this.invokeFunction(callback, callbackArgs);
+    const apply = this.applyCollectionCallback(args[0], `Array.${name}`, node);
     return Effect.gen({ self: this }, function* () {
       // Iterate a snapshot taken at call time so a callback that mutates the array can't
       // self-extend the loop - matching JS, where elements appended during iteration are not visited.
@@ -4126,15 +4098,15 @@ class Interpreter<R> {
     });
   }
 
-  private sortArray<ComparatorInput>(
+  private sortArray(
     target: InterpreterArray,
-    comparator: ComparatorInput,
+    comparator: InterpreterValue,
     node: AstNode,
   ): Effect.Effect<InterpreterArray, RuntimeFailure, R> {
-    if (comparator !== undefined && !(comparator instanceof CodeModeFunction)) {
-      throw new InterpreterRuntimeError("Array.sort expects an arrow function comparator.", node);
+    if (comparator !== undefined && !isCallableReference(comparator)) {
+      throw new InterpreterRuntimeError("Array.sort expects a function comparator.", node);
     }
-    if (!(comparator instanceof CodeModeFunction)) {
+    if (comparator === undefined) {
       return Effect.sync(() =>
         [...target].sort((a, b) => {
           const left = coerceToString(a);
@@ -4143,6 +4115,7 @@ class Interpreter<R> {
         }),
       );
     }
+    const apply = this.applyCollectionCallback(comparator, "Array.sort", node);
     const mergeSort = (
       items: InterpreterArray,
     ): Effect.Effect<InterpreterArray, RuntimeFailure, R> => {
@@ -4157,9 +4130,7 @@ class Interpreter<R> {
         while (leftIndex < left.length && rightIndex < right.length) {
           // Coerce the comparator's result like JS ToNumber (data objects -> NaN, never a host
           // crash) and treat NaN as 0 - the spec's "no consistent order" -> keep the left element.
-          const order = coerceToNumber(
-            yield* this.invokeFunction(comparator, [left[leftIndex], right[rightIndex]]),
-          );
+          const order = coerceToNumber(yield* apply([left[leftIndex], right[rightIndex]]));
           if (Number.isNaN(order) || order <= 0) merged.push(left[leftIndex++]);
           else merged.push(right[rightIndex++]);
         }

@@ -50,6 +50,13 @@ export const mapMethods = new Set([
 ]);
 
 export const setMethods = new Set([
+  "union",
+  "intersection",
+  "difference",
+  "symmetricDifference",
+  "isSubsetOf",
+  "isSupersetOf",
+  "isDisjointFrom",
   "add",
   "has",
   "delete",

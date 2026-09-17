@@ -34,6 +34,7 @@ behavior for diffability:
 - `src/interpreter/runtime.ts`
 - `src/interpreter/guest-turns.ts` (local async scheduling; see deviation 13)
 - `src/interpreter/group-by.ts` (local grouping callbacks; see deviation 14)
+- `src/interpreter/set-operations.ts` (local Set operations; see deviation 17)
 - `src/interpreter/json.ts` (local JSON callbacks and projection; see deviation 15)
 - `src/stdlib/*.ts` (the twelve upstream modules plus local `epoch.ts`; see
   deviation 6)
@@ -55,7 +56,7 @@ behavior for diffability:
 ## Intentional local deviations
 
 Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
-add confinement and observation. Deviations 11-16 add JavaScript compatibility and correct
+add confinement and observation. Deviations 11-17 add JavaScript compatibility and correct
 mutation and async semantics; their behavior and remaining limits are documented below.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
@@ -314,6 +315,22 @@ mutation and async semantics; their behavior and remaining limits are documented
     `tests/promise-any.test.ts`, including native scheduling comparisons, cancellation, and
     descendant cleanup.
 
+17. **Callback consistency and Set operations.** Array callbacks, Array.from mappers,
+    sort comparators, collection forEach, and string replacers share callable detection and
+    interpreter dispatch with promise/grouping/JSON callbacks. This admits existing builtin,
+    intrinsic, and tool references without invoking guest code as host functions. Callback
+    arguments, nonawaited promise results, tool input checks, and mutation guards remain;
+    callback loops check deadlines before dispatch. Fixed-arity Math methods ignore unused
+    callback arguments, so `.map(Math.floor)` works; consumed arguments still require numbers.
+
+    `interpreter/set-operations.ts` adds union, intersection, difference, symmetricDifference,
+    and subset/superset/disjoint predicates over owned Set and Map wrappers. Map operands
+    contribute keys, not entries. Exact output preflight admits overlapping full-size inputs;
+    source checks bound copy/delete difference before allocation. Traversals check deadlines,
+    preserve native ordering and SameValueZero member identity, and leave operands unchanged.
+    Custom set-like objects are refused. Covered by `tests/callback-compat.test.ts` and
+    `tests/set-operations.test.ts`.
+
 ## Resync policy
 
 Upstream updates are pulled by pinned manual review only:
@@ -324,7 +341,7 @@ Upstream updates are pulled by pinned manual review only:
    programs).
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
-   hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-16
+   hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-17
    for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
    host-adapter code. Re-run the confinement, lifecycle, and compatibility tests.
 4. Update the pinned commit here, then run the full package and workspace

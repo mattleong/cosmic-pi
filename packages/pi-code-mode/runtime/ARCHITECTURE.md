@@ -36,6 +36,7 @@ src/
     model.ts            # interpreter AST/diagnostic model (internal)
     guest-turns.ts      # LOCAL FIFO guest-continuation and promise-reaction scheduling
     group-by.ts         # LOCAL bounded live grouping with interpreter callbacks
+    set-operations.ts   # LOCAL Set algebra, membership predicates, and allocation preflight
     json.ts             # LOCAL JSON callbacks, projection, and exact output preflight
     runtime.ts          # Acorn-based tree-walk interpreter (internal, vendored large file)
     confinement.ts      # LOCAL (non-upstream) in-process confinement: regex guard +
@@ -119,6 +120,19 @@ Object helpers validate without replacing shallow references. `Object.assign`, `
 and `sort` mutate their targets; assignment and sort write-back retain cycle and growth
 guards. Sparse literals preserve holes, with separator preflight charging holes in `join`.
 Copying array variants stay nonmutating. See deviation 12 and the compatibility tests.
+
+## Collection callbacks and Set operations
+
+Array helpers, Array.from, sorting, collection forEach, and string replacement share callable
+detection and ordinary interpreter call dispatch. Callback arguments and nonawaited promises
+retain their existing behavior; builtin and tool input validation still applies. Callback loops
+check the execution deadline before dispatch.
+
+`set-operations.ts` implements Set algebra and membership predicates over owned Set/Map
+wrappers only. It preserves key identity, SameValueZero, and native result ordering. Exact
+result-size preflight permits overlapping full-size inputs without allowing oversized results;
+copy/delete difference checks its bounded source before allocation. Every traversal checks the
+deadline. Neither operand is mutated, and custom set-like objects are refused. See deviation 17.
 
 ## Grouping and JSON callbacks
 

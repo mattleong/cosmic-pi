@@ -54,7 +54,13 @@ export const mathMethods = new Set([
 export const invokeMathMethod = (name: string, args: InterpreterArray, node: AstNode): number => {
   if (!mathMethods.has(name))
     throw new InterpreterRuntimeError(`Math.${name} is not available in CodeMode.`, node);
-  const nums = args.map((arg) => {
+  // Fixed-arity functions ignore callback index/container arguments just as native Math does.
+  // Keep numeric validation for consumed arguments, including every variadic argument.
+  const consumed =
+    name === "max" || name === "min" || name === "hypot"
+      ? args
+      : args.slice(0, name === "pow" ? 2 : 1);
+  const nums = consumed.map((arg) => {
     if (!Predicate.isNumber(arg))
       throw new InterpreterRuntimeError(`Math.${name} expects number arguments.`, node);
     return arg;

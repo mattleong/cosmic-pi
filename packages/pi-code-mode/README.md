@@ -38,6 +38,14 @@ The confined runtime supports async functions, promise `then`/`catch`/`finally`,
 `Promise.any` and `AggregateError`, live `Object.groupBy`/`Map.groupBy`, JSON stringify
 replacer lists/callbacks, and JSON parse revivers. Grouping and JSON callbacks are not
 implicitly awaited. JSON serialization of a promise yields `{}` without observing rejection.
+Array, collection, sorting, and string replacement callbacks accept the same supported callable
+references, including `.map(JSON.stringify)`. Callbacks receive their normal positional arguments;
+tool input validation still applies, so wrap single-input tools in an arrow function.
+
+Sets support `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`,
+`isSupersetOf`, and `isDisjointFrom`. Operands may be Sets or Maps, using Map keys.
+Custom set-like objects are not supported. Result sets preserve member identity and do not
+mutate either operand.
 
 This is not a full JavaScript engine. Custom iterators/thenables, the Promise constructor,
 callback `this` binding, guest `toJSON`, and reviver source contexts remain unsupported.
