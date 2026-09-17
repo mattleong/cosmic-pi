@@ -32,6 +32,19 @@ mathematical preemption of native execution — an admitted native operation sti
 completion, bounded to a small worst case — and some safe patterns are rejected in exchange.
 See the runtime `PROVENANCE.md` (deviation 8) for the exact rules.
 
+## JavaScript compatibility
+
+The confined runtime supports async functions, promise `then`/`catch`/`finally`,
+`Promise.any` and `AggregateError`, live `Object.groupBy`/`Map.groupBy`, JSON stringify
+replacer lists/callbacks, and JSON parse revivers. Grouping and JSON callbacks are not
+implicitly awaited. JSON serialization of a promise yields `{}` without observing rejection.
+
+This is not a full JavaScript engine. Custom iterators/thenables, the Promise constructor,
+callback `this` binding, guest `toJSON`, and reviver source contexts remain unsupported.
+Blocked property names and allocation/deadline limits still apply. `Promise.race` cancels
+losers; `Promise.any` does not cancel them on fulfillment, but execution teardown can cancel
+pending work. Await work you need completed before returning.
+
 ## TUI presentation
 
 In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>`. The optional

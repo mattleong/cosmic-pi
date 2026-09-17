@@ -215,11 +215,12 @@ describe("promises at data boundaries", () => {
     }),
   );
 
-  it.live("JSON.stringify of a promise is a diagnostic, not '{}'", () =>
+  it.live("JSON.stringify does not await or observe a promise", () =>
     Effect.gen(function* () {
-      const diagnostic = yield* error(`return JSON.stringify(Promise.resolve(1))`);
-      expect(diagnostic.kind).toBe("InvalidDataValue");
-      expect(diagnostic.message).toContain("un-awaited Promise");
+      expect(yield* value(`return JSON.stringify(Promise.resolve(1))`)).toBe("{}");
+      expect(yield* run(`JSON.stringify(Promise.reject("unobserved")); return 1`)).toMatchObject({
+        ok: false,
+      });
     }),
   );
 
@@ -539,17 +540,6 @@ describe("timeout interruption of forked calls", () => {
 });
 
 describe("unsupported promise surface", () => {
-  it.live(".then/.catch/.finally give a clear await-instead error", () =>
-    Effect.gen(function* () {
-      for (const method of ["then", "catch", "finally"]) {
-        const diagnostic = yield* error(`return tools.host.sleepy({ id: 1 }).${method}((x) => x)`);
-        expect(diagnostic.kind).toBe("UnsupportedSyntax");
-        expect(diagnostic.message).toContain(`Promise.prototype.${method} is not supported`);
-        expect(diagnostic.message).toContain("await");
-      }
-    }),
-  );
-
   it.live("other property reads on a promise hint at the missing await", () =>
     Effect.gen(function* () {
       const diagnostic = yield* error(`return tools.host.sleepy({ id: 1 }).value`);
@@ -561,8 +551,8 @@ describe("unsupported promise surface", () => {
 
   it.live("unknown Promise statics list what is available", () =>
     Effect.gen(function* () {
-      const diagnostic = yield* error(`return await Promise.any([tools.host.sleepy({ id: 1 })])`);
-      expect(diagnostic.message).toContain("Promise.any is not available");
+      const diagnostic = yield* error(`return Promise.withResolvers()`);
+      expect(diagnostic.message).toContain("Promise.withResolvers is not available");
       expect(diagnostic.message).toContain("Promise.allSettled");
     }),
   );

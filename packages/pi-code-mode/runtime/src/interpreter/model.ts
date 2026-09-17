@@ -96,7 +96,7 @@ export class ComputedValue {
 
 export class PromiseNamespace {}
 
-export type PromiseMethodName = "all" | "allSettled" | "race" | "resolve" | "reject";
+export type PromiseMethodName = "all" | "allSettled" | "any" | "race" | "resolve" | "reject";
 
 export class PromiseMethodReference {
   readonly name: PromiseMethodName;
@@ -205,6 +205,26 @@ export type InterpreterValue =
   | SandboxValue
   | typeof OptionalShortCircuit;
 
+export type CallableReference =
+  | CodeModeFunction
+  | CoercionFunction
+  | UriFunction
+  | ToolReference
+  | GlobalMethodReference
+  | IntrinsicReference
+  | PromiseMethodReference
+  | ErrorConstructorReference;
+
+export const isCallableReference = (value: InterpreterValue): value is CallableReference =>
+  value instanceof CodeModeFunction ||
+  value instanceof CoercionFunction ||
+  value instanceof UriFunction ||
+  (value instanceof ToolReference && value.path.length > 0) ||
+  value instanceof GlobalMethodReference ||
+  value instanceof IntrinsicReference ||
+  value instanceof PromiseMethodReference ||
+  value instanceof ErrorConstructorReference;
+
 export type DiagnosticKind =
   | "ParseError"
   | "UnsupportedSyntax"
@@ -220,7 +240,7 @@ export type DiagnosticKind =
 export const OptionalShortCircuit: unique symbol = Symbol("codemode.optional-short-circuit");
 
 export const supportedSyntaxMessage =
-  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (incl. for...of and for...in over object/array/tools keys), arrow functions, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, and Promise.all/allSettled/race/resolve/reject over arrays mixing promises and plain values for parallel tool calls (promise chaining with .then/.catch is not supported - use await with try/catch).";
+  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (incl. for...of and for...in over object/array/tools keys), arrow functions, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, Object.groupBy/Map.groupBy, JSON replacers/revivers, AggregateError, and Promise.all/allSettled/any/race/resolve/reject over arrays mixing promises and plain values for parallel tool calls, with then/catch/finally chaining. Grouping and JSON callbacks are not implicitly awaited.";
 
 type InterpreterRuntimeErrorProps = {
   readonly message: string;

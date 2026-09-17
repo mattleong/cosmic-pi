@@ -35,6 +35,8 @@ src/
   interpreter/
     model.ts            # interpreter AST/diagnostic model (internal)
     guest-turns.ts      # LOCAL FIFO guest-continuation and promise-reaction scheduling
+    group-by.ts         # LOCAL bounded live grouping with interpreter callbacks
+    json.ts             # LOCAL JSON callbacks, projection, and exact output preflight
     runtime.ts          # Acorn-based tree-walk interpreter (internal, vendored large file)
     confinement.ts      # LOCAL (non-upstream) in-process confinement: regex guard +
                         # subject caps, amplification limits, wall-clock deadline
@@ -105,13 +107,34 @@ Execution-owned fibers keep fire-and-forget tools alive after an async function 
 Completion drains newly admitted work until quiescent before reporting unhandled failures.
 Timeout and host cancellation close the execution scope. Losing races cancel descendants,
 including those of completed activations, but never their own activation ancestors;
-re-entrant cancellation is guarded against mutual interruption waits. Promise chaining,
-custom thenables, and custom iterators remain unsupported. See deviation 13.
+re-entrant cancellation is guarded against mutual interruption waits. `then`, `catch`, and
+`finally` share FIFO reactions and callable dispatch with ordinary calls. Each returned chain
+tracks its own rejection. `Promise.any` retains losing work while execution continues; execution
+teardown still cancels pending observed work. `AggregateError` preserves original rejection
+values in nonenumerable `errors`, with optional nonenumerable `cause`. Custom thenables,
+custom iterators, `this` binding, and the Promise constructor remain unsupported.
+See deviations 13 and 16.
 
 Object helpers validate without replacing shallow references. `Object.assign`, `reverse`,
 and `sort` mutate their targets; assignment and sort write-back retain cycle and growth
 guards. Sparse literals preserve holes, with separator preflight charging holes in `join`.
 Copying array variants stay nonmutating. See deviation 12 and the compatibility tests.
+
+## Grouping and JSON callbacks
+
+`group-by.ts` owns live `Object.groupBy`/`Map.groupBy` iteration, preserving entry and key
+identity without awaiting callback results. Source, visited-entry, group-size, key-coercion,
+and deadline checks bound growth and delete/reinsert loops. Object groups use null-prototype
+records and reject blocked keys.
+
+`json.ts` owns JSON evaluation; `stdlib/json.ts` holds synchronous native syntax/encoding
+primitives and the method allowlist. Replacers visit
+original values before projection; revivers run bottom-up and delete properties on undefined.
+Neither awaits callbacks. Own-property-only, null-prototype projections prevent property lists
+from reaching host prototypes. Exact UTF-16 accounting covers escapes and indentation before
+native serialization. Traversal accounting includes property-list lookups on opaque `{}`
+projections. Returned reviver graphs are validated without replacing references. Guest `this`,
+custom `toJSON`, and reviver source contexts are not provided. See deviations 14–15.
 
 ## In-process confinement (local deviation)
 
@@ -161,7 +184,7 @@ byte budget. Covered by `tests/confinement.test.ts`.
 
 ## Vendored-code exception
 
-`src/interpreter/runtime.ts` (~4.8k lines) and other vendored files
+`src/interpreter/runtime.ts` (~5k lines) and other vendored files
 intentionally exceed the repository's soft file-size guidance and keep upstream
 structure, naming, and style. Do not refactor them for local conventions:
 upstream comparability is the safety property that keeps pinned manual resyncs

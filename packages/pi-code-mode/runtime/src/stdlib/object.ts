@@ -19,6 +19,7 @@ export const objectStatics = new Set([
   "hasOwn",
   "assign",
   "fromEntries",
+  "groupBy",
 ]);
 
 // Validate the original graph without replacing its members with checkpoint copies.

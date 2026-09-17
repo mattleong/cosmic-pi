@@ -1,5 +1,6 @@
 export const errorConstructors = new Set([
   "Error",
+  "AggregateError",
   "TypeError",
   "RangeError",
   "SyntaxError",
@@ -67,13 +68,14 @@ const coerceToStringBudgeted = (value: InterpreterValue, budget: { remaining: nu
     if (budget.remaining < 0) overflow();
     return text;
   };
-  if (value === null) return "null";
-  if (value === undefined) return "undefined";
+  if (value === null) return spend("null");
+  if (value === undefined) return spend("undefined");
   if (value instanceof SandboxDate)
-    return Number.isFinite(value.time) ? isoString(value.time) : "Invalid Date";
+    return spend(Number.isFinite(value.time) ? isoString(value.time) : "Invalid Date");
   if (value instanceof SandboxRegExp) return spend(`/${value.regex.source}/${value.regex.flags}`);
-  if (value instanceof SandboxMap) return "[object Map]";
-  if (value instanceof SandboxSet) return "[object Set]";
+  if (value instanceof SandboxPromise) return spend("[object Promise]");
+  if (value instanceof SandboxMap) return spend("[object Map]");
+  if (value instanceof SandboxSet) return spend("[object Set]");
   if (value instanceof SandboxURL) return spend(value.url.href);
   if (value instanceof SandboxURLSearchParams) {
     // Confinement preflight: the serialized worst case (percent-encoding expansion) is
@@ -86,12 +88,12 @@ const coerceToStringBudgeted = (value: InterpreterValue, budget: { remaining: nu
     return spend(value.params.toString());
   }
   if (hasObjectRuntimeType(value)) {
-    if (!Array.isArray(value)) return "[object Object]";
+    if (!Array.isArray(value)) return spend("[object Object]");
+    budget.remaining -= Math.max(0, value.length - 1);
+    if (budget.remaining < 0) overflow();
     const parts: Array<string> = [];
     for (const item of value) {
       parts.push(item === null || item === undefined ? "" : coerceToStringBudgeted(item, budget));
-      budget.remaining -= 1; // separator
-      if (budget.remaining < 0) overflow();
     }
     return parts.join(",");
   }
@@ -111,7 +113,7 @@ export const coerceToNumber = (value: InterpreterValue): number => {
 
 export const invokeCoercion = (ref: CoercionFunction, args: InterpreterArray, node: AstNode) => {
   const raw = args[0];
-  if (isSandboxValue(raw)) {
+  if (isSandboxValue(raw) || raw instanceof SandboxPromise) {
     if (ref.name === "Boolean") return true;
     if (ref.name === "Number") return coerceToNumber(raw);
     if (ref.name === "String") return coerceToString(raw);
@@ -149,6 +151,7 @@ import {
   isSandboxValue,
   SandboxDate,
   SandboxMap,
+  SandboxPromise,
   SandboxRegExp,
   SandboxSet,
   SandboxURL,

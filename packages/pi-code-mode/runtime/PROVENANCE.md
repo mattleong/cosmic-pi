@@ -33,6 +33,8 @@ behavior for diffability:
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
 - `src/interpreter/guest-turns.ts` (local async scheduling; see deviation 13)
+- `src/interpreter/group-by.ts` (local grouping callbacks; see deviation 14)
+- `src/interpreter/json.ts` (local JSON callbacks and projection; see deviation 15)
 - `src/stdlib/*.ts` (the twelve upstream modules plus local `epoch.ts`; see
   deviation 6)
 - Behavioral portions of `test/codemode.test.ts`, plus `test/parity.test.ts`,
@@ -53,7 +55,7 @@ behavior for diffability:
 ## Intentional local deviations
 
 Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
-add confinement and observation. Deviations 11-13 add JavaScript compatibility and correct
+add confinement and observation. Deviations 11-16 add JavaScript compatibility and correct
 mutation and async semantics; their behavior and remaining limits are documented below.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
@@ -267,11 +269,50 @@ mutation and async semantics; their behavior and remaining limits are documented
     race-loser cancellation extends to descendants of completed activations, excludes
     activation ancestors and duplicate winners, and guards re-entrant cancellation to avoid
     mutual interruption waits. Timeout and host cancellation close the execution scope.
-    Promise chaining, `any`, custom thenables/iterators, and `this` binding remain unsupported.
+    Custom thenables/iterators and `this` binding remain unsupported. Chaining and `any`
+    are added in deviation 16.
     Covered by local async-function and async-scheduling suites, including reaction-order,
     cancellation, and scope-isolation regressions. Earlier tests that expected awaited
     string replacers were corrected; Array.from async tests now explicitly consume their
     mapped promises.
+
+14. **Grouping helpers.** `interpreter/group-by.ts` implements `Object.groupBy` and
+    `Map.groupBy` over supported live iterables, with value/index callbacks and shallow
+    identity preservation. Object groups use null-prototype records and reject blocked keys;
+    Map groups retain SameValueZero keys, including opaque functions and promises. Callbacks
+    are not implicitly awaited. Source, visited-entry, bucket-growth, and deadline checks
+    bound self-extending iteration. Shared string coercion charges Date and object-tag text,
+    plus exact array separator counts, before joining grouping keys. Covered by
+    `tests/group-by.test.ts`.
+
+15. **JSON replacers and revivers.** `interpreter/json.ts` replaces synchronous JSON
+    evaluation; `stdlib/json.ts` retains synchronous native syntax/encoding primitives and the
+    method allowlist. Stringify accepts property-name
+    arrays and callable replacers. Parse invokes bottom-up revivers, preserving returned
+    references and sparse deletions. Shared interpreter callable dispatch never invokes guest
+    callbacks as host functions or implicitly awaits them. Built-in Date/URL conversion occurs
+    before replacers; promises serialize as `{}` without observing rejection.
+
+    Null-prototype, own-property-only projections prevent inherited host-property access.
+    Blocked keys remain refused. Exact UTF-16 output preflight charges escaping and indentation,
+    replacing the earlier conservative estimate. Depth/cycle checks and a bounded traversal
+    count cover callback-produced graphs and property-list lookups, including empty opaque
+    projections. Excluded branches are not materialized. Guest `this`, custom `toJSON`, and
+    reviver source contexts remain unsupported. Covered by `tests/json-callbacks.test.ts` and
+    updated confinement/promise tests.
+
+16. **Promise chains and first fulfillment.** `then`, `catch`, and `finally` use execution-owned
+    FIFO reactions, adoption jobs, and logical settlements. Returned chains track their own
+    unhandled failures; passthrough handlers, cleanup overrides, and direct self-resolution
+    follow native behavior. All existing callable references share ordinary call dispatch.
+    `Promise.any` resolves on first fulfillment or rejects with an `AggregateError` containing
+    original rejection values in input order. It does not cancel losers on fulfillment while
+    guest execution continues; normal execution teardown still cancels pending observed work.
+    `AggregateError` supports construction with or without `new`, Error branding, nonenumerable
+    `errors`, and optional nonenumerable `cause`. Custom thenables/iterators and the Promise
+    constructor are not added. Covered by `tests/promise-chaining.test.ts` and
+    `tests/promise-any.test.ts`, including native scheduling comparisons, cancellation, and
+    descendant cleanup.
 
 ## Resync policy
 
@@ -283,7 +324,7 @@ Upstream updates are pulled by pinned manual review only:
    programs).
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
-   hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-13
+   hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-16
    for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
    host-adapter code. Re-run the confinement, lifecycle, and compatibility tests.
 4. Update the pinned commit here, then run the full package and workspace

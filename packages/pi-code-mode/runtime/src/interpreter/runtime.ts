@@ -79,6 +79,7 @@ import {
   type InterpreterValue,
   isRecord,
   makeInterpreterObject,
+  isCallableReference,
   type MemberReference,
   OptionalShortCircuit,
   PromiseMethodReference,
@@ -96,7 +97,8 @@ import { arrayMethods, mapMethods, setMethods, spreadItems } from "../stdlib/col
 import { consoleMethods, MAX_CONSOLE_DEPTH } from "../stdlib/console.js";
 import { dateMethods, dateStatics, invokeDateMethod, invokeDateStatic } from "../stdlib/date.js";
 import { clipEpochMillis, epochFromLocalParts, epochNow } from "../stdlib/epoch.js";
-import { invokeJsonMethod } from "../stdlib/json.js";
+import { invokeJson } from "./json.js";
+import { invokeGroupBy } from "./group-by.js";
 import { invokeMathMethod, mathConstant, mathConstants } from "../stdlib/math.js";
 import {
   invokeNumberMethod,
@@ -729,7 +731,10 @@ const invokeGlobalMethod = (ref: GlobalMethodReference, args: InterpreterArray, 
       node,
     );
   }
-  return invokeJsonMethod(ref.name, args, node);
+  throw new InterpreterRuntimeError(
+    `${ref.namespace}.${ref.name} is not available in CodeMode.`,
+    node,
+  );
 };
 
 // Every identifier a parameter pattern binds, used to seed TDZ slots before defaults run.
@@ -1007,10 +1012,10 @@ class Interpreter<R> {
 
   // Promise reactions run after the current synchronous guest turn, including reactions
   // to already-fulfilled values. Never hold a guest turn while waiting on a promise.
-  private promiseReaction<A, B>(
+  private promiseReaction<A, B, Requirements = never>(
     settlement: Effect.Effect<A, RuntimeFailure>,
-    reaction: (value: A) => Effect.Effect<B, RuntimeFailure>,
-  ): Effect.Effect<B, RuntimeFailure> {
+    reaction: (value: A) => Effect.Effect<B, RuntimeFailure, Requirements>,
+  ): Effect.Effect<B, RuntimeFailure, Requirements> {
     return Effect.flatMap(Effect.exit(settlement), (exit) => {
       if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
         return Effect.failCause(exit.cause);
@@ -1951,6 +1956,8 @@ class Interpreter<R> {
     }
     if (errorConstructors.has(name)) {
       return Effect.gen({ self: this }, function* () {
+        if (name === "AggregateError")
+          return this.constructAggregateError(yield* this.evaluateCallArguments(argNodes), node);
         const arg =
           argNodes.length > 0
             ? yield* this.evaluateExpression(asNode(argNodes[0], "arguments[0]"))
@@ -2500,7 +2507,17 @@ class Interpreter<R> {
         return OptionalShortCircuit;
 
       const args = yield* this.evaluateCallArguments(argNodes);
+      return yield* this.invokeCallable(callable, args, node, callee);
+    });
+  }
 
+  private invokeCallable(
+    callable: InterpreterValue,
+    args: InterpreterArray,
+    node: AstNode,
+    callee = node,
+  ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+    return Effect.gen({ self: this }, function* () {
       if (callable instanceof ToolReference) {
         if (callable.path.length === 0)
           throw new InterpreterRuntimeError("The tools root is not callable.", callee);
@@ -2517,6 +2534,26 @@ class Interpreter<R> {
         return yield* this.invokeIntrinsic(callable, args, node);
       }
       if (callable instanceof GlobalMethodReference) {
+        if (callable.namespace === "JSON")
+          return yield* invokeJson(
+            callable.name,
+            args,
+            node,
+            (callback, _name, callbackNode) => (callbackArgs) =>
+              this.invokeCallable(callback, callbackArgs, callbackNode),
+            () => this.deadline.check(),
+          );
+        if (
+          (callable.namespace === "Object" || callable.namespace === "Map") &&
+          callable.name === "groupBy"
+        )
+          return yield* invokeGroupBy(
+            callable.namespace,
+            args,
+            node,
+            (callback, callbackArgs) => this.invokeCallable(callback, callbackArgs, node),
+            () => this.deadline.check(),
+          );
         if (callable.namespace === "console") return this.invokeConsole(callable.name, args, node);
         if (callable.namespace === "Array" && callable.name === "from")
           return yield* this.invokeArrayFrom(args, node);
@@ -2555,6 +2592,7 @@ class Interpreter<R> {
       }
       // `Error("msg")` without `new` constructs an error exactly like `new Error("msg")`, as in JS.
       if (callable instanceof ErrorConstructorReference) {
+        if (callable.name === "AggregateError") return this.constructAggregateError(args, node);
         return createErrorValue(
           callable.name,
           args[0] === undefined ? "" : coerceToString(args[0]),
@@ -2800,6 +2838,146 @@ class Interpreter<R> {
     });
   }
 
+  private constructAggregateError(args: InterpreterArray, node: AstNode): InterpreterObject {
+    const errors = Array.isArray(args[0]) ? Array.from(args[0]) : spreadItems(args[0]);
+    if (errors === undefined)
+      throw new InterpreterRuntimeError("AggregateError expects a supported iterable.", node).as(
+        "TypeError",
+      );
+    assertBoundedCollectionSize(errors.length, "AggregateError errors", node);
+    const result = createErrorValue(
+      "AggregateError",
+      args[1] === undefined ? "" : coerceToString(args[1]),
+    );
+    Object.defineProperty(result, "errors", { value: errors, writable: true, configurable: true });
+    const options = args[2];
+    if (
+      options !== null &&
+      hasObjectRuntimeType(options) &&
+      (Object.getPrototypeOf(options) === null ||
+        Object.getPrototypeOf(options) === Object.prototype) &&
+      Object.hasOwn(options, "cause")
+    ) {
+      // SAFETY: The closed guest domain and plain-object prototype check exclude wrappers.
+      const cause = (options as InterpreterObject)["cause"];
+      Object.defineProperty(result, "cause", { value: cause, writable: true, configurable: true });
+    }
+    return result;
+  }
+
+  private chainReaction(
+    source: SandboxPromise,
+    reaction: (
+      exit: Exit.Exit<InterpreterValue, RuntimeFailure>,
+    ) => Effect.Effect<InterpreterValue, RuntimeFailure, R>,
+    descendants: Set<SandboxPromise>,
+  ): Effect.Effect<SandboxPromise, never, R> {
+    const observed = Effect.exit(this.settlePromise(source));
+    const settlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
+    let promise: SandboxPromise | undefined;
+    const work = Effect.gen({ self: this }, function* () {
+      yield* this.promiseReaction(observed, (exit) =>
+        Effect.gen({ self: this }, function* () {
+          if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+            return yield* Effect.failCause(exit.cause);
+          const result = yield* Effect.exit(Effect.suspend(() => reaction(exit)));
+          if (Exit.isFailure(result) || !(result.value instanceof SandboxPromise)) {
+            yield* Deferred.done(settlement, result);
+            return;
+          }
+          if (result.value === promise) {
+            yield* Deferred.fail(
+              settlement,
+              new InterpreterRuntimeError("A promise cannot resolve to itself.").as("TypeError"),
+            );
+            return;
+          }
+          const adopted = Effect.exit(this.settlePromise(result.value));
+          // Promise resolution queues an adoption job, which installs its reaction before
+          // relinquishing that job's FIFO turn.
+          yield* Effect.forkChild(
+            Effect.gen({ self: this }, function* () {
+              yield* this.execution.turns.withPermit(
+                Effect.asVoid(
+                  Effect.forkChild(
+                    this.promiseReaction(adopted, (value) => Deferred.done(settlement, value)),
+                    { startImmediately: true },
+                  ),
+                ),
+              );
+              yield* Effect.exit(Deferred.await(settlement));
+            }),
+            { startImmediately: true },
+          );
+        }),
+      );
+      return yield* Deferred.await(settlement);
+    });
+    return Effect.map(this.startPromise(work, descendants, settlement), (value) => {
+      promise = value;
+      return value;
+    });
+  }
+
+  private invokePromiseChain(
+    source: SandboxPromise,
+    name: string,
+    args: InterpreterArray,
+    node: AstNode,
+  ): Effect.Effect<SandboxPromise, never, R> {
+    const activation = new Interpreter(
+      this.invokeTool,
+      this.toolKeys,
+      this.logs,
+      this.deadline,
+      this.onToolCallLifecycle,
+      this,
+    );
+    const descendants = new Set<SandboxPromise>();
+    activation.turn = { held: false };
+    activation.owners = [...this.owners, descendants];
+    return this.chainReaction(
+      source,
+      (exit) => {
+        const handler =
+          name === "catch"
+            ? Exit.isFailure(exit)
+              ? args[0]
+              : undefined
+            : name === "finally"
+              ? args[0]
+              : args[Exit.isSuccess(exit) ? 0 : 1];
+        if (!isCallableReference(handler))
+          return Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause);
+        return Effect.gen(function* () {
+          const result = yield* activation.invokeCallable(
+            handler,
+            name === "finally"
+              ? []
+              : [Exit.isSuccess(exit) ? exit.value : caughtErrorValue(Cause.squash(exit.cause))],
+            node,
+          );
+          if (name !== "finally") return result;
+          const cleanup =
+            result instanceof SandboxPromise
+              ? result
+              : new SandboxPromise(undefined, Effect.succeed(result));
+          return yield* activation.chainReaction(
+            cleanup,
+            (cleaned) => {
+              if (Exit.isFailure(cleaned)) return Effect.failCause(cleaned.cause);
+              return Exit.isSuccess(exit)
+                ? Effect.succeed(exit.value)
+                : Effect.failCause(exit.cause);
+            },
+            new Set(),
+          );
+        });
+      },
+      descendants,
+    );
+  }
+
   // Promise.* over ordinary runtime values. Combinators accept ANY array (or spreadable
   // collection) mixing promise values and plain data - built inline, beforehand, via spread,
   // whatever - because tool calls already run eagerly on their own fibers. Combinators
@@ -2813,7 +2991,7 @@ class Interpreter<R> {
       return this.evaluatePromiseMethod(ref, args, node);
     }
     const items = Array.isArray(args[0]) ? Array.from(args[0]) : spreadItems(args[0]);
-    if (items?.length === 0 && ref.name !== "race")
+    if (items?.length === 0 && (ref.name === "all" || ref.name === "allSettled"))
       return Effect.succeed(new SandboxPromise(undefined, Effect.succeed([])));
     const inputs = items === undefined ? args : [items];
     const settlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
@@ -2874,6 +3052,40 @@ class Interpreter<R> {
     }
 
     switch (ref.name) {
+      case "any": {
+        const observations: Array<Effect.Effect<Exit.Exit<InterpreterValue, RuntimeFailure>>> =
+          items.map((item) =>
+            item instanceof SandboxPromise
+              ? Effect.exit(this.settlePromise(item, node))
+              : Effect.succeed(Exit.succeed(item)),
+          );
+        return Effect.gen({ self: this }, function* () {
+          const errors: InterpreterArray = [];
+          let remaining = observations.length;
+          const reject = () =>
+            Deferred.fail(
+              settlement,
+              new ProgramThrow(
+                this.constructAggregateError([errors, "All promises were rejected"], node),
+              ),
+            );
+          if (remaining === 0) yield* reject();
+          for (const [index, observation] of observations.entries()) {
+            yield* Effect.forkChild(
+              this.promiseReaction(observation, (exit) => {
+                if (Exit.isSuccess(exit)) return Deferred.succeed(settlement, exit.value);
+                if (Cause.hasInterruptsOnly(exit.cause))
+                  return Deferred.failCause(settlement, exit.cause);
+                errors[index] = caughtErrorValue(Cause.squash(exit.cause));
+                remaining--;
+                return remaining === 0 ? reject() : Effect.void;
+              }),
+              { startImmediately: true },
+            );
+          }
+          return yield* Deferred.await(settlement);
+        });
+      }
       case "all": {
         // Mark every promise element observed up-front (Promise.all handles all of its
         // members' failures, as in JS). Observe concurrently so a later rejection does
@@ -3137,6 +3349,8 @@ class Interpreter<R> {
     args: InterpreterArray,
     node: AstNode,
   ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+    if (ref.receiver instanceof SandboxPromise)
+      return this.invokePromiseChain(ref.receiver, ref.name, args, node);
     if (Predicate.isString(ref.receiver)) {
       if (
         (ref.name === "replace" || ref.name === "replaceAll") &&
@@ -4185,7 +4399,7 @@ class Interpreter<R> {
           return new PromiseMethodReference(key as PromiseMethodName);
         }
         throw new InterpreterRuntimeError(
-          `Promise.${String(key)} is not available in CodeMode. Available: Promise.all, Promise.allSettled, Promise.race, Promise.resolve, and Promise.reject; consume promises with await.`,
+          `Promise.${String(key)} is not available in CodeMode. Available: Promise.all, Promise.allSettled, Promise.any, Promise.race, Promise.resolve, and Promise.reject; consume promises with await or then/catch/finally.`,
           propertyNode,
         );
       }
@@ -4283,17 +4497,10 @@ class Interpreter<R> {
         return new ComputedValue(undefined);
       }
 
-      // Any property access on a promise is a confused program (`p.then(...)`, `p.value`);
-      // reading `undefined` here would hide the missing await, so both paths get an explicit,
-      // await-hinting error instead of the forgiving unknown-property fallthrough.
+      // Expose only confined reactions. Other reads retain the missing-await diagnostic.
       if (objectValue instanceof SandboxPromise) {
         if (key === "then" || key === "catch" || key === "finally") {
-          throw new InterpreterRuntimeError(
-            `Promise.prototype.${String(key)} is not supported in CodeMode; use await instead (with try/catch to handle failures) - e.g. \`const result = await tools.ns.tool(...)\`.`,
-            propertyNode,
-            "UnsupportedSyntax",
-            [supportedSyntaxMessage],
-          );
+          return new IntrinsicReference(objectValue, key);
         }
         throw new InterpreterRuntimeError(
           "This value is an un-awaited Promise and has no readable properties; await it first - e.g. `const result = await tools.ns.tool(...)`.",

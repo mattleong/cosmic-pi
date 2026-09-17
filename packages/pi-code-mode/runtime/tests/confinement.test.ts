@@ -777,12 +777,19 @@ describe("JSON and log growth limits", () => {
     }),
   );
 
-  it.live("indented JSON.stringify runs against a proportionally smaller budget", () =>
+  it.live("JSON.stringify charges actual indentation before allocating output", () =>
     Effect.gen(function* () {
       const error = yield* timed(() =>
-        failure(`const s = "x".repeat(1_000_000); return JSON.stringify([s], null, 2).length`),
+        failure(
+          `const s = "x".repeat(${MAX_GUEST_STRING_LENGTH} - 4); return JSON.stringify([s], null, 2).length`,
+        ),
       );
       expect(error.kind).toBe("InvalidDataValue");
+      expect(
+        yield* run(
+          `const s = "x".repeat(${MAX_GUEST_STRING_LENGTH} - 4); return JSON.stringify([s]).length`,
+        ),
+      ).toMatchObject({ ok: true, value: MAX_GUEST_STRING_LENGTH });
       const fits = yield* run(`return JSON.stringify({ a: 1 }, null, 2)`);
       expect(fits).toMatchObject({ ok: true, value: '{\n  "a": 1\n}' });
     }),
