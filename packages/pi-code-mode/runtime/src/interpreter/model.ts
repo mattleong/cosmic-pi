@@ -61,6 +61,7 @@ export type MemberReference = {
 };
 
 export class CodeModeFunction {
+  readonly async: boolean;
   readonly parameters: ReadonlyArray<AstNode>;
   readonly body: AstNode;
   readonly capturedScopes: ReadonlyArray<Map<string, Binding>>;
@@ -68,7 +69,9 @@ export class CodeModeFunction {
     parameters: ReadonlyArray<AstNode>,
     body: AstNode,
     capturedScopes: ReadonlyArray<Map<string, Binding>>,
+    async = false,
   ) {
+    this.async = async;
     this.parameters = parameters;
     this.body = body;
     this.capturedScopes = capturedScopes;

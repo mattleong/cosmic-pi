@@ -5,10 +5,13 @@ import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.js";
 import { parse } from "acorn";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Scope from "effect/Scope";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
+import { GuestTurns } from "./guest-turns.js";
 import {
   DiagnosticCategory,
   ModuleKind,
@@ -103,7 +106,7 @@ import {
   numberMethods,
   numberStatics,
 } from "../stdlib/number.js";
-import { invokeObjectMethod } from "../stdlib/object.js";
+import { invokeObjectAssign, invokeObjectMethod } from "../stdlib/object.js";
 import { promiseStatics, TOOL_CALL_CONCURRENCY } from "../stdlib/promise.js";
 import {
   escapeRegexHint,
@@ -445,8 +448,9 @@ const invokeStringMethod = (value: string, name: string, args: InterpreterArray,
       break;
     }
     case "split": {
-      if (args.length === 0) {
-        result = [value];
+      if (args[0] === undefined) {
+        const limit = optNum(1);
+        result = limit !== undefined && limit >>> 0 === 0 ? [] : [value];
         break;
       }
       if (args[0] instanceof SandboxRegExp) {
@@ -648,14 +652,6 @@ const invokeArrayStatic = (name: string, args: InterpreterArray, node: AstNode) 
     case "of":
       return [...args];
     case "from": {
-      if (args.length > 1) {
-        throw new InterpreterRuntimeError(
-          "Array.from(...) does not support a map function in CodeMode; call .map() on the result instead.",
-          node,
-          "UnsupportedSyntax",
-          [supportedSyntaxMessage],
-        );
-      }
       // Map/Set materialize directly (the data checkpoint would serialize them to {}).
       // Confinement preflight: the projected entry count is charged before any native
       // materialization allocates it.
@@ -766,6 +762,8 @@ const collectPatternNames = (pattern: AstNode, out: Array<string> = []): Array<s
   return out;
 };
 
+type PromiseOwners = ReadonlyArray<Set<SandboxPromise>>;
+
 class Interpreter<R> {
   private scopes: Array<Map<string, Binding>>;
   private readonly invokeTool: (
@@ -776,7 +774,16 @@ class Interpreter<R> {
   private readonly onToolCallLifecycle:
     | ((event: ToolRuntime.ToolCallLifecycleEvent) => Effect.Effect<void, never, R>)
     | undefined;
-  private nextToolCallLifecycleId = 0;
+  private readonly execution: {
+    nextToolCallLifecycleId: number;
+    activePromises: number;
+    scope: Scope.Scope;
+    turns: GuestTurns;
+    interrupting: Set<SandboxPromise>;
+  };
+  private owners: PromiseOwners;
+  private turn: { held: boolean };
+  private firstBoundary: Deferred.Deferred<void> | undefined;
   // Enumerable namespace/tool names at a node of the host tool tree, threaded from
   // ToolRuntime.make like invokeTool: the interpreter never holds the tree itself.
   private readonly toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>;
@@ -805,16 +812,29 @@ class Interpreter<R> {
     onToolCallLifecycle?: (
       event: ToolRuntime.ToolCallLifecycleEvent,
     ) => Effect.Effect<void, never, R>,
+    parent?: Interpreter<R>,
   ) {
-    const globalScope = new Map<string, Binding>();
-    this.scopes = [globalScope];
+    this.execution = parent?.execution ?? {
+      nextToolCallLifecycleId: 0,
+      activePromises: 0,
+      scope: Scope.makeUnsafe(),
+      turns: new GuestTurns(),
+      interrupting: new Set(),
+    };
+    this.owners = parent?.owners ?? [];
+    this.turn = parent?.turn ?? { held: false };
+    this.scopes = parent?.scopes.slice() ?? [];
     this.invokeTool = invokeTool;
     this.onToolCallLifecycle = onToolCallLifecycle;
     this.toolKeys = toolKeys;
     this.logs = logs;
     this.deadline = deadline;
     this.lastValue = undefined;
-    this.callPermits = Semaphore.makeUnsafe(TOOL_CALL_CONCURRENCY);
+    this.callPermits = parent?.callPermits ?? Semaphore.makeUnsafe(TOOL_CALL_CONCURRENCY);
+    this.pendingSettlements = parent?.pendingSettlements ?? this.pendingSettlements;
+    if (parent !== undefined) return;
+    const globalScope = new Map<string, Binding>();
+    this.scopes.push(globalScope);
     globalScope.set("tools", { mutable: false, value: new ToolReference([]) });
     globalScope.set("Promise", { mutable: false, value: new PromiseNamespace() });
     globalScope.set("undefined", { mutable: false, value: undefined });
@@ -864,6 +884,7 @@ class Interpreter<R> {
     // JS module scope, instead of colliding with the seeded globals.
     this.pushScope();
     return Effect.gen({ self: this }, function* () {
+      yield* this.execution.turns.take(this.turn);
       this.hoistFunctions(program.body);
       let value: InterpreterValue = undefined;
       let returned = false;
@@ -892,10 +913,113 @@ class Interpreter<R> {
       // The program body runs inside an implicit async function, so a returned promise
       // resolves before crossing the data boundary - `return tools.ns.tool(...)` works
       // without an explicit await, exactly as in JS.
+      yield* this.releaseTurn();
       if (value instanceof SandboxPromise) value = yield* this.settlePromise(value);
       yield* this.drainPendingSettlements();
       return value;
-    }).pipe(Effect.ensuring(Effect.sync(() => this.popScope())));
+    }).pipe(
+      Effect.onExit((exit) => Scope.close(this.execution.scope, exit)),
+      Effect.ensuring(this.releaseTurn()),
+      Effect.ensuring(Effect.sync(() => this.popScope())),
+    );
+  }
+
+  private releaseTurn(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      if (!this.turn.held) return Effect.void;
+      this.turn.held = false;
+      return this.execution.turns.release();
+    });
+  }
+
+  private startPromise(
+    work: Effect.Effect<InterpreterValue, RuntimeFailure, R>,
+    descendants?: Set<SandboxPromise>,
+    settlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>(),
+  ): Effect.Effect<SandboxPromise, never, R> {
+    // Admission and observer installation are atomic with respect to cancellation. The
+    // child work itself remains interruptible, including its synchronous guest prefix.
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen({ self: this }, function* () {
+        assertBoundedCollectionSize(
+          this.execution.activePromises + this.pendingSettlements.size + 1,
+          "Pending promises",
+        );
+        this.execution.activePromises++;
+        let ownerPromise: SandboxPromise | undefined;
+        const owned =
+          descendants === undefined
+            ? work
+            : work.pipe(
+                Effect.onInterrupt(() =>
+                  Effect.forEach(
+                    descendants,
+                    (child) => this.interruptPromise(child, ownerPromise?.interrupted === true),
+                    { discard: true },
+                  ),
+                ),
+              );
+        const fiber = yield* Effect.forkIn(
+          restore(owned.pipe(Effect.onExit((exit) => Deferred.done(settlement, exit)))),
+          this.execution.scope,
+          {
+            startImmediately: true,
+          },
+        );
+        const promise = new SandboxPromise(fiber, undefined, descendants, settlement);
+        ownerPromise = promise;
+        for (const owner of this.owners) owner.add(promise);
+        this.pendingSettlements.add(promise);
+        fiber.addObserver((exit) => {
+          this.execution.activePromises--;
+          for (const owner of this.owners) owner.delete(promise);
+          // Keep only live work and unobserved failures, not every completed invocation.
+          if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) {
+            this.pendingSettlements.delete(promise);
+          }
+        });
+        return promise;
+      }),
+    );
+  }
+
+  private interruptPromise(promise: SandboxPromise, raceInterrupted: boolean): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      // Cancelling an ancestor would cancel this race itself and form an interruption
+      // wait cycle. Cross-linked sibling races likewise must not re-enter cancellation.
+      if (
+        (raceInterrupted &&
+          promise.descendants !== undefined &&
+          this.owners.some((owner) => owner === promise.descendants)) ||
+        this.execution.interrupting.has(promise)
+      )
+        return Effect.void;
+      this.execution.interrupting.add(promise);
+      return Effect.gen({ self: this }, function* () {
+        if (raceInterrupted) promise.interrupted = true;
+        if (promise.fiber !== undefined) yield* Fiber.interrupt(promise.fiber);
+        // Completed losing activations can still own live descendants.
+        for (const child of promise.descendants ?? [])
+          yield* this.interruptPromise(child, raceInterrupted);
+      }).pipe(Effect.ensuring(Effect.sync(() => this.execution.interrupting.delete(promise))));
+    }).pipe(Effect.uninterruptible);
+  }
+
+  // Promise reactions run after the current synchronous guest turn, including reactions
+  // to already-fulfilled values. Never hold a guest turn while waiting on a promise.
+  private promiseReaction<A, B>(
+    settlement: Effect.Effect<A, RuntimeFailure>,
+    reaction: (value: A) => Effect.Effect<B, RuntimeFailure>,
+  ): Effect.Effect<B, RuntimeFailure> {
+    return Effect.flatMap(Effect.exit(settlement), (exit) => {
+      if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause))
+        return Effect.failCause(exit.cause);
+      return this.execution.turns.withPermit(
+        Exit.isSuccess(exit)
+          ? Effect.suspend(() => reaction(exit.value))
+          : Effect.failCause(exit.cause),
+      );
+    });
   }
 
   // Awaits every fiber-backed promise the program abandoned (fire-and-forget tool calls), so
@@ -904,17 +1028,34 @@ class Interpreter<R> {
   // diagnostic (interrupted calls, e.g. Promise.race losers, are ignored).
   private drainPendingSettlements(): Effect.Effect<void, RuntimeFailure, never> {
     return Effect.gen({ self: this }, function* () {
-      // Snapshot: observePromise removes entries from the live set while this loop runs.
-      for (const promise of Array.from(this.pendingSettlements)) {
-        const exit = yield* this.observePromise(promise);
-        if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) continue;
+      // Keep failures in the bounded ledger until continuations have had a chance to
+      // observe them. A later async turn can legitimately attach a rejection handler.
+      const failures = new Set<SandboxPromise>();
+      while (true) {
+        const batch = Array.from(this.pendingSettlements).filter(
+          (promise) => !failures.has(promise),
+        );
+        if (batch.length === 0) break;
+        for (const promise of batch) {
+          this.deadline.check();
+          if (!this.pendingSettlements.has(promise)) continue;
+          const exit = yield* this.promiseSettlement(promise);
+          if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause))
+            this.pendingSettlements.delete(promise);
+          else failures.add(promise);
+        }
+      }
+      for (const promise of failures) {
+        if (!this.pendingSettlements.has(promise)) continue;
+        const exit = yield* this.promiseSettlement(promise);
+        if (Exit.isSuccess(exit)) continue;
         const failure = normalizeError(Cause.squash(exit.cause));
         throw new InterpreterRuntimeError(
-          `Unhandled rejection from an un-awaited tool call: ${failure.message}`,
+          `Unhandled rejection from an un-awaited promise: ${failure.message}`,
           undefined,
           failure.kind,
           [
-            "Await tool calls - `const result = await tools.ns.tool(...)` - so failures can be caught and handled.",
+            "Await async functions and tool calls - `const result = await tools.ns.tool(...)` - so failures can be caught and handled.",
           ],
         );
       }
@@ -930,7 +1071,7 @@ class Interpreter<R> {
     path: ReadonlyArray<string>,
     args: InterpreterArray,
   ): Effect.Effect<SandboxPromise, never, R> {
-    const id = this.nextToolCallLifecycleId++;
+    const id = this.execution.nextToolCallLifecycleId++;
     const name = path.join(".");
     const emit = (event: ToolRuntime.ToolCallLifecycleEvent): Effect.Effect<void, never, R> =>
       this.onToolCallLifecycle?.(event) ?? Effect.void;
@@ -980,11 +1121,7 @@ class Interpreter<R> {
         return yield* Effect.failCause(exit.cause);
       }),
     );
-    return Effect.map(Effect.forkChild(lifecycle, { startImmediately: true }), (fiber) => {
-      const promise = new SandboxPromise(fiber);
-      this.pendingSettlements.add(promise);
-      return promise;
-    });
+    return this.startPromise(lifecycle);
   }
 
   // The promise's settlement as an Exit, marking it observed for unhandled-rejection tracking.
@@ -994,6 +1131,13 @@ class Interpreter<R> {
     promise: SandboxPromise,
   ): Effect.Effect<Exit.Exit<InterpreterValue, RuntimeFailure>> {
     this.pendingSettlements.delete(promise);
+    return this.promiseSettlement(promise);
+  }
+
+  private promiseSettlement(
+    promise: SandboxPromise,
+  ): Effect.Effect<Exit.Exit<InterpreterValue, RuntimeFailure>> {
+    if (promise.settlement !== undefined) return Effect.exit(Deferred.await(promise.settlement));
     if (promise.fiber !== undefined) return Fiber.await(promise.fiber);
     if (promise.immediate !== undefined) return Effect.exit(promise.immediate);
     throw new InterpreterRuntimeError("Promise has no settlement source.");
@@ -1120,6 +1264,7 @@ class Interpreter<R> {
       getArray(node, "params").map((parameter, index) => asNode(parameter, `params[${index}]`)),
       getNode(node, "body"),
       this.scopes.slice(),
+      node.async === true,
     );
   }
 
@@ -1764,11 +1909,23 @@ class Interpreter<R> {
       case "UpdateExpression":
         return this.evaluateUpdateExpression(node);
       case "AwaitExpression": {
-        // `await` resolves a promise value; awaiting anything else is a passthrough no-op,
-        // matching real JS semantics for non-thenables.
-        return Effect.flatMap(this.evaluateExpression(getNode(node, "argument")), (value) =>
-          value instanceof SandboxPromise ? this.settlePromise(value, node) : Effect.succeed(value),
-        );
+        return Effect.gen({ self: this }, function* () {
+          const value = yield* this.evaluateExpression(getNode(node, "argument"));
+          // Evaluate the operand before handing control back to the caller. Every await,
+          // including a plain value, ends this guest turn.
+          yield* this.releaseTurn();
+          if (this.firstBoundary !== undefined) {
+            const boundary = this.firstBoundary;
+            this.firstBoundary = undefined;
+            yield* Deferred.succeed(boundary, undefined);
+          }
+          const settled =
+            value instanceof SandboxPromise
+              ? yield* Effect.exit(this.settlePromise(value, node))
+              : Exit.succeed(value);
+          yield* this.execution.turns.take(this.turn);
+          return yield* settled;
+        });
       }
       case "NewExpression":
         return this.evaluateNewExpression(node);
@@ -2035,6 +2192,9 @@ class Interpreter<R> {
     rhs: InterpreterValue,
     node: AstNode,
   ): InterpreterValue {
+    // Strict equality observes identity without reading or coercing opaque values.
+    if (operator === "===") return lhs === rhs;
+    if (operator === "!==") return lhs !== rhs;
     if (containsOpaqueReference(lhs) || containsOpaqueReference(rhs)) {
       throw new InterpreterRuntimeError(
         "Binary operators require data values in CodeMode.",
@@ -2358,9 +2518,29 @@ class Interpreter<R> {
       }
       if (callable instanceof GlobalMethodReference) {
         if (callable.namespace === "console") return this.invokeConsole(callable.name, args, node);
+        if (callable.namespace === "Array" && callable.name === "from")
+          return yield* this.invokeArrayFrom(args, node);
         if (callable.namespace === "Object" && args[0] instanceof ToolReference) {
           // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
           return this.invokeObjectMethodOnTools(callable.name, args[0] as ToolReference, node);
+        }
+        if (callable.namespace === "Object" && callable.name === "assign") {
+          return invokeObjectAssign(args, node, (target, key, value) =>
+            this.assignToReference(
+              { target, key },
+              Array.isArray(target) ? Number(key) : key,
+              value,
+              node,
+            ),
+          );
+        }
+        if (
+          callable.namespace === "Object" &&
+          (callable.name === "values" || callable.name === "entries")
+        ) {
+          const result = invokeObjectMethod(callable.name, args, node);
+          boundedData(result, `Object.${callable.name} result`);
+          return result;
         }
         return boundedData(
           invokeGlobalMethod(callable, args, node),
@@ -2622,13 +2802,45 @@ class Interpreter<R> {
 
   // Promise.* over ordinary runtime values. Combinators accept ANY array (or spreadable
   // collection) mixing promise values and plain data - built inline, beforehand, via spread,
-  // whatever - because tool calls already run eagerly on their own fibers; the combinators
-  // only observe settlements. Joining is therefore sequential (no extra fibers) without
-  // costing parallelism, and the concurrency cap stays where the work is: the fork semaphore.
+  // whatever - because tool calls already run eagerly on their own fibers. Combinators
+  // observe settlements without holding a guest turn; tool concurrency stays at admission.
   private invokePromiseMethod(
     ref: PromiseMethodReference,
     args: InterpreterArray,
     node: AstNode,
+  ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+    if (ref.name === "resolve" || ref.name === "reject") {
+      return this.evaluatePromiseMethod(ref, args, node);
+    }
+    const items = Array.isArray(args[0]) ? Array.from(args[0]) : spreadItems(args[0]);
+    if (items?.length === 0 && ref.name !== "race")
+      return Effect.succeed(new SandboxPromise(undefined, Effect.succeed([])));
+    const inputs = items === undefined ? args : [items];
+    const settlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
+    return this.startPromise(
+      Effect.suspend(() => this.evaluatePromiseMethod(ref, inputs, node, settlement)).pipe(
+        Effect.onInterrupt(() =>
+          Effect.forEach(
+            items ?? [],
+            (item) => {
+              return item instanceof SandboxPromise
+                ? this.interruptPromise(item, true)
+                : Effect.void;
+            },
+            { discard: true },
+          ),
+        ),
+      ),
+      undefined,
+      settlement,
+    );
+  }
+
+  private evaluatePromiseMethod(
+    ref: PromiseMethodReference,
+    args: InterpreterArray,
+    node: AstNode,
+    settlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>(),
   ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
     if (ref.name === "resolve") {
       // Promise.resolve of a promise is that promise (JS flattens); anything else is a
@@ -2641,9 +2853,16 @@ class Interpreter<R> {
       );
     }
     if (ref.name === "reject") {
-      return Effect.sync(
-        () => new SandboxPromise(undefined, Effect.fail(new ProgramThrow(args[0]))),
-      );
+      return Effect.sync(() => {
+        assertBoundedCollectionSize(
+          this.execution.activePromises + this.pendingSettlements.size + 1,
+          "Pending promises",
+          node,
+        );
+        const promise = new SandboxPromise(undefined, Effect.fail(new ProgramThrow(args[0])));
+        this.pendingSettlements.add(promise);
+        return promise;
+      });
     }
 
     const items = Array.isArray(args[0]) ? args[0] : spreadItems(args[0]);
@@ -2657,15 +2876,28 @@ class Interpreter<R> {
     switch (ref.name) {
       case "all": {
         // Mark every promise element observed up-front (Promise.all handles all of its
-        // members' failures, as in JS), then join in index order; the first failure rejects
-        // the whole call while unrelated in-flight members keep running.
+        // members' failures, as in JS). Observe concurrently so a later rejection does
+        // not wait for an earlier unresolved input. Unrelated tools keep running.
         const settles = items.map((item) =>
           item instanceof SandboxPromise ? this.settlePromise(item, node) : Effect.succeed(item),
         );
         return Effect.gen({ self: this }, function* () {
+          if (settles.length === 0) return [];
+          const done = settlement;
           const values: InterpreterArray = [];
-          for (const settle of settles) values.push(yield* settle);
-          return values;
+          let remaining = settles.length;
+          for (const [index, settle] of settles.entries()) {
+            yield* Effect.forkChild(
+              this.promiseReaction(Effect.exit(settle), (exit) => {
+                if (Exit.isFailure(exit)) return Deferred.failCause(done, exit.cause);
+                values[index] = exit.value;
+                remaining -= 1;
+                return remaining === 0 ? Deferred.succeed(done, values) : Effect.void;
+              }),
+              { startImmediately: true },
+            );
+          }
+          return yield* Deferred.await(done);
         });
       }
       case "allSettled": {
@@ -2678,44 +2910,43 @@ class Interpreter<R> {
               }))
             : Effect.succeed({
                 promise: undefined as SandboxPromise | undefined,
-                exit: Exit.succeed(item as unknown),
+                exit: Exit.succeed(item),
               }),
         );
         return Effect.gen({ self: this }, function* () {
           const outcomes: InterpreterArray = [];
-          for (const observation of observations) {
-            const { exit, promise } = yield* observation;
-            if (Exit.isSuccess(exit)) {
-              // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-              outcomes.push(
-                Object.assign(makeInterpreterObject(), {
-                  status: "fulfilled",
-                  value: exit.value,
-                }),
-              );
-              continue;
-            }
-            const raceInterrupted =
-              promise?.interrupted === true && Cause.hasInterruptsOnly(exit.cause);
-            if (Cause.hasInterruptsOnly(exit.cause) && !raceInterrupted) {
-              // Execution teardown (timeout/host interruption), not a program-level rejection.
-              return yield* Effect.failCause(exit.cause);
-            }
-            const thrown = raceInterrupted
-              ? new InterpreterRuntimeError(
-                  "This tool call was interrupted because another value settled a Promise.race first.",
-                  node,
-                )
-              : Cause.squash(exit.cause);
-            // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-            outcomes.push(
-              Object.assign(makeInterpreterObject(), {
-                status: "rejected",
-                reason: caughtErrorValue(thrown),
+          let remaining = observations.length;
+          for (const [index, observation] of observations.entries()) {
+            yield* Effect.forkChild(
+              this.promiseReaction(observation, ({ exit, promise }) => {
+                if (Exit.isSuccess(exit)) {
+                  outcomes[index] = Object.assign(makeInterpreterObject(), {
+                    status: "fulfilled",
+                    value: exit.value,
+                  });
+                } else {
+                  const raceInterrupted =
+                    promise?.interrupted === true && Cause.hasInterruptsOnly(exit.cause);
+                  if (Cause.hasInterruptsOnly(exit.cause) && !raceInterrupted)
+                    return Deferred.failCause(settlement, exit.cause);
+                  const thrown = raceInterrupted
+                    ? new InterpreterRuntimeError(
+                        "This tool call was interrupted because another value settled a Promise.race first.",
+                        node,
+                      )
+                    : Cause.squash(exit.cause);
+                  outcomes[index] = Object.assign(makeInterpreterObject(), {
+                    status: "rejected",
+                    reason: caughtErrorValue(thrown),
+                  });
+                }
+                remaining -= 1;
+                return remaining === 0 ? Deferred.succeed(settlement, outcomes) : Effect.void;
               }),
+              { startImmediately: true },
             );
           }
-          return outcomes;
+          return observations.length === 0 ? outcomes : yield* Deferred.await(settlement);
         });
       }
       case "race": {
@@ -2733,18 +2964,40 @@ class Interpreter<R> {
         return Effect.gen({ self: this }, function* () {
           // First settlement (fulfilled OR rejected) wins; the observations never fail, so
           // racing them yields exactly that. Losing in-flight calls are then interrupted.
-          const winner = yield* Effect.raceAll(observations);
-          for (const [index, item] of items.entries()) {
-            if (
-              index === winner.index ||
-              !(item instanceof SandboxPromise) ||
-              item.fiber === undefined
-            )
-              continue;
-            item.interrupted = true;
-            yield* Fiber.interrupt(item.fiber);
+          const done = Deferred.makeUnsafe<{
+            index: number;
+            exit: Exit.Exit<InterpreterValue, RuntimeFailure>;
+          }>();
+          // Attach reactions eagerly and publish logical settlement inside the reaction,
+          // before Effect fiber cleanup can reorder two otherwise identical aggregates.
+          let won = false;
+          for (const observation of observations) {
+            yield* Effect.forkChild(
+              this.promiseReaction(observation, (value) => {
+                if (won) return Effect.void;
+                won = true;
+                const input = items[value.index];
+                return Effect.gen({ self: this }, function* () {
+                  const exit = yield* Effect.exit(
+                    this.unwrapPromiseExit(
+                      input instanceof SandboxPromise ? input : undefined,
+                      value.exit,
+                      node,
+                    ),
+                  );
+                  yield* Deferred.done(settlement, exit);
+                  yield* Deferred.succeed(done, value);
+                });
+              }),
+              { startImmediately: true },
+            );
           }
+          const winner = yield* Deferred.await(done);
           const winningItem = items[winner.index];
+          for (const item of items) {
+            if (item === winningItem || !(item instanceof SandboxPromise)) continue;
+            yield* this.interruptPromise(item, true);
+          }
           return yield* this.unwrapPromiseExit(
             winningItem instanceof SandboxPromise ? winningItem : undefined,
             winner.exit,
@@ -2756,6 +3009,83 @@ class Interpreter<R> {
   }
 
   private invokeFunction(
+    fn: CodeModeFunction,
+    args: InterpreterArray,
+  ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+    return Effect.gen({ self: this }, function* () {
+      const activation = new Interpreter(
+        this.invokeTool,
+        this.toolKeys,
+        this.logs,
+        this.deadline,
+        this.onToolCallLifecycle,
+        this,
+      );
+      if (!fn.async) return yield* activation.evaluateFunction(fn, args);
+      const boundary = Deferred.makeUnsafe<void>();
+      const descendants = new Set<SandboxPromise>();
+      activation.firstBoundary = boundary;
+      activation.turn = { held: false };
+      activation.owners = [...this.owners, descendants];
+      let promise: SandboxPromise | undefined;
+      let adopting = false;
+      const logicalSettlement = Deferred.makeUnsafe<InterpreterValue, RuntimeFailure>();
+      const work = Effect.gen(function* () {
+        const result = yield* activation
+          .evaluateFunction(fn, args)
+          .pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) || !(exit.value instanceof SandboxPromise)
+                ? Deferred.done(logicalSettlement, exit)
+                : Effect.void,
+            ),
+          );
+        // Adoption is not part of the synchronous prefix and must not hold a guest turn.
+        if (!(result instanceof SandboxPromise)) return result;
+        if (result === promise)
+          throw new InterpreterRuntimeError(
+            "An async function cannot resolve to its own promise.",
+          ).as("TypeError");
+        adopting = true;
+        const settlement = activation.settlePromise(result);
+        // Queue adoption before releasing the function's current turn. Its job likewise
+        // registers the follow-up reaction before a later adoption can overtake it.
+        yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* activation.execution.turns.withPermit(
+              Effect.asVoid(
+                Effect.forkChild(
+                  activation.promiseReaction(Effect.exit(settlement), (exit) =>
+                    Deferred.done(logicalSettlement, exit),
+                  ),
+                  { startImmediately: true },
+                ),
+              ),
+            );
+            // Keep the reaction child alive until adoption settles; its failure belongs to
+            // the async function promise, not to this internal scheduling fiber.
+            yield* Effect.exit(Deferred.await(logicalSettlement));
+          }),
+          { startImmediately: true },
+        );
+        yield* activation.releaseTurn();
+        yield* Deferred.succeed(boundary, undefined);
+        return yield* Deferred.await(logicalSettlement);
+      }).pipe(
+        Effect.ensuring(activation.releaseTurn()),
+        Effect.ensuring(Deferred.succeed(boundary, undefined)),
+      );
+      promise = yield* this.startPromise(work, descendants, logicalSettlement);
+      yield* Deferred.await(boundary);
+      // An async body with no await/adoption fulfills or rejects before returning to its
+      // caller. Wait for fiber bookkeeping, but do not mark that rejection as observed.
+      if (!adopting && activation.firstBoundary !== undefined && promise.fiber !== undefined)
+        yield* Fiber.await(promise.fiber);
+      return promise;
+    });
+  }
+
+  private evaluateFunction(
     fn: CodeModeFunction,
     args: InterpreterArray,
   ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
@@ -2914,8 +3244,13 @@ class Interpreter<R> {
       let end = 0;
       for (const match of matches) {
         push(value.slice(end, match.offset));
+        const replacement = yield* apply(match.args);
+        // Replacers do not await callbacks. Coercion here is not a data-boundary escape
+        // and does not observe a returned promise's rejection.
         push(
-          coerceToString(boundedData(yield* apply(match.args), `String.${name} replacer result`)),
+          replacement instanceof SandboxPromise
+            ? "[object Promise]"
+            : coerceToString(boundedData(replacement, `String.${name} replacer result`)),
         );
         end = match.offset + match.match.length;
       }
@@ -3157,6 +3492,98 @@ class Interpreter<R> {
     }
   }
 
+  // Local compatibility addition: mapping must run inside the interpreter, not a native
+  // Array.from callback. Preserve live iteration while bounding growth before mapper effects.
+  private invokeArrayFrom(
+    args: InterpreterArray,
+    node: AstNode,
+  ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+    if (args[2] !== undefined) {
+      throw new InterpreterRuntimeError(
+        "Array.from does not support thisArg in CodeMode.",
+        node,
+        "UnsupportedSyntax",
+      );
+    }
+    const callback = args[1];
+    if (callback === undefined) {
+      return Effect.sync(() =>
+        boundedData(invokeArrayStatic("from", [args[0]], node), "Array.from result"),
+      );
+    }
+    if (
+      !(callback instanceof CodeModeFunction) &&
+      !(callback instanceof CoercionFunction) &&
+      !(callback instanceof UriFunction)
+    ) {
+      throw new InterpreterRuntimeError("Array.from expects a function mapper.", node);
+    }
+
+    const source = args[0];
+    let iterator: Iterator<InterpreterValue>;
+    if (source instanceof SandboxMap) {
+      assertBoundedCollectionSize(source.map.size, "Array.from result", node);
+      iterator = source.map.entries();
+    } else if (source instanceof SandboxSet) {
+      assertBoundedCollectionSize(source.set.size, "Array.from result", node);
+      iterator = source.set.values();
+    } else if (source instanceof SandboxURLSearchParams) {
+      assertBoundedCollectionSize(source.params.size, "Array.from result", node);
+      iterator = source.params.entries();
+    } else {
+      // Validate the source, but read the original between callbacks so mutations remain
+      // observable. No guest getters, custom iterators, or host functions enter this path.
+      boundedData(source, "Array.from input");
+      if (Predicate.isString(source) || Array.isArray(source)) {
+        assertBoundedCollectionSize(source.length, "Array.from result", node);
+        iterator = source[Symbol.iterator]();
+      } else if (
+        source !== null &&
+        hasObjectRuntimeType(source) &&
+        // SAFETY: boundedData validated this guest object; missing length remains undefined.
+        Predicate.isNumber((source as InterpreterObject).length)
+      ) {
+        // SAFETY: boundedData validated this guest value and the branch checked numeric length.
+        const arrayLike = source as InterpreterObject & { length: number };
+        const length = Number.isNaN(arrayLike.length)
+          ? 0
+          : Math.max(0, Math.trunc(arrayLike.length));
+        assertBoundedCollectionSize(length, "Array.from result", node);
+        // Array-like length is captured once; indexed values are read at each iteration.
+        let index = 0;
+        iterator = {
+          next: () =>
+            index < length
+              ? { done: false, value: arrayLike[String(index++)] }
+              : { done: true, value: undefined },
+        };
+      } else {
+        throw new InterpreterRuntimeError(
+          "Array.from expects an array, string, Map, Set, or array-like value.",
+          node,
+        );
+      }
+    }
+    return Effect.gen({ self: this }, function* () {
+      const values: InterpreterArray = [];
+      while (true) {
+        this.deadline.check(node);
+        const next = iterator.next();
+        if (next.done) return values;
+        assertBoundedCollectionSize(values.length + 1, "Array.from result", node);
+        const callbackArgs: InterpreterArray = [next.value, values.length];
+        const mapped =
+          callback instanceof CoercionFunction
+            ? invokeCoercion(callback, callbackArgs, node)
+            : callback instanceof UriFunction
+              ? invokeUriFunction(callback, callbackArgs, node)
+              : yield* this.invokeFunction(callback, callbackArgs);
+        // Keep promises and functions as interpreter values, just as Array.map does.
+        values.push(mapped);
+      }
+    });
+  }
+
   private invokeArrayMethod(
     target: InterpreterArray,
     name: string,
@@ -3182,10 +3609,11 @@ class Interpreter<R> {
         // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
         const separator = args.length === 0 ? "," : (args[0] as string);
         // Confinement preflight: charge the joined length before the native join allocates.
-        let joined = 0;
+        let joined = Math.max(0, input.length - 1) * separator.length;
+        assertBoundedStringLength(joined, "Array.join", node);
         const parts = input.map((item) => {
           const part = coerceToString(item ?? "");
-          joined += part.length + separator.length;
+          joined += part.length;
           assertBoundedStringLength(joined, "Array.join", node);
           return part;
         });
@@ -3242,8 +3670,22 @@ class Interpreter<R> {
         return Effect.succeed(flattened);
       }
       case "reverse":
-        return Effect.succeed([...target].reverse());
-      case "sort":
+        return Effect.succeed(target.reverse());
+      case "sort": {
+        const length = target.length;
+        // Sort only present elements, then restore holes in the original index range.
+        // Comparator side effects beyond that range must not be truncated away.
+        const items = target.filter(() => true);
+        return Effect.map(this.sortArray(items, args[0], node), (sorted) => {
+          // A comparator may have changed the graph since its elements were collected.
+          // Validate every reinsertion before writing any of the sorted snapshot back.
+          for (const item of sorted)
+            this.rejectCircularInsertion(target, item, "Array.sort result", node);
+          for (const [index, item] of sorted.entries()) target[index] = item;
+          for (let index = sorted.length; index < length; index += 1) delete target[index];
+          return target;
+        });
+      }
       case "toSorted":
         return this.sortArray(target, args[0], node);
       case "toReversed":
@@ -3278,6 +3720,31 @@ class Interpreter<R> {
         return Effect.succeed(target.pop());
       case "shift":
         return Effect.succeed(target.shift());
+      case "toSpliced": {
+        const length = target.length;
+        const rawStart = optNumber(args[0], "start") ?? 0;
+        const start = Number.isNaN(rawStart) ? 0 : Math.trunc(rawStart);
+        const from = start < 0 ? Math.max(length + start, 0) : Math.min(start, length);
+        const rawDelete = optNumber(args[1], "delete count") ?? 0;
+        const removed =
+          args.length === 0
+            ? 0
+            : args.length === 1
+              ? length - from
+              : Math.min(
+                  Math.max(Number.isNaN(rawDelete) ? 0 : Math.trunc(rawDelete), 0),
+                  length - from,
+                );
+        const inserted = args.slice(2);
+        assertBoundedCollectionSize(length - removed + inserted.length, "Array.toSpliced", node);
+        const copied: InterpreterArray = [];
+        // Read every retained index to densify holes. Avoid a native argument spread:
+        // the collection cap is larger than engines' function-argument limits.
+        for (let index = 0; index < from; index += 1) copied.push(target[index]);
+        for (const item of inserted) copied.push(item);
+        for (let index = from + removed; index < length; index += 1) copied.push(target[index]);
+        return Effect.succeed(copied);
+      }
       case "splice": {
         // Mutates in place and returns the removed elements, exactly like JS: one argument
         // removes to the end, an undefined delete count removes nothing.
@@ -3591,7 +4058,8 @@ class Interpreter<R> {
     return Effect.gen({ self: this }, function* () {
       for (const elementValue of elements) {
         if (elementValue === null) {
-          values.push(undefined);
+          assertBoundedCollectionSize(values.length + 1, "Array literal", node);
+          values.length += 1;
           continue;
         }
         const element = asNode(elementValue, "elements");

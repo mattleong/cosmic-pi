@@ -21,17 +21,103 @@ export const objectStatics = new Set([
   "fromEntries",
 ]);
 
+// Validate the original graph without replacing its members with checkpoint copies.
+const requireDataContainer = (
+  value: InterpreterValue,
+  label: string,
+  node: AstNode,
+): InterpreterObject | InterpreterArray => {
+  boundedData(value, label);
+  if (
+    value === null ||
+    !hasObjectRuntimeType(value) ||
+    (!Array.isArray(value) &&
+      Object.getPrototypeOf(value) !== null &&
+      Object.getPrototypeOf(value) !== Object.prototype)
+  ) {
+    throw new InterpreterRuntimeError(`${label} expects a data object or array.`, node);
+  }
+  // SAFETY: Only arrays and plain data objects pass the checkpoint and prototype checks.
+  return value as InterpreterObject | InterpreterArray;
+};
+
+const ownDataMember = (
+  value: InterpreterObject | InterpreterArray,
+  key: string,
+): InterpreterValue => {
+  // SAFETY: Own data members of interpreter arrays and objects belong to InterpreterValue.
+  return (value as InterpreterObject)[key];
+};
+
+const ownDataEntries = (
+  value: InterpreterObject | InterpreterArray,
+  label: string,
+  node: AstNode,
+): string[] => {
+  const keys = Object.keys(value);
+  assertBoundedCollectionSize(keys.length, label, node);
+  for (const key of keys) {
+    if (isBlockedMember(key))
+      throw new InterpreterRuntimeError(`Property '${key}' is not available in CodeMode.`, node);
+    // Array checkpoints omit non-index properties, including match-result metadata.
+    boundedData(ownDataMember(value, key), label);
+  }
+  return keys;
+};
+
+// The interpreter must supply its guarded member-write path. Never mutate directly here.
+export const invokeObjectAssign = (
+  args: InterpreterArray,
+  node: AstNode,
+  write: (
+    target: InterpreterObject | InterpreterArray,
+    key: string,
+    value: InterpreterValue,
+  ) => void,
+): InterpreterObject | InterpreterArray => {
+  const target = requireDataContainer(args[0], "Object.assign target", node);
+  let entries = ownDataEntries(target, "Object.assign target", node).length;
+  for (const source of args.slice(1)) {
+    if (source === null || source === undefined) continue;
+    if (isSandboxValue(source)) {
+      boundedData(source, "Object.assign input");
+      continue;
+    }
+    const value = requireDataContainer(source, "Object.assign input", node);
+    const keys = ownDataEntries(value, "Object.assign input", node);
+    for (const key of keys) {
+      if (Array.isArray(target)) {
+        const index = Number(key);
+        if (!Number.isInteger(index) || index < 0 || String(index) !== key) {
+          throw new InterpreterRuntimeError(
+            "Object.assign array targets only support numeric index properties.",
+            node,
+          );
+        }
+        assertBoundedCollectionSize(index + 1, "Object.assign result", node);
+      }
+      if (!Object.hasOwn(target, key)) {
+        assertBoundedCollectionSize(entries + 1, "Object.assign result", node);
+        entries += 1;
+      }
+      const item = ownDataMember(value, key);
+      boundedData(item, "Object.assign input");
+      write(target, key, item);
+    }
+  }
+  return target;
+};
+
 export const invokeObjectMethod = (name: string, args: InterpreterArray, node: AstNode) => {
   if (!objectStatics.has(name))
     throw new InterpreterRuntimeError(`Object.${name} is not available in CodeMode.`, node);
-  const requireObject = (): InterpreterObject => {
-    const value = boundedData(args[0], `Object.${name} input`);
-    if (isSandboxValue(value)) return {};
-    if (value === null || !hasObjectRuntimeType(value) || Array.isArray(value)) {
-      throw new InterpreterRuntimeError(`Object.${name} expects a data object.`, node);
+  const requireObject = (): InterpreterObject | InterpreterArray => {
+    const value = args[0];
+    if (isSandboxValue(value)) {
+      boundedData(value, `Object.${name} input`);
+      return makeInterpreterObject();
     }
-    // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-    return value as InterpreterObject;
+    return requireDataContainer(value, `Object.${name} input`, node);
   };
   // Confinement: merging multiple sources (each individually within the entry cap) must not
   // materialize an over-cap object; distinct-key growth is counted and refused as it happens.
@@ -55,25 +141,20 @@ export const invokeObjectMethod = (name: string, args: InterpreterArray, node: A
       }
       return Object.keys(value);
     }
-    case "values":
-      return Object.values(requireObject());
-    case "entries":
-      return Object.entries(requireObject()).map(([key, item]) => [key, item]);
+    case "values": {
+      const value = requireObject();
+      return ownDataEntries(value, "Object.values input", node).map(
+        (key): InterpreterValue => ownDataMember(value, key),
+      );
+    }
+    case "entries": {
+      const value = requireObject();
+      return ownDataEntries(value, "Object.entries input", node).map(
+        (key): InterpreterArray => [key, ownDataMember(value, key)],
+      );
+    }
     case "hasOwn":
       return Object.hasOwn(requireObject(), String(args[1]));
-    case "assign": {
-      const out: InterpreterObject = makeInterpreterObject();
-      for (const source of args) {
-        if (source === null || source === undefined) continue;
-        const value = boundedData(source, "Object.assign input");
-        if (isSandboxValue(value)) continue;
-        if (value === null || !hasObjectRuntimeType(value) || Array.isArray(value)) {
-          throw new InterpreterRuntimeError("Object.assign expects data objects.", node);
-        }
-        for (const [key, item] of Object.entries(value)) guardedSet(out, key, item);
-      }
-      return out;
-    }
     case "fromEntries": {
       if (args[0] instanceof SandboxMap) {
         const out: InterpreterObject = makeInterpreterObject();

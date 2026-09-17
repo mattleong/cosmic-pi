@@ -267,7 +267,7 @@ describe("RegExp", () => {
       }),
   );
 
-  it.effect("function replacers can await effectful tool calls", () =>
+  it.effect("function replacers coerce returned promises without awaiting them", () =>
     Effect.gen(function* () {
       const decorate = Tool.make({
         description: "Decorate a string",
@@ -279,14 +279,13 @@ describe("RegExp", () => {
         tools: { host: { decorate } },
         code: `return "a1b22".replace(/\\d+/g, async (match) => await tools.host.decorate(match))`,
       });
-      expect(result.ok && result.value).toBe("a[1]b[22]");
+      expect(result.ok && result.value).toBe("a[object Promise]b[object Promise]");
 
       const missingAwait = yield* CodeMode.execute({
         tools: { host: { decorate } },
         code: `return "a1".replace(/\\d/, (match) => tools.host.decorate(match))`,
       });
-      expect(!missingAwait.ok && missingAwait.error.kind).toBe("InvalidDataValue");
-      expect(!missingAwait.ok && missingAwait.error.message).toContain("un-awaited Promise");
+      expect(missingAwait.ok && missingAwait.value).toBe("a[object Promise]");
     }),
   );
 

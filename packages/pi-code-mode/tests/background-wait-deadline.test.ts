@@ -207,7 +207,7 @@ describe("nested background wait deadlines", () => {
         execute(
           "wait-queued",
           {
-            code: `const requests = Array.from({ length: 9 }).map((_, index) => ({
+            code: `const requests = Array.from({ length: 9 }, (_, index) => ({
           action: "wait", id: "bg-1", until: "exit", waitSeconds: index < 8 ? 10 : 120
         }));
         const replies = await Promise.all(requests.map(input => tools.session.backgroundTask(input)));

@@ -188,7 +188,7 @@ describe("first-class promise values", () => {
       return "done"
     `);
       expect(diagnostic.kind).toBe("ToolFailure");
-      expect(diagnostic.message).toContain("Unhandled rejection from an un-awaited tool call");
+      expect(diagnostic.message).toContain("Unhandled rejection");
       expect(diagnostic.message).toContain("Lookup refused");
       expect(diagnostic.suggestions?.join(" ")).toContain("await tools.ns.tool(...)");
     }),

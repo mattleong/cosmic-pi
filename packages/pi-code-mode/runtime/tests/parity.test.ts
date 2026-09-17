@@ -78,7 +78,7 @@ describe("H3: array property access reads as undefined (not a throw)", () => {
 
   it.effect("unknown property reads stay undefined for methods CodeMode does not implement", () =>
     Effect.gen(function* () {
-      expect(yield* value(`return [1,2,3].toSpliced === undefined`)).toBe(true);
+      expect(yield* value(`return [1,2,3].notAnArrayMethod === undefined`)).toBe(true);
     }),
   );
 

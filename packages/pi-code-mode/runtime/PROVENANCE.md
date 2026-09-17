@@ -32,6 +32,7 @@ behavior for diffability:
 - `src/failure.ts` (local closed Effect failure union; see deviation 6)
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
+- `src/interpreter/guest-turns.ts` (local async scheduling; see deviation 13)
 - `src/stdlib/*.ts` (the twelve upstream modules plus local `epoch.ts`; see
   deviation 6)
 - Behavioral portions of `test/codemode.test.ts`, plus `test/parity.test.ts`,
@@ -52,8 +53,8 @@ behavior for diffability:
 ## Intentional local deviations
 
 Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
-are deliberate local behavior layered on top of the vendored interpreter; they are
-confined to the additions listed there and do not alter upstream execution results.
+add confinement and observation. Deviations 11-13 add JavaScript compatibility and correct
+mutation and async semantics; their behavior and remaining limits are documented below.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
@@ -214,6 +215,64 @@ confined to the additions listed there and do not alter upstream execution resul
     separation and reapply the closed-domain annotations after reviewing upstream
     model changes.
 
+11. **Array.from mapper overload (additive compatibility).** `Array.from(source, mapper)`
+    uses the interpreter's existing function, coercion, and URI callback execution paths.
+    It passes exactly the value and zero-based index, retains returned interpreter promises
+    and functions, and does not implicitly await returned tool promises. An omitted or
+    explicitly undefined mapper keeps the existing unmapped conversion. Nonundefined
+    `thisArg` is rejected because the interpreter does not implement `this` binding.
+    Arrays, Map, Set, and URLSearchParams use live native iterators; strings use Unicode
+    code points. Array-like inputs retain the existing numeric-length requirement, capture
+    the normalized length once, and read original indexed values between callbacks.
+    Existing source validation remains in place without substituting a copied source.
+    Collection preflight runs before mapping; each produced entry is checked before its
+    mapper can execute, and every iteration checks the cooperative deadline. This bounds
+    self-extending iterators even when deletions keep the source collection small. Initial
+    over-cap inputs are refused even if a mapper could shrink them. No native callback,
+    custom guest iterator, dynamic `this`, or new tool authority is introduced. Covered by
+    the local `tests/array-from.test.ts` suite.
+
+12. **Collection and object compatibility.** `Object.assign` mutates and returns its
+    original target. Sources are validated without replacing shallow references; guarded
+    runtime writes reject cycles, blocked keys, invalid array properties, and over-cap growth
+    before insertion. `Object.values`, `Object.entries`, and `Object.hasOwn` accept arrays,
+    skip holes where enumerable entries are required, and preserve member identity.
+    `reverse` and `sort` mutate and return the original array; copying variants do not.
+    Sort retains the bounded interpreter merge sort, skips undefined comparator arguments,
+    preserves holes and comparator-appended elements, and rechecks cycles before write-back.
+    Array literals now preserve holes; `join` charges separators from array length before
+    allocation, even for holes, and admits exact-fit output. `toSpliced` produces a dense,
+    shallow copy with omission-aware argument normalization and projected growth checks.
+    `split(undefined, limit)` uses the normalized unsigned limit. Existing data-only and
+    numeric-argument restrictions remain. Covered by `tests/object-compat.test.ts` and
+    `tests/javascript-compat.test.ts`; the unsupported-method parity fixture now uses an
+    actually unsupported array method.
+
+13. **Async functions and promise scheduling.** Function activations have isolated evaluator
+    stacks with shared captured bindings. Async calls return distinct promises after their
+    synchronous prefix, reject on throws, adopt returned promises, and reject direct
+    self-resolution. Combinators return eager promises rather than blocking their caller.
+    `interpreter/guest-turns.ts` provides bounded FIFO turns, including interruption-safe
+    handoff: the Effect semaphore alone permits newly arriving jobs to overtake waiters.
+    Promise reactions publish logical settlement within their turn, independently of fiber
+    cleanup. Adoption registers its follow-up reaction before releasing its job's turn.
+    Ordinary strict equality compares opaque interpreter values by identity without making
+    them serializable. Async sort callbacks are not awaited; promise-valued string replacers
+    stringify as `[object Promise]` without hiding unhandled rejections.
+
+    One execution scope owns async and tool fibers; activation completion does not cancel
+    fire-and-forget tools. The shared, admission-bounded ledger drops completed successes,
+    drains continuations until quiescent, and reports failures still unobserved afterward.
+    Tool concurrency and lifecycle identifiers remain shared across activations. Existing
+    race-loser cancellation extends to descendants of completed activations, excludes
+    activation ancestors and duplicate winners, and guards re-entrant cancellation to avoid
+    mutual interruption waits. Timeout and host cancellation close the execution scope.
+    Promise chaining, `any`, custom thenables/iterators, and `this` binding remain unsupported.
+    Covered by local async-function and async-scheduling suites, including reaction-order,
+    cancellation, and scope-isolation regressions. Earlier tests that expected awaited
+    string replacers were corrected; Array.from async tests now explicitly consume their
+    mapped promises.
+
 ## Resync policy
 
 Upstream updates are pulled by pinned manual review only:
@@ -224,8 +283,8 @@ Upstream updates are pulled by pinned manual review only:
    programs).
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
-   hook**, and **the deviation-10 closed interpreter value domain**; do not adopt
-   upstream OpenAPI or host-adapter code. Re-run the confinement and lifecycle
-   tests.
+   hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-13
+   for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
+   host-adapter code. Re-run the confinement, lifecycle, and compatibility tests.
 4. Update the pinned commit here, then run the full package and workspace
    validation gates.

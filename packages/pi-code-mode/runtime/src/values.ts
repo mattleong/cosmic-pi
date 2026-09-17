@@ -1,3 +1,4 @@
+import type * as Deferred from "effect/Deferred";
 import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import type { RuntimeFailure } from "./failure.js";
@@ -8,12 +9,18 @@ export class SandboxPromise {
   interrupted = false;
   readonly fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined;
   readonly immediate: Effect.Effect<InterpreterValue, RuntimeFailure> | undefined;
+  readonly descendants: ReadonlySet<SandboxPromise> | undefined;
+  readonly settlement: Deferred.Deferred<InterpreterValue, RuntimeFailure> | undefined;
   constructor(
     fiber: Fiber.Fiber<InterpreterValue, RuntimeFailure> | undefined,
     immediate?: Effect.Effect<InterpreterValue, RuntimeFailure>,
+    descendants?: ReadonlySet<SandboxPromise>,
+    settlement?: Deferred.Deferred<InterpreterValue, RuntimeFailure>,
   ) {
     this.fiber = fiber;
     this.immediate = immediate;
+    this.descendants = descendants;
+    this.settlement = settlement;
   }
 }
 

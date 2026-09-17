@@ -34,6 +34,7 @@ src/
   runtime-values.ts     # owned runtime-type predicates used instead of host `typeof`
   interpreter/
     model.ts            # interpreter AST/diagnostic model (internal)
+    guest-turns.ts      # LOCAL FIFO guest-continuation and promise-reaction scheduling
     runtime.ts          # Acorn-based tree-walk interpreter (internal, vendored large file)
     confinement.ts      # LOCAL (non-upstream) in-process confinement: regex guard +
                         # subject caps, amplification limits, wall-clock deadline
@@ -84,6 +85,34 @@ bodies so host scheduling and guest language semantics stay separate.
 - No Pi-specific limits (program source size, cumulative child output) live in
   this package; a Pi host applies those above this boundary.
 
+`Array.from(source, mapper)` is a local compatibility addition in `interpreter/runtime.ts`.
+Mappers use existing interpreter callback execution, not host JavaScript callbacks. Live
+collection iteration and fixed-length array-like reads preserve source mutations. Source
+preflight, per-entry collection checks before mapper execution, and cooperative deadline
+checks bound self-extending iteration. Returned tool promises remain unawaited values.
+Nonundefined `thisArg` remains unsupported. See `PROVENANCE.md` deviation 11.
+
+## Guest functions and promises
+
+Each function invocation has its own evaluator stack while captured binding maps remain
+shared. Async functions return distinct promises after their synchronous prefix. One execution
+owns their scope, deadline, logs, tool permits, lifecycle ids, and bounded promise tracking.
+`guest-turns.ts` serializes guest continuations and promise reactions in FIFO order; Effect
+scheduler yields cannot split a synchronous guest turn. Promise settlement is separate from
+fiber cleanup so cleanup latency cannot reorder race winners.
+
+Execution-owned fibers keep fire-and-forget tools alive after an async function returns.
+Completion drains newly admitted work until quiescent before reporting unhandled failures.
+Timeout and host cancellation close the execution scope. Losing races cancel descendants,
+including those of completed activations, but never their own activation ancestors;
+re-entrant cancellation is guarded against mutual interruption waits. Promise chaining,
+custom thenables, and custom iterators remain unsupported. See deviation 13.
+
+Object helpers validate without replacing shallow references. `Object.assign`, `reverse`,
+and `sort` mutate their targets; assignment and sort write-back retain cycle and growth
+guards. Sparse literals preserve holes, with separator preflight charging holes in `join`.
+Copying array variants stay nonmutating. See deviation 12 and the compatibility tests.
+
 ## In-process confinement (local deviation)
 
 `src/interpreter/confinement.ts` and its helper `src/interpreter/regex-first-sets.ts`
@@ -132,7 +161,7 @@ byte budget. Covered by `tests/confinement.test.ts`.
 
 ## Vendored-code exception
 
-`src/interpreter/runtime.ts` (~3.9k lines) and other vendored files
+`src/interpreter/runtime.ts` (~4.8k lines) and other vendored files
 intentionally exceed the repository's soft file-size guidance and keep upstream
 structure, naming, and style. Do not refactor them for local conventions:
 upstream comparability is the safety property that keeps pinned manual resyncs
