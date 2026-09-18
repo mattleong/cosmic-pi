@@ -165,7 +165,17 @@ Pi continues to register complete `code_mode` parameters and instructions at ses
 Its guest catalog is fixed; it does not send catalog deltas, import arbitrary registered tools,
 or treat MCP discovery as permission to add guest leaves. The runtime API allows other host
 consumers to deliver discovery updates, but is not a provider-schema replacement or a Pi token
-savings mechanism. Snapshot data carries no execution authority.
+savings mechanism. Snapshot data carries no execution authority. Runtime `namespace.ts` owns
+optional host-only descriptions; ancestor descriptions affect search, and bounded namespace
+metadata participates in catalog replacement. `tool-schema.ts` owns constraint documentation,
+not a JSON Schema validator. Pi's supplied tools continue to use Effect Schema decoding.
+
+The runtime also owns assignment ordering and iterator-aware destructuring, a fixed synchronous
+guest call-depth cap of 128 with semantic-await resets, and bounded owned bytes/UTF-8/base64/hex.
+These add no extension setting or ambient authority. `runtime/src/stdlib/bytes.ts` and
+`encoding.ts` implement the encoding subset; the runtime data boundary rejects bytes and
+encoder/decoder objects even when nested. Programs must encode bytes to strings before invoking
+tools or returning them. `subarray` may share owned storage, while `slice` copies.
 
 ## Tool execution and limits
 

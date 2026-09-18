@@ -1,5 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import type { CatalogSnapshot } from "./catalog.js";
+import { description as namespaceDescription } from "./namespace.js";
 import { hasObjectRuntimeType } from "./runtime-values.js";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -29,6 +30,9 @@ import {
 } from "./tool-schema.js";
 import { isDefinition as isToolDefinition, type Definition } from "./tool.js";
 import {
+  SandboxBytes,
+  SandboxTextEncoder,
+  SandboxTextDecoder,
   SandboxDate,
   SandboxMap,
   SandboxPromise,
@@ -273,6 +277,18 @@ const copyBounded = <Value>(
     );
   }
 
+  if (
+    value instanceof SandboxBytes ||
+    value instanceof SandboxTextEncoder ||
+    value instanceof SandboxTextDecoder
+  ) {
+    if (preserveSandboxValues) return value;
+    throw new ToolRuntimeError(
+      "InvalidDataValue",
+      `${label} contains an opaque byte value; encode bytes as text before crossing a data boundary.`,
+    );
+  }
+
   if (preserveSandboxValues) {
     // Intra-sandbox checkpoints keep sandbox value instances alive as leaves; their contents
     // are never walked here (Map/Set members are validated where mutation happens, and the
@@ -416,6 +432,16 @@ export type SerializableValue =
   | SerializableArray;
 
 export const copyOut = (value: InterpreterValue, undefinedAsNull = false): SerializableValue => {
+  if (
+    value instanceof SandboxBytes ||
+    value instanceof SandboxTextEncoder ||
+    value instanceof SandboxTextDecoder
+  ) {
+    throw new ToolRuntimeError(
+      "InvalidDataValue",
+      "Opaque byte values cannot cross a data boundary; encode bytes as text first.",
+    );
+  }
   if (value === undefined && undefinedAsNull) return null;
   // Normalize non-finite numbers to null as the value crosses out of the sandbox (final return
   // and tool-call arguments both funnel through here), matching JSON semantics - NaN/Infinity
@@ -448,6 +474,38 @@ const definitions = <R>(
     else if (!Predicate.isFunction(value)) entries.push(...definitions(value, next));
   }
   return entries;
+};
+
+const namespaceMetadata = <R>(
+  tools: HostTools<R>,
+  path: ReadonlyArray<string> = [],
+): Array<{
+  path: ReadonlyArray<string>;
+  description: string | undefined;
+}> =>
+  Object.entries(tools).flatMap(([name, value]) => {
+    if (isDefinition(value) || Predicate.isFunction(value)) return [];
+    const next = [...path, name];
+    return [
+      { path: next, description: namespaceDescription(value) },
+      ...namespaceMetadata(value, next),
+    ];
+  });
+
+const ancestorDescriptions = <R>(
+  tools: HostTools<R>,
+  path: ReadonlyArray<string>,
+): Array<string> => {
+  const descriptions: Array<string> = [];
+  let node = tools;
+  for (const segment of path.slice(0, -1)) {
+    const child = node[segment];
+    if (child === undefined || isDefinition(child) || Predicate.isFunction(child)) break;
+    node = child;
+    const description = namespaceDescription(node);
+    if (description !== undefined) descriptions.push(description);
+  }
+  return descriptions;
 };
 
 const describeDefinition = <R>(
@@ -601,12 +659,14 @@ const toSearchEntry = <R>(
   path: ReadonlyArray<string>,
   definition: Definition<R>,
   description: DescribedTool,
+  namespaceDescriptions: ReadonlyArray<string> = [],
 ): SearchEntry => ({
   description,
   namespace: path[0]!,
   searchText: [
     path.join("."),
     definition.description,
+    ...namespaceDescriptions,
     ...inputProperties(definition).flatMap(({ name, description: property }) =>
       property === undefined ? [name] : [name, property],
     ),
@@ -618,7 +678,7 @@ const toSearchEntry = <R>(
 /** The runtime search index over every described tool. Search is always registered. */
 export const searchIndex = <R>(tools: HostTools<R>): ReadonlyArray<SearchEntry> =>
   visibleDefinitions(tools).map(({ path, definition, description }) =>
-    toSearchEntry(path, definition, description),
+    toSearchEntry(path, definition, description, ancestorDescriptions(tools, path)),
   );
 
 export const assertValidTools = <R>(tools: HostTools<R>): void => {
@@ -650,7 +710,11 @@ export const prepare = <R>(
   const visible = visibleDefinitions(tools);
   const described = visible.map(({ description }) => description);
 
+  const metadata = namespaceMetadata(tools).sort((left, right) =>
+    compareText(toolExpression(left.path), toolExpression(right.path)),
+  );
   const namespaces = new Map<string, Array<DescribedTool>>();
+  for (const { path } of metadata) if (path.length === 1) namespaces.set(path[0]!, []);
   for (const { path, description: tool } of visible) {
     const namespace = path[0]!;
     const group = namespaces.get(namespace) ?? [];
@@ -695,7 +759,22 @@ export const prepare = <R>(
   const totalShown = selections.reduce((total, { picked }) => total + picked.size, 0);
   const complete = totalShown === described.length;
 
-  const empty = described.length === 0;
+  // Descriptions consume only the remaining budget, never displacing callable signatures.
+  const namespaceLines: Array<string> = [];
+  const namespaceDescriptions: Array<{ readonly path: string; readonly description: string }> = [];
+  for (const { path, description } of metadata) {
+    if (description === undefined || description.trim() === "") continue;
+    const summary = catalogDescription({ path: "", signature: "", description })
+      .replaceAll("*/", "* /")
+      .replace(/[\r\n\u2028\u2029]/g, " ");
+    const line = `  // ${toolExpression(path)}: ${summary}`;
+    const cost = estimateTokens(line);
+    if (used + cost > catalogBudget) continue;
+    used += cost;
+    namespaceLines.push(line);
+    namespaceDescriptions.push(Object.freeze({ path: toolExpression(path), description: summary }));
+  }
+  const empty = described.length === 0 && ordered.length === 0;
 
   // Section order is deliberate: workflow first (the top is the least likely part of a long
   // description to be truncated or skimmed away), then rules, then syntax, with the budgeted
@@ -759,7 +838,9 @@ export const prepare = <R>(
     "",
     "## Language",
     "",
-    "Use common JavaScript data operations, functions, control flow, selected standard-library methods, and awaited tool calls. Built-ins include Date, RegExp, Map, Set, URL, URLSearchParams, and URI encoding helpers.",
+    "Use common JavaScript data operations, functions, control flow, selected standard-library methods, and awaited tool calls. Destructuring declarations and assignments support computed keys. Built-ins include Date, RegExp, Map, Set, URL, URLSearchParams, and URI encoding helpers.",
+    "Bounded Uint8Array supports indexed mutation, iteration, at/slice/subarray/set, fromBase64/fromHex and toBase64/toHex. TextEncoder/TextDecoder support UTF-8 only; TextDecoder accepts boolean fatal/ignoreBOM flags. atob/btoa and byte codecs require standard canonical padded base64 without whitespace; hex requires complete byte pairs. ArrayBuffer, streaming and base64/hex options are unavailable. Encode bytes as text before returning them or passing them to tools; raw bytes are refused, including inside arrays and records.",
+    "Synchronous guest call ancestry is capped at 128 with a catchable RangeError. Genuine async continuation boundaries reset depth; async calls before their first await and nested generator resumes still count.",
     "Async functions, sync and async generators, guest Symbol.iterator/Symbol.asyncIterator protocols, for-await loops, labeled control flow, promise chaining, Promise.any, grouping helpers, and JSON replacers/revivers are supported. Set union/intersection/difference/symmetricDifference and isSubsetOf/isSupersetOf/isDisjointFrom accept Set or Map operands. Callbacks accept supported builtin references such as .map(JSON.stringify); wrap single-input tools in arrow functions to avoid extra callback arguments. Grouping and JSON callbacks are not implicitly awaited. Modules/imports, classes, timers, fetch, eval, prototype access, and unlisted methods are unavailable. Use Code Mode tools for external operations.",
     "For literal keyword filtering, prefer `terms.some(term => line.includes(term))` over regex alternation; conservative regex guards reject some safe patterns. Backslashes in string patterns must survive JavaScript string escaping.",
     "Dates and URLs serialize to strings at data boundaries; Map/Set/RegExp/URLSearchParams serialize to `{}`.",
@@ -789,6 +870,7 @@ export const prepare = <R>(
       toolSection.push(`- ${namespace} (${label})`);
       for (const tool of group) if (picked.has(tool)) toolSection.push(catalogLine(tool));
     }
+    toolSection.push(...namespaceLines);
     if (!complete) {
       toolSection.push(
         "",
@@ -807,15 +889,8 @@ export const prepare = <R>(
     })),
     snapshot: Object.freeze({
       complete,
-      namespacePaths: Object.freeze(
-        [
-          ...new Set(
-            visible.flatMap(({ path }) =>
-              path.slice(0, -1).map((_, index) => toolExpression(path.slice(0, index + 1))),
-            ),
-          ),
-        ].sort(compareText),
-      ),
+      namespacePaths: Object.freeze(metadata.map(({ path }) => toolExpression(path))),
+      namespaceDescriptions: Object.freeze(namespaceDescriptions),
       namespaces: Object.freeze(
         ordered.map(([name, group]) => Object.freeze({ name, total: group.length })),
       ),
@@ -834,7 +909,7 @@ export const prepare = <R>(
     }),
     instructions: lines.join("\n"),
     searchIndex: visible.map(({ path, definition, description }) =>
-      toSearchEntry(path, definition, description),
+      toSearchEntry(path, definition, description, ancestorDescriptions(tools, path)),
     ),
   };
 };

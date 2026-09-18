@@ -22,9 +22,10 @@ nested output).
 
 ```text
 src/
-  index.ts              # public barrel: CodeMode, Tool, ToolError/toolError
+  index.ts              # public barrel: CodeMode, Namespace, Tool, ToolError/toolError
   codemode.ts           # public CodeMode namespace: make/execute, schemas, types
   catalog.ts            # semantic discovery snapshots and host-only delta decisions
+  namespace.ts          # host-only optional namespace descriptions
   failure.ts            # closed internal RuntimeFailure union
   tool.ts               # Tool.make and tool definition types
   tool-error.ts         # ToolError: safe model-visible tool refusal
@@ -47,7 +48,9 @@ src/
     generators.ts       # suspended generator activations and request queues
     iterator-protocol.ts # iterator acquisition, stepping, closing and materialization
     scope.ts            # binding lookup, initialization and scope stack
-    bindings.ts         # binding/assignment patterns
+    bindings.ts         # iterator-aware binding/assignment patterns and computed keys
+    assignment.ts       # reference resolution, evaluation order and assignment writes
+    recursion.ts        # fixed guest call-depth budget; internal test injection only
     statements.ts       # control flow and statement evaluation
     expressions.ts      # expression evaluation
     callable.ts         # guest activation and callable dispatch
@@ -64,6 +67,7 @@ src/
     regex-first-sets.ts # LOCAL (non-upstream) conservative alternation first-character
                         # analysis used by the confinement regex guard
   stdlib/               # confined standard-library surfaces (internal)
+    bytes.ts  encoding.ts # owned byte operations, UTF-8, strict base64 and hex
     collections.ts  console.ts  date.ts  epoch.ts  json.ts  math.ts
     number.ts  object.ts  promise.ts  regexp.ts  string.ts  url.ts  value.ts
 tests/                  # upstream and local behavioral suites (Effect-backed Vitest)
@@ -78,6 +82,7 @@ The only public entry is `src/index.ts` (`pi-code-mode-runtime` package export):
 - `CodeMode` - `make`, `execute`, result/diagnostic schemas and types, plus optional
   queued/running/terminal tool-call lifecycle observation.
 - `Tool` - `make`, `Definition`, `Options`, `SchemaType`, `JsonSchema`.
+- `Namespace` - `make({ tools, description })`, optional host-only discovery metadata.
 - `ToolError` / `toolError` - the explicit safe-message failure channel.
 
 Everything else (`failure.ts`, `tool-runtime.ts`, `tool-schema.ts`, `values.ts`,
@@ -117,10 +122,32 @@ preflight, per-entry collection checks before mapper execution, and cooperative 
 checks bound self-extending iteration. Returned tool promises remain unawaited values.
 Nonundefined `thisArg` remains unsupported. See `PROVENANCE.md` deviation 11.
 
+## Assignment, bytes and discovery ownership
+
+`assignment.ts` resolves assignment references once and preserves compound/logical evaluation
+order. `bindings.ts` shares iterator-aware pattern traversal between declarations and assignments,
+including computed keys, defaults and rest. Writes still use the guarded member/binding doors.
+
+`values.ts` owns opaque `SandboxBytes`, `SandboxTextEncoder` and `SandboxTextDecoder` values.
+`stdlib/bytes.ts` and `encoding.ts` own bounded byte operations and pure encodings; interpreter
+constructor, member, iterator and callable dispatch admit only their explicit methods.
+`subarray` may share owned storage; `slice` copies. `tool-runtime.ts` rejects these values at
+nested data boundaries with an encode-first hint. No host buffer or ambient I/O is exposed.
+
+`namespace.ts` keeps descriptions outside the guest tool tree. `tool-runtime.ts` indexes ancestor
+descriptions and selects clipped catalog metadata within the existing budget; `catalog.ts`
+compares discovery projections. `tool-schema.ts` renders constraint annotations without adding
+raw JSON Schema validation. Effect Schema validation remains the execution boundary.
+
 ## Guest functions and promises
 
 Each function invocation has its own evaluator stack while captured binding maps remain
-shared. Async functions return distinct promises after their synchronous prefix. One execution
+shared. `recursion.ts` owns a fixed synchronous guest call-depth cap of 128. Ordinary calls,
+async prefixes, callbacks and generator resumes share the policy; a semantic await starts a
+fresh depth segment. The conservative cap accounts for immediate Effect activation forks without
+changing FIFO scheduling. It is not a total invocation quota, and async pagination may exceed
+128 calls across awaits. Only internal tests inject smaller budgets; no host or user setting
+changes the production cap. Async functions return distinct promises after their synchronous prefix. One execution
 owns their scope, deadline, logs, tool permits, lifecycle ids, and bounded promise tracking.
 `guest-turns.ts` serializes guest continuations and promise reactions in FIFO order; Effect
 scheduler yields cannot split a synchronous guest turn. Promise settlement is separate from

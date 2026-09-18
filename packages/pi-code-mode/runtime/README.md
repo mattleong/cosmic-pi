@@ -39,6 +39,20 @@ The selective v2 upgrade retains the original vendored base and local confinemen
 Its compatibility matrix records supported behavior and regression coverage;
 this package does not claim broad ECMAScript conformance.
 
+## Selective additions
+
+Assignment and destructuring preserve computed-key evaluation order and use admitted iterators.
+Synchronous guest call depth is capped at 128, with fresh depth after semantic awaits and no
+public configuration knob. Owned Uint8Array values support bounded UTF-8, base64 and hex
+conversion; encode bytes to strings before tool calls or final returns. Nested byte values are
+also rejected at data boundaries. There is no fetch, crypto or Promise constructor.
+
+Hosts can attach optional namespace descriptions through `Namespace.make({ tools, description })`.
+Descriptions affect discovery, not guest properties or authority. Pretty tool signatures document
+JSON Schema constraints, but raw JSON Schema remains render-only rather than validation.
+See `SUPPORT.md` for exact allowlists and limits, and `PROVENANCE.md` for the additional pinned
+reference and local safety adaptations.
+
 ## Verification
 
 Ordinary tests include six pinned, checksummed Test262 fixtures. No network fetch or

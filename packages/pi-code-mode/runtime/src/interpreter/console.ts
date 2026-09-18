@@ -5,6 +5,7 @@ import { boundedData, coerceToString } from "../stdlib/value.js";
 import { copyIn, copyOut, ToolReference } from "../tool-runtime.js";
 import {
   isSandboxValue,
+  SandboxBytes,
   SandboxDate,
   SandboxMap,
   SandboxPromise,
@@ -126,6 +127,17 @@ export function formatConsoleValue<R, ValueInput>(
   // String(value) keeps NaN/Infinity/-Infinity readable; finite numbers match their JSON form.
   if (Predicate.isNumber(value) || Predicate.isBoolean(value)) return spend(String(value));
   if (!hasObjectRuntimeType(value)) return spend(String(value));
+  if (value instanceof SandboxBytes) {
+    let text = spend(`Uint8Array(${value.length}) [`);
+    for (let index = 0; index < value.length; index++) {
+      if (budget.remaining < 8) {
+        text += spend("...");
+        break;
+      }
+      text += spend(`${index ? "," : ""}${value.storage()[index]}`);
+    }
+    return text + spend("]");
+  }
   if (value instanceof SandboxPromise) return spend("[Promise (await it to get its value)]");
   if (value instanceof SandboxDate) return spend(coerceToString(value));
   if (value instanceof SandboxRegExp) return spend(coerceToString(value));

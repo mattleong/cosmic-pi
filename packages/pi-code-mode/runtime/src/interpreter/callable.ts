@@ -5,6 +5,8 @@ import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
 import { invokeDateMethod } from "../stdlib/date.js";
+import { invokeBytesMethod } from "../stdlib/bytes.js";
+import { invokeEncodingMethod } from "../stdlib/encoding.js";
 import { invokeNumberMethod } from "../stdlib/number.js";
 import { invokeObjectAssign, invokeObjectMethod } from "../stdlib/object.js";
 import { invokeRegExpMethod } from "../stdlib/regexp.js";
@@ -13,6 +15,9 @@ import { boundedData, coerceToString, createErrorValue, invokeCoercion } from ".
 import { ToolReference, ToolRuntime } from "../tool-runtime.js";
 import {
   SandboxDate,
+  SandboxBytes,
+  SandboxTextEncoder,
+  SandboxTextDecoder,
   SandboxMap,
   SandboxPromise,
   SandboxRegExp,
@@ -23,6 +28,7 @@ import {
 import { assertBoundedCollectionSize, ExecutionDeadline } from "./confinement.js";
 import { createGenerator, invokeGenerator } from "./generators.js";
 import { GeneratorReference } from "./model.js";
+import type { RecursionBudget } from "./recursion.js";
 import {
   acquireIterator,
   closeOnAbrupt,
@@ -69,6 +75,8 @@ import {
   type PromiseOwners,
 } from "./runtime.js";
 export interface CallableHost<R> {
+  callDepth: number;
+  readonly recursion: RecursionBudget;
   rejectCircularInsertion(
     container: InterpreterObject | InterpreterArray,
     value: InterpreterValue,
@@ -358,6 +366,7 @@ export function invokeFunction<R>(
   return Effect.gen({ self: this }, function* () {
     const activation = this.fork();
     if (fn.generator) {
+      activation.callDepth = this.recursion.next(this.callDepth, fn.body);
       yield* prepareFunction(activation, fn, args);
       return createGenerator(activation, fn, evaluatePreparedFunction(activation, fn));
     }
@@ -431,12 +440,15 @@ export function evaluateFunction<R>(
   args: InterpreterArray,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   return Effect.suspend(() => {
+    const savedDepth = this.callDepth;
+    this.callDepth = this.recursion.next(savedDepth, fn.body);
     const savedScopes = this.scopes;
     const savedFunctionScope = this.functionScope;
     const run = Effect.andThen(prepareFunction(this, fn, args), evaluatePreparedFunction(this, fn));
     return run.pipe(
       Effect.ensuring(
         Effect.sync(() => {
+          this.callDepth = savedDepth;
           this.scopes = savedScopes;
           this.functionScope = savedFunctionScope;
         }),
@@ -502,6 +514,10 @@ export function invokeIntrinsic<R>(
   args: InterpreterArray,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
+  if (ref.receiver instanceof SandboxBytes)
+    return Effect.succeed(invokeBytesMethod(ref, args, node));
+  if (ref.receiver instanceof SandboxTextEncoder || ref.receiver instanceof SandboxTextDecoder)
+    return Effect.succeed(invokeEncodingMethod(ref, args, node));
   if (ref.receiver instanceof GeneratorReference)
     return invokeGenerator(this.fork(), ref.receiver, ref.name, args, node);
   if (isNativeIterator(ref.receiver))

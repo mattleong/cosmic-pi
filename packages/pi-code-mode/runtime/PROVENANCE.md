@@ -8,7 +8,10 @@ extension is built on a host-neutral, independently reviewable core.
 - Repository: <https://github.com/anomalyco/opencode> (`dev` branch)
 - Original base commit: `d4704347465c1ee63d0c213ed00e648e7f0231c5`
 - Selective v2 reference commit: `0ac458b3b36f4d17fe3322fd9fab673066ea6297`
-  for the upgrade described below. This is not a whole-package resync.
+  for the lexical, iterator and catalog upgrade described below.
+- Additional selective reference commit: `90112f52db59a8f2ec412c66c6677193bf5dc7b8`
+  for assignment order, destructuring, recursion, discovery metadata and byte helpers.
+  Neither reference is a whole-package resync; the original base pin remains unchanged.
 - Upstream package: `@opencode-ai/codemode` (workspace-private), version `1.18.16`
 - Upstream path: `packages/codemode`
 - License: MIT (Copyright (c) 2025 opencode). The full upstream notice is
@@ -386,6 +389,39 @@ Do not replace them with an upstream module merely because a filename matches.
 The fixed concurrency, regex guard, allocation caps and data serialization rules
 are not part of the upgrade and must remain unchanged.
 
+## Selective assignment, discovery and byte additions
+
+The `90112f52db59a8f2ec412c66c6677193bf5dc7b8` reference informs these local adaptations:
+
+- `interpreter/assignment.ts` separates reference resolution from right-hand-side evaluation.
+  `bindings.ts` shares iterator-aware destructuring assignments and bindings, including computed
+  object keys. Member writes retain local blocked-key, cycle and allocation checks.
+- `interpreter/recursion.ts` supplies `RecursionBudget` to call and generator activation paths.
+  The fixed production cap is 128 synchronous guest frames, not the reference's 10,000.
+  A local subprocess smoke at 10,000 failed to settle nested generator/async-prefix cases within
+  its 40-second watchdog, while plain synchronous recursion completed. This is not proof of
+  native stack overflow. The conservative local cap accounts for immediate Effect activation
+  forks without replacing FIFO scheduling. Semantic await resumes reset depth, so the cap is
+  not a total call quota. Smaller budgets are internal test injection only, never public config.
+- `src/namespace.ts` adds `Namespace.make` with optional host-only descriptions. Search indexes
+  ancestor descriptions, while catalog descriptions are clipped and budgeted. Namespace metadata
+  and topology participate in snapshot replacement decisions without granting callable authority.
+  `tool-schema.ts` documents numeric, string, array and object constraints in pretty signatures.
+  Raw JSON Schema remains render-only; only Effect Schemas validate at the runtime boundary.
+- `stdlib/bytes.ts` and `encoding.ts`, backed by owned wrappers in `values.ts`, provide a bounded
+  Uint8Array subset, UTF-8 TextEncoder/TextDecoder, Latin-1 atob/btoa, canonical standard base64
+  and hex. Constructor/member/callable/iterator dispatch uses explicit allowlists. Byte output
+  allocation uses the existing 262,144-entry cap, and strings retain their 4,194,304-code-unit cap.
+  `subarray` may share internal owned storage; `slice` copies. Tool and final-return boundaries
+  reject bytes and encoder objects even when nested, with an encode-first diagnostic.
+
+These are selective adaptations, not copies of an upstream layout. The byte helpers add no
+fetch, crypto, Buffer, ArrayBuffer, DataView, Promise constructor or ambient capability.
+`SUPPORT.md` records the exact supported subset. Dedicated assignment, destructuring,
+recursion, discovery and byte suites cover each addition; `feature-composition.test.ts` checks
+their interaction through tool calls. Preserve these adaptations alongside deviations 1-17
+when reviewing a future resync.
+
 ## Test262 provenance
 
 Six unchanged positive fixtures under `tests/test262/fixtures/` come from
@@ -415,7 +451,8 @@ Upstream updates are pulled by pinned manual review only:
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
    hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-17
    for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
-   host-adapter code. Re-run the confinement, lifecycle, and compatibility tests.
+   host-adapter code. Preserve the selective assignment, discovery, recursion and bounded-byte
+   adaptations above. Re-run the confinement, lifecycle, and compatibility tests.
 4. Record a whole-base replacement or a selective reference explicitly, preserving
    the original base history and updating the extraction map. Run the mandatory
    Test262 selection, full package tests and workspace validation gates.

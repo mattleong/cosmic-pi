@@ -3,6 +3,7 @@ import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
 import { hasObjectRuntimeType } from "../runtime-values.js";
 import { arrayMethods, mapMethods, setMethods } from "../stdlib/collections.js";
+import { byteMethods, byteNumber } from "../stdlib/bytes.js";
 import { dateMethods } from "../stdlib/date.js";
 import { mathConstant, mathConstants } from "../stdlib/math.js";
 import { numberConstant, numberConstants, numberMethods, numberStatics } from "../stdlib/number.js";
@@ -20,6 +21,9 @@ import {
 } from "../stdlib/url.js";
 import { isBlockedMember, ToolReference, ToolRuntimeError } from "../tool-runtime.js";
 import {
+  SandboxBytes,
+  SandboxTextEncoder,
+  SandboxTextDecoder,
   SandboxDate,
   SandboxMap,
   SandboxPromise,
@@ -60,6 +64,7 @@ import {
   PromiseNamespace,
 } from "./model.js";
 import { isRuntimeReference } from "./runtime.js";
+const deferredAccessErrors = new WeakMap<ComputedValue, InterpreterRuntimeError>();
 export interface MembersHost<R> {
   assignToReference(
     reference: MemberReference,
@@ -70,6 +75,7 @@ export interface MembersHost<R> {
   evaluateExpression(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R>;
   getMemberReference(
     node: AstNode,
+    deferInvalidBase?: boolean,
   ): Effect.Effect<
     | MemberReference
     | ToolReference
@@ -105,6 +111,7 @@ export interface MembersHost<R> {
 export function getMemberReference<R>(
   this: MembersHost<R>,
   node: AstNode,
+  deferInvalidBase = false,
 ): Effect.Effect<
   | MemberReference
   | ToolReference
@@ -178,6 +185,7 @@ export function getMemberReference<R>(
       key === GuestIterator &&
       (Array.isArray(objectValue) ||
         Predicate.isString(objectValue) ||
+        objectValue instanceof SandboxBytes ||
         objectValue instanceof SandboxMap ||
         objectValue instanceof SandboxSet ||
         objectValue instanceof SandboxURLSearchParams)
@@ -235,6 +243,28 @@ export function getMemberReference<R>(
 
     // Sandbox value types expose their method/property allowlists; any other key reads as
     // `undefined`, consistent with unknown-property reads on strings/numbers/arrays.
+    if (objectValue instanceof SandboxBytes) {
+      if (key === "length" || key === "byteLength") return new ComputedValue(objectValue.length);
+      if (Predicate.isString(key) && byteMethods.has(key))
+        return new IntrinsicReference(objectValue, key);
+      if (
+        Predicate.isNumber(key) ||
+        (Predicate.isString(key) && (key === "-0" || String(Number(key)) === key))
+      )
+        return { target: objectValue, key };
+      return new ComputedValue(undefined);
+    }
+    if (objectValue instanceof SandboxTextEncoder || objectValue instanceof SandboxTextDecoder) {
+      if (key === "encoding") return new ComputedValue("utf-8");
+      if (objectValue instanceof SandboxTextDecoder && (key === "fatal" || key === "ignoreBOM"))
+        return new ComputedValue(objectValue[key]);
+      if (
+        (objectValue instanceof SandboxTextEncoder && key === "encode") ||
+        (objectValue instanceof SandboxTextDecoder && key === "decode")
+      )
+        return new IntrinsicReference(objectValue, key);
+      return new ComputedValue(undefined);
+    }
     if (objectValue instanceof SandboxDate) {
       if (Predicate.isString(key) && dateMethods.has(key))
         return new IntrinsicReference(objectValue, key);
@@ -298,10 +328,14 @@ export function getMemberReference<R>(
     }
 
     if (!hasObjectRuntimeType(objectValue) || objectValue === null) {
-      throw new InterpreterRuntimeError(
+      const error = new InterpreterRuntimeError(
         "Cannot access a property on a non-object value.",
         objectNode,
-      );
+      ).as("TypeError");
+      if (!deferInvalidBase) throw error;
+      const reference = new ComputedValue(undefined);
+      deferredAccessErrors.set(reference, error);
+      return reference;
     }
 
     if (Predicate.isString(key) && isBlockedMember(key)) {
@@ -357,6 +391,10 @@ export function readMember<R>(
         ? reference.target.length
         : reference.target[Number(reference.key)];
     }
+    if (reference.target instanceof SandboxBytes)
+      return reference.target.storage()[
+        reference.key === "-0" ? Number.NaN : Number(reference.key)
+      ];
     if (reference.target instanceof SandboxURL)
       return readUrlProperty(reference.target, String(reference.key));
     return reference.target[reference.key];
@@ -383,7 +421,24 @@ export function modifyMember<R>(
   >,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
   return Effect.gen({ self: this }, function* () {
-    const reference = yield* this.getMemberReference(node);
+    const operation = resolveAssignmentReference<R>;
+    const reference = yield* operation.call(this, node);
+    const { write, next, result } = yield* compute(reference.get());
+    if (write) reference.set(next);
+    return result;
+  });
+}
+
+export function resolveAssignmentReference<R>(
+  this: MembersHost<R>,
+  node: AstNode,
+): Effect.Effect<
+  { get(): InterpreterValue; set(value: InterpreterValue): InterpreterValue },
+  RuntimeFailure,
+  R
+> {
+  return Effect.gen({ self: this }, function* () {
+    const reference = yield* this.getMemberReference(node, true);
     if (
       reference === OptionalShortCircuit ||
       reference instanceof ComputedValue ||
@@ -393,26 +448,47 @@ export function modifyMember<R>(
       reference instanceof IntrinsicReference ||
       reference instanceof GlobalMethodReference
     ) {
-      throw new InterpreterRuntimeError("Only data fields may be assigned in CodeMode.", node);
-    }
-    if (Array.isArray(reference.target)) {
-      if (reference.key === "length")
-        throw new InterpreterRuntimeError("Array length cannot be assigned in CodeMode.", node);
-      if (Predicate.isString(reference.key) && arrayMethods.has(reference.key)) {
-        throw new InterpreterRuntimeError("Array methods cannot be assigned in CodeMode.", node);
-      }
+      const error =
+        reference instanceof ComputedValue ? deferredAccessErrors.get(reference) : undefined;
+      return {
+        get: () => {
+          if (error) throw error;
+          return reference instanceof ComputedValue ? reference.value : reference;
+        },
+        set: () => {
+          throw (
+            error ??
+            new InterpreterRuntimeError("Only data fields may be assigned in CodeMode.", node)
+          );
+        },
+      };
     }
     const key = Array.isArray(reference.target) ? Number(reference.key) : reference.key;
     // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-    const current =
-      reference.target instanceof SandboxURL
-        ? readUrlProperty(reference.target, String(key))
-        : Array.isArray(reference.target)
-          ? reference.target[Number(key)]
-          : reference.target[key];
-    const { write, next, result } = yield* compute(current);
-    if (write) this.assignToReference(reference, key, next, node);
-    return result;
+    const get = (): InterpreterValue =>
+      reference.target instanceof SandboxBytes
+        ? reference.target.storage()[key === "-0" ? Number.NaN : Number(key)]
+        : reference.target instanceof SandboxURL
+          ? readUrlProperty(reference.target, String(key))
+          : Array.isArray(reference.target)
+            ? reference.target[Number(key)]
+            : reference.target[key];
+    return {
+      get,
+      set: (value: InterpreterValue) => {
+        if (
+          Array.isArray(reference.target) &&
+          (reference.key === "length" ||
+            (Predicate.isString(reference.key) && arrayMethods.has(reference.key)))
+        )
+          throw new InterpreterRuntimeError(
+            "Array length and methods cannot be assigned in CodeMode.",
+            node,
+          );
+        this.assignToReference(reference, key, value, node);
+        return value;
+      },
+    };
   });
 }
 
@@ -452,6 +528,13 @@ export function assignToReference<R>(
   next: InterpreterValue,
   node: AstNode,
 ): void {
+  if (reference.target instanceof SandboxBytes) {
+    const index = key === "-0" ? Number.NaN : Number(key);
+    const number = byteNumber(next);
+    if (Number.isInteger(index) && index >= 0 && index < reference.target.length)
+      reference.target.storage()[index] = number;
+    return;
+  }
   if (Array.isArray(reference.target)) {
     const target = reference.target;
     // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.

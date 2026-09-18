@@ -185,6 +185,9 @@ export function invokePromiseChain<R>(
   return this.chainReaction(
     source,
     (exit) => {
+      // This child was captured when the handler was registered. A reaction starts
+      // a fresh guest continuation, not the registrar's synchronous ancestry.
+      activation.callDepth = 0;
       const handler =
         name === "catch"
           ? Exit.isFailure(exit)

@@ -86,7 +86,7 @@ const hasUnresolvedRef = (
 
 /**
  * Schema constraints a TypeScript type cannot express natively but a model benefits from,
- * surfaced as JSDoc tags (`@deprecated`, `@default`, `@format`, `@minItems`, `@maxItems`).
+ * surfaced as JSDoc tags. These annotations do not validate JSON Schema inputs or results.
  */
 const docTags = (schema: JsonSchema): Array<string> => {
   const tags: Array<string> = [];
@@ -100,8 +100,26 @@ const docTags = (schema: JsonSchema): Array<string> => {
     }
   }
   if (Predicate.isString(schema.format)) tags.push(`@format ${schema.format}`);
-  if (Predicate.isNumber(schema.minItems)) tags.push(`@minItems ${schema.minItems}`);
-  if (Predicate.isNumber(schema.maxItems)) tags.push(`@maxItems ${schema.maxItems}`);
+  if (schema.type === "integer") tags.push("@integer");
+  for (const key of [
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "minItems",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+  ] as const) {
+    const value = schema[key];
+    if (Predicate.isNumber(value) && Number.isFinite(value)) tags.push(`@${key} ${value}`);
+    else if (value === true) tags.push(`@${key} true`);
+  }
+  if (Predicate.isString(schema.pattern)) tags.push(`@pattern ${JSON.stringify(schema.pattern)}`);
+  if (schema.uniqueItems === true) tags.push("@uniqueItems true");
   return tags;
 };
 
@@ -129,6 +147,27 @@ const jsdoc = (
 };
 
 const renderSchema = (
+  schema: JsonSchema,
+  ctx: RenderContext,
+  depth = 0,
+  seen: ReadonlySet<string> = new Set(),
+): string => {
+  const rendered = renderSchemaType(schema, ctx, depth, seen);
+  if (!ctx.pretty || depth > MAX_RENDER_DEPTH) return rendered;
+  // Constraint-only schemas still carry useful documentation. Keep their `unknown`
+  // type in intersections rather than inferring a type from a validation keyword.
+  if (
+    rendered === "unknown" &&
+    hasUnresolvedRef(schema, { ...ctx.definitions, ...schema.definitions, ...schema.$defs }, seen)
+  )
+    return rendered;
+  const tags = docTags(schema);
+  return tags.length === 0
+    ? rendered
+    : `${jsdoc(undefined, [tags.join(" ")], "").trim()} ${rendered}`;
+};
+
+const renderSchemaType = (
   schema: JsonSchema,
   ctx: RenderContext,
   depth = 0,
@@ -222,7 +261,7 @@ const renderSchema = (
     if (properties.length === 0 && indexType === undefined) return "{}";
     const pad = "  ".repeat(depth + 1);
     const lines = properties.map(
-      (entry) => `${jsdoc(entry[1].description, docTags(entry[1]), pad)}${pad}${field(entry)},`,
+      (entry) => `${jsdoc(entry[1].description, [], pad)}${pad}${field(entry)},`,
     );
     if (indexType !== undefined) lines.push(`${pad}[key: string]: ${indexType},`);
     return `{\n${lines.join("\n")}\n${"  ".repeat(depth)}}`;

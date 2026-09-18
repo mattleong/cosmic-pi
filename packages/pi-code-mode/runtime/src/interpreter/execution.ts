@@ -24,6 +24,7 @@ import {
 } from "./model.js";
 import { normalizeError, type PromiseOwners } from "./runtime.js";
 export interface ExecutionHost<R> {
+  callDepth: number;
   currentScope(): Map<string, Binding>;
   functionScope: Map<string, Binding> | undefined;
   callPermits: Semaphore.Semaphore;
@@ -224,7 +225,10 @@ export function promiseReaction<R, A, B, Requirements = never>(
       return Effect.failCause(exit.cause);
     return this.execution.turns.withPermit(
       Exit.isSuccess(exit)
-        ? Effect.suspend(() => reaction(exit.value))
+        ? Effect.suspend(() => {
+            this.callDepth = 0;
+            return reaction(exit.value);
+          })
         : Effect.failCause(exit.cause),
     );
   });

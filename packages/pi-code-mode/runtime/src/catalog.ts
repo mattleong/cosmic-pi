@@ -9,6 +9,11 @@ export type CatalogSnapshot = {
   readonly complete: boolean;
   /** Canonical branch expressions; topology changes require replacement. */
   readonly namespacePaths: ReadonlyArray<string>;
+  /** Only clipped namespace descriptions selected by the model discovery budget. */
+  readonly namespaceDescriptions?: ReadonlyArray<{
+    readonly path: string;
+    readonly description: string;
+  }>;
   readonly namespaces: ReadonlyArray<{ readonly name: string; readonly total: number }>;
   /** Only entries selected by the discovery budget, not the entire searchable catalog. */
   readonly entries: ReadonlyArray<CatalogEntry>;
@@ -39,6 +44,8 @@ export const catalogUpdate = (
   const namespaceNames = (snapshot: CatalogSnapshot) => snapshot.namespaces.map(({ name }) => name);
   if (
     current.complete !== previous.complete ||
+    JSON.stringify(current.namespaceDescriptions ?? []) !==
+      JSON.stringify(previous.namespaceDescriptions ?? []) ||
     JSON.stringify(current.namespacePaths) !== JSON.stringify(previous.namespacePaths) ||
     JSON.stringify(namespaceNames(current)) !== JSON.stringify(namespaceNames(previous))
   )

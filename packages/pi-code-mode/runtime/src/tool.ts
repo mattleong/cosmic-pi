@@ -25,6 +25,17 @@ export type JsonSchema = {
   readonly default?: unknown;
   readonly format?: string | undefined;
   readonly deprecated?: boolean | undefined;
+  readonly minimum?: number | undefined;
+  readonly maximum?: number | undefined;
+  readonly exclusiveMinimum?: number | boolean | undefined;
+  readonly exclusiveMaximum?: number | boolean | undefined;
+  readonly multipleOf?: number | undefined;
+  readonly minLength?: number | undefined;
+  readonly maxLength?: number | undefined;
+  readonly pattern?: string | undefined;
+  readonly minProperties?: number | undefined;
+  readonly maxProperties?: number | undefined;
+  readonly uniqueItems?: boolean | undefined;
   readonly minItems?: number | undefined;
   readonly maxItems?: number | undefined;
   readonly $ref?: string | undefined;

@@ -4,7 +4,13 @@ import type { RuntimeFailure } from "../failure.js";
 import { jsonStatics, parseJsonText, stringifyJsonProjection } from "../stdlib/json.js";
 import { hasObjectRuntimeType } from "../runtime-values.js";
 import { copyIn, isBlockedMember } from "../tool-runtime.js";
-import { SandboxDate, SandboxPromise, SandboxURL, isSandboxValue } from "../values.js";
+import {
+  SandboxBytes,
+  SandboxDate,
+  SandboxPromise,
+  SandboxURL,
+  isSandboxValue,
+} from "../values.js";
 import { MAX_GUEST_COLLECTION_ENTRIES, MAX_GUEST_STRING_LENGTH } from "./confinement.js";
 import {
   type AstNode,
@@ -224,8 +230,9 @@ export const invokeJson = <R>(
           spend(value ? 4 : 5);
           return value;
         }
+        const bytes = value instanceof SandboxBytes ? value : undefined;
         // Promises have no enumerable JSON properties. Never inspect or observe their fibers.
-        if (value instanceof SandboxPromise || isSandboxValue(value)) {
+        if (value instanceof SandboxPromise || (isSandboxValue(value) && !bytes)) {
           // Native serialization still probes every selected key on this empty projection.
           // Charge that work now; otherwise opaque arrays bypass the traversal bound.
           chargeVisits(propertyList?.length ?? 0);
@@ -235,10 +242,10 @@ export const invokeJson = <R>(
         if (seen.has(value)) fail("JSON.stringify contains a circular value.");
         seen.add(value);
         const array = Array.isArray(value);
-        const object = array ? undefined : asObject(value);
+        const object = array || bytes ? undefined : asObject(value);
         const keys = object ? keysOf(object) : undefined;
         const selected = array ? undefined : (propertyList ?? keys);
-        const length = Array.isArray(value) ? value.length : selected!.length;
+        const length = Array.isArray(value) ? value.length : (selected?.length ?? bytes!.length);
         check(depth, length);
         const outputArray: InterpreterArray = [];
         const outputObject = makeInterpreterObject();
@@ -247,12 +254,16 @@ export const invokeJson = <R>(
         spend(2);
         for (let i = 0; i < length; i++) {
           checkDeadline();
-          const child = array ? String(i) : selected![i]!;
+          const child = array || (bytes && !selected) ? String(i) : selected![i]!;
           const original = Array.isArray(value)
             ? value[i]
-            : Object.hasOwn(object!, child)
-              ? object![child]
-              : undefined;
+            : bytes
+              ? String(Number(child)) === child
+                ? bytes.storage()[Number(child)]
+                : undefined
+              : Object.hasOwn(object!, child)
+                ? object![child]
+                : undefined;
           const item = yield* walk(child, original, depth + 1);
           if (item === undefined && !array) continue;
           if (count++) spend(1);

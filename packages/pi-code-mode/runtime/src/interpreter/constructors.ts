@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { RuntimeFailure } from "../failure.js";
 import { hasObjectRuntimeType, runtimeTypeName } from "../runtime-values.js";
+import { constructBytes } from "../stdlib/bytes.js";
+import { constructTextDecoder } from "../stdlib/encoding.js";
 import { clipEpochMillis, epochFromLocalParts, epochNow } from "../stdlib/epoch.js";
 import { escapeRegexHint, regexFailureReason } from "../stdlib/regexp.js";
 import { uriArgument, urlArgument } from "../stdlib/url.js";
@@ -23,6 +25,8 @@ import {
 } from "../stdlib/value.js";
 import {
   isSandboxValue,
+  SandboxBytes,
+  SandboxTextEncoder,
   SandboxDate,
   SandboxMap,
   SandboxRegExp,
@@ -80,6 +84,32 @@ export function evaluateNewExpression<R>(
       "UnsupportedSyntax",
       [supportedSyntaxMessage],
     );
+  }
+  if (name === "Uint8Array" || name === "TextEncoder" || name === "TextDecoder") {
+    return Effect.gen({ self: this }, function* () {
+      const args = yield* this.evaluateCallArguments(argNodes);
+      if (name === "TextEncoder") {
+        if (args.length !== 0)
+          throw new InterpreterRuntimeError("TextEncoder takes no options.", node).as("TypeError");
+        return new SandboxTextEncoder();
+      }
+      if (name === "TextDecoder") return constructTextDecoder(args, node);
+      if (args.length > 1)
+        throw new InterpreterRuntimeError(
+          "Uint8Array buffer/offset constructors are not supported.",
+          node,
+        ).as("TypeError");
+      const source = args[0];
+      return constructBytes(
+        source !== undefined &&
+          !Predicate.isNumber(source) &&
+          !(source instanceof SandboxBytes) &&
+          !Array.isArray(source)
+          ? yield* materializeIterable(this, source, node, "Uint8Array constructor")
+          : source,
+        node,
+      );
+    });
   }
   if (errorConstructors.has(name)) {
     return Effect.gen({ self: this }, function* () {

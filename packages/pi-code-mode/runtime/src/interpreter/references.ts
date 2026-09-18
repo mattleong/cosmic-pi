@@ -4,6 +4,9 @@ import { errorBrandName } from "../stdlib/value.js";
 import { ToolReference } from "../tool-runtime.js";
 import {
   isSandboxValue,
+  SandboxBytes,
+  SandboxTextEncoder,
+  SandboxTextDecoder,
   SandboxDate,
   SandboxMap,
   SandboxPromise,
@@ -117,6 +120,12 @@ export const instanceofValue = (
   }
   if (rhs instanceof GlobalNamespace) {
     switch (rhs.name) {
+      case "Uint8Array":
+        return lhs instanceof SandboxBytes;
+      case "TextEncoder":
+        return lhs instanceof SandboxTextEncoder;
+      case "TextDecoder":
+        return lhs instanceof SandboxTextDecoder;
       case "Date":
         return lhs instanceof SandboxDate;
       case "RegExp":

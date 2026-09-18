@@ -94,6 +94,7 @@ function suspendYield<R>(
           ? yield* Effect.exit(generator.activation.settlePromise(value))
           : Exit.succeed(value);
       yield* generator.activation.execution.turns.take(generator.activation.turn);
+      generator.activation.callDepth = 0;
       value = yield* settled;
       yield* generator.activation.releaseTurn();
     }
@@ -107,8 +108,10 @@ function suspendYield<R>(
         next.kind === "return" && next.value instanceof SandboxPromise
           ? yield* Effect.exit(generator.activation.settlePromise(next.value))
           : Exit.succeed(next.value);
-      if (generator.activation.firstBoundary === undefined)
+      if (generator.activation.firstBoundary === undefined) {
         yield* generator.activation.execution.turns.take(generator.activation.turn);
+        generator.activation.callDepth = 0;
+      }
       next.value = yield* settled;
     }
     return yield* resumeValue(next);
@@ -134,6 +137,9 @@ function request<R>(
     }
     if (generator.running)
       throw new InterpreterRuntimeError("Generator is already executing.").as("TypeError");
+    // Queued async requests start on a later turn, not on the enqueueing stack.
+    const depth =
+      generator.async && boundary === undefined ? 0 : caller.recursion.next(caller.callDepth);
     generator.running = true;
     for (const owner of caller.owners) {
       generator.ownerSets.add(owner);
@@ -141,6 +147,7 @@ function request<R>(
     }
     const incoming: Request = { kind, value, reply: Deferred.makeUnsafe() };
     const activation = generator.activation;
+    activation.callDepth = depth;
     // A synchronous resume borrows, rather than releases and reacquires, this turn.
     activation.turn = generator.async ? { held: false } : caller.turn;
     const run = Effect.gen(function* () {
@@ -172,8 +179,10 @@ function request<R>(
         activation.generatorAsync = generator.async;
         activation.generatorYield = (yielded) => suspendYield(generator, yielded);
         const body = Effect.gen(function* () {
-          if (generator.async && boundary === undefined)
+          if (generator.async && boundary === undefined) {
             yield* activation.execution.turns.take(activation.turn);
+            activation.callDepth = 0;
+          }
           let result = yield* generator.body;
           if (generator.async) yield* endPrefix(activation);
           if (generator.async && result instanceof SandboxPromise)
@@ -219,6 +228,7 @@ function request<R>(
       Effect.ensuring(
         Effect.sync(() => {
           generator.running = false;
+          activation.callDepth = 0;
         }),
       ),
     );

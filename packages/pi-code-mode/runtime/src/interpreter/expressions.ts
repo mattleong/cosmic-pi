@@ -1,3 +1,4 @@
+import { assignExpression, type AssignmentHost } from "./assignment.js";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -42,7 +43,8 @@ import {
   isRuntimeReference,
   typeofValue,
 } from "./runtime.js";
-export interface ExpressionsHost<R> extends IteratorHost<R> {
+export interface ExpressionsHost<R> extends IteratorHost<R>, AssignmentHost<R> {
+  callDepth: number;
   yieldValue(
     value: InterpreterValue,
     node: AstNode,
@@ -193,6 +195,7 @@ export function evaluateExpression<R>(
             ? yield* Effect.exit(this.settlePromise(value, node))
             : Exit.succeed(value);
         yield* this.execution.turns.take(this.turn);
+        this.callDepth = 0;
         return yield* settled;
       });
     }
@@ -413,42 +416,7 @@ export function evaluateAssignmentExpression<R>(
   this: ExpressionsHost<R>,
   node: AstNode,
 ): Effect.Effect<InterpreterValue, RuntimeFailure, R> {
-  const left = getNode(node, "left");
-  const operator = getString(node, "operator");
-  return Effect.gen({ self: this }, function* () {
-    if (operator === "??=" || operator === "||=" || operator === "&&=") {
-      return yield* this.evaluateLogicalAssignment(node, left, operator);
-    }
-    const rightValue = yield* this.evaluateExpression(getNode(node, "right"));
-    if (left.type === "Identifier") {
-      const name = getString(left, "name");
-      if (operator === "=") return this.setIdentifierValue(name, rightValue, left);
-      const next = boundedData(
-        this.applyCompoundAssignment(
-          operator,
-          this.getIdentifierValue(name, left),
-          rightValue,
-          node,
-        ),
-        "Assignment result",
-      );
-      return this.setIdentifierValue(name, next, left);
-    }
-    if (left.type === "MemberExpression") {
-      if (operator === "=") return yield* this.writeMember(left, rightValue);
-      return yield* this.modifyMember(left, (current) => {
-        const next = boundedData(
-          this.applyCompoundAssignment(operator, current, rightValue, node),
-          "Assignment result",
-        );
-        return Effect.succeed({ write: true, next, result: next });
-      });
-    }
-    throw new InterpreterRuntimeError(
-      "Assignment target must be an Identifier or MemberExpression.",
-      left,
-    );
-  });
+  return assignExpression(this, node);
 }
 
 export function evaluateLogicalAssignment<R>(

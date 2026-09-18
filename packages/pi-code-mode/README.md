@@ -47,7 +47,20 @@ Sets support `union`, `intersection`, `difference`, `symmetricDifference`, `isSu
 Custom set-like objects are not supported. Result sets preserve member identity and do not
 mutate either operand.
 
-This is not a full JavaScript engine. Custom iterators/thenables, the Promise constructor,
+Labeled control flow, generators, admitted custom sync/async iterators and for-await are
+supported. Destructuring assignments and bindings accept computed object keys and byte iterators.
+Assignment resolves its target before evaluating the right-hand side; compound assignment reads
+the old value first. Synchronous guest call depth is fixed at 128. Semantic awaits reset depth,
+so long async pagination does not consume a lifetime call-depth quota. There is no depth setting.
+
+Owned `Uint8Array`, `TextEncoder` and UTF-8-only `TextDecoder` support bounded text processing,
+with `atob`/`btoa`, standard canonical padded base64 and hex helpers. Byte arrays are capped at
+262,144 entries. `slice` copies; `subarray` may share owned internal storage. Bytes cannot cross
+tool or return boundaries, including nested values: use `toBase64()`, `toHex()` or decoded text
+first. These helpers add no fetch, crypto, Buffer or backing-buffer access. See
+[runtime support](runtime/SUPPORT.md) for the method allowlist and encoding restrictions.
+
+This is not a full JavaScript engine. Custom thenables, the Promise constructor,
 callback `this` binding, guest `toJSON`, and reviver source contexts remain unsupported.
 Blocked property names and allocation/deadline limits still apply. `Promise.race` cancels
 losers; `Promise.any` does not cancel them on fulfillment, but execution teardown can cancel
@@ -83,8 +96,8 @@ return log
 The excerpt must cover the relevant log section; an empty match does not prove the check passed.
 Keyword filtering is useful for summaries, but keep source context when interpretation requires it.
 The interpreter conservatively rejects some safe regex alternations. String patterns also require
-JavaScript backslash escaping. Use the documented subset rather than adding unsupported syntax,
-such as labeled statements, to otherwise simple programs.
+JavaScript backslash escaping. Use the documented subset rather than assuming that all parsed
+JavaScript syntax or native methods are available.
 
 ## TUI presentation
 
@@ -157,6 +170,11 @@ This Pi extension keeps its fixed catalog in the complete tool registration desc
 not deliver deltas or claim token savings from this API. Provider-required tool schemas remain
 complete. Snapshots are metadata, not tool authority; they never import registered extension tools
 or turn discovered MCP tools into guest functions.
+
+Host-defined namespaces may carry optional descriptions through `Namespace.make`; these affect
+search and budgeted catalog metadata without becoming guest properties. Pretty signatures expose
+JSON Schema constraint annotations. Raw JSON Schema describes a tool but does not validate it;
+Effect Schemas retain runtime validation. Neither metadata feature imports more Pi tools.
 
 ## Supplied tool authority and direct nested dispatch
 

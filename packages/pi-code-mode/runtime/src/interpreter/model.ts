@@ -1,7 +1,7 @@
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
-import type { SandboxURL, SandboxValue } from "../values.js";
+import type { SandboxBytes, SandboxURL, SandboxValue } from "../values.js";
 
 export type SourcePosition = {
   line: number;
@@ -79,7 +79,7 @@ export class GeneratorReturn {
 }
 
 export type MemberReference = {
-  target: InterpreterObject | InterpreterArray | SandboxURL;
+  target: InterpreterObject | InterpreterArray | SandboxURL | SandboxBytes;
   key: GuestPropertyKey;
 };
 
@@ -143,7 +143,11 @@ export type GlobalNamespaceName =
   | "Set"
   | "URL"
   | "URLSearchParams"
-  | "Symbol";
+  | "Symbol"
+  | "Uint8Array"
+  | "TextEncoder"
+  | "TextDecoder"
+  | "Encoding";
 
 export class GlobalNamespace {
   readonly name: GlobalNamespaceName;
@@ -269,7 +273,7 @@ export type DiagnosticKind =
 export const OptionalShortCircuit: unique symbol = Symbol("codemode.optional-short-circuit");
 
 export const supportedSyntaxMessage =
-  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (including for...of, for-await, and for...in over object/array/tools keys), labeled control flow, lexical TDZ and function-scoped var declarations, arrow functions, sync/async generators, guest iterator protocols, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, Object.groupBy/Map.groupBy, JSON replacers/revivers, AggregateError, and Promise.all/allSettled/any/race/resolve/reject over supported iterables mixing promises and plain values for parallel tool calls, with then/catch/finally chaining. Grouping and JSON callbacks are not implicitly awaited.";
+  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, binding and assignment destructuring with computed keys, optional chaining, template literals, conditionals, switch, loops (including for...of, for-await, and for...in over object/array/tools keys), labeled control flow, lexical TDZ and function-scoped var declarations, arrow functions, sync/async generators, guest iterator protocols, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, bounded Uint8Array and UTF-8 TextEncoder/TextDecoder, strict padded base64 and hex helpers, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, Object.groupBy/Map.groupBy, JSON replacers/revivers, AggregateError, and Promise.all/allSettled/any/race/resolve/reject over supported iterables mixing promises and plain values for parallel tool calls, with then/catch/finally chaining. Grouping and JSON callbacks are not implicitly awaited. Encode bytes to base64/hex strings before tools or final return; no ArrayBuffer, streaming codecs, or ambient I/O.";
 
 type InterpreterRuntimeErrorProps = {
   readonly message: string;

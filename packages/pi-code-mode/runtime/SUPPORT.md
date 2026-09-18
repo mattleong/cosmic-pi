@@ -24,10 +24,68 @@ claim of general ECMAScript conformance.
 | Interpreter module split, upgrade | Internal responsibility split, not a new execution boundary or language guarantee                                                                                         | `ARCHITECTURE.md`, retained runtime regression suites                                                                              |
 | Test262                           | Six pinned positive cases, all mandatory in ordinary runtime tests; not a full Test262 runner or broad ECMAScript conformance                                             | `tests/test262.test.ts`, manifest and fixture checksums                                                                            |
 
+## Assignment and binding patterns
+
+Assignment resolves member bases and computed keys once, before evaluating its right-hand
+side. Compound assignment reads the old value before that evaluation; logical assignments
+skip it when their condition does not require a write. Array and object destructuring
+assignments support nested targets, defaults, rest and computed object keys. Array patterns
+consume admitted iterators, including bytes, and close them on early completion or failure.
+Binding patterns also accept computed object keys. Existing blocked-key, cycle and growth
+checks still apply. See `assignment.test.ts`, `destructuring-assignment.test.ts` and
+`feature-composition.test.ts`.
+
+## Bytes and text
+
+These are owned interpreter values, not host typed-array or buffer capabilities:
+
+- `new Uint8Array()` accepts a length, owned bytes, or an admitted iterable. Bytes expose
+  indexed reads/writes, `length`, `byteLength`, iteration, `at`, `set`, `slice`, `subarray`,
+  `toBase64` and `toHex`. `slice` copies; `subarray` may share owned internal storage.
+  No backing `ArrayBuffer`, `DataView`, Buffer or host prototype is exposed.
+- `Uint8Array.fromBase64` and `fromHex` decode strings. Base64 uses the standard alphabet,
+  mandatory padding where needed and canonical trailing bits, without whitespace or URL-safe
+  variants. Hex requires an even number of digits, accepts either case and emits lowercase.
+  Encoding options are not supported.
+- `new TextEncoder().encode(text)` produces UTF-8 bytes, replacing lone surrogates.
+  `new TextDecoder(label, { fatal, ignoreBOM }).decode(bytes)` accepts UTF-8 labels only.
+  Flags must be booleans. There is no streaming or `encodeInto`.
+- `btoa` encodes Latin-1 binary strings; use TextEncoder for Unicode. `atob` returns a binary
+  string and uses the same strict base64 subset.
+
+Byte allocations use the fixed collection cap of 262,144 entries. Text uses the existing
+4,194,304 UTF-16-code-unit cap. UTF-8 encoding counts exact output bytes before allocation;
+base64 and hex preflight decoded and encoded lengths. These are per-operation bounds, not
+an aggregate heap quota. Bytes and encoder/decoder objects cannot cross tool-input,
+tool-result or final-return data boundaries, including bytes nested in arrays or records.
+Encode bytes to a string first; refusal diagnostics explain this requirement.
+`JSON.stringify(bytes)` produces a string with numeric object properties. Existing Map/Set
+boundary projection remains `{}`, not a transfer of their members. The helpers add no fetch,
+crypto or other ambient authority. See `bytes.test.ts`, `encoding.test.ts`,
+`bytes-confinement.test.ts` and
+`feature-composition.test.ts`.
+
+## Namespace and schema discovery
+
+Hosts may wrap a plain tool tree with `Namespace.make({ tools, description })`. The optional
+description contributes to descendant search matches and budgeted catalog metadata, never to
+guest properties or callable authority. Plain trees remain supported. Namespace topology and
+metadata changes can require a replacement snapshot, while signatures retain round-robin
+budget selection. Search retains full signatures for tools omitted from the initial catalog.
+
+Pretty signatures show JSON Schema constraints as documentation on inputs, nested values and
+outputs: numeric minimum/maximum, exclusive bounds and multipleOf; string length and pattern;
+array length and uniqueItems; object property counts; integer, format, default and deprecated
+annotations. Enum and const values remain literal types. Unsupported or unresolved references
+fall back to `unknown`; comment terminators are escaped. Compact signatures omit annotations.
+Raw JSON Schema is render-only, not validation. Effect Schemas still decode inputs and outputs;
+hosts using raw JSON Schema must enforce constraints themselves. See `schema-discovery.test.ts`
+and `namespace-discovery.test.ts`.
+
 ## Deliberate restrictions
 
 No modules/imports, classes, dynamic `this`, host prototype access, arbitrary
-constructors, eval, timers, fetch, process, ambient filesystem or network APIs.
+constructors, eval, timers, fetch, crypto, process, ambient filesystem or network APIs.
 Only explicit host-supplied tools grant external authority. Interpreter confinement
 does not undo or sandbox the effects of those tools.
 
@@ -35,6 +93,12 @@ Callbacks use interpreter dispatch. Most collection and JSON callbacks do not aw
 returned promises. Async iteration has its own awaiting rules. Returned dates and URLs
 serialize to strings; Maps, Sets, RegExps and URLSearchParams serialize to `{}`.
 Opaque functions, promises and iterators are not data-boundary capabilities.
+
+Synchronous guest call depth is fixed at 128 across ordinary calls, async prefixes, callbacks
+and generator resumes. A semantic await resets depth for its continuation; this is not a total
+call quota. The conservative bound accounts for local immediate Effect activation forks without
+changing FIFO scheduling. No public option changes it; smaller injected budgets exist only in
+internal tests. See `recursion.test.ts`.
 
 Tool concurrency stays 8 and data-boundary depth stays 32. String, collection and
 captured-log caps, conservative regex screening, bounded serialization and cooperative

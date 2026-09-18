@@ -1,3 +1,4 @@
+import { RecursionBudget } from "./recursion.js";
 import { yieldDelegated, yieldGenerator } from "./generators.js";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -93,6 +94,8 @@ export const collectPatternNames = (pattern: AstNode, out: Array<string> = []): 
 export type PromiseOwners = ReadonlyArray<Set<SandboxPromise>>;
 
 export class Interpreter<R> {
+  callDepth = 0;
+  readonly recursion: RecursionBudget;
   scopes: Array<Map<string, Binding>>;
   functionScope: Map<string, Binding> | undefined;
   generatorAsync = false;
@@ -109,6 +112,7 @@ export class Interpreter<R> {
       }
       const settled = yield* Effect.exit(this.settlePromise(promise, node));
       yield* this.execution.turns.take(this.turn);
+      this.callDepth = 0;
       return yield* settled;
     });
   }
@@ -164,6 +168,12 @@ export class Interpreter<R> {
   readonly pendingSettlements = new Set<SandboxPromise>();
 
   private readonly executionHost: executionOps.ExecutionHost<R> = ((owner: Interpreter<R>) => ({
+    get callDepth() {
+      return owner.callDepth;
+    },
+    set callDepth(value) {
+      owner.callDepth = value;
+    },
     currentScope: this.currentScope.bind(this),
     get functionScope() {
       return owner.functionScope;
@@ -270,6 +280,7 @@ export class Interpreter<R> {
   }))(this);
 
   private readonly bindingsHost: bindingsOps.BindingsHost<R> = ((owner: Interpreter<R>) => ({
+    toPropertyKey: this.toPropertyKey.bind(this),
     awaitIteratorPromise: this.awaitIteratorPromise.bind(this),
     get deadline() {
       return owner.deadline;
@@ -286,6 +297,13 @@ export class Interpreter<R> {
   private readonly expressionsHost: expressionsOps.ExpressionsHost<R> = ((
     owner: Interpreter<R>,
   ) => ({
+    get callDepth() {
+      return owner.callDepth;
+    },
+    set callDepth(value) {
+      owner.callDepth = value;
+    },
+    resolveAssignmentReference: this.resolveAssignmentReference.bind(this),
     awaitIteratorPromise: this.awaitIteratorPromise.bind(this),
     yieldValue: this.yieldValue.bind(this),
     invokeCallable: this.invokeCallable.bind(this),
@@ -336,6 +354,15 @@ export class Interpreter<R> {
   }))(this);
 
   private readonly callableHost: callableOps.CallableHost<R> = ((owner: Interpreter<R>) => ({
+    get callDepth() {
+      return owner.callDepth;
+    },
+    set callDepth(value) {
+      owner.callDepth = value;
+    },
+    get recursion() {
+      return owner.recursion;
+    },
     get functionScope() {
       return owner.functionScope;
     },
@@ -512,6 +539,16 @@ export class Interpreter<R> {
     formatConsoleTableCell: this.formatConsoleTableCell.bind(this),
     consoleTableValues: this.consoleTableValues.bind(this),
   }))(this);
+  resolveAssignmentReference(
+    node: AstNode,
+  ): Effect.Effect<
+    { get(): InterpreterValue; set(value: InterpreterValue): InterpreterValue },
+    RuntimeFailure,
+    R
+  > {
+    const operation = membersOps.resolveAssignmentReference<R>;
+    return operation.call(this.membersHost, node);
+  }
   fork(): Interpreter<R> {
     return new Interpreter(
       this.invokeTool,
@@ -536,7 +573,10 @@ export class Interpreter<R> {
       event: ToolRuntime.ToolCallLifecycleEvent,
     ) => Effect.Effect<void, never, R>,
     parent?: Interpreter<R>,
+    recursion = new RecursionBudget(),
   ) {
+    this.recursion = parent?.recursion ?? recursion;
+    this.callDepth = parent?.callDepth ?? 0;
     this.execution = parent?.execution ?? {
       nextToolCallLifecycleId: 0,
       activePromises: 0,
@@ -560,6 +600,17 @@ export class Interpreter<R> {
     this.scopes.push(globalScope);
     globalScope.set("tools", { mutable: false, value: new ToolReference([]) });
     globalScope.set("Symbol", { mutable: false, value: new GlobalNamespace("Symbol") });
+    globalScope.set("Uint8Array", { mutable: false, value: new GlobalNamespace("Uint8Array") });
+    globalScope.set("TextEncoder", { mutable: false, value: new GlobalNamespace("TextEncoder") });
+    globalScope.set("TextDecoder", { mutable: false, value: new GlobalNamespace("TextDecoder") });
+    globalScope.set("atob", {
+      mutable: false,
+      value: new GlobalMethodReference("Encoding", "atob"),
+    });
+    globalScope.set("btoa", {
+      mutable: false,
+      value: new GlobalMethodReference("Encoding", "btoa"),
+    });
     globalScope.set("Promise", { mutable: false, value: new PromiseNamespace() });
     globalScope.set("undefined", { mutable: false, value: undefined });
     globalScope.set("Object", { mutable: false, value: new GlobalNamespace("Object") });
@@ -1170,6 +1221,7 @@ export class Interpreter<R> {
 
   getMemberReference(
     node: AstNode,
+    deferInvalidBase?: boolean,
   ): Effect.Effect<
     | MemberReference
     | ToolReference
@@ -1183,7 +1235,7 @@ export class Interpreter<R> {
     R
   > {
     const operation = membersOps.getMemberReference<R>;
-    return operation.call(this.membersHost, node);
+    return operation.call(this.membersHost, node, deferInvalidBase);
   }
 
   readMember(node: AstNode): Effect.Effect<InterpreterValue, RuntimeFailure, R> {

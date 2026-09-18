@@ -3,7 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
 import type { RuntimeFailure } from "../failure.js";
-import { SandboxMap, SandboxPromise, SandboxSet, SandboxURLSearchParams } from "../values.js";
+import {
+  SandboxBytes,
+  SandboxMap,
+  SandboxPromise,
+  SandboxSet,
+  SandboxURLSearchParams,
+} from "../values.js";
 import { assertBoundedCollectionSize, type ExecutionDeadline } from "./confinement.js";
 import {
   GeneratorReference,
@@ -99,7 +105,7 @@ export function preflightSource(
   node: AstNode,
   label = "Iterator source",
 ): void {
-  if (Array.isArray(value) || Predicate.isString(value))
+  if (Array.isArray(value) || Predicate.isString(value) || value instanceof SandboxBytes)
     assertBoundedCollectionSize(value.length, label, node);
   else if (value instanceof SandboxMap) assertBoundedCollectionSize(value.map.size, label, node);
   else if (value instanceof SandboxSet) assertBoundedCollectionSize(value.set.size, label, node);
@@ -108,6 +114,7 @@ export function preflightSource(
 }
 function nativeSource(value: InterpreterValue): IterableIterator<InterpreterValue> | undefined {
   if (Array.isArray(value) || Predicate.isString(value)) return value[Symbol.iterator]();
+  if (value instanceof SandboxBytes) return value.storage().values();
   if (value instanceof SandboxMap) return value.map.entries();
   if (value instanceof SandboxSet) return value.set.values();
   if (value instanceof SandboxURLSearchParams) return value.params.entries();

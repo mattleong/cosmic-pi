@@ -1,5 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
+import { invokeBytesStatic } from "../stdlib/bytes.js";
+import { invokeBase64 } from "../stdlib/encoding.js";
 import { dateStatics, invokeDateStatic } from "../stdlib/date.js";
 import { invokeMathMethod } from "../stdlib/math.js";
 import { invokeNumberStatic } from "../stdlib/number.js";
@@ -82,6 +84,9 @@ export const invokeGlobalMethod = (
   args: InterpreterArray,
   node: AstNode,
 ) => {
+  if (ref.namespace === "Uint8Array") return invokeBytesStatic(ref.name, args, node);
+  if (ref.namespace === "Encoding" && (ref.name === "atob" || ref.name === "btoa"))
+    return invokeBase64(ref.name, args, node);
   if (ref.namespace === "console")
     throw new InterpreterRuntimeError(`console.${ref.name} is not available in CodeMode.`, node);
   if (ref.namespace === "Object") return invokeObjectMethod(ref.name, args, node);
