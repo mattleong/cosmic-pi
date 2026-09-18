@@ -1,4 +1,8 @@
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import {
+  captureCodePreviewPresentationPolicy,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AskUserAsyncParameters,
@@ -21,7 +25,10 @@ export function registerAsyncAskUserTools(
   control: (input: AskUserAsyncControl, signal?: AbortSignal) => Promise<AsyncQuestionnaireResult>,
   scheduleAnimation?: CompactAnimationScheduler,
 ): void {
-  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAsyncMessage);
+  const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
+  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
+    renderAsyncMessage(message, options, theme, compact),
+  );
   pi.registerTool(
     withCodePreviewShell(
       defineTool({

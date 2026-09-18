@@ -20,12 +20,12 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
   mode?: ToolCallBackgroundMode;
 
   /**
-   * Leave tools that already render their own shell untouched. Defaults to true to avoid
-   * double-framing or overriding custom backgrounds from cooperating extensions.
+   * Leave self-shell tools untouched in preview mode. Defaults to true.
+   * Compact mode always wraps owned tools; expansion restores their original components.
    */
   preserveSelfShell?: boolean;
 
-  /** Opt into compact rendering when enabled by settings. Declining preserves both bodies. */
+  /** Supply semantic compact details. Declining uses a generic row with details on expansion. */
   compactSummary?: CompactSummaryProvider<TArgs, TDetails, TState>;
 
   /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
@@ -56,7 +56,12 @@ export function withCodePreviewShell<
 ): TTool {
   const mode = options.mode ?? codePreviewSettings.toolCallBackground;
   const preserveSelfShell = options.preserveSelfShell ?? true;
-  if (preserveSelfShell && tool.renderShell === "self") return tool;
+  if (
+    preserveSelfShell &&
+    tool.renderShell === "self" &&
+    codePreviewSettings.toolCallCollapsedStyle !== "compact"
+  )
+    return tool;
 
   const originalRenderCall = tool.renderCall;
   const originalRenderResult = tool.renderResult;

@@ -127,6 +127,7 @@ class CompactShell implements Component {
   private summary(
     phase: CompactPhase,
     result: AgentToolResult<unknown> | undefined,
+    argumentOnly = false,
   ): CompactSummary | undefined {
     try {
       const provider = this.options.compactSummary;
@@ -135,15 +136,65 @@ class CompactShell implements Component {
           phase,
           args: this.context.args,
           result,
-          context: this.context,
+          context: argumentOnly
+            ? { ...this.context, isError: false, isPartial: true }
+            : this.context,
         }),
         phase,
-        this.context.isError,
+        argumentOnly ? false : this.context.isError,
       );
     } catch {
-      // An optional summary cannot suppress the tool's original presentation on failure.
+      // A broken projector loses semantic ownership, not the user's compact preference.
       return undefined;
     }
+  }
+
+  private collapsedSummary(
+    summary: CompactSummary | undefined,
+    phase: CompactPhase,
+    covered: boolean,
+  ): CompactSummary {
+    if (summary && covered) return summary;
+    const isError = this.context.isError && summary?.outcome !== "cancelled";
+    // Reuse argument-only identity, never a previous result's outcome or ownership flags.
+    const heading = summary ?? this.summary("pending", undefined, true);
+    return {
+      ...(summary ?? {
+        subject: heading?.subject ?? "",
+        ...(heading?.action !== undefined && { action: heading.action }),
+        ...(heading?.showTiming && { showTiming: true }),
+        ...(phase === "settled" && {
+          outcome: isError ? ("error" as const) : ("uncertain" as const),
+        }),
+      }),
+      ...(summary?.issues &&
+        phase === "settled" && {
+          issues: {
+            ...summary.issues,
+            entries: [
+              ...summary.issues.entries,
+              {
+                operation: "compact-shell",
+                code: "details-on-expand",
+                severity: isError ? ("error" as const) : ("warning" as const),
+                cause: "Expand for full output and recovery details.",
+                recovery: [],
+              },
+            ],
+          },
+        }),
+      notices: [
+        ...(summary?.notices ?? []),
+        ...(phase === "settled"
+          ? [
+              {
+                kind: isError ? ("error" as const) : ("warning" as const),
+                text: "Expand for full output and recovery details.",
+              },
+            ]
+          : []),
+      ],
+    };
   }
 
   render(width: number): string[] {
@@ -201,18 +252,13 @@ class CompactShell implements Component {
       }
       return this.display.render(width);
     }
-    if (
-      !this.context.expanded &&
-      summary &&
-      covered &&
-      (!failure || summary.detailsOnExpand === true)
-    ) {
+    if (!this.context.expanded) {
       this.detailBounds = undefined;
       return renderCompactToolCall(
         {
           name: this.options.name,
           phase,
-          summary,
+          summary: this.collapsedSummary(summary, phase, covered),
           duration: this.duration,
           elapsedMs: this.elapsedMs,
           timingEnabled: codePreviewSettings.toolCallTiming,

@@ -33,6 +33,20 @@ const result = <Details, Content>(details: Details, expanded = false, content?: 
   output(renderAsyncResult({ details, content }, { expanded, isPartial: false }, theme));
 
 describe("async questionnaire replay rendering", () => {
+  it("compact notifications keep answers and unknown content behind expansion", () => {
+    for (const input of [message, { content: "Full fallback diagnostic" }]) {
+      for (const expanded of [false, true, false]) {
+        const text = output(renderAsyncMessage(input, { expanded, outputPad: 0 }, theme, true));
+        if (input === message) {
+          expect(text.includes("Scenic")).toBe(expanded);
+          expect(text.includes("Avoid tolls")).toBe(expanded);
+        } else {
+          expect(text.includes("Full fallback diagnostic")).toBe(expanded);
+        }
+      }
+    }
+  });
+
   it("rejects malformed or hostile notes but accepts string fallback content", () => {
     const hostileNote = Object.defineProperty({}, "note", {
       get() {

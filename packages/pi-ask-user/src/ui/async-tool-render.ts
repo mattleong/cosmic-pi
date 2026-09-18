@@ -150,9 +150,24 @@ export function renderAsyncMessage<Input>(
   input: Input,
   options: { expanded: boolean; outputPad: number },
   theme: Theme,
+  compact = false,
 ): Text {
   const message = envelope(input);
   const details = notification(message?.details);
+  if (compact && !options.expanded) {
+    const outcome = details?.outcome;
+    const label =
+      outcome?.outcome === "submitted"
+        ? `Answers submitted · ${outcome.answers.length} answers`
+        : outcome?.outcome === "cancelled"
+          ? "Questionnaire cancelled"
+          : "Questionnaire update. Expand for details.";
+    return new Text(
+      toolStatusLine(theme, outcome?.outcome === "submitted" ? "success" : "warning", label),
+      options.outputPad,
+      0,
+    );
+  }
   if (!details) return new Text(fallback(message?.content), options.outputPad, 0);
   const lines = summary(details.outcome.outcome, details.outcome, theme);
   if (options.expanded) {

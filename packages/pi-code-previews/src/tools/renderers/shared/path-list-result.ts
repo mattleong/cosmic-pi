@@ -43,7 +43,7 @@ export function renderPathListResult(
     theme,
     loadingLabel: config.loadingLabel,
     isError: context.isError,
-    errorText: output.split("\n")[0] || config.errorLabel,
+    errorText: (expanded ? output : output.split("\n")[0]) || config.errorLabel,
   });
   if (prelude) return prelude;
   const hiddenPrelude = renderHiddenPreviewPrelude({

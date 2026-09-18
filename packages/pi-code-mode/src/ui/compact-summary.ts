@@ -17,7 +17,11 @@ import { describeCodeModeIntent } from "./tool-renderer.ts";
 import { verifiedFailurePresentation } from "./failure-presentation.ts";
 import { codeModeCallRows } from "./call-rows.ts";
 
-const ArgsSchema = Schema.Struct({ intent: Schema.optional(Schema.Unknown) });
+const ArgsSchema = Schema.Struct({
+  intent: Schema.optional(Schema.Unknown),
+  action: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+});
 const TextContentSchema = Schema.Array(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
 );
@@ -29,8 +33,11 @@ const projectCodeModeCompactSummary = (
   liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
 ): ReturnType<SummaryProvider> => {
   try {
-    const subject = describeCodeModeIntent(decodeOption(ArgsSchema, args)?.intent);
-    const heading = { subject, showTiming: true as const };
+    const input = decodeOption(ArgsSchema, args);
+    const heading =
+      input?.action === "result.read"
+        ? { action: input.action, subject: input.id ?? "", showTiming: true as const }
+        : { subject: describeCodeModeIntent(input?.intent), showTiming: true as const };
     if (result === undefined) return phase === "settled" ? undefined : heading;
     const details = decodeCodeModeRenderDetails(result.details);
     if (!details.compactEligible) return undefined;

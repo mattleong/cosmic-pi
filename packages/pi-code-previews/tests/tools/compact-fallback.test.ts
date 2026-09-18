@@ -96,7 +96,7 @@ test("transient renderer failures clear original slot caches so later calls reco
   }
 });
 
-test("expanded and declined compact details preserve nested mouse actions through every frame", () => {
+test("only expanded details expose nested mouse actions through every frame", () => {
   for (const mode of ["on", "off", "border"] as const) {
     for (const failure of [false, true]) {
       let clicks = 0;
@@ -132,9 +132,13 @@ test("expanded and declined compact details preserve nested mouse actions throug
         if (failure) {
           const noticeRow = rows.findIndex((line) => line.includes("retained guidance"));
           assert.ok(noticeRow >= 0);
-          if (mode !== "off") assert.ok(noticeRow < rows.length - 1);
+          if (expanded && mode !== "off") assert.ok(noticeRow < rows.length - 1);
         }
         const y = rows.findIndex((line) => line.includes("ACTION"));
+        if (!expanded) {
+          assert.equal(y, -1);
+          continue;
+        }
         assert.ok(y >= 0);
         const x = rows[y]!.indexOf("ACTION");
         const event: TuiMouseEvent = {
@@ -152,7 +156,7 @@ test("expanded and declined compact details preserve nested mouse actions throug
         };
         assert.equal(call.handleMouse?.(event)?.handled, true);
       }
-      assert.equal(clicks, 2);
+      assert.equal(clicks, 1);
     }
   }
 });
@@ -200,7 +204,7 @@ test("explicit non-success projections hide details until expansion and retain s
   }
 });
 
-test("unflagged non-success retains details and owned failure overrides expansion opt-in", () => {
+test("unflagged non-success keeps details on expansion and owned failure keeps its presentation", () => {
   for (const outcome of ["error", "cancelled", "uncertain"] as const) {
     for (const owned of [false, true]) {
       const tool = withCodePreviewShell(
@@ -227,9 +231,12 @@ test("unflagged non-success retains details and owned failure overrides expansio
         if (owned) {
           assert.match(text, expanded ? /owned details/u : /owned cause/u);
           assert.doesNotMatch(text, /original call|original result/u);
-        } else {
+        } else if (expanded) {
           assert.match(text, /original call/u);
           assert.match(text, /original result/u);
+        } else {
+          assert.doesNotMatch(text, /original call|original result/u);
+          assert.match(text, /decoded outcome/u);
         }
       }
     }
@@ -403,8 +410,12 @@ test("unknown providers retain complete long original recovery without parsing i
     );
     for (const expanded of [false, true]) {
       const text = paint(tool, context({ expanded })).rows.join("\n");
-      assert.match(text, /unique source and target/u);
-      for (const step of recovery.split("\n")) assert.ok(text.includes(step));
+      if (expanded) {
+        assert.match(text, /unique source and target/u);
+        for (const step of recovery.split("\n")) assert.ok(text.includes(step));
+      } else {
+        assert.doesNotMatch(text, /unique source and target|recovery-step/u);
+      }
     }
   }
 });
@@ -431,7 +442,7 @@ test("throwing result fallback retains hidden image indicators alongside text", 
   assert.match(text, /image\/png/u);
 });
 
-test("unknown child coverage cannot hide the original batch result", () => {
+test("unknown child coverage keeps the original batch result on expansion", () => {
   const definition: Definition = {
     ...createReadToolDefinition("/project"),
     renderResult: () => new Text("Original recovery must remain visible", 0, 0),
@@ -451,7 +462,11 @@ test("unknown child coverage cannot hide the original batch result", () => {
       },
     }),
   });
-  assert.match(paint(tool, context({ expanded: false })).rows.join("\n"), /Original recovery/u);
+  assert.doesNotMatch(
+    paint(tool, context({ expanded: false })).rows.join("\n"),
+    /Original recovery/u,
+  );
+  assert.match(paint(tool, context({ expanded: true })).rows.join("\n"), /Original recovery/u);
 });
 
 test("render-time failures revoke component ownership before invalidation and reuse", () => {

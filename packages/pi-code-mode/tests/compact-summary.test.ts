@@ -2,6 +2,7 @@ import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
 import { withCodePreviewShell } from "pi-code-previews";
+import { createCompactToolShell } from "../../pi-code-previews/src/preview/compact-shell.ts";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import {
@@ -30,6 +31,63 @@ const summarize = <Details>(
 const success = { ...callEntryDetails([]), outputKind: "text" as const };
 
 describe("Code Mode compact outcomes", () => {
+  it("retained reads stay compact for both returned pages and host failures", () => {
+    const definition = buildCodeModeToolDefinition({
+      catalogBudget: 0,
+      includePowerShell: false,
+      execute: () => Promise.reject(new Error("not executed")),
+      startUiTicker: () => () => undefined,
+    });
+    const theme = opaqueHostFixture({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    });
+    for (const isError of [false, true]) {
+      const shell = createCompactToolShell("border", {
+        name: "code_mode",
+        compactSummary: codeModeCompactSummary,
+      });
+      const args = { action: "result.read" as const, id: "retained-page" };
+      const state = {};
+      const result = {
+        content: [{ type: "text" as const, text: "Full retained result diagnostic" }],
+        details: { toolCalls: [] },
+      };
+      for (const expanded of [false, true, false]) {
+        const context = opaqueHostFixture<Parameters<typeof shell.renderCall>[0]>({
+          args,
+          state,
+          toolCallId: "read-page",
+          cwd: "/project",
+          lastComponent: undefined,
+          expanded,
+          isError,
+          isPartial: false,
+          executionStarted: false,
+          argsComplete: true,
+          showImages: false,
+          invalidate: () => undefined,
+        });
+        const call = shell.renderCall(context, theme, (ctx) =>
+          definition.renderCall!(args, theme, ctx),
+        );
+        const body = shell.renderResult(
+          context,
+          theme,
+          (ctx) => definition.renderResult!(result, { expanded, isPartial: false }, theme, ctx),
+          result,
+        );
+        const text = [...call.render(200), ...body.render(200)].join("\n");
+        expect(text.includes("Full retained result diagnostic")).toBe(expanded);
+        if (!expanded) {
+          expect(text).toContain("result.read");
+          expect(text).toContain(args.id);
+        }
+      }
+    }
+  });
+
   it("includes call names and lifecycle without source, output or individual activity", () => {
     const calls: Array<Parameters<typeof callEntryDetails>[0][number]> = [];
     for (const tool of ["pi.read", "pi.grep", "pi.find"]) {
@@ -301,11 +359,18 @@ describe("Code Mode compact outcomes", () => {
     syncProgressTicker(true, input.context, startTicker);
     codeModeCompactSummaryAtHost({
       ...input,
+      result: { content: [], details: undefined },
+      context: opaqueHostFixture({ state, isPartial: true, isError: false, expanded: false }),
+    });
+    expect(stops).toBe(2);
+    syncProgressTicker(true, input.context, startTicker);
+    codeModeCompactSummaryAtHost({
+      ...input,
       phase: "settled",
       result: { details: success, content: [] },
       context: opaqueHostFixture({ state, isPartial: false, isError: false, expanded: false }),
     });
-    expect(stops).toBe(2);
+    expect(stops).toBe(3);
   });
 
   it("leaves the default preview renderer and expanded source intact", () => {

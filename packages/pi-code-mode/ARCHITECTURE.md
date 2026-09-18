@@ -328,8 +328,9 @@ publish v2 receipts and one v2 generic attention ledger. `tools/issue-evidence.t
 collection to 32 issues, each issue to eight recovery instructions, and each string to 1024
 UTF-16 units. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
 failures have independent identities and never rewrite captured operation outcomes. Structured
-coverage is separate from outcome counters. Unknown coverage retains the original renderer;
-malformed and overflowing evidence adds explicit incomplete recovery. Explicit v1 schema branches
+coverage is separate from outcome counters. Unknown coverage uses a generic compact row while
+collapsed and retains the original renderer on expansion. Retained reads keep their `result.read`
+action and ID in argument-only headings. Malformed and overflowing evidence adds explicit incomplete recovery. Explicit v1 schema branches
 continue decoding historical receipts and ledgers without inventing semantic identities. Historical dual-ledger records still validate both because
 older per-call receipts did not contain complete MCP recovery. Overflow or malformed evidence
 never silently becomes success; fallback retains salvaged notices and explicit incompleteness.

@@ -261,7 +261,7 @@ test("result-only rendering stays visible and is not duplicated when a call slot
   );
 });
 
-test("missing outcomes, declines and throwing providers preserve domain failure bodies", () => {
+test("missing outcomes, declines and throwing providers keep domain failure bodies on expansion", () => {
   for (const provider of [
     () => undefined,
     () => ({ subject: "subject" }),
@@ -271,6 +271,8 @@ test("missing outcomes, declines and throwing providers preserve domain failure 
   ] satisfies Provider[]) {
     const h = harness(provider);
     h.update({ isPartial: false }, result("domain failed, recover with resume"));
+    assert.doesNotMatch(h.rows().join("\n"), /CALL file.ts|domain failed/u);
+    h.update({ expanded: true });
     assert.match(h.rows().join("\n"), /CALL file.ts/u);
     assert.match(h.rows().join("\n"), /domain failed, recover with resume/u);
   }
@@ -286,13 +288,26 @@ test("errors, cancellation and uncertainty retain full notices and original deta
     h.update({ isPartial: false }, result("rich failure body"));
     for (const expanded of [false, true]) {
       const rows = h.update({ expanded });
-      assert.match(rows.join("\n"), /rich failure body/u);
+      assert.equal(rows.join("\n").includes("rich failure body"), expanded);
       assert.match(rows.join("\n"), /line-two recovery command/u);
     }
   }
   const h = harness(summarize);
   h.update({ isError: true, isPartial: false }, result("aborted before execution"));
-  assert.match(h.rows().join("\n"), /aborted before execution/u);
+  assert.match(h.update({ expanded: true }).join("\n"), /aborted before execution/u);
+});
+
+test("covered cancellation keeps its classification regardless of the host error flag", () => {
+  const summary: CompactSummary = { subject: "file.ts", outcome: "cancelled" };
+  const provider: Provider = () => summary;
+  const ordinary = harness(provider);
+  const hostError = harness(provider);
+  const value = result("Cancellation diagnostics");
+  const expected = ordinary.update({ isPartial: false, isError: false }, value);
+  const actual = hostError.update({ isPartial: false, isError: true }, value);
+  assert.deepEqual(actual, expected);
+  assert.equal(actual.length, 1, "known cancellation needs no synthetic warning or error");
+  assert.match(hostError.update({ expanded: true }).join("\n"), /Cancellation diagnostics/u);
 });
 
 test("legacy owned failures retain unclassified recovery without text-based suppression", () => {
@@ -358,8 +373,8 @@ test("lazy original renderer exceptions use per-slot fallback instead of escapin
     );
     const text = h.rows().join("\n");
     assert.match(text, /read/u);
-    assert.match(text, /all raw error details/u);
-    assert.match(text, /recover here/u);
+    assert.equal(text.includes("all raw error details"), expanded);
+    assert.equal(text.includes("recover here"), expanded);
     assert.equal(text.includes("\u001b"), false);
   }
 });
@@ -410,7 +425,7 @@ test("expanded ownership survives neither factory nor component rendering failur
   }
 });
 
-test("incomplete and malformed structured evidence cannot hide the original result", () => {
+test("incomplete and malformed evidence stays compact with original details on expansion", () => {
   for (const malformed of [false, true]) {
     const summary: CompactSummary = {
       subject: "file.ts",
@@ -434,13 +449,14 @@ test("incomplete and malformed structured evidence cannot hide the original resu
       Reflect.set(summary, "issues", { coverage: "complete", entries: [{ severity: "error" }] });
     const h = harness(() => summary);
     const rows = h.update({ isPartial: false }, result("complete original recovery"));
-    assert.match(rows.join("\n"), /complete original recovery/u);
+    assert.doesNotMatch(rows.join("\n"), /complete original recovery/u);
+    assert.match(h.update({ expanded: true }).join("\n"), /complete original recovery/u);
   }
   const h = harness(() => {
     throw new Error("hostile provider");
   });
   assert.match(
-    h.update({ isPartial: false }, result("original recovery survives")).join("\n"),
+    h.update({ isPartial: false, expanded: true }, result("original recovery survives")).join("\n"),
     /original recovery survives/u,
   );
 });

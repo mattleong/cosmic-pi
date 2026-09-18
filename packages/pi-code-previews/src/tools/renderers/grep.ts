@@ -45,7 +45,7 @@ export function createGrepPreviewTool(cwd: string) {
         theme,
         loadingLabel: "Searching…",
         isError: renderContext.isError,
-        errorText: output.split("\n")[0] || "Grep failed",
+        errorText: (expanded ? output : output.split("\n")[0]) || "Grep failed",
       });
       if (prelude) return prelude;
       const hiddenPrelude = renderHiddenPreviewPrelude({

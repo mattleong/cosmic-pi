@@ -6,6 +6,90 @@ import {
 } from "../../../pi-code-previews/src/config/state.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import { view } from "./fixtures/tool-harness.ts";
+
+it("stops an expanded await ticker when a declined summary collapses", () => {
+  const settings = { ...codePreviewSettings };
+  setCodePreviewSettings({ ...settings, toolCallCollapsedStyle: "compact", toolCallTiming: false });
+  try {
+    const tools: ToolDefinition<any, any, any>[] = [];
+    const ticks = new Set<() => void>();
+    registerSubagentTools(
+      extensionApiFixture({
+        registerTool: (tool: ToolDefinition<any, any, any>) => tools.push(tool),
+      }),
+      {
+        environment: { cwd: "/project", projectTrusted: false },
+        run: () => Promise.reject(new Error("not executed")),
+        startUiTicker: (_interval, tick) => {
+          ticks.add(tick);
+          return () => {
+            ticks.delete(tick);
+          };
+        },
+      },
+    );
+    const tool = tools.find((entry) => entry.name === "subagent_await")!;
+    // SAFETY: The fixture supplies all tool and shell styling callbacks.
+    const theme = {
+      fg: (_key: string, text: string) => text,
+      bg: (_key: string, text: string) => text,
+      bold: (text: string) => text,
+    } as Theme;
+    const projected = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ id: "target", state: "running" })],
+    });
+    if (projected.action === "models") throw new Error("Expected run cards");
+    const args = { runIds: ["target"], until: "all_finished" };
+    const state = {};
+    let invalidations = 0;
+    for (const expanded of [true, false]) {
+      const context = {
+        args,
+        state,
+        cwd: "/project",
+        toolCallId: "ticker-await",
+        lastComponent: undefined,
+        expanded,
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: true,
+        isError: !expanded,
+        showImages: false,
+        invalidate: () => {
+          invalidations++;
+        },
+      };
+      const call = tool.renderCall!(args, theme, context);
+      const body = tool.renderResult!(
+        {
+          content: [],
+          details: expanded
+            ? {
+                version: 2,
+                action: "await",
+                cards: projected.cards,
+                awaitUntil: "all_finished",
+                awaitedRunIds: ["target"],
+              }
+            : undefined,
+        },
+        { expanded, isPartial: true },
+        theme,
+        context,
+      );
+      call.render(120);
+      body.render(120);
+      for (const tick of ticks) tick();
+      expect(ticks.size).toBe(expanded ? 1 : 0);
+      expect(invalidations).toBe(1);
+    }
+  } finally {
+    setCodePreviewSettings(settings);
+  }
+});
 
 it("keeps the sole await heading when the live panel owns the result", () => {
   const settings = { ...codePreviewSettings };

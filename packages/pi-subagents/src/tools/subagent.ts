@@ -318,14 +318,9 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
         ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
         compactSummary: (input) => {
           const summary = project(input);
-          const ownsCollapsed =
-            summary &&
-            (summary.outcome === undefined ||
-              summary.outcome === "success" ||
-              summary.outcome === "warning" ||
-              summary.failure !== undefined);
+          // Compact mode owns every collapsed row, even when projection declines.
           // Hidden original renderers cannot retire a ticker started while expanded.
-          if (!input.context.isPartial || (!input.context.expanded && ownsCollapsed))
+          if (!input.context.isPartial || !input.context.expanded)
             syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
           // The live panel intentionally empties the original result, not the call heading.
           if (

@@ -102,7 +102,10 @@ export function createEditPreviewTool(cwd: string) {
         renderContext.state.editSummaryText = undefined;
         updateEditHeader(renderContext, cwd, theme);
         return new Text(
-          theme.fg("error", escapeControlChars(firstText.split("\n")[0] || "Edit failed")),
+          theme.fg(
+            "error",
+            escapeControlChars((expanded ? firstText : firstText.split("\n")[0]) || "Edit failed"),
+          ),
           0,
           0,
         );

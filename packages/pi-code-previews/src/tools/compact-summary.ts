@@ -77,10 +77,10 @@ export interface CompactSummary {
    * The shell bounds displayed rows; warnings and recovery must remain in notices.
    */
   children?: { entries: readonly CompactChild[]; total: number };
-  /** Opts decoded non-success results into compact collapsed presentation.
-   * The provider must completely project attention and recovery information into
-   * subject/notices. Expansion retains the original renderers; failure takes precedence.
-   * Unknown or malformed results must decline compaction instead.
+  /** Legacy provider marker for details available on expansion. All collapsed outcomes
+   * now use compact rows regardless of this flag. Expansion retains original renderers;
+   * a covered failure takes precedence. Unknown or malformed results must decline
+   * semantic projection and use the shell's generic compact row.
    */
   detailsOnExpand?: true;
   /** The original expanded result supplies the complete call heading and call information.

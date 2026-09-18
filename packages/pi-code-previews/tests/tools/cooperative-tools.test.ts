@@ -261,7 +261,7 @@ test("preview shell does not hide semantic updates during timing invalidation", 
   }
 });
 
-test("unknown cooperative renderers retain domain failure output with compact enabled", () => {
+test("tools without providers stay compact and retain domain failure output on expansion", () => {
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     toolCallCollapsedStyle: "compact",
@@ -284,10 +284,17 @@ test("unknown cooperative renderers retain domain failure output with compact en
     theme,
     context,
   );
-  assert.match(renderComponent(output), /background work failed; inspect recovery receipt/u);
+  assert.doesNotMatch(renderComponent(output), /background work failed/u);
+  const expanded = wrapped.renderResult(
+    result("invocation completed"),
+    { expanded: true, isPartial: false },
+    theme,
+    { ...context, expanded: true },
+  );
+  assert.match(renderComponent(expanded), /background work failed; inspect recovery receipt/u);
 });
 
-test("compact style is captured at wrapping and preserves source execution and self-shell identity", () => {
+test("compact style is captured and wraps self shells without changing execution", () => {
   const base = createReadToolDefinition("/project");
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
@@ -302,7 +309,9 @@ test("compact style is captured at wrapping and preserves source execution and s
   });
   const compact = withCodePreviewShell(base, { mode: "on", compactSummary: compactProvider });
   const self = { ...base, renderShell: "self" as const };
-  assert.equal(withCodePreviewShell(self, { compactSummary: compactProvider }), self);
+  const wrappedSelf = withCodePreviewShell(self, { compactSummary: compactProvider });
+  assert.notEqual(wrappedSelf, self);
+  assert.equal(wrappedSelf.execute, self.execute);
   assert.equal(preview.renderShell, "default");
   assert.equal(compact.renderShell, "self");
   assert.equal(compact.execute, base.execute);

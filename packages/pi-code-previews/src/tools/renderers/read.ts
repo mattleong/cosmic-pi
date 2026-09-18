@@ -42,7 +42,7 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
         theme,
         loadingLabel: "Reading…",
         isError: renderContext.isError,
-        errorText: firstText.split("\n")[0] || "Read failed",
+        errorText: (expanded ? firstText : firstText.split("\n")[0]) || "Read failed",
       });
       if (prelude) return prelude;
 

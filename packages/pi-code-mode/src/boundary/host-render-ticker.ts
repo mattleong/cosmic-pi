@@ -101,14 +101,7 @@ export const codeModeCompactSummaryAtHost: typeof codeModeCompactSummary = (inpu
     input,
     input.phase === "running" ? liveChildElapsed() : undefined,
   );
-  const ownsCollapsed =
-    summary &&
-    (summary.outcome === undefined ||
-      summary.outcome === "success" ||
-      summary.outcome === "warning" ||
-      summary.failure !== undefined);
-  if (!input.context.isPartial || (!input.context.expanded && ownsCollapsed))
-    syncProgressTicker(false, input.context);
+  if (!input.context.isPartial || !input.context.expanded) syncProgressTicker(false, input.context);
   return summary;
 };
 

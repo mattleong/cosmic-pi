@@ -875,6 +875,49 @@ describe("builtin factory compact integration", () => {
   });
 
   test.each([
+    ["read", createReadPreviewTool],
+    ["bash", createBashPreviewTool],
+    ["write", createWritePreviewTool],
+    ["edit", createEditPreviewTool],
+    ["grep", createGrepPreviewTool],
+    ["find", createFindPreviewTool],
+    ["ls", createLsPreviewTool],
+  ] as const)(
+    "%s keeps declined failure projections compact without losing expanded recovery",
+    (_name, factory) => {
+      for (const mode of ["on", "off", "border"] as const) {
+        setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
+        const tool = factory("/project");
+        const ctx = context({ isError: true });
+        const output = {
+          content: [
+            { type: "text" as const, text: "Diagnostic starts\n" + "x".repeat(128 * 1024 + 1) },
+            { type: "text" as const, text: "Inspect destination before retrying." },
+            { type: "image" as const, mimeType: "image/png", data: "" },
+          ],
+          details: undefined,
+        };
+        const before = structuredClone(output);
+        for (const expanded of [false, true, false]) {
+          const renderContext = { ...ctx, expanded };
+          const call = tool.renderCall?.(args, theme, renderContext);
+          const body = tool.renderResult?.(
+            output,
+            { expanded, isPartial: false },
+            theme,
+            renderContext,
+          );
+          const text = [call, body].flatMap((component) => component?.render(200) ?? []).join("\n");
+          expect(text.includes("Diagnostic starts")).toBe(expanded);
+          expect(text.includes("Inspect destination before retrying.")).toBe(expanded);
+          expect(text.includes("x".repeat(100))).toBe(expanded);
+        }
+        expect(output).toEqual(before);
+      }
+    },
+  );
+
+  test.each([
     ["write", createWritePreviewTool],
     ["edit", createEditPreviewTool],
   ] as const)("%s hides pending content until expanded", (_name, factory) => {

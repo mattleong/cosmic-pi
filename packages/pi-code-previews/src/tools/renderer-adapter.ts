@@ -64,12 +64,10 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
 ): TTool {
   const previewShell = createCodePreviewToolShell(
     renderers.mode,
-    renderers.compactSummary
-      ? {
-          name: tool.name,
-          compactSummary: renderers.compactSummary,
-        }
-      : undefined,
+    {
+      name: tool.name,
+      compactSummary: renderers.compactSummary ?? (() => undefined),
+    },
     renderers.scheduleAnimation,
   );
   const renderCall = renderers.renderCall;
