@@ -1,6 +1,7 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
 import { makeQuestionnaireLifetimes } from "./questionnaire-lifetime.ts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,7 +10,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { BackendProxyRequest, BackendProxyResult } from "../backend/model.ts";
 import { SubagentBackendRegistry } from "../backend/service.ts";
@@ -346,13 +346,22 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ),
   );
   const waitForRevision = (after: number): Effect.Effect<void, SubagentRuntimeClosedError> =>
-    SubscriptionRef.changes(projectionRef).pipe(
-      Stream.dropWhile((current) => current.revision <= after),
-      Stream.runHead,
-      Effect.flatMap((next) =>
-        Option.isSome(next)
-          ? Effect.void
-          : Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." })),
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Subscribe to the same replay-one source as SubscriptionRef.changes, so a
+        // revision published before subscription is not lost. The pinned Stream
+        // PubSub adapter adds a failing Cause.Done finalizer on interruption;
+        // taking directly keeps cancellation interruption-only and scopes cleanup.
+        const subscription = yield* PubSub.subscribe(projectionRef.pubsub);
+        while ((yield* PubSub.take(subscription)).revision <= after) {
+          // Ignore the replayed revision until a newer projection arrives.
+        }
+      }),
+    ).pipe(
+      // PubSub shutdown must retain the service's typed closed-session failure.
+      Effect.catchCauseIf(
+        (cause) => closed && Cause.hasInterruptsOnly(cause),
+        () => Effect.fail(new SubagentRuntimeClosedError({ message: "Parent session shut down." })),
       ),
     );
   const notifyRoot = (
