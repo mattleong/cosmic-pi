@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import type { CatalogSnapshot } from "./catalog.js";
 import { hasObjectRuntimeType } from "./runtime-values.js";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
@@ -38,6 +39,7 @@ import {
 } from "./values.js";
 
 const estimateTokens = (input: string) => Math.max(0, Math.round(input.length / 4));
+const compareText = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 /**
  * Callable host tool leaf. The declared failure channel is the closed `ToolError`; hosts
@@ -134,6 +136,11 @@ export type ToolDescription = {
   readonly signature: string;
 };
 
+type DescribedTool = ToolDescription & {
+  /** Exact expression, preserving literal dots and bracket-only names. */
+  readonly callablePath: string;
+};
+
 const reservedNamespace = "$codemode";
 const defaultCatalogBudget = 2_000;
 const defaultSearchLimit = 10;
@@ -155,10 +162,9 @@ const SearchOutput = Schema.Struct({
   remaining: NonNegativeInt,
   next: Schema.NullOr(Schema.Struct({ offset: NonNegativeInt })),
 });
-const toolExpression = (path: string) =>
+const toolExpression = (path: ReadonlyArray<string>) =>
   "tools" +
   path
-    .split(".")
     .map((segment) =>
       identifierSegment.test(segment) ? `.${segment}` : `[${JSON.stringify(segment)}]`,
     )
@@ -434,37 +440,46 @@ export const copyOut = (value: InterpreterValue, undefinedAsNull = false): Seria
 const definitions = <R>(
   tools: HostTools<R>,
   path: ReadonlyArray<string> = [],
-): Array<{ path: string; definition: Definition<R> }> => {
-  const entries: Array<{ path: string; definition: Definition<R> }> = [];
+): Array<{ path: ReadonlyArray<string>; definition: Definition<R> }> => {
+  const entries: Array<{ path: ReadonlyArray<string>; definition: Definition<R> }> = [];
   for (const [name, value] of Object.entries(tools)) {
     const next = [...path, name];
-    if (isDefinition(value)) entries.push({ path: next.join("."), definition: value });
+    if (isDefinition(value)) entries.push({ path: next, definition: value });
     else if (!Predicate.isFunction(value)) entries.push(...definitions(value, next));
   }
   return entries;
 };
 
-const describeDefinition = <R>(path: string, definition: Definition<R>): ToolDescription => ({
-  path,
+const describeDefinition = <R>(
+  path: ReadonlyArray<string>,
+  definition: Definition<R>,
+): DescribedTool => ({
+  path: path.join("."),
+  callablePath: toolExpression(path),
   description: definition.description,
   signature: `${toolExpression(path)}(input: ${inputTypeScript(definition, true)}): Promise<${outputTypeScript(definition, true)}>`,
 });
 
 const visibleDefinitions = <R>(tools: HostTools<R>) =>
-  definitions(tools).map(({ path, definition }) => ({
-    path,
-    definition,
-    description: describeDefinition(path, definition),
-  }));
+  definitions(tools)
+    .map(({ path, definition }) => ({
+      path,
+      definition,
+      description: describeDefinition(path, definition),
+    }))
+    .sort((left, right) =>
+      compareText(left.description.callablePath, right.description.callablePath),
+    );
 
 export type DiscoveryPlan = {
+  readonly snapshot: CatalogSnapshot;
   readonly catalog: ReadonlyArray<ToolDescription>;
   readonly instructions: string;
   readonly searchIndex: ReadonlyArray<SearchEntry>;
 };
 
 export type SearchEntry = {
-  readonly description: ToolDescription;
+  readonly description: DescribedTool;
   /** Top-level namespace (first path segment), matched by the search `namespace` option. */
   readonly namespace: string;
   /** Lowercased path + description + input property names/descriptions, for substring matching. */
@@ -520,11 +535,8 @@ const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => 
       const exact =
         pathQuery === ""
           ? undefined
-          : scoped.find(
-              (entry) =>
-                entry.description.path === pathQuery ||
-                toolExpression(entry.description.path) === trimmed,
-            );
+          : (scoped.find((entry) => entry.description.callablePath === trimmed) ??
+            scoped.find((entry) => entry.description.path === pathQuery));
       const terms = tokenize(query).map(termForms);
       // Additive field-weighted scoring, summed across terms: exact path or path segment
       // (20) > path substring (8) > description substring (4) > any searchable text,
@@ -551,14 +563,18 @@ const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => 
               .sort(
                 (left, right) =>
                   right.score - left.score ||
-                  left.entry.description.path.localeCompare(right.entry.description.path),
+                  compareText(
+                    left.entry.description.callablePath,
+                    right.entry.description.callablePath,
+                  ),
               )
               .map(({ entry }) => entry);
       const items = ranked
         .slice(offset, offset + (request.limit ?? defaultSearchLimit))
         .map(({ description }) => ({
-          ...description,
-          path: toolExpression(description.path),
+          path: description.callablePath,
+          description: description.description,
+          signature: description.signature,
         }));
       const remaining = Math.max(0, ranked.length - offset - items.length);
       return {
@@ -569,24 +585,27 @@ const makeSearchTool = (searchIndex: ReadonlyArray<SearchEntry>): Definition => 
     }),
 });
 
-const searchDescription = describeDefinition(`${reservedNamespace}.search`, makeSearchTool([]));
+const searchDescription = describeDefinition([reservedNamespace, "search"], makeSearchTool([]));
+
+const catalogDescription = (tool: ToolDescription) => {
+  const line = tool.description.split("\n", 1)[0]!.trim();
+  return line.length > 120 ? line.slice(0, 119) + "..." : line;
+};
 
 const catalogLine = (tool: ToolDescription) => {
-  // Keep the tool description concise; the full schema documentation remains in the signature.
-  const line = tool.description.split("\n", 1)[0]!.trim();
-  const description = line.length > 120 ? line.slice(0, 119) + "..." : line;
+  const description = catalogDescription(tool);
   return description === "" ? `  - ${tool.signature}` : `  - ${tool.signature} // ${description}`;
 };
 
 const toSearchEntry = <R>(
-  path: string,
+  path: ReadonlyArray<string>,
   definition: Definition<R>,
-  description: ToolDescription,
+  description: DescribedTool,
 ): SearchEntry => ({
   description,
-  namespace: path.split(".", 1)[0]!,
+  namespace: path[0]!,
   searchText: [
-    path,
+    path.join("."),
     definition.description,
     ...inputProperties(definition).flatMap(({ name, description: property }) =>
       property === undefined ? [name] : [name, property],
@@ -631,14 +650,14 @@ export const prepare = <R>(
   const visible = visibleDefinitions(tools);
   const described = visible.map(({ description }) => description);
 
-  const namespaces = new Map<string, Array<ToolDescription>>();
-  for (const tool of described) {
-    const [namespace = tool.path] = tool.path.split(".");
+  const namespaces = new Map<string, Array<DescribedTool>>();
+  for (const { path, description: tool } of visible) {
+    const namespace = path[0]!;
     const group = namespaces.get(namespace) ?? [];
     group.push(tool);
     namespaces.set(namespace, group);
   }
-  const ordered = [...namespaces].sort(([left], [right]) => left.localeCompare(right));
+  const ordered = [...namespaces].sort(([left], [right]) => compareText(left, right));
 
   // Select which signatures fit the budget before emitting, so the list can state
   // exactly how comprehensive it is. Round-robin fairness: in each round (namespaces
@@ -648,11 +667,11 @@ export const prepare = <R>(
   // before any namespace gets everything.
   const selections = ordered.map(([namespace, group]) => ({
     namespace,
-    picked: new Set<ToolDescription>(),
+    picked: new Set<DescribedTool>(),
     queue: [...group].sort(
       (left, right) =>
         estimateTokens(catalogLine(left)) - estimateTokens(catalogLine(right)) ||
-        left.path.localeCompare(right.path),
+        compareText(left.callablePath, right.callablePath),
     ),
   }));
   let used = 0;
@@ -670,7 +689,7 @@ export const prepare = <R>(
     }
     active = stillActive;
   }
-  const shown = new Map<string, ReadonlySet<ToolDescription>>(
+  const shown = new Map<string, ReadonlySet<DescribedTool>>(
     selections.map(({ namespace, picked }) => [namespace, picked]),
   );
   const totalShown = selections.reduce((total, { picked }) => total + picked.size, 0);
@@ -741,8 +760,8 @@ export const prepare = <R>(
     "## Language",
     "",
     "Use common JavaScript data operations, functions, control flow, selected standard-library methods, and awaited tool calls. Built-ins include Date, RegExp, Map, Set, URL, URLSearchParams, and URI encoding helpers.",
-    "Async functions, promise chaining, Promise.any, grouping helpers, and JSON replacers/revivers are supported. Set union/intersection/difference/symmetricDifference and isSubsetOf/isSupersetOf/isDisjointFrom accept Set or Map operands. Callbacks accept supported builtin references such as .map(JSON.stringify); wrap single-input tools in arrow functions to avoid extra callback arguments. Grouping and JSON callbacks are not implicitly awaited. Modules/imports, classes, generators, timers, fetch, eval, prototype access, and unlisted methods are unavailable. Use Code Mode tools for external operations.",
-    "For literal keyword filtering, prefer `terms.some(term => line.includes(term))` over regex alternation; conservative regex guards reject some safe patterns. Backslashes in string patterns must survive JavaScript string escaping. Labeled statements are unsupported.",
+    "Async functions, sync and async generators, guest Symbol.iterator/Symbol.asyncIterator protocols, for-await loops, labeled control flow, promise chaining, Promise.any, grouping helpers, and JSON replacers/revivers are supported. Set union/intersection/difference/symmetricDifference and isSubsetOf/isSupersetOf/isDisjointFrom accept Set or Map operands. Callbacks accept supported builtin references such as .map(JSON.stringify); wrap single-input tools in arrow functions to avoid extra callback arguments. Grouping and JSON callbacks are not implicitly awaited. Modules/imports, classes, timers, fetch, eval, prototype access, and unlisted methods are unavailable. Use Code Mode tools for external operations.",
+    "For literal keyword filtering, prefer `terms.some(term => line.includes(term))` over regex alternation; conservative regex guards reject some safe patterns. Backslashes in string patterns must survive JavaScript string escaping.",
     "Dates and URLs serialize to strings at data boundaries; Map/Set/RegExp/URLSearchParams serialize to `{}`.",
   ];
 
@@ -781,7 +800,38 @@ export const prepare = <R>(
 
   const lines = [...intro, ...workflow, ...rules, ...language, ...toolSection];
   return {
-    catalog: described,
+    catalog: described.map(({ path, description, signature }) => ({
+      path,
+      description,
+      signature,
+    })),
+    snapshot: Object.freeze({
+      complete,
+      namespacePaths: Object.freeze(
+        [
+          ...new Set(
+            visible.flatMap(({ path }) =>
+              path.slice(0, -1).map((_, index) => toolExpression(path.slice(0, index + 1))),
+            ),
+          ),
+        ].sort(compareText),
+      ),
+      namespaces: Object.freeze(
+        ordered.map(([name, group]) => Object.freeze({ name, total: group.length })),
+      ),
+      entries: Object.freeze(
+        described
+          .filter((tool) => selections.some(({ picked }) => picked.has(tool)))
+          .map((tool) =>
+            Object.freeze({
+              path: tool.callablePath,
+              signature: tool.signature,
+              description: catalogDescription(tool),
+            }),
+          ),
+      ),
+      instructions: lines.join("\n"),
+    }),
     instructions: lines.join("\n"),
     searchIndex: visible.map(({ path, definition, description }) =>
       toSearchEntry(path, definition, description),

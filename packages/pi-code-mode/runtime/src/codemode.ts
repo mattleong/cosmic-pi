@@ -8,6 +8,8 @@ import {
   ToolRuntime,
 } from "./tool-runtime.js";
 import type { Definition } from "./tool.js";
+import { catalogUpdate, type CatalogSnapshot, type CatalogUpdate } from "./catalog.js";
+export type { CatalogEntry, CatalogSnapshot, CatalogUpdate } from "./catalog.js";
 
 /** A tool call admitted during an execution. */
 export type {
@@ -132,6 +134,9 @@ export type Result = typeof Result.Type;
 export type Runtime<R = never> = {
   readonly catalog: () => ReadonlyArray<ToolDescription>;
   readonly instructions: () => string;
+  readonly snapshot: () => CatalogSnapshot;
+  /** Pure discovery comparison; does not replace tools or provider tool schemas. */
+  readonly update: (previous?: CatalogSnapshot) => CatalogUpdate;
   readonly execute: (code: string) => Effect.Effect<Result, never, R>;
 };
 
@@ -180,6 +185,8 @@ export const make = <const Tools extends object = {}>(
   return {
     catalog: () => prepared.catalog,
     instructions: () => prepared.instructions,
+    snapshot: () => prepared.snapshot,
+    update: (previous) => catalogUpdate(prepared.snapshot, previous),
     execute: (code) => executeWithLimits<Tools>({ ...options, code }, limits, prepared.searchIndex),
   };
 };

@@ -6,7 +6,16 @@ are derived from the MIT-licensed `@opencode-ai/codemode` package
 (<https://github.com/anomalyco/opencode>, `dev` branch, commit
 `d4704347465c1ee63d0c213ed00e648e7f0231c5`). The upstream license notice is
 reproduced in full below, as required by the MIT license. See `PROVENANCE.md`
-for the exact included/excluded paths and local modifications.
+for the exact included/excluded paths and local modifications. Selective v2
+adaptations reference commit `0ac458b3b36f4d17fe3322fd9fab673066ea6297`
+of the same MIT-licensed package. The original base pin remains unchanged.
+
+The unchanged files under `tests/test262/fixtures/` are separately licensed
+Test262 inputs from <https://github.com/tc39/test262>, commit
+`250f204f23a9249ff204be2baec29600faae7b75`. Their BSD license is reproduced
+in `tests/LICENSE.test262`, and their individual copyright notices are retained.
+The manifest identifies each original path and checksum. They are not derived
+from OpenCode and are not production interpreter code.
 
 ---
 

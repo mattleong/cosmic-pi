@@ -143,6 +143,21 @@ policy; Code Mode aggregates it without maintaining a second live MCP-specific l
 without correlated receipts remain conservative. Programs must still inspect and return protocol
 outcome evidence. No nested built-in is wrapped or dispatched differently.
 
+## Catalog updates
+
+The runtime exposes `runtime.snapshot()` and `runtime.update(previousSnapshot)` for hosts that
+need discovery updates. Updates are `unchanged`, `delta` with added/changed signatures and removed
+exact callable paths, or `replace` with a fresh snapshot. Namespace or completeness changes need
+replacement; a delta larger than the fresh snapshot also falls back to replacement. Snapshots
+cover only budget-selected entries, using the same concise descriptions as the instructions.
+Hidden entries remain available through paginated search. A hidden-only change with unchanged
+counts and visible entries is not a discovery update.
+
+This Pi extension keeps its fixed catalog in the complete tool registration description. It does
+not deliver deltas or claim token savings from this API. Provider-required tool schemas remain
+complete. Snapshots are metadata, not tool authority; they never import registered extension tools
+or turn discovered MCP tools into guest functions.
+
 ## Supplied tool authority and direct nested dispatch
 
 Tools invoked from inside a Code Mode program are dispatched **directly** against fresh Pi

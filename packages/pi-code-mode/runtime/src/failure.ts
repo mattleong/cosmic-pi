@@ -1,4 +1,8 @@
-import type { InterpreterRuntimeError, ProgramThrow } from "./interpreter/model.js";
+import type {
+  GeneratorReturn,
+  InterpreterRuntimeError,
+  ProgramThrow,
+} from "./interpreter/model.js";
 import type { ToolError } from "./tool-error.js";
 import type { ToolRuntimeError } from "./tool-runtime.js";
 
@@ -11,4 +15,9 @@ import type { ToolRuntimeError } from "./tool-runtime.js";
  * surface program failures as `Result` data - `executeWithLimits` converts this channel
  * (and any defect) into a `Diagnostic` before returning.
  */
-export type RuntimeFailure = InterpreterRuntimeError | ProgramThrow | ToolRuntimeError | ToolError;
+export type RuntimeFailure =
+  | InterpreterRuntimeError
+  | ProgramThrow
+  | GeneratorReturn
+  | ToolRuntimeError
+  | ToolError;

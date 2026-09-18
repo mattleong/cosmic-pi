@@ -6,7 +6,9 @@ extension is built on a host-neutral, independently reviewable core.
 ## Upstream origin
 
 - Repository: <https://github.com/anomalyco/opencode> (`dev` branch)
-- Pinned commit: `d4704347465c1ee63d0c213ed00e648e7f0231c5`
+- Original base commit: `d4704347465c1ee63d0c213ed00e648e7f0231c5`
+- Selective v2 reference commit: `0ac458b3b36f4d17fe3322fd9fab673066ea6297`
+  for the upgrade described below. This is not a whole-package resync.
 - Upstream package: `@opencode-ai/codemode` (workspace-private), version `1.18.16`
 - Upstream path: `packages/codemode`
 - License: MIT (Copyright (c) 2025 opencode). The full upstream notice is
@@ -18,8 +20,9 @@ legacy OpenCode product-v1 architecture.
 
 ## Included paths
 
-Copied from upstream `packages/codemode`, preserving upstream file structure and
-behavior for diffability:
+Initially copied from upstream `packages/codemode`. Local additions and the later
+interpreter extraction are recorded below; the current tree is not a byte-for-byte
+copy or the file layout of upstream v2:
 
 - `src/index.ts` (OpenAPI export line removed; see exclusions)
 - `src/codemode.ts`
@@ -75,7 +78,9 @@ mutation and async semantics; their behavior and remaining limits are documented
    Microsoft's side-by-side guidance and keeps `transpileModule` behavior isolated from the
    workspace compiler. The alias exposes TypeScript 6's `tsc` binary, so the Code Mode package
    typecheck scripts call the root TypeScript 7 binary explicitly.
-5. All files are formatted with the repository's `oxfmt` configuration
+5. Maintained files are formatted with the repository's `oxfmt` configuration.
+   Unchanged Test262 fixtures are excluded from formatting and linting to preserve
+   their checked bytes; the local runner and all production files remain checked
    (semicolons, wrapping); compare against upstream with a formatter-insensitive
    diff or by re-formatting the upstream files before diffing.
 6. **Zero-suppression workspace adaptation (mechanical).** The runtime inherits
@@ -107,7 +112,8 @@ mutation and async semantics; their behavior and remaining limits are documented
    `timeoutMs`/`maxToolCalls`/`maxOutputBytes`, catalog budget default 2000.
    No Pi-specific source-size or cumulative-output limits were added. Local catalog
    instructions encourage bounded batching of known work while retaining decision evidence,
-   and document literal string filtering and unsupported labeled statements.
+   and document literal string filtering. The earlier labeled-statement restriction
+   is being replaced by the selective upgrade below.
 8. **In-process confinement (deliberate, security-motivated).** Because this
    interpreter executes model-written programs in the host process, every
    synchronous native operation it delegates to must be bounded before it runs -
@@ -335,6 +341,68 @@ mutation and async semantics; their behavior and remaining limits are documented
     Custom set-like objects are refused. Covered by `tests/callback-compat.test.ts` and
     `tests/set-operations.test.ts`.
 
+## Selective v2 upgrade and extraction map
+
+The v2 reference above informs lexical initialization, var hoisting, labels,
+for-await, generators and custom iterators, plus semantic catalog snapshot/delta
+support. These are selective adaptations on the original base and local deviations,
+not wholesale copies of the v2 interpreter. `SUPPORT.md` records supported semantics
+and regression coverage without claiming broad ECMAScript conformance.
+
+The former `src/interpreter/runtime.ts` is split locally by responsibility:
+
+| Extracted module       | Former runtime responsibility                                |
+| ---------------------- | ------------------------------------------------------------ |
+| `execution.ts`         | Run setup, scope-owned work and completion                   |
+| `host-execution.ts`    | Effect execution boundary and limits                         |
+| `diagnostics.ts`       | Parsing, transpilation and safe error projection             |
+| `references.ts`        | Runtime-reference classification and containment             |
+| `constructors.ts`      | Bounded constructor dispatch and coercion                    |
+| `globals.ts`           | Allowlisted global static operations                         |
+| `string-operations.ts` | Bounded string and regexp operations                         |
+| `console.ts`           | Bounded guest log projection                                 |
+| `scope.ts`             | Binding lookup, declaration and scope stack                  |
+| `bindings.ts`          | Binding and assignment patterns                              |
+| `statements.ts`        | Statement and control-flow evaluation                        |
+| `expressions.ts`       | Expression evaluation                                        |
+| `callable.ts`          | Guest function activation and callable dispatch              |
+| `promises.ts`          | Promise creation, reactions and combinators                  |
+| `iteration.ts`         | Collection traversal and callback helpers                    |
+| `members.ts`           | Guarded property access and writes                           |
+| `builtins.ts`          | Array builtin dispatch and callbacks                         |
+| `runtime.ts`           | Interpreter composition and remaining shared evaluator state |
+
+New `generators.ts` owns suspended activations and generator request queues;
+`iterator-protocol.ts` owns iterator acquisition, stepping, closing and bounded
+materialization. These are local selective-v2 adaptations, not prior runtime
+extractions. `src/catalog.ts` owns semantic discovery snapshots and delta decisions;
+`src/codemode.ts` exposes them to hosts. The Pi adapter does not deliver these deltas
+and no Pi token savings are claimed.
+
+These names describe local extractions, not upstream-v2 file correspondences.
+Existing local `guest-turns.ts`, `group-by.ts`, `json.ts`, `set-operations.ts`,
+`confinement.ts` and `regex-first-sets.ts` keep their provenance and safety rules.
+Do not replace them with an upstream module merely because a filename matches.
+The fixed concurrency, regex guard, allocation caps and data serialization rules
+are not part of the upgrade and must remain unchanged.
+
+## Test262 provenance
+
+Six unchanged positive fixtures under `tests/test262/fixtures/` come from
+<https://github.com/tc39/test262> commit
+`250f204f23a9249ff204be2baec29600faae7b75`, the pin used by the v2 reference.
+`tests/test262/manifest.json` records each upstream path and SHA-256 checksum.
+`tests/LICENSE.test262` contains the upstream license; file-level notices remain
+intact. These files are repository test inputs, not runtime code.
+
+The local runner is mandatory in ordinary Vitest runs and fails before fixture execution for missing,
+modified, zero or reduced fixture inventories, and upstream-path or async-metadata
+mismatches against an independent required-case map. Pure validation regressions do
+not mutate fixture files. It interprets a minimal guest assertion prelude with no
+tools and replaces only the assertion failure constructor in the execution copy.
+See `SUPPORT.md` for that adaptation, async completion checks and coverage limits.
+Neither this selection nor the v2 reference establishes broad ECMAScript conformance.
+
 ## Resync policy
 
 Upstream updates are pulled by pinned manual review only:
@@ -348,5 +416,6 @@ Upstream updates are pulled by pinned manual review only:
    hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-17
    for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
    host-adapter code. Re-run the confinement, lifecycle, and compatibility tests.
-4. Update the pinned commit here, then run the full package and workspace
-   validation gates.
+4. Record a whole-base replacement or a selective reference explicitly, preserving
+   the original base history and updating the extraction map. Run the mandatory
+   Test262 selection, full package tests and workspace validation gates.

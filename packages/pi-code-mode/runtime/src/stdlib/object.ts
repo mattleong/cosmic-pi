@@ -77,7 +77,9 @@ export const invokeObjectAssign = (
   ) => void,
 ): InterpreterObject | InterpreterArray => {
   const target = requireDataContainer(args[0], "Object.assign target", node);
-  let entries = ownDataEntries(target, "Object.assign target", node).length;
+  ownDataEntries(target, "Object.assign target", node);
+  // Count symbol slots too, matching ordinary member assignment's growth guard.
+  let entries = Reflect.ownKeys(target).length;
   for (const source of args.slice(1)) {
     if (source === null || source === undefined) continue;
     if (isSandboxValue(source)) {
@@ -109,7 +111,21 @@ export const invokeObjectAssign = (
   return target;
 };
 
-export const invokeObjectMethod = (name: string, args: InterpreterArray, node: AstNode) => {
+export function invokeObjectMethod(
+  name: "fromEntries",
+  args: InterpreterArray,
+  node: AstNode,
+): InterpreterObject;
+export function invokeObjectMethod(
+  name: string,
+  args: InterpreterArray,
+  node: AstNode,
+): InterpreterValue;
+export function invokeObjectMethod(
+  name: string,
+  args: InterpreterArray,
+  node: AstNode,
+): InterpreterValue {
   if (!objectStatics.has(name))
     throw new InterpreterRuntimeError(`Object.${name} is not available in CodeMode.`, node);
   const requireObject = (): InterpreterObject | InterpreterArray => {
@@ -185,4 +201,4 @@ export const invokeObjectMethod = (name: string, args: InterpreterArray, node: A
     }
   }
   throw new InterpreterRuntimeError(`Object.${name} is not available in CodeMode.`, node);
-};
+}

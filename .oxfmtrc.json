@@ -13,6 +13,7 @@
     ".pi-subagents/**",
     ".roo/**",
     ".windsurf/**",
-    "tools/oxlint/anti-slop/**"
+    "tools/oxlint/anti-slop/**",
+    "**/tests/test262/fixtures/**"
   ]
 }

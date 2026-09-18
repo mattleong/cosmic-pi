@@ -24,6 +24,7 @@ nested output).
 src/
   index.ts              # public barrel: CodeMode, Tool, ToolError/toolError
   codemode.ts           # public CodeMode namespace: make/execute, schemas, types
+  catalog.ts            # semantic discovery snapshots and host-only delta decisions
   failure.ts            # closed internal RuntimeFailure union
   tool.ts               # Tool.make and tool definition types
   tool-error.ts         # ToolError: safe model-visible tool refusal
@@ -38,7 +39,26 @@ src/
     group-by.ts         # LOCAL bounded live grouping with interpreter callbacks
     set-operations.ts   # LOCAL Set algebra, membership predicates, and allocation preflight
     json.ts             # LOCAL JSON callbacks, projection, and exact output preflight
-    runtime.ts          # Acorn-based tree-walk interpreter (internal, vendored large file)
+    runtime.ts          # interpreter composition and shared evaluator state
+    execution.ts        # execution setup, scope-owned work and completion
+    host-execution.ts   # public Effect execution boundary and limits
+    diagnostics.ts      # parsing, transpilation and safe diagnostics
+    references.ts       # opaque runtime-reference classification
+    generators.ts       # suspended generator activations and request queues
+    iterator-protocol.ts # iterator acquisition, stepping, closing and materialization
+    scope.ts            # binding lookup, initialization and scope stack
+    bindings.ts         # binding/assignment patterns
+    statements.ts       # control flow and statement evaluation
+    expressions.ts      # expression evaluation
+    callable.ts         # guest activation and callable dispatch
+    promises.ts         # promise reactions and combinators
+    iteration.ts        # collection traversal and callback helpers
+    members.ts          # guarded member access and mutation
+    builtins.ts         # array builtin dispatch and callbacks
+    globals.ts          # allowlisted global static operations
+    constructors.ts     # bounded construction and coercion
+    string-operations.ts # bounded string and regexp operations
+    console.ts          # bounded guest log projection
     confinement.ts      # LOCAL (non-upstream) in-process confinement: regex guard +
                         # subject caps, amplification limits, wall-clock deadline
     regex-first-sets.ts # LOCAL (non-upstream) conservative alternation first-character
@@ -46,7 +66,9 @@ src/
   stdlib/               # confined standard-library surfaces (internal)
     collections.ts  console.ts  date.ts  epoch.ts  json.ts  math.ts
     number.ts  object.ts  promise.ts  regexp.ts  string.ts  url.ts  value.ts
-tests/                  # ported upstream behavioral suites (Effect-backed Vitest)
+tests/                  # upstream and local behavioral suites (Effect-backed Vitest)
+  test262.test.ts       # mandatory pinned selection, no network prerequisite
+  test262/              # local runner, checksum manifest and unchanged fixtures
 ```
 
 ## Public boundary
@@ -88,7 +110,7 @@ bodies so host scheduling and guest language semantics stay separate.
 - No Pi-specific limits (program source size, cumulative child output) live in
   this package; a Pi host applies those above this boundary.
 
-`Array.from(source, mapper)` is a local compatibility addition in `interpreter/runtime.ts`.
+`Array.from(source, mapper)` is a local compatibility addition in the interpreter.
 Mappers use existing interpreter callback execution, not host JavaScript callbacks. Live
 collection iteration and fixed-length array-like reads preserve source mutations. Source
 preflight, per-entry collection checks before mapper execution, and cooperative deadline
@@ -113,8 +135,10 @@ re-entrant cancellation is guarded against mutual interruption waits. `then`, `c
 tracks its own rejection. `Promise.any` retains losing work while execution continues; execution
 teardown still cancels pending observed work. `AggregateError` preserves original rejection
 values in nonenumerable `errors`, with optional nonenumerable `cause`. Custom thenables,
-custom iterators, `this` binding, and the Promise constructor remain unsupported.
-See deviations 13 and 16.
+`this` binding, and the Promise constructor remain unsupported. Custom iterators and
+generators use execution-owned suspended activations and bounded iterator dispatch; see
+`SUPPORT.md`.
+See deviations 13 and 16 for the original promise implementation.
 
 Object helpers validate without replacing shallow references. `Object.assign`, `reverse`,
 and `sort` mutate their targets; assignment and sort write-back retain cycle and growth
@@ -198,12 +222,13 @@ byte budget. Covered by `tests/confinement.test.ts`.
 
 ## Vendored-code exception
 
-`src/interpreter/runtime.ts` (~5k lines) and other vendored files
-intentionally exceed the repository's soft file-size guidance and keep upstream
-structure, naming, and style. Do not refactor them for local conventions:
-upstream comparability is the safety property that keeps pinned manual resyncs
-reviewable. Mechanical deviations, including the zero-suppression TypeScript
-and Effect adaptation, and the deliberate confinement deviation are enumerated
-in `PROVENANCE.md`. The confinement guards added into the vendored files are
-single call-site lines that delegate to `confinement.ts`, so an upstream diff
-stays readable.
+The original large interpreter is now extracted by responsibility. `PROVENANCE.md`
+maps the local modules back to the original runtime rather than claiming the new
+layout is an upstream copy. Keep source changes traceable through that map and
+record later semantic adaptations separately. Existing TypeScript, Effect and
+confinement deviations still apply across every extracted call site.
+
+`SUPPORT.md` records the selective v2 semantics and their regression coverage,
+without claiming a complete ECMAScript implementation.
+Test262 assertions exist only in `tests/test262/runner.ts`; no test harness global,
+host callback authority or host guest-code evaluator is installed in production.

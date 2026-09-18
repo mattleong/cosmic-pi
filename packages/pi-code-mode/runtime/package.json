@@ -40,6 +40,7 @@
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
+    "pi-cosmic-core": "workspace:*",
     "vitest": "catalog:"
   },
   "engines": {

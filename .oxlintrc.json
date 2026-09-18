@@ -12,7 +12,8 @@
     ".pi/**",
     ".pi-subagents/**",
     ".roo/**",
-    ".windsurf/**"
+    ".windsurf/**",
+    "**/tests/test262/fixtures/**"
   ],
   "jsPlugins": [
     {

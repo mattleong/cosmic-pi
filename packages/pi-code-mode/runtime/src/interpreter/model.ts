@@ -52,16 +52,40 @@ export type StatementResult =
   | { kind: "none" }
   | { kind: "value"; value: InterpreterValue }
   | { kind: "return"; value: InterpreterValue }
-  | { kind: "break" }
-  | { kind: "continue" };
+  | { kind: "break"; label?: string }
+  | { kind: "continue"; label?: string };
+
+// Guest well-known keys are interpreter-owned identities, never host Symbol.iterator.
+export const GuestIterator: unique symbol = Symbol("codemode.iterator");
+export const GuestAsyncIterator: unique symbol = Symbol("codemode.asyncIterator");
+export type GuestPropertyKey = string | number | typeof GuestIterator | typeof GuestAsyncIterator;
+
+export class GeneratorReference {
+  readonly #async: boolean;
+  constructor(async: boolean) {
+    this.#async = async;
+  }
+  get async(): boolean {
+    return this.#async;
+  }
+}
+
+/** Abrupt return injected at a suspended yield, distinct from a guest throw. */
+export class GeneratorReturn {
+  readonly value: InterpreterValue;
+  constructor(value: InterpreterValue) {
+    this.value = value;
+  }
+}
 
 export type MemberReference = {
   target: InterpreterObject | InterpreterArray | SandboxURL;
-  key: string | number;
+  key: GuestPropertyKey;
 };
 
 export class CodeModeFunction {
   readonly async: boolean;
+  readonly generator: boolean;
   readonly parameters: ReadonlyArray<AstNode>;
   readonly body: AstNode;
   readonly capturedScopes: ReadonlyArray<Map<string, Binding>>;
@@ -70,8 +94,10 @@ export class CodeModeFunction {
     body: AstNode,
     capturedScopes: ReadonlyArray<Map<string, Binding>>,
     async = false,
+    generator = false,
   ) {
     this.async = async;
+    this.generator = generator;
     this.parameters = parameters;
     this.body = body;
     this.capturedScopes = capturedScopes;
@@ -116,7 +142,8 @@ export type GlobalNamespaceName =
   | "Map"
   | "Set"
   | "URL"
-  | "URLSearchParams";
+  | "URLSearchParams"
+  | "Symbol";
 
 export class GlobalNamespace {
   readonly name: GlobalNamespaceName;
@@ -173,6 +200,7 @@ export type InterpreterPrimitive = undefined | null | string | number | boolean 
 
 export interface InterpreterObject {
   [key: string]: InterpreterValue;
+  [key: symbol]: InterpreterValue;
 }
 
 export interface InterpreterArray extends Array<InterpreterValue> {
@@ -191,6 +219,7 @@ export type InterpreterValue =
   | InterpreterObject
   | InterpreterArray
   | CodeModeFunction
+  | GeneratorReference
   | IntrinsicReference
   | ComputedValue
   | PromiseNamespace
@@ -240,7 +269,7 @@ export type DiagnosticKind =
 export const OptionalShortCircuit: unique symbol = Symbol("codemode.optional-short-circuit");
 
 export const supportedSyntaxMessage =
-  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (incl. for...of and for...in over object/array/tools keys), arrow functions, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, Object.groupBy/Map.groupBy, JSON replacers/revivers, AggregateError, and Promise.all/allSettled/any/race/resolve/reject over arrays mixing promises and plain values for parallel tool calls, with then/catch/finally chaining. Grouping and JSON callbacks are not implicitly awaited.";
+  "Supported orchestration syntax: tools.* calls (they return promises - resolve them with await), data literals, destructuring, optional chaining, template literals, conditionals, switch, loops (including for...of, for-await, and for...in over object/array/tools keys), labeled control flow, lexical TDZ and function-scoped var declarations, arrow functions, sync/async generators, guest iterator protocols, spread, try/catch, array methods (map/filter/find/findIndex/some/every/reduce/flatMap/forEach/sort/slice/concat/indexOf/lastIndexOf/at/flat/reverse/includes/join), string methods (incl. match/matchAll/replace/split with regular expressions), Date/RegExp/Map/Set/URL/URLSearchParams, URI encoding helpers, Object/Math/JSON helpers, captured console.log/warn/error/dir/table, Object.groupBy/Map.groupBy, JSON replacers/revivers, AggregateError, and Promise.all/allSettled/any/race/resolve/reject over supported iterables mixing promises and plain values for parallel tool calls, with then/catch/finally chaining. Grouping and JSON callbacks are not implicitly awaited.";
 
 type InterpreterRuntimeErrorProps = {
   readonly message: string;

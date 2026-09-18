@@ -153,6 +153,20 @@ callback, list callbacks, input application, and reopen checks.
 inert component. Preset writes use the list signal, ignore stale callbacks, and restore the
 persisted row after an active failure.
 
+## Discovery snapshots
+
+The private runtime's `snapshot()` and `update(previous)` compare discovery metadata without
+changing the callable tool tree. `runtime/src/catalog.ts` owns replacement/delta/no-op decisions.
+Snapshots retain only budget-selected signatures, concise descriptions, namespace counts, and
+complete instructions. Canonical callable paths preserve literal property segments. Search still
+indexes every described tool and keeps round-robin catalog selection across namespaces.
+
+Pi continues to register complete `code_mode` parameters and instructions at session activation.
+Its guest catalog is fixed; it does not send catalog deltas, import arbitrary registered tools,
+or treat MCP discovery as permission to add guest leaves. The runtime API allows other host
+consumers to deliver discovery updates, but is not a provider-schema replacement or a Pi token
+savings mechanism. Snapshot data carries no execution authority.
+
 ## Tool execution and limits
 
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed

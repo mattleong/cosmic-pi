@@ -30,11 +30,20 @@ tools the host supplies.
 
 ## Documentation
 
+- `SUPPORT.md` - compatibility matrix, deliberate restrictions and Test262 coverage.
 - `ARCHITECTURE.md` - source map and public/private boundaries.
 - `PROVENANCE.md` - upstream origin, pinned commit, deviations, resync policy.
 - `THIRD_PARTY_NOTICES.md` - upstream MIT license notice.
 
+The selective v2 upgrade retains the original vendored base and local confinement.
+Its compatibility matrix records supported behavior and regression coverage;
+this package does not claim broad ECMAScript conformance.
+
 ## Verification
+
+Ordinary tests include six pinned, checksummed Test262 fixtures. No network fetch or
+external checkout is needed, and missing or changed fixtures fail the test run. For
+just that selection, run `pnpm --filter pi-code-mode-runtime exec vitest run tests/test262.test.ts`.
 
 ```sh
 pnpm --filter pi-code-mode-runtime typecheck
