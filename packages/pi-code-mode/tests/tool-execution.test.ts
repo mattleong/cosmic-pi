@@ -473,7 +473,7 @@ describe("early-path clamp wiring", () => {
             config: { maxOutputBytes: 31 },
             runInSession: () => Promise.reject(new Error(failure)),
           },
-          expected: clampModelVisibleText(`code_mode execution did not complete: ${failure}`, 31),
+          expected: clampModelVisibleText("Full output unavailable (runtime-unavailable).", 31),
         },
         {
           name: "zero",
@@ -575,7 +575,13 @@ describe("final model-visible byte bound", () => {
         const result = yield* Effect.tryPromise(() =>
           execute("call-structured-bound", "return null;"),
         );
-        expect(textOf(result)).toBe(clampModelVisibleText(formatCodeModeSuccess(sample), budget));
+        expect(utf8ByteLength(textOf(result))).toBeLessThanOrEqual(budget);
+        if (budget >= utf8ByteLength(formatCodeModeSuccess(sample))) {
+          expect(textOf(result)).toBe(formatCodeModeSuccess(sample));
+        } else {
+          expect(result.details.truncated).toBe(true);
+          expect(textOf(result)).toContain("Full output");
+        }
         expect(result.details.outputKind).toBe("structured");
       }
     }),
@@ -693,7 +699,8 @@ describe("cancellation", () => {
       yield* Deferred.await(started);
       controller.abort();
       const result = yield* Effect.promise(() => pending);
-      expect(textOf(result)).toBe("Execution cancelled.");
+      expect(textOf(result)).toContain("Execution cancelled.");
+      expect(result.details.executionReceipts).toMatchObject({ total: 1, unknown: 1 });
       expect(seenSignal?.aborted).toBe(true);
     }),
   );
@@ -716,7 +723,8 @@ describe("cancellation", () => {
       yield* Deferred.await(started);
       controller.abort();
       const result = yield* Effect.promise(() => pending);
-      expect(textOf(result)).toBe("Execution cancelled.");
+      expect(textOf(result)).toContain("Execution cancelled.");
+      expect(result.details.executionReceipts).toMatchObject({ total: 1, unknown: 1 });
       // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
       expect(result.details.toolCalls[0]?.subject).toBe("hang");

@@ -12,6 +12,7 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeRetainedBackendLayer,
+  fakeChildLayer,
   request,
   retainedServiceLayer,
   localServiceFixture,
@@ -19,6 +20,163 @@ import {
   retainedServiceFixture,
   retainedReportFrame,
 } from "./fixtures/service-harness.ts";
+
+describe("local Pi terminal evidence", () => {
+  for (const stopReason of ["error", "aborted", "length", "toolUse", "stop", undefined] as const) {
+    it.effect(
+      `fails a settled ${stopReason ?? "missing"} attempt without accepting partial output`,
+      () => {
+        const { fake, projections, layer } = localServiceFixture();
+        return Effect.gen(function* () {
+          const service = yield* SubagentService;
+          const run = yield* service.start(request());
+          fake.controls[0]!.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Earlier success must not leak." }],
+            },
+          });
+          fake.controls[0]!.offer({ type: "message_start", message: { role: "assistant" } });
+          if (stopReason !== undefined)
+            fake.controls[0]!.offer({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                stopReason,
+                errorMessage: "Provider unavailable.\u001b[31m",
+                content: [{ type: "text", text: stopReason === "stop" ? "   " : "Partial work." }],
+              },
+            });
+          fake.controls[0]!.offer({ type: "agent_settled" });
+          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+          const result = yield* service.status(run.id);
+          expect(result).toMatchObject({
+            state: "failed",
+            reportGeneration: 0,
+            reportStatus: "missing",
+          });
+          expect(result.finalText).toBeUndefined();
+          expect(result.error).toContain("writes may already exist");
+          expect(result.error).not.toContain("\u001b");
+          if (stopReason === "error") expect(result.error).toContain("Provider unavailable.");
+          fake.controls[0]!.exit(0);
+          yield* yieldUntil(() => fake.controls[0]!.released() === 1);
+        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      },
+    );
+  }
+
+  it.effect("lets automatic retries recover before final settlement", () => {
+    const { fake, projections, layer } = localServiceFixture();
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request());
+      fake.controls[0]!.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "Transient failure",
+          content: [],
+          usage: { totalTokens: 1 },
+        },
+      });
+      fake.controls[0]!.offer({ type: "agent_end", willRetry: true });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
+      expect((yield* service.status(run.id)).state).toBe("running");
+      fake.controls[0]!.offer({ type: "agent_start" });
+      fake.controls[0]!.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Recovered report." }],
+        },
+      });
+      fake.controls[0]!.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "completed",
+        reportGeneration: 1,
+        finalText: "Recovered report.",
+        reportStatus: "available",
+      });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "does not reuse the previous assistant attempt after a paused assignment resumes",
+    () => {
+      const { fake, projections, layer } = localServiceFixture();
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request());
+        fake.controls[0]!.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Previous attempt." }],
+            usage: { totalTokens: 1 },
+          },
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
+        expect((yield* service.interrupt(run.id)).state).toBe("paused");
+        yield* service.resume(run.id, "Continue");
+        fake.controls[0]!.offer({ type: "agent_settled" });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+        expect(yield* service.status(run.id)).toMatchObject({
+          reportGeneration: 0,
+          reportStatus: "missing",
+        });
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  for (const stopReason of ["error", "stop"] as const) {
+    it.effect(
+      `preserves buffered ${stopReason} settlement while prompt admission is in flight`,
+      () => {
+        const gate = Deferred.makeUnsafe<void>();
+        const { fake, projections, layer } = localServiceFixture(
+          {},
+          fakeChildLayer(Effect.void, {
+            initialSendGates: [{ spawnIndex: 0, type: "prompt", gate }],
+          }),
+        );
+        return Effect.gen(function* () {
+          const service = yield* SubagentService;
+          const starting = yield* service.start(request()).pipe(Effect.forkScoped);
+          yield* yieldUntil(
+            () => fake.controls[0]?.commands.some((command) => command.type === "prompt") === true,
+          );
+          fake.controls[0]!.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason,
+              content: [{ type: "text", text: "Buffered report." }],
+              usage: { totalTokens: 1 },
+            },
+          });
+          fake.controls[0]!.offer({ type: "agent_settled" });
+          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
+          for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+          yield* Deferred.succeed(gate, undefined);
+          yield* Fiber.join(starting).pipe(Effect.exit);
+          yield* yieldUntil(
+            () =>
+              projections.at(-1)?.runs[0]?.state ===
+              (stopReason === "stop" ? "completed" : "failed"),
+          );
+          expect(projections.at(-1)?.runs[0]?.reportGeneration).toBe(stopReason === "stop" ? 1 : 0);
+        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      },
+    );
+  }
+});
 
 describe("SubagentService", () => {
   it.effect(
@@ -826,6 +984,14 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "resume-backlog" }));
       for (let generation = 1; generation <= 64; generation += 1) {
+        fake.controls[generation - 1]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[generation - 1]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>

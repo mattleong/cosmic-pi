@@ -495,7 +495,7 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       const callsBefore = yield* Ref.get(harness.calls);
       for (const query of queries.filter((query) => query.server === undefined)) {
         const result = yield* discovery.query(query);
-        expect(result.notices).toHaveLength(1);
+        expect(result.notices.some((notice) => notice.includes("refresh"))).toBe(true);
         expect(result.notices[0]).toContain("a");
         expect(result.notices.join("\n")).not.toContain("private-refresh-error");
       }
@@ -504,7 +504,8 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       yield* Ref.set(harness.route, defaultRoute);
       const recovered = yield* connections.withOperation("a", {}, discovery.refresh);
       expect(recovered.revision).toBeGreaterThan(before.revision);
-      for (const query of queries) expect((yield* discovery.query(query)).notices).toEqual([]);
+      for (const query of queries)
+        expect((yield* discovery.query(query)).notices.join(" ")).not.toContain("refresh");
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -1002,6 +1003,31 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
           .query({ action: "tools.search", query: "readFile", cursor: token })
           .pipe(Effect.flip),
       ).toMatchObject({ kind: "stale" });
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("keeps an empty metadata search distinct from unsupported dispatcher operations", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ a: server("a") });
+    yield* Effect.gen(function* () {
+      const discovery = yield* McpDiscovery;
+      const missing = yield* discovery.query({
+        action: "tools.search",
+        server: "a",
+        query: "attachment",
+      });
+      expect((yield* decodePage(missing)).page.total).toBe(0);
+      expect(missing.notices.join(" ")).toContain("tools.describe");
+      expect(missing.notices.join(" ")).toContain("dispatcher");
+      expect(missing.notices.join(" ")).toContain("Do not automatically execute");
+      const found = yield* discovery.query({
+        action: "tools.search",
+        server: "a",
+        query: "alpha",
+      });
+      expect((yield* decodePage(found)).page.total).toBe(1);
+      expect(found.notices.join(" ")).not.toContain("dispatcher");
     }).pipe(Effect.provide(harness.layer));
   }),
 );

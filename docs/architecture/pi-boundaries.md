@@ -31,6 +31,15 @@ stable-session capability, and `host-tool-update.ts` contains undefined,
 synchronous-throwing, and rejecting-thenable progress callbacks. Every private slot input owns a publication flag; deactivation revokes it before clearing state and disposal, so a late old-session commit cannot publish. Slot startup uses core `bestEffortHostBootstrap` for preview settings and returns the session-owned preview scheduler. Current-owner, current-token `onActivated` rereads the guarded live state before building, wrapping, registering, and activating the tool with token-checked animation scheduling. The hostile renderer-ticker adapter (`boundary/host-render-ticker.ts`) owns weak ticker cleanup; the tools controller captures sanitized bounded expand keys once when it builds the definition. Pure rendering stays in `ui/tool-renderer.ts`; pure defensive details normalization lives in `ui/tool-render-details.ts`. Direct nested built-in dispatch still bypasses Pi middleware and registered overrides. The Background Tasks adapter does not invoke a registered definition; its provider
 rechecks stable session identity, current slot token, and top-level activation on every query.
 
+Code Mode result capture crosses only the optional synchronous runtime `onResult` hook after
+plain-data validation and before output bounding. The extension bounds serialization, retains
+text in its scoped results service, and contains capture failure without relabeling execution.
+`code_mode` result reads never construct an interpreter or dispatch tools. Their complete paging
+envelope fits the current output-byte cap, retains the original outcome and rechecks publication
+after waiting. Tree navigation replaces the runtime and revokes IDs; disabling revokes the
+activation until reload. Receipts preserve completed and uncertain nested work, with guest
+output delivery separate from adapter settlement. No recovery path automatically replays work.
+
 ### Synchronous TUI rendering
 
 Cosmic UI's `boundary/host-viewport.ts` reads live terminal dimensions for one custom UI opening. Its retained options getters and component height callback share the pure `manager/viewport.ts` calculation. Pinned Pi 0.85.1 evaluates the options factory once but reads retained properties during rendering, so hosts must pass the options object without copying it. The adapter owns no listeners, runtime, focus, or cleanup. Embedded children consume allocated dimensions; compact dialogs retain natural height within the allocation.

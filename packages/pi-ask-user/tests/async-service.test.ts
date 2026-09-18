@@ -99,6 +99,40 @@ it.effect("waits only for mounting, admits independent work, and retains automat
   }),
 );
 
+it.effect(
+  "retains text outcomes with unchanged request and delivery IDs through status and await",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Deferred.succeed(f.mount, undefined);
+      const service = yield* acquireService(f.host, f.delivery, "text");
+      const receipt = yield* service.startAsync({
+        ...request,
+        questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+      });
+      const textOutcome: AskUserOutcome = {
+        outcome: "submitted",
+        answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
+      };
+      yield* Deferred.succeed(f.answer, textOutcome);
+      yield* Deferred.await(f.delivered);
+      const messages = yield* Ref.get(f.messages);
+      const status = yield* service.controlAsync({
+        action: "status",
+        requestId: receipt.requestId,
+      });
+      const awaited = yield* service.controlAsync({
+        action: "await",
+        requestId: receipt.requestId,
+      });
+      for (const result of [messages[0], status.requests[0], awaited.requests[0]]) {
+        expect(result?.requestId).toBe(receipt.requestId);
+        expect(result?.deliveryId).toBe(receipt.deliveryId);
+        expect(result?.outcome).toEqual(textOutcome);
+      }
+    }),
+);
+
 it.effect("queues competing async and blocking dialogs without replacing the pending request", () =>
   Effect.gen(function* () {
     const f = yield* fixture;

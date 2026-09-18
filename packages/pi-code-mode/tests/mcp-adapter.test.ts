@@ -88,6 +88,32 @@ describe("fixed MCP request adapter", () => {
         expect(received).toEqual([{ action: "server.instructions", server: "one" }]);
       }),
   );
+  it.effect(
+    "returns fixed repair guidance for invalid input without rejected values or dispatch",
+    () =>
+      Effect.gen(function* () {
+        let sent = false;
+        const events = eventsFor([
+          {
+            ...capability(reply()),
+            execute: () => {
+              sent = true;
+              return Promise.resolve(reply());
+            },
+          },
+        ]);
+        const extra = { unsupported: "DO-NOT-LEAK" };
+        const invalid = Object.assign(
+          { action: "tools.call" as const, server: "one", tool: "run" },
+          extra,
+        );
+        const error = yield* dispatchFor(events)(invalid).pipe(Effect.flip);
+        expect(error.message).toContain("not-sent");
+        expect(error.message).toContain("arguments");
+        expect(error.message).not.toContain("DO-NOT-LEAK");
+        expect(sent).toBe(false);
+      }),
+  );
   it.effect("fails closed for missing, wrong-session, duplicate and invalid providers", () =>
     Effect.gen(function* () {
       for (const candidates of [

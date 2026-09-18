@@ -1,6 +1,6 @@
-import type { AskUserRequest, AskUserQuestion } from "../../src/questionnaire/schema.ts";
+import type { AskUserRequest, AskUserChoiceQuestion } from "../../src/questionnaire/schema.ts";
 
-export const defaultQuestion: AskUserQuestion = {
+export const defaultQuestion: AskUserChoiceQuestion = {
   key: "choice",
   title: "Choice",
   prompt: "Choose.",

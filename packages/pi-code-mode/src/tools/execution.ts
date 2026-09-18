@@ -3,7 +3,6 @@
  * runtime execution with composed cancellation, bounded progress, and model-safe results.
  */
 // Pi tool execution is a Promise-shaped host boundary.
-import * as Predicate from "effect/Predicate";
 
 import type {
   AgentToolResult,
@@ -14,11 +13,25 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import { captureBuiltinCompactPolicy, projectBuiltinCompactSummary } from "pi-code-previews";
-import { makeCompactEvidence, type CompactReceipt } from "./compact-evidence.ts";
+import { makeCompactEvidence } from "./compact-evidence.ts";
+import {
+  emptyCounts,
+  snapshotCalls,
+  statusCountKey,
+  transitionCall,
+  settlePendingAsCancelled,
+  type MutableCallEntry,
+} from "./execution-progress.ts";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { projectMcpCompactSummary, MCP_CODE_MODE_MAX_OUTPUT_BYTES } from "pi-mcp/code-mode";
 import { makeMcpDispatch } from "../boundary/host-mcp.ts";
-import { CodeMode, type CodeModeResult } from "../boundary/codemode-runtime.ts";
+import { CodeMode } from "../boundary/codemode-runtime.ts";
+import type { ResultsContract } from "../results/service.ts";
+import type { ResultCapture } from "../results/model.ts";
+import { captureResult } from "../results/serialize.ts";
+import { makeExecutionReceipts } from "./execution-receipts.ts";
+import { makeResultResponse } from "./result-response.ts";
+import { isExecutionInput, readRetainedResult, type CodeModeInput } from "./result-read.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
   makeNestedPiToolDispatch,
@@ -27,18 +40,12 @@ import {
 import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts";
 import { makeChildTimings } from "../boundary/host-child-timing.ts";
 import type { CodeModeState } from "../config/store.ts";
-import { projectFailurePresentation } from "./failure-evidence.ts";
 import { describeNestedSubject } from "./compact-subject.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import {
   callEntryDetails,
-  formatCodeModeFailure,
-  formatCodeModeSuccess,
   formatForeignRejection,
   progressResult,
-  type LiveChildTiming,
-  type CodeModeCallCounts,
-  type CodeModeCallEntry,
   type CodeModeToolDetails,
 } from "./format.ts";
 import { checkSourceSize, clampModelVisibleText, makeCumulativeOutputBudget } from "./limits.ts";
@@ -56,6 +63,7 @@ export const CODE_MODE_UNAVAILABLE_MESSAGE =
   "trusting the project or enabling Code Mode.";
 
 export interface CodeModeExecutionEnvironment {
+  readonly results?: ResultsContract;
   /** True only while this registration's session slot generation is still current. */
   readonly isCurrent: () => boolean;
   /** Live resolved configuration snapshot for the current session. */
@@ -78,60 +86,6 @@ const MAX_TRACKED_CALL_ENTRIES = 256;
 /** Hard ceiling for one structured protocol result before schema decoding or JSON admission. */
 const MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES = 16 * 1_024 * 1_024;
 
-type MutableCallCounts = { -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key] };
-
-interface MutableCallEntry {
-  compact?: CompactReceipt;
-  tool: string;
-  status: CodeModeCallEntry["status"];
-  subject?: string;
-  durationMs?: number;
-  liveTiming?: LiveChildTiming;
-}
-
-const snapshotCalls = (
-  calls: ReadonlyMap<number, MutableCallEntry>,
-): ReadonlyArray<CodeModeCallEntry> => Array.from(calls.values(), (call) => ({ ...call }));
-
-const emptyCounts = (): MutableCallCounts => ({
-  total: 0,
-  queued: 0,
-  running: 0,
-  succeeded: 0,
-  failed: 0,
-  cancelled: 0,
-});
-
-const statusCountKey = (
-  status: CodeModeCallEntry["status"],
-): Exclude<keyof CodeModeCallCounts, "total"> =>
-  status === "completed" ? "succeeded" : status === "error" ? "failed" : status;
-
-const transitionCall = (
-  call: MutableCallEntry,
-  status: CodeModeCallEntry["status"],
-  counts: MutableCallCounts,
-): void => {
-  if (call.status === status) return;
-  counts[statusCountKey(call.status)] -= 1;
-  counts[statusCountKey(status)] += 1;
-  call.status = status;
-};
-
-const settlePendingAsCancelled = (
-  calls: ReadonlyMap<number, MutableCallEntry>,
-  counts: MutableCallCounts,
-): boolean => {
-  let changed = false;
-  for (const call of calls.values()) {
-    if (call.status === "queued" || call.status === "running") {
-      transitionCall(call, "cancelled", counts);
-      changed = true;
-    }
-  }
-  return changed;
-};
-
 // The cancellation text goes through the same authoritative clamp as every other
 // model-visible result (maxOutputBytes = 0 yields empty text).
 const cancelledResult = (
@@ -149,7 +103,7 @@ const cancelledResult = (
 
 export type CodeModeToolExecute = (
   toolCallId: string,
-  params: { code: string; intent?: string | undefined },
+  params: CodeModeInput,
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<CodeModeToolDetails> | undefined,
   ctx: ExtensionContext,
@@ -170,6 +124,39 @@ export const makeCodeModeToolExecute =
         );
       }
       const { config } = state;
+      if (params.action === "result.read") {
+        return environment
+          .runInSession(
+            readRetainedResult(params, environment.results, config.maxOutputBytes),
+            signal,
+          )
+          .then((text) => ({
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  environment.isCurrent() && environment.getState()?.available === true
+                    ? text
+                    : clampModelVisibleText(
+                        "Retained result revoked. No execution was run.",
+                        config.maxOutputBytes,
+                      ),
+              },
+            ],
+            details: { toolCalls: [] },
+          }));
+      }
+      if (!isExecutionInput(params)) {
+        throw new Error(
+          clampModelVisibleText(
+            "Invalid Code Mode execution request. Use code and optional intent, or result.read without code. No execution was run.",
+            config.maxOutputBytes,
+          ),
+        );
+      }
+      const receipts = makeExecutionReceipts();
+      let capture: ResultCapture = { status: "unavailable", reason: "runtime-unavailable" };
+      let acceptingCapture = true;
 
       const calls = new Map<number, MutableCallEntry>();
       const childTimings = makeChildTimings();
@@ -188,7 +175,9 @@ export const makeCodeModeToolExecute =
       const returnedOutputs = new Set<number>();
       const endDelivery = (fiber: number, failed: boolean) => {
         const id = compact.identity(fiber);
-        if (id !== undefined && returnedOutputs.delete(id) && failed) compact.deliveryFailure(id);
+        const returned = id !== undefined && returnedOutputs.delete(id);
+        if (returned && failed) compact.deliveryFailure(id);
+        receipts.delivery(id, returned && !failed);
         compact.end(fiber);
       };
       const policy = invokeHostCallback(() => captureBuiltinCompactPolicy(), undefined);
@@ -239,6 +228,7 @@ export const makeCodeModeToolExecute =
             ctx,
             toolCallId,
             observationId: compact.identity,
+            onOperation: receipts.observe,
             onDeliveryFailure: compact.deliveryFailure,
             observe: (id, name, args, result, isError) =>
               compact.observe(id, () => {
@@ -263,6 +253,7 @@ export const makeCodeModeToolExecute =
             maxOutputBytes: () =>
               Math.min(budget.remaining(), MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES),
             missingPresentation: compact.missing,
+            onOperation: receipts.observe,
             observationId: compact.identity,
             onDeliveryFailure: compact.deliveryFailure,
             observePresentation: (id, receipt) => {
@@ -277,7 +268,8 @@ export const makeCodeModeToolExecute =
             toolCallId,
             maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
             observationId: compact.identity,
-            observePresentation: (id, args, observation, reply) =>
+            observePresentation: (id, args, observation, reply) => {
+              receipts.observe(id, observation.outcome, observation.resultId, observation.isError);
               compact.observe(id, () => {
                 if (observation.incomplete) compact.missing();
                 const projected =
@@ -309,11 +301,15 @@ export const makeCodeModeToolExecute =
                   issues: observation.issues,
                   notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
                 };
-              }),
+              });
+            },
           });
 
           return (environment.executeCodeMode ?? CodeMode.execute)({
             code: params.code,
+            onResult: (result) => {
+              if (acceptingCapture && environment.isCurrent()) capture = captureResult(result);
+            },
             tools: makeExecutionGuestTools(dispatch, dispatchBackgroundTask, dispatchMcp, budget, {
               includePowerShell: environment.definitions.powershell !== undefined,
               observationId: compact.identity,
@@ -334,6 +330,7 @@ export const makeCodeModeToolExecute =
                     endDelivery(fiber, event.status !== "succeeded");
                   if (event.status === "queued") {
                     compact.admit(event.name);
+                    receipts.admit(event.id, event.name);
                     counts.total += 1;
                     counts.queued += 1;
                     const entry: MutableCallEntry = {
@@ -383,6 +380,7 @@ export const makeCodeModeToolExecute =
                   let current = calls.get(id);
                   if (current === undefined && lifecycleId === undefined) {
                     compact.admit(name);
+                    receipts.admit(id, name);
                     counts.total += 1;
                     counts.running += 1;
                     current = {
@@ -393,15 +391,17 @@ export const makeCodeModeToolExecute =
                   } else if (current !== undefined) {
                     transitionCall(current, "running", counts);
                   }
+                  receipts.start(id, name);
+                  const subject =
+                    presentationCwd === undefined
+                      ? undefined
+                      : describeNestedSubject(name, input, presentationCwd);
+                  receipts.target(id, subject);
                   if (current !== undefined) {
                     if (calls.has(id) && current.liveTiming === undefined) {
                       const timing = childTimings.start();
                       if (timing !== undefined) current.liveTiming = timing;
                     }
-                    const subject =
-                      presentationCwd === undefined
-                        ? undefined
-                        : describeNestedSubject(name, input, presentationCwd);
                     if (subject !== undefined) current.subject = subject;
                     else delete current.subject;
                   }
@@ -437,6 +437,7 @@ export const makeCodeModeToolExecute =
         });
 
         const settleProgress = (): CodeModeToolDetails => {
+          acceptingCapture = false;
           childTimings.close();
           // Legacy hooks cannot prove delivery for interrupted calls that never emit an end.
           for (const id of returnedOutputs) compact.deliveryFailure(id);
@@ -456,59 +457,26 @@ export const makeCodeModeToolExecute =
           };
         };
 
-        const settleAfterFailure = (message: string): AgentToolResult<CodeModeToolDetails> => {
-          const details = settleProgress();
-          if (aborted() || !environment.isCurrent()) {
-            return cancelledResult(details, config.maxOutputBytes);
-          }
-          const raw = `code_mode execution did not complete: ${message}`;
-          const text = clampModelVisibleText(raw, config.maxOutputBytes);
-          environment.retainFailureDetails?.(toolCallId, { ...details, truncated: text !== raw });
-          throw new Error(text);
-        };
-
-        const settleAfterSuccess = (
-          result: CodeModeResult,
-        ): AgentToolResult<CodeModeToolDetails> => {
-          const settledDetails = settleProgress();
-          if (aborted()) return cancelledResult(settledDetails, config.maxOutputBytes);
-
-          const raw = result.ok ? formatCodeModeSuccess(result) : formatCodeModeFailure(result);
-          const text = clampModelVisibleText(raw, config.maxOutputBytes);
-          const baseDetails: CodeModeToolDetails =
-            result.truncated === true || text !== raw
-              ? { ...settledDetails, truncated: true }
-              : settledDetails;
-          if (!result.ok) {
-            const failurePresentation = projectFailurePresentation(result);
-            environment.retainFailureDetails?.(toolCallId, {
-              ...baseDetails,
-              ...(failurePresentation && { failurePresentation }),
-            });
-            throw new Error(text);
-          }
-          const details: CodeModeToolDetails = {
-            ...baseDetails,
-            outputKind: Predicate.isString(result.value) ? "text" : "structured",
-          };
-          return {
-            content: [
-              {
-                type: "text",
-                text,
-              },
-            ],
-            details,
-          };
-        };
-
+        const response = makeResultResponse({
+          maxBytes: config.maxOutputBytes,
+          results: environment.results,
+          run: (effect) => environment.runInSession(effect),
+          current: environment.isCurrent,
+          aborted,
+          capture: () => capture,
+          settle: settleProgress,
+          receipts: receipts.close,
+          retain: (details) => environment.retainFailureDetails?.(toolCallId, details),
+        });
         return environment
           .runInSession(execution, signal)
-          .then(settleAfterSuccess, (error) => settleAfterFailure(formatForeignRejection(error)));
+          .then(response.success, (error) => response.failure(formatForeignRejection(error)));
       };
       return Promise.resolve()
         .then(attempt)
         .finally(() => {
+          acceptingCapture = false;
+          receipts.close();
           childTimings.close();
           compact.close();
           publisher.settle();

@@ -107,6 +107,12 @@ export const nestedResultToGuestData = (
   );
 
 export interface NestedDispatchOptions {
+  readonly onOperation?: (
+    id: number | undefined,
+    certainty: "unknown" | "completed",
+    recoveryId?: string,
+    isError?: boolean,
+  ) => void;
   readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   readonly observationId?: (fiber: number) => number | undefined;
   readonly observe?: (
@@ -147,10 +153,15 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
         if (definition === undefined) {
           return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
         }
-        return Effect.tryPromise((interruptSignal) =>
-          definition.execute(callId, input, interruptSignal, undefined, options.ctx),
-        ).pipe(
+        return Effect.tryPromise((interruptSignal) => {
+          invokeHostCallback(() => options.onOperation?.(invocationId, "unknown"), undefined);
+          return definition.execute(callId, input, interruptSignal, undefined, options.ctx);
+        }).pipe(
           Effect.mapError((error: Cause.UnknownError) => {
+            invokeHostCallback(
+              () => options.onOperation?.(invocationId, "completed", undefined, true),
+              undefined,
+            );
             const message = formatForeignRejection(error.cause);
             invokeHostCallback(
               () =>
@@ -166,6 +177,10 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
             return toolError(`Nested tool '${name}' failed: ${message}`);
           }),
           Effect.flatMap((result) => {
+            invokeHostCallback(
+              () => options.onOperation?.(invocationId, "completed", undefined, false),
+              undefined,
+            );
             invokeHostCallback(
               () => options.observe?.(invocationId, name, input, result, false),
               undefined,

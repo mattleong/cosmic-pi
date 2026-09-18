@@ -349,6 +349,36 @@ copying snapshots; the consumer repeats that aggregate check before charging com
 same cumulative budget. MCP applies the same cumulative accounting to its checked JSON replies
 and catchable failures. Its own retention and projection limits also apply.
 
+## Recovering output without rerunning
+
+When output is truncated or a program fails, Code Mode reports a retained ID when capture fits.
+Read it through the same tool, without a `code` field:
+
+```json
+{ "action": "result.read", "id": "cm-…", "offset": 0, "limit": 10000 }
+```
+
+Follow the returned `next` offset until it is `null`. Offsets count UTF-16 code units, not bytes.
+Invalid or split-surrogate offsets are refused. The default and maximum `limit` is 30,000 units;
+the complete page, including metadata, still fits the current `maxOutputBytes` setting. Tiny or
+zero budgets may be unable to return a useful page. Reads never run a program or nested tool.
+
+Inspect `outcome`, which records the original execution rather than retrieval success. `kind`
+is `output` for exact successful text, compact JSON and logs, or `failure-receipt` for operation
+receipts followed by the captured diagnostic. Page `text` is a slice, not independently parseable
+JSON. Capture is bounded at 8 MiB and 100,000 visits; session storage keeps at most 32 artifacts
+under a conservatively charged 64 MiB cap. Oldest results are evicted. Nothing is persisted.
+Tree navigation, replacement and shutdown revoke IDs. Disabling revokes access until reload.
+
+Full capture can be unavailable, including when an older cached runtime lacks the observation
+hook. A failure receipt may still be retained; it explicitly says when full output is absent.
+It cannot recover output already discarded by a nested provider or the interpreter's data boundary.
+Failure and cancellation receipts preserve distinct nested invocation IDs, completion certainty,
+redacted targets and guest output delivery. `completed` does not mean success or background process
+exit; `unknown` means the host operation may still have taken effect. No timeout, cancellation or
+output refusal undoes a write. Inspect receipts, retained provider output or affected state, and
+never replay completed or uncertain operations merely to recover output.
+
 ## `/code-mode-settings`
 
 - `/code-mode-settings` opens the interactive TUI editor. Choose a scope, then edit values.

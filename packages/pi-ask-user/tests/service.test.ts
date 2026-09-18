@@ -10,7 +10,7 @@ import { AskUserService, type AskUserHost } from "../src/questionnaire/service.t
 
 const provideLayer = Effect.provide;
 
-const request: AskUserRequest = { questions: [defaultQuestion] };
+const request = { questions: [defaultQuestion] } satisfies AskUserRequest;
 
 const invalidRequest: AskUserRequest = {
   questions: [

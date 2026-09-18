@@ -46,11 +46,16 @@ describe("SubagentService", () => {
         type: "message_end",
         message: {
           role: "assistant",
+          stopReason: "stop",
           content: [{ type: "text", text: "Exclusively delivered." }],
         },
       });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* Deferred.await(enteredRender);
+      const competing = yield* service.status(run.id);
+      expect(competing.reportStatus).toBe("claimed");
+      expect(competing.finalText).toBeUndefined();
+      expect(updates.at(-1)?.[0]?.reportStatus).toBe("available");
 
       const conflict = yield* service.awaitTerminal([run.id], "all_finished").pipe(Effect.flip);
       expect(conflict).toMatchObject({
@@ -63,8 +68,11 @@ describe("SubagentService", () => {
         .awaitTerminal([run.id], "all_finished")
         .pipe(Effect.forkScoped);
       expect(yield* Fiber.join(replacement)).toMatchObject([
-        { state: "completed", finalText: "Exclusively delivered." },
+        { state: "completed", finalText: "Exclusively delivered.", reportStatus: "available" },
       ]);
+      const delivered = yield* service.status(run.id);
+      expect(delivered.reportStatus).toBe("delivered");
+      expect(delivered.finalText).toBeUndefined();
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
@@ -85,6 +93,7 @@ describe("SubagentService", () => {
             type: "message_end",
             message: {
               role: "assistant",
+              stopReason: "stop",
               content: [{ type: "text", text: "Completed during subscription setup." }],
             },
           });
@@ -118,6 +127,14 @@ describe("SubagentService", () => {
           updateProjection = projection;
           if (!settled) {
             settled = true;
+            fake.controls[0]?.offer({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                stopReason: "stop",
+                content: [{ type: "text", text: "Assignment complete." }],
+              },
+            });
             fake.controls[0]?.offer({ type: "agent_settled" });
           }
         },
@@ -150,10 +167,26 @@ describe("SubagentService", () => {
 
         yield* service.rename(first.id, "revision-first-renamed");
         yield* yieldUntil(() => firstUpdates > 1 && secondUpdates > 1);
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[0]?.offer({ type: "agent_settled" });
         expect((yield* Fiber.join(firstAwait))[0]?.state).toBe("completed");
         expect(secondAwait.pollUnsafe()).toBeUndefined();
 
+        fake.controls[1]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[1]?.offer({ type: "agent_settled" });
         expect((yield* Fiber.join(secondAwait))[0]?.state).toBe("completed");
 
@@ -215,6 +248,7 @@ describe("SubagentService", () => {
         type: "message_end",
         message: {
           role: "assistant",
+          stopReason: "stop",
           content: [{ type: "text", text: "Owned report text." }],
         },
       });
@@ -387,9 +421,25 @@ describe("SubagentService", () => {
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
 
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => updates.at(-1)?.[0]?.state === "completed");
       expect(updates.at(-1)?.[1]?.state).toBe("running");
+      fake.controls[1]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[1]?.offer({ type: "agent_settled" });
 
       const completed = yield* Fiber.join(waiting);
@@ -423,6 +473,14 @@ describe("SubagentService", () => {
         .awaitTerminal([first.id, second.id], "any_finished", (runs) => updates.push(runs))
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
+      fake.controls[1]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[1]?.offer({ type: "agent_settled" });
       const runs = yield* Fiber.join(waiting);
       expect(runs.map((run) => run.state)).toEqual(["running", "completed"]);
@@ -447,6 +505,14 @@ describe("SubagentService", () => {
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
       yield* Fiber.interrupt(waiting);
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* TestClock.adjust("100 millis");
@@ -477,6 +543,14 @@ describe("SubagentService", () => {
         )
         .pipe(Effect.forkScoped);
       yield* yieldUntil(() => updates.length > 0);
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       const observations = yield* Fiber.join(waiting);
       expect(observations[0]?.completionReceipt).toEqual({
@@ -517,6 +591,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "leased-observation" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
 
@@ -555,7 +637,23 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const first = yield* service.start(request({ name: "notify-one" }));
       const second = yield* service.start(request({ name: "notify-two" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
+      fake.controls[1]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[1]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
         Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
@@ -593,6 +691,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       yield* service.start(request({ name: "retry-notification" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
 
@@ -624,6 +730,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       yield* service.start(request({ name: "throwing-completion" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
 
@@ -651,6 +765,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       yield* service.start(request({ name: "persistent-retry" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       for (const [index, delay] of [
@@ -680,7 +802,23 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const one = yield* service.start(request({ name: "partial-one" }));
       const two = yield* service.start(request({ name: "partial-two" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
+      fake.controls[1]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[1]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
         Boolean(projections.at(-1)?.runs.every((run) => run.state === "completed")),
@@ -717,6 +855,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "claimed-retry" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* TestClock.adjust("100 millis");
@@ -746,6 +892,14 @@ describe("SubagentService", () => {
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         yield* service.start(request({ name: "shutdown-retry" }));
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[0]?.offer({ type: "agent_settled" });
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
         yield* TestClock.adjust("100 millis");
@@ -770,6 +924,14 @@ describe("SubagentService", () => {
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "single-settlement" }));
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");

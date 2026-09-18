@@ -3,6 +3,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { McpBoundaryError } from "../client/errors.ts";
 import { McpDataRequestSchema, McpGatewayReplySchema } from "../tools/model.ts";
+import { mcpRequestGuidance } from "../tools/request-guidance.ts";
 
 export const MCP_CODE_MODE_VERSION = 1 as const;
 export const MCP_CODE_MODE_QUERY = "pi-mcp:v1:code-mode:query";
@@ -19,11 +20,16 @@ export const McpCodeModeOutputSchema = McpGatewayReplySchema.annotate({
 export type McpCodeModeInput = typeof McpCodeModeInputSchema.Type;
 export type McpCodeModeOutput = typeof McpCodeModeOutputSchema.Type;
 
+const RequestAction = Schema.Union(
+  McpDataRequestSchema.members.map((member) => member.fields.action),
+);
+
 /** A detached rejection, never a raw SDK error or an Effect runtime failure. */
 export class McpCodeModeError extends Schema.TaggedError<McpCodeModeError>()("McpCodeModeError", {
   kind: McpBoundaryError.fields.kind,
   outcome: McpBoundaryError.fields.outcome,
   message: Schema.String.check(Schema.isMaxLength(512)),
+  requestAction: Schema.optionalKey(RequestAction),
 }) {}
 
 const FailureMetadata = Schema.Struct({
@@ -33,7 +39,8 @@ const FailureMetadata = Schema.Struct({
 });
 const failureMessages = {
   unavailable: "MCP is not active for this trusted session.",
-  "invalid-input": "MCP request is invalid or contains unsupported fields.",
+  "invalid-input":
+    "MCP request is invalid or contains unsupported fields. Use a supported data action and only its declared fields.",
   connection: "MCP connection failed.",
   transport: "MCP transport failed. Do not replay a possibly dispatched operation.",
   protocol: "MCP returned an unrecognized result shape.",
@@ -54,7 +61,21 @@ const failureMessages = {
 export const mcpCodeModeError = (
   kind: McpCodeModeError["kind"],
   outcome: McpCodeModeError["outcome"],
-): McpCodeModeError => new McpCodeModeError({ kind, outcome, message: failureMessages[kind] });
+  requestAction?: McpCodeModeInput["action"],
+): McpCodeModeError => {
+  const action =
+    kind === "invalid-input" && outcome === "not-sent"
+      ? decodeSafely(RequestAction, requestAction)
+      : undefined;
+  if (action === undefined)
+    return new McpCodeModeError({ kind, outcome, message: failureMessages[kind] });
+  return new McpCodeModeError({
+    kind,
+    outcome,
+    message: mcpRequestGuidance(action),
+    requestAction: action,
+  });
+};
 
 const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
@@ -67,11 +88,43 @@ const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   }
 };
 
-/** Preserve checked certainty, never an unknown rejection's message, cause, or coercion. */
+const decodeOwnField = <S extends Schema.ConstraintDecoder<unknown>, Value>(
+  schema: S,
+  value: Value,
+  key: string,
+): S["Type"] | undefined => {
+  try {
+    if (!Predicate.isObjectOrArray(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? decodeSafely(schema, descriptor.value) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Capture only an admitted, recognized action; never read request accessors or rejected values. */
+export const mcpCodeModeInputError = <Value>(input: Value): McpCodeModeError =>
+  mcpCodeModeError(
+    "invalid-input",
+    "not-sent",
+    mcpCodeModeJsonFits(input, MCP_CODE_MODE_MAX_INPUT_BYTES)
+      ? decodeOwnField(RequestAction, input, "action")
+      : undefined,
+  );
+
+/** Preserve checked certainty and action, never a rejection's message, cause, or accessors. */
 export const normalizeMcpCodeModeError = <Value>(value: Value): McpCodeModeError => {
-  const decoded = decodeSafely(FailureMetadata, value);
+  const decoded = decodeSafely(FailureMetadata, {
+    _tag: decodeOwnField(FailureMetadata.fields._tag, value, "_tag"),
+    kind: decodeOwnField(FailureMetadata.fields.kind, value, "kind"),
+    outcome: decodeOwnField(FailureMetadata.fields.outcome, value, "outcome"),
+  });
   return decoded
-    ? mcpCodeModeError(decoded.kind, decoded.outcome)
+    ? mcpCodeModeError(
+        decoded.kind,
+        decoded.outcome,
+        decodeOwnField(RequestAction, value, "requestAction"),
+      )
     : mcpCodeModeError("transport", "unknown");
 };
 
@@ -215,10 +268,14 @@ export const mcpCodeModeJsonFits = <Value>(value: Value, maxBytes: number): bool
     ancestors.add(item);
     if (!spend(2)) return false;
     let count = 0;
-    for (const key in item) {
-      if (++count > 100_000 || !Object.hasOwn(item, key)) return false;
+    const keys = Reflect.ownKeys(item);
+    if (keys.length > 100_000) return false;
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      if (!Predicate.isString(key)) return false;
+      count += 1;
       const descriptor = Object.getOwnPropertyDescriptor(item, key);
-      if (!descriptor || !("value" in descriptor)) return false;
+      if (!descriptor?.enumerable || !("value" in descriptor)) return false;
       const child: unknown = descriptor.value;
       if (count > 1 && !spend(1)) return false;
       if (array) {
@@ -227,7 +284,7 @@ export const mcpCodeModeJsonFits = <Value>(value: Value, maxBytes: number): bool
       if (!visit(child, depth + 1)) return false;
     }
     ancestors.delete(item);
-    return !array || count === item.length;
+    return !array || count === decodeOwnField(Schema.Natural, item, "length");
   };
   try {
     return visit(value, 0);

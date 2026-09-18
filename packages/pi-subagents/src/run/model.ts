@@ -176,6 +176,8 @@ export interface SubagentRunView {
   readonly question?: PendingParentQuestion | undefined;
   readonly sessionEvents: ReadonlyArray<SubagentSessionEvent>;
   readonly finalText?: string | undefined;
+  /** Observed before report redaction. Absent historical metadata means unknown. */
+  readonly reportStatus?: "available" | "claimed" | "delivered" | "missing" | undefined;
   readonly error?: string | undefined;
   readonly usage: SubagentUsage;
 }

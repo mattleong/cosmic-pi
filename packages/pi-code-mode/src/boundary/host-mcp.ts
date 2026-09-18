@@ -8,6 +8,7 @@ import {
   McpCodeModeInputSchema,
   McpCodeModeOutputSchema,
   mcpCodeModeError,
+  mcpCodeModeInputError,
   mcpCodeModeHasBinary,
   mcpCodeModeJsonFits,
   mcpCodeModeOutcome,
@@ -80,9 +81,17 @@ export const makeMcpDispatch = (options: {
             );
           }
           return decodeInput(input).pipe(
-            Effect.mapError(() =>
-              toolError("MCP request has an unsupported action or fields; outcome=not-sent."),
-            ),
+            Effect.mapError(() => {
+              const error = mcpCodeModeInputError(input);
+              observation = projectMcpFailurePresentation(error);
+              return toolError(
+                JSON.stringify({
+                  outcome: error.outcome,
+                  kind: error.kind,
+                  message: error.message,
+                }),
+              );
+            }),
             Effect.flatMap((decoded) => {
               const sessionId = options.sessionId;
               if (sessionId === undefined)

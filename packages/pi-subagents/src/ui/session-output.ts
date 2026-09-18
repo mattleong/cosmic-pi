@@ -246,7 +246,15 @@ const addAssistantConclusion = (container: Container, run: SubagentRunView, them
   }
   if (run.state === "completed" && !assistantOutput && !run.error) {
     container.addChild(new Spacer(1));
-    container.addChild(new Text(theme.fg("dim", "Completed without a final report."), 0, 0));
+    const reportStatus =
+      run.reportStatus === "missing"
+        ? "No accepted final report for this assignment."
+        : run.reportStatus === "claimed"
+          ? "Final report claimed by another operation."
+          : run.reportStatus === "delivered"
+            ? "Final report already delivered."
+            : "Final report availability unknown in this observation.";
+    container.addChild(new Text(theme.fg("dim", reportStatus), 0, 0));
   }
   if (run.error) {
     container.addChild(new Spacer(1));

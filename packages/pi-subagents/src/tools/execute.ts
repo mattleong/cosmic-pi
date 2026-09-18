@@ -22,7 +22,6 @@ import {
   type SubagentError,
 } from "../run/errors.ts";
 import {
-  isAssignmentFinishedRunState,
   isParentActionRequiredRun,
   type StartSubagentRequest,
   type SubagentRunView,
@@ -43,7 +42,11 @@ import {
   managementAcknowledgement,
   renderedCompletionReceipts,
 } from "./format.ts";
-import { formatAwaitProgress } from "./render-await.ts";
+import {
+  makeAwaitExecution,
+  observeAwaitInterruption,
+  type AwaitExecution,
+} from "./execute-await.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import { executeModelsAction } from "./execute-models.ts";
 import { executeWorkspaceAction } from "./execute-workspace.ts";
@@ -61,6 +64,7 @@ export interface SubagentToolRuntime {
         signal: AbortSignal | undefined,
         onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         ctx: ExtensionContext,
+        onInterruption?: () => void,
       ) => Promise<AgentToolResult<unknown>>)
     | undefined;
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
@@ -150,6 +154,7 @@ export const executeSubagentActionEffect = (
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
   callerRunId?: string,
+  awaitExecution?: AwaitExecution,
 ): Effect.Effect<
   AgentToolResult<unknown>,
   SubagentError,
@@ -158,23 +163,11 @@ export const executeSubagentActionEffect = (
   if (input.action === "models") return executeModelsAction(input, pi, ctx);
   if (input.action === "workspace") return executeWorkspaceAction(input.operation, callerRunId);
 
-  let latestAwaitRuns: ReadonlyArray<SubagentRunView> = [];
-  let latestAwaitContextRuns: ReadonlyArray<SubagentRunView> = [];
-  const requestedAwaitUntil = input.action === "await" ? input.until : undefined;
-  /** Shared await progress projection for live updates, settlement, and cancellation:
-   * bounded descendant context, then the hierarchical summary. */
-  const awaitProgressText = (runs: ReadonlyArray<SubagentRunView>): string =>
-    formatAwaitProgress(
-      runs,
-      requestedAwaitUntil ?? "all_finished",
-      projectRunCardTree(latestAwaitContextRuns)
-        .map((row) => row.run)
-        .slice(0, Math.max(0, MAX_TARGET_RUNS - runs.length)),
-    );
-  const requestedAwaitIds =
+  const awaitState =
     input.action === "await"
-      ? [...new Set(input.runIds.map((id) => id.trim()).filter(Boolean))]
+      ? (awaitExecution ?? makeAwaitExecution(input.runIds, input.until, onUpdate))
       : undefined;
+  const requestedAwaitIds = awaitState?.requestedIds;
   const effect = Effect.gen(function* () {
     const service = yield* SubagentService;
     const authorize = (ids: ReadonlyArray<string>) =>
@@ -238,51 +231,17 @@ export const executeSubagentActionEffect = (
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const until = input.until;
         yield* authorize(ids);
-        let lastUpdate = "";
-        const updateAwait = (
-          runs: ReadonlyArray<SubagentRunView>,
-          projection?: ReadonlyArray<SubagentRunView>,
-        ) => {
-          latestAwaitRuns = runs;
-          // Await context is the projected tree minus the awaited targets and their
-          // ancestors: only strict descendants of the awaited runs belong on the card.
-          const scope = projection ?? runs;
-          const targetIds = new Set(runs.map((run) => run.id));
-          const byId = new Map(scope.map((run) => [run.id, run]));
-          latestAwaitContextRuns = scope.filter((run) => {
-            if (targetIds.has(run.id)) return false;
-            const visited = new Set<string>([run.id]);
-            let parentRunId = run.parentRunId;
-            while (parentRunId && visited.add(parentRunId)) {
-              if (targetIds.has(parentRunId)) return true;
-              parentRunId = byId.get(parentRunId)?.parentRunId;
-            }
-            return false;
-          });
-          const text = awaitProgressText(runs);
-          const details = makeAwaitDetails({
-            runs,
-            contextRuns: latestAwaitContextRuns,
-            awaitedRunIds: ids,
-            awaitUntil: until,
-          });
-          const updateKey = JSON.stringify(details);
-          if (updateKey === lastUpdate) return;
-          lastUpdate = updateKey;
-          onUpdate?.({
-            content: [{ type: "text", text }],
-            details,
-          });
-        };
+        // The action discriminator above always constructs this call's await state.
+        const state = awaitState!;
         return yield* service.withAwaitTerminalObservations(
           ids,
           until,
-          updateAwait,
+          state.update,
           (observations) =>
             Effect.gen(function* () {
               const runs = observations.map((observation) => observation.run);
-              const outcome = yield* completeObservations(observations, [awaitProgressText(runs)]);
-              return { ...outcome, awaitContextRuns: latestAwaitContextRuns };
+              const outcome = yield* completeObservations(observations, [state.progressText(runs)]);
+              return { ...outcome, awaitContextRuns: state.contextRuns() };
             }),
         );
       }
@@ -388,34 +347,7 @@ export const executeSubagentActionEffect = (
     }
   });
 
-  const renderAwaitCancellation = Effect.try(() => {
-    if (input.action !== "await" || !requestedAwaitUntil) return;
-    const unfinished = latestAwaitRuns.filter(
-      (run) => !isAssignmentFinishedRunState(run.state),
-    ).length;
-    const summary =
-      latestAwaitRuns.length === 0
-        ? "Await canceled before progress was observed; selected subagents may still be unfinished."
-        : `Await canceled; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished.`;
-    const text = joinSections([
-      summary,
-      latestAwaitRuns.length > 0 ? awaitProgressText(latestAwaitRuns) : "",
-      attentionRecoveryText(latestAwaitRuns),
-    ]);
-    onUpdate?.({
-      content: [{ type: "text", text }],
-      details: makeAwaitDetails({
-        runs: latestAwaitRuns,
-        contextRuns: latestAwaitContextRuns,
-        awaitedRunIds: requestedAwaitIds,
-        awaitUntil: requestedAwaitUntil,
-        cancelled: true,
-      }),
-    });
-  }).pipe(Effect.ignore);
-
   return effect.pipe(
-    Effect.onInterrupt(() => renderAwaitCancellation),
     Effect.map(
       (executionResult: {
         readonly runs: ReadonlyArray<SubagentRunView>;
@@ -490,10 +422,36 @@ export const executeSubagentAction = (
   signal: AbortSignal | undefined,
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
   ctx: ExtensionContext,
-): Promise<AgentToolResult<unknown>> =>
-  runtime.proxyCall
-    ? runtime.proxyCall(input, signal, onUpdate, ctx)
+): Promise<AgentToolResult<unknown>> => {
+  const awaitState =
+    input.action === "await" ? makeAwaitExecution(input.runIds, input.until, onUpdate) : undefined;
+  const executing = runtime.proxyCall
+    ? runtime.proxyCall(input, signal, onUpdate, ctx, awaitState?.markInterrupted)
     : runtime.run(
-        executeSubagentActionEffect(pi, runtime.environment, input, signal, onUpdate, ctx),
+        observeAwaitInterruption(
+          executeSubagentActionEffect(
+            pi,
+            runtime.environment,
+            input,
+            signal,
+            onUpdate,
+            ctx,
+            undefined,
+            awaitState,
+          ),
+          awaitState?.markInterrupted,
+        ),
         signal,
       );
+  return executing.catch((error) => {
+    if (!awaitState?.wasInterrupted()) throw error;
+    // The runtime Promise settles only after the interrupted operation releases its claims.
+    const result = awaitState.cancelled(runtime.proxyCall !== undefined);
+    try {
+      onUpdate?.(result);
+    } catch {
+      /* Progress cannot replace the persisted result. */
+    }
+    return result;
+  });
+};

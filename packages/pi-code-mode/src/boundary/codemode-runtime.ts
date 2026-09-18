@@ -57,6 +57,7 @@ interface CodeModeExecutionLimits {
 }
 
 interface CodeModeExecuteOptions {
+  readonly onResult?: (result: CodeModeResult) => void;
   readonly code: string;
   readonly tools?: CodeModeToolNamespace;
   readonly limits?: CodeModeExecutionLimits;

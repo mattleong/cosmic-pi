@@ -30,7 +30,7 @@ const AskUserChoiceSchema = Type.Object({
   ),
 });
 
-const AskUserQuestionSchema = Type.Object({
+const questionFields = {
   key: Type.String({
     minLength: 1,
     maxLength: 32,
@@ -47,6 +47,10 @@ const AskUserQuestionSchema = Type.Object({
     maxLength: 500,
     description: "Complete, specific question shown to the user.",
   }),
+};
+
+const AskUserChoiceQuestionSchema = Type.Object({
+  ...questionFields,
   mode: StringEnum(["single", "multiple"] as const, {
     description: "Whether the user chooses one choice or any number of choices.",
   }),
@@ -56,6 +60,19 @@ const AskUserQuestionSchema = Type.Object({
     description: "Two to four concrete choices. A custom-answer action is appended automatically.",
   }),
 });
+
+const AskUserTextQuestionSchema = Type.Object(
+  {
+    ...questionFields,
+    mode: StringEnum(["text"] as const, {
+      description:
+        "A required free-text answer, trimmed and limited to 4000 code units. Omit choices.",
+    }),
+  },
+  { additionalProperties: false },
+);
+
+const AskUserQuestionSchema = Type.Union([AskUserChoiceQuestionSchema, AskUserTextQuestionSchema]);
 
 export const AskUserParameters = Type.Object({
   questions: Type.Array(AskUserQuestionSchema, {
@@ -101,5 +118,6 @@ export type AskUserAsyncRequest = Static<typeof AskUserAsyncParameters>;
 export type AskUserAsyncControl = Static<typeof AskUserAsyncControlParameters>;
 
 export type AskUserChoice = Static<typeof AskUserChoiceSchema>;
+export type AskUserChoiceQuestion = Static<typeof AskUserChoiceQuestionSchema>;
 export type AskUserQuestion = Static<typeof AskUserQuestionSchema>;
 export type AskUserRequest = Static<typeof AskUserParameters>;

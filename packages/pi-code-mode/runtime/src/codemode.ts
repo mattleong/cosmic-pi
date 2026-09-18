@@ -55,6 +55,10 @@ export type ExecuteOptions<Tools extends object = {}> = {
   tools?: Tools & ToolTree<Services<Tools>>;
   /** Per-execution overrides for the default resource limits. */
   limits?: ExecutionLimits;
+  /** Synchronous host-only observation after validation, before output bounding.
+   * Hosts must bound capture work and must not retain or mutate the supplied graph.
+   * Observation errors are ignored and never change the execution outcome. */
+  onResult?: (result: Result) => void;
   /** Observes queued, running, and terminal lifecycle states for every eagerly forked call. */
   onToolCallLifecycle?: (
     event: ToolRuntime.ToolCallLifecycleEvent,

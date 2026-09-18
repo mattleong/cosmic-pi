@@ -40,6 +40,7 @@ import { Type } from "typebox";
 import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
+import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
 import {
@@ -199,12 +200,16 @@ export default function registerPiSubagentSupervisorBridge(
     name: Name,
     input: SupervisorMcpToolArgumentsByName[Name],
     signal?: AbortSignal,
+    onInterruption?: () => void,
   ): Promise<string> => {
     if (shuttingDown || !slot.isCurrent(token))
       return Promise.reject(new Error("Supervisor bridge is unavailable."));
     return slot
       .run(
-        SupervisorBridge.use((bridge) => bridge.call(name, input)),
+        observeAwaitInterruption(
+          SupervisorBridge.use((bridge) => bridge.call(name, input)),
+          onInterruption,
+        ),
         signal,
       )
       .then((text) => {
@@ -294,6 +299,7 @@ export default function registerPiSubagentSupervisorBridge(
     const proxyCall = (
       input: import("../tools/schema.ts").SubagentToolInput,
       signal?: AbortSignal,
+      onInterruption?: () => void,
     ) => {
       const encoded = encodeSubagentProxyInput(input);
       return callBridge(
@@ -301,6 +307,7 @@ export default function registerPiSubagentSupervisorBridge(
         SUPERVISOR_MCP_PROXY_TOOL_NAME,
         { tool: encoded.tool, arguments_json: encoded.argumentsJson },
         signal,
+        onInterruption,
       ).then((source) => {
         const result = decodeSubagentProxyResult(source);
         if (!result) throw new Error("Root coordinator returned an invalid response.");
@@ -331,7 +338,8 @@ export default function registerPiSubagentSupervisorBridge(
     registerSubagentTools(pi, {
       scheduleAnimation,
       environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
-      proxyCall: (input, signal) => proxyCall(input, signal),
+      proxyCall: (input, signal, _onUpdate, _ctx, onInterruption) =>
+        proxyCall(input, signal, onInterruption),
       run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
     });
     const runId = subagentChildRunId();

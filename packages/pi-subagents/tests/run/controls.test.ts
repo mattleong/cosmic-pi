@@ -284,6 +284,14 @@ describe("SubagentService", () => {
       expect(
         (yield* service.send(transportRun.id, "Continue after uncertain clearing.")).state,
       ).toBe("running");
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect((yield* service.status(transportRun.id)).state).toBe("completed");
@@ -798,7 +806,11 @@ describe("SubagentService", () => {
       });
       fake.controls[0]?.offer({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "Turn resolved." }] },
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Turn resolved." }],
+        },
       });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
@@ -870,7 +882,11 @@ describe("SubagentService", () => {
 
       fake.controls[0]?.offer({
         type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "Final report." }] },
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Final report." }],
+        },
       });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");

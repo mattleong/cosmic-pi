@@ -1,4 +1,5 @@
 import type { McpBoundaryError } from "./errors.ts";
+import { mcpRequestGuidance } from "../tools/request-guidance.ts";
 
 export type McpRecovery =
   | "inspect-settings"
@@ -34,6 +35,12 @@ interface DiagnosticActions {
 const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiagnostic => {
   const signIn: ReadonlyArray<McpRecovery> = actions.canSignIn ? ["sign-in"] : ["inspect-status"];
   switch (error.reason) {
+    case "gateway-request-invalid":
+      return diagnostic(
+        "MCP arguments rejected",
+        `${mcpRequestGuidance(actions.action)} No rejected action was dispatched.`,
+        [],
+      );
     case "protocol-negotiation-rejected":
       return diagnostic(
         "Protocol negotiation rejected",

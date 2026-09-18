@@ -74,9 +74,20 @@ export interface BackendProxyResult {
   readonly details?: unknown;
 }
 
+/** Latest assistant attempt only, bounded and sanitized by the adapter. */
+export interface BackendAssistantTerminal {
+  readonly stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted" | undefined;
+  readonly text?: string | undefined;
+  readonly errorMessage?: string | undefined;
+}
+
 export type BackendEvent =
   | { readonly type: "run_started"; readonly assignmentEpoch: number }
-  | { readonly type: "run_settled"; readonly assignmentEpoch: number }
+  | {
+      readonly type: "run_settled";
+      readonly assignmentEpoch: number;
+      readonly terminal?: BackendAssistantTerminal | undefined;
+    }
   | ({ readonly type: "report" } & BackendReport)
   | { readonly type: "activity"; readonly assignmentEpoch: number }
   | {
@@ -91,6 +102,7 @@ export type BackendEvent =
       readonly assignmentEpoch: number;
       readonly text?: string | undefined;
       readonly usage: SubagentUsage;
+      readonly terminal?: BackendAssistantTerminal | undefined;
     }
   | {
       readonly type: "tool_started";

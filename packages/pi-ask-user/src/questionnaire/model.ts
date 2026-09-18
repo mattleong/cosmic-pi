@@ -6,11 +6,13 @@ type AnswerContent =
       readonly values: ReadonlyArray<string>;
       readonly labels: ReadonlyArray<string>;
     }
-  | { readonly kind: "custom"; readonly text: string };
+  | { readonly kind: "custom"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string };
 
 type DraftAnswerContent =
   | { readonly kind: "choices"; readonly values: ReadonlyArray<string> }
-  | { readonly kind: "custom"; readonly text: string };
+  | { readonly kind: "custom"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string };
 
 /** Internal answer content retained until a question supplies its public key and choice labels. */
 export type AskUserAnswerDraft = DraftAnswerContent & {
@@ -46,5 +48,6 @@ export type QuestionnaireAction =
   | { readonly type: "select-one"; readonly question: number; readonly choice: number }
   | { readonly type: "toggle-many"; readonly question: number; readonly choice: number }
   | { readonly type: "set-custom"; readonly question: number; readonly text: string }
+  | { readonly type: "set-text"; readonly question: number; readonly text: string }
   | { readonly type: "set-note"; readonly question: number; readonly note: string }
   | { readonly type: "set-review-cursor"; readonly cursor: 0 | 1 };

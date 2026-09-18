@@ -111,6 +111,14 @@ describe("root-owned subagent run tree", () => {
         const parent = yield* service.start(request({ name: "parent" }));
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[0]?.offer({ type: "agent_end", willRetry: false });
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[0]?.offer({ type: "agent_settled" });
         yield* yieldUntil(() => fake.controls[0]?.released() === 1, 200);
         expect(yield* service.status(parent.id)).toMatchObject({
@@ -143,6 +151,14 @@ describe("root-owned subagent run tree", () => {
         const parent = yield* service.start(request({ name: "parent" }));
         const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
         fake.controls[1]?.offer({ type: "agent_end", willRetry: false });
+        fake.controls[1]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[1]?.offer({ type: "agent_settled" });
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
@@ -157,9 +173,25 @@ describe("root-owned subagent run tree", () => {
           request({ name: "fallback-child" }),
         );
         fake.controls[0]?.offer({ type: "agent_end", willRetry: false });
+        fake.controls[0]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[0]?.offer({ type: "agent_settled" });
         yield* yieldUntil(() => fake.controls[0]?.released() === 1, 200);
         fake.controls[2]?.offer({ type: "agent_end", willRetry: false });
+        fake.controls[2]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[2]?.offer({ type: "agent_settled" });
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
@@ -200,6 +232,14 @@ describe("root-owned subagent run tree", () => {
         );
         const deliveryGate = yield* Deferred.make<void>();
         fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+        fake.controls[1]?.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[1]?.offer({ type: "agent_settled" });
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
@@ -252,6 +292,14 @@ describe("root-owned subagent run tree", () => {
           );
           const deliveryGate = yield* Deferred.make<void>();
           fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+          fake.controls[1]?.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Assignment complete." }],
+            },
+          });
           fake.controls[1]?.offer({ type: "agent_settled" });
           yield* TestClock.adjust("100 millis");
           yield* yieldUntil(
@@ -276,6 +324,14 @@ describe("root-owned subagent run tree", () => {
             "clear_queue",
           );
 
+          fake.controls[2]?.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Assignment complete." }],
+            },
+          });
           fake.controls[2]?.offer({ type: "agent_settled" });
           yield* TestClock.adjust("100 millis");
           yield* yieldUntil(() =>

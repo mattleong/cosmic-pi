@@ -82,7 +82,17 @@ describe("subagent session output projection", () => {
     expect(reported).toContain("Report body text.");
 
     const silentCompletion = render(baseRun({ state: "completed", endedAt: 60_000 }));
-    expect(silentCompletion).toContain("Completed without a final report.");
+    expect(silentCompletion).toContain("availability unknown");
+    expect(silentCompletion).not.toContain("No accepted final report");
+    expect(render(baseRun({ state: "completed", reportStatus: "claimed" }))).toContain(
+      "claimed by another operation",
+    );
+    expect(render(baseRun({ state: "completed", reportStatus: "delivered" }))).toContain(
+      "already delivered",
+    );
+    expect(render(baseRun({ state: "completed", reportStatus: "missing" }))).toContain(
+      "No accepted final report",
+    );
 
     const failure = render(
       baseRun({ state: "failed", endedAt: 60_000, error: "Backend crashed." }),

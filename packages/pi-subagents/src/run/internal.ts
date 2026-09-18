@@ -2,6 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type {
+  BackendAssistantTerminal,
   BackendDriver,
   BackendHandle,
   BackendLaunchRequest,
@@ -44,7 +45,7 @@ export interface AssignmentState {
   startedObserved: boolean;
   outcomeUncertain: boolean;
   pendingReport?: BackendReport | undefined;
-  pendingRunSettled: boolean;
+  pendingRunSettled: false | { readonly terminal?: BackendAssistantTerminal | undefined };
 }
 
 export interface BackendReportWatermark {

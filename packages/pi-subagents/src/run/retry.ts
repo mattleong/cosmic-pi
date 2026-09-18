@@ -20,7 +20,10 @@ export interface RunRetryDependencies {
 }
 
 const invalid = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
+  new InvalidSubagentRequestError({
+    code,
+    message: `${message} Earlier work and writes may already exist; inspect them before authorizing replacement work.`,
+  });
 
 /**
  * Projects only settled run facts. Error codes are deliberately excluded: the
@@ -113,7 +116,11 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
               `Subagent ${id} may have accepted or executed its task; automatic next-candidate continuation is blocked. Inspect the run before deciding how to recover.`,
             );
           if (record.cleanupPending) return { waitForCleanup: record.cleanupSettlement } as const;
-          if (record.process !== undefined || record.writerPool !== undefined)
+          if (
+            record.cleanupDisposition !== "confirmed" ||
+            record.process !== undefined ||
+            record.writerPool !== undefined
+          )
             return yield* invalid(
               "retry_cleanup_unconfirmed",
               `Subagent ${id} still owns backend or writer resources; next-candidate continuation fails closed.`,

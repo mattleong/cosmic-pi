@@ -595,6 +595,16 @@ describe("subagent compact semantic policy", () => {
     const cancelled = summarize("await", { ...details, cancelled: true });
     expect(cancelled?.outcome).toBe("cancelled");
     expect(cancelled?.notices?.some((notice) => notice.text.includes("NOT stopped"))).toBe(true);
+    const proxyCancelled = summarize("await", {
+      ...details,
+      cancelled: true,
+      cancellationCleanup: "unconfirmed",
+    });
+    expect(proxyCancelled?.outcome).toBe("cancelled");
+    const proxyNotices = proxyCancelled?.notices?.map((notice) => notice.text).join(" ");
+    expect(proxyNotices).toContain("Root completion-claim cleanup is unconfirmed");
+    expect(proxyNotices).toContain("completion_claim_conflict");
+    expect(proxyNotices).not.toContain("await the requested targets again");
   });
 
   it("does not turn a completed descendant into a missing target's completion", () => {

@@ -154,6 +154,9 @@ export const SubagentRunCardSchema = Schema.Struct({
   runtime: RuntimeSchema,
   closeOnReport: Schema.Boolean,
   reportGeneration: nonNegativeInteger,
+  reportStatus: Schema.optionalKey(
+    Schema.Literals(["available", "claimed", "delivered", "missing"]),
+  ),
   parentRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
   depth: Schema.optionalKey(nonNegativeInteger),
   directChildCount: Schema.optionalKey(nonNegativeInteger),
@@ -330,6 +333,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   timedOut: Schema.optionalKey(Schema.Literal(true)),
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
+  cancellationCleanup: Schema.optionalKey(Schema.Literal("unconfirmed")),
   contextOmitted: Schema.optionalKey(Schema.Literal(true)),
   reportsOnlyOmitted: Schema.optionalKey(Schema.Literal(true)),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),

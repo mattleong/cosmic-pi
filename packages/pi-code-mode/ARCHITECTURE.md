@@ -1,7 +1,7 @@
 # Architecture
 
 `pi-code-mode` owns one Effect-managed Pi extension. It provides trusted-project configuration,
-the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A tool call runs one
+the session lifecycle, `/code-mode-settings`, and one `code_mode` tool. A `{code,intent?}` call runs one
 confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read`, `bash`, `edit`,
 `write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
@@ -12,6 +12,44 @@ The interpreter is the nested `pi-code-mode-runtime` workspace package under `ru
 in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
 packed install needs no private registry package and uses the extension's single Effect instance.
 Only runtime source plus its README, legal, and provenance documents ship.
+
+## Output retention and receipts
+
+The same tool accepts `{action:"result.read",id,offset?,limit?}`. This branch checks session
+availability and reads a retained text artifact without building an interpreter or guest tools.
+It rejects `code`, invalid offsets, split surrogate offsets and invalid limits. Paging uses UTF-16
+offsets, preserves code points and checks the complete JSON envelope against `maxOutputBytes`.
+A page that cannot fit metadata and one code point has no continuation cursor. Reads recheck
+publication authority after the session Promise settles. Reading output does not change its
+original `succeeded`, `failed` or `cancelled` outcome.
+
+`src/results/service.ts` owns a scoped Effect Ref of settled artifacts. Limits are fixed at
+8 MiB UTF-8 per artifact, 64 MiB conservatively charged session storage, and 32 entries. Charges
+include UTF-16 text, UTF-8 projection and fixed metadata overhead. Eviction removes oldest settled
+entries; reads do not refresh order. There is no persistence. Runtime replacement, successful
+`session_tree`, and shutdown close the old store. Disabling also revokes the activation's execution
+and result-access owner until reload. Late callbacks cannot advertise old artifacts.
+
+`results/serialize.ts` captures only bounded text from the runtime's optional pre-bound `onResult`
+hook, with at most 100,000 visits and depth 32. It uses own data descriptors, never guest getters
+or `toJSON`, and retains no guest graph. Small successful responses remain unchanged. Truncated
+success artifacts preserve exact original text/compact JSON and log framing. Failure artifacts
+are marked `failure-receipt` and contain receipt text plus the normalized diagnostic when captured.
+Missing old-runtime hooks, capture limits, interruption and store refusal are explicit unavailable
+states, not claims that truncated output can be recovered.
+
+`tools/execution-receipts.ts` keeps bounded operation facts, not UI outcome colors. It reuses the
+existing fiber/invocation correlation and redacted target projection. Native dispatch is unknown
+until settlement; MCP preserves producer certainty. Guest output delivery is separate. Counts
+cover every admitted call while at most 256 receipt rows survive; active dispatch rows are not
+evicted. Receipts contain IDs, names, bounded redacted targets, certainty, delivery and validated
+provider recovery IDs, never argument objects, write bodies or raw errors. Settlement freezes
+receipts and rejects late observations. Completed writes survive later throws, timeouts and output
+refusal. Background capability completion does not mean its process exited.
+
+`tools/result-response.ts` places safe recovery before output and applies the final byte clamp.
+It never replays an operation or rolls back a mutation. `tools/execution-progress.ts` owns the
+unchanged progress/count transitions; display and operation evidence remain separate.
 
 ## Grouped ownership
 
@@ -24,7 +62,9 @@ Only runtime source plus its README, legal, and provenance documents ship.
 - `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
   result formatting, failure-detail retention, tool registration, and active-list reconciliation.
   Its Background Tasks and MCP leaves import producer-owned v1 input/output codecs instead of
-  declaring second protocol shapes. Neither adapter invokes a registered tool definition.
+  declaring second protocol shapes. MCP catalog decoding retains those constraints but replaces
+  raw parser diagnostics with producer-owned, action-specific not-sent repair guidance.
+  Neither adapter invokes a registered tool definition.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
   legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
   renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without

@@ -311,7 +311,20 @@ const runOverviewComponent = (
         )
         .map((run) =>
           truncateToWidth(
-            theme.fg("dim", `${sanitizeTerminalLine(run.name)} completed without a final report.`),
+            theme.fg(
+              "dim",
+              `${sanitizeTerminalLine(run.name)}: ${
+                run.reportStatus === "missing"
+                  ? "no accepted final report."
+                  : run.reportStatus === "claimed"
+                    ? "final report claimed by another operation."
+                    : run.reportStatus === "delivered"
+                      ? "final report already delivered."
+                      : run.reportStatus === "available"
+                        ? "final report omitted from this card."
+                        : "final report availability unknown in this observation."
+              }`,
+            ),
             safeWidth,
           ),
         ),
@@ -448,6 +461,7 @@ export const awaitResultBanner = (details: {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly cancellationCleanup?: "unconfirmed" | undefined;
   readonly usage?: string | undefined;
   readonly targetCount?: number | undefined;
   readonly descendantCount?: number | undefined;
@@ -472,10 +486,17 @@ export const awaitResultBanner = (details: {
           : "warning";
   return {
     color,
-    text: formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, {
-      ...details,
-      settled: true,
-    }),
+    text: [
+      formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, {
+        ...details,
+        settled: true,
+      }),
+      ...(details.cancellationCleanup === "unconfirmed"
+        ? [
+            "Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may conflict.",
+          ]
+        : []),
+    ].join("\n"),
   };
 };
 

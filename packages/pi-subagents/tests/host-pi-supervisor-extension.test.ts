@@ -494,6 +494,57 @@ describe("Herdr-hosted Pi bridge extension", () => {
   );
 
   effectTest(
+    "persists delegated proxy await cancellation after its bridge finalizer",
+    function* () {
+      const started = Deferred.makeUnsafe<void>();
+      let finalized = false;
+      const activeOpen: PiSupervisorBridgeExtensionDependencies["openBridge"] = () =>
+        Effect.succeed<PiSupervisorBridgeClient>({
+          call: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized = true;
+                }),
+              ),
+            ),
+        });
+      const { handlers, tools } = bridgeHarness(activeOpen);
+      yield* settle(() =>
+        handlers.get("session_start")?.(
+          {},
+          extensionContextFixture({ cwd: "/project", isProjectTrusted: () => false, hasUI: false }),
+        ),
+      );
+      const controller = new AbortController();
+      const waiting = tools
+        .find((tool) => tool.name === "subagent_await")!
+        .execute(
+          "await",
+          { runIds: ["agent-nested"], until: "all_finished" },
+          controller.signal,
+          undefined,
+          bridgeContext,
+        );
+      yield* Deferred.await(started);
+      controller.abort();
+      const result = yield* step(() => waiting);
+      expect(finalized).toBe(true);
+      expect(result.details).toMatchObject({
+        action: "await",
+        cancelled: true,
+        awaitedRunIds: ["agent-nested"],
+        cancellationCleanup: "unconfirmed",
+      });
+      expect(result.content[0]?.text).toContain("states are unobserved");
+      expect(result.content[0]?.text).toContain("Root completion-claim cleanup is unconfirmed");
+      expect(result.content[0]?.text).not.toContain("Wait cleanup is complete");
+      yield* settle(() => handlers.get("session_shutdown")?.({}, bridgeContext));
+    },
+  );
+
+  effectTest(
     "interrupts and joins an active bridge call before releasing the helper on shutdown",
     function* () {
       const callStarted = Deferred.makeUnsafe<void>();

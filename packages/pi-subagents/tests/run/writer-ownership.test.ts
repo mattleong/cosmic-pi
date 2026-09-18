@@ -244,6 +244,14 @@ describe("SubagentService", () => {
       const first = yield* service.start(
         request({ name: "writer-one", writeIntent: "writer", task: "Implement auth" }),
       );
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* service.start(
@@ -273,6 +281,7 @@ describe("SubagentService", () => {
         type: "message_end",
         message: {
           role: "assistant",
+          stopReason: "stop",
           content: [{ type: "text", text: "First writer turn complete." }],
         },
       });
@@ -609,6 +618,14 @@ describe("SubagentService", () => {
         request({ name: "respawn-mark-writer", writeIntent: "writer" }),
       );
       expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
         projections.some((projection) => projection.runs[0]?.state === "completed"),

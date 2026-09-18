@@ -105,6 +105,16 @@ with the Effect test clock. Guest `async` and `Promise` behavior likewise remain
 interpreter behavior. The Vitest suites use Effect-backed, non-`async` host test
 bodies so host scheduling and guest language semantics stay separate.
 
+## Result observation
+
+`ExecuteOptions.onResult` is an optional synchronous host callback in `host-execution.ts`.
+It sees the final plain-data copy after validation or the normalized failure, before output
+bounding. It sees no opaque interpreter object. Hosts must use a bounded traversal and must
+not retain or mutate the supplied graph. A thrown callback is ignored, never converted into
+a program failure. Host interruption remains interruption and need not produce a callback.
+Without the hook, returned results and execution limits are unchanged. Storage, quotas,
+retrieval and lifecycle revocation belong to the host, not this runtime.
+
 ## Fixed runtime policy
 
 - Tool-call concurrency is a fixed constant 8; data-boundary depth is a fixed

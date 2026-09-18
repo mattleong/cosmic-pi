@@ -13,7 +13,7 @@ import { appendWrapped, borderLine, joinColumns } from "./layout.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
 
 export interface DialogInputMode {
-  readonly kind: "custom" | "note";
+  readonly kind: "custom" | "text" | "note";
   readonly question: number;
 }
 
@@ -69,8 +69,9 @@ function renderQuestion(
   const draft = model.state.drafts[model.state.currentTab]!;
   append(" ", model.theme.fg("text", stripTerminalControls(question.prompt)));
   lines.push("");
-  for (let index = 0; index < question.choices.length; index++) {
-    const choice = question.choices[index]!;
+  const choices = question.mode === "text" ? [] : question.choices;
+  for (let index = 0; index < choices.length; index++) {
+    const choice = choices[index]!;
     const focused = draft.cursor === index;
     const selected = draft.answer?.kind === "choices" && draft.answer.values.includes(choice.value);
     const marker =
@@ -84,15 +85,18 @@ function renderQuestion(
     );
     append("      ", model.theme.fg("muted", stripTerminalControls(choice.description)));
   }
-  const customIndex = question.choices.length;
+  const customIndex = choices.length;
   const customFocused = draft.cursor === customIndex;
   const custom =
-    draft.answer?.kind === "custom"
+    draft.answer?.kind === "custom" || draft.answer?.kind === "text"
       ? ` — ${truncateToWidth(stripTerminalControls(draft.answer.text), 48)}`
       : "";
   append(
     customFocused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ",
-    model.theme.fg(customFocused ? "accent" : "text", `✎ Write a custom answer${custom}`),
+    model.theme.fg(
+      customFocused ? "accent" : "text",
+      `✎ ${question.mode === "text" ? "Edit answer" : "Write a custom answer"}${custom}`,
+    ),
   );
   if (question.mode === "multiple") {
     const continueFocused = draft.cursor === customIndex + 1;
@@ -125,12 +129,12 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
     const draft = model.state.drafts[index];
     const answer = draft?.answer;
     const value =
-      answer?.kind === "choices"
+      answer?.kind === "choices" && question.mode !== "text"
         ? question.choices
             .filter((choice) => answer.values.includes(choice.value))
             .map((choice) => choice.label)
             .join(", ")
-        : answer?.kind === "custom"
+        : answer?.kind === "custom" || answer?.kind === "text"
           ? answer.text
           : "Unanswered";
     append(
@@ -199,10 +203,10 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
   } else {
     const question = model.state.request.questions[model.state.currentTab]!;
     const draft = model.state.drafts[model.state.currentTab]!;
-    const choice =
-      draft.cursor < question.choices.length ? question.choices[draft.cursor] : undefined;
+    const choices = question.mode === "text" ? [] : question.choices;
+    const choice = choices[draft.cursor];
     model.preview.setChoice(choice?.preview ? choice : undefined);
-    const hasAnyPreview = question.choices.some((candidate) => !!candidate.preview);
+    const hasAnyPreview = choices.some((candidate) => !!candidate.preview);
     if (hasAnyPreview && width >= 92) {
       const leftWidth = Math.max(36, Math.floor(width * 0.48));
       const rightWidth = Math.max(8, width - leftWidth - 2);
@@ -231,9 +235,11 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
       ? "PgUp/PgDn scroll • Home/End first/last • j/k or ↑↓ move • h/l or Tab/←→ questions • n note • b hide (resume from footer) • Esc cancel • ? less"
       : onReview
         ? `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
-        : question?.mode === "multiple"
-          ? `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
-          : `1–${question?.choices.length ?? 0} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
+        : question?.mode === "text"
+          ? "Enter edit answer • n note • h/l or Tab/←→ questions • b hide • Esc cancel • ? help"
+          : question?.mode === "multiple"
+            ? `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`
+            : `1–${question?.choices.length ?? 0} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
     append(" ", model.theme.fg("dim", help));
   }
   lines.push(borderLine(width, model.theme));

@@ -119,6 +119,31 @@ const expectDeeplyFrozen = <ValueInput>(value: ValueInput): void => {
 };
 
 describe("persisted subagent details version 2", () => {
+  it("retains known report availability through fitting without inventing historical absence", () => {
+    const runs = Array.from({ length: 12 }, (_, index) => ({
+      ...run(index + 1),
+      reportStatus: "available" as const,
+    }));
+    const fitted = makeAwaitDetails({ runs, awaitUntil: "all_finished" });
+    expect(JSON.stringify(fitted).length).toBeLessThanOrEqual(48_000);
+    expect(fitted.cards.every((card) => card.reportStatus === "available")).toBe(true);
+    const historical = makeAwaitDetails({
+      runs: [{ ...run(), finalText: undefined }],
+      awaitUntil: "all_finished",
+    });
+    const restored = decodeStartAwaitCardDetails(historical);
+    expect(
+      restored && restored.action === "await" && restored.cards[0]?.reportStatus,
+    ).toBeUndefined();
+    for (const reportStatus of ["claimed", "delivered", "missing"] as const) {
+      const details = makeAwaitDetails({
+        runs: [{ ...run(), finalText: undefined, reportStatus }],
+        awaitUntil: "all_finished",
+      });
+      expect(decodeStartAwaitCardDetails(details)).toMatchObject({ cards: [{ reportStatus }] });
+      expect(JSON.stringify(details)).not.toContain("private transcript");
+    }
+  });
   it("projects warning provenance and bounds system evidence independently", () => {
     for (const [density, limit] of [
       ["full", 512],

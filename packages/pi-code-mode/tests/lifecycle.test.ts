@@ -6,6 +6,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { afterEach, vi } from "vitest";
 import {
   registerCodeModeApplication,
@@ -104,6 +105,8 @@ describe("code mode application lifecycle at the Pi boundary", () => {
         invoke("session_start", { reason }, ctx),
       shutdown: (ctx: ReturnType<typeof makeContext>, reason = "quit") =>
         invoke("session_shutdown", { reason }, ctx),
+      tree: (ctx: ReturnType<typeof makeContext>) =>
+        invoke("session_tree", { reason: "tree" }, ctx),
       command: (args: string, ctx: ReturnType<typeof makeContext>) =>
         Promise.resolve(commands.get("code-mode-settings")?.handler(args, ctx)).then(
           () => undefined,
@@ -331,6 +334,69 @@ describe("code mode application lifecycle at the Pi boundary", () => {
         expect(h.notify.mock.calls.map((call) => call[1])).toEqual(["info"]);
         expect(h.registerTool).toHaveBeenCalledTimes(2);
         yield* Effect.promise(() => h.shutdown(secondCtx));
+      }),
+  );
+
+  it.effect(
+    "revokes result IDs on tree navigation and gives the replacement a fresh registry",
+    () =>
+      Effect.gen(function* () {
+        const h = applicationHarness();
+        const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+        yield* Effect.promise(() => h.start(ctx));
+        yield* Effect.promise(() => h.command("global maxOutputBytes 600", ctx));
+        const original = h.registerTool.mock.calls.at(-1)![0];
+        const retained = yield* Effect.promise(() =>
+          original.execute(
+            "retain",
+            { code: 'return "x".repeat(5000);' },
+            undefined,
+            undefined,
+            ctx,
+          ),
+        );
+        const { resultId: id } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ resultId: Schema.String }),
+        )(retained.details);
+        expect(id).toBeTruthy();
+        yield* Effect.promise(() => h.tree(ctx));
+        const replacement = h.registerTool.mock.calls.at(-1)![0];
+        const read = yield* Effect.promise(() =>
+          replacement.execute("read", { action: "result.read", id }, undefined, undefined, ctx),
+        );
+        expect(read.content).toEqual([
+          { type: "text", text: expect.stringContaining("unavailable") },
+        ]);
+        yield* Effect.promise(() =>
+          expect(
+            original.execute("stale", { action: "result.read", id }, undefined, undefined, ctx),
+          ).rejects.toThrow(),
+        );
+        const fresh = yield* Effect.promise(() =>
+          replacement.execute(
+            "fresh",
+            { code: 'return "y".repeat(5000);' },
+            undefined,
+            undefined,
+            ctx,
+          ),
+        );
+        const { resultId: freshId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ resultId: Schema.String }),
+        )(fresh.details);
+        expect(freshId).not.toBe(id);
+        yield* Effect.promise(() => h.shutdown(ctx));
+        yield* Effect.promise(() =>
+          expect(
+            replacement.execute(
+              "closed",
+              { action: "result.read", id: freshId },
+              undefined,
+              undefined,
+              ctx,
+            ),
+          ).rejects.toThrow(),
+        );
       }),
   );
 

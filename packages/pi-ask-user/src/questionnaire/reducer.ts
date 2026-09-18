@@ -7,6 +7,7 @@ import type {
   QuestionDraft,
 } from "./model.ts";
 import type { AskUserQuestion, AskUserRequest } from "./schema.ts";
+import { validateQuestionnaireInput } from "./validation.ts";
 
 export const createQuestionnaireState = (request: AskUserRequest): QuestionnaireState => ({
   request,
@@ -42,7 +43,8 @@ export function reduceQuestionnaire(
       return updateDraft(state, action.question, (draft) => ({ ...draft, cursor: action.cursor }));
     case "select-one": {
       const question = state.request.questions[action.question];
-      const choice = question?.choices[action.choice];
+      if (!question || question.mode !== "single") return state;
+      const choice = question.choices[action.choice];
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => ({
         ...draft,
@@ -51,7 +53,8 @@ export function reduceQuestionnaire(
     }
     case "toggle-many": {
       const question = state.request.questions[action.question];
-      const choice = question?.choices[action.choice];
+      if (!question || question.mode !== "multiple") return state;
+      const choice = question.choices[action.choice];
       if (!choice) return state;
       return updateDraft(state, action.question, (draft) => {
         const selected = new Set(draft.answer?.kind === "choices" ? draft.answer.values : []);
@@ -65,10 +68,17 @@ export function reduceQuestionnaire(
       });
     }
     case "set-custom":
+    case "set-text": {
+      const question = state.request.questions[action.question];
+      const kind = action.type === "set-text" ? "text" : "custom";
+      if (!question || (question.mode === "text") !== (kind === "text")) return state;
+      const checked = validateQuestionnaireInput(action.text, kind);
+      if (checked.error !== undefined) return state;
       return updateDraft(state, action.question, (draft) => ({
         ...draft,
-        answer: { kind: "custom", text: action.text },
+        answer: { kind, text: checked.value },
       }));
+    }
     case "set-note":
       return updateDraft(state, action.question, (draft) => {
         const note = action.note.trim();
@@ -89,7 +99,8 @@ export function finalizeAskUserAnswer(
   question: AskUserQuestion,
   draft: AskUserAnswerDraft,
 ): AskUserAnswer {
-  if (draft.kind === "custom") return { key: question.key, ...draft };
+  if (draft.kind !== "choices") return { key: question.key, ...draft };
+  if (question.mode === "text") throw new Error("Text questions cannot have choice answers.");
 
   const choicesByValue = new Map(question.choices.map((choice) => [choice.value, choice]));
   const seen = new Set<string>();

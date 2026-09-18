@@ -11,11 +11,12 @@ import type { AskUserAnswer, AskUserAnswerDraft, AskUserOutcome } from "../quest
 import { cancelQuestionnaire, finalizeAskUserAnswer } from "../questionnaire/reducer.ts";
 import type { AskUserHost } from "../questionnaire/service.ts";
 import {
-  MAX_CUSTOM_ANSWER_LENGTH,
-  MAX_NOTE_LENGTH,
+  type AskUserChoice,
+  type AskUserChoiceQuestion,
   type AskUserQuestion,
   type AskUserRequest,
 } from "../questionnaire/schema.ts";
+import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import { makeAskUserTuiHost } from "./host-tui.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
@@ -39,31 +40,20 @@ const boundedInput = (
   ui: ExtensionUIContext,
   title: string,
   placeholder: string,
-  options: {
-    readonly maximum?: number;
-    readonly noun?: "answer" | "note";
-    readonly allowEmpty?: boolean;
-  } = {},
+  kind: "custom" | "text" | "note" = "custom",
 ): Effect.Effect<string | undefined, AskUserHostError> =>
   Effect.gen(function* () {
-    const maximum = options.maximum ?? MAX_CUSTOM_ANSWER_LENGTH;
-    const noun = options.noun ?? "answer";
     while (true) {
       const value = yield* dialogCall((signal) => ui.input(title, placeholder, { signal }));
       if (value === undefined) return undefined;
-      const trimmed = value.trim();
-      if ((options.allowEmpty || trimmed.length > 0) && trimmed.length <= maximum) return trimmed;
-      yield* notifyBestEffort(
-        ui,
-        trimmed.length === 0
-          ? `The ${noun} cannot be empty.`
-          : `Keep the ${noun} under ${maximum} characters.`,
-        "warning",
-      );
+      const checked = validateQuestionnaireInput(value, kind);
+      if (checked.error === undefined) return checked.value;
+      yield* notifyBestEffort(ui, checked.error, "warning");
     }
   });
 
 const previewText = (question: AskUserQuestion): string => {
+  if (question.mode === "text") return "";
   const previews = question.choices.flatMap((choice, index) =>
     choice.preview
       ? [
@@ -74,22 +64,20 @@ const previewText = (question: AskUserQuestion): string => {
   return previews.join("\n").slice(0, 1_500);
 };
 
-const optionLines = (question: AskUserQuestion): string[] =>
+const optionLines = (question: AskUserChoiceQuestion): string[] =>
   question.choices.map(
     (choice, index) =>
       `${index + 1}. ${stripTerminalControls(choice.label)} — ${stripTerminalControls(choice.description)}`,
   );
 
-const choiceDraft = (
-  choices: ReadonlyArray<AskUserQuestion["choices"][number]>,
-): AskUserAnswerDraft => ({
+const choiceDraft = (choices: ReadonlyArray<AskUserChoice>): AskUserAnswerDraft => ({
   kind: "choices",
   values: choices.map((choice) => choice.value),
 });
 
 const askSingleQuestion = (
   ui: ExtensionUIContext,
-  question: AskUserQuestion,
+  question: AskUserChoiceQuestion,
   title: string,
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
@@ -117,7 +105,7 @@ const askSingleQuestion = (
 
 const askMultipleQuestion = (
   ui: ExtensionUIContext,
-  question: AskUserQuestion,
+  question: AskUserChoiceQuestion,
   title: string,
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
@@ -208,7 +196,7 @@ const askOptionalNote = (
         ui,
         `${title}\n\nLeave blank to omit the note.`,
         "Optional context",
-        { maximum: MAX_NOTE_LENGTH, noun: "note", allowEmpty: true },
+        "note",
       );
       if (note !== undefined) return attachNote(answer, note || undefined);
       yield* notifyBestEffort(ui, "Note dismissed; choose how to continue.", "info");
@@ -222,10 +210,16 @@ const askRpcQuestion = (
 ): Effect.Effect<AskUserAnswerDraft | undefined, AskUserHostError> =>
   Effect.gen(function* () {
     const title = `[${stripTerminalControls(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
-    const answer =
-      question.mode === "single"
-        ? yield* askSingleQuestion(ui, question, title)
-        : yield* askMultipleQuestion(ui, question, title);
+    const answer: AskUserAnswerDraft | undefined =
+      question.mode === "text"
+        ? yield* boundedInput(ui, title, "Your answer", "text").pipe(
+            Effect.map((text) =>
+              text === undefined ? undefined : { kind: "text" as const, text },
+            ),
+          )
+        : question.mode === "single"
+          ? yield* askSingleQuestion(ui, question, title)
+          : yield* askMultipleQuestion(ui, question, title);
     if (!answer) return undefined;
     return yield* askOptionalNote(ui, question, answer, existingNote);
   });

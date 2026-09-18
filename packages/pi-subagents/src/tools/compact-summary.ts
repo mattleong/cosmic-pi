@@ -282,7 +282,9 @@ function awaitNotices(
     summary.outcome = "cancelled";
     add(
       "await-cancelled",
-      "Await cancelled; child runs were NOT stopped. Inspect status or await the requested targets again.",
+      details.cancellationCleanup === "unconfirmed"
+        ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
+        : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
     );
   }
   if (details.timedOut && !details.cancelled) {

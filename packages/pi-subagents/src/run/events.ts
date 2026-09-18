@@ -1,6 +1,6 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import type { BackendEvent, BackendReport } from "../backend/model.ts";
+import type { BackendAssistantTerminal, BackendEvent, BackendReport } from "../backend/model.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
@@ -46,7 +46,11 @@ export interface RunEventDependencies {
     usage: import("./model.ts").SubagentUsage,
   ) => Effect.Effect<void>;
   readonly runStarted: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
-  readonly runSettled: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
+  readonly runSettled: (
+    record: RunRecord,
+    assignmentEpoch: number,
+    terminal?: BackendAssistantTerminal,
+  ) => Effect.Effect<void>;
   readonly acceptReport: (
     record: RunRecord,
     report: BackendReport,
@@ -213,7 +217,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       case "run_started":
         return runStarted(record, event.assignmentEpoch);
       case "run_settled":
-        return runSettled(record, event.assignmentEpoch);
+        return runSettled(record, event.assignmentEpoch, event.terminal);
       case "report":
         return acceptReport(record, event).pipe(Effect.asVoid);
       case "activity":

@@ -33,7 +33,7 @@ export const outcomeProjection = <Fields extends Schema.Struct.Fields>(fields: F
           }),
           Schema.Struct({
             key: Schema.String,
-            kind: Schema.Literal("custom"),
+            kind: Schema.Literals(["custom", "text"]),
             text: Schema.String,
             ...fields,
           }),
@@ -83,7 +83,7 @@ export function fallbackText<Content>(content: Content, allowString = false): st
 export function answerLine(
   answer:
     | { readonly key: string; readonly kind: "choices"; readonly labels: readonly string[] }
-    | { readonly key: string; readonly kind: "custom"; readonly text: string },
+    | { readonly key: string; readonly kind: "custom" | "text"; readonly text: string },
   theme: Theme,
 ): string {
   const value = answer.kind === "choices" ? answer.labels.join(", ") : answer.text;

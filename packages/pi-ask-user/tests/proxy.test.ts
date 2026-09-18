@@ -75,6 +75,73 @@ it("decodes bounded structured transport data and rejects hostile or semanticall
     }),
   ).toBeUndefined();
 });
+it("decodes detached text requests and rejects incompatible choices and malformed text results", () => {
+  const question = { key: "text", title: "Text", prompt: "Explain?", mode: "text" };
+  const input = { questions: [question] };
+  const decoded = decodeQuestionnaireRequest(input);
+  expect(decoded).toEqual(input);
+  question.prompt = "changed";
+  expect(decoded?.questions[0]?.prompt).toBe("Explain?");
+  for (const choices of [[], undefined, [{ value: "a", label: "A", description: "A" }]]) {
+    expect(decodeQuestionnaireRequest({ questions: [{ ...question, choices }] })).toBeUndefined();
+  }
+  expect(
+    decodeQuestionnaireRequest({
+      questions: [
+        {
+          ...question,
+          get choices() {
+            throw new Error("hostile");
+          },
+        },
+      ],
+    }),
+  ).toBeUndefined();
+  let reads = 0;
+  expect(
+    decodeQuestionnaireRequest({
+      questions: [
+        {
+          ...question,
+          get mode() {
+            return ++reads === 1 ? "text" : "multiple";
+          },
+        },
+      ],
+    })?.questions[0]?.mode,
+  ).toBe("text");
+  for (const text of ["", " \n ", "x".repeat(4001), 42]) {
+    expect(
+      decodeQuestionnaireOutcome({
+        outcome: "submitted",
+        answers: [{ key: "text", kind: "text", text }],
+      }),
+    ).toBeUndefined();
+  }
+  expect(
+    decodeQuestionnaireOutcome({
+      outcome: "submitted",
+      answers: [{ key: "text", kind: "text", text: " bq12\nanswer ", note: "context" }],
+    }),
+  ).toEqual({
+    outcome: "submitted",
+    answers: [{ key: "text", kind: "text", text: "bq12\nanswer", note: "context" }],
+  });
+  expect(
+    decodeQuestionnaireOutcome({
+      outcome: "submitted",
+      answers: [
+        {
+          key: "text",
+          kind: "text",
+          get text() {
+            throw new Error("hostile");
+          },
+        },
+      ],
+    }),
+  ).toBeUndefined();
+});
 it.effect(
   "root capabilities are session-bound, validate owner input and revoke captured handles",
   () =>

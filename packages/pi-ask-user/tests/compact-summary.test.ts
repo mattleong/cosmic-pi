@@ -88,17 +88,25 @@ describe("questionnaire compact outcome projection", () => {
     expect(summary?.notices?.length).toBeGreaterThan(0);
   });
 
-  it("compacts submitted answers without copying private answer text into the headline", () => {
-    for (const summary of [
-      summarize(askUserCompactSummary, submitted),
-      summarize(asyncAskUserCompactSummary, row()),
-      summarize(asyncAskUserCompactSummary, { requests: [row()] }),
-    ]) {
-      expect(summary?.outcome).toBe("success");
-      expect(summary?.failure).toBeUndefined();
-      expect(JSON.stringify(summary)).not.toContain("Keep the current library");
-    }
-  });
+  it.each(["custom", "text"])(
+    "compacts %s answers without copying private text into the headline",
+    (kind) => {
+      const outcome = {
+        ...submitted,
+        answers: submitted.answers.map((answer) => ({ ...answer, kind })),
+      };
+      for (const summary of [
+        summarize(askUserCompactSummary, outcome),
+        summarize(asyncAskUserCompactSummary, row({ outcome })),
+        summarize(asyncAskUserCompactSummary, { requests: [row({ outcome })] }),
+      ]) {
+        expect(summary?.outcome).toBe("success");
+        expect(summary?.failure).toBeUndefined();
+        expect(JSON.stringify(summary)).not.toContain("Keep the current library");
+        expect(JSON.stringify(summary)).not.toContain("No upgrade");
+      }
+    },
+  );
 
   it("retains request titles at settlement without disclosing answers or delivery IDs", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {

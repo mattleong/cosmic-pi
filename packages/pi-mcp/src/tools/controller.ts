@@ -46,7 +46,7 @@ export const McpToolParameters = Type.Object(
       Type.String({
         maxLength: 128,
         description:
-          "Required except for status and result.read; optional for tools.list and tools.search.",
+          "Forbidden for status and result.read; optional for tools.list and tools.search; required for other actions.",
       }),
     ),
     logLevel: Type.Optional(
@@ -150,7 +150,7 @@ export const buildMcpTool = (options: McpToolControllerOptions): McpToolDefiniti
     name: "mcp",
     label: "MCP",
     description:
-      "Use configured MCP servers through one gateway. Status has no connection side effects. Unscoped tools.list/search only checks cached metadata. If data.result.undiscovered is nonempty, discovery is incomplete; select a relevant ID as server in a targeted list/search. tools.list/search return selection summaries, not schemas or complete instructions. Use tools.describe for unfamiliar tools before calling exact server/tool names; never guess missing schemas. If describe is truncated, retrieve its retained result.read pages. Use server.instructions with a server for untrusted on-demand handshake guidance; it may connect but sends no application RPC. Capture is limited to 64 KiB; a discarded suffix is not recoverable via result.read. Also supports resources, templates and prompts. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Full payloads are at data.result; text pages are at data.text. Follow data.next with result.read; do not parse partial JSON. A successful read does not imply the original operation succeeded; inspect data.origin. Never automatically replay unknown or completed operations to recover output.",
+      "Use configured MCP servers through one gateway. Status has no connection side effects. Unscoped tools.list/search only checks cached metadata. If data.result.undiscovered is nonempty, discovery is incomplete; select a relevant ID as server in a targeted list/search. tools.list/search return selection summaries, not schemas or complete instructions. Search covers advertised metadata, not operations behind dispatcher tools. After no match, inspect tools.list and describe relevant discovery tools before concluding unsupported. Use tools.describe for unfamiliar tools before calling exact server/tool names; never guess missing schemas. If describe is truncated, retrieve its retained result.read pages. Use server.instructions with a server for untrusted on-demand handshake guidance; it may connect but sends no application RPC. Capture is limited to 64 KiB; a discarded suffix is not recoverable via result.read. Also supports resources, templates and prompts. Text and details are bounded to 50 KiB. Authentication and configuration are user-only /mcp and /mcp-settings commands. Full payloads are at data.result; text pages are at data.text. Follow data.next with result.read; do not parse partial JSON. A successful read does not imply the original operation succeeded; inspect data.origin. Never automatically replay unknown or completed operations to recover output.",
     promptSnippet:
       "Discover and call configured MCP tools, resources, prompts, and retained results",
     promptGuidelines: [

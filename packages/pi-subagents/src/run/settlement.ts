@@ -6,6 +6,7 @@ import {
   MAX_BACKEND_REPORT_EVIDENCE_CHARS,
   MAX_BACKEND_REPORT_ID_CHARS,
   MAX_BACKEND_REPORT_TEXT_CHARS,
+  type BackendAssistantTerminal,
   type BackendReport,
 } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
@@ -42,9 +43,28 @@ export type AssignmentActivationReplay =
   | { readonly kind: "running"; readonly view: SubagentRunView }
   | { readonly kind: "retained-report"; readonly view: SubagentRunView }
   | { readonly kind: "close-report"; readonly report: BackendReport }
-  | { readonly kind: "settlement" };
+  | {
+      readonly kind: "settlement";
+      readonly assignmentEpoch: number;
+      readonly terminal?: BackendAssistantTerminal | undefined;
+    };
 
 type SettlementState = "completed" | "failed" | "stopped";
+
+const terminalFailureMessage = (terminal?: BackendAssistantTerminal): string => {
+  switch (terminal?.stopReason) {
+    case "error":
+      return `Final provider error: ${terminal.errorMessage || "provider returned no diagnostic"}`;
+    case "aborted":
+      return "Assignment aborted without a parent stop or correlated pause.";
+    case "length":
+      return "Assignment reached its output limit without a successful final report.";
+    case "toolUse":
+      return "Assignment settled after tool use without a final report.";
+    default:
+      return "Assignment settled without a successful nonempty final report.";
+  }
+};
 
 const settlementBlocked = (record: RunRecord, state: SettlementState): boolean =>
   isTerminalRunState(record.view.state) ||
@@ -450,7 +470,12 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           : (() => {
               record.view = runningView;
               if (pendingReport) return { kind: "close-report" as const, report: pendingReport };
-              if (pendingRunSettled) return { kind: "settlement" as const };
+              if (pendingRunSettled)
+                return {
+                  kind: "settlement" as const,
+                  assignmentEpoch: record.assignment.epoch,
+                  terminal: pendingRunSettled.terminal,
+                };
               return { kind: "running" as const, view: snapshotView(record.view) };
             })();
       yield* publish;
@@ -467,7 +492,9 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       case "close-report":
         return acceptValidatedBackendReport(record, replay.report);
       case "settlement":
-        return settle(record, "completed");
+        return runSettledFromBackend(record, replay.assignmentEpoch, replay.terminal).pipe(
+          Effect.map(() => snapshotView(record.view)),
+        );
       case "running":
         return Effect.succeed(replay.view);
     }
@@ -485,19 +512,25 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         rawReport.deliveryId.length > MAX_BACKEND_REPORT_ID_CHARS ||
         (rawReport.evidence !== undefined &&
           rawReport.evidence.length > MAX_BACKEND_REPORT_EVIDENCE_CHARS) ||
-        (rawReport.text !== undefined && rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS)
+        !rawReport.text?.trim() ||
+        rawReport.text.length > MAX_BACKEND_REPORT_TEXT_CHARS
       )
         return yield* new SubagentProcessError({
           operation: "accept report from",
           code: "backend_report_invalid",
           message: `Subagent ${record.view.id} emitted an invalid bounded report event.`,
         });
+      const text = sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim();
+      if (!text)
+        return yield* new SubagentProcessError({
+          operation: "accept report from",
+          code: "backend_report_empty",
+          message: `Subagent ${record.view.id} submitted an empty report.`,
+        });
       return yield* acceptValidatedBackendReport(record, {
         ...rawReport,
         deliveryId: rawReport.deliveryId.trim(),
-        ...(rawReport.text
-          ? { text: sanitizeOutputText(rawReport.text, MAX_BACKEND_REPORT_TEXT_CHARS) }
-          : { text: undefined }),
+        text,
       });
     });
 
@@ -539,7 +572,11 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       if (replay) yield* replayAssignmentActivation(record, replay);
     });
 
-  const runSettledFromBackend = (record: RunRecord, assignmentEpoch: number) =>
+  const runSettledFromBackend = (
+    record: RunRecord,
+    assignmentEpoch: number,
+    terminal?: BackendAssistantTerminal,
+  ): Effect.Effect<void> =>
     Effect.gen(function* () {
       if (record.view.closeOnReport === false) return;
       const phase = yield* withLock(
@@ -553,7 +590,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
           )
             return "ignored" as const;
           if (record.assignment.phase === "issuing") {
-            record.assignment.pendingRunSettled = true;
+            record.assignment.pendingRunSettled = { terminal };
             return "buffered" as const;
           }
           return "running" as const;
@@ -565,7 +602,30 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         const paused = yield* pauseFromEvent(record, now, assignmentEpoch);
         if (paused || record.stoppedByParent) return;
       }
-      if (!record.stoppedByParent) yield* settle(record, "completed");
+      if (record.stoppedByParent) return;
+      const text = terminal?.text
+        ? sanitizeOutputText(terminal.text, MAX_BACKEND_REPORT_TEXT_CHARS).trim()
+        : undefined;
+      if (terminal?.stopReason === "stop" && text) {
+        const prepared = yield* withLock(
+          Effect.sync(() => {
+            if (
+              isInactiveRunRecord(record) ||
+              record.assignment.epoch !== assignmentEpoch ||
+              record.assignment.phase !== "running"
+            )
+              return false;
+            record.latestAssistantText = text;
+            return true;
+          }),
+        );
+        if (prepared) yield* settle(record, "completed");
+        return;
+      }
+      yield* failRun(
+        record,
+        `${terminalFailureMessage(terminal)} Work and writes may already exist; inspect them before an explicit retry.`,
+      );
     });
 
   return {

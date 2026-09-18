@@ -33,10 +33,16 @@ import {
   type RpcCommand,
   type RpcResponse,
 } from "./local-pi-protocol.ts";
-import { MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
+import {
+  MAX_ERROR_CHARS,
+  MAX_FINAL_TEXT_CHARS,
+  sanitizeDiagnosticText,
+  sanitizeOutputText,
+} from "../run/state.ts";
 import { correlatedRequest, protocolError } from "./driver-shared.ts";
 import {
   toBackendExit,
+  type BackendAssistantTerminal,
   type BackendDriver,
   type BackendEvent,
   type BackendLaunchRequest,
@@ -89,6 +95,7 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
       switch (envelope.type) {
         case "response":
         case "agent_end":
+        case "message_start":
         case "ignored":
           return noBackendEvent;
         case "agent_start":
@@ -106,12 +113,19 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
           return decodeAssistantMessage(envelope.message).pipe(
             Effect.map((message): BackendEvent | undefined => {
               if (!message) return undefined;
-              const text = assistantText(message);
+              const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
               return {
                 type: "assistant_message",
                 assignmentEpoch,
                 ...(text && { text }),
                 usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
+                terminal: {
+                  stopReason: message.stopReason,
+                  text,
+                  ...(message.errorMessage && {
+                    errorMessage: sanitizeDiagnosticText(message.errorMessage, MAX_ERROR_CHARS),
+                  }),
+                },
               };
             }),
           );
@@ -189,6 +203,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let nextRpcId = 1;
   let nextIpcAckId = 1;
   let assignmentEpoch = 0;
+  let latestTerminal: BackendAssistantTerminal | undefined;
 
   const acknowledgeRaw = (event: ChildWireEvent) => child.acknowledge?.(event);
   const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
@@ -393,9 +408,18 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               Effect.catch(() => Effect.void),
               Effect.ensuring(Effect.sync(() => acknowledgeRaw(event))),
             );
+        // A new attempt invalidates earlier success, including retries and queued continuations.
+        if (
+          envelope.type === "agent_start" ||
+          (envelope.type === "message_start" && envelope.message.role === "assistant")
+        )
+          latestTerminal = undefined;
         const eventAssignmentEpoch = assignmentEpoch;
         return normalizeRpcEvent(event.value, eventAssignmentEpoch).pipe(
           Effect.flatMap((normalized) => {
+            if (normalized?.type === "assistant_message") latestTerminal = normalized.terminal;
+            if (normalized?.type === "run_settled")
+              return offer({ ...normalized, terminal: latestTerminal }, event);
             if (normalized) return offer(normalized, event);
             acknowledgeRaw(event);
             return Effect.void;
@@ -454,14 +478,18 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     start: (message: string, nextAssignmentEpoch: number) =>
       Effect.suspend(() => {
         const previousAssignmentEpoch = assignmentEpoch;
+        const previousTerminal = latestTerminal;
         assignmentEpoch = nextAssignmentEpoch;
+        latestTerminal = undefined;
         return rpc({ type: "prompt", message }).pipe(
           Effect.tapError((error) =>
             Effect.sync(() => {
               const outcomeUncertain =
                 error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
-              if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch)
+              if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch) {
                 assignmentEpoch = previousAssignmentEpoch;
+                latestTerminal = previousTerminal;
+              }
             }),
           ),
           Effect.asVoid,

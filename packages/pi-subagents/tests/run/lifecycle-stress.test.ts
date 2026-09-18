@@ -40,6 +40,14 @@ describe("SubagentService lifecycle stress", () => {
         const parent = yield* service.start(request());
         const child = yield* service.startSessionOwnedFrom(parent.id, request());
         fake.controls[1]!.gateRelease(release);
+        fake.controls[1]!.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Assignment complete." }],
+          },
+        });
         fake.controls[1]!.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () => projection?.runs.find((run) => run.id === child.id)?.state === "completed",
@@ -169,6 +177,14 @@ describe("SubagentService lifecycle stress", () => {
             expect(stoppingChild.pollUnsafe()).toBeUndefined();
 
             // An unrelated root completes and resumes while descendant cleanup is blocked.
+            siblingControl.offer({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                stopReason: "stop",
+                content: [{ type: "text", text: "Assignment complete." }],
+              },
+            });
             siblingControl.offer({ type: "agent_settled" });
             yield* yieldUntil(() => siblingControl.released() === 1);
             expect((yield* service.resume(sibling.id, "Next assignment")).state).toBe("running");

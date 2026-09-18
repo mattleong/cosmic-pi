@@ -25,13 +25,8 @@ import type {
   QuestionnaireAction,
   QuestionnaireState,
 } from "../questionnaire/model.ts";
-import {
-  MAX_CHOICES,
-  MAX_CUSTOM_ANSWER_LENGTH,
-  MAX_NOTE_LENGTH,
-  type AskUserQuestion,
-  type AskUserRequest,
-} from "../questionnaire/schema.ts";
+import { MAX_CHOICES, type AskUserQuestion, type AskUserRequest } from "../questionnaire/schema.ts";
+import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import { PreviewPane } from "./preview-pane.ts";
 import { DialogViewport } from "./viewport.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
@@ -71,6 +66,8 @@ export class AskUserDialog implements Focusable {
   private state: QuestionnaireState;
   private input: DialogInputMode | undefined;
   private inputError: string | undefined;
+  private readonly enteredTextQuestions = new Set<number>();
+  private readonly textBuffers = new Map<number, string>();
   private alternateHelp = false;
   private externalEditorBusy = false;
   private readonly editor: Editor;
@@ -86,6 +83,7 @@ export class AskUserDialog implements Focusable {
     this.editor = new Editor(options.tui, editorTheme(options.theme), { paddingX: 1 });
     this.preview = new PreviewPane(options.theme);
     this.editor.onSubmit = (value) => this.commitInput(value);
+    this.enterTextQuestion();
   }
 
   get focused(): boolean {
@@ -118,6 +116,17 @@ export class AskUserDialog implements Focusable {
   private dispatch(action: QuestionnaireAction): void {
     this.viewport.follow();
     this.state = reduceQuestionnaire(this.state, action);
+    if (action.type === "set-tab" || action.type === "move-tab") this.enterTextQuestion();
+  }
+
+  private enterTextQuestion(): void {
+    if (
+      this.currentQuestion()?.mode !== "text" ||
+      this.enteredTextQuestions.has(this.state.currentTab)
+    )
+      return;
+    this.enteredTextQuestions.add(this.state.currentTab);
+    this.openInput("text");
   }
 
   private currentQuestion(): AskUserQuestion | undefined {
@@ -127,7 +136,10 @@ export class AskUserDialog implements Focusable {
   private setCursor(cursor: number): void {
     const question = this.currentQuestion();
     if (!question) return;
-    const limit = question.choices.length + (question.mode === "multiple" ? 1 : 0);
+    const limit =
+      question.mode === "text"
+        ? 0
+        : question.choices.length + (question.mode === "multiple" ? 1 : 0);
     this.dispatch({
       type: "set-cursor",
       question: this.state.currentTab,
@@ -152,9 +164,11 @@ export class AskUserDialog implements Focusable {
     const value =
       kind === "note"
         ? (draft?.note ?? "")
-        : draft?.answer?.kind === "custom"
-          ? draft.answer.text
-          : "";
+        : kind === "text" && this.textBuffers.has(question)
+          ? this.textBuffers.get(question)!
+          : draft?.answer?.kind === "custom" || draft?.answer?.kind === "text"
+            ? draft.answer.text
+            : "";
     this.input = { kind, question };
     this.inputError = undefined;
     this.editor.setText(value);
@@ -163,6 +177,8 @@ export class AskUserDialog implements Focusable {
   }
 
   private closeInput(): void {
+    if (this.input?.kind === "text")
+      this.textBuffers.set(this.input.question, this.editor.getExpandedText());
     this.input = undefined;
     this.inputError = undefined;
     this.editor.focused = false;
@@ -172,26 +188,28 @@ export class AskUserDialog implements Focusable {
   private commitInput(value: string): void {
     const input = this.input;
     if (!input) return;
-    const trimmed = value.trim();
-    const maximum = input.kind === "note" ? MAX_NOTE_LENGTH : MAX_CUSTOM_ANSWER_LENGTH;
-    if (input.kind === "custom" && trimmed.length === 0) {
-      this.inputError = "Write an answer first.";
-      this.refresh();
-      return;
-    }
-    if (trimmed.length > maximum) {
-      this.inputError = `Keep this ${input.kind === "note" ? "note" : "answer"} under ${maximum} characters.`;
+    const checked = validateQuestionnaireInput(value, input.kind);
+    if (checked.error !== undefined) {
+      // Pi's Editor clears itself before onSubmit; restore invalid input for editing.
+      this.editor.setText(value);
+      this.inputError = checked.error;
       this.refresh();
       return;
     }
     this.dispatch(
       input.kind === "note"
-        ? { type: "set-note", question: input.question, note: trimmed }
-        : { type: "set-custom", question: input.question, text: trimmed },
+        ? { type: "set-note", question: input.question, note: checked.value }
+        : {
+            type: input.kind === "text" ? "set-text" : "set-custom",
+            question: input.question,
+            text: checked.value,
+          },
     );
     this.input = undefined;
+    this.inputError = undefined;
     this.editor.focused = false;
-    if (input.kind === "custom") this.advance();
+    if (input.kind === "text") this.textBuffers.delete(input.question);
+    if (input.kind !== "note") this.advance();
     else this.refresh();
   }
 
@@ -323,6 +341,10 @@ export class AskUserDialog implements Focusable {
     const question = this.currentQuestion();
     const draft = this.state.drafts[this.state.currentTab];
     if (!question || !draft) return;
+    if (question.mode === "text") {
+      if (this.options.keybindings.matches(data, "tui.select.confirm")) this.openInput("text");
+      return;
+    }
     for (let index = 0; index < question.choices.length; index++) {
       const shortcut = CHOICE_SHORTCUTS[index];
       if (shortcut && matchesKey(data, shortcut)) {

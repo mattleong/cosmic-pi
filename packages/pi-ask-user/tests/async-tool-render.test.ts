@@ -15,6 +15,7 @@ const outcome = {
   answers: [
     { key: "route", kind: "choices", labels: ["Scenic"], note: "Avoid tolls" },
     { key: "time", kind: "custom", text: "Tomorrow morning" },
+    { key: "details", kind: "text", text: "Text answer\nwith another line", note: "Text context" },
   ],
 };
 const snapshot = {
@@ -85,6 +86,9 @@ describe("async questionnaire replay rendering", () => {
       expect(rendered).toContain("Scenic");
       expect(rendered).toContain("Tomorrow morning");
       expect(rendered).toContain("Avoid tolls");
+      expect(rendered).toContain("Text answer");
+      expect(rendered).toContain("with another line");
+      expect(rendered).toContain("Text context");
       expect(rendered).not.toContain(snapshot.requestId);
       expect(rendered).not.toContain(snapshot.deliveryId);
     }

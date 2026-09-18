@@ -6,7 +6,9 @@ import {
   MCP_CODE_MODE_QUERY,
   MCP_CODE_MODE_VERSION,
   normalizeMcpCodeModeCapability,
+  normalizeMcpCodeModeError,
   type McpCodeModeCapability,
+  type McpCodeModeInput,
   type McpCodeModeOutput,
 } from "../../src/code-mode/protocol.ts";
 import { makeMcpCodeModeHost } from "../../src/boundary/host-code-mode.ts";
@@ -46,6 +48,15 @@ const activation = (
 });
 const invoke = (capability: McpCodeModeCapability) =>
   capability.execute("outer/mcp/1", { action: "status" }, new AbortController().signal, 1024);
+
+const invokeRejected = <Input extends object>(capability: McpCodeModeCapability, input: Input) =>
+  capability.execute(
+    "invalid",
+    // SAFETY: Deliberately malformed test fixtures exercise the public capability's runtime admission.
+    input as McpCodeModeInput,
+    new AbortController().signal,
+    1024,
+  );
 
 describe("MCP session capability producer", () => {
   it.effect("gates queries and retained execution on every live authority check", () =>
@@ -194,6 +205,103 @@ describe("MCP session capability producer", () => {
         }
         h.host.dispose();
       }),
+  );
+
+  it.effect("repairs rejected capability inputs without dispatch or rejected data", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      let dispatched = 0;
+      h.host.activate(
+        activation((_id, input) => {
+          dispatched += 1;
+          return Promise.resolve({ ...reply(), action: input.action });
+        }),
+      );
+      const capability = h.query()[0]!;
+      for (const input of [
+        { action: "result.read", server: "PRIVATE_SERVER" },
+        { action: "result.read", id: "PRIVATE_ID", offset: -1 },
+        { action: "result.read", id: "PRIVATE_ID", PRIVATE_KEY: "PRIVATE_TOKEN" },
+      ]) {
+        const failure = yield* Effect.tryPromise({
+          try: () => invokeRejected(capability, input),
+          catch: normalizeMcpCodeModeError,
+        }).pipe(Effect.flip);
+        expect(failure).toMatchObject({
+          kind: "invalid-input",
+          outcome: "not-sent",
+          requestAction: "result.read",
+        });
+        expect(failure.message).toContain("requires id");
+        expect(failure.message).toContain("nonnegative");
+        expect(failure.message).not.toContain("PRIVATE_");
+        expect(failure.message).not.toContain("tools.call");
+      }
+      expect(dispatched).toBe(0);
+      const corrected = yield* Effect.promise(() =>
+        capability.execute(
+          "corrected",
+          { action: "result.read", id: "retained", offset: 0 },
+          new AbortController().signal,
+          1024,
+        ),
+      );
+      expect(corrected).toMatchObject({ action: "result.read", outcome: "completed" });
+      expect(dispatched).toBe(1);
+      h.host.dispose();
+    }),
+  );
+
+  it.effect("keeps unsafe and unknown capability inputs generic without invoking getters", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      let dispatched = false;
+      let accessed = false;
+      h.host.activate(
+        activation(() => {
+          dispatched = true;
+          return Promise.resolve(reply());
+        }),
+      );
+      const capability = h.query()[0]!;
+      const accessor = Object.defineProperty({}, "action", {
+        enumerable: true,
+        get: () => {
+          accessed = true;
+          return "result.read";
+        },
+      });
+      for (const input of [
+        accessor,
+        Object.defineProperty({}, "action", {
+          get: () => {
+            accessed = true;
+            return "result.read";
+          },
+        }),
+        Object.defineProperty({ action: "result.read" }, "id", {
+          get: () => {
+            accessed = true;
+            return "PRIVATE_ID";
+          },
+        }),
+        { action: "result.read", id: "x".repeat(1024 * 1024) },
+        { action: "PRIVATE_ACTION", PRIVATE_KEY: "PRIVATE_TOKEN" },
+        { action: "connect", server: "PRIVATE_SERVER" },
+      ]) {
+        const failure = yield* Effect.tryPromise({
+          try: () => invokeRejected(capability, input),
+          catch: normalizeMcpCodeModeError,
+        }).pipe(Effect.flip);
+        expect(failure).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
+        expect(failure.requestAction).toBeUndefined();
+        expect(failure.message).not.toContain("PRIVATE_");
+        expect(failure.message).not.toContain("requires id");
+      }
+      expect(accessed).toBe(false);
+      expect(dispatched).toBe(false);
+      h.host.dispose();
+    }),
   );
 
   it.effect("rejects binary envelopes rather than passing images through JSON", () =>

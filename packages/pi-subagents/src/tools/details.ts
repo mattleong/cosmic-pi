@@ -62,6 +62,7 @@ export interface AwaitDetailsInput {
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
+  readonly cancellationCleanup?: "unconfirmed" | undefined;
   readonly contentOmitted?: boolean | undefined;
 }
 
@@ -351,6 +352,7 @@ export const projectSubagentRunCard = (
     runtime: run.runtime,
     closeOnReport: run.closeOnReport,
     reportGeneration: nonNegativeInteger(run.reportGeneration),
+    ...(run.reportStatus !== undefined && { reportStatus: run.reportStatus }),
     model: requiredText(run.model, limits.model, "unknown-model"),
     effort: SUBAGENT_EFFORTS.includes(run.effort) ? run.effort : ("off" as const),
     openaiFastMode: run.openaiFastMode,
@@ -596,6 +598,10 @@ const awaitCandidate = (
     ...(input.timedOut && { timedOut: true as const }),
     ...(input.attentionRequired && { attentionRequired: true as const }),
     ...(input.cancelled && { cancelled: true as const }),
+    ...(input.cancelled &&
+      input.cancellationCleanup === "unconfirmed" && {
+        cancellationCleanup: "unconfirmed" as const,
+      }),
     ...(contextCandidates.length > contextSource.length && { contextOmitted: true as const }),
     ...((input.contentOmitted || omitted) && { contentOmitted: true as const }),
     ...(omitted &&

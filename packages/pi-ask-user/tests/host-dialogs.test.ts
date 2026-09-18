@@ -10,7 +10,7 @@ import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/bounda
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
 
-const request: AskUserRequest = {
+const request = {
   questions: [
     {
       ...defaultQuestion,
@@ -19,7 +19,7 @@ const request: AskUserRequest = {
       prompt: "Which library?",
     },
   ],
-};
+} satisfies AskUserRequest;
 
 const run = (
   ctx: ExtensionContext,
@@ -38,7 +38,68 @@ const scriptedSelect = (...indexes: number[]) => {
   );
 };
 
+const textRequest: AskUserRequest = {
+  questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+};
+
 describe("RPC questionnaire boundary", () => {
+  it("asks text directly, retries invalid input and preserves notes through review edits", () => {
+    const input = vi
+      .fn()
+      .mockResolvedValueOnce(" \n ")
+      .mockResolvedValueOnce("x".repeat(4001))
+      .mockResolvedValueOnce(" initial\nanswer ")
+      .mockResolvedValueOnce(" context ")
+      .mockResolvedValueOnce(" bq1234\nrevised ");
+    const select = scriptedSelect(1, 1, 0, 0);
+    const notify = vi.fn();
+    return run(
+      opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify } }),
+      textRequest,
+    ).then((outcome) => {
+      expect(outcome).toEqual({
+        outcome: "submitted",
+        answers: [{ key: "details", kind: "text", text: "bq1234\nrevised", note: "context" }],
+      });
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
+    });
+  });
+
+  it.each(["input", "review"])("discards text when RPC %s is dismissed", (at) => {
+    const select = at === "review" ? scriptedSelect(0, 99) : vi.fn();
+    const input = vi.fn(() => Promise.resolve(at === "input" ? undefined : "draft"));
+    return expect(
+      run(
+        opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify: vi.fn() } }),
+        textRequest,
+      ),
+    ).resolves.toEqual({ outcome: "cancelled", answers: [] });
+  });
+
+  it("aborts a pending native text input without publishing drafts", () => {
+    const entered = controlled<AbortSignal>();
+    const input = (_title: string, _placeholder: string, options: { signal: AbortSignal }) => {
+      const answer = controlled<string | undefined>();
+      options.signal.addEventListener("abort", () => answer.resolve(undefined), { once: true });
+      entered.resolve(options.signal);
+      return answer.promise;
+    };
+    const select = vi.fn();
+    const controller = new AbortController();
+    const pending = run(
+      opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify: vi.fn() } }),
+      textRequest,
+      { signal: controller.signal },
+    );
+    const rejected = expect(pending).rejects.toBeDefined();
+    return entered.promise.then((signal) => {
+      controller.abort();
+      expect(signal.aborted).toBe(true);
+      expect(select).not.toHaveBeenCalled();
+      return rejected;
+    });
+  });
   it("uses interruption-linked native dialogs and returns stable values after review", () => {
     const select = scriptedSelect(1, 0, 0);
     const ui = { select, input: vi.fn(), notify: vi.fn() };

@@ -28,13 +28,14 @@ export function registerAskUserTool(
     name: "ask_user",
     label: "Ask User",
     description:
-      "Present one structured questionnaire containing one to four questions. Each question has two to four concrete choices, an automatic custom-answer action, optional answer notes, and optional markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local and Herdr Pi child requests route to the root UI with authenticated run ownership.",
+      "Present one structured questionnaire containing one to four questions. Use single/multiple mode with two to four concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local and Herdr Pi child requests route to the root UI with authenticated run ownership.",
     promptSnippet:
       "Ask one structured batch of questions when concrete user decisions are required",
     promptGuidelines: [
       "Use ask_user when the request is materially ambiguous and proceeding would commit to a user preference, requirement, or trade-off that cannot be inferred safely.",
       "Do not use ask_user for rhetorical questions, routine confirmations, information already present in context, or decisions that can be reversed cheaply.",
       "Batch related decisions into one ask_user invocation and do not call ask_user repeatedly after the user cancels.",
+      "Use ask_user text mode without choices when the user must supply wording or information rather than select alternatives. Text answers must be nonblank and at most 4000 code units after trimming.",
       "Every ask_user choice needs a stable value, concise label, and useful trade-off description. Use previews only for concrete artifacts that benefit from visual comparison.",
       "When ask_user offers alternatives and one choice is the main agent's recommendation, place it first, append (Recommended) to its label, and explain why in its description; do not force a recommendation for preference-only choices.",
       "Never ask users to enter passwords, API keys, tokens, private keys, or other credentials through ask_user.",

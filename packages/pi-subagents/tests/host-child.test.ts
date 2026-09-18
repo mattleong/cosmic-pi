@@ -320,6 +320,58 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.shutdown);
   });
 
+  effectTest(
+    "returns a persisted cancelled proxy await with requested IDs and unobserved states",
+    function* () {
+      const harness = makeHarness();
+      yield* settle(harness.start);
+      const controller = new AbortController();
+      const waiting = execute(
+        harness.latestTool("subagent_await"),
+        { runIds: ["agent-child"], until: "all_finished" },
+        controller.signal,
+      );
+      yield* step(() =>
+        vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
+      );
+      const request = contactOfType(harness.contacts, "proxy_request")!;
+      controller.abort();
+      const result = yield* step(() => waiting);
+      expect(result.details).toMatchObject({
+        action: "await",
+        cancelled: true,
+        awaitedRunIds: ["agent-child"],
+        cancellationCleanup: "unconfirmed",
+        cards: [],
+      });
+      const text = result.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n");
+      expect(text).toContain("states are unobserved");
+      expect(text).toContain("agent-child");
+      expect(text).toContain("Children continue");
+      expect(text).toContain("Root completion-claim cleanup is unconfirmed");
+      expect(text).not.toContain("Wait cleanup is complete");
+      expect(text).not.toContain("Await these IDs again");
+      yield* step(() =>
+        vi.waitFor(() =>
+          expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(
+            request.requestId,
+          ),
+        ),
+      );
+      const immediate = yield* step(() =>
+        execute(
+          harness.latestTool("subagent_await"),
+          { runIds: ["agent-other"], until: "any_finished" },
+          controller.signal,
+        ),
+      );
+      expect(immediate.details).toMatchObject({ cancelled: true, awaitedRunIds: ["agent-other"] });
+      yield* settle(harness.shutdown);
+    },
+  );
+
   effectTest("cancels exact proxy calls and parent questions", function* () {
     const harness = makeHarness();
     yield* settle(harness.start);

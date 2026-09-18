@@ -38,6 +38,11 @@ export const makeBackgroundTaskDispatch = (options: {
   /** Current per-call allowance, already capped by the Code Mode host. */
   readonly maxOutputBytes: () => number;
   readonly observationId?: (fiber: number) => number | undefined;
+  readonly onOperation?: (
+    id: number | undefined,
+    certainty: "unknown" | "completed",
+    recoveryId?: string,
+  ) => void;
   readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   readonly observePresentation?: (
     invocationId: number | undefined,
@@ -107,8 +112,9 @@ export const makeBackgroundTaskDispatch = (options: {
                 : input;
           // The provider still applies its configured maximum. Omitted log waits stay
           // nonblocking; a depleted wait budget performs an immediate inspection.
-          return Effect.tryPromise((signal) =>
-            capability.execute(callId, boundedInput, signal, maxOutputBytes, (value) => {
+          return Effect.tryPromise((signal) => {
+            invokeHostCallback(() => options.onOperation?.(invocationId, "unknown"), undefined);
+            return capability.execute(callId, boundedInput, signal, maxOutputBytes, (value) => {
               if (!accepting) return;
               const receipt = normalizeBackgroundTaskPresentation(value);
               if (observed || receipt === undefined || receipt.summary?.action !== input.action) {
@@ -120,15 +126,16 @@ export const makeBackgroundTaskDispatch = (options: {
                 () => options.observePresentation?.(invocationId, receipt),
                 undefined,
               );
-            }),
-          ).pipe(
+            });
+          }).pipe(
             Effect.mapError((error: Cause.UnknownError) =>
               toolError(
                 `Nested tool 'session.backgroundTask' failed: ${formatForeignRejection(error.cause)}`,
               ),
             ),
-            Effect.flatMap((output) =>
-              decodeOutput(output).pipe(
+            Effect.flatMap((output) => {
+              invokeHostCallback(() => options.onOperation?.(invocationId, "completed"), undefined);
+              return decodeOutput(output).pipe(
                 Effect.mapError(() =>
                   toolError(
                     "Nested tool 'session.backgroundTask' returned an unrecognized result shape.",
@@ -143,8 +150,8 @@ export const makeBackgroundTaskDispatch = (options: {
                         ),
                       ),
                 ),
-              ),
-            ),
+              );
+            }),
             Effect.onExit((exit) =>
               Effect.sync(() => {
                 // A presentation receipt precedes companion output projection. Rejection after

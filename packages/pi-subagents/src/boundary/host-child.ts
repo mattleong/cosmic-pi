@@ -30,6 +30,7 @@ import { SUBAGENT_TOOL_NAMES } from "../run/tool-policy.ts";
 import { registerSubagentProxyManagerCommand } from "../settings/proxy-controller.ts";
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../tools/schema.ts";
+import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
@@ -278,6 +279,7 @@ export function registerSubagentChildBridge(
     token: number,
     encoded: SubagentProxyRequest,
     signal: AbortSignal | undefined,
+    onInterruption?: () => void,
   ): Promise<AgentToolResult<unknown>> => {
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
@@ -285,27 +287,30 @@ export function registerSubagentChildBridge(
     if (encoded.tool === "ask_user") input.questionnaires.add(requestId);
     return slot
       .run(
-        correlate(
-          pendingProxy,
-          requestId,
-          ipc.sendContact({
-            channel: "pi-subagents",
-            type: "proxy_request",
+        observeAwaitInterruption(
+          correlate(
+            pendingProxy,
             requestId,
-            tool: encoded.tool,
-            argumentsJson: encoded.argumentsJson,
-          }),
-          () => {
-            if (isActivationCurrent(input, token))
-              slot.fork(
-                ipc
-                  .sendContact({ channel: "pi-subagents", type: "proxy_cancel", requestId })
-                  .pipe(
-                    Effect.ignore,
-                    Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
-                  ),
-              );
-          },
+            ipc.sendContact({
+              channel: "pi-subagents",
+              type: "proxy_request",
+              requestId,
+              tool: encoded.tool,
+              argumentsJson: encoded.argumentsJson,
+            }),
+            () => {
+              if (isActivationCurrent(input, token))
+                slot.fork(
+                  ipc
+                    .sendContact({ channel: "pi-subagents", type: "proxy_cancel", requestId })
+                    .pipe(
+                      Effect.ignore,
+                      Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
+                    ),
+                );
+            },
+          ),
+          onInterruption,
         ),
         signal,
       )
@@ -459,8 +464,11 @@ export function registerSubagentChildBridge(
     onActivated: (input, token, scheduler) => {
       if (!isSessionCurrent(input) || !slot.isCurrent(token)) return;
       input.token = token;
-      const call = (toolInput: SubagentToolInput, signal?: AbortSignal) =>
-        proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal);
+      const call = (
+        toolInput: SubagentToolInput,
+        signal?: AbortSignal,
+        onInterruption?: () => void,
+      ) => proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal, onInterruption);
       try {
         if (input.sessionId)
           input.detachRelay = publishChildQuestionnaireRelay(
@@ -473,7 +481,8 @@ export function registerSubagentChildBridge(
           scheduleAnimation: (interval, tick) =>
             isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
           environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
-          proxyCall: (toolInput, signal) => call(toolInput, signal),
+          proxyCall: (toolInput, signal, _onUpdate, _ctx, onInterruption) =>
+            call(toolInput, signal, onInterruption),
           run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
         });
         registerContactParent(input, token, (interval, tick) =>

@@ -5,6 +5,7 @@ import {
   QUESTIONNAIRE_CAPABILITY_QUERY,
   queryQuestionnaireRelay,
   type AskUserRequest,
+  type AskUserOutcome,
   type QuestionnaireCapability,
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
@@ -55,6 +56,61 @@ const bus = () => {
 };
 
 describe("structured questionnaire proxy boundary", () => {
+  it("round-trips text questions and notes through the authenticated root and rejects text with choices", () => {
+    const textRequest: AskUserRequest = {
+      questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+    };
+    const outcome: AskUserOutcome = {
+      outcome: "submitted",
+      answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
+    };
+    const root = bus();
+    const child = bus();
+    const owner = {
+      runId: "authenticated-run",
+      assignmentEpoch: 3,
+      requestId: "authenticated-text",
+    };
+    const capability: QuestionnaireCapability = {
+      version: 1,
+      sessionId: "root",
+      generation: "g1",
+      cancel: (received) => {
+        expect(received).toEqual(owner);
+        return Promise.resolve();
+      },
+      ask: (received, receivedOwner) => {
+        expect(received).toEqual(textRequest);
+        expect(receivedOwner).toEqual(owner);
+        return Promise.resolve(outcome);
+      },
+    };
+    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
+    const detach = publishChildQuestionnaireRelay(
+      child,
+      "child",
+      () => true,
+      (wire, signal) => {
+        const decoded = decodeQuestionnaireProxyRequest(wire);
+        if (decoded instanceof InvalidSubagentRequestError) return Promise.reject(decoded);
+        return Effect.runPromise(askParentQuestionnaire(root, "root", decoded, owner), { signal });
+      },
+    );
+    for (const choices of [[], [{ value: "a", label: "A", description: "A" }]]) {
+      expect(
+        decodeQuestionnaireProxyRequest({
+          tool: "ask_user",
+          argumentsJson: JSON.stringify({ questions: [{ ...textRequest.questions[0], choices }] }),
+        }),
+      ).toBeInstanceOf(InvalidSubagentRequestError);
+    }
+    return queryQuestionnaireRelay(child, "child")!
+      .ask(textRequest, new AbortController().signal)
+      .then((answer) => {
+        expect(answer).toEqual(outcome);
+      })
+      .finally(detach);
+  });
   it("keeps questionnaire requests separate and rejects ownership injection and excess data", () => {
     const wire = { tool: "ask_user", argumentsJson: JSON.stringify(request) };
     expect(decodeQuestionnaireProxyRequest(wire)).toEqual(request);

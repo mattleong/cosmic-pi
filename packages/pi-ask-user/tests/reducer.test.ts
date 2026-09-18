@@ -34,6 +34,30 @@ const request: AskUserRequest = {
 };
 
 describe("questionnaire reducer", () => {
+  it("requires valid text, keeps notes through edits, and does not accept choice actions for text", () => {
+    let state = createQuestionnaireState({
+      questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+    });
+    for (const text of [" \n ", "x".repeat(4001)]) {
+      state = reduceQuestionnaire(state, { type: "set-text", question: 0, text });
+      expect(submitQuestionnaire(state)).toBeUndefined();
+    }
+    state = reduceQuestionnaire(state, { type: "set-note", question: 0, note: " context " });
+    state = reduceQuestionnaire(state, { type: "set-text", question: 0, text: " first " });
+    state = reduceQuestionnaire(state, { type: "select-one", question: 0, choice: 0 });
+    state = reduceQuestionnaire(state, { type: "set-custom", question: 0, text: "wrong mode" });
+    expect(state.drafts[0]?.answer).toEqual({ kind: "text", text: "first" });
+    state = reduceQuestionnaire(state, {
+      type: "set-text",
+      question: 0,
+      text: " revised\nanswer ",
+    });
+    expect(submitQuestionnaire(state)).toEqual({
+      outcome: "submitted",
+      answers: [{ key: "details", kind: "text", text: "revised\nanswer", note: "context" }],
+    });
+    expect(cancelQuestionnaire()).toEqual({ outcome: "cancelled", answers: [] });
+  });
   it("builds stable choice and custom answer details", () => {
     let state = createQuestionnaireState(request);
     state = reduceQuestionnaire(state, { type: "select-one", question: 0, choice: 1 });

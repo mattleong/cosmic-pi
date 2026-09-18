@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
 import {
   loadCodePreviewSettings,
@@ -83,6 +84,20 @@ const ErrorActionSchema = Schema.Struct({
     "result.read",
   ]),
 });
+
+/** Failure labels must not invoke rejected getters or turn unknown actions into status. */
+const failureAction = <Input>(request: Input): string =>
+  invokeHostCallback(() => {
+    if (!Predicate.isObject(request) || Array.isArray(request)) return "unknown";
+    const descriptor = Object.getOwnPropertyDescriptor(request, "action");
+    if (descriptor === undefined) return "status";
+    if (!("value" in descriptor)) return "unknown";
+    return (
+      Option.getOrUndefined(
+        Schema.decodeUnknownOption(ErrorActionSchema)({ action: descriptor.value }),
+      )?.action ?? "unknown"
+    );
+  }, "unknown");
 
 interface McpSessionInput extends McpLayerInput {
   readonly ctx: ExtensionContext;
@@ -190,12 +205,7 @@ export const makeMcpLifecycle = (
     return slot.run(Effect.result(execution.execute(request, observedProjection)), signal).then(
       (result) => {
         if (Result.isFailure(result)) {
-          const action = invokeHostCallback(
-            () =>
-              Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
-                ?.action ?? "status",
-            "status",
-          );
+          const action = failureAction(request);
           if (
             result.failure.kind === "auth-required" ||
             promptArgumentHint(action, result.failure) !== undefined
@@ -287,12 +297,7 @@ export const makeMcpLifecycle = (
                   error instanceof McpBoundaryError
                     ? error
                     : boundaryError("unavailable", "unknown", "MCP operation failed.");
-                const action = invokeHostCallback(
-                  () =>
-                    Option.getOrUndefined(Schema.decodeUnknownOption(ErrorActionSchema)(request))
-                      ?.action ?? "status",
-                  "status",
-                );
+                const action = failureAction(request);
                 return { reply: mcpFailureReply(action, failure), images: [] };
               }),
           }),

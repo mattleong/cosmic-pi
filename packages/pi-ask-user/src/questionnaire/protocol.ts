@@ -3,7 +3,11 @@ import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import type { AskUserOutcome } from "./model.ts";
 import type { AskUserRequest } from "./schema.ts";
-import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
+import {
+  normalizeAskUserRequest,
+  validateAskUserRequest,
+  validateQuestionnaireInput,
+} from "./validation.ts";
 
 export type { AskUserRequest } from "./schema.ts";
 export type { AskUserOutcome } from "./model.ts";
@@ -42,20 +46,29 @@ export interface QuestionnaireQuery<A> {
 
 export const QuestionnaireRequestSchema = Schema.Struct({
   questions: Schema.Array(
-    Schema.Struct({
-      key: text(32),
-      title: text(16),
-      prompt: text(500),
-      mode: Schema.Literals(["single", "multiple"]),
-      choices: Schema.Array(
-        Schema.Struct({
-          value: text(64),
-          label: text(60),
-          description: text(400),
-          preview: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000))),
-        }),
-      ).check(Schema.isMinLength(2), Schema.isMaxLength(4)),
-    }),
+    Schema.Union([
+      Schema.Struct({
+        key: text(32),
+        title: text(16),
+        prompt: text(500),
+        mode: Schema.Literals(["single", "multiple"]),
+        choices: Schema.Array(
+          Schema.Struct({
+            value: text(64),
+            label: text(60),
+            description: text(400),
+            preview: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000))),
+          }),
+        ).check(Schema.isMinLength(2), Schema.isMaxLength(4)),
+      }),
+      Schema.Struct({
+        key: text(32),
+        title: text(16),
+        prompt: text(500),
+        mode: Schema.Literal("text"),
+        choices: Schema.optionalKey(Schema.Never),
+      }),
+    ]),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
 });
 const answerFields = {
@@ -69,6 +82,11 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
     answers: Schema.Array(
       Schema.Union([
         Schema.Struct({ ...answerFields, kind: Schema.Literal("custom"), text: text(4000) }),
+        Schema.Struct({
+          ...answerFields,
+          kind: Schema.Literal("text"),
+          text: text(4000).check(Schema.isPattern(/\S/)),
+        }),
         Schema.Struct({
           ...answerFields,
           kind: Schema.Literal("choices"),
@@ -87,7 +105,7 @@ const RawQuestion = Schema.Struct({
   title: Schema.Unknown,
   prompt: Schema.Unknown,
   mode: Schema.Unknown,
-  choices: Schema.Unknown,
+  choices: Schema.optionalKey(Schema.Unknown),
 });
 const RawChoice = Schema.Struct({
   value: Schema.Unknown,
@@ -123,6 +141,7 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
     if (!questions) return undefined;
     const captured = questions.map((input) => {
       const question = Schema.decodeUnknownSync(RawQuestion)(input);
+      if (question.mode === "text") return question;
       const choices = captureArray(question.choices);
       return {
         ...question,
@@ -131,10 +150,16 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
     });
     const value = Schema.decodeUnknownSync(QuestionnaireRequestSchema)({ questions: captured });
     const request = normalizeAskUserRequest({
-      questions: value.questions.map((question) => ({
-        ...question,
-        choices: question.choices.map((choice) => ({ ...choice })),
-      })),
+      questions: value.questions.map((question) =>
+        question.mode === "text"
+          ? {
+              key: question.key,
+              title: question.title,
+              prompt: question.prompt,
+              mode: question.mode,
+            }
+          : { ...question, choices: question.choices.map((choice) => ({ ...choice })) },
+      ),
     });
     return validateAskUserRequest(request) ? undefined : request;
   } catch {
@@ -148,6 +173,10 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
     if (!root || !answers) return undefined;
     const captured = answers.map((input) => {
       const answer = Schema.decodeUnknownSync(RawAnswer)(input);
+      if (answer.kind === "text" && Schema.is(Schema.String)(answer.text)) {
+        const checked = validateQuestionnaireInput(answer.text, "text");
+        return checked.error === undefined ? { ...answer, text: checked.value } : undefined;
+      }
       return answer?.kind === "choices"
         ? { ...answer, values: captureArray(answer.values), labels: captureArray(answer.labels) }
         : answer;

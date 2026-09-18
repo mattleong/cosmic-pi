@@ -6,6 +6,7 @@ import {
   McpCodeModeInputSchema,
   mcpCodeModeJsonFits,
   mcpCodeModeHasBinary,
+  mcpCodeModeInputError,
   normalizeMcpCodeModeError,
   normalizeMcpCodeModeQuery,
 } from "../../src/code-mode/protocol.ts";
@@ -88,6 +89,13 @@ describe("MCP Code Mode protocol admission", () => {
     for (let index = 0; index < 70; index += 1) deep = { child: deep };
     for (const value of [
       accessor,
+      Object.defineProperty({}, "action", {
+        get: () => {
+          getterRead = true;
+          return "status";
+        },
+      }),
+      { [Symbol("hidden")]: "secret" },
       cyclic,
       deep,
       [undefined],
@@ -100,6 +108,70 @@ describe("MCP Code Mode protocol admission", () => {
       expect(mcpCodeModeJsonFits(value, 1_000_000)).toBe(false);
     }
     expect(getterRead).toBe(false);
+  });
+
+  it("regenerates action guidance from bounded metadata, never arbitrary messages or getters", () => {
+    const inputError = mcpCodeModeInputError({
+      action: "result.read",
+      offset: -1,
+      PRIVATE_KEY: "PRIVATE_VALUE",
+    });
+    const normalized = normalizeMcpCodeModeError(inputError);
+    expect(normalized).toMatchObject({
+      kind: "invalid-input",
+      outcome: "not-sent",
+      requestAction: "result.read",
+    });
+    expect(normalized.message).toContain("requires id");
+    expect(normalized.message).not.toContain("PRIVATE_");
+    let accessed = false;
+    const metadata = {
+      _tag: "McpCodeModeError",
+      kind: "invalid-input",
+      outcome: "not-sent",
+      requestAction: "result.read",
+    };
+    const hostileMessage = Object.defineProperty({ ...metadata }, "message", {
+      get: () => {
+        accessed = true;
+        throw new Error("PRIVATE_MESSAGE");
+      },
+    });
+    expect(normalizeMcpCodeModeError(hostileMessage).message).toContain("requires id");
+    const hostileAction = Object.defineProperty({ ...metadata }, "requestAction", {
+      get: () => {
+        accessed = true;
+        return "result.read";
+      },
+    });
+    expect(normalizeMcpCodeModeError(hostileAction).requestAction).toBeUndefined();
+    const hostileKind = Object.defineProperty({ ...metadata }, "kind", {
+      get: () => {
+        accessed = true;
+        return "invalid-input";
+      },
+    });
+    expect(normalizeMcpCodeModeError(hostileKind)).toMatchObject({
+      kind: "transport",
+      outcome: "unknown",
+    });
+    expect(accessed).toBe(false);
+    for (const override of [
+      { outcome: "completed" },
+      { outcome: "unknown" },
+      { kind: "transport" },
+      { requestAction: "PRIVATE_ACTION" },
+      { requestAction: "connect" },
+    ]) {
+      const failure = normalizeMcpCodeModeError({
+        ...metadata,
+        ...override,
+        message: "PRIVATE_MESSAGE",
+      });
+      expect(failure.requestAction).toBeUndefined();
+      expect(failure.message).not.toContain("requires id");
+      expect(failure.message).not.toContain("PRIVATE_");
+    }
   });
 
   it("contains throwing callbacks and rejection coercion, preserving only typed certainty", () => {

@@ -77,8 +77,18 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       unresolved &&
       claimToken !== undefined &&
       completionClaimOwner(record, generation) === claimToken;
+    const observed: SubagentRunView = {
+      ...view,
+      reportStatus: !view.finalText?.trim()
+        ? "missing"
+        : !unresolved
+          ? "delivered"
+          : owns || completionClaimOwner(record, generation) === undefined
+            ? "available"
+            : "claimed",
+    };
     return {
-      run: owns ? view : redactCompletionReport(view),
+      run: owns ? snapshotView(observed) : redactCompletionReport(observed),
       ...(owns && {
         completionReceipt: {
           id: record.view.id,

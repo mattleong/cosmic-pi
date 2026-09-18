@@ -2,32 +2,55 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeAskUserRequest,
   validateAskUserRequest,
+  validateQuestionnaireInput,
 } from "../src/questionnaire/validation.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 
-const base = (): AskUserRequest => ({
-  questions: [
-    {
-      key: "scope",
-      title: "Scope",
-      prompt: "Which scope should we use?",
-      mode: "single",
-      choices: [
-        { value: "small", label: "Small", description: "Minimal change." },
-        { value: "large", label: "Large", description: "Broader change." },
-      ],
-    },
-  ],
-});
+const base = () =>
+  ({
+    questions: [
+      {
+        key: "scope",
+        title: "Scope",
+        prompt: "Which scope should we use?",
+        mode: "single",
+        choices: [
+          { value: "small", label: "Small", description: "Minimal change." },
+          { value: "large", label: "Large", description: "Broader change." },
+        ],
+      },
+    ],
+  }) satisfies AskUserRequest;
 
 describe("ask-user validation", () => {
+  it("normalizes text prompts and applies the same fixed trimmed input bounds", () => {
+    const normalized = normalizeAskUserRequest({
+      questions: [{ key: " note ", title: " Note ", prompt: " Explain? ", mode: "text" }],
+    });
+    expect(normalized).toEqual({
+      questions: [{ key: "note", title: "Note", prompt: "Explain?", mode: "text" }],
+    });
+    expect(validateAskUserRequest(normalized)).toBeUndefined();
+    for (const kind of ["text", "custom"] as const) {
+      expect(validateQuestionnaireInput(" \n\t ", kind).error).toBeDefined();
+      expect(validateQuestionnaireInput(" x\ny ", kind)).toEqual({ value: "x\ny" });
+      expect(validateQuestionnaireInput(" " + "😀".repeat(2000) + " ", kind)).toEqual({
+        value: "😀".repeat(2000),
+      });
+      expect(validateQuestionnaireInput("😀".repeat(2000) + "x", kind).error).toBeDefined();
+    }
+    expect(validateQuestionnaireInput(" ", "note")).toEqual({ value: "" });
+    expect(validateQuestionnaireInput("x".repeat(2000), "note").error).toBeUndefined();
+    expect(validateQuestionnaireInput("x".repeat(2001), "note").error).toBeDefined();
+  });
   it("accepts a valid request and normalizes stable identifiers", () => {
     const request = base();
     request.questions[0]!.key = " scope ";
     request.questions[0]!.choices[0]!.value = " small ";
     const normalized = normalizeAskUserRequest(request);
     expect(normalized.questions[0]?.key).toBe("scope");
-    expect(normalized.questions[0]?.choices[0]?.value).toBe("small");
+    const question = normalized.questions[0];
+    expect(question?.mode !== "text" && question?.choices[0]?.value).toBe("small");
     expect(validateAskUserRequest(normalized)).toBeUndefined();
   });
 

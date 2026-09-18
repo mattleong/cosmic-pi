@@ -45,13 +45,21 @@ export const executeWithLimits = <const Tools extends object>(
   );
   const logs: Array<string> = [];
   const logged = () => (logs.length > 0 ? { logs: [...logs] } : {});
+  const observe = (result: Result): Result => {
+    try {
+      options.onResult?.(result);
+    } catch {
+      /* Host capture cannot relabel execution. */
+    }
+    return result;
+  };
 
   if (options.code.trim().length === 0) {
     return Effect.succeed({
       ok: false,
       error: { kind: "ParseError", message: "Code cannot be empty." },
       toolCalls: tools.calls,
-    });
+    } satisfies Result).pipe(Effect.map(observe));
   }
 
   // Confinement: the wall-clock deadline is shared with the interpreter so synchronous
@@ -109,9 +117,12 @@ export const executeWithLimits = <const Tools extends object>(
             toolCalls: tools.calls,
           } satisfies Result),
     ),
-    Effect.map((result) =>
-      limits.maxOutputBytes === undefined ? result : boundOutput(result, limits.maxOutputBytes),
-    ),
+    Effect.map((result) => {
+      observe(result);
+      return limits.maxOutputBytes === undefined
+        ? result
+        : boundOutput(result, limits.maxOutputBytes);
+    }),
   );
 };
 

@@ -64,6 +64,7 @@ copy or the file layout of upstream v2:
 Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
 add confinement and observation. Deviations 11-17 add JavaScript compatibility and correct
 mutation and async semantics; their behavior and remaining limits are documented below.
+Deviation 18 adds host-only pre-truncation result observation.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
@@ -344,6 +345,16 @@ mutation and async semantics; their behavior and remaining limits are documented
     Custom set-like objects are refused. Covered by `tests/callback-compat.test.ts` and
     `tests/set-operations.test.ts`.
 
+18. **Pre-truncation result observation.** `src/codemode.ts` adds optional synchronous
+    `onResult(result)` host observation. `interpreter/host-execution.ts` calls it after
+    final plain-data validation or normalized failure, before `boundOutput`. Empty-source
+    diagnostics are also observed. Host interruption remains interruption. Observer throws
+    cannot relabel execution; hosts must bound capture work and must not retain or mutate
+    the supplied graph. The hook has no guest authority, retention policy, persistence,
+    or Pi dependency. With no hook, existing execution results and limits are unchanged.
+    Local `tests/result-observation.test.ts` covers full capture, normalized failures,
+    opaque-output rejection and callback failure containment.
+
 ## Selective v2 upgrade and extraction map
 
 The v2 reference above informs lexical initialization, var hoisting, labels,
@@ -450,7 +461,7 @@ Upstream updates are pulled by pinned manual review only:
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
    hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-17
-   for JavaScript compatibility and async execution**; do not adopt upstream OpenAPI or
+   for JavaScript compatibility and async execution**, plus **deviation 18 result observation**; do not adopt upstream OpenAPI or
    host-adapter code. Preserve the selective assignment, discovery, recursion and bounded-byte
    adaptations above. Re-run the confinement, lifecycle, and compatibility tests.
 4. Record a whole-base replacement or a selective reference explicitly, preserving

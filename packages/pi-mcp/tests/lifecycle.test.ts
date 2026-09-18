@@ -66,6 +66,7 @@ import { McpConfigStore } from "../src/config/store.ts";
 import type { McpToolDefinition } from "../src/tools/controller.ts";
 import type { McpGatewayExecution } from "../src/tools/model.ts";
 import { McpExecution } from "../src/tools/service.ts";
+import { decodeGatewayRequest } from "../src/invocation/validation.ts";
 
 const host = <A>(run: () => PromiseLike<A>) => Effect.tryPromise(run);
 let directory: string;
@@ -550,6 +551,59 @@ describe("MCP session ownership", () => {
         yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(expected),
       );
       expect(notification).not.toContain("private-failure");
+      yield* host(() => h.lifecycle.shutdown());
+    }),
+  );
+
+  it.live("keeps unknown-action repair generic through the public gateway", () =>
+    Effect.gen(function* () {
+      const request = { action: "PRIVATE_ACTION", server: "private-value" };
+      const h = harness({
+        execute: () =>
+          decodeGatewayRequest(request).pipe(
+            Effect.andThen(Effect.die("Invalid request was admitted")),
+          ),
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      // SAFETY: Intentionally malformed input exercises the public gateway's rejection path.
+      const input = request as Parameters<McpToolDefinition["execute"]>[1];
+      const result = yield* host(() =>
+        h.tool.execute("invalid", input, undefined, undefined, h.ctx),
+      );
+      expect(result.details).toMatchObject({ outcome: "not-sent", isError: true });
+      const guidance = result.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join(" ");
+      expect(guidance).toContain("supported MCP action");
+      expect(guidance).not.toContain("Status accepts only action");
+      expect(guidance).not.toContain("PRIVATE_ACTION");
+      expect(guidance).not.toContain("private-value");
+      yield* host(() => h.lifecycle.shutdown());
+    }),
+  );
+
+  it.live("labels rejected input without evaluating its action getter", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const request = {
+        get action() {
+          reads += 1;
+          return "status" as const;
+        },
+        server: "private-value",
+      };
+      const h = harness({
+        execute: () =>
+          decodeGatewayRequest(request).pipe(
+            Effect.andThen(Effect.die("Invalid request was admitted")),
+          ),
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      const result = yield* host(() =>
+        h.tool.execute("invalid", request, undefined, undefined, h.ctx),
+      );
+      expect(result.details).toMatchObject({ outcome: "not-sent", isError: true });
+      expect(reads).toBe(0);
       yield* host(() => h.lifecycle.shutdown());
     }),
   );

@@ -310,8 +310,14 @@ const activityStatusFields = (run: SubagentRunView): ReadonlyArray<string | unde
 
 const finalReportStatus = (run: SubagentRunView): string | undefined => {
   if (run.finalText) return `\nFinal report\n${sanitizeTerminalText(run.finalText)}`;
+  if (run.reportStatus === "missing")
+    return "\nFinal report\nMissing: no accepted final report for this assignment.";
+  if (run.reportStatus === "claimed")
+    return "\nFinal report\nClaimed by another operation; report text is withheld here.";
+  if (run.reportStatus === "delivered")
+    return "\nFinal report\nAlready delivered; report text is withheld here.";
   if (run.state !== "completed" && run.state !== "reported") return undefined;
-  return "\nFinal report\nUnavailable in this observation; it may be claimed by another subagent_await or already delivered to the parent.";
+  return "\nFinal report\nAvailability unknown in this observation; report text is not included.";
 };
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {

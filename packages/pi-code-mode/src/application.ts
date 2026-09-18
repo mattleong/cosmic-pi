@@ -49,6 +49,7 @@ import {
   registerCodeModeTool,
   type CodeModeToolDefinition,
 } from "./tools/controller.ts";
+import { CodeModeResults, type ResultsContract } from "./results/service.ts";
 import { makeCodeModeToolExecute } from "./tools/execution.ts";
 import {
   applyRetainedCodeModeFailureDetails,
@@ -61,6 +62,8 @@ interface CodeModeSessionInput extends CodeModeLayerInput {
   readonly sessionId: CodeModeSessionKey | undefined;
   /** Revoked before this session's runtime can finish a late uninterruptible publication. */
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
+  /** Disabling revokes execution and result access until the next activation. */
+  readonly executionOwner: MutableRef.MutableRef<boolean>;
 }
 
 /** Host boundaries injected here so tests can control settings latency and nested tools. */
@@ -138,16 +141,19 @@ export function registerCodeModeApplication(
     CodeModeApplication,
     never,
     CodeModeRuntimeError,
-    CodePreviewSchedulerServiceContract
+    { readonly scheduler: CodePreviewSchedulerServiceContract; readonly results: ResultsContract }
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
         Layer.merge(
           (boundaries.makeLayer ?? makeCodeModeLayer)(input, (state) => {
-            if (MutableRef.get(input.publicationOwner)) MutableRef.set(stateRef, state);
+            if (MutableRef.get(input.publicationOwner)) {
+              if (!state.available) MutableRef.set(input.executionOwner, false);
+              MutableRef.set(stateRef, state);
+            }
           }),
-          CodePreviewSchedulerService.layer,
+          Layer.merge(CodePreviewSchedulerService.layer, CodeModeResults.layer),
         ),
         { agentDirectory: getAgentDir, packageName: "pi-code-mode" },
       ),
@@ -158,8 +164,12 @@ export function registerCodeModeApplication(
               boundaries.loadSettings(input.cwd, input.projectTrusted, signal),
             )
           : Effect.void,
-      ).pipe(Effect.andThen(CodePreviewSchedulerService)),
-    onActivated: (input, token, scheduler) => {
+      ).pipe(
+        Effect.andThen(
+          Effect.all({ scheduler: CodePreviewSchedulerService, results: CodeModeResults }),
+        ),
+      ),
+    onActivated: (input, token, { scheduler, results }) => {
       const ownsPublication = () => MutableRef.get(input.publicationOwner);
       const isCurrent = () => ownsPublication() && slot.isCurrent(token);
       if (!isCurrent()) return;
@@ -173,7 +183,8 @@ export function registerCodeModeApplication(
             catalogBudget: state.config.catalogBudget,
             includePowerShell: definitions.powershell !== undefined,
             execute: makeCodeModeToolExecute({
-              isCurrent,
+              results,
+              isCurrent: () => isCurrent() && MutableRef.get(input.executionOwner),
               getState: () => MutableRef.get(stateRef),
               runInSession: (effect, signal) => slot.run(effect, signal),
               definitions,
@@ -203,6 +214,7 @@ export function registerCodeModeApplication(
     },
     onDeactivated: (input) => {
       MutableRef.set(input.publicationOwner, false);
+      MutableRef.set(input.executionOwner, false);
       MutableRef.set(stateRef, undefined);
       tearDownTool();
     },
@@ -248,6 +260,7 @@ export function registerCodeModeApplication(
           cwd: captured.cwd,
           projectTrusted,
           publicationOwner,
+          executionOwner: MutableRef.make(true),
           sessionId: sessionKey,
         },
         captured.signal,
@@ -256,6 +269,8 @@ export function registerCodeModeApplication(
   };
 
   pi.on("session_start", (_event, ctx) => activateSession(ctx));
+  // Successful tree navigation revokes the old result registry and in-flight publication.
+  pi.on("session_tree", (_event, ctx) => activateSession(ctx));
 
   pi.on("session_shutdown", () => {
     observeUserIntent();

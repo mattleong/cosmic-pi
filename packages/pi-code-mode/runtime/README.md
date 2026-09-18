@@ -28,6 +28,11 @@ tools the host supplies.
   failed, and cancelled tool calls with stable execution-local ids and durations. Existing
   start/end hooks and guest-visible execution semantics remain compatible.
 
+Hosts may supply `onResult(result)` to capture validated plain output or a normalized failure
+before `boundOutput` truncates it. This synchronous, host-only callback must bound its work
+and must not retain or mutate the supplied graph. Callback failures do not change execution.
+The runtime owns no output store or recovery API; hosts own retention and revocation.
+
 ## Documentation
 
 - `SUPPORT.md` - compatibility matrix, deliberate restrictions and Test262 coverage.

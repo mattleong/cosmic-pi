@@ -18,7 +18,9 @@ import {
   view,
 } from "./fixtures/tool-harness.ts";
 
-const resultText = (result: AgentToolResult<unknown>): string =>
+const resultText = (result: {
+  readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
+}): string =>
   result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 
 describe("subagent tool", () => {
@@ -253,9 +255,17 @@ describe("subagent tool", () => {
     yield* step(() => Promise.resolve());
     yield* step(() => Promise.resolve());
     controller.abort();
-    yield* step(() => expect(executing).rejects.toBeDefined());
-    const cancelled = updates.at(-1) ?? "";
-    expect(cancelled).toContain("Await canceled; 1 subagent is unfinished.");
+    const result = yield* step(() => executing!);
+    expect(result.details).toMatchObject({
+      action: "await",
+      cancelled: true,
+      awaitedRunIds: [waiting.id],
+      attentionRequired: true,
+    });
+    const cancelled = resultText(result);
+    expect(cancelled).toContain("1 subagent is unfinished");
+    expect(cancelled).toContain("Children continue");
+    expect(updates.at(-1)).toBe(cancelled);
     expect(cancelled).toContain("Question from auth-review: Which fixture?");
     expect(cancelled).toContain('subagent_reply({ runId: "agent-question", message: "..." })');
 
@@ -271,9 +281,103 @@ describe("subagent tool", () => {
         (result) => immediateUpdates.push(resultText(result)),
         context,
       );
-    yield* step(() => expect(immediate).rejects.toBeDefined());
+    const immediateResult = yield* step(() => immediate!);
+    expect(immediateResult.details).toMatchObject({
+      action: "await",
+      cancelled: true,
+      awaitedRunIds: [waiting.id],
+    });
+    expect(resultText(immediateResult)).toContain("states are unobserved");
+    expect(resultText(immediateResult)).toContain(waiting.id);
     expect(immediateUpdates.at(-1)).toContain("Await canceled before progress was observed");
   });
+
+  effectTest(
+    "returns cancellation only after owned wait cleanup, without a progress callback",
+    function* () {
+      const started = Deferred.makeUnsafe<void>();
+      const closing = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      let released = false;
+      let returned = false;
+      const service = subagentServiceDouble({
+        ...startCapturingService([]),
+        withAwaitTerminalObservations: () =>
+          Effect.acquireUseRelease(
+            Deferred.succeed(started, undefined),
+            () => Effect.never,
+            () =>
+              Deferred.succeed(closing, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    released = true;
+                  }),
+                ),
+              ),
+          ),
+      });
+      const controller = new AbortController();
+      const executing = captureSubagentTools(service)
+        .get("subagent_await")!
+        .execute(
+          "call",
+          { runIds: ["agent-one"], until: "all_finished" },
+          controller.signal,
+          undefined,
+          context,
+        )
+        .then((result) => {
+          returned = true;
+          return result;
+        });
+      yield* Deferred.await(started);
+      controller.abort();
+      yield* Deferred.await(closing);
+      expect(returned).toBe(false);
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* step(() => executing);
+      expect(released).toBe(true);
+      expect(result.details).not.toHaveProperty("cancellationCleanup");
+      expect(resultText(result)).toContain("Wait cleanup is complete");
+      expect(result.details).toMatchObject({
+        action: "await",
+        cancelled: true,
+        awaitedRunIds: ["agent-one"],
+      });
+      expect(resultText(result)).toContain("Children continue");
+    },
+  );
+
+  for (const defect of [false, true]) {
+    effectTest(
+      `does not hide an await ${defect ? "defect" : "failure"} when the signal aborts during cleanup`,
+      function* () {
+        const controller = new AbortController();
+        const error = new InvalidSubagentRequestError({
+          code: "test_failure",
+          message: "Actual failure",
+        });
+        const service = subagentServiceDouble({
+          ...startCapturingService([]),
+          withAwaitTerminalObservations: () =>
+            (defect ? Effect.die(error) : Effect.fail(error)).pipe(
+              Effect.ensuring(Effect.sync(() => controller.abort())),
+            ),
+        });
+        const executing = captureSubagentTools(service)
+          .get("subagent_await")!
+          .execute(
+            "call",
+            { runIds: ["agent-one"], until: "all_finished" },
+            controller.signal,
+            undefined,
+            context,
+          );
+        yield* step(() => expect(executing).rejects.toBeDefined());
+      },
+    );
+  }
 
   effectTest("scopes persistent await presentation to tool execution", function* () {
     const service = subagentServiceDouble({
@@ -311,7 +415,8 @@ describe("subagent tool", () => {
     expect(presentation.beginAwait).toHaveBeenCalledWith(["agent-1"], "all_finished");
     expect(release).not.toHaveBeenCalled();
     controller.abort();
-    yield* step(() => expect(executing).rejects.toBeDefined());
+    const cancelled = yield* step(() => executing!);
+    expect(cancelled.details).toMatchObject({ cancelled: true });
     expect(release).toHaveBeenCalledOnce();
   });
 

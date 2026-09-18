@@ -77,6 +77,40 @@ const resultOutput = <Details, Content>(tool: CapturedTool, details: Details, co
   );
 
 describe("ask_user tool", () => {
+  it("returns first-class text with notes and replays text alongside historical answer tags", () => {
+    const input: AskUserRequest = {
+      questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+    };
+    const outcome: AskUserOutcome = {
+      outcome: "submitted",
+      answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
+    };
+    const tool = captureTool(() => Promise.resolve(outcome));
+    return tool
+      .execute("text-call", input, undefined, undefined, opaqueHostFixture({}))
+      .then((result) => {
+        expect(result.details).toEqual(outcome);
+        expect(result.content[0]).toMatchObject({
+          text: expect.stringContaining("bq1234\nanswer"),
+        });
+        const rendered = resultOutput(
+          tool,
+          {
+            outcome: "submitted",
+            answers: [
+              outcome.answers[0],
+              { key: "old", kind: "custom", text: "Historical custom" },
+              { key: "choice", kind: "choices", labels: ["Historical choice"] },
+            ],
+          },
+          [],
+        );
+        expect(rendered).toContain("bq1234");
+        expect(rendered).toContain("answer");
+        expect(rendered).toContain("Historical custom");
+        expect(rendered).toContain("Historical choice");
+      });
+  });
   it("ignores notes without reading them and rejects string fallback content", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
     const hostileNote = Object.defineProperty({}, "note", {

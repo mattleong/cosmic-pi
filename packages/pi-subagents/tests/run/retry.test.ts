@@ -117,7 +117,7 @@ describe("explicit profile-route retry", () => {
   });
 
   it.effect("admits one linked successor and atomically supersedes the failed predecessor", () => {
-    const { fake, layer } = localServiceFixture();
+    const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
       const service = yield* SubagentService;
       const failedRun = yield* service.start(
@@ -136,8 +136,27 @@ describe("explicit profile-route retry", () => {
           },
         }),
       );
-      fake.controls[0]?.exit(1);
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "partial analysis is not a report" }],
+          stopReason: "error",
+          errorMessage: "RESOURCE_EXHAUSTED: exhausted your capacity",
+        },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      fake.controls[0]?.exit(0);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const [failed] = yield* service.list;
+      expect(failed).toMatchObject({
+        state: "failed",
+        reportGeneration: 0,
+      });
+      expect(failed?.finalText).toBeUndefined();
+      expect(failed?.error).toContain("RESOURCE_EXHAUSTED");
+      expect(fake.controls).toHaveLength(1);
 
       const claim = yield* service.claimRetryContinuation(failedRun.id);
       const conflicting = yield* service.claimRetryContinuation(failedRun.id).pipe(Effect.flip);

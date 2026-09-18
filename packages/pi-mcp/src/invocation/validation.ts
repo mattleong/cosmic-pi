@@ -27,10 +27,16 @@ export const decodeGatewayRequest = <Input>(
           ? { action: "status", ...snapshot }
           : snapshot,
         { onExcessProperty: "error" },
+      ).pipe(
+        Effect.mapError(() =>
+          boundaryError(
+            "invalid-input",
+            "not-sent",
+            "MCP request is invalid or exceeds its limits.",
+            "gateway-request-invalid",
+          ),
+        ),
       ),
-    ),
-    Effect.mapError(() =>
-      boundaryError("invalid-input", "not-sent", "MCP request is invalid or exceeds its limits."),
     ),
   );
 

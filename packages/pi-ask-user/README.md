@@ -13,7 +13,8 @@ Restart pi after installation. If another questionnaire extension is installed, 
 ## What it does
 
 - Single- and multi-select questions with stable returned values.
-- An automatic custom-answer action for every question.
+- Required free-text questions when there are no meaningful alternatives.
+- An automatic custom-answer action for every choice question.
 - Optional notes that do not change the selected answer.
 - Markdown previews beside choices on wide terminals and stacked below them on narrow terminals.
 - A review step before answers are submitted.
@@ -52,7 +53,26 @@ The tool is named `ask_user`:
 }
 ````
 
-Limits are intentionally bounded: 1-4 questions and 2-4 choices per question. Question keys and choice values must be unique in their scope.
+Limits are intentionally bounded: 1-4 questions and 2-4 choices per single/multiple question. Question keys and choice values must be unique in their scope.
+
+For a required free-text answer, use `mode: "text"` and omit `choices`:
+
+```json
+{
+  "questions": [
+    {
+      "key": "details",
+      "title": "Details",
+      "prompt": "What requirement is missing?",
+      "mode": "text"
+    }
+  ]
+}
+```
+
+Text answers return `{ "key": "details", "kind": "text", "text": "The supplied wording" }`, with an optional `note`. Choice results keep `kind: "choices"`; their custom answers keep `kind: "custom"`. Text and custom answers are trimmed, must be nonblank, and allow at most 4,000 JavaScript code units. Notes are trimmed and allow at most 2,000 code units. Invalid input is rejected for editing, never truncated. Text questions cannot include choices, defaults, placeholders, or configurable limits.
+
+Never use questionnaires to collect passwords, API keys, tokens, private keys, or other credentials.
 
 Submitted results contain stable values and user-facing labels:
 
@@ -127,10 +147,12 @@ URL requests show the full inert URL and a prominent host for user consent. Acce
 - `Enter`: choose or activate an action.
 - `Space`: toggle a focused multi-select choice.
 - `n`: add or edit a note for the current question.
-- Pi's configured external-editor binding: edit a custom answer or note externally.
+- Pi's configured external-editor binding: edit a text answer, custom answer, or note externally.
 - `b`: hide the questionnaire without losing state.
 - `/ask-user` or activity Resume: resume a hidden questionnaire.
 - `Esc`: leave an editor or cancel the questionnaire.
+
+Text questions open directly in the editor on first entry. While editing, letters such as `b` and `q` and digits are literal text; `Shift+Enter` inserts a newline. `Esc` returns to the question view, where `Enter` activates Edit answer. Unsaved text survives that navigation and hide/resume, but only a valid saved answer counts toward submission. Tabs, notes, hide, and cancellation are available outside the editor. Answers still require explicit submission on Review.
 
 The overlay shows question/answer progress, live text limits, mode-specific controls, and the selected count for multi-select questions. Review highlights unanswered questions; activating the primary review action jumps to the next unanswered item before submission.
 
@@ -143,11 +165,11 @@ The overlay shows question/answer progress, live text limits, mode-specific cont
 | JSON  | Tool omitted                                                                          |
 | Print | Tool omitted                                                                          |
 
-RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
+RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, and side-by-side preview layout are TUI-only. RPC text questions open a bounded native input directly, followed by the same optional-note and review/edit flow. RPC uses interruption-linked native dialogs, includes bounded preview text in question titles, and offers an optional bounded note after each answer. Multi-select questions first ask whether to choose listed options or write a custom answer; the listed path accepts only in-range choice numbers and re-prompts invalid input. A final native review shows sanitized answer summaries and lets the user submit, edit any answer, or cancel. Cancellation always discards every answer and note draft.
 
 ## Compact tool cards
 
-All three questionnaire tools opt into the shared `pi-code-previews` compact setting. The default `preview` style is unchanged. With `toolCallCollapsedStyle: "compact"` and after `/reload`, submitted results show an answer count; expansion restores the answers. Cancellation keeps its original details and never means approval. Live transcript cards show question titles and counts without changing the separate questionnaire overlay. Known queued or pending results show request IDs and visible await guidance, never an answer or approval. Opening failures and unrecognized replies keep their existing cards. Automatic delivery failures keep status/await recovery guidance visible. Dialogs and automatic answer messages are unchanged.
+All three questionnaire tools opt into the shared `pi-code-previews` compact setting. The default `preview` style is unchanged. With `toolCallCollapsedStyle: "compact"` and after `/reload`, submitted results show an answer count; expansion restores the answers. Text answers, custom answers, and notes never appear in compact headlines. Cancellation keeps its original details and never means approval. Live transcript cards show question titles and counts without changing the separate questionnaire overlay. Known queued or pending results show request IDs and visible await guidance, never an answer or approval. Opening failures and unrecognized replies keep their existing cards. Automatic delivery failures keep status/await recovery guidance visible. Dialogs and automatic answer messages are unchanged.
 
 ## Development
 

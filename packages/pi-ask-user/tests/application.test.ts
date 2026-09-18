@@ -112,9 +112,9 @@ const harness = (
     };
   });
 
-const request: AskUserRequest = {
+const request = {
   questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
-};
+} satisfies AskUserRequest;
 
 const asyncRequest: AskUserAsyncRequest = {
   ...request,

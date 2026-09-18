@@ -83,7 +83,7 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
           message:
             `Nested tool output refused: admitting ${bytes} bytes would exceed the cumulative ` +
             `nested-output budget (${used} of ${limitBytes} bytes already used). ` +
-            "Narrow the nested call (smaller limit, tighter pattern, offset/limit) and retry.",
+            "The operation may already have completed. Inspect retained results or affected state; do not replay mutations to recover output.",
         };
       }
       used += bytes;

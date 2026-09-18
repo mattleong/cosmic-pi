@@ -19,20 +19,21 @@ const ESCAPE = "\x1b";
 const DOWN = "\x1b[B";
 const EXTERNAL_EDITOR = "\x07";
 
-const request = (mode: "single" | "multiple" = "single"): AskUserRequest => ({
-  questions: [
-    {
-      key: "approach",
-      title: "Approach",
-      prompt: "Which implementation approach should we use for this change?",
-      mode,
-      choices: [
-        { value: "first", label: "First", description: "First option.", preview: "First" },
-        { value: "second", label: "Second", description: "Use the second authored option." },
-      ],
-    },
-  ],
-});
+const request = (mode: "single" | "multiple" = "single") =>
+  ({
+    questions: [
+      {
+        key: "approach",
+        title: "Approach",
+        prompt: "Which implementation approach should we use for this change?",
+        mode,
+        choices: [
+          { value: "first", label: "First", description: "First option.", preview: "First" },
+          { value: "second", label: "Second", description: "Use the second authored option." },
+        ],
+      },
+    ],
+  }) satisfies AskUserRequest;
 
 interface KeybindingFixture extends Readonly<Record<string, KeyId | undefined>> {}
 const KEY_BINDINGS: KeybindingFixture = {
@@ -85,7 +86,84 @@ const openCustomInput = (dialog: AskUserDialog): void => {
   dialog.handleInput(ENTER);
 };
 
+const textRequest: AskUserRequest = {
+  questions: [
+    { key: "details", title: "Details", prompt: "Describe the requirement.", mode: "text" },
+  ],
+};
+
 describe("AskUserDialog", () => {
+  it("opens text input directly, preserves literal shortcuts and drafts across escape, notes, hide and review", () => {
+    const { dialog, done } = makeDialog(textRequest);
+    const hidden = vi.fn();
+    dialog.setOverlayHandle(opaqueHostFixture({ setHidden: hidden }));
+    dialog.focused = true;
+    typeText(dialog, "bq1234");
+    dialog.handleInput("\x1b[200~\nnext line\x1b[201~");
+    expect(hidden).not.toHaveBeenCalled();
+    expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
+    dialog.handleInput(ESCAPE);
+    dialog.handleInput("b");
+    expect(hidden).toHaveBeenCalledWith(true);
+    dialog.resume();
+    expect(hidden).toHaveBeenCalledWith(false);
+    dialog.handleInput("n");
+    typeText(dialog, "context");
+    dialog.handleInput(ENTER);
+    dialog.handleInput(ENTER);
+    dialog.handleInput(ENTER);
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput("\x1b[D");
+    dialog.handleInput(ENTER);
+    typeText(dialog, " revised");
+    dialog.handleInput(ENTER);
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledWith({
+      outcome: "submitted",
+      answers: [
+        { key: "details", kind: "text", text: "bq1234\nnext line revised", note: "context" },
+      ],
+    });
+  });
+
+  it("retries blank and over-limit text without truncation and accepts the exact bound", () => {
+    const replacement = "x".repeat(4001);
+    const { dialog, done } = makeDialog(
+      textRequest,
+      () => Promise.resolve(replacement),
+      () => 5,
+    );
+    dialog.focused = true;
+    dialog.handleInput(ENTER);
+    expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
+    dialog.handleInput(EXTERNAL_EDITOR);
+    return Promise.resolve().then(() => {
+      dialog.handleInput(ENTER);
+      expect(done).not.toHaveBeenCalled();
+      expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
+      dialog.handleInput("\x7f");
+      dialog.handleInput(ENTER);
+      expect(done).not.toHaveBeenCalled();
+      dialog.handleInput(ENTER);
+      expect(done).toHaveBeenCalledWith({
+        outcome: "submitted",
+        answers: [{ key: "details", kind: "text", text: replacement.slice(0, 4000) }],
+      });
+    });
+  });
+
+  it("enters a later text question directly and discards text on cancellation", () => {
+    const { dialog, done } = makeDialog({
+      questions: [...request().questions, ...textRequest.questions],
+    });
+    dialog.handleInput("1");
+    typeText(dialog, "bq");
+    dialog.handleInput(ENTER);
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput(ESCAPE);
+    expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
+  });
   it("keeps validation feedback visible beside a clipped custom editor", () => {
     const base = request();
     let height = 9;

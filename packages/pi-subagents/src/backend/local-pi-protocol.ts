@@ -45,6 +45,10 @@ const MessageUpdateSchema = Schema.Struct({
     delta: Schema.optional(Schema.String.check(Schema.isMaxLength(MAX_MESSAGE_DELTA_CHARS))),
   }),
 });
+const MessageStartSchema = Schema.Struct({
+  type: Schema.Literal("message_start"),
+  message: Schema.Struct({ role: Schema.String }),
+});
 const MessageEndSchema = Schema.Struct({
   type: Schema.Literal("message_end"),
   message: Schema.Unknown,
@@ -179,6 +183,7 @@ export type RpcChildEnvelope =
   | Schema.Schema.Type<typeof AgentSettledSchema>
   | Schema.Schema.Type<typeof MessageUpdateSchema>
   | Schema.Schema.Type<typeof MessageEndSchema>
+  | Schema.Schema.Type<typeof MessageStartSchema>
   | Schema.Schema.Type<typeof ToolStartSchema>
   | Schema.Schema.Type<typeof ToolEndSchema>
   | Schema.Schema.Type<typeof ExtensionErrorSchema>
@@ -203,6 +208,8 @@ export function decodeRpcEnvelope<ValueInput>(
         return yield* Schema.decodeUnknownEffect(MessageUpdateSchema)(value);
       case "message_end":
         return yield* Schema.decodeUnknownEffect(MessageEndSchema)(value);
+      case "message_start":
+        return yield* Schema.decodeUnknownEffect(MessageStartSchema)(value);
       case "tool_execution_start":
         return yield* Schema.decodeUnknownEffect(ToolStartSchema)(value);
       case "tool_execution_end":
@@ -279,6 +286,8 @@ export const decodeRpcUsageOption = <ValueInput>(value: ValueInput): RpcUsage | 
 const AssistantMessageSchema = Schema.Struct({
   role: Schema.Literal("assistant"),
   content: Schema.Array(Schema.Unknown),
+  stopReason: Schema.optional(Schema.Literals(["stop", "length", "toolUse", "error", "aborted"])),
+  errorMessage: Schema.optional(ProtocolErrorSchema),
   // Usage is decoded independently so malformed accounting cannot discard an
   // otherwise valid assistant message or fail the run.
   usage: Schema.optional(Schema.Unknown),

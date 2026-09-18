@@ -12,6 +12,7 @@ import {
   McpCodeModeOutputSchema,
   mcpCodeModeError,
   mcpCodeModeHasBinary,
+  mcpCodeModeInputError,
   mcpCodeModeJsonFits,
   mcpCodeModeOutcome,
   normalizeMcpCodeModeError,
@@ -98,7 +99,7 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
               const decoded = Option.getOrUndefined(
                 Schema.decodeUnknownOption(McpCodeModeInputSchema)(input),
               );
-              if (!decoded) throw mcpCodeModeError("invalid-input", "not-sent");
+              if (!decoded) throw mcpCodeModeInputError(input);
               if (!available()) throw mcpCodeModeError("unavailable", "not-sent");
               const allowance = Math.min(maxOutputBytes, MCP_CODE_MODE_MAX_OUTPUT_BYTES);
               return activation.execute(callId, decoded, signal, allowance).then((output) => {
