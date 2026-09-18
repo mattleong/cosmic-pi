@@ -340,6 +340,7 @@ test("expanded-only hints render once on expansion, including renderer fallback"
               {
                 kind: "recovery",
                 text: "Continue at offset=143",
+                code: "read-pagination",
                 expandedOnly: true,
                 expandedInResult: true,
               },
@@ -428,4 +429,77 @@ test("throwing result fallback retains hidden image indicators alongside text", 
   const text = paint(tool, context({ showImages: false }), value).rows.join("\n");
   assert.match(text, /image context/u);
   assert.match(text, /image\/png/u);
+});
+
+test("unknown child coverage cannot hide the original batch result", () => {
+  const definition: Definition = {
+    ...createReadToolDefinition("/project"),
+    renderResult: () => new Text("Original recovery must remain visible", 0, 0),
+  };
+  const tool = withCodePreviewShell(definition, {
+    mode: "off",
+    compactSummary: () => ({
+      subject: "batch",
+      outcome: "success",
+      detailsOnExpand: true,
+      issues: { coverage: "complete", entries: [] },
+      children: {
+        total: 1,
+        entries: [
+          { label: "child", status: "success", issues: { coverage: "unknown", entries: [] } },
+        ],
+      },
+    }),
+  });
+  assert.match(paint(tool, context({ expanded: false })).rows.join("\n"), /Original recovery/u);
+});
+
+test("render-time failures revoke component ownership before invalidation and reuse", () => {
+  let fails = true;
+  let inherited: Component | undefined;
+  const definition: Definition = {
+    ...createReadToolDefinition("/project"),
+    renderResult(_value, _options, _theme, ctx) {
+      inherited = ctx.lastComponent;
+      if (!fails) return new Text("Recovered original result", 0, 0);
+      return {
+        render() {
+          throw new Error("bad render");
+        },
+        invalidate() {
+          throw new Error("bad invalidate");
+        },
+      };
+    },
+  };
+  const tool = withCodePreviewShell(definition, {
+    mode: "off",
+    compactSummary: () => ({
+      subject: "operation",
+      outcome: "warning",
+      issues: {
+        coverage: "complete",
+        entries: [
+          {
+            operation: "operation",
+            code: "cleanup",
+            severity: "warning",
+            cause: "Check cleanup",
+            recovery: [],
+            expandedInResult: true,
+          },
+        ],
+      },
+    }),
+  });
+  const ctx = context();
+  const failed = paint(tool, ctx);
+  assert.match(failed.rows.join("\n"), /Check cleanup/u);
+  assert.doesNotThrow(() => {
+    failed.call.invalidate();
+    failed.output.invalidate();
+  });
+  fails = false;
+  assert.match(paint(tool, ctx).rows.join("\n"), /Recovered original result/u);
+  assert.equal(inherited, undefined);
 });

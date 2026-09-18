@@ -36,6 +36,18 @@ export {
 
 export { builtinFailure as projectBuiltinFailure } from "./src/tools/builtin-failure";
 export { isCompactAttention } from "./src/tools/compact-summary";
+export {
+  CompactIssuesSchema,
+  isCompactIssues,
+  normalizeCompactIssues,
+  compactIssueSeverity,
+  legacyCompactIssues,
+  summaryCompactIssues,
+  withCompactIssues,
+  type CompactIssue,
+  type CompactIssues,
+} from "./src/tools/compact-issues";
+export { renderCompactIssues } from "./src/preview/compact-issues";
 
 /** Semantic compact summaries for cooperating tools. */
 export type {

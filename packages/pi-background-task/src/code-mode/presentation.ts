@@ -34,6 +34,23 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
           text: Text,
         }),
       ).check(Schema.isMaxLength(32)),
+      issues: Schema.optionalKey(
+        Schema.Struct({
+          coverage: Schema.Literals(["complete", "unknown"]),
+          entries: Schema.Array(
+            Schema.Struct({
+              operation: Text,
+              code: Text,
+              severity: Schema.Literals(["error", "warning"]),
+              cause: Text,
+              recovery: Schema.Array(Schema.Struct({ code: Text, text: Text })).check(
+                Schema.isMaxLength(8),
+              ),
+              expandedInResult: Schema.optionalKey(Schema.Literal(true)),
+            }),
+          ).check(Schema.isMaxLength(32)),
+        }),
+      ),
       detailsOnExpand: Schema.Literal(true),
     }),
   ),
@@ -62,6 +79,21 @@ export const normalizeBackgroundTaskPresentation = <Value>(
         summary: {
           ...s,
           subject: sanitizeTerminalLine(s.subject),
+          ...(s.issues && {
+            issues: {
+              coverage: s.issues.coverage,
+              entries: s.issues.entries.map((issue) => ({
+                ...issue,
+                operation: sanitizeTerminalLine(issue.operation),
+                code: sanitizeTerminalLine(issue.code),
+                cause: sanitizeTerminalLine(issue.cause),
+                recovery: issue.recovery.map((instruction) => ({
+                  code: sanitizeTerminalLine(instruction.code),
+                  text: sanitizeTerminalLine(instruction.text),
+                })),
+              })),
+            },
+          }),
           metadata: s.metadata.map(sanitizeTerminalLine),
           counters: s.counters.map(sanitizeTerminalLine),
           notices: s.notices.map((n) => ({ ...n, text: sanitizeTerminalLine(n.text) })),
@@ -88,7 +120,7 @@ export const projectBackgroundTaskPresentation = (
     if (!summary?.outcome) return { version: 1, incomplete: true, overflow: false };
     const receipt = normalizeBackgroundTaskPresentation({
       version: 1,
-      incomplete: false,
+      incomplete: summary.issues?.coverage === "unknown",
       overflow: false,
       summary: {
         action: summary.action ?? args.action,
@@ -97,6 +129,7 @@ export const projectBackgroundTaskPresentation = (
         metadata: summary.metadata ?? [],
         counters: summary.counters ?? [],
         notices: summary.notices ?? [],
+        issues: summary.issues,
         detailsOnExpand: true,
       },
     });

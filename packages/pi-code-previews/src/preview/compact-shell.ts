@@ -27,11 +27,9 @@ import {
   renderWithBorderSlot,
   syncBorderShellChrome,
 } from "./bordered-tool-call";
-import {
-  renderCompactFailure,
-  renderCompactNotices,
-  renderCompactToolCall,
-} from "./compact-tool-call";
+import { renderCompactFailure, renderCompactToolCall } from "./compact-tool-call";
+import { compactIssueSeverity, summaryCompactIssues } from "../tools/compact-issues";
+import { renderCompactIssues } from "./compact-issues";
 import { timingState, updateToolCallTiming, withLastComponent } from "./tool-timing";
 import type { CodePreviewToolShell } from "./tool-shell";
 
@@ -153,7 +151,11 @@ class CompactShell implements Component {
     const phase = this.phase(result);
     const summary = this.summary(phase, result);
     const failure = summary && compactSummaryNeedsDetails(summary);
-    if (failure && summary.failure) {
+    const covered =
+      !summary ||
+      (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
+      summaryCompactIssues(summary).coverage === "complete";
+    if (failure && summary.failure && covered) {
       this.detailBounds = undefined;
       const input = {
         name: this.options.name,
@@ -176,16 +178,22 @@ class CompactShell implements Component {
         if (this.mode === "border") {
           const shell = new BorderedToolCall(this.theme);
           shell.setBorderColor(
-            summary.outcome === "cancelled"
-              ? "borderMuted"
-              : summary.outcome === "uncertain"
-                ? "warning"
-                : "error",
+            compactIssueSeverity(summaryCompactIssues(summary)) === "error"
+              ? "error"
+              : summary.outcome === "cancelled"
+                ? "borderMuted"
+                : summary.outcome === "uncertain"
+                  ? "warning"
+                  : "error",
           );
           shell.setResult(body);
           this.display = shell;
         } else {
-          const background = summary.outcome === "error" ? "toolErrorBg" : "toolPendingBg";
+          const background =
+            compactIssueSeverity(summaryCompactIssues(summary)) === "error" ||
+            summary.outcome === "error"
+              ? "toolErrorBg"
+              : "toolPendingBg";
           const shell = new Box(1, 1, (text) => this.theme.bg(background, text));
           shell.addChild(body);
           this.display = shell;
@@ -193,7 +201,12 @@ class CompactShell implements Component {
       }
       return this.display.render(width);
     }
-    if (!this.context.expanded && summary && (!failure || summary.detailsOnExpand === true)) {
+    if (
+      !this.context.expanded &&
+      summary &&
+      covered &&
+      (!failure || summary.detailsOnExpand === true)
+    ) {
       this.detailBounds = undefined;
       return renderCompactToolCall(
         {
@@ -211,36 +224,80 @@ class CompactShell implements Component {
     }
     // Build bodies only when visible. In particular, pending write/edit diffs stay uncomputed.
     this.display ??= this.renderDetails(result !== undefined, summary);
-    const rows = this.display.render(width);
+    let rows: string[];
+    try {
+      rows = this.display.render(width);
+    } catch {
+      // Ownership is accepted only after rendering succeeds, not merely construction.
+      // Never replay a hostile renderer to recover its output.
+      this.callComponent = undefined;
+      this.resultComponent = undefined;
+      this.display = this.renderDetails(result !== undefined, summary, true);
+      rows = this.display.render(width);
+    }
     this.detailBounds = { offset: 0, height: rows.length, width };
     return rows;
   }
 
-  private renderDetails(hasResult: boolean, summary: CompactSummary | undefined): Component {
+  private renderDetails(
+    hasResult: boolean,
+    summary: CompactSummary | undefined,
+    fallback = false,
+  ): Component {
     const outcome = summary?.outcome;
     const context = this.context;
     const isError =
-      outcome === "cancelled" || outcome === "uncertain"
-        ? false
-        : context.isError || outcome === "error";
+      (summary !== undefined && compactIssueSeverity(summaryCompactIssues(summary)) === "error") ||
+      (outcome !== "cancelled" &&
+        outcome !== "uncertain" &&
+        (context.isError || outcome === "error"));
     const state = borderState(context);
     const callContext = withLastComponent(context, this.callComponent);
     const resultContext = withLastComponent(context, this.resultComponent);
     const call = this.callRender;
     const result = this.resultRender;
-    const renderCall = () => (call ? this.renderSlot("call", call, callContext) : undefined);
+    const renderCall = () =>
+      call
+        ? fallback
+          ? this.fallbackSlot("call", callContext)
+          : this.renderSlot("call", call, callContext)
+        : undefined;
     const renderResult = () =>
-      hasResult && result ? this.renderSlot("result", result, resultContext) : undefined;
+      hasResult && result
+        ? fallback
+          ? this.fallbackSlot("result", resultContext)
+          : this.renderSlot("result", result, resultContext)
+        : undefined;
     const callBody =
       this.mode === "border" ? renderWithBorderSlot(state, "call", renderCall) : renderCall();
     const resultBody =
       this.mode === "border" ? renderWithBorderSlot(state, "result", renderResult) : renderResult();
     // Only a current successful original result can accept shared presentation ownership.
     const resultOwns =
-      context.expanded && resultBody !== undefined && resultBody === this.resultComponent;
-    const notices = summary?.notices?.filter((notice) => !resultOwns || !notice.expandedInResult);
+      !fallback &&
+      (!summary ||
+        (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
+        summaryCompactIssues(summary).coverage === "complete") &&
+      context.expanded &&
+      resultBody !== undefined &&
+      resultBody === this.resultComponent;
+    const issues = summary
+      ? summaryCompactIssues(summary, context.expanded)
+      : { coverage: "unknown" as const, entries: [] };
+    const visibleIssues = {
+      ...issues,
+      entries: issues.entries.filter((issue) => !resultOwns || !issue.expandedInResult),
+    };
     const noticeBody: Component = {
-      render: (width) => renderCompactNotices(notices, this.theme, width, context.expanded),
+      render: (width) =>
+        renderCompactIssues(
+          visibleIssues,
+          this.theme,
+          width,
+          context.expanded,
+          Boolean(summary?.children?.total),
+          isError,
+        ),
       invalidate: () => undefined,
     };
     const details = new Container();
@@ -250,8 +307,8 @@ class CompactShell implements Component {
     if (this.mode === "border") {
       const shell = new BorderedToolCall(this.theme);
       syncBorderShellChrome(shell, state, { ...context, isError }, this.timingLabel);
-      if (outcome === "cancelled") shell.setBorderColor("borderMuted");
-      else if (outcome === "uncertain") shell.setBorderColor("warning");
+      if (!isError && outcome === "cancelled") shell.setBorderColor("borderMuted");
+      else if (!isError && outcome === "uncertain") shell.setBorderColor("warning");
       shell.setCall(visibleCall);
       shell.setResult(details);
       return shell;
@@ -286,10 +343,14 @@ class CompactShell implements Component {
       // Pi clears a failed slot. Never return fallback Text as a custom renderer's lastComponent.
       if (slot === "call") this.callComponent = undefined;
       else this.resultComponent = undefined;
-      const text = slot === "call" ? this.options.name : this.fallbackResultText();
-      const color = slot === "call" ? "toolTitle" : context.isError ? "error" : "toolOutput";
-      return new Text(this.theme.fg(color, escapeControlChars(text)), 0, 0);
+      return this.fallbackSlot(slot, context);
     }
+  }
+
+  private fallbackSlot(slot: "call" | "result", context: ToolRenderContext): Component {
+    const text = slot === "call" ? this.options.name : this.fallbackResultText();
+    const color = slot === "call" ? "toolTitle" : context.isError ? "error" : "toolOutput";
+    return new Text(this.theme.fg(color, escapeControlChars(text)), 0, 0);
   }
 
   private fallbackResultText(): string {

@@ -2,6 +2,8 @@
 import * as Schema from "effect/Schema";
 import {
   isCompactAttention,
+  legacyCompactIssues,
+  normalizeCompactIssues,
   selectCompactChildren,
   type CompactNotice,
   type CompactSummaryProvider,
@@ -22,7 +24,7 @@ const TextContentSchema = Schema.Array(
 
 type SummaryProvider = CompactSummaryProvider<unknown, unknown, unknown>;
 
-export const codeModeCompactSummary = (
+const projectCodeModeCompactSummary = (
   { phase, args, result, context }: Parameters<SummaryProvider>[0],
   liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
 ): ReturnType<SummaryProvider> => {
@@ -38,7 +40,32 @@ export const codeModeCompactSummary = (
     ];
     const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
     // Keep informational hints parent-owned when an outer failure bypasses details.
-    const notices: CompactNotice[] = codeModeEvidenceNotices(details).map((notice) => ({
+    const notices: CompactNotice[] = (
+      details.compactAttention?.version === 2
+        ? codeModeEvidenceNotices({
+            ...details,
+            compactAttention: {
+              ...details.compactAttention,
+              notices: [],
+              issues: { coverage: "complete", entries: [] },
+            },
+            toolCalls: details.toolCalls.map((call) => ({
+              ...call,
+              ...(call.compact && {
+                compact: {
+                  ...call.compact,
+                  ...(call.compact.version === 2 && {
+                    issues: { coverage: "complete" as const, entries: [] },
+                  }),
+                  notices: context.isError
+                    ? call.compact.notices.filter((notice) => !isCompactAttention(notice))
+                    : [],
+                },
+              }),
+            })),
+          })
+        : codeModeEvidenceNotices(details)
+    ).map((notice) => ({
       ...notice,
       expandedInResult: true,
     }));
@@ -75,21 +102,6 @@ export const codeModeCompactSummary = (
     )
       return undefined;
     const hasAttention = notices.some(isCompactAttention);
-    const visibleNotices = context.expanded
-      ? []
-      : selectCompactChildren(children).entries.flatMap(
-          (child) => child.notices?.filter(isCompactAttention) ?? [],
-        );
-    for (let index = notices.length - 1; index >= 0; index--) {
-      const notice = notices[index]!;
-      if (
-        isCompactAttention(notice) &&
-        visibleNotices.some(
-          (visible) => visible.kind === notice.kind && visible.text === notice.text,
-        )
-      )
-        notices.splice(index, 1);
-    }
     if (phase !== "settled") return { ...heading, counters, children, notices };
     if (running + queued > 0) {
       notices.push({
@@ -108,31 +120,8 @@ export const codeModeCompactSummary = (
       // coverage lets ordinary source/stack output move exclusively to expanded details.
       if (!known && rest.some((line) => line.trim().length > 0))
         notices.push({ kind: "recovery", text: rest.join("\n") });
-      for (const notice of known?.notices ?? [])
-        if (
-          !notices.some((other) => other.kind === notice.kind && other.text === notice.text) &&
-          !visibleNotices.some((other) => other.kind === notice.kind && other.text === notice.text)
-        )
-          notices.push(notice);
-      // This only omits a redundant root explanation, never attributes the root to a
-      // particular invocation. Independent child failures and their identities stay intact.
-      const rootAlreadyExplained =
-        !context.expanded &&
-        known !== undefined &&
-        selectedCalls.some(
-          (child) =>
-            child.label === known.tool &&
-            child.failureEvidence?.code === known.evidence.code &&
-            child.failureEvidence?.coverage === "complete" &&
-            child.notices?.some(
-              (notice) => notice.kind === "error" && notice.text === known.evidence.cause,
-            ),
-        );
-      if (known) {
-        for (let index = notices.length - 1; index >= 0; index--)
-          if (notices[index]?.kind === "error" && notices[index]?.text === known.evidence.cause)
-            notices.splice(index, 1);
-      }
+      notices.push(...(known?.notices ?? []));
+      // Root provenance has no invocation identity, so it cannot suppress child evidence.
       if (details.cancelled)
         notices.push({
           kind: "warning",
@@ -146,7 +135,7 @@ export const codeModeCompactSummary = (
         outcome: details.cancelled ? "cancelled" : "error",
         ...(text.length > 0 && {
           failure: {
-            cause: rootAlreadyExplained ? "" : (known?.evidence.cause ?? first),
+            cause: known?.evidence.cause ?? first,
             details: text,
           },
         }),
@@ -185,6 +174,46 @@ export const codeModeCompactSummary = (
                 hasAttention
               ? "warning"
               : "success",
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+/** The outer shell owns one issue block. V1 history keeps conservative legacy evidence. */
+export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
+  input,
+  liveElapsed,
+) => {
+  try {
+    const summary = projectCodeModeCompactSummary(input, liveElapsed);
+    if (!summary || !input.result) return summary;
+    const details = decodeCodeModeRenderDetails(input.result.details);
+    const attention = details.compactAttention;
+    if (attention?.version !== 2) return summary;
+    const own = legacyCompactIssues(summary.notices?.filter(isCompactAttention), "code-mode");
+    const root =
+      summary.outcome !== "cancelled" && summary.failure?.cause
+        ? [
+            {
+              operation: "code-mode",
+              code: "program-failure",
+              severity: "error" as const,
+              cause: summary.failure.cause,
+              recovery: [],
+              expandedInResult: true as const,
+            },
+          ]
+        : [];
+    return {
+      ...summary,
+      issues: normalizeCompactIssues([
+        attention.issues,
+        {
+          coverage: attention.incomplete ? "unknown" : attention.issues.coverage,
+          entries: [...own.entries, ...root],
+        },
+      ]),
     };
   } catch {
     return undefined;

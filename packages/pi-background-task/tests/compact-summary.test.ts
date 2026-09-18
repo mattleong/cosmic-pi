@@ -43,6 +43,39 @@ const project = <Details>(
   });
 
 describe("background task compact semantics", () => {
+  it("keeps independent task failures and cleanup gates in one issue collection", () => {
+    const summary = project(
+      {
+        action: "list",
+        tasks: [
+          { ...snapshot, id: "one", state: "exited", exitCode: 2 },
+          { ...snapshot, id: "two", state: "exited", exitCode: 2 },
+          { ...snapshot, id: "three", state: "stopping", droppedLogBytes: 8 },
+        ],
+      },
+      "list",
+    );
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.issues?.coverage).toBe("complete");
+    expect(
+      summary?.issues?.entries
+        .filter((entry) => entry.severity === "error")
+        .map((entry) => entry.code),
+    ).toEqual(["one:exit-code", "two:exit-code"]);
+    expect(
+      summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
+    ).toContain("three:cleanup-unconfirmed");
+    const unknown = project({
+      action: "status",
+      snapshot: {
+        ...snapshot,
+        state: "failed",
+        error: "Custom failure. Inspect external state before retry.",
+      },
+    });
+    expect(unknown?.issues?.coverage).toBe("unknown");
+    expect(JSON.stringify(unknown?.issues)).toContain("Inspect external state before retry.");
+  });
   it("retains supplied task identity before a status result arrives", () => {
     for (const phase of ["pending", "running"] as const) {
       const summary = backgroundTaskCompactSummary({

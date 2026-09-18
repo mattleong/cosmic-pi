@@ -1,5 +1,5 @@
 /** Shared evidence collection; each renderer retains ownership of notice selection. */
-import { isCompactAttention, type CompactNotice } from "pi-code-previews";
+import { isCompactAttention, normalizeCompactIssues, type CompactNotice } from "pi-code-previews";
 import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
 import { mcpAttention } from "../tools/mcp-evidence.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
@@ -9,8 +9,27 @@ export const TRUNCATED_OUTPUT_NOTICE =
 
 export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): CompactNotice[] => {
   const notices: CompactNotice[] = [
-    ...(details.compactAttention?.notices ?? []),
-    ...details.toolCalls.flatMap((call) => call.compact?.notices ?? []),
+    ...(details.compactAttention?.version === 2
+      ? normalizeCompactIssues([
+          details.compactAttention.issues,
+          ...details.toolCalls.flatMap((call) =>
+            call.compact?.version === 2 ? [call.compact.issues] : [],
+          ),
+        ]).entries.flatMap((issue) => [
+          ...(issue.cause
+            ? [{ kind: issue.severity, text: `${issue.operation}: ${issue.cause}` }]
+            : []),
+          ...issue.recovery.map((item) => ({
+            kind: "recovery" as const,
+            text: `${issue.operation}: ${item.text}`,
+          })),
+        ])
+      : (details.compactAttention?.notices ?? [])),
+    ...details.toolCalls.flatMap((call) =>
+      call.compact?.version === 2
+        ? call.compact.notices.filter((notice) => !isCompactAttention(notice))
+        : (call.compact?.notices ?? []),
+    ),
     ...(details.recoveredNotices ?? []),
     ...(details.compactAttention?.incomplete
       ? [{ kind: "warning" as const, text: INCOMPLETE_ATTENTION }]
@@ -26,11 +45,7 @@ export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): Compact
       kind: "recovery",
       text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
     });
-  return notices.filter(
-    (notice, index) =>
-      notices.findIndex((other) => other.kind === notice.kind && other.text === notice.text) ===
-      index,
-  );
+  return notices;
 };
 
 export const codeModeVisibleNotices = (

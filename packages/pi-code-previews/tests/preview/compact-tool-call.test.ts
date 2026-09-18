@@ -279,12 +279,15 @@ test("failure text is inert and width bounded without clipping recovery continua
       assert.ok(rows.every((row) => visibleWidth(row) <= width));
       assert.equal(rows.join("").includes("\u001b[2J"), false);
       if (width >= 40)
-        assert.equal(rows.join("\n").match(/Inspect before retrying\./gu)?.length, 1);
+        assert.equal(
+          rows.join("\n").match(/Inspect before retrying\./gu)?.length,
+          expanded ? 2 : 1,
+        );
     }
   }
 });
 
-test("owned failure notices deduplicate across line endings without losing narrow wide text", () => {
+test("unidentified legacy recovery is not suppressed by matching diagnostic prose", () => {
   const details = "failure\r\nInspect before retrying.\r\nKeep the original file.";
   const rows = renderCompactFailure(
     {
@@ -301,8 +304,8 @@ test("owned failure notices deduplicate across line endings without losing narro
     theme,
     100,
   );
-  assert.equal(rows.join("\n").match(/Inspect before retrying\./gu)?.length, 1);
-  assert.equal(rows.join("\n").match(/Keep the original file\./gu)?.length, 1);
+  assert.equal(rows.join("\n").match(/Inspect before retrying\./gu)?.length, 2);
+  assert.equal(rows.join("\n").match(/Keep the original file\./gu)?.length, 2);
   for (const width of [2, 3, 6]) {
     const narrow = renderCompactFailure(
       {
@@ -347,7 +350,8 @@ test("settlement requires a semantic outcome and Pi errors cannot become success
     "settled",
     true,
   );
-  assert.equal(overridden?.outcome, "error");
+  assert.equal(overridden?.outcome, "success");
+  assert.equal(compactStatus("settled", overridden!), "error");
   assert.equal(compactStatus("running", { subject: "work", outcome: "success" }), "running");
   assert.equal(compactStatus("settled", { subject: "work", outcome: "success" }), "success");
   assert.equal(compactStatus("pending", { subject: "work", outcome: "error" }), "error");

@@ -37,6 +37,28 @@ function summarize<DetailsInput>(
 }
 
 describe("subagent compact semantic policy", () => {
+  it("attributes recovery to each run and keeps unknown warning evidence conservative", () => {
+    const summary = summarize(
+      "list",
+      makeCompactToolDetails({
+        action: "list",
+        runs: [view({ id: "one", state: "stopping" }), view({ id: "two", state: "stopping" })],
+      }),
+    );
+    expect(summary?.issues?.coverage).toBe("complete");
+    expect(
+      summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
+    ).toEqual(["one:cleanup-pending", "two:cleanup-pending"]);
+    const unknown = summarize(
+      "status",
+      makeCompactToolDetails({
+        action: "status",
+        runs: [view({ id: "one", warning: "Review external ownership before retrying." })],
+      }),
+    );
+    expect(unknown?.issues?.coverage).toBe("unknown");
+    expect(JSON.stringify(unknown?.issues)).toContain("Review external ownership before retrying.");
+  });
   it("uses start names or profiles before launch and combines observed state counts", () => {
     const provider = createSubagentCompactSummary("subagent_start");
     for (const agent of [{ name: "Review auth", profile: "reviewer" }, { profile: "reviewer" }]) {
@@ -624,6 +646,9 @@ describe("subagent compact semantic policy", () => {
       "settled",
       { action: "review" },
     );
+    expect(
+      summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
+    ).toEqual(["read-revision", "prepare-revision", "test-preparation", "integrate-preparation"]);
     const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
     for (const required of [
       "ALL pages",

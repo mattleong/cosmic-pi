@@ -75,8 +75,10 @@ const result = {
 it("preserves original truncation independently of unchanged guest data", () => {
   const receipt = projectBackgroundTaskPresentation(args, result);
   expect(receipt.incomplete).toBe(false);
-  expect(receipt.summary?.notices).toHaveLength(1);
+  expect(receipt.summary?.notices.map((notice) => notice.kind)).toEqual(["warning", "recovery"]);
   expect(receipt.summary?.outcome).toBe("warning");
+  expect(receipt.summary?.issues?.coverage).toBe("complete");
+  expect(receipt.summary?.issues?.entries.length).toBeGreaterThan(0);
   expect(JSON.stringify(receipt)).not.toContain(result.text);
   const guest = projectBackgroundTaskCodeModeOutput(result, 4096);
   expect(guest._tag).toBe("Accepted");
@@ -87,6 +89,7 @@ it("preserves original truncation independently of unchanged guest data", () => 
     result,
     isError: false,
   });
+  expect(receipt.summary?.issues).toEqual(pure?.issues);
   const standalone = backgroundTaskCompactSummary({
     phase: "settled",
     args,
@@ -107,7 +110,10 @@ it("preserves original truncation independently of unchanged guest data", () => 
     },
   });
   expect(pure).toEqual(standalone);
-  expect(receipt.summary?.notices).toEqual(pure?.notices);
+  // The v1 receipt retains the legacy notice contract, not the new semantic identities.
+  expect(receipt.summary?.notices).toEqual(
+    pure?.notices?.map(({ kind, text }) => ({ kind, text })),
+  );
 });
 
 it("marks oversized semantic evidence incomplete instead of silently clipping", () => {

@@ -41,7 +41,12 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
             notices.length = 0;
             break;
           }
-          notices.push({ kind: "recovery", text: line });
+          notices.push({
+            code: "shell-retained-output",
+            kind: "recovery",
+            text: line,
+            expandedInResult: true,
+          });
         }
       }
     }
@@ -73,13 +78,31 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
         );
       if (duplicate) {
         code = "edit-ambiguous";
-        cause = `${duplicate[2] === undefined ? "oldText" : `edits[${duplicate[2]}].oldText`} matched ${duplicate[1]} places. Add context to make it unique.`;
+        cause = `${duplicate[2] === undefined ? "oldText" : `edits[${duplicate[2]}].oldText`} matched ${duplicate[1]} places.`;
+        notices.push({
+          code: "edit-add-context",
+          kind: "recovery",
+          text: "Add context to make it unique.",
+          expandedInResult: true,
+        });
       } else if (missing) {
         code = "edit-no-match";
-        cause = `${missing[1] === undefined ? "oldText" : `edits[${missing[1]}].oldText`} was not found. Match the original text, including whitespace.`;
+        cause = `${missing[1] === undefined ? "oldText" : `edits[${missing[1]}].oldText`} was not found.`;
+        notices.push({
+          code: "edit-match-original",
+          kind: "recovery",
+          text: "Match the original text, including whitespace.",
+          expandedInResult: true,
+        });
       } else if (overlap) {
         code = "edit-overlap";
-        cause = `edits[${overlap[1]}] and edits[${overlap[2]}] overlap. Merge them or target disjoint regions.`;
+        cause = `edits[${overlap[1]}] and edits[${overlap[2]}] overlap.`;
+        notices.push({
+          code: "edit-disjoint-regions",
+          kind: "recovery",
+          text: "Merge them or target disjoint regions.",
+          expandedInResult: true,
+        });
       } else if (
         /^No changes made to .+\. The replacements produced identical content\.$/u.test(details)
       ) {
@@ -91,7 +114,7 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
       complete = false;
       // Preserve unfamiliar continuations, including instructions and possible side effects.
       const tail = lines.slice(1).join("\n").trim();
-      if (tail) notices.push({ kind: "recovery", text: tail });
+      if (tail) notices.push({ code: "unclassified-continuation", kind: "recovery", text: tail });
     }
   }
   const failureEvidence: CompactFailureEvidence | undefined =

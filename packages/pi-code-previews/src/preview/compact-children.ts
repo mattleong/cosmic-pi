@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
 import { renderCompactRow, renderCompactNotices } from "./compact-row";
+import { renderCompactIssues } from "./compact-issues";
 import { formatToolCallDuration } from "./format";
 
 const MAX_CHILDREN = 5;
@@ -65,12 +66,35 @@ export function renderCompactChildren(
     const noticeIndent = width - visibleWidth(prefix) >= 2 ? visibleWidth(prefix) : 0;
     const continuation = noticeIndent ? theme.fg("dim", branch === "├─" ? "  │  " : "     ") : "";
     return [truncateToWidth(`${prefix}${row}`, width, "")].concat(
-      renderCompactNotices(
-        entry.notices,
-        theme,
-        width - noticeIndent,
-        expanded,
-        layout === "flat" ? "plain" : "branch",
+      (entry.issues
+        ? [
+            ...renderCompactIssues(
+              entry.issues,
+              theme,
+              width - noticeIndent,
+              expanded,
+              false,
+              entry.status === "error",
+            ),
+            ...(expanded
+              ? renderCompactNotices(
+                  entry.notices?.filter(
+                    (notice) => notice.kind === "recovery" && notice.expandedOnly,
+                  ),
+                  theme,
+                  width - noticeIndent,
+                  true,
+                  layout === "flat" ? "plain" : "branch",
+                )
+              : []),
+          ]
+        : renderCompactNotices(
+            entry.notices,
+            theme,
+            width - noticeIndent,
+            expanded,
+            layout === "flat" ? "plain" : "branch",
+          )
       ).map((notice) => `${continuation}${notice}`),
     );
   });

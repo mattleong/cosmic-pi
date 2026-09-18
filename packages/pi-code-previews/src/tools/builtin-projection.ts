@@ -8,6 +8,7 @@ import { getObjectValue } from "../shared/helpers";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { isCompactAttention, type CompactSummary, type CompactPhase } from "./compact-summary";
 import { builtinFailure } from "./builtin-failure";
+import { withCompactIssues } from "./compact-issues";
 import {
   bashCommandNotices,
   outputLimitProjection,
@@ -46,6 +47,16 @@ export interface BuiltinCompactProjectionInput extends BuiltinCompactPolicy {
  * sensitive text, and bound every retained string/collection. Never retain raw output.
  */
 export function projectBuiltinCompactSummary(
+  tool: BuiltinCompactTool,
+  input: BuiltinCompactProjectionInput,
+): CompactSummary | undefined {
+  const summary = projectBuiltinSummary(tool, input);
+  // Unclassified diagnostic bodies retain the pre-existing full-text failure renderer.
+  if (summary?.failure && summary.failureEvidence?.coverage !== "complete") return summary;
+  return summary && withCompactIssues(summary, tool);
+}
+
+function projectBuiltinSummary(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
 ): CompactSummary | undefined {
@@ -89,7 +100,7 @@ export function projectBuiltinCompactSummary(
     return {
       subject,
       ...failure,
-      notices: deduplicateNotices([...notices, ...failure.notices]),
+      notices: [...notices, ...failure.notices],
     };
   }
   if (phase !== "settled") return { subject, notices };
@@ -119,7 +130,12 @@ export function projectBuiltinCompactSummary(
     if (detail) counters.push(detail);
     const diff = getEditDiff(result.details);
     if (diff) notices.push(...scan([diff]));
-    else notices.push({ kind: "warning", text: "Edit applied; diff unavailable" });
+    else
+      notices.push({
+        code: "edit-diff-unavailable",
+        kind: "warning",
+        text: "Edit applied; diff unavailable",
+      });
   }
   if (tool === "grep" && counters.length === 0) {
     const detail = grepResultDetail(output, result.details);
@@ -130,7 +146,7 @@ export function projectBuiltinCompactSummary(
     counters,
     metadata,
     outcome: notices.some(isCompactAttention) ? "warning" : "success",
-    notices: deduplicateNotices(notices),
+    notices,
   };
 }
 
@@ -160,14 +176,4 @@ function secretInputSources<Args>(
     }
   }
   return sources;
-}
-
-function deduplicateNotices<T extends { kind: string; text: string }>(notices: T[]): T[] {
-  const seen = new Set<string>();
-  return notices.filter((notice) => {
-    const key = `${notice.kind}\0${notice.text}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

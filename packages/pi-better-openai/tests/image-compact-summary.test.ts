@@ -46,10 +46,12 @@ describe("image compact summary", () => {
       expect(summary?.notices).toBeUndefined();
       expect(summary?.subject).toContain("/project/output.png");
     } else {
-      expect(summary?.notices).toContainEqual({
-        kind: "recovery",
-        text: "Saved: /project/output.png",
-      });
+      expect(summary?.notices).toContainEqual(
+        expect.objectContaining({
+          kind: "recovery",
+          text: "Saved: /project/output.png",
+        }),
+      );
     }
     expect(call.result).toEqual(before);
     expect(call.result?.content[1]).toBe(image);
@@ -86,6 +88,10 @@ describe("image compact summary", () => {
     const text = "Save failed.\nOutput may exist; inspect the destination before retrying.";
     call.result = { content: [{ type: "text", text }], details: undefined };
     expect(imageCompactSummary(call)?.failure).toEqual({ cause: text, details: text });
+    expect(imageCompactSummary(call)?.issues).toMatchObject({
+      coverage: "unknown",
+      entries: [{ cause: text }],
+    });
     call.result.content.push(image);
     expect(imageCompactSummary(call)).toBeUndefined();
     expect(call.result.content[1]).toBe(image);

@@ -1,5 +1,9 @@
 import * as Schema from "effect/Schema";
-import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
+import {
+  withCompactIssues,
+  type CompactSummary,
+  type CompactSummaryProvider,
+} from "pi-code-previews";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
@@ -11,9 +15,10 @@ import {
 
 const Outcome = outcomeProjection({ note: Schema.optional(Schema.String) });
 const outcome = projection(Outcome);
+const Identity = Schema.String.check(Schema.isLengthBetween(1, 256));
 const Snapshot = Schema.Struct({
-  requestId: Schema.String,
-  deliveryId: Schema.String,
+  requestId: Identity,
+  deliveryId: Identity,
   status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
   delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
   outcome: Schema.optional(Outcome),
@@ -38,6 +43,7 @@ function summarize(outcomes: readonly (typeof Outcome.Type)[]): CompactSummary {
     subject: cancelled ? "Questionnaire cancelled" : "Answers submitted",
     outcome: cancelled ? "cancelled" : "success",
     counters: cancelled ? [] : [`${answers} ${answers === 1 ? "answer" : "answers"}`],
+    issues: { coverage: "complete", entries: [] },
   };
 }
 
@@ -108,12 +114,7 @@ export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, res
   };
 };
 
-export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
-  phase,
-  args,
-  result,
-  context,
-}) => {
+const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
   if (context.isError) return undefined;
   if (phase !== "settled") return liveSummary(args);
   const single = snapshot(result?.details);
@@ -146,10 +147,31 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
       ...identity,
       outcome: "warning",
       counters: [statuses.join(", ")],
+      issues: {
+        coverage: "complete",
+        entries: rows.map((row) => ({
+          operation: `questionnaire:${row.requestId}`,
+          code: "answers-pending",
+          severity: "warning",
+          cause: "No answers yet.",
+          recovery: [
+            {
+              code: "await-answers",
+              text: "Continue only independent work; use ask_user_async_control await when it is exhausted.",
+            },
+          ],
+        })),
+      },
       notices: [
         {
+          code: "answers-pending",
           kind: "warning",
-          text: "No answers yet. Continue only independent work; use ask_user_async_control await when it is exhausted.",
+          text: "No answers yet.",
+        },
+        {
+          code: "await-answers",
+          kind: "recovery",
+          text: "Continue only independent work; use ask_user_async_control await when it is exhausted.",
         },
       ],
     };
@@ -173,8 +195,26 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
     return {
       ...summary,
       outcome: summary.outcome === "cancelled" ? "cancelled" : "warning",
+      issues: {
+        coverage: "complete",
+        entries: rows
+          .filter((row) => row.delivery === "failed")
+          .map((row) => ({
+            operation: `questionnaire:${row.requestId}:${row.deliveryId}`,
+            code: "delivery-failed",
+            severity: "warning",
+            cause: "Automatic delivery failed.",
+            recovery: [
+              {
+                code: "retrieve-delivery",
+                text: "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.",
+              },
+            ],
+          })),
+      },
       notices: [
         {
+          code: "retrieve-delivery",
           kind: "recovery",
           text: "Automatic delivery failed. Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.",
         },
@@ -182,4 +222,13 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
     };
   }
   return summary;
+};
+
+export const asyncAskUserCompactSummary: CompactSummaryProvider = (input) => {
+  const summary = projectAsyncSummary(input);
+  return summary?.issues
+    ? summary
+    : summary
+      ? withCompactIssues(summary, "ask-user-async")
+      : undefined;
 };

@@ -1,3 +1,4 @@
+import { withCompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import {
@@ -174,16 +175,31 @@ export function createSubagentCompactSummary(
       Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
     );
     applyArgumentLanes(summary, details, phase, lanes);
-    return summary;
+    const projected = withCompactIssues(summary, `subagent:${operation}`);
+    if (hasIncompleteAttention(details))
+      projected.issues = { ...projected.issues, coverage: "unknown" };
+    return projected;
   };
+}
+
+function hasIncompleteAttention(
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+): boolean {
+  if (details.action === "start") return false;
+  if (details.contentOmitted && !("reportsOnlyOmitted" in details && details.reportsOnlyOmitted))
+    return true;
+  return (
+    "cards" in details &&
+    details.cards.some((card) => card.errorTruncated || card.writeClaimsOmitted)
+  );
 }
 
 type Notices = NonNullable<CompactSummary["notices"]>[number][];
 type Phase = Parameters<CompactSummaryProvider>[0]["phase"];
 const appendNotice =
   (notices: Notices) =>
-  (text: string, kind: "warning" | "error" | "recovery" = "recovery") =>
-    notices.push({ kind, text });
+  (code: string | undefined, text: string, kind: "warning" | "error" | "recovery" = "recovery") =>
+    notices.push(code ? { code, kind, text } : { kind, text });
 
 function summarizeStart(
   details: SubagentStartDetails,
@@ -198,22 +214,31 @@ function summarizeStart(
   ];
   summary.metadata = [];
   for (const entry of details.startEntries) {
-    if (entry.routeStatus === "selected" && entry.warning) add(entry.warning, "warning");
-    if (entry.status === "failed")
-      add(`${entry.name}: launch failed; inspect expanded launch evidence.`, "error");
+    if (entry.routeStatus === "selected" && entry.warning) add(undefined, entry.warning, "warning");
+    if (
+      entry.status === "failed" &&
+      !details.startFailures?.some((failure) => failure.index === entry.index)
+    )
+      add(
+        `launch:${entry.index}:failed`,
+        `${entry.name}: launch failed; inspect expanded launch evidence.`,
+        "error",
+      );
   }
   for (const failure of details.startFailures ?? []) {
-    add(failure.message, "error");
+    add(undefined, `${failure.name ?? `Launch ${failure.index + 1}`}: ${failure.message}`, "error");
     const recovery = failure.admittedRun;
     if (recovery) {
-      add(formatFailedStartRecovery(recovery));
+      add(`run:${recovery.runId}:cleanup-receipt`, formatFailedStartRecovery(recovery));
       add(
+        `run:${recovery.runId}:retry-gate`,
         recovery.cleanupDisposition === "confirmed"
           ? failedStartRecoveryAction(recovery)
           : "Do not retry or launch a replacement while cleanup is pending or quarantined. Inspect full subagent_status and confirm process and writer cleanup before recovery.",
       );
     } else {
       add(
+        "launch-recovery-unknown",
         "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
       );
     }
@@ -242,6 +267,7 @@ function awaitNotices(
   summary.metadata = settledMetadata;
   if (cards.length < targets.length) {
     add(
+      "targets-omitted",
       "Some requested targets have no projected state; inspect subagent_status before acting.",
       "warning",
     );
@@ -249,17 +275,22 @@ function awaitNotices(
   }
   if (details.contextOmitted)
     add(
+      "descendant-context",
       "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
     );
   if (details.cancelled) {
     summary.outcome = "cancelled";
     add(
+      "await-cancelled",
       "Await cancelled; child runs were NOT stopped. Inspect status or await the requested targets again.",
     );
   }
   if (details.timedOut && !details.cancelled) {
     summary.outcome = "warning";
-    add("Await timed out; unfinished children continue. Inspect status or await again.");
+    add(
+      "await-timeout",
+      "Await timed out; unfinished children continue. Inspect status or await again.",
+    );
   }
   if (
     details.attentionRequired &&
@@ -272,6 +303,7 @@ function awaitNotices(
     )
   )
     add(
+      "parent-action",
       "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim containment before acting.",
     );
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
@@ -289,13 +321,15 @@ function runNotices(
       `${details.cards.length}/${details.runCount} shown, ${cardCounters(cards).join(", ")}`,
     ];
     add(
+      "runs-omitted",
       "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
       "warning",
     );
   }
   for (const failure of details.actionFailures ?? []) {
-    add(`${failure.id}: ${failure.message}`, "error");
+    add(undefined, `${failure.id}: ${failure.message}`, "error");
     add(
+      `run:${failure.id}:action-recovery`,
       "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
     );
   }
@@ -323,6 +357,7 @@ function summarizeModels(
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
       add(
+        `profile:${profile.id}:unavailable`,
         `${profile.id}: ${invalid ? "invalid profile configuration" : "no statically eligible candidates"}; inspect expanded discovery.`,
         "warning",
       );
@@ -382,6 +417,7 @@ function summarizeDetails(
   if (details.action === "start") return summarizeStart(details, phase, summary, notices);
   if (details.contentOmitted && !("reportsOnlyOmitted" in details && details.reportsOnlyOmitted)) {
     add(
+      "evidence-omitted",
       "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
       "warning",
     );

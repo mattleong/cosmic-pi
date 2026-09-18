@@ -1,3 +1,6 @@
+import type { CompactIssues } from "./compact-issues";
+import { compactIssueSeverity, summaryCompactIssues, legacyCompactIssues } from "./compact-issues";
+import { isSafeCompactSummary } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
 
@@ -11,6 +14,8 @@ export type CompactPhase = "pending" | "running" | "settled";
 export type CompactOutcome = "success" | "warning" | "error" | "cancelled" | "uncertain";
 
 export interface CompactNotice {
+  /** Producer-owned identity within this operation. Absent on unclassified history. */
+  code?: string;
   kind: "warning" | "error" | "recovery";
   text: string;
   /** Informational recovery shown only on expansion. Ignored for warnings and errors. */
@@ -28,6 +33,7 @@ export function isCompactAttention(notice: CompactNotice): boolean {
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
 export interface CompactChild {
+  issues?: CompactIssues;
   failureEvidence?: CompactFailureEvidence;
   label: string;
   action?: string;
@@ -53,6 +59,7 @@ export interface CompactFailureEvidence {
 
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */
 export interface CompactSummary {
+  issues?: CompactIssues;
   subject: string;
   /** Operation not already identified by the tool name. Kept separate from target clipping. */
   action?: string;
@@ -106,12 +113,58 @@ export function resolveCompactSummary(
   phase: CompactPhase,
   isError: boolean,
 ): CompactSummary | undefined {
-  if (!summary || (phase === "settled" && summary.outcome === undefined)) return undefined;
   if (
-    (isError && summary.outcome !== "cancelled" && summary.outcome !== "uncertain") ||
-    summary.notices?.some((notice) => notice.kind === "error")
+    !summary ||
+    !isSafeCompactSummary(summary) ||
+    (phase === "settled" && summary.outcome === undefined)
   )
-    return { ...summary, outcome: "error" };
+    return undefined;
+  if (
+    isError &&
+    summary.outcome !== "cancelled" &&
+    !summary.issues?.entries.some((issue) => issue.severity === "error")
+  ) {
+    const issues =
+      summary.issues ??
+      legacyCompactIssues(
+        [
+          ...(summary.notices ?? []),
+          ...(summary.outcome === "uncertain"
+            ? [{ kind: "warning" as const, text: "Execution outcome is uncertain." }]
+            : []),
+        ],
+        "outer",
+      );
+    return {
+      ...summary,
+      issues: {
+        ...issues,
+        coverage: summary.issues?.coverage ?? "complete",
+        entries: [
+          ...issues.entries,
+          ...(summary.outcome === "uncertain" && summary.issues
+            ? [
+                {
+                  operation: "outer",
+                  code: "execution-uncertain",
+                  severity: "warning" as const,
+                  cause: "Execution outcome is uncertain.",
+                  recovery: [],
+                },
+              ]
+            : []),
+          {
+            operation: "outer",
+            code: "pi-error",
+            severity: "error",
+            cause: summary.failure?.cause || "Tool reported a failure.",
+            recovery: [],
+            ...(summary.failure && { expandedInResult: true as const }),
+          },
+        ],
+      },
+    };
+  }
   return summary;
 }
 
@@ -121,13 +174,16 @@ export function compactStatus(
   summary: CompactSummary,
 ): Exclude<CompactPhase, "settled"> | CompactOutcome {
   return phase === "settled" || compactSummaryNeedsDetails(summary)
-    ? (summary.outcome ?? "uncertain")
+    ? summary.outcome === "error"
+      ? "error"
+      : (compactIssueSeverity(summaryCompactIssues(summary)) ?? summary.outcome ?? "uncertain")
     : phase;
 }
 
 /** Semantic non-success classification, independent of collapsed presentation opt-ins. */
 export function compactSummaryNeedsDetails(summary: CompactSummary): boolean {
   return (
+    compactIssueSeverity(summaryCompactIssues(summary)) === "error" ||
     summary.outcome === "error" ||
     summary.outcome === "cancelled" ||
     summary.outcome === "uncertain"

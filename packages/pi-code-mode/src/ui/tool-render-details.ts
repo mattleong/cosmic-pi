@@ -2,6 +2,7 @@
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import { invocationIssues } from "../tools/issue-evidence.ts";
 import { FailurePresentationSchema, type FailurePresentation } from "../tools/failure-evidence.ts";
 import {
   CompactReceiptSchema,
@@ -101,7 +102,15 @@ const decodeCallEntry = <Value>(value: Value): NormalizedCallEntry => {
   const liveTiming = decodeOption(LiveChildTimingSchema, entry.liveTiming);
   const subject = decodeOption(SubjectSchema, entry.subject);
   const base: CodeModeCallEntry = {
-    ...(compact !== undefined && { compact: { ...compact, notices } }),
+    ...(compact !== undefined && {
+      compact: {
+        ...compact,
+        notices,
+        ...(compact.version === 2 && {
+          issues: invocationIssues(compact.issues) ?? { coverage: "unknown", entries: [] },
+        }),
+      },
+    }),
     tool: Predicate.isString(entry.tool) ? entry.tool : "",
     status,
   };
@@ -163,7 +172,17 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
       ? record.outputKind
       : undefined;
   const mcpEvidence = decodeOption(McpEvidenceSchema, record.mcpEvidence);
-  const decodedAttention = decodeOption(CompactAttentionSchema, record.compactAttention);
+  const rawAttention = decodeOption(CompactAttentionSchema, record.compactAttention);
+  const decodedAttention =
+    rawAttention?.version === 2
+      ? {
+          ...rawAttention,
+          issues: invocationIssues(rawAttention.issues) ?? {
+            coverage: "unknown" as const,
+            entries: [],
+          },
+        }
+      : rawAttention;
   const malformedReceipt = normalizedCalls.some((entry) => entry.malformed);
   const visibleOutcomes = { errors: 0, warnings: 0, cancelled: 0, uncertain: 0 };
   for (const call of toolCalls) {

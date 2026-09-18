@@ -306,6 +306,7 @@ export const makeCodeModeToolExecute =
                       : observation.isError || observation.outcome === "not-sent"
                         ? "error"
                         : "warning",
+                  issues: observation.issues,
                   notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
                 };
               }),

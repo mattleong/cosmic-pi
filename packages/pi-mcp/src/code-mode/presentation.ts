@@ -1,5 +1,9 @@
-/** Pure, bounded recovery evidence. Never retain request arguments or result bodies. */
+/** Pure, bounded recovery evidence. No arguments or general result bodies; issues may
+ * retain bounded sanitized remote error text. Nested consumers enforce receipt limits.
+ */
 import * as Predicate from "effect/Predicate";
+import type { CompactIssues } from "pi-code-previews";
+import { projectMcpIssues } from "./issues.ts";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import {
@@ -10,6 +14,7 @@ import {
 import { normalizeMcpCodeModeError } from "./protocol.ts";
 
 export interface McpPresentation {
+  readonly issues: CompactIssues;
   readonly outcome: "completed" | "unknown" | "not-sent";
   readonly isError: boolean;
   readonly incomplete: boolean;
@@ -215,8 +220,20 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
       "MCP presentation evidence is incomplete. Some recovery information is unavailable; do not replay operations to recover output.",
     );
   }
-  const presentation: McpPresentation = { outcome, isError, incomplete, truncated, notices };
-  return resultId ? { ...presentation, resultId } : presentation;
+  const evidence: Omit<McpPresentation, "issues"> = {
+    outcome,
+    isError,
+    incomplete,
+    truncated,
+    notices,
+  };
+  const retained = resultId ? { ...evidence, resultId } : evidence;
+  const issues = projectMcpIssues(field, reply, retained);
+  return {
+    ...retained,
+    incomplete,
+    issues: incomplete ? { ...issues, coverage: "unknown" } : issues,
+  };
 };
 
 export const projectMcpFailurePresentation = <Error>(error: Error): McpPresentation => {

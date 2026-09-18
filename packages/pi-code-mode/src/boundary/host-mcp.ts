@@ -136,6 +136,7 @@ export const makeMcpDispatch = (options: {
                               outcome: reply.outcome,
                               isError: reply.isError,
                               incomplete: true,
+                              issues: { coverage: "unknown", entries: [] },
                               truncated: false,
                               notices: [...reply.notices],
                             });

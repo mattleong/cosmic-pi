@@ -119,7 +119,7 @@ describe("interpreter delivery evidence", () => {
       context: opaqueHostFixture({ isError: false }),
     })!;
     expect(
-      summary.notices?.some((notice) => notice.text === recovery(receipts.get(0)!)[0]!.text),
+      summary.issues?.entries.some((issue) => issue.cause === recovery(receipts.get(0)!)[0]!.text),
     ).toBe(true);
     const theme = opaqueHostFixture({
       fg: (_color: string, text: string) => text,

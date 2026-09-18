@@ -52,9 +52,9 @@ Only runtime source plus its README, legal, and provenance documents ship.
   receipts supply semantic child statuses; delivery failures override successful operation colors
   without changing the recorded operation outcome. `call-rows.ts` shares this receipt projection
   with `expanded-result.ts`. Expansion renders Program, Calls, and Result sections.
-  `notices.ts` collects evidence for compact, detailed, and emergency views; each view controls
-  visibility and affected-call ownership. Replay normalizes each row once, salvaging bounded valid
-  notices separately when sibling fields invalidate its receipt.
+  `notices.ts` collects evidence for detailed and emergency views without text-based deduplication.
+  The shared issue reducer merges only matching operation/code evidence. Replay normalizes each
+  row once, salvaging bounded valid notices and structured recovery when sibling fields fail.
   `sections.ts` owns real spacer rows and width-aware indentation. Calls reuse flat compact
   rows with plain hints beneath each row; the collapsed tree remains unchanged. Aggregate
   recovery has its own Notices section so it cannot appear to belong to the last visible call. `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
@@ -264,8 +264,9 @@ complete errors such as native edit matching refusals do not imply incomplete pr
 `tools/failure-evidence.ts` projects only recognized native outer diagnostics into bounded
 semantic provenance. `ui/failure-presentation.ts` checks that saved provenance against the current
 error text before folding ordinary source/stack details. It never identifies a culprit by call
-order or counts. A matching visible child explanation can replace a redundant root explanation;
-full outer text remains available expanded. Unrecognized errors and historical metadata retain
+order or counts. Root provenance currently has no invocation ID. It cannot prove which parallel call propagated
+a failure, so root explanations remain separate rather than suppressing a child by matching text.
+Full outer text remains available expanded. Unrecognized errors and historical metadata retain
 conservative recovery. Failed counts live in header metadata, with separate summaries for hidden
 failures. Hidden failure counts use selected rows' original lifecycle identities, not semantic
 display colors; an uncertain MCP row can still represent a received lifecycle failure.
@@ -283,7 +284,13 @@ Only bounded sanitized presentation fields survive. Failure bodies, nested outpu
 arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots
 are detached and frozen, including failure retention; settlement revokes late callbacks. The older
 `tools/mcp-evidence.ts` only decodes and renders historical MCP-specific ledgers. New executions
-publish one generic attention ledger. Historical dual-ledger records still validate both because
+publish v2 receipts and one v2 generic attention ledger. `tools/issue-evidence.ts` bounds each
+collection to 32 issues, each issue to eight recovery instructions, and each string to 1024
+UTF-16 units. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
+failures have independent identities and never rewrite captured operation outcomes. Structured
+coverage is separate from outcome counters. Unknown coverage retains the original renderer;
+malformed and overflowing evidence adds explicit incomplete recovery. Explicit v1 schema branches
+continue decoding historical receipts and ledgers without inventing semantic identities. Historical dual-ledger records still validate both because
 older per-call receipts did not contain complete MCP recovery. Overflow or malformed evidence
 never silently becomes success; fallback retains salvaged notices and explicit incompleteness.
 

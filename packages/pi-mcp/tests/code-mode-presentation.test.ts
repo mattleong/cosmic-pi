@@ -15,6 +15,30 @@ const reply = <Data>(data: Data, extra = {}) => ({
   ...extra,
 });
 describe("producer MCP presentation", () => {
+  it("keeps retained origin failure, read failure, uncertainty and cleanup independently", () => {
+    const presentation = projectMcpPresentation(
+      reply(
+        {
+          kind: "cleanup",
+          message: "Reading output failed.",
+          origin: { action: "tools.call", outcome: "unknown", isError: true },
+        },
+        { action: "result.read", outcome: "unknown", isError: true, resultId: "saved" },
+      ),
+    );
+    expect(presentation.issues.coverage).toBe("unknown");
+    expect(presentation.issues.entries.map((entry) => entry.code)).toEqual(
+      expect.arrayContaining([
+        "origin-failed",
+        "retained-read-failed",
+        "execution-unknown",
+        "cleanup-unconfirmed",
+      ]),
+    );
+    expect(
+      presentation.issues.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
+    ).toEqual(expect.arrayContaining(["inspect-before-replay", "cleanup-gate", "read-retained"]));
+  });
   it.each(["unknown", "not-sent", "completed"] as const)(
     "preserves retained %s certainty",
     (outcome) => {

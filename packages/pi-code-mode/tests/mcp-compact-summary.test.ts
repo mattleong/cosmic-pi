@@ -142,7 +142,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
     [reply(), "success"],
     [reply({ isError: true }), "error"],
     [reply({ outcome: "unknown" }), "uncertain"],
-    [reply({ outcome: "not-sent" }), "error"],
+    [reply({ outcome: "not-sent" }), "warning"],
     [reply({ notices: ["Inspect server access before continuing."] }), "warning"],
     [reply({ data: { result: { undiscovered: ["server"] } } }), "warning"],
     [reply({ data: { result: { truncated: true } } }), "warning"],
@@ -162,7 +162,7 @@ describe("MCP execution evidence in compact Code Mode results", () => {
     [{ outcome: "completed", isError: false }, "success"],
     [{ outcome: "completed", isError: true }, "error"],
     [{ outcome: "unknown", isError: false }, "uncertain"],
-    [{ outcome: "not-sent", isError: false }, "error"],
+    [{ outcome: "not-sent", isError: false }, "warning"],
     [{ outcome: "completed", isError: false, outputValidation: "failed" }, "error"],
     [{ outcome: "completed", isError: false, outputValidation: "unavailable" }, "warning"],
     [{ outcome: "completed" }, "uncertain"],
@@ -395,8 +395,8 @@ describe("MCP execution evidence in compact Code Mode results", () => {
           outcome === "unknown" ? "uncertain" : "error",
         );
         expect(
-          summary(result.details)?.notices?.some((notice) =>
-            notice.text.includes("Early recovery"),
+          summary(result.details)?.issues?.entries.some((issue) =>
+            issue.cause.includes("Early recovery"),
           ),
         ).toBe(true);
       }),

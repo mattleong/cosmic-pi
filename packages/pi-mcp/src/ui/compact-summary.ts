@@ -28,7 +28,7 @@ const searchQuery = <Args>(args: Args): string | undefined => {
   }
 };
 
-/** Display-only opt-in. Failures keep the existing renderer, including remote recovery details. */
+/** Only complete producer evidence may replace the original collapsed card. */
 export const projectMcpCompactSummary = ({
   phase,
   args,
@@ -49,14 +49,13 @@ export const projectMcpCompactSummary = ({
   if (phase !== "settled") return isError ? undefined : { action, subject };
 
   const card = decodeMcpCardDetails(result);
-  // A resolved Pi call is not evidence of remote success. Historical, unknown,
-  // not-sent and failed replies remain unowned, never flattened into a cause.
+  // The original card retains unknown diagnostics and its sanitized remote error body.
   if (
-    isError ||
     !card.known ||
     card.presentation.incomplete ||
-    card.presentation.outcome !== "completed" ||
-    card.presentation.isError
+    card.diagnostic ||
+    (isError && !card.presentation.isError) ||
+    (card.presentation.isError && card.presentation.issues.coverage !== "complete")
   )
     return undefined;
 
@@ -77,15 +76,30 @@ export const projectMcpCompactSummary = ({
       notice: text,
     });
     return policy.visibility === "expanded-only"
-      ? { kind: "recovery", text, expandedOnly: true, expandedInResult: true }
+      ? {
+          code: "discovery-information",
+          kind: "recovery",
+          text,
+          expandedOnly: true,
+          expandedInResult: true,
+        }
       : { kind: "warning", text, expandedInResult: true };
   });
   return {
     action,
     subject,
     counters,
-    outcome: notices.some(isCompactAttention) ? "warning" : "success",
+    outcome:
+      isError || card.presentation.isError
+        ? "error"
+        : card.presentation.outcome === "unknown"
+          ? "uncertain"
+          : notices.some(isCompactAttention) || card.presentation.issues.entries.length
+            ? "warning"
+            : "success",
     notices,
+    issues: card.presentation.issues,
+    detailsOnExpand: true,
   };
 };
 

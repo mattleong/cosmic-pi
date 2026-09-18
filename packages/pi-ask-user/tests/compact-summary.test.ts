@@ -173,6 +173,7 @@ describe("questionnaire compact outcome projection", () => {
       summarize(asyncAskUserCompactSummary, row({ status: "cancelled", outcome: cancelled })),
     ]) {
       expect(summary?.outcome).toBe("cancelled");
+      expect(summary?.issues?.entries).toEqual([]);
       expect(summary?.failure).toBeUndefined();
     }
   });
@@ -180,6 +181,12 @@ describe("questionnaire compact outcome projection", () => {
   it("keeps automatic delivery recovery visible even when answers were submitted", () => {
     const summary = summarize(asyncAskUserCompactSummary, row({ delivery: "failed" }));
     expect(summary?.outcome).toBe("warning");
+    expect(summary?.issues).toMatchObject({
+      coverage: "complete",
+      entries: [
+        { code: "delivery-failed", severity: "warning", recovery: [{ code: "retrieve-delivery" }] },
+      ],
+    });
     expect(summary?.notices).toEqual([
       expect.objectContaining({
         kind: "recovery",

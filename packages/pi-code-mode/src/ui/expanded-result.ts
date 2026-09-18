@@ -3,7 +3,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import {
   renderCompactChildren,
-  renderCompactNotices,
+  renderCompactIssues,
+  summaryCompactIssues,
   renderCompactRow,
   type CompactSummary,
 } from "pi-code-previews";
@@ -41,10 +42,7 @@ export const renderExpandedCodeModeResult = (
     entries: codeModeCallRows(details, phase, presentation.liveElapsed),
   };
   const summary = presentation.summary;
-  const shown = children.entries.flatMap((child) => child.notices ?? []);
-  const notices = summary?.notices?.filter(
-    (notice) => !shown.some((child) => child.kind === notice.kind && child.text === notice.text),
-  );
+  const issues = summary ? summaryCompactIssues(summary, true) : undefined;
   const body = new Container();
   if (presentation.ownsCall) {
     if (summary)
@@ -85,7 +83,14 @@ export const renderExpandedCodeModeResult = (
     calls.addChild({
       render: (width) =>
         renderCompactChildren(
-          children,
+          {
+            ...children,
+            entries: children.entries.map((child) => ({
+              ...child,
+              notices: [],
+              issues: { coverage: "complete", entries: [] },
+            })),
+          },
           theme,
           width,
           animationFrame,
@@ -98,10 +103,10 @@ export const renderExpandedCodeModeResult = (
     if (fallbackStatus) calls.addChild(new Text(fallbackStatus, 0, 0));
   }
   // Aggregate/evicted recovery belongs to the parent, not the last visible call.
-  if (notices?.length) {
+  if (issues?.entries.length) {
     const attention = addCodeModeSection(body, "Notices", theme);
     attention.addChild({
-      render: (width) => renderCompactNotices(notices, theme, width, true, "plain"),
+      render: (width) => renderCompactIssues(issues, theme, width, true, true),
       invalidate() {},
     });
   }

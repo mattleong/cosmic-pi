@@ -1,12 +1,12 @@
 import * as Predicate from "effect/Predicate";
-import type { CompactSummaryProvider } from "pi-code-previews";
+import { withCompactIssues, type CompactSummaryProvider } from "pi-code-previews";
 import type { ToolParams } from "./types.ts";
 
 const short = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 100);
 const optionalString = <Value>(value: Value) => value === undefined || Predicate.isString(value);
 
 /** Projects display state only. Pi retains ownership of result images and execution. */
-export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
+const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
   phase,
   args,
   result,
@@ -38,6 +38,8 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   if (
     !Predicate.isObject(details) ||
     !Predicate.isString(details.id) ||
+    details.id.length === 0 ||
+    details.id.length > 256 ||
     !Predicate.isString(details.status) ||
     !Predicate.isString(details.prompt) ||
     !Predicate.isString(details.mimeType) ||
@@ -53,14 +55,41 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
     return undefined;
   const savedPath = Predicate.isString(details.savedPath) ? details.savedPath : undefined;
   const finalSubject = savedPath || short(String(details.prompt));
-  const notices = savedPath ? [{ kind: "recovery" as const, text: `Saved: ${savedPath}` }] : [];
+  const notices = savedPath
+    ? [
+        {
+          code: "saved-path",
+          kind: "recovery" as const,
+          text: `Saved: ${savedPath}`,
+          expandedOnly: true as const,
+        },
+      ]
+    : [];
   switch (details.status) {
     case "completed":
       // A completed record without an image is not evidence of a delivered image.
       if (!result?.content.some((part) => part.type === "image")) return undefined;
       return { action: String(details.action), subject: finalSubject, outcome: "success" };
     case "failed":
-      return { action: String(details.action), subject: finalSubject, outcome: "error", notices };
+      // Status alone cannot account for remote diagnostic text or recovery.
+      return {
+        action: String(details.action),
+        subject: finalSubject,
+        outcome: "error",
+        notices,
+        issues: {
+          coverage: "unknown",
+          entries: [
+            {
+              operation: `image:${details.id}`,
+              code: "image-failed",
+              severity: "error",
+              cause: "Image generation failed.",
+              recovery: [],
+            },
+          ],
+        },
+      };
     case "cancelled":
       return {
         action: String(details.action),
@@ -74,9 +103,25 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
         action: String(details.action),
         subject: finalSubject,
         outcome: "uncertain",
-        notices,
+        notices: [
+          ...notices,
+          {
+            code: `image-${details.status}`,
+            kind: "warning",
+            text: `Image generation is ${details.status}.`,
+          },
+        ],
       };
     default:
       return undefined;
   }
+};
+
+export const imageCompactSummary: CompactSummaryProvider<ToolParams> = (input) => {
+  const summary = projectImageSummary(input);
+  return summary?.issues
+    ? summary
+    : summary
+      ? withCompactIssues(summary, "openai-image")
+      : undefined;
 };

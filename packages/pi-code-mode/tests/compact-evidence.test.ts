@@ -115,7 +115,7 @@ describe("compact semantic evidence", () => {
             context: opaqueHostFixture({ isError: true, expanded: false }),
           });
           expect(compact?.failure?.details).toBe(text);
-          expect(compact?.failure?.cause).toBe("");
+          expect(compact?.failure?.cause).toBe(details.failurePresentation?.evidence.cause);
           expect(
             compact?.children?.entries[0]?.notices?.filter((notice) => notice.kind === "error"),
           ).toHaveLength(1);
@@ -544,7 +544,9 @@ describe("compact semantic evidence", () => {
       outputKind: "text",
       compactAttention: collector.snapshot(),
     };
-    expect(project(details)?.notices?.some((notice) => notice.text === "Recovery 0")).toBe(true);
+    expect(project(details)?.issues?.entries.some((issue) => issue.cause === "Recovery 0")).toBe(
+      true,
+    );
     expect(project(details)?.notices?.some((notice) => notice.text.includes("warning limit"))).toBe(
       true,
     );
@@ -682,8 +684,8 @@ describe("compact semantic evidence", () => {
           yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(serialized),
         );
         expect(replay.toolCalls[0]?.compact?.notices[0]).toMatchObject({ expandedOnly: true });
-        expect(project(completed.details!)?.notices).toContainEqual(
-          expect.objectContaining({ expandedOnly: true, expandedInResult: true }),
+        expect(project(completed.details!)?.children?.entries[0]?.notices).toContainEqual(
+          expect.objectContaining({ expandedOnly: true }),
         );
         const theme = opaqueHostFixture({
           fg: (_color: string, text: string) => text,
@@ -723,9 +725,11 @@ describe("compact semantic evidence", () => {
         expect(summary?.notices).toContainEqual(
           expect.objectContaining({ expandedOnly: true, expandedInResult: true }),
         );
-        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(1);
+        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(2);
         expect(
-          summary?.notices?.some((notice) => notice.text.includes("/tmp/recovery-output")),
+          summary?.issues?.entries.some((issue) =>
+            issue.recovery.some((instruction) => instruction.text.includes("/tmp/recovery-output")),
+          ),
         ).toBe(true);
       }),
   );

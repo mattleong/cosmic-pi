@@ -22,7 +22,7 @@ export function secretNotices(
     sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
   );
   return warnings.size > 0
-    ? [{ kind: "warning", text: `Possible ${[...warnings].join(", ")}` }]
+    ? [{ code: "possible-secrets", kind: "warning", text: `Possible ${[...warnings].join(", ")}` }]
     : [];
 }
 
@@ -33,7 +33,11 @@ export function bashCommandNotices(
   if (!enabled) return [];
   // Do not partially scan a command and hide warnings in its unscanned middle.
   if (command.length > 16 * 1024) return undefined;
-  return getBashWarnings(command).map((text) => ({ kind: "warning", text }));
+  return getBashWarnings(command).map((text, index) => ({
+    code: `command-risk-${index}`,
+    kind: "warning",
+    text,
+  }));
 }
 
 export function readNotices<Details>(
@@ -44,7 +48,9 @@ export function readNotices<Details>(
   const truncation = getObjectValue(details, "truncation");
   if (getObjectValue(truncation, "firstLineExceedsLimit") === true) {
     // This successful read contains only the host's bash recovery instruction.
-    return output ? [{ kind: "recovery", text: escapeControlChars(output) }] : undefined;
+    return output
+      ? [{ code: "oversized-first-line", kind: "recovery", text: escapeControlChars(output) }]
+      : undefined;
   }
   const truncated = isTruncated(details);
   if (!truncated && !hasLimit) return [];
@@ -69,13 +75,14 @@ export function readNotices<Details>(
     if (lastLinePartial !== true && (requestedRange || linePage || bytePage))
       return [
         {
+          code: "read-continuation",
           kind: "recovery",
           text: escapeControlChars(notice),
           expandedOnly: true,
           expandedInResult: true,
         },
       ];
-    return [{ kind: "recovery", text: escapeControlChars(notice) }];
+    return [{ code: "read-truncated", kind: "recovery", text: escapeControlChars(notice) }];
   }
   // An unrecognized host continuation may contain recovery detail we cannot summarize.
   return truncated ? undefined : [];
@@ -94,11 +101,20 @@ export function outputLimitProjection<Details>(
   const notices: CompactNotice[] = [];
   const metadata: string[] = [];
   const counters: string[] = [];
-  if (isTruncated(details)) notices.push({ kind: "warning", text: `Output truncated by ${tool}` });
+  if (isTruncated(details))
+    notices.push({
+      code: "output-truncated",
+      kind: "warning",
+      text: `Output truncated by ${tool}`,
+    });
   if (tool === "bash") {
     const path = getObjectValue(details, "fullOutputPath");
     if (Predicate.isString(path) && path)
-      notices.push({ kind: "recovery", text: `Full output: ${escapeControlChars(path)}` });
+      notices.push({
+        code: "retained-output",
+        kind: "recovery",
+        text: `Full output: ${escapeControlChars(path)}`,
+      });
     return { notices, metadata };
   }
   const field =
@@ -113,6 +129,7 @@ export function outputLimitProjection<Details>(
     counters.push(`limit reached: ${limit}`);
   if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
     notices.push({
+      code: "grep-partial-lines",
       kind: "recovery",
       text: "Some lines truncated. Use read tool to see full lines.",
     });
@@ -150,7 +167,11 @@ export function writeDiffProjection<Before>(
       };
     return {
       notices: [
-        { kind: "warning", text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}` },
+        {
+          code: "write-diff-skipped",
+          kind: "warning",
+          text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}`,
+        },
       ],
       metadata: [],
     };
@@ -159,7 +180,11 @@ export function writeDiffProjection<Before>(
   if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent))
     return {
       notices: [
-        { kind: "warning", text: "Write applied; diff unavailable: previous content unavailable" },
+        {
+          code: "write-history-unavailable",
+          kind: "warning",
+          text: "Write applied; diff unavailable: previous content unavailable",
+        },
       ],
       metadata: [],
     };

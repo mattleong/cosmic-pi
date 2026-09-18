@@ -1,3 +1,4 @@
+import { withCompactIssues } from "pi-code-previews";
 import type {
   CompactNotice,
   CompactOutcome,
@@ -90,21 +91,32 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
     outcome = "uncertain";
   if (value.droppedLogBytes > 0)
     notices.push({
+      code: `${value.id}:log-loss`,
       kind: "warning",
       text: `${value.droppedLogBytes} log bytes discarded; discarded output cannot be recovered.`,
     });
   if (value.state === "stopping")
     notices.push({
+      code: `${value.id}:cleanup-unconfirmed`,
       kind: "recovery",
       text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
     });
   if (value.state === "timed_out")
-    notices.push({ kind: "error", text: "Task exceeded its runtime timeout." });
+    notices.push({
+      code: `${value.id}:runtime-timeout`,
+      kind: "error",
+      text: "Task exceeded its runtime timeout.",
+    });
   if (outcome === "error") {
     if (value.exitCode !== undefined && value.exitCode !== null && value.exitCode !== 0)
-      notices.push({ kind: "error", text: `Process exited with code ${value.exitCode}.` });
+      notices.push({
+        code: `${value.id}:exit-code`,
+        kind: "error",
+        text: `Process exited with code ${value.exitCode}.`,
+      });
     if (value.signal)
       notices.push({
+        code: `${value.id}:signal`,
         kind: "error",
         text: `Process received signal ${sanitizeTerminalLine(value.signal)}.`,
       });
@@ -113,10 +125,15 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
       !value.error &&
       !notices.some((notice) => notice.kind === "error")
     )
-      notices.push({ kind: "error", text: "Task failed; no failure cause was reported." });
+      notices.push({
+        code: `${value.id}:failed`,
+        kind: "error",
+        text: "Task failed; no failure cause was reported.",
+      });
   }
   if (value.state === "exited" && value.exitCode == null)
     notices.push({
+      code: `${value.id}:exit-unknown`,
       kind: "recovery",
       text: "Process exited, but its exit code is unknown; inspect task status.",
     });
@@ -141,21 +158,23 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   };
 }
 
-function cursors(value: typeof Cursors.Type, notices: CompactNotice[]): void {
+function cursors(value: typeof Cursors.Type, notices: CompactNotice[], id: string): void {
   if (value.droppedBytes > 0)
     notices.push({
+      code: `${id}:log-loss`,
       kind: "warning",
       text: `${value.droppedBytes} log bytes discarded; discarded output cannot be recovered.`,
     });
   if (value.droppedBytes > 0)
     notices.push({
+      code: `${id}:retained-cursors`,
       kind: "recovery",
       text: `Retained output: earliest cursor ${value.earliestAvailableCursor}, next cursor ${value.nextCursor}; use logs with afterCursor to continue.`,
     });
 }
 
 /** Display-only projection. Unknown errors keep their original text, including cleanup guidance. */
-export const projectBackgroundTaskCompactSummary = ({
+const projectTaskSummary = ({
   phase,
   args,
   result,
@@ -229,10 +248,11 @@ export const projectBackgroundTaskCompactSummary = ({
       const task = taskSummary(details.wait.snapshot);
       if (details.wait.id !== details.wait.snapshot.id) return undefined;
       const notices = [...(task.notices ?? [])];
-      cursors(details.wait, notices);
+      cursors(details.wait, notices, details.wait.id);
       const timeout = details.wait.outcome === "timeout";
       if (timeout)
         notices.push({
+          code: `${details.wait.id}:wait-timeout`,
           kind: "warning",
           text: "Wait timed out; this does not stop the background task.",
         });
@@ -253,14 +273,22 @@ export const projectBackgroundTaskCompactSummary = ({
     case "logs": {
       const logs = details.logs;
       const notices: CompactNotice[] = [];
-      cursors(logs, notices);
+      cursors(logs, notices, logs.id);
       if (details.truncation !== undefined) {
         const cut = details.truncation;
         if (cut.truncated)
-          notices.push({
-            kind: "warning",
-            text: `Output truncated: ${cut.outputLines}/${cut.totalLines} lines, ${cut.outputBytes}/${cut.totalBytes} bytes. Request a smaller log slice; expansion shows only fetched output.`,
-          });
+          notices.push(
+            {
+              code: `${logs.id}:slice-truncated`,
+              kind: "warning",
+              text: `Output truncated: ${cut.outputLines}/${cut.totalLines} lines, ${cut.outputBytes}/${cut.totalBytes} bytes.`,
+            },
+            {
+              code: `${logs.id}:request-log-slice`,
+              kind: "recovery",
+              text: "Request a smaller log slice; expansion shows only fetched output.",
+            },
+          );
       }
       // Success here describes log retrieval, not a clean process exit. Log slices omit
       // exit codes by contract; snapshot-based status checks still classify exit evidence.
@@ -275,15 +303,22 @@ export const projectBackgroundTaskCompactSummary = ({
                 ? "warning"
                 : "success";
       if (logs.state === "failed" || logs.state === "timed_out")
-        notices.push({
-          kind: "error",
-          text:
-            logs.state === "timed_out"
-              ? "Task exceeded its runtime timeout; read task status for details."
-              : "Task failed; read task status for the failure cause.",
-        });
+        notices.push(
+          {
+            code: `${logs.id}:${logs.state === "timed_out" ? "runtime-timeout" : "failed"}`,
+            kind: "error",
+            text:
+              logs.state === "timed_out" ? "Task exceeded its runtime timeout." : "Task failed.",
+          },
+          {
+            code: `${logs.id}:read-task-status`,
+            kind: "recovery",
+            text: "Read task status for the failure cause and details.",
+          },
+        );
       if (logs.state === "stopping")
         notices.push({
+          code: `${logs.id}:cleanup-unconfirmed`,
           kind: "recovery",
           text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
         });
@@ -299,6 +334,15 @@ export const projectBackgroundTaskCompactSummary = ({
     default:
       return undefined;
   }
+};
+
+export const projectBackgroundTaskCompactSummary = (
+  input: Parameters<typeof projectTaskSummary>[0],
+) => {
+  const summary = projectTaskSummary(input);
+  return summary
+    ? withCompactIssues(summary, `background-task:${input.args.action ?? "task"}`)
+    : undefined;
 };
 
 export const backgroundTaskCompactSummary: CompactSummaryProvider<

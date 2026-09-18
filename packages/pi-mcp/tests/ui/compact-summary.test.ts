@@ -41,6 +41,48 @@ function summarize<Details>(
 }
 
 describe("MCP compact summaries", () => {
+  it("projects complete remote causes without generic replacement and retains unknown fallback", () => {
+    const details = reply(
+      {
+        result: {
+          content: [
+            { type: "text", text: "Element detached.\nInspect the document before retrying." },
+          ],
+        },
+      },
+      { action: "tools.call", isError: true },
+    );
+    const before = structuredClone(details);
+    const summary = summarize(details, "settled", true, {
+      action: "tools.call",
+      server: "browser",
+      tool: "click",
+    });
+    expect(summary?.issues).toMatchObject({
+      coverage: "complete",
+      entries: [{ code: "remote-failure", severity: "error" }],
+    });
+    expect(summary?.issues?.entries[0]?.cause).toContain("Element detached.");
+    expect(summary?.issues?.entries[0]?.cause).toContain("Inspect the document before retrying.");
+    expect(summary?.issues?.entries).toHaveLength(1);
+    expect(details).toEqual(before);
+    for (const result of [
+      { content: [{ type: "text", text: "x".repeat(513) }] },
+      {
+        content: [{ type: "text", text: "Failure" }],
+        structuredContent: { recovery: "Review state" },
+      },
+    ])
+      expect(
+        summarize(reply({ result }, { action: "tools.call", isError: true }), "settled", true),
+      ).toBeUndefined();
+    expect(
+      summarize({ ...details, notices: ["Additional recovery is required."] }, "settled", true),
+    ).toBeUndefined();
+    expect(
+      summarize(reply({}, { notices: ["Additional recovery is required."] }))?.issues?.coverage,
+    ).toBe("unknown");
+  });
   it("keeps pending and remote progress observational, without premature outcomes", () => {
     for (const phase of ["pending", "running"] as const) {
       const summary = summarize(reply({}, { outcome: "unknown" }), phase);
@@ -131,12 +173,14 @@ describe("MCP compact summaries", () => {
       const details = reply({}, { action, notices: [stale] });
       expect(summarize(details)?.outcome).toBe("success");
       expect(summarize(details)?.notices?.some(isCompactAttention)).toBe(false);
-      expect(summarize(details)?.notices).toContainEqual({
-        kind: "recovery",
-        text: stale,
-        expandedOnly: true,
-        expandedInResult: true,
-      });
+      expect(summarize(details)?.notices).toContainEqual(
+        expect.objectContaining({
+          kind: "recovery",
+          text: stale,
+          expandedOnly: true,
+          expandedInResult: true,
+        }),
+      );
       expect(decodeMcpCardDetails({ details }).notices).toContain(stale);
     }
     for (const details of [
@@ -226,17 +270,12 @@ describe("MCP compact summaries", () => {
   });
   it("requires explicit success and never clears a Pi error", () => {
     expect(summarize(reply())?.outcome).toBe("success");
-    for (const details of [
-      undefined,
-      {},
-      { outcome: "completed" },
-      reply({}, { isError: true }),
-      reply({}, { outcome: "unknown" }),
-      reply({}, { outcome: "not-sent" }),
-    ]) {
+    for (const details of [undefined, {}, { outcome: "completed" }, reply({}, { isError: true })]) {
       expect(summarize(details)).toBeUndefined();
     }
     expect(summarize(reply(), "settled", true)).toBeUndefined();
+    expect(summarize(reply({}, { outcome: "unknown" }))?.outcome).toBe("uncertain");
+    expect(summarize(reply({}, { outcome: "not-sent" }))?.outcome).toBe("warning");
   });
   it("leaves rich failures, unknown execution and cleanup recovery to the original renderer", () => {
     for (const data of [
@@ -256,7 +295,6 @@ describe("MCP compact summaries", () => {
   });
   it("does not turn successful retained reads into successful original operations", () => {
     for (const origin of [
-      { outcome: "unknown", isError: false },
       { outcome: "completed", isError: true },
       { outcome: "completed", outputValidation: "failed" },
       { outcome: "completed" },
@@ -264,6 +302,13 @@ describe("MCP compact summaries", () => {
     ]) {
       expect(summarize(reply({ origin }, { action: "result.read" }))).toBeUndefined();
     }
+  });
+  it("keeps explicit retained uncertainty distinct from successful reads", () => {
+    expect(
+      summarize(
+        reply({ origin: { outcome: "unknown", isError: false } }, { action: "result.read" }),
+      )?.outcome,
+    ).toBe("uncertain");
   });
   it("summarizes retained reads only with explicit original success", () => {
     expect(
@@ -280,6 +325,7 @@ describe("MCP compact summaries", () => {
       {
         truncated: true,
         origin: {
+          action: "tools.call",
           outcome: "completed",
           isError: false,
           outputValidation: "unavailable",

@@ -1,3 +1,4 @@
+import { withCompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
@@ -81,9 +82,11 @@ export function createParentCompactSummary(
     if (toolName === "contact_parent") summary.action = action;
     if (action === "warning") {
       summary.outcome = "warning";
-      summary.notices = [{ kind: "warning", text: stripTerminalControls(message) }];
+      summary.notices = [
+        { code: "parent-warning", kind: "warning", text: stripTerminalControls(message) },
+      ];
     }
-    if (!result) return phase === "settled" ? undefined : summary;
+    if (!result) return phase === "settled" ? undefined : withCompactIssues(summary, toolName);
     if (action === "question") return undefined;
     const receipt = decodeReceipt(result);
     if (receipt._tag === "None") return undefined;
@@ -92,11 +95,14 @@ export function createParentCompactSummary(
       Predicate.isString(acknowledgement) ? text !== acknowledgement : !acknowledgement.test(text)
     )
       return undefined;
-    return {
-      ...summary,
-      counters: ["acknowledged"],
-      outcome: action === "warning" ? "warning" : "success",
-      detailsOnExpand: true,
-    };
+    return withCompactIssues(
+      {
+        ...summary,
+        counters: ["acknowledged"],
+        outcome: action === "warning" ? "warning" : "success",
+        detailsOnExpand: true,
+      },
+      toolName,
+    );
   };
 }

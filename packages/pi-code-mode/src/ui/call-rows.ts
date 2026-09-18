@@ -34,6 +34,7 @@ export const codeModeCallRows = (
         ...(call.compact.counters !== undefined && { counters: call.compact.counters }),
         ...(call.compact.metadata !== undefined && { metadata: call.compact.metadata }),
         notices: call.compact.notices,
+        ...(call.compact.version === 2 && { issues: call.compact.issues }),
       }),
       ...(durationMs !== undefined && { durationMs }),
       // Delivery failure takes precedence over a successful operation receipt.

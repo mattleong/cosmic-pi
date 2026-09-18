@@ -295,7 +295,7 @@ test("errors, cancellation and uncertainty retain full notices and original deta
   assert.match(h.rows().join("\n"), /aborted before execution/u);
 });
 
-test("owned failures replace both slots, retaining recovery and full details once on expansion", () => {
+test("legacy owned failures retain unclassified recovery without text-based suppression", () => {
   for (const outcome of ["error", "cancelled", "uncertain"] as const) {
     for (const mode of ["on", "off", "border"] as const) {
       const h = harness(
@@ -325,7 +325,7 @@ test("owned failures replace both slots, retaining recovery and full details onc
         const text = h.update({ expanded }).join("\n");
         assert.doesNotMatch(text, /CALL |BODY |original renderer detail/u);
         assert.equal(text.match(/file\.ts/gu)?.length, 1);
-        assert.equal(text.match(/Inspect before retrying\./gu)?.length, 1);
+        assert.equal(text.match(/Inspect before retrying\./gu)?.length, expanded ? 2 : 1);
         assert.match(text, /Independent safety warning/u);
         if (expanded) {
           assert.match(text, /complete diagnostic/u);
@@ -362,6 +362,87 @@ test("lazy original renderer exceptions use per-slot fallback instead of escapin
     assert.match(text, /recover here/u);
     assert.equal(text.includes("\u001b"), false);
   }
+});
+
+test("expanded ownership survives neither factory nor component rendering failure", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const failure of ["factory", "render"] as const) {
+      const h = harness(
+        () => ({
+          subject: "file.ts",
+          outcome: "warning",
+          detailsOnExpand: true,
+          expandedResultOwnsCall: true,
+          issues: {
+            coverage: "complete",
+            entries: [
+              {
+                operation: "read-1",
+                code: "cleanup",
+                severity: "warning",
+                cause: "Cleanup is unconfirmed.",
+                recovery: [{ code: "inspect", text: "Inspect state before retrying." }],
+                expandedInResult: true,
+              },
+            ],
+          },
+        }),
+        mode,
+        {
+          result:
+            failure === "factory"
+              ? brokenRenderer
+              : () => ({
+                  render: brokenRenderer,
+                  invalidate: () => undefined,
+                }),
+        },
+      );
+      const rows = h.update(
+        { expanded: true, isPartial: false },
+        result("raw diagnostic retained"),
+      );
+      const text = rows.join("\n");
+      assert.match(text, /raw diagnostic retained/u);
+      assert.match(text, /Cleanup is unconfirmed\./u);
+      assert.match(text, /Inspect state before retrying\./u);
+    }
+  }
+});
+
+test("incomplete and malformed structured evidence cannot hide the original result", () => {
+  for (const malformed of [false, true]) {
+    const summary: CompactSummary = {
+      subject: "file.ts",
+      outcome: "error",
+      detailsOnExpand: true,
+      expandedResultOwnsCall: true,
+      issues: {
+        coverage: "unknown",
+        entries: [
+          {
+            operation: "read-1",
+            code: "incomplete",
+            severity: "warning",
+            cause: "Additional recovery unavailable.",
+            recovery: [],
+          },
+        ],
+      },
+    };
+    if (malformed)
+      Reflect.set(summary, "issues", { coverage: "complete", entries: [{ severity: "error" }] });
+    const h = harness(() => summary);
+    const rows = h.update({ isPartial: false }, result("complete original recovery"));
+    assert.match(rows.join("\n"), /complete original recovery/u);
+  }
+  const h = harness(() => {
+    throw new Error("hostile provider");
+  });
+  assert.match(
+    h.update({ isPartial: false }, result("original recovery survives")).join("\n"),
+    /original recovery survives/u,
+  );
 });
 
 test("expansion, arguments, result and error changes are not hidden by a timing token", () => {

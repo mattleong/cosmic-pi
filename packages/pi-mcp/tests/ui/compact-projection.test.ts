@@ -31,8 +31,12 @@ it("shares standalone semantics without relaxing remote outcome requirements", (
         },
       });
       expect(pure).toEqual(standalone);
-      if (outcome !== "completed" || isError) expect(pure).toBeUndefined();
-      else expect(pure?.outcome).toBe("success");
+      if (isError) expect(pure).toBeUndefined();
+      else if (outcome === "completed") expect(pure?.outcome).toBe("success");
+      else {
+        expect(pure?.outcome).toBe(outcome === "unknown" ? "uncertain" : "warning");
+        expect(pure?.issues?.coverage).toBe("unknown");
+      }
     }
   }
 });
@@ -40,8 +44,7 @@ it("shares standalone semantics without relaxing remote outcome requirements", (
 it("declines retained replies with incomplete or invalid origin evidence", () => {
   for (const origin of [
     { outcome: "completed" },
-    { outcome: "unknown", isError: false },
-    { outcome: "completed", isError: false, outputValidation: "failed" },
+    { outcome: "completed", isError: false, outputValidation: "invalid" },
   ]) {
     expect(
       projectMcpCompactSummary({

@@ -424,7 +424,9 @@ describe("notices independent of hidden preview bodies", () => {
       result(recovery, { truncation: { truncated: true, firstLineExceedsLimit: true } }),
     );
     expect(oversized?.outcome).toBe("warning");
-    expect(oversized?.notices).toContainEqual({ kind: "recovery", text: recovery });
+    expect(oversized?.notices).toContainEqual(
+      expect.objectContaining({ kind: "recovery", text: recovery }),
+    );
     expect(
       summary(
         "read",
