@@ -20,10 +20,11 @@ export const consumeRuntimeApiCredentials = (
 };
 
 /** Registers the private priority tier hook, narrowed to eligible active OpenAI models. */
-export const registerChildPiFastModeHook = (pi: ExtensionAPI, enabled: boolean): void => {
+export const registerChildPiFastModeHook = (pi: ExtensionAPI, isEnabled: () => boolean): void => {
   pi.on("before_provider_request", (event, ctx) => {
     if (
-      !enabled ||
+      // Pi applies CLI flags after extension factories finish. Read at request time.
+      !isEnabled() ||
       !ctx.model ||
       !supportsFastModel(ctx.model.provider, ctx.model.id) ||
       !event.payload ||

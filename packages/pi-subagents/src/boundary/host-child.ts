@@ -117,7 +117,6 @@ export function registerSubagentChildBridge(
     type: "boolean",
     default: false,
   });
-  const openaiFastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   const runtimeApi = consumeRuntimeApiCredentials(process.env);
   if (runtimeApi.apiKey && runtimeApi.provider)
     pi.registerProvider(runtimeApi.provider, { apiKey: runtimeApi.apiKey });
@@ -511,7 +510,7 @@ export function registerSubagentChildBridge(
     onStartFailure: deactivate,
   });
 
-  registerChildPiFastModeHook(pi, openaiFastMode);
+  registerChildPiFastModeHook(pi, () => pi.getFlag("pi-subagents-fast-mode") === true);
 
   pi.on("session_start", (_event, ctx) => {
     deactivate(currentSession);

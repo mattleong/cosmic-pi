@@ -138,7 +138,6 @@ export default function registerPiSubagentSupervisorBridge(
     type: "boolean",
     default: false,
   });
-  const openaiFastMode = pi.getFlag("pi-subagents-fast-mode") === true;
   let detachRelay: (() => void) | undefined;
   const slot = makePiSessionRuntimeSlot<
     SupervisorBridgeSessionInput,
@@ -393,7 +392,7 @@ export default function registerPiSubagentSupervisorBridge(
     ]);
   };
 
-  registerChildPiFastModeHook(pi, openaiFastMode);
+  registerChildPiFastModeHook(pi, () => pi.getFlag("pi-subagents-fast-mode") === true);
 
   pi.on("session_start", (_event, ctx) => {
     if (started) return;
