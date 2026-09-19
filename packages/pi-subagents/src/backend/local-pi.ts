@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
@@ -50,6 +51,8 @@ import {
 } from "./model.ts";
 
 const RPC_TIMEOUT = "10 seconds";
+// Process spawn precedes Pi model/resource loading and extension startup.
+const STARTUP_RPC_TIMEOUT = "30 seconds";
 const EVENT_CAPACITY = 512;
 
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
@@ -226,9 +229,12 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     ipcAcks.clear();
   };
 
-  const rpc = <A extends RpcCommand>(command: A): Effect.Effect<RpcResponse, SubagentError> =>
+  const rpc = <A extends RpcCommand>(
+    command: A,
+    timeout: Duration.Input = RPC_TIMEOUT,
+  ): Effect.Effect<RpcResponse, SubagentError> =>
     correlatedRequest({
-      timeout: RPC_TIMEOUT,
+      timeout,
       register: (deferred) => {
         const id = `backend-rpc-${nextRpcId++}`;
         responses.set(id, { command: command.type, deferred });
@@ -456,7 +462,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   );
 
   const controls = {
-    initialize: rpc({ type: "get_state" }).pipe(
+    initialize: rpc({ type: "get_state" }, STARTUP_RPC_TIMEOUT).pipe(
       Effect.flatMap((response) =>
         decodeRpcStateData(response.data).pipe(
           Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
