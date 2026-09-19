@@ -7,6 +7,7 @@ import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
+import { mcpBoundaryFailure } from "./boundary-failure.ts";
 
 const searchQuery = <Args>(args: Args): string | undefined => {
   try {
@@ -28,7 +29,7 @@ const searchQuery = <Args>(args: Args): string | undefined => {
   }
 };
 
-/** Only complete producer evidence may replace the original collapsed card. */
+/** Typed causes may be concise without claiming complete diagnostic or recovery coverage. */
 export const projectMcpCompactSummary = ({
   phase,
   args,
@@ -49,24 +50,42 @@ export const projectMcpCompactSummary = ({
   if (phase !== "settled") return isError ? undefined : { action, subject };
 
   const card = decodeMcpCardDetails(result);
+  const boundary = card.action === action ? mcpBoundaryFailure(card) : undefined;
+  if (boundary)
+    return {
+      action,
+      subject,
+      outcome: boundary.outcome,
+      counters: [boundary.status.toLowerCase()],
+      issues: boundary.issues,
+    };
+  const retainedRead =
+    card.action === "result.read" &&
+    action === "result.read" &&
+    card.retainedPage !== undefined &&
+    !card.isError &&
+    !isError;
   // The original card retains unknown diagnostics and its sanitized remote error body.
   if (
     !card.known ||
     card.presentation.incomplete ||
     card.diagnostic ||
     (isError && !card.presentation.isError) ||
-    (card.presentation.isError && card.presentation.issues.coverage !== "complete")
+    (card.presentation.isError && card.presentation.issues.coverage !== "complete" && !retainedRead)
   )
     return undefined;
 
-  const count = card.page
-    ? `${card.page.returned}${card.page.total === undefined ? "" : ` of ${card.page.total}`} entries${card.page.hasMore ? ", more available" : ""}`
-    : (card.counters[0] ??
-      (card.attachmentCount
-        ? `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`
-        : card.imageCount
-          ? `${card.imageCount} native images`
-          : undefined));
+  const count =
+    retainedRead && card.retainedPage
+      ? `page ${card.retainedPage.offset}..${card.retainedPage.end}/${card.retainedPage.total}${card.retainedPage.next === null ? " · EOF" : ""}`
+      : card.page
+        ? `${card.page.returned}${card.page.total === undefined ? "" : ` of ${card.page.total}`} entries${card.page.hasMore ? ", more available" : ""}`
+        : (card.counters[0] ??
+          (card.attachmentCount
+            ? `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`
+            : card.imageCount
+              ? `${card.imageCount} native images`
+              : undefined));
   const counters = count ? [count] : [];
   const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])].map((text) => {
     const policy = classifyMcpDiscoveryNotice({
@@ -90,10 +109,10 @@ export const projectMcpCompactSummary = ({
     subject,
     counters,
     outcome:
-      isError || card.presentation.isError
-        ? "error"
-        : card.presentation.outcome === "unknown"
-          ? "uncertain"
+      card.presentation.outcome === "unknown"
+        ? "uncertain"
+        : isError || (card.presentation.isError && !retainedRead)
+          ? "error"
           : notices.some(isCompactAttention) || card.presentation.issues.entries.length
             ? "warning"
             : "success",

@@ -6,6 +6,7 @@ import {
   summaryCompactIssues,
   normalizeCompactIssues,
   compactIssueSeverity,
+  withoutFailureBodyIssues,
 } from "../tools/compact-issues";
 import { renderCompactIssues } from "./compact-issues";
 export { renderCompactNotices, compactSingleLine } from "./compact-row";
@@ -81,10 +82,12 @@ export function renderCompactFailure(
       ...header,
       ...indentedCompactText(failure.details, "  ", color, theme, width),
       ...renderCompactIssues(
-        {
-          ...issues,
-          entries: issues.entries.filter((issue) => !summary.issues || !issue.expandedInResult),
-        },
+        failure.ownedIssues !== undefined
+          ? withoutFailureBodyIssues(issues, failure.ownedIssues)
+          : {
+              ...issues,
+              entries: issues.entries.filter((issue) => !summary.issues || !issue.expandedInResult),
+            },
         theme,
         width,
         true,

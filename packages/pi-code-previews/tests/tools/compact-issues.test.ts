@@ -4,6 +4,7 @@ import {
   normalizeCompactIssues,
   summaryCompactIssues,
   withCompactIssues,
+  withoutFailureBodyIssues,
   type CompactIssue,
   type CompactIssues,
 } from "../../src/tools/compact-issues";
@@ -225,6 +226,59 @@ describe("semantic compact issues", () => {
       expect(text).toContain(expanded ? "Full diagnostics." : "Refused.");
     }
   });
+});
+
+test("outer failure ownership cannot consume nested evidence, even with identical wording", () => {
+  const root = issue({
+    operation: "outer",
+    code: "copied",
+    cause: "Same diagnostic",
+    recovery: [],
+  });
+  const nested = issue({ operation: "child-1", cause: "Same diagnostic", expandedInResult: true });
+  const summary: CompactSummary = {
+    subject: "execute",
+    outcome: "error",
+    issues: collection(root, nested),
+    failure: {
+      cause: root.cause,
+      details: root.cause,
+      ownedIssues: [{ operation: root.operation, code: root.code }],
+    },
+  };
+  const text = renderCompactFailure(
+    { name: "code_mode", phase: "settled", summary, failure: summary.failure!, expanded: true },
+    testTheme(),
+    200,
+  ).join("\n");
+  expect(text.split(root.cause).length - 1).toBe(2);
+  expect(text).toContain(nested.recovery[0]!.text);
+  const augmented = normalizeCompactIssues([
+    collection(root),
+    collection({ ...root, recovery: [{ code: "new-repair", text: "Independent repair" }] }),
+  ]);
+  const retained = withoutFailureBodyIssues(augmented, summary.failure!.ownedIssues);
+  expect(retained.entries).toEqual([
+    { ...root, cause: "", recovery: [{ code: "new-repair", text: "Independent repair" }] },
+  ]);
+  const diagnostic = { ...root, diagnostics: ["Independent diagnostic"] };
+  expect(
+    withoutFailureBodyIssues(collection(diagnostic), summary.failure!.ownedIssues).entries,
+  ).toEqual([{ ...diagnostic, cause: "" }]);
+  const conflict = { ...root, cause: "Conflicting recovery" };
+  expect(
+    withoutFailureBodyIssues(collection(root, conflict), summary.failure!.ownedIssues).entries,
+  ).toEqual([root, conflict]);
+  const conflictingRecovery = {
+    ...root,
+    recovery: [
+      { code: "repair", text: "First repair" },
+      { code: "repair", text: "Conflicting repair" },
+    ],
+  };
+  expect(
+    withoutFailureBodyIssues(collection(conflictingRecovery), summary.failure!.ownedIssues).entries,
+  ).toEqual([conflictingRecovery]);
 });
 
 test("Pi failure cannot be hidden by a success summary with an owned failure body", () => {

@@ -30,6 +30,7 @@ import {
 import {
   executeWriteWithPreview,
   getCodePreviewBeforeWrite,
+  isKnownNewWrite,
   withCodePreviewBeforeWrite,
 } from "../../write/preview-execution";
 import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
@@ -115,7 +116,6 @@ export function createWritePreviewTool(cwd: string) {
         : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
       renderContext.state[stateKey] = before;
       const beforeContent = getObjectValue(before, "content");
-      const beforeKind = getObjectValue(before, "kind");
       const skipReason = getWriteDiffSkipReason(before, content);
       if (skipReason)
         return new Text(
@@ -178,7 +178,7 @@ export function createWritePreviewTool(cwd: string) {
       }
       if (Predicate.isString(beforeContent))
         return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
-      if (beforeKind === "content")
+      if (!isKnownNewWrite(before, result.details))
         return new Text(
           theme.fg("success", "✓ Write applied") +
             theme.fg("muted", " · previous content unavailable"),

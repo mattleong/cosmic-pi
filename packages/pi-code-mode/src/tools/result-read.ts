@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { ResultsContract } from "../results/service.ts";
 import { projectResultPage } from "../results/projection.ts";
-import { clampModelVisibleText } from "./limits.ts";
+import { resultReadFailure, type ResultReadProjection } from "../results/read-presentation.ts";
 
 export interface ResultReadInput {
   readonly action: "result.read";
@@ -24,7 +24,7 @@ export const readRetainedResult = (
   params: ResultReadInput,
   results: ResultsContract | undefined,
   maxBytes: number,
-): Effect.Effect<string> => {
+): Effect.Effect<ResultReadProjection> => {
   const offset = params.offset ?? 0;
   const limit = params.limit ?? 30_000;
   if (
@@ -38,20 +38,12 @@ export const readRetainedResult = (
     params.id.length < 1 ||
     params.id.length > 128
   ) {
-    return Effect.succeed(
-      clampModelVisibleText(
-        "Invalid result.read request. Code is not accepted; offset must be nonnegative and limit 1..30000.",
-        maxBytes,
-      ),
-    );
+    return Effect.succeed(resultReadFailure("invalid-input", maxBytes));
   }
   return (results?.get(params.id) ?? Effect.succeed(undefined)).pipe(
     Effect.map((artifact) =>
       artifact === undefined
-        ? clampModelVisibleText(
-            "Retained result unavailable, evicted, or revoked. No execution was run. Do not replay mutations to recover output.",
-            maxBytes,
-          )
+        ? resultReadFailure("unavailable", maxBytes)
         : projectResultPage(artifact, offset, limit, maxBytes),
     ),
   );

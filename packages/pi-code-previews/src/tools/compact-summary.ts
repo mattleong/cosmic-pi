@@ -92,7 +92,13 @@ export interface CompactSummary {
    * Unknown causes may retain multiple lines rather than hide unclassified recovery text.
    * Notices contain independent safety/recovery information, not another error copy.
    */
-  failure?: { cause: string; details: string };
+  failure?: {
+    cause: string;
+    details: string;
+    /** Root cause identities represented by this exact failure body. Additional
+     * recovery and diagnostics stay independent, as does child result ownership. */
+    ownedIssues?: readonly { readonly operation: string; readonly code: string }[];
+  };
   failureEvidence?: CompactFailureEvidence;
 }
 
@@ -137,6 +143,13 @@ export function resolveCompactSummary(
       );
     return {
       ...summary,
+      ...(summary.failure?.cause &&
+        summary.failure.ownedIssues !== undefined && {
+          failure: {
+            ...summary.failure,
+            ownedIssues: [...summary.failure.ownedIssues, { operation: "outer", code: "pi-error" }],
+          },
+        }),
       issues: {
         ...issues,
         coverage: summary.issues?.coverage ?? "complete",

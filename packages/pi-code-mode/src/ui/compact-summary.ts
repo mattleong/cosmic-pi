@@ -16,6 +16,7 @@ import { describeCodeModeIntent } from "./tool-renderer.ts";
 
 import { verifiedFailurePresentation } from "./failure-presentation.ts";
 import { codeModeCallRows } from "./call-rows.ts";
+import { resultReadCompactSummary } from "./result-read-summary.ts";
 
 const ArgsSchema = Schema.Struct({
   intent: Schema.optional(Schema.Unknown),
@@ -39,6 +40,10 @@ const projectCodeModeCompactSummary = (
         ? { action: input.action, subject: input.id ?? "", showTiming: true as const }
         : { subject: describeCodeModeIntent(input?.intent), showTiming: true as const };
     if (result === undefined) return phase === "settled" ? undefined : heading;
+    if (input?.action === "result.read")
+      return phase === "settled"
+        ? resultReadCompactSummary(result.details, input.id ?? "")
+        : heading;
     const details = decodeCodeModeRenderDetails(result.details);
     if (!details.compactEligible) return undefined;
     const { total, succeeded, failed, cancelled, running, queued } = details.counts;
@@ -125,8 +130,14 @@ const projectCodeModeCompactSummary = (
       const [first = "", ...rest] = text.split("\n");
       // Unclassified history may contain recovery instructions. Only verified producer
       // coverage lets ordinary source/stack output move exclusively to expanded details.
-      if (!known && rest.some((line) => line.trim().length > 0))
-        notices.push({ kind: "recovery", text: rest.join("\n") });
+      const hasContinuation = !known && rest.some((line) => line.trim().length > 0);
+      if (hasContinuation)
+        notices.push({
+          code: "failure-continuation",
+          kind: "recovery",
+          text: rest.join("\n"),
+          expandedInResult: true,
+        });
       notices.push(...(known?.notices ?? []));
       // Root provenance has no invocation identity, so it cannot suppress child evidence.
       if (details.cancelled)
@@ -144,6 +155,24 @@ const projectCodeModeCompactSummary = (
           failure: {
             cause: known?.evidence.cause ?? first,
             details: text,
+            ownedIssues: [
+              ...(hasContinuation
+                ? [
+                    {
+                      operation: details.compactAttention?.version === 2 ? "code-mode" : "outer",
+                      code: "failure-continuation",
+                    },
+                  ]
+                : []),
+              ...(details.compactAttention?.version === 2 && !details.cancelled
+                ? [
+                    {
+                      operation: "code-mode",
+                      code: "program-failure",
+                    },
+                  ]
+                : []),
+            ],
           },
         }),
       };

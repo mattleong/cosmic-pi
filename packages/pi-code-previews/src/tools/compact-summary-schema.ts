@@ -32,7 +32,20 @@ const Summary = Schema.Struct({
   subject: Schema.String,
   detailsOnExpand: Schema.optionalKey(Schema.Literal(true)),
   expandedResultOwnsCall: Schema.optionalKey(Schema.Literal(true)),
-  failure: Schema.optionalKey(Schema.Struct({ cause: Schema.String, details: Schema.String })),
+  failure: Schema.optionalKey(
+    Schema.Struct({
+      cause: Schema.String,
+      details: Schema.String,
+      ownedIssues: Schema.optionalKey(
+        Schema.Array(
+          Schema.Struct({
+            operation: Schema.String.check(Schema.isMinLength(1)),
+            code: Schema.String.check(Schema.isMinLength(1)),
+          }),
+        ),
+      ),
+    }),
+  ),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,

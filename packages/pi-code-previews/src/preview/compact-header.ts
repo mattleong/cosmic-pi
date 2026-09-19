@@ -52,11 +52,9 @@ export function allocateCompactHeader(
   if (remaining <= 0) return truncateToWidth(identity, width, "");
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
-  const fullSubjectSpace = subject ? 1 + subjectWidth : 0;
-  const counterBudget = Math.min(
-    remaining - subjectMinimum,
-    Math.max(Math.floor(remaining / 2), remaining - fullSubjectSpace),
-  );
+  // Counters carry progress/outcome facts. Spend available subject space on them
+  // before eliding the target, rather than dropping a counter at half the row.
+  const counterBudget = remaining - subjectMinimum;
   let counterText = "";
   let counterWidth = 0;
   for (const counter of counters) {

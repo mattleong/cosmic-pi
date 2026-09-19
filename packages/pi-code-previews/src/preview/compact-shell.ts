@@ -174,10 +174,10 @@ class CompactShell implements Component {
             entries: [
               ...summary.issues.entries,
               {
-                operation: "compact-shell",
+                operation: summary.issues.entries[0]?.operation ?? "outer",
                 code: "details-on-expand",
                 severity: isError ? ("error" as const) : ("warning" as const),
-                cause: "Expand for full output and recovery details.",
+                cause: "Expand for details.",
                 recovery: [],
               },
             ],
@@ -189,7 +189,7 @@ class CompactShell implements Component {
           ? [
               {
                 kind: isError ? ("error" as const) : ("warning" as const),
-                text: "Expand for full output and recovery details.",
+                text: "Expand for details.",
               },
             ]
           : []),
@@ -319,20 +319,24 @@ class CompactShell implements Component {
     const resultBody =
       this.mode === "border" ? renderWithBorderSlot(state, "result", renderResult) : renderResult();
     // Only a current successful original result can accept shared presentation ownership.
-    const resultOwns =
+    const resultRendered =
       !fallback &&
-      (!summary ||
-        (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
-        summaryCompactIssues(summary).coverage === "complete") &&
       context.expanded &&
       resultBody !== undefined &&
       resultBody === this.resultComponent;
+    // Each marked issue has its own ownership promise. Unknown aggregate coverage
+    // still forbids taking over the whole call or replacing its original result.
+    const resultOwns =
+      resultRendered &&
+      (!summary ||
+        (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
+        summaryCompactIssues(summary).coverage === "complete");
     const issues = summary
       ? summaryCompactIssues(summary, context.expanded)
       : { coverage: "unknown" as const, entries: [] };
     const visibleIssues = {
       ...issues,
-      entries: issues.entries.filter((issue) => !resultOwns || !issue.expandedInResult),
+      entries: issues.entries.filter((issue) => !resultRendered || !issue.expandedInResult),
     };
     const noticeBody: Component = {
       render: (width) =>

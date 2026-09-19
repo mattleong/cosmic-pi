@@ -6,6 +6,7 @@ import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
 import { codeModeCompactSummary } from "../ui/compact-summary.ts";
+import { codeModeReadRequest } from "../ui/result-read-renderer.ts";
 import { liveChildElapsed } from "../boundary/host-child-timing.ts";
 import { codeModeCompactSummaryAtHost } from "../boundary/host-render-ticker.ts";
 import { Type } from "typebox";
@@ -175,7 +176,9 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
             result,
             context,
           });
+          const readRequest = codeModeReadRequest(context.args);
           return {
+            ...(readRequest && { readRequest }),
             ownsCall:
               ownsExpanded && summary !== undefined && codeModeSource(context.args) !== undefined,
             source: context.args && "code" in context.args ? context.args.code : undefined,

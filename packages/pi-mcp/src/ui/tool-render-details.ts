@@ -80,6 +80,7 @@ export interface McpCardDetails {
   readonly counters: readonly string[];
   readonly metadata: readonly string[];
   readonly notices: readonly string[];
+  readonly noticesComplete: boolean;
   readonly warnings: readonly string[];
   readonly truncated: boolean;
   readonly displayCuts: readonly McpDisplayCut[];
@@ -87,6 +88,14 @@ export interface McpCardDetails {
   readonly attachmentsLimited: boolean;
   readonly imageCount: number;
   readonly page?: McpCardPage;
+  readonly retainedPage?: {
+    readonly offset: number;
+    readonly end: number;
+    readonly next: number | null;
+    readonly total: number;
+  };
+  readonly failureKind?: McpBoundaryError["kind"];
+  readonly failureReason?: McpBoundaryError["reason"];
   readonly undiscoveredCount: number;
   readonly preview: string;
   readonly failurePreview: string;
@@ -210,7 +219,14 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     originIsError: own(rawOrigin, "isError").value,
     outputValidation: own(rawOrigin, "outputValidation").value,
   });
-  const notices = list(own(details, "notices").value, 16).flatMap((entry) => {
+  const rawNotices = own(details, "notices").value;
+  const noticeCount = arrayLength(rawNotices);
+  const noticeEntries = list(rawNotices, 32);
+  const noticesComplete =
+    noticeCount !== undefined &&
+    noticeCount <= 32 &&
+    noticeEntries.every((entry) => Predicate.isString(entry) && entry.length <= 512);
+  const notices = noticeEntries.flatMap((entry) => {
     if (validationIdentity && isOwnedValidationNotice(entry, validationIdentity)) return [];
     const text = safeText(entry);
     return text ? [text] : [];
@@ -293,6 +309,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     counters,
     metadata,
     notices,
+    noticesComplete,
     warnings,
     truncated,
     displayCuts: preview.cuts,
@@ -309,7 +326,35 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   if (currentOutcome) projection = { ...projection, outcome: currentOutcome };
   if (origin) projection = { ...projection, origin };
   if (page) projection = { ...projection, page };
-  if (diagnostic) projection = { ...projection, diagnostic };
+  if (diagnostic && evidence)
+    projection = {
+      ...projection,
+      diagnostic,
+      failureKind: evidence.kind,
+      failureReason: evidence.reason,
+    };
+  if (action === "result.read" && currentOutcome === "completed" && !currentError) {
+    const offset = natural(own(data, "offset").value);
+    const total = natural(own(data, "total").value);
+    const next = own(data, "next").value;
+    const text = own(data, "text").value;
+    const end = offset !== undefined && Predicate.isString(text) ? offset + text.length : undefined;
+    if (
+      offset !== undefined &&
+      end !== undefined &&
+      Number.isSafeInteger(end) &&
+      total !== undefined &&
+      end <= total &&
+      (next === null
+        ? end === total
+        : natural(next) !== undefined && next === end && end > offset && end < total)
+    ) {
+      projection = {
+        ...projection,
+        retainedPage: { offset, end, total, next: next === null ? null : end },
+      };
+    }
+  }
   if (resultId !== undefined)
     projection = { ...projection, resultId, recoveryHint: `/mcp result ${resultId}` };
   else if (diagnostic?.recovery.length)

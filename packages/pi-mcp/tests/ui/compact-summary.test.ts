@@ -277,7 +277,7 @@ describe("MCP compact summaries", () => {
     expect(summarize(reply({}, { outcome: "unknown" }))?.outcome).toBe("uncertain");
     expect(summarize(reply({}, { outcome: "not-sent" }))?.outcome).toBe("warning");
   });
-  it("leaves rich failures, unknown execution and cleanup recovery to the original renderer", () => {
+  it("projects fixed boundary causes without claiming complete recovery coverage", () => {
     for (const data of [
       { kind: "cleanup" },
       { kind: "auth-required" },
@@ -289,9 +289,91 @@ describe("MCP compact summaries", () => {
         isError: true,
         notices: ["Do not replay; inspect current state before recovery."],
       });
-      expect(summarize(details)).toBeUndefined();
+      const projected = summarize(details);
+      expect(projected?.outcome).toBe("uncertain");
+      expect(projected?.issues?.coverage).toBe("unknown");
+      expect(projected?.issues?.entries[0]?.cause).toBe("");
+      expect(projected?.issues?.entries[0]?.recovery).toContainEqual(
+        expect.objectContaining({
+          text: decodeMcpCardDetails({ details }).diagnostic?.explanation,
+        }),
+      );
+      expect(projected?.failure).toBeUndefined();
+      expect(projected?.expandedResultOwnsCall).toBeUndefined();
       expect(decodeMcpCardDetails({ details }).warnings.length).toBeGreaterThan(0);
     }
+  });
+  it("shows successful retained-page reads separately from original outcomes", () => {
+    for (const origin of [
+      { action: "tools.call", outcome: "completed", isError: false },
+      { action: "tools.call", outcome: "completed", isError: true },
+      { action: "tools.call", outcome: "unknown", isError: false },
+      { action: "tools.call", outcome: "completed", isError: false, outputValidation: "failed" },
+    ]) {
+      const projected = summarize(
+        reply(
+          { origin, offset: 0, next: 4, total: 8, text: "page" },
+          { action: "result.read", resultId: "retained-1" },
+        ),
+        "settled",
+        false,
+        { action: "result.read", id: "retained-1" },
+      );
+      expect(projected?.counters?.join(" ")).toContain("0..4/8");
+      expect(projected?.outcome === "success").toBe(
+        !origin.isError && origin.outcome === "completed" && !("outputValidation" in origin),
+      );
+      expect(projected?.outcome).not.toBe("error");
+    }
+  });
+  it("does not invent page ranges from malformed cursor metadata", () => {
+    for (const data of [
+      { offset: 2, next: 2, total: 8, text: "page" },
+      { offset: 2, next: null, total: 8, text: "page" },
+      { offset: 2, next: 6, total: 4, text: "page" },
+      { offset: -1, next: 3, total: 8, text: "page" },
+    ]) {
+      const projected = summarize(
+        reply(
+          { ...data, origin: { action: "tools.call", outcome: "completed", isError: false } },
+          { action: "result.read" },
+        ),
+        "settled",
+        false,
+        { action: "result.read", id: "retained-1" },
+      );
+      expect(
+        decodeMcpCardDetails({ details: reply({ ...data }, { action: "result.read" }) })
+          .retainedPage,
+      ).toBeUndefined();
+      expect(projected?.counters ?? []).toEqual([]);
+    }
+  });
+  it("does not derive fallback causes from raw remote messages", () => {
+    const projected = summarize(
+      reply(
+        { kind: "invalid-input", reason: "gateway-request-invalid", message: "PRIVATE RAW BODY" },
+        { action: "result.read", outcome: "not-sent", isError: true },
+      ),
+      "settled",
+      true,
+      { action: "result.read", id: "missing" },
+    );
+    expect(projected?.issues?.coverage).toBe("unknown");
+    expect(projected?.issues?.entries[0]?.cause).toBe("MCP arguments rejected");
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE RAW BODY");
+    expect(projected?.outcome).toBe("error");
+    expect(
+      summarize(
+        reply({ kind: "not-a-known-kind", message: "PRIVATE RAW BODY" }, { isError: true }),
+      ),
+    ).toBeUndefined();
+    const cancelled = summarize(
+      reply({ kind: "cancelled" }, { outcome: "not-sent", isError: true }),
+      "settled",
+      true,
+    );
+    expect(cancelled?.outcome).toBe("cancelled");
   });
   it("does not turn successful retained reads into successful original operations", () => {
     for (const origin of [

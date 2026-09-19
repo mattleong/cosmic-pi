@@ -28,6 +28,7 @@ import { renderExpandedCodeModeResult, type ExpandedPresentation } from "./expan
 import { formatCodeModeProgram } from "./program-source.ts";
 import { codeModeOutputText } from "./result-output.ts";
 import { addCodeModeSection } from "./sections.ts";
+import { codeModeReadRequest, renderCodeModeResultRead } from "./result-read-renderer.ts";
 import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
 
 /** Neutral headline when the model provided no usable intent. */
@@ -84,6 +85,19 @@ export const renderCodeModeToolCall = <Args>(
   theme: Theme,
   context: CodeModeRenderContext | undefined,
 ): Component => {
+  const read = codeModeReadRequest(args);
+  if (read)
+    return new Text(
+      renderToolHeader(
+        {
+          title: "Code Mode result.read",
+          subtitle: truncateDisplay(sanitizeTerminalLine(read.id), 128),
+        },
+        theme,
+      ),
+      0,
+      0,
+    );
   const header = new Text(intentHeadline(args, theme), 0, 0);
   let expanded = false;
   try {
@@ -302,6 +316,18 @@ export const renderCodeModeToolResult = (
   const isPartial = guarded(() => options.isPartial);
   const isError = guarded(() => context?.isError);
   const expanded = guarded(() => context?.expanded);
+  if (presentation.readRequest)
+    return {
+      component: renderCodeModeResultRead(
+        emergencyResultText(result),
+        presentation.summary,
+        isPartial,
+        isError,
+        expanded,
+        theme,
+      ),
+      shouldAnimate: false,
+    };
   let details: CodeModeRenderDetails;
   try {
     const rawDetails = result.details;

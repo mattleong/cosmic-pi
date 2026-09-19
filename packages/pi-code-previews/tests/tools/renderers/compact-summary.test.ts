@@ -750,6 +750,39 @@ describe("builtin factory compact integration", () => {
     },
   );
 
+  test("write expansion distinguishes observed new files from unavailable history", () => {
+    const fresh = { codePreviewBeforeWrite: undefined };
+    const accessor = Object.defineProperty({}, "codePreviewBeforeWrite", { get: () => undefined });
+    for (const details of [
+      undefined,
+      {},
+      fresh,
+      JSON.parse(JSON.stringify(fresh)),
+      accessor,
+      { codePreviewBeforeWrite: { kind: "content", byteLength: 12 } },
+      { codePreviewBeforeWrite: { kind: "unrecognized" } },
+    ]) {
+      const tool = createWritePreviewTool("/project");
+      const ctx = context();
+      const output = result<undefined>("applied");
+      Object.assign(output, { details });
+      const knownNew = details === fresh;
+      for (const expanded of [false, true, false, true]) {
+        const renderContext = { ...ctx, expanded };
+        const call = tool.renderCall?.(args, theme, renderContext);
+        const body = tool.renderResult?.(
+          output,
+          { expanded, isPartial: false },
+          theme,
+          renderContext,
+        );
+        const text = [call, body].flatMap((component) => component?.render(200) ?? []).join("\n");
+        expect(/new file/iu.test(text)).toBe(knownNew);
+        expect(/previous content unavailable/iu.test(text)).toBe(!knownNew);
+      }
+    }
+  });
+
   test("quiet write size guards preserve the original expanded skip reason and result", () => {
     const tool = createWritePreviewTool("/project");
     const ctx = context();

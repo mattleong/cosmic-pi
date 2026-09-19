@@ -1,4 +1,5 @@
-import { clampModelVisibleText, utf8ByteLength } from "../tools/limits.ts";
+import { utf8ByteLength } from "../tools/limits.ts";
+import { resultReadFailure, type ResultReadProjection } from "./read-presentation.ts";
 import type { ResultArtifact, ResultPage } from "./model.ts";
 
 const boundary = (text: string, offset: number) =>
@@ -15,17 +16,14 @@ export function projectResultPage(
   offset: number,
   limit: number,
   maxBytes: number,
-): string {
+): ResultReadProjection {
   if (
     !Number.isSafeInteger(offset) ||
     offset < 0 ||
     offset > artifact.text.length ||
     boundary(artifact.text, offset) !== offset
   ) {
-    return clampModelVisibleText(
-      "Invalid result offset: use a UTF-16 code-point boundary within the retained text. No execution was run.",
-      maxBytes,
-    );
+    return resultReadFailure("invalid-offset", maxBytes);
   }
   const start = offset;
   const end = boundary(artifact.text, Math.min(artifact.text.length, start + limit));
@@ -39,11 +37,23 @@ export function projectResultPage(
       total: artifact.text.length,
       text: artifact.text.slice(start, finish),
     } satisfies ResultPage);
+  const project = (finish: number, text: string): ResultReadProjection => ({
+    text,
+    presentation: {
+      status: "page",
+      id: artifact.id,
+      originalOutcome: artifact.outcome,
+      offset: start,
+      end: finish,
+      next: finish < artifact.text.length ? finish : null,
+      total: artifact.text.length,
+    },
+  });
   // EOF replaces a numeric cursor with null and can shrink metadata. Test that endpoint
   // before the monotone search over nonterminal prefixes.
   const whole = render(end);
   if ((end > start || start === artifact.text.length) && utf8ByteLength(whole) <= maxBytes)
-    return whole;
+    return project(end, whole);
   let low = start;
   let high = end;
   let best = start;
@@ -56,10 +66,7 @@ export function projectResultPage(
     } else high = middle - 1;
   }
   if ((best === start && start < artifact.text.length) || utf8ByteLength(render(best)) > maxBytes) {
-    return clampModelVisibleText(
-      "Result page unavailable: output budget or limit cannot fit metadata and one code point. No execution was run.",
-      maxBytes,
-    );
+    return resultReadFailure("page-budget", maxBytes);
   }
-  return render(best);
+  return project(best, render(best));
 }

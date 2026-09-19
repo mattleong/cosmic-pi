@@ -77,6 +77,31 @@ const harness = (provider: McpCodeModeCapability["execute"], maxOutputBytes = 10
 };
 describe("MCP execution evidence in compact Code Mode results", () => {
   it.effect(
+    "keeps action-specific repair evidence when a short boundary cause has unknown coverage",
+    () =>
+      Effect.gen(function* () {
+        const output = reply({
+          action: "prompts.get",
+          outcome: "not-sent",
+          isError: true,
+          data: {
+            kind: "invalid-input",
+            reason: "gateway-request-invalid",
+            message:
+              "prompts.get requires string-valued arguments. Use prompts.list to inspect declared arguments.",
+          },
+        });
+        const completed = yield* Effect.promise(() =>
+          harness(() => Promise.resolve(output)).run(
+            'await tools.mcp.request({action:"prompts.get",server:"catalog",prompt:"inspect"}); return "discarded"',
+          ),
+        );
+        const retained = completed.details?.toolCalls[0]?.compact;
+        expect(retained?.notices.some((notice) => notice.text.includes("prompts.list"))).toBe(true);
+        expect(summary(completed.details)?.outcome).toBe("error");
+      }),
+  );
+  it.effect(
     "uses the same discovery notice relevance standalone and nested without resurrecting routine attention",
     () =>
       Effect.gen(function* () {

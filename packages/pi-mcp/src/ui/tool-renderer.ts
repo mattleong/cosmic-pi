@@ -8,6 +8,7 @@ import {
 } from "pi-cosmic-ui/tool";
 import { progressLabel } from "./remote-events.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
+import { mcpBoundaryFailure } from "./boundary-failure.ts";
 
 type CardTheme = Pick<Theme, "fg" | "bold">;
 export const renderMcpCall = <Args>(args: Args, theme: CardTheme): Component => {
@@ -30,6 +31,7 @@ export const renderMcpResult = <Result>(
   expandHint = "",
 ): Component => {
   const details = decodeMcpCardDetails(result);
+  const boundary = options.expanded && !options.isPartial ? mcpBoundaryFailure(details) : undefined;
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const lines: string[] = [];
@@ -56,10 +58,10 @@ export const renderMcpResult = <Result>(
             : failed
               ? "Completed with a problem"
               : "Completed";
-    lines.push(toolStatusLine(theme, status, label));
+    lines.push(toolStatusLine(theme, status, boundary?.status ?? label));
     const progress = options.isPartial ? progressLabel(result) : undefined;
     if (progress) lines.push(theme.fg("muted", progress));
-    if (details.diagnostic && !options.isPartial)
+    if (details.diagnostic && !options.isPartial && !boundary)
       lines.push(theme.fg("muted", details.diagnostic.title));
     const counts = [...details.counts];
     if (details.attachmentCount)
@@ -68,6 +70,18 @@ export const renderMcpResult = <Result>(
       );
     if (details.imageCount) counts.push(`${details.imageCount} native images`);
     if (counts.length) lines.push(theme.fg("muted", counts.join(" · ")));
+    if (boundary) {
+      // The same identified issues back the compact summary. The shell can yield
+      // ownership per issue without treating this as complete diagnostic coverage.
+      for (const issue of boundary.issues.entries) {
+        if (issue.cause) lines.push(theme.fg(issue.severity, issue.cause));
+        for (const recovery of issue.recovery) lines.push(theme.fg("warning", recovery.text));
+        for (const detail of issue.diagnostics ?? []) lines.push(theme.fg("muted", detail));
+      }
+      lines.push(renderExpansionAffordance("Existing details", true, theme, expandHint));
+      lines.push(theme.fg("toolOutput", details.preview));
+      return new Text(lines.join("\n"), 0, 0).render(Math.floor(width));
+    }
     // Failed calls use this renderer even in compact mode. Keep the bounded,
     // sanitized error body visible rather than requiring expansion to find the cause.
     if (failed && !options.isPartial && !options.expanded)

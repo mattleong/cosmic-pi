@@ -21,7 +21,15 @@ It rejects `code`, invalid offsets, split surrogate offsets and invalid limits. 
 offsets, preserves code points and checks the complete JSON envelope against `maxOutputBytes`.
 A page that cannot fit metadata and one code point has no continuation cursor. Reads recheck
 publication authority after the session Promise settles. Reading output does not change its
-original `succeeded`, `failed` or `cancelled` outcome.
+original `succeeded`, `failed` or `cancelled` outcome. `results/read-presentation.ts` defines
+producer-owned page metadata and fixed read-failure reasons. Projection returns that metadata
+beside the unchanged model-visible text; publication revocation replaces both together.
+`ui/result-read-summary.ts` validates saved metadata before showing page ranges and original
+execution warnings. Page counters take priority over opaque retained IDs at narrow widths; routine
+read-recovery explanations use expanded-only diagnostics. `ui/result-read-renderer.ts` owns the
+read-specific expanded status, recovery and raw page view, including unknown historical reads.
+It omits execution-only Program/Calls sections and renders its owned notices once without internal
+operation labels. Read views never parse guest page text or treat a successful read as execution success.
 
 `src/results/service.ts` owns a scoped Effect Ref of settled artifacts. Limits are fixed at
 8 MiB UTF-8 per artifact, 64 MiB conservatively charged session storage, and 32 entries. Charges
@@ -91,7 +99,10 @@ unchanged progress/count transitions; display and operation evidence remain sepa
   Producer-owned argument-only projections supply MCP and Background Tasks headings. Correlated
   receipts supply semantic child statuses; delivery failures override successful operation colors
   without changing the recorded operation outcome. `call-rows.ts` shares this receipt projection
-  with `expanded-result.ts`. Expansion renders Program, Calls, and Result sections.
+  with `expanded-result.ts`. Execution expansion renders Program, Calls, and Result sections.
+  Failure bodies declare the identities of their own root and copied continuation issues. Both
+  expanded paths omit only those body-owned copies; independent nested recovery remains visible,
+  even with identical wording. Original rendering accepts this ownership only for the exact body.
   `notices.ts` collects evidence for detailed and emergency views without text-based deduplication.
   The shared issue reducer merges only matching operation/code evidence. Replay normalizes each
   row once, salvaging bounded valid notices and structured recovery when sibling fields fail.

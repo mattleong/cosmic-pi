@@ -25,6 +25,8 @@ const pageFromJson = Schema.fromJsonString(
     outcome: Schema.String,
     kind: Schema.String,
     text: Schema.String,
+    offset: Schema.Number,
+    total: Schema.Number,
     next: Schema.NullOr(Schema.Number),
   }),
 );
@@ -112,6 +114,15 @@ describe("output recovery without replay", () => {
         const page = yield* Schema.decodeEffect(pageFromJson)(raw);
         expect(page.outcome).toBe("succeeded");
         expect(page.kind).toBe("output");
+        expect(result.details.resultRead).toEqual({
+          status: "page",
+          id,
+          originalOutcome: "succeeded",
+          offset: page.offset,
+          end: page.offset + page.text.length,
+          next: page.next,
+          total: page.total,
+        });
         reconstructed += page.text;
         if (page.next === null) break;
         expect(page.next).toBeGreaterThan(offset);
@@ -145,6 +156,10 @@ describe("output recovery without replay", () => {
           h.run({ action: "result.read", id: details.resultId! }),
         );
         expect((yield* Schema.decodeEffect(pageFromJson)(textOf(page))).outcome).toBe("failed");
+        expect(page.details.resultRead).toMatchObject({
+          status: "page",
+          originalOutcome: "failed",
+        });
         expect(h.writes()).toBe(1);
       }
     }).pipe(Effect.provide(CodeModeResults.layer)),
@@ -227,6 +242,7 @@ describe("output recovery without replay", () => {
         const read = yield* Effect.promise(() => h.run({ action: "result.read", id: id! }));
         expect(textOf(read)).not.toContain("sensitive old output");
         expect(textOf(read)).toContain("revoked");
+        expect(read.details.resultRead).toEqual({ status: "error", code: "revoked" });
         const safe = harness(results);
         const request = opaqueHostFixture({
           action: "result.read",
@@ -235,6 +251,7 @@ describe("output recovery without replay", () => {
         });
         const invalid = yield* Effect.promise(() => safe.run(request));
         expect(textOf(invalid)).toContain("Invalid result.read");
+        expect(invalid.details.resultRead).toEqual({ status: "error", code: "invalid-input" });
         expect(safe.writes()).toBe(0);
       }).pipe(Effect.provide(CodeModeResults.layer)),
   );

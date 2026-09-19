@@ -9,6 +9,8 @@ export interface CompactIssue {
   readonly cause: string;
   readonly recovery: readonly { readonly code: string; readonly text: string }[];
   readonly diagnostics?: readonly string[];
+  /** This issue's complete cause, recovery and diagnostics appear in the original
+   * expanded result, independently of aggregate coverage. Revoked on render failure. */
   readonly expandedInResult?: true;
 }
 export interface CompactIssues {
@@ -71,6 +73,29 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
   return { coverage: complete ? "complete" : "unknown", entries };
 }
 
+/** The producer names root causes copied from the outer failure body. Additional
+ * recovery/diagnostics and conflicting identities remain independent. No text matching. */
+export function withoutFailureBodyIssues(
+  issues: CompactIssues,
+  owned: NonNullable<CompactSummary["failure"]>["ownedIssues"],
+): CompactIssues {
+  return {
+    ...issues,
+    entries: issues.entries.flatMap((issue) => {
+      if (!owned?.some((key) => key.operation === issue.operation && key.code === issue.code))
+        return [issue];
+      const sameIdentity = issues.entries.filter(
+        (entry) => entry.operation === issue.operation && entry.code === issue.code,
+      );
+      const recoveryCodes = new Set(issue.recovery.map((entry) => entry.code));
+      if (sameIdentity.length > 1 || recoveryCodes.size !== issue.recovery.length) return [issue];
+      // Normalization may merge an independent instruction onto an owned cause.
+      // Body ownership never absorbs that extra evidence, even with a distinct code.
+      return issue.recovery.length || issue.diagnostics?.length ? [{ ...issue, cause: "" }] : [];
+    }),
+  };
+}
+
 export function compactIssueSeverity(issues: CompactIssues): "error" | "warning" | undefined {
   return issues.entries.some((issue) => issue.severity === "error")
     ? "error"
@@ -93,7 +118,7 @@ export function legacyCompactIssues(
         : [
             {
               operation,
-              code: `legacy-${index}`,
+              code: notice.code ?? `legacy-${index}`,
               severity: notice.kind === "error" ? ("error" as const) : ("warning" as const),
               cause: notice.text,
               recovery: [],

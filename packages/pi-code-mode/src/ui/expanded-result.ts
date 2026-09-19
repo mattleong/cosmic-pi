@@ -5,6 +5,7 @@ import {
   renderCompactChildren,
   renderCompactIssues,
   summaryCompactIssues,
+  withoutFailureBodyIssues,
   renderCompactRow,
   type CompactSummary,
 } from "pi-code-previews";
@@ -19,6 +20,7 @@ import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 import { addCodeModeSection } from "./sections.ts";
 
 export interface ExpandedPresentation {
+  readonly readRequest?: { readonly id: string };
   readonly source?: string | undefined;
   readonly summary?: CompactSummary | undefined;
   readonly ownsCall?: boolean;
@@ -42,7 +44,13 @@ export const renderExpandedCodeModeResult = (
     entries: codeModeCallRows(details, phase, presentation.liveElapsed),
   };
   const summary = presentation.summary;
-  const issues = summary ? summaryCompactIssues(summary, true) : undefined;
+  const allIssues = summary ? summaryCompactIssues(summary, true) : undefined;
+  // Only this exact outer body can own its copied root/continuation issues.
+  // Nested result ownership is unrelated and must not erase independent recovery.
+  const issues =
+    allIssues && !isPartial && raw === summary?.failure?.details
+      ? withoutFailureBodyIssues(allIssues, summary.failure.ownedIssues)
+      : allIssues;
   const body = new Container();
   if (presentation.ownsCall) {
     if (summary)

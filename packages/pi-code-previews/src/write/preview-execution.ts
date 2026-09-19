@@ -46,6 +46,19 @@ export function getCodePreviewBeforeWrite<DetailsInput>(
   return getObjectValue(details, CODE_PREVIEW_BEFORE_WRITE_DETAIL);
 }
 
+/** Only an own data property with explicit undefined records an observed absent file.
+ * JSON replay drops that property, so missing history must remain unknown.
+ */
+export function isKnownNewWrite<Before, Details>(before: Before, details: Details): boolean {
+  if (before !== undefined || details === null || !hasObjectRuntimeType(details)) return false;
+  try {
+    const field = Object.getOwnPropertyDescriptor(details, CODE_PREVIEW_BEFORE_WRITE_DETAIL);
+    return field !== undefined && "value" in field && field.value === undefined;
+  } catch {
+    return false;
+  }
+}
+
 export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute")(function* (
   toolCallId: string,
   path: string,

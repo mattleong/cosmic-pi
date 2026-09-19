@@ -1,10 +1,9 @@
 import * as Predicate from "effect/Predicate";
 import { writeResultDetail } from "./builtin-result-detail";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { codePreviewSettings } from "../config/state";
 import { codePreviewPerformanceConfig } from "../config/env";
 import { getObjectValue } from "../shared/helpers";
-import { getCodePreviewBeforeWrite } from "../write/preview-execution";
+import { getCodePreviewBeforeWrite, isKnownNewWrite } from "../write/preview-execution";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import {
   projectBuiltinCompactSummary,
@@ -33,14 +32,7 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
   let beforeWrite: BuiltinBeforeWrite = { kind: "unknown" };
   if (tool === "write" && phase === "settled" && result && !context.isError) {
     const before = getCodePreviewBeforeWrite(context.toolCallId, result.details);
-    // Explicit undefined records a known absent file; JSON replay loses this evidence.
-    const knownNew =
-      before === undefined &&
-      result.details !== null &&
-      hasObjectRuntimeType(result.details) &&
-      Object.hasOwn(result.details, "codePreviewBeforeWrite") &&
-      getObjectValue(result.details, "codePreviewBeforeWrite") === undefined;
-    beforeWrite = knownNew
+    beforeWrite = isKnownNewWrite(before, result.details)
       ? { kind: "new" }
       : before === undefined
         ? { kind: "unknown" }

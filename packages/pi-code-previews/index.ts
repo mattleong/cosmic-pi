@@ -43,6 +43,7 @@ export {
   compactIssueSeverity,
   legacyCompactIssues,
   summaryCompactIssues,
+  withoutFailureBodyIssues,
   withCompactIssues,
   type CompactIssue,
   type CompactIssues,

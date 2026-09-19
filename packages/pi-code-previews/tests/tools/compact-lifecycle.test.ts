@@ -425,6 +425,61 @@ test("expanded ownership survives neither factory nor component rendering failur
   }
 });
 
+test("unknown coverage transfers individual issues but never whole-call ownership", () => {
+  for (const failure of ["none", "factory", "render"] as const) {
+    const h = harness(
+      () => ({
+        subject: "file.ts",
+        outcome: "error",
+        expandedResultOwnsCall: true,
+        issues: {
+          coverage: "unknown",
+          entries: [
+            {
+              operation: "read-1",
+              code: "owned",
+              severity: "error",
+              cause: "Owned cause",
+              recovery: [],
+              expandedInResult: true,
+            },
+            {
+              operation: "read-1",
+              code: "independent",
+              severity: "warning",
+              cause: "Independent recovery",
+              recovery: [],
+            },
+          ],
+        },
+      }),
+      "off",
+      {
+        result:
+          failure === "factory"
+            ? brokenRenderer
+            : failure === "render"
+              ? () => ({ render: brokenRenderer, invalidate: () => undefined })
+              : () => new Text("Owned cause\nOriginal diagnostics", 0, 0),
+      },
+    );
+    for (const expanded of [false, true, false]) {
+      const text = h
+        .update({ expanded, isPartial: false }, result("Fallback diagnostics"))
+        .join("\n");
+      assert.equal(text.split("Owned cause").length - 1, 1);
+      assert.match(text, /Independent recovery/u);
+      assert.equal(text.includes("CALL file.ts"), expanded && failure !== "render");
+      if (expanded) {
+        if (failure !== "render") assert.ok(text.includes("file.ts"));
+        assert.ok(
+          text.includes(failure === "none" ? "Original diagnostics" : "Fallback diagnostics"),
+        );
+      }
+    }
+  }
+});
+
 test("incomplete and malformed evidence stays compact with original details on expansion", () => {
   for (const malformed of [false, true]) {
     const summary: CompactSummary = {

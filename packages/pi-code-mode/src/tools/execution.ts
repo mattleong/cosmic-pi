@@ -32,6 +32,7 @@ import { captureResult } from "../results/serialize.ts";
 import { makeExecutionReceipts } from "./execution-receipts.ts";
 import { makeResultResponse } from "./result-response.ts";
 import { isExecutionInput, readRetainedResult, type CodeModeInput } from "./result-read.ts";
+import { resultReadFailure } from "../results/read-presentation.ts";
 import { makeBackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import {
   makeNestedPiToolDispatch,
@@ -130,21 +131,16 @@ export const makeCodeModeToolExecute =
             readRetainedResult(params, environment.results, config.maxOutputBytes),
             signal,
           )
-          .then((text) => ({
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  environment.isCurrent() && environment.getState()?.available === true
-                    ? text
-                    : clampModelVisibleText(
-                        "Retained result revoked. No execution was run.",
-                        config.maxOutputBytes,
-                      ),
-              },
-            ],
-            details: { toolCalls: [] },
-          }));
+          .then((read) => {
+            const current =
+              environment.isCurrent() && environment.getState()?.available === true
+                ? read
+                : resultReadFailure("revoked", config.maxOutputBytes);
+            return {
+              content: [{ type: "text" as const, text: current.text }],
+              details: { toolCalls: [], resultRead: current.presentation },
+            };
+          });
       }
       if (!isExecutionInput(params)) {
         throw new Error(
@@ -281,7 +277,20 @@ export const makeCodeModeToolExecute =
                         result: { details: reply },
                         isError: observation.isError,
                       });
-                if (projected !== undefined && !observation.incomplete) return projected;
+                // Nested calls have no original MCP card to restore on expansion.
+                // Incomplete summaries must keep the observation's full recovery evidence.
+                if (projected !== undefined && !observation.incomplete) {
+                  return projected.issues?.coverage !== "unknown"
+                    ? projected
+                    : {
+                        ...projected,
+                        issues: observation.issues,
+                        notices: observation.notices.map((text) => ({
+                          kind: "warning" as const,
+                          text,
+                        })),
+                      };
+                }
                 // Heading-only projection does not claim operation success.
                 const heading = projectMcpCompactSummary({
                   phase: "running",
