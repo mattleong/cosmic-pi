@@ -23,6 +23,8 @@ export interface CompactNotice {
   code?: string;
   kind: "warning" | "error" | "recovery";
   text: string;
+  /** Display only; original instructions remain available on expansion and to the agent. */
+  description?: string | undefined;
   /** Informational recovery shown only on expansion. Ignored for warnings and errors. */
   expandedOnly?: true;
 }
@@ -46,6 +48,7 @@ export interface CompactChild {
   notices?: readonly CompactNotice[];
   /** Argument-only target, laid out like a standalone compact call. Never output or recovery. */
   subject?: string;
+  compactSubject?: string;
   /** Measured dispatch duration, not an estimate or a sum of sibling timings. */
   durationMs?: number;
   status: "pending" | "running" | "returned" | CompactOutcome;
@@ -62,6 +65,8 @@ export interface CompactFailureEvidence {
 export interface CompactSummary {
   issues?: CompactIssues;
   subject: string;
+  /** Human-facing target without internal identifiers; expansion retains subject. */
+  compactSubject?: string;
   /** Operation not already identified by the tool name. Kept separate from target clipping. */
   action?: string;
   /** The first nonblank counter owns the single routine-detail slot. Combine related counts
@@ -97,6 +102,7 @@ export interface CompactSummary {
    */
   failure?: {
     cause: string;
+    description?: string | undefined;
     details: string;
     /** Snapshot fields represented by this exact failure body. */
     ownedIssues?: readonly CompactIssueClaim[];
@@ -148,6 +154,11 @@ export function resolveCompactSummary(
       code: "pi-error",
       severity: "error" as const,
       cause: summary.failure?.cause || "Tool reported a failure.",
+      description:
+        summary.failure?.description ??
+        (summary.outcome === "uncertain"
+          ? "Could not confirm what happened."
+          : "The tool reported an error."),
       recovery: [],
     };
     return {
@@ -173,6 +184,7 @@ export function resolveCompactSummary(
                   code: "execution-uncertain",
                   severity: "warning" as const,
                   cause: "Execution outcome is uncertain.",
+                  description: "Could not confirm what happened.",
                   recovery: [],
                 },
               ]

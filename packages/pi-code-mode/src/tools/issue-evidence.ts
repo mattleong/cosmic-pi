@@ -39,6 +39,7 @@ export const invocationIssues = (issues: CompactIssues, id?: number): CompactIss
       operation: id === undefined ? clean(issue.operation) : `call-${id}/${clean(issue.operation)}`,
       code: clean(issue.code),
       cause: clean(issue.cause),
+      ...(issue.description !== undefined && { description: clean(issue.description) }),
       recovery: issue.recovery.map((item) => ({ code: clean(item.code), text: clean(item.text) })),
       ...(issue.diagnostics && { diagnostics: issue.diagnostics.map(clean) }),
     })),

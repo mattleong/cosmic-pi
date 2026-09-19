@@ -92,18 +92,21 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   if (value.droppedLogBytes > 0)
     notices.push({
       code: `${value.id}:log-loss`,
+      description: "Some task output was discarded and cannot be recovered.",
       kind: "warning",
       text: `${value.droppedLogBytes} log bytes discarded; discarded output cannot be recovered.`,
     });
   if (value.state === "stopping")
     notices.push({
       code: `${value.id}:cleanup-unconfirmed`,
+      description: "Some task processes may still be running.",
       kind: "recovery",
       text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
     });
   if (value.state === "timed_out")
     notices.push({
       code: `${value.id}:runtime-timeout`,
+      description: "The task exceeded its time limit.",
       kind: "error",
       text: "Task exceeded its runtime timeout.",
     });
@@ -111,12 +114,14 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
     if (value.exitCode !== undefined && value.exitCode !== null && value.exitCode !== 0)
       notices.push({
         code: `${value.id}:exit-code`,
+        description: `The task exited with code ${value.exitCode}.`,
         kind: "error",
         text: `Process exited with code ${value.exitCode}.`,
       });
     if (value.signal)
       notices.push({
         code: `${value.id}:signal`,
+        description: "The task received a signal.",
         kind: "error",
         text: `Process received signal ${sanitizeTerminalLine(value.signal)}.`,
       });
@@ -127,6 +132,7 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
     )
       notices.push({
         code: `${value.id}:failed`,
+        description: "The task failed without reporting a cause.",
         kind: "error",
         text: "Task failed; no failure cause was reported.",
       });
@@ -134,10 +140,16 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   if (value.state === "exited" && value.exitCode == null)
     notices.push({
       code: `${value.id}:exit-unknown`,
+      description: "The task exited, but its outcome is unknown.",
       kind: "recovery",
       text: "Process exited, but its exit code is unknown; inspect task status.",
     });
-  if (value.error) notices.push({ kind: "error", text: sanitizeTerminalLine(value.error) });
+  if (value.error)
+    notices.push({
+      kind: "error",
+      text: sanitizeTerminalLine(value.error),
+      description: "The task reported an error.",
+    });
   const detail =
     value.exitCode == null
       ? compactTaskState(value.state)
@@ -147,6 +159,7 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   const metadata = outcome === "cancelled" ? [] : [detail];
   const subject = sanitizeTerminalLine(value.name?.trim() || value.id);
   return {
+    compactSubject: sanitizeTerminalLine(value.name?.trim() || "Background task"),
     subject:
       outcome === "cancelled"
         ? `${subject} stopped${value.signal ? `, signal ${sanitizeTerminalLine(value.signal)}` : ""}`
@@ -162,6 +175,7 @@ function cursors(value: typeof Cursors.Type, notices: CompactNotice[], id: strin
   if (value.droppedBytes > 0)
     notices.push({
       code: `${id}:log-loss`,
+      description: "Some task output was discarded and cannot be recovered.",
       kind: "warning",
       text: `${value.droppedBytes} log bytes discarded; discarded output cannot be recovered.`,
     });
@@ -192,7 +206,8 @@ const projectTaskSummary = ({
       : "id" in args && Predicate.isString(args.id)
         ? sanitizeTerminalLine(args.id)
         : "";
-  if (phase !== "settled") return { action, subject };
+  if (phase !== "settled")
+    return { action, subject, ...(args.action !== "start" && { compactSubject: "" }) };
   if (isError) return undefined;
   const decoded = Schema.decodeUnknownOption(Details)(result?.details);
   if (Option.isNone(decoded)) return undefined;
@@ -227,6 +242,9 @@ const projectTaskSummary = ({
           ...(task.notices ?? []).map((notice) => ({
             ...notice,
             text: `${task.subject}: ${notice.text}`,
+            ...(notice.description && {
+              description: `${(task.compactSubject ?? "Task").slice(0, 60)}: ${notice.description}`,
+            }),
           })),
         );
       }
@@ -253,6 +271,7 @@ const projectTaskSummary = ({
       if (timeout)
         notices.push({
           code: `${details.wait.id}:wait-timeout`,
+          description: "Timed out waiting. The task may still be running.",
           kind: "warning",
           text: "Wait timed out; this does not stop the background task.",
         });
@@ -280,6 +299,7 @@ const projectTaskSummary = ({
           notices.push(
             {
               code: `${logs.id}:slice-truncated`,
+              description: "Only part of the requested logs was returned.",
               kind: "warning",
               text: `Output truncated: ${cut.outputLines}/${cut.totalLines} lines, ${cut.outputBytes}/${cut.totalBytes} bytes.`,
             },
@@ -306,6 +326,8 @@ const projectTaskSummary = ({
         notices.push(
           {
             code: `${logs.id}:${logs.state === "timed_out" ? "runtime-timeout" : "failed"}`,
+            description:
+              logs.state === "timed_out" ? "The task exceeded its time limit." : "The task failed.",
             kind: "error",
             text:
               logs.state === "timed_out" ? "Task exceeded its runtime timeout." : "Task failed.",
@@ -319,12 +341,14 @@ const projectTaskSummary = ({
       if (logs.state === "stopping")
         notices.push({
           code: `${logs.id}:cleanup-unconfirmed`,
+          description: "Some task processes may still be running.",
           kind: "recovery",
           text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
         });
       return {
         action,
         subject: sanitizeTerminalLine(logs.id),
+        compactSubject: "Task logs",
         metadata: [compactTaskState(logs.state)],
         outcome,
         notices,

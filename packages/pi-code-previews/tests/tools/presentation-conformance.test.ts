@@ -21,9 +21,67 @@ const issue: CompactIssue = {
   code: "failure",
   severity: "error",
   cause: "Failure cause",
+  description: "Failure cause",
   recovery: [{ code: "inspect", text: "Independent recovery" }],
 };
 const theme = Object.assign(testTheme(), { bg: (_key: string, text: string) => text });
+
+test.each(["on", "off", "border"] as const)(
+  "compact descriptions do not expose or erase agent evidence in %s mode",
+  (mode) => {
+    const human = "The operation may still be running.";
+    const cause = "CANONICAL_CAUSE with provider internals";
+    const recovery = "AGENT_COMMAND inspect status before retry";
+    const diagnostic = "ORIGINAL_DIAGNOSTIC";
+    const original = {
+      content: [{ type: "text" as const, text: `${cause}\n${recovery}\n${diagnostic}` }],
+      details: undefined,
+    };
+    const before = JSON.stringify(original);
+    const source = createReadToolDefinition("/project");
+    const tool = withCodePreviewShell(
+      {
+        ...source,
+        renderCall: () => new Text("complete input", 0, 0),
+        renderResult: () => new Text(original.content[0]!.text, 0, 0),
+      },
+      {
+        mode,
+        compactSummary: () => ({
+          subject: "OPAQUE_INTERNAL_ID",
+          compactSubject: "Operation",
+          outcome: "uncertain",
+          issues: {
+            coverage: "unknown",
+            entries: [
+              {
+                operation: "INTERNAL_OPERATION_ID",
+                code: "unknown",
+                severity: "warning",
+                cause,
+                description: human,
+                recovery: [{ code: "inspect", text: recovery }],
+                diagnostics: [diagnostic],
+              },
+            ],
+          },
+        }),
+      },
+    );
+    const h = createToolPresentationHarness(tool, { theme, width: 120 });
+    for (const expanded of [false, true, false, true]) {
+      h.call({ path: "file" }, { expanded });
+      h.result(original, { expanded });
+      const text = h.render().join("\n");
+      expect(text.includes(human)).toBe(!expanded);
+      for (const evidence of [cause, recovery, diagnostic])
+        expect(text.includes(evidence)).toBe(expanded);
+      expect(!expanded && /OPAQUE_INTERNAL_ID|INTERNAL_OPERATION_ID/.test(text)).toBe(false);
+      expect(JSON.stringify(original)).toBe(before);
+    }
+    expect(tool.execute).toBe(source.execute);
+  },
+);
 
 test.each(["on", "off", "border"] as const)(
   "parent timing has one owner across expansion and fallback in %s mode",
@@ -130,7 +188,7 @@ test("expanded failure retains unique multiline call content and one claimed dia
         const text = h.render(width).join("\n");
         expect(text.includes("Unique source line two")).toBe(expanded);
         expect(text.match(/Failure cause/g)).toHaveLength(1);
-        expect(text).toContain("Independent recovery");
+        expect(text.includes("Independent recovery")).toBe(expanded);
         expect(text).not.toMatch(/OLD CALL|OLD RESULT|UNUSED RESULT/);
       }
     }

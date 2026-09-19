@@ -50,7 +50,16 @@ export function compactWorkspaceSummary<ValueInput>(
   const metadata: string[] = [];
   const counters: string[] = [];
   const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
-  const add = (code: string, text: string) => notices.push({ code, kind: "recovery", text });
+  const add = (code: string, text: string) =>
+    notices.push({
+      code,
+      kind: "recovery",
+      text,
+      description:
+        code === "revision-invalidated"
+          ? "Earlier review and test preparation no longer apply."
+          : "",
+    });
   switch (details.operation) {
     case "list":
       if (details.workspaceCount !== undefined && details.listedCount !== undefined)
@@ -108,6 +117,7 @@ export function compactWorkspaceSummary<ValueInput>(
     {
       action: operation,
       subject: details.workspaceId ?? "",
+      compactSubject: "Proposed changes",
       counters,
       metadata,
       notices,

@@ -99,7 +99,9 @@ describe("registered expanded Code Mode views", () => {
               );
               if (!expanded && style === "preview") continue;
               for (const issue of summary.issues!.entries) {
-                expect(text.split(issue.cause).length - 1).toBe(1);
+                expect(text.split((expanded ? issue.cause : issue.description)!).length - 1).toBe(
+                  1,
+                );
                 for (const diagnostic of issue.diagnostics ?? [])
                   expect(text.split(diagnostic).length - 1).toBe(expanded ? 1 : 0);
               }
@@ -236,8 +238,8 @@ describe("registered expanded Code Mode views", () => {
       const render = renderer({ code: "throw 1", intent: "Root recovery" }, result, true);
       for (const expanded of [false, true, false, true]) {
         const text = render(expanded);
-        expect(text.split("boom").length - 1).toBe(1);
-        expect(text.split(repair).length - 1).toBe(1);
+        expect(text.split("boom").length - 1).toBe(expanded ? 1 : 0);
+        expect(text.split(repair).length - 1).toBe(expanded ? 1 : 0);
       }
     } finally {
       setCodePreviewSettings(previous);
@@ -292,9 +294,9 @@ describe("registered expanded Code Mode views", () => {
             );
             for (const expanded of [false, true, false, true]) {
               const text = render(expanded);
-              expect(text).toContain(diagnostic);
-              expect(text.split(diagnostic).length - 1).toBe(1);
-              expect(text.split(instruction).length - 1, text).toBe(1);
+              expect(text.includes(diagnostic)).toBe(expanded);
+              expect(text.split(diagnostic).length - 1).toBe(expanded ? 1 : 0);
+              expect(text.split(instruction).length - 1, text).toBe(expanded ? 1 : 0);
             }
           }
         } finally {

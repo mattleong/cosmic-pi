@@ -29,6 +29,9 @@ export const codeModeCallRows = (
       ...(call.subject !== undefined && { subject: call.subject }),
       ...(call.compact !== undefined && {
         subject: call.compact.subject,
+        ...(call.compact.compactSubject !== undefined && {
+          compactSubject: call.compact.compactSubject,
+        }),
         ...(call.compact.failureEvidence && { failureEvidence: call.compact.failureEvidence }),
         ...(call.compact.action !== undefined && { action: call.compact.action }),
         ...(call.compact.counters !== undefined && { counters: call.compact.counters }),

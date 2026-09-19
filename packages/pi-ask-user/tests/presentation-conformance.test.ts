@@ -165,6 +165,29 @@ describe("registered questionnaire presentation", () => {
     ).toContain("ACTUAL_VALUE");
   });
 
+  it("describes failed answer delivery without showing agent procedures or identities", () => {
+    const tool = register("compact").tools.find(
+      (entry) => entry.name === "ask_user_async_control",
+    )!;
+    const harness = createToolPresentationHarness(tool, { theme, width: 200 });
+    const result = {
+      details: { ...snapshot, delivery: "failed" },
+      content: [{ type: "text" as const, text: "AGENT_DELIVERY_PROCEDURE" }],
+    };
+    const before = structuredClone(result);
+    for (const expanded of [false, true, false]) {
+      harness.call({ action: "status", requestId: snapshot.requestId }, { expanded });
+      harness.result(result, { expanded });
+      const text = harness.render().join("\n");
+      expect(text.includes("AGENT_DELIVERY_PROCEDURE")).toBe(expanded);
+      expect(
+        !expanded && /request-identity|delivery-identity|Retrieve the retained/.test(text),
+      ).toBe(false);
+      expect(!expanded && !/saved.*delivery failed/i.test(text)).toBe(false);
+      expect(result).toEqual(before);
+    }
+  });
+
   it("retains raw malformed failures and cancellation guidance", () => {
     for (const tool of register("compact").tools) {
       const harness = createToolPresentationHarness(tool, { theme });

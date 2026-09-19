@@ -29,7 +29,7 @@ describe("subagent host notifier", () => {
       content:
         "Background subagent reader (agent-1) completed.\n\n## Read report\n\n- Complete.\n  - Nested.\n\n    const value = 1;",
     });
-    expect(message).not.toHaveProperty("details");
+    expect(JSON.stringify(message.details)).not.toContain("Read report");
     expect(options).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
@@ -330,7 +330,6 @@ describe("subagent host notifier", () => {
     expect(message.content).toContain("password=[REDACTED]");
     expect(message.content).toContain("token=[REDACTED]");
     expect(message.content).toContain("api_key=[REDACTED]");
-    expect(message).not.toHaveProperty("details");
     expect(JSON.stringify(message)).not.toContain("hunter2");
     expect(JSON.stringify(message)).not.toContain("terminal-secret");
     expect(JSON.stringify(message)).not.toContain("warning-secret");

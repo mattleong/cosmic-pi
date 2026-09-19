@@ -84,14 +84,15 @@ export function registerOpenAIImage(
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
   pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) => {
     const details = isCodexImageDetails(message.details) ? message.details : undefined;
+    const raw = Predicate.isString(message.content)
+      ? message.content
+      : message.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n");
     const text = details
-      ? resultText(details)
-      : Predicate.isString(message.content)
-        ? message.content
-        : message.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n");
+      ? [resultText(details), ...(raw ? ["Raw result", raw] : [])].join("\n")
+      : raw;
     const contentImage = Array.isArray(message.content)
       ? message.content.find(isImageContent)
       : undefined;
@@ -126,15 +127,30 @@ export function registerOpenAIImage(
                     action: details.action,
                     outcome,
                     notices:
-                      outcome === "uncertain"
+                      outcome === "error"
                         ? [
                             {
-                              code: "image-status",
-                              kind: "warning" as const,
-                              text: `Image generation is ${details.status}.`,
+                              code: "image-failed",
+                              kind: "error" as const,
+                              text: "Image generation failed.",
+                              description: "Image generation failed.",
                             },
                           ]
-                        : [],
+                        : outcome === "uncertain"
+                          ? [
+                              {
+                                code: "image-status",
+                                kind: "warning" as const,
+                                text: `Image generation is ${details.status}.`,
+                                description:
+                                  details.status === "completed"
+                                    ? "Image generation was reported complete, but no image is attached."
+                                    : details.status === "in_progress"
+                                      ? "Image generation may still be running."
+                                      : "Image generation has no confirmed completion.",
+                              },
+                            ]
+                          : [],
                   },
                   `image:${details.id}`,
                 )

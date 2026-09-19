@@ -137,6 +137,31 @@ describe("registered image presentation", () => {
     }
   });
 
+  it.each([
+    { status: "failed", fact: /image generation failed/i },
+    { status: "in_progress", fact: /may still be running/i },
+    { status: "completed", fact: /no image is attached/i },
+  ])(
+    "describes $status image messages without exposing provider procedures",
+    ({ status, fact }) => {
+      const { message } = register("compact");
+      const record = {
+        customType: "openai-image",
+        details: { ...details, status },
+        content: [{ type: "text", text: "PROVIDER_RECOVERY_COMMAND" }],
+      };
+      const before = structuredClone(record);
+      for (const expanded of [false, true, false]) {
+        const text = message(fixture(record), { expanded, outputPad: 0 }, theme)!
+          .render(200)
+          .join("\n");
+        expect(text.includes("PROVIDER_RECOVERY_COMMAND")).toBe(expanded);
+        expect(!expanded && !fact.test(text)).toBe(false);
+        expect(record).toEqual(before);
+      }
+    },
+  );
+
   it("retains unknown error text and cancelled result metadata", () => {
     const harness = createToolPresentationHarness(register("compact").tool, { theme });
     harness.call({ prompt: details.prompt }, { expanded: true });

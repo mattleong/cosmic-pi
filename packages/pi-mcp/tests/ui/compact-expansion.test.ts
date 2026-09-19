@@ -62,9 +62,10 @@ it("renders unknown-coverage boundary attention once through the real MCP factor
         const text = harness.render(400).join("\n");
         expect(text.includes("Original raw diagnostic")).toBe(expanded);
         for (const issue of summary.issues!.entries) {
-          if (issue.cause) expect(text.split(issue.cause).length - 1).toBe(1);
+          const visible = expanded ? issue.cause : issue.description;
+          if (visible) expect(text.split(visible).length - 1).toBe(1);
           for (const recovery of issue.recovery)
-            expect(text.split(recovery.text).length - 1).toBe(1);
+            expect(text.split(recovery.text).length - 1).toBe(expanded ? 1 : 0);
           for (const detail of issue.diagnostics ?? [])
             expect(text.split(detail).length - 1).toBe(expanded ? 1 : 0);
         }

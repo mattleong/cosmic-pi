@@ -290,7 +290,7 @@ test("errors, cancellation and uncertainty retain full notices and original deta
     for (const expanded of [false, true]) {
       const rows = h.update({ expanded });
       assert.equal(rows.join("\n").includes("rich failure body"), expanded);
-      assert.match(rows.join("\n"), /line-two recovery command/u);
+      assert.equal(rows.join("\n").includes("line-two recovery command"), expanded);
     }
   }
   const h = harness(summarize);
@@ -320,11 +320,16 @@ test("legacy owned failures retain unclassified recovery without text-based supp
           outcome,
           failure: {
             cause: "short cause",
+            description: "short cause",
             details: "complete diagnostic\nInspect before retrying.",
           },
           notices: [
             { kind: "recovery", text: "Inspect before retrying." },
-            { kind: "warning", text: "Independent safety warning" },
+            {
+              kind: "warning",
+              text: "Independent safety warning",
+              description: "Independent safety warning",
+            },
           ],
         }),
         mode,
@@ -341,7 +346,7 @@ test("legacy owned failures retain unclassified recovery without text-based supp
         const text = h.update({ expanded }).join("\n");
         assert.doesNotMatch(text, /CALL |BODY |original renderer detail/u);
         assert.equal(text.match(/file\.ts/gu)?.length, 1);
-        assert.equal(text.match(/Inspect before retrying\./gu)?.length, expanded ? 2 : 1);
+        assert.equal(text.match(/Inspect before retrying\./gu)?.length ?? 0, expanded ? 2 : 0);
         assert.match(text, /Independent safety warning/u);
         if (expanded) {
           assert.match(text, /complete diagnostic/u);
@@ -358,7 +363,7 @@ test("legacy owned failures retain unclassified recovery without text-based supp
 test("warnings remain visible while normal live output stays hidden", () => {
   const h = harness(({ args }) => ({
     subject: args.path ?? "",
-    notices: [{ kind: "warning", text: "secret detected" }],
+    notices: [{ kind: "warning", text: "secret detected", description: "secret detected" }],
   }));
   h.update({ executionStarted: true }, result("ordinary live output"));
   assert.match(h.rows().join("\n"), /secret detected/u);
@@ -459,6 +464,7 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
               code: "independent",
               severity: "warning",
               cause: "Independent recovery",
+              description: "Independent recovery",
               recovery: [],
             },
           ],
@@ -478,7 +484,7 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
       const text = h
         .update({ expanded, isPartial: false }, result("Fallback diagnostics"))
         .join("\n");
-      assert.equal(text.split("Owned cause").length - 1, 1);
+      assert.equal(text.split("Owned cause").length - 1, expanded ? 1 : 0);
       assert.match(text, /Independent recovery/u);
       assert.equal(text.includes("CALL file.ts"), expanded && failure !== "render");
       if (expanded) {
@@ -656,7 +662,13 @@ it.effect("cooperative animation uses its injected owner without a previews runt
             subject: input.args.path ?? "",
             notices:
               textOf(input.result) === "1/2"
-                ? [{ kind: "warning", text: "Inspect partial side effects" }]
+                ? [
+                    {
+                      kind: "warning",
+                      text: "Inspect partial side effects",
+                      description: "Partial changes may remain",
+                    },
+                  ]
                 : [],
           });
           const h = harness(provider, "off", { timing, scheduleAnimation: scheduler.schedule });
@@ -678,7 +690,7 @@ it.effect("cooperative animation uses its injected owner without a previews runt
             h.update({}, result("1/2"));
             const progress = h.rows(240);
             assert.equal(progress[0]?.replace("1/2", "0/2"), previous.split("\n")[0]);
-            assert.match(progress.join("\n"), /Inspect partial side effects/u);
+            assert.match(progress.join("\n"), /Partial changes may remain/u);
             h.call({ args: { path: "updated-file.ts" } });
             const streamed = h.rows(240);
             assert.equal(streamed[0]?.replace("updated-file.ts", "file.ts"), progress[0]);

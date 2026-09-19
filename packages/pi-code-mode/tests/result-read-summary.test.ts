@@ -74,7 +74,8 @@ describe("retained-read summaries", () => {
           width,
         ).join("\n");
         expect(collapsed).toContain(projected.counters![0]);
-        expect(collapsed).toContain(issue.cause);
+        expect(collapsed).toContain(issue.description);
+        expect(collapsed).not.toContain(issue.cause);
         for (const diagnostic of issue.diagnostics ?? [])
           expect(collapsed).not.toContain(diagnostic);
       }

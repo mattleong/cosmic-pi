@@ -784,7 +784,7 @@ describe("builtin factory compact integration", () => {
         );
         const text = [call, body].flatMap((component) => component?.render(200) ?? []).join("\n");
         expect(/new file/iu.test(text)).toBe(knownNew);
-        expect(/previous content unavailable/iu.test(text)).toBe(!knownNew);
+        expect(/previous content(?:s)? (?:is |are )?unavailable/iu.test(text)).toBe(!knownNew);
       }
     }
   });
@@ -906,8 +906,10 @@ describe("builtin factory compact integration", () => {
         const text = [call, resultSlot]
           .flatMap((component) => (component ? [renderComponent(component)] : []))
           .join("\n");
-        expect(text.match(/failureLineOne/gu)).toHaveLength(1);
-        expect(text.match(/Inspect the destination before retrying\./gu)).toHaveLength(1);
+        expect(text.match(/failureLineOne/gu) ?? []).toHaveLength(expanded ? 1 : 0);
+        expect(text.match(/Inspect the destination before retrying\./gu) ?? []).toHaveLength(
+          expanded ? 1 : 0,
+        );
         // Expanded content retains full arguments as well as the elidable semantic target.
         expect(text).toMatch(/file\.ts|printf value/u);
       }

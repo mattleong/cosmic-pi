@@ -105,10 +105,13 @@ interface ChildSessionInput {
   token: number | undefined;
 }
 
+import { registerSubagentMessageRenderers } from "../application/messages.ts";
+
 export function registerSubagentChildBridge(
   pi: ExtensionAPI,
   boundaries: SubagentChildBridgeBoundaries = LIVE_CHILD_BRIDGE_BOUNDARIES,
 ): void {
+  registerSubagentMessageRenderers(pi);
   pi.registerFlag("pi-subagents-fast-mode", {
     description: "Private OpenAI fast-mode request for this subagent",
     type: "boolean",

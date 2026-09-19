@@ -17,6 +17,7 @@ const Notice = Schema.Struct({
   kind: Schema.Literals(["warning", "error", "recovery"]),
   text: Text,
   expandedOnly: Schema.optionalKey(Schema.Literal(true)),
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(240))),
 });
 export const FailureEvidenceSchema = Schema.Struct({
   code: Text,
@@ -26,6 +27,7 @@ export const FailureEvidenceSchema = Schema.Struct({
 const ReceiptFields = {
   failureEvidence: Schema.optionalKey(FailureEvidenceSchema),
   subject: Text,
+  compactSubject: Schema.optionalKey(Text),
   action: Schema.optional(Text),
   counters: Schema.optional(Labels),
   metadata: Schema.optional(Labels),
@@ -235,6 +237,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           const decoded = decodeOption(Notice, {
             kind: notice.kind,
             text: clean(notice.text),
+            ...(notice.description !== undefined && { description: clean(notice.description) }),
             ...(notice.expandedOnly === true && { expandedOnly: true }),
           });
           if (decoded === undefined) incomplete = true;
@@ -267,6 +270,9 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
             failureEvidence: { ...failureEvidence, cause: clean(failureEvidence.cause) },
           }),
           subject: clean(summary.subject),
+          ...(summary.compactSubject !== undefined && {
+            compactSubject: clean(summary.compactSubject),
+          }),
           ...(summary.action !== undefined && { action: clean(summary.action) }),
           ...(summary.counters !== undefined && { counters: summary.counters.map(clean) }),
           ...(summary.metadata !== undefined && { metadata: summary.metadata.map(clean) }),
@@ -274,6 +280,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           notices: semanticNotices.map((notice) => ({
             kind: notice.kind,
             text: clean(notice.text),
+            ...(notice.description !== undefined && { description: clean(notice.description) }),
             ...(notice.expandedOnly === true && { expandedOnly: true }),
           })),
           deliveryFailed: false,
@@ -313,6 +320,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           code: "delivery-failed",
           severity: "warning",
           cause: notice.text,
+          description: "An operation may have finished, but its result did not reach the program.",
           recovery: [],
         };
         retainIssues([deliveryIssue]);

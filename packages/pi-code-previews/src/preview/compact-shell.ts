@@ -359,6 +359,7 @@ class CompactShell implements Component {
               renderCompactRow(
                 {
                   name: this.options.name,
+                  expanded: true,
                   phase: this.phase(this.currentResult()),
                   summary,
                   duration: this.duration,

@@ -246,8 +246,8 @@ describe("Code Mode shared presentation conformance", () => {
         view.invalidate();
         const text = view.render().join("\n");
         expect(text.includes("FULL_PROGRAM_SOURCE")).toBe(expanded);
-        expect(text.split("ROOT_CAUSE")).toHaveLength(2);
-        expect(text.split("INDEPENDENT_DIAGNOSTIC")).toHaveLength(2);
+        expect(text.split("ROOT_CAUSE")).toHaveLength(expanded ? 2 : 1);
+        expect(text.split("INDEPENDENT_DIAGNOSTIC")).toHaveLength(expanded ? 2 : 1);
       }
       expect(JSON.stringify(result)).toBe(before);
       expect(execute).not.toHaveBeenCalled();
@@ -270,6 +270,7 @@ describe("Code Mode shared presentation conformance", () => {
                 code: "retained",
                 severity: "warning" as const,
                 cause: `CAUSE_${index}`,
+                description: `HUMAN_DESCRIPTION_${index}`,
                 recovery: [{ code: "inspect", text: `RECOVERY_${index}` }],
                 diagnostics: [`DIAGNOSTIC_${index}`],
               },
@@ -288,8 +289,14 @@ describe("Code Mode shared presentation conformance", () => {
         view.result(result, { expanded });
         const text = view.render().join("\n");
         for (const index of [0, 1, 2]) {
-          expect(text).toContain(`CAUSE_${index}`);
-          expect(text).toContain(`RECOVERY_${index}`);
+          if (style === "compact" && !expanded) {
+            expect(text).toContain(`HUMAN_DESCRIPTION_${index}`);
+            expect(text).not.toContain(`CAUSE_${index}`);
+            expect(text).not.toContain(`RECOVERY_${index}`);
+          } else {
+            expect(text).toContain(`CAUSE_${index}`);
+            expect(text).toContain(`RECOVERY_${index}`);
+          }
           if (expanded) {
             expect(text.split(`DIAGNOSTIC_${index}`)).toHaveLength(2);
             expect(text.split(`RECOVERY_${index}`)).toHaveLength(2);

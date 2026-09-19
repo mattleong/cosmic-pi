@@ -17,6 +17,9 @@ export function createBoundedCompactIssuesSchema(limits: {
         code: identity,
         severity: Schema.Literals(["error", "warning"]),
         cause: text,
+        description: Schema.optional(
+          Schema.String.check(Schema.isMaxLength(Math.min(240, limits.maxTextLength))),
+        ),
         recovery: Schema.Array(Schema.Struct({ code: identity, text })).check(
           Schema.isMaxLength(limits.maxRecoveryEntries),
         ),

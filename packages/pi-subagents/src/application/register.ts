@@ -41,6 +41,7 @@ import { registerSubagentManagerCommand } from "../settings/controller.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import { decodeSubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
+import { registerSubagentMessageRenderers } from "./messages.ts";
 import { makeProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import { makeProfileReloadHandoff, profileReloadSessionKey } from "./profile-reload-handoff.ts";
 
@@ -109,6 +110,7 @@ export function registerSubagentApplication(
   pi: ExtensionAPI,
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
+  registerSubagentMessageRenderers(pi);
   const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
   let releaseActivity: (() => void) | undefined;

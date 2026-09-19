@@ -98,8 +98,9 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
       { expanded, isPartial: true },
     );
     const text = harness.render(100).join("\n");
-    expect(text).toContain("grant the reviewed file");
-    expect(text).toContain("subagent_reply");
+    expect(text.includes("grant the reviewed file")).toBe(expanded);
+    expect(text.includes("subagent_reply")).toBe(expanded);
+    if (!expanded) expect(text).toMatch(/needs a reply/i);
     expect(text.match(/subagent_await/g)?.length).toBeGreaterThan(0);
   }
 });
@@ -206,9 +207,15 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
         Object.assign(details, { cancelled: true, cancellationCleanup: "unconfirmed" });
       harness.result({ content: [], details }, { expanded });
       const text = harness.render(120).join("\n");
-      expect(text).toContain(scenario.evidence);
+      if (expanded) expect(text).toContain(scenario.evidence);
+      else {
+        expect(text).not.toContain("subagent_status");
+        if (scenario.error) expect(text).not.toContain(scenario.error);
+        if (scenario.cancelled) expect(text).toMatch(/workers were not stopped/i);
+        if (scenario.state === "stopping") expect(text).toMatch(/cleanup is not yet confirmed/i);
+      }
       if (expanded && scenario.error) expect(text.split(scenario.error)).toHaveLength(2);
-      if (scenario.cancelled) expect(text).toContain("completion_claim_conflict");
+      if (scenario.cancelled) expect(text.includes("completion_claim_conflict")).toBe(expanded);
     }
   }
 });

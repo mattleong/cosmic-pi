@@ -116,12 +116,18 @@ export function createParentCompactSummary(
     }
     const summary: CompactSummary = {
       subject: safeTextPrefix(sanitizeTerminalLine(message), 120),
+      ...(action === "warning" && { compactSubject: "Worker warning" }),
     };
     if (toolName === "contact_parent") summary.action = action;
     if (action === "warning") {
       summary.outcome = "warning";
       summary.notices = [
-        { code: "parent-warning", kind: "warning", text: stripTerminalControls(message) },
+        {
+          code: "parent-warning",
+          kind: "warning",
+          text: stripTerminalControls(message),
+          description: "The worker reported a warning.",
+        },
       ];
     }
     if (!result) return phase === "settled" ? undefined : withCompactIssues(summary, toolName);

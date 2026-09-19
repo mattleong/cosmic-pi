@@ -42,7 +42,12 @@ const projectCodeModeCompactSummary = (
     const input = decodeOption(ArgsSchema, args);
     const heading =
       input?.action === "result.read"
-        ? { action: input.action, subject: input.id ?? "", showTiming: true as const }
+        ? {
+            action: input.action,
+            subject: input.id ?? "",
+            compactSubject: "Saved output",
+            showTiming: true as const,
+          }
         : { subject: describeCodeModeIntent(input?.intent), showTiming: true as const };
     if (result === undefined) return phase === "settled" ? undefined : heading;
     if (input?.action === "result.read")
@@ -95,16 +100,19 @@ const projectCodeModeCompactSummary = (
       notices.push({
         kind: "warning",
         text: `${hiddenFailed} additional nested operations failed.`,
+        description: `${hiddenFailed} other operations failed.`,
       });
     if (cancelled > 0 && !details.cancelled)
       notices.push({
         kind: "warning",
         text: `${cancelled} nested operations cancelled; prior side effects are not rolled back.`,
+        description: `${cancelled} operations were cancelled. Earlier changes may remain.`,
       });
     if (details.truncated)
       notices.push({
         kind: "recovery",
         text: TRUNCATED_OUTPUT_NOTICE,
+        description: "Only part of the output was returned. Earlier changes may remain.",
       });
     const evidence = details.mcpEvidence;
     if (
@@ -120,6 +128,7 @@ const projectCodeModeCompactSummary = (
       notices.push({
         kind: "warning",
         text: "Nested operations have no confirmed settlement. Check their state before retrying.",
+        description: "Some operations may still be running.",
       });
       return { ...heading, counters, children, notices, outcome: "uncertain" };
     }
@@ -144,6 +153,7 @@ const projectCodeModeCompactSummary = (
         notices.push({
           kind: "warning",
           text: "Execution cancelled; prior side effects are not rolled back.",
+          description: "The run was cancelled. Earlier changes may remain.",
         });
       return {
         ...heading,
@@ -154,6 +164,9 @@ const projectCodeModeCompactSummary = (
         ...(text.length > 0 && {
           failure: {
             cause: known?.evidence.cause ?? first,
+            description: details.cancelled
+              ? "The run was cancelled."
+              : "The program reported an error.",
             details: text,
           },
         }),
@@ -248,6 +261,7 @@ export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
               code: "program-failure",
               severity: "error" as const,
               cause: summary.failure.cause,
+              description: summary.failure.description,
               recovery: [],
             },
           ]

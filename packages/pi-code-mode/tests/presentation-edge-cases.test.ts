@@ -268,7 +268,8 @@ describe("presentation edge cases", () => {
       const expanded = renderCompactChildren(children, theme, 100, 0, true, true, "flat").join(
         "\n",
       );
-      expect(compact).toContain("/tmp/retained-output.txt");
+      expect(compact).not.toContain("/tmp/retained-output.txt");
+      expect(expanded).toContain("/tmp/retained-output.txt");
       expect(compact).not.toContain("offset=3");
       expect(expanded).toContain("offset=3");
       expect(expanded).toContain("/tmp/retained-output.txt");

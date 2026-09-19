@@ -17,7 +17,13 @@ export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): Compact
           ),
         ]).entries.flatMap((issue) => [
           ...(issue.cause
-            ? [{ kind: issue.severity, text: `${issue.operation}: ${issue.cause}` }]
+            ? [
+                {
+                  kind: issue.severity,
+                  text: `${issue.operation}: ${issue.cause}`,
+                  ...(issue.description !== undefined && { description: issue.description }),
+                },
+              ]
             : []),
           ...issue.recovery.map((item) => ({
             kind: "recovery" as const,
@@ -38,7 +44,13 @@ export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): Compact
     ),
     ...(details.recoveredNotices ?? []),
     ...(details.compactAttention?.incomplete
-      ? [{ kind: "warning" as const, text: INCOMPLETE_ATTENTION }]
+      ? [
+          {
+            kind: "warning" as const,
+            text: INCOMPLETE_ATTENTION,
+            description: "Some operation details are unavailable.",
+          },
+        ]
       : []),
     ...mcpAttention(details.mcpEvidence).map((text): CompactNotice => ({ kind: "warning", text })),
   ];
@@ -50,6 +62,7 @@ export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): Compact
     notices.push({
       kind: "recovery",
       text: "A nested call did not deliver a successful result to the program. MCP work may already have completed; do not replay it to recover output.",
+      description: "An operation may have finished, but its result did not reach the program.",
     });
   return notices;
 };

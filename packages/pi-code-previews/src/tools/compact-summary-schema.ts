@@ -13,10 +13,12 @@ const Notices = Schema.Array(
     code: Schema.optionalKey(Schema.String),
     kind: Schema.Literals(["warning", "error", "recovery"]),
     text: Schema.String,
+    description: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
     expandedOnly: Schema.optionalKey(Schema.Literal(true)),
   }),
 );
 const Fields = {
+  compactSubject: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
   counters: Schema.optionalKey(Labels),
   metadata: Schema.optionalKey(Labels),
@@ -35,6 +37,7 @@ const Summary = Schema.Struct({
   failure: Schema.optionalKey(
     Schema.Struct({
       cause: Schema.String,
+      description: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
       details: Schema.String,
       ownedIssues: Schema.optionalKey(Schema.Array(CompactIssueClaimSchema)),
     }),

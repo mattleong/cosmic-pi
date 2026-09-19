@@ -101,6 +101,13 @@ export function renderCompactFailure(
               code: "legacy-failure",
               severity: color === "error" ? "error" : "warning",
               cause: failure.cause,
+              description:
+                failure.description ??
+                (summary.outcome === "cancelled"
+                  ? "Cancelled."
+                  : summary.outcome === "uncertain"
+                    ? "Could not confirm what happened."
+                    : undefined),
               recovery: [],
             },
           ],

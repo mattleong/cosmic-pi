@@ -221,11 +221,12 @@ test("middle elision keeps combining, ZWJ and wide graphemes intact", () => {
   assert.ok(visibleWidth(row) < 200);
 });
 
-test("notice wrapping retains multiline recovery instructions without subject row expansion", () => {
+test("expanded notice wrapping retains multiline recovery instructions", () => {
   const rows = renderCompactToolCall(
     {
       name: "read",
       phase: "settled",
+      expanded: true,
       summary: {
         subject: "file.txt",
         outcome: "warning",
@@ -255,6 +256,7 @@ test("notice indentation preserves every character at narrow widths", () => {
         {
           name: "read",
           phase: "settled",
+          expanded: true,
           summary: { subject: "file", outcome: "warning", notices: [{ kind, text: notice }] },
         },
         theme,
@@ -293,8 +295,8 @@ test("failure text is inert and width bounded without clipping recovery continua
       assert.equal(rows.join("").includes("\u001b[2J"), false);
       if (width >= 40)
         assert.equal(
-          rows.join("\n").match(/Inspect before retrying\./gu)?.length,
-          expanded ? 2 : 1,
+          rows.join("\n").match(/Inspect before retrying\./gu)?.length ?? 0,
+          expanded ? 2 : 0,
         );
     }
   }
@@ -329,6 +331,7 @@ test("unidentified legacy recovery is not suppressed by matching diagnostic pros
           outcome: "error",
           notices: [{ kind: "recovery", text: "文字" }],
         },
+        expanded: true,
         failure: { cause: "日本語", details: "日本語" },
       },
       theme,

@@ -1,3 +1,4 @@
+import { runNoticeDescription } from "./compact-descriptions.ts";
 import type { CompactNotice } from "pi-code-previews";
 import type { SubagentRunCard } from "./details-schema.ts";
 
@@ -29,8 +30,12 @@ export function compactRunNotices(
     const noticeStart = notices.length;
     const id = JSON.stringify(card.id);
     const add: AddNotice = (code, text, kind = "recovery") => {
+      const description = runNoticeDescription(code, kind);
       const notice: CompactNotice = {
         kind,
+        description: description
+          ? `${(card.name === card.id ? "Worker" : card.name).slice(0, 60)}: ${description}`
+          : "",
         text: `${card.name === card.id ? card.id : `${card.name} (${card.id})`}: ${text}`,
       };
       if (code) notice.code = `${card.id}:${code}`;

@@ -8,6 +8,8 @@ Compact attention policy stays in the typed tool projections. Static discovery c
 
 All 11 root `subagent_*` registrations and their local-child and supervisor Pi proxies use the shared presentation shell. The shell owns semantic headings and attention in both compact states. Content callbacks retain tasks, reports, hierarchy, usage, routes, and audits without adding a competing status banner. A live panel may hide partial hierarchy, but never owns the tool heading, omissions, questions, writer admission, or cleanup recovery. `contact_parent` and the four supervisor tools share content-only callbacks; arbitrary replies remain verbatim. No issue ownership is claimed for hidden content. Workspace producers record optional UTF-16 display spans while composing output, so expansion can show list records and immutable diff pages without parsing text for deduplication. Original content bytes remain unchanged; historical or invalid spans retain labeled raw output. The private native-agent MCP proxy transports results only and has no Pi TUI renderer.
 
+`tools/compact-descriptions.ts` maps producer-owned notice identities to human-facing facts. Compact views omit agent procedures and opaque run IDs; original reports, recovery order, and evidence remain unchanged on expansion. `application/messages.ts` registers root and child message renderers; pure `ui/notification.ts` shows typed completion counts or a question summary, with conservative historical fallback. `host-notifier.ts` attaches display-only counts without altering message content, delivery keys, or acknowledgement behavior.
+
 ## Topic documentation
 
 - [Routing, candidate planning, and launch](docs/routing.md)

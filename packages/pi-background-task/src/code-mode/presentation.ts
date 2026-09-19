@@ -26,6 +26,7 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
         "clear",
       ]),
       subject: Text,
+      compactSubject: Schema.optionalKey(Text),
       outcome: Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]),
       metadata: Labels,
       counters: Labels,
@@ -33,6 +34,7 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
         Schema.Struct({
           kind: Schema.Literals(["warning", "error", "recovery"]),
           text: Text,
+          description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(240))),
         }),
       ).check(Schema.isMaxLength(32)),
       issues: Schema.optionalKey(
@@ -71,6 +73,9 @@ export const normalizeBackgroundTaskPresentation = <Value>(
         summary: {
           ...s,
           subject: sanitizeTerminalLine(s.subject),
+          ...(s.compactSubject !== undefined && {
+            compactSubject: sanitizeTerminalLine(s.compactSubject),
+          }),
           ...(s.issues && {
             issues: {
               coverage: decoded.incomplete || decoded.overflow ? "unknown" : s.issues.coverage,
@@ -79,6 +84,9 @@ export const normalizeBackgroundTaskPresentation = <Value>(
                 operation: sanitizeTerminalLine(issue.operation),
                 code: sanitizeTerminalLine(issue.code),
                 cause: sanitizeTerminalLine(issue.cause),
+                ...(issue.description !== undefined && {
+                  description: sanitizeTerminalLine(issue.description),
+                }),
                 ...(issue.diagnostics && {
                   diagnostics: issue.diagnostics.map(sanitizeTerminalLine),
                 }),
@@ -91,7 +99,13 @@ export const normalizeBackgroundTaskPresentation = <Value>(
           }),
           metadata: s.metadata.map(sanitizeTerminalLine),
           counters: s.counters.map(sanitizeTerminalLine),
-          notices: s.notices.map((n) => ({ ...n, text: sanitizeTerminalLine(n.text) })),
+          notices: s.notices.map((n) => ({
+            ...n,
+            text: sanitizeTerminalLine(n.text),
+            ...(n.description !== undefined && {
+              description: sanitizeTerminalLine(n.description),
+            }),
+          })),
         },
       };
     }
@@ -120,6 +134,7 @@ export const projectBackgroundTaskPresentation = (
       summary: {
         action: summary.action ?? args.action,
         subject: summary.subject,
+        ...(summary.compactSubject !== undefined && { compactSubject: summary.compactSubject }),
         outcome: summary.outcome,
         metadata: summary.metadata ?? [],
         counters: summary.counters ?? [],

@@ -46,7 +46,7 @@ describe("compact child selection", () => {
             status: "success" as const,
             notices: [
               { kind: "recovery" as const, text: "Continue at offset=143", expandedOnly: true },
-              { kind: "warning" as const, text: warning, expandedOnly: true },
+              { kind: "warning" as const, text: warning, description: warning, expandedOnly: true },
             ],
           },
           { label: "second", status: "success" as const },
@@ -77,8 +77,18 @@ describe("compact child selection", () => {
         code: "read-pagination",
         expandedOnly: true,
       },
-      { kind: "warning", text: "Sensitive content", expandedOnly: true },
-      { kind: "error", text: "Independent error", expandedOnly: true },
+      {
+        kind: "warning",
+        text: "Sensitive content",
+        description: "Sensitive content",
+        expandedOnly: true,
+      },
+      {
+        kind: "error",
+        text: "Independent error",
+        description: "Independent error",
+        expandedOnly: true,
+      },
     ];
     expect(notices.map(isCompactAttention)).toEqual([false, true, true]);
     const children = renderCompactChildren(
@@ -217,7 +227,7 @@ describe("compact child selection", () => {
               .slice(1)
               .join("")
               .replace(/[\s│╰─]/gu, ""),
-          ).toBe(recovery.replace(/\s/gu, ""));
+          ).toBe(expanded ? recovery.replace(/\s/gu, "") : "");
         }
       }
     },
@@ -303,12 +313,16 @@ describe("compact child selection", () => {
           },
           notices: [{ kind: "recovery", text: "Check remote state before retrying." }],
         },
-        failure: { cause: "Delivery failed", details: "Delivery failed after dispatch" },
+        failure: {
+          cause: "Delivery failed",
+          description: "Delivery failed",
+          details: "Delivery failed after dispatch",
+        },
       },
       theme,
       80,
     );
     expect(rows.join("\n")).toContain("Delivery failed");
-    expect(rows.join("\n")).toContain("Check remote state before retrying.");
+    expect(rows.join("\n")).not.toContain("Check remote state before retrying.");
   });
 });

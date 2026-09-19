@@ -159,6 +159,7 @@ function projectBuiltinSummary(
     else
       notices.push({
         code: "edit-diff-unavailable",
+        description: "The edit was applied, but its changes cannot be previewed.",
         kind: "warning",
         text: "Edit applied; diff unavailable",
       });

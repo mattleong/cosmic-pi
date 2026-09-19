@@ -122,10 +122,13 @@ interface SupervisorBridgeSessionInput {
   readonly configPath: string;
 }
 
+import { registerSubagentMessageRenderers } from "../application/messages.ts";
+
 export default function registerPiSubagentSupervisorBridge(
   pi: ExtensionAPI,
   dependencies: PiSupervisorBridgeExtensionDependencies = { openBridge: openPiSupervisorBridge },
 ): void {
+  registerSubagentMessageRenderers(pi);
   pi.registerFlag("pi-subagents-supervisor-config", {
     description: "Private pi-subagents supervisor channel configuration",
     type: "string",

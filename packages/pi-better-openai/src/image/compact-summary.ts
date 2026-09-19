@@ -38,7 +38,12 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
       .map((part) => part.text)
       .join("\n");
     if (!details.trim()) return undefined;
-    return { action, subject, outcome: "error", failure: { cause: details, details } };
+    return {
+      action,
+      subject,
+      outcome: "error",
+      failure: { cause: details, description: "Image generation reported an error.", details },
+    };
   }
 
   const details = result?.details;
@@ -92,6 +97,7 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
               code: "image-failed",
               severity: "error",
               cause: "Image generation failed.",
+              description: "Image generation failed.",
               recovery: [],
             },
           ],
@@ -116,6 +122,10 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
             code: `image-${details.status}`,
             kind: "warning",
             text: `Image generation is ${details.status}.`,
+            description:
+              details.status === "in_progress"
+                ? "Image generation may still be running."
+                : "Image generation did not finish.",
           },
         ],
       };

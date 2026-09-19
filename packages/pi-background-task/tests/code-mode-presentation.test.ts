@@ -110,9 +110,13 @@ it("preserves original truncation independently of unchanged guest data", () => 
     },
   });
   expect(pure).toEqual(standalone);
-  // The v1 receipt retains the legacy notice contract, not the new semantic identities.
+  // Display descriptions survive without changing the legacy instructions.
   expect(receipt.summary?.notices).toEqual(
-    pure?.notices?.map(({ kind, text }) => ({ kind, text })),
+    pure?.notices?.map(({ kind, text, description }) => ({
+      kind,
+      text,
+      ...(description !== undefined && { description }),
+    })),
   );
 });
 

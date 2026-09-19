@@ -66,6 +66,7 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
   return {
     action: input.action,
     subject: input.requestId ? stripTerminalControls(input.requestId) : "",
+    compactSubject: "Questionnaire",
   };
 }
 
@@ -126,7 +127,10 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
     return undefined;
   const input = control(args);
   const identity: Partial<CompactSummary> = {};
-  if (input) identity.action = input.action;
+  if (input) {
+    identity.action = input.action;
+    identity.compactSubject = "Questionnaire";
+  }
   if (rows.length === 1)
     identity.subject = liveSummary(args)?.subject || stripTerminalControls(rows[0]!.requestId);
   if (
@@ -158,6 +162,7 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
           code: "answers-pending",
           severity: "warning",
           cause: "No answers yet.",
+          description: "Waiting for answers.",
           recovery: [
             {
               code: "await-answers",
@@ -171,6 +176,7 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
           code: "answers-pending",
           kind: "warning",
           text: "No answers yet.",
+          description: "Waiting for answers.",
         },
         {
           code: "await-answers",
@@ -208,6 +214,10 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
             code: "delivery-failed",
             severity: "warning",
             cause: "Automatic delivery failed.",
+            description:
+              row.outcome?.outcome === "submitted"
+                ? "Answers were saved, but automatic delivery failed."
+                : "The cancellation was saved, but automatic delivery failed.",
             recovery: [
               {
                 code: "retrieve-delivery",
@@ -219,6 +229,7 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
       notices: [
         {
           code: "retrieve-delivery",
+          description: "The response was saved, but automatic delivery failed.",
           kind: "recovery",
           text: "Automatic delivery failed. Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.",
         },

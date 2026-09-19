@@ -95,7 +95,13 @@ describe("shared semantic row", () => {
     for (const width of [1, 2, 5, 6, 7, 12, 40]) {
       const rows = renderCompactChildren(
         {
-          entries: [{ label: "read", status: "error", notices: [{ kind: "recovery", text }] }],
+          entries: [
+            {
+              label: "read",
+              status: "error",
+              notices: [{ kind: "recovery", text, description: text }],
+            },
+          ],
           total: 1,
         },
         theme,
@@ -111,10 +117,17 @@ describe("shared semantic row", () => {
       label: `read-${index}`,
       status: "error" as const,
       outcome: "success" as const,
-      notices: [{ kind: "recovery" as const, text: `delivery-${index}: do not replay` }],
+      notices: [
+        {
+          kind: "recovery" as const,
+          text: `delivery-${index}: do not replay`,
+          description: `delivery-${index} failed`,
+        },
+      ],
     }));
     const rows = renderCompactChildren({ entries, total: 8 }, theme, 100);
-    expect(rows.filter((row) => row.includes("do not replay"))).toHaveLength(5);
+    expect(rows.filter((row) => row.includes("delivery-"))).toHaveLength(5);
+    expect(rows.join("\n")).not.toContain("do not replay");
     expect(rows.join("\n")).toContain("3 more");
     // Delivery failure remains authoritative even when the operation succeeded.
     const success = renderCompactChildren(

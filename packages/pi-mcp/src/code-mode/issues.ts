@@ -1,3 +1,4 @@
+import { mcpIssueDescription } from "../ui/compact-descriptions.ts";
 import type { CompactIssue, CompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -94,7 +95,14 @@ export function projectMcpIssues<Reply>(
       complete = false;
       return;
     }
-    entries.push({ operation, code, severity, cause, recovery });
+    entries.push({
+      operation,
+      code,
+      severity,
+      cause,
+      recovery,
+      description: mcpIssueDescription(code),
+    });
   };
   const noReplay = { code: "no-replay", text: "Do not replay the operation to recover output." };
   const safe = <Value>(value: Value): string | undefined => {

@@ -12,7 +12,9 @@ export function planCompactPresentation(input: {
   phase: CompactPhase;
   isError: boolean;
   expanded: boolean;
-  heading?: Pick<CompactSummary, "subject" | "action" | "showTiming"> | undefined;
+  heading?:
+    | Pick<CompactSummary, "subject" | "compactSubject" | "action" | "showTiming">
+    | undefined;
 }) {
   const summary = resolveCompactSummary(input.summary, input.phase, input.isError);
   const covered = Boolean(
@@ -23,6 +25,9 @@ export function planCompactPresentation(input: {
   const isError = input.isError && summary?.outcome !== "cancelled";
   const fallback: CompactSummary = summary ?? {
     subject: input.heading?.subject ?? "",
+    ...(input.heading?.compactSubject !== undefined && {
+      compactSubject: input.heading.compactSubject,
+    }),
     ...(input.heading?.action !== undefined && { action: input.heading.action }),
     ...(input.heading?.showTiming && { showTiming: true }),
     ...(input.phase === "settled" && { outcome: isError ? "error" : "uncertain" }),
@@ -42,6 +47,7 @@ export function planCompactPresentation(input: {
                 code: "details-on-expand",
                 severity: isError ? "error" : "warning",
                 cause: "Expand for details.",
+                description: "Additional details are not summarized.",
                 recovery: [],
               },
             ],
@@ -49,7 +55,15 @@ export function planCompactPresentation(input: {
         }),
         notices: [
           ...(fallback.notices ?? []),
-          { kind: isError ? "error" : "warning", text: "Expand for details." },
+          {
+            kind: isError ? "error" : "warning",
+            text: "Expand for details.",
+            description: summary
+              ? "Additional details are not summarized."
+              : isError
+                ? "The tool reported an error."
+                : "The outcome is unknown.",
+          },
         ],
       };
   const issues = summaryCompactIssues(collapsedSummary, input.expanded);

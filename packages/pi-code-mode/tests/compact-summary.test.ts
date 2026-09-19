@@ -80,9 +80,9 @@ describe("Code Mode compact outcomes", () => {
         );
         const text = [...call.render(200), ...body.render(200)].join("\n");
         expect(text.includes("Full retained result diagnostic")).toBe(expanded);
+        expect(text.includes(args.id)).toBe(expanded);
         if (!expanded) {
           expect(text).toContain("result.read");
-          expect(text).toContain(args.id);
         }
       }
     }

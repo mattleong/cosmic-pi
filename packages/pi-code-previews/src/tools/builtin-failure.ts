@@ -9,6 +9,7 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
   const last = lines.at(-1) ?? details;
   const notices: CompactNotice[] = [];
   let cause = details;
+  let description = "The tool reported an error.";
   let outcome: "error" | "cancelled" = "error";
   let code: string | undefined;
   let complete = true;
@@ -52,14 +53,19 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
   } else {
     if (first.startsWith("ENOENT: no such file or directory, ")) {
       cause = "File not found · ENOENT";
+      description = "File not found.";
     } else if (first.startsWith("EACCES: permission denied, ")) {
       cause = "Permission denied · EACCES";
+      description = "Permission denied.";
     } else if (first.startsWith("EPERM: operation not permitted, ")) {
       cause = "Operation not permitted · EPERM";
+      description = "This operation is not permitted.";
     } else if (first.startsWith("Path not found: ")) {
       cause = "Path not found";
+      description = "Path not found.";
     } else if (first.startsWith("Not a directory: ")) {
       cause = "Not a directory";
+      description = "The target is not a folder.";
     }
     if (cause !== details) code = "filesystem";
     if (tool === "edit" && cause === details) {
@@ -113,6 +119,13 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
       if (tail) notices.push({ code: "unclassified-continuation", kind: "recovery", text: tail });
     }
   }
+  if (outcome === "cancelled") description = "Cancelled.";
+  else if (code === "shell-exit" || code === "shell-timeout") description = cause;
+  else if (code === "edit-ambiguous")
+    description = "The replacement text matches more than one location.";
+  else if (code === "edit-no-match") description = "The text to replace was not found.";
+  else if (code === "edit-overlap") description = "The requested edits overlap.";
+  else if (code === "edit-unchanged") description = "The replacement would not change the file.";
   const failureEvidence: CompactFailureEvidence | undefined =
     code === undefined
       ? undefined
@@ -123,7 +136,7 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
         };
   return {
     outcome,
-    failure: { cause, details },
+    failure: { cause, description, details },
     notices,
     ...(failureEvidence && { failureEvidence }),
   };

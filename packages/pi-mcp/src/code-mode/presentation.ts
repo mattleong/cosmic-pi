@@ -255,6 +255,7 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
               code: "evidence-overflow",
               severity: "warning",
               cause: "MCP presentation evidence exceeded its bounds.",
+              description: "Some operation details are unavailable.",
               recovery: [
                 {
                   code: "no-replay",

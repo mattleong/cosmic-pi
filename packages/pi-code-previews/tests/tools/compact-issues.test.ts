@@ -24,6 +24,7 @@ const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
   code: "remote-failure",
   severity: "error",
   cause: "Element detached.",
+  description: overrides.cause ?? "Element detached.",
   recovery: [{ code: "inspect", text: "Inspect state before retrying." }],
   ...overrides,
 });
@@ -114,12 +115,7 @@ describe("semantic compact issues", () => {
       testTheme(),
       120,
     ).join("\n");
-    for (const text of [
-      "Element detached.",
-      "Execution is uncertain.",
-      "Cleanup is unconfirmed.",
-      "Do not replay.",
-    ])
+    for (const text of ["Element detached.", "Execution is uncertain.", "Cleanup is unconfirmed."])
       expect(output).toContain(text);
   });
 
@@ -143,8 +139,7 @@ describe("semantic compact issues", () => {
       testTheme(),
       120,
     ).join("\n");
-    for (let index = 0; index < 8; index++)
-      expect(text).toContain(`call-${index}: Element detached.`);
+    for (let index = 0; index < 8; index++) expect(text).not.toContain(`call-${index}:`);
     expect(text.match(/Element detached\./gu)).toHaveLength(8);
   });
 
@@ -205,7 +200,11 @@ describe("semantic compact issues", () => {
       {
         subject: "operation",
         outcome: "error" as const,
-        failure: { cause: "Refused.", details: "Full diagnostics.\nInspect state." },
+        failure: {
+          cause: "Refused.",
+          description: "Refused.",
+          details: "Full diagnostics.\nInspect state.",
+        },
         failureEvidence: { code: "refused", cause: "Refused.", coverage: "complete" as const },
         notices: [
           {
@@ -228,7 +227,7 @@ describe("semantic compact issues", () => {
         testTheme(),
         120,
       ).join("\n");
-      expect(text.match(/Inspect state\./gu)).toHaveLength(1);
+      expect(text.match(/Inspect state\./gu) ?? []).toHaveLength(expanded ? 1 : 0);
       expect(text).toContain(expanded ? "Full diagnostics." : "Refused.");
     }
   });

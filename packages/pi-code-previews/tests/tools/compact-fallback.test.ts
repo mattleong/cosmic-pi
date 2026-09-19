@@ -137,7 +137,7 @@ test("only expanded details expose nested mouse actions through every frame", ()
         const { call, rows } = paint(tool, ctx);
         if (failure) {
           const noticeRow = rows.findIndex((line) => line.includes("retained guidance"));
-          assert.ok(noticeRow >= 0);
+          assert.equal(noticeRow >= 0, expanded);
           if (expanded && mode !== "off") assert.ok(noticeRow < rows.length - 1);
         }
         const y = rows.findIndex((line) => line.includes("ACTION"));
@@ -199,7 +199,7 @@ test("explicit non-success projections hide details until expansion and retain s
       for (let cycle = 0; cycle < 2; cycle++) {
         const collapsed = paint(tool, context({ state, expanded: false })).rows.join("\n");
         assert.match(collapsed, /decoded outcome/u);
-        assert.match(collapsed, /Inspect before retrying/u);
+        assert.doesNotMatch(collapsed, /Inspect before retrying/u);
         assert.doesNotMatch(collapsed, /original call|original result/u);
         const expanded = paint(tool, context({ state, expanded: true })).rows.join("\n");
         assert.match(expanded, /original call/u);
@@ -227,7 +227,11 @@ test("unflagged non-success keeps details on expansion and owned failure keeps i
                   subject: "decoded outcome",
                   outcome,
                   detailsOnExpand: true,
-                  failure: { cause: "owned cause", details: "owned details" },
+                  failure: {
+                    cause: "owned cause",
+                    description: "owned cause",
+                    details: "owned details",
+                  },
                 }
               : { subject: "decoded outcome", outcome },
         },
@@ -274,7 +278,7 @@ test("expanded ownership requires a current successful result and survives toggl
           expandedResultOwnsIssues: [claimNotice("complete recovery")],
           notices: [
             { kind: "recovery", text: "complete recovery" },
-            { kind: "warning", text: "independent guidance" },
+            { kind: "warning", text: "independent guidance", description: "independent guidance" },
           ],
         }),
       },
@@ -285,7 +289,7 @@ test("expanded ownership requires a current successful result and survives toggl
         for (fails of [false, true, false]) {
           preparedHeading = undefined;
           const text = paint(tool, context({ state, isPartial, expanded })).rows.join("\n");
-          assert.equal(text.match(/complete recovery/gu)?.length, 1);
+          assert.equal(text.match(/complete recovery/gu)?.length ?? 0, expanded ? 1 : 0);
           assert.match(text, /independent guidance/u);
           if (expanded) {
             if (!fails) assert.match(text, /prepared result heading/u);
@@ -319,7 +323,11 @@ test("owned failure keeps independent notices even when marked for original resu
           subject: "failed operation",
           outcome: "error",
           expandedResultOwnsCall: true,
-          failure: { cause: "owned cause", details: "complete owned failure" },
+          failure: {
+            cause: "owned cause",
+            description: "owned cause",
+            details: "complete owned failure",
+          },
           notices: [{ kind: "recovery", text: "independent recovery" }],
         }),
       },
@@ -327,7 +335,7 @@ test("owned failure keeps independent notices even when marked for original resu
     for (const expanded of [false, true]) {
       const text = paint(tool, context({ expanded })).rows.join("\n");
       assert.match(text, expanded ? /complete owned failure/u : /owned cause/u);
-      assert.equal(text.match(/independent recovery/gu)?.length, 1);
+      assert.equal(text.match(/independent recovery/gu)?.length ?? 0, expanded ? 1 : 0);
       assert.doesNotMatch(text, /original call|original result/u);
     }
   }

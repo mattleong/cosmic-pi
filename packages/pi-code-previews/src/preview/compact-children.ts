@@ -58,6 +58,7 @@ export function renderCompactChildren(
         elapsedMs: entry.durationMs,
         timingEnabled,
         animationFrame,
+        expanded,
       },
       theme,
       Math.max(0, width - visibleWidth(prefix)),

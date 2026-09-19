@@ -1,3 +1,4 @@
+import { mcpBoundaryDescriptions } from "./compact-descriptions.ts";
 import type { CompactIssue, CompactIssues, CompactSummary } from "pi-code-previews";
 import type { McpCardDetails } from "./tool-render-details.ts";
 
@@ -73,6 +74,22 @@ export function mcpBoundaryFailure(
             (card.failureKind === "stale" || card.failureKind === "not-found")
           ? "Retained result unavailable."
           : card.diagnostic.title,
+      description: [
+        uncertain
+          ? "Could not confirm the operation's outcome."
+          : card.action === "result.read" &&
+              (card.failureKind === "stale" || card.failureKind === "not-found")
+            ? "Saved output is not available."
+            : mcpBoundaryDescriptions[card.failureKind],
+        card.failureKind === "cleanup"
+          ? "The connection may still be active."
+          : blocked
+            ? "Credential changes are not confirmed."
+            : "",
+        card.truncated ? "Some output is unavailable." : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
       recovery,
       diagnostics,
     },
@@ -83,6 +100,7 @@ export function mcpBoundaryFailure(
       code: "unclassified-notices",
       severity: "warning",
       cause: card.notices.join("\n"),
+      description: "The server reported additional warnings.",
       recovery: [],
     });
   return {

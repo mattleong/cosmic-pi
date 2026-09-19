@@ -1,3 +1,4 @@
+import { runNoticeDescription } from "./compact-descriptions.ts";
 import { withCompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
@@ -97,9 +98,28 @@ function argumentSummary(
         : ids && ids.length > 1
           ? [`${ids.length} targets`]
           : [];
-  const summary: CompactSummary = { subject, counters, metadata: [] };
+  const summary: CompactSummary = {
+    subject,
+    counters,
+    metadata: [],
+    compactSubject: compactArgumentSubject(input, action, subject),
+  };
   if (operation !== action) summary.action = operation;
   return summary;
+}
+
+function compactArgumentSubject(input: SummaryArguments, action: string, subject: string): string {
+  if (action === "workspace") return "Proposed changes";
+  return input.runId === subject || requestedRunIds(input)?.includes(subject) ? "Worker" : subject;
+}
+
+function compactProjectedSubject(
+  input: SummaryArguments,
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+  subject: string,
+): string {
+  if ("cards" in details && details.cards.some((card) => card.id === subject)) return "Worker";
+  return compactArgumentSubject(input, details.action, subject);
 }
 
 function projectedSubject(
@@ -176,6 +196,7 @@ export function createSubagentCompactSummary(
       context.expanded,
     );
     applyArgumentLanes(summary, details, phase, lanes);
+    summary.compactSubject = compactProjectedSubject(input, details, summary.subject);
     const projected = withCompactIssues(summary, `subagent:${operation}`);
     if (hasIncompleteAttention(details))
       projected.issues = { ...projected.issues, coverage: "unknown" };
@@ -199,8 +220,13 @@ type Notices = NonNullable<CompactSummary["notices"]>[number][];
 type Phase = Parameters<CompactSummaryProvider>[0]["phase"];
 const appendNotice =
   (notices: Notices) =>
-  (code: string | undefined, text: string, kind: "warning" | "error" | "recovery" = "recovery") =>
-    notices.push(code ? { code, kind, text } : { kind, text });
+  (
+    code: string | undefined,
+    text: string,
+    kind: "warning" | "error" | "recovery" = "recovery",
+    description = runNoticeDescription(code, kind),
+  ) =>
+    notices.push(code ? { code, kind, text, description } : { kind, text, description });
 
 function summarizeStart(
   details: SubagentStartDetails,
@@ -231,10 +257,18 @@ function summarizeStart(
       undefined,
       `${failure.name ?? `Launch ${failure.index + 1}`}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
       "error",
+      `${(failure.name ?? "Worker").slice(0, 60)}: ${failure.code === "get_state_outcome_uncertain" ? "Could not confirm startup. Work may have started." : "Startup reported an error."}`,
     );
     const recovery = failure.admittedRun;
     if (recovery) {
-      add(`run:${recovery.runId}:cleanup-receipt`, formatFailedStartRecovery(recovery));
+      add(
+        `run:${recovery.runId}:cleanup-receipt`,
+        formatFailedStartRecovery(recovery),
+        "recovery",
+        recovery.cleanupDisposition === "confirmed"
+          ? "Worker cleanup is confirmed."
+          : "Worker cleanup is not confirmed; processes may still be running.",
+      );
       add(
         `run:${recovery.runId}:retry-gate`,
         recovery.cleanupDisposition === "confirmed"
@@ -289,6 +323,10 @@ function awaitNotices(
       details.cancellationCleanup === "unconfirmed"
         ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
         : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
+      "recovery",
+      details.cancellationCleanup === "unconfirmed"
+        ? "Waiting was cancelled. Workers were not stopped, and wait cleanup is unconfirmed."
+        : "Waiting was cancelled. Workers were not stopped.",
     );
   }
   if (details.timedOut && !details.cancelled) {
@@ -370,6 +408,9 @@ function summarizeModels(
         `profile:${profile.id}:unavailable`,
         `${profile.id}: ${invalid ? "invalid profile configuration" : "no statically eligible candidates"}; inspect expanded discovery.`,
         "warning",
+        invalid
+          ? "A worker profile has invalid settings."
+          : "A worker profile has no eligible options.",
       );
     } else if (profile.candidates.length === 0) disabled++;
   }

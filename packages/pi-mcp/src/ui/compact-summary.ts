@@ -47,7 +47,10 @@ export const projectMcpCompactSummary = ({
     action === "tools.search"
       ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
       : call.target;
-  if (phase !== "settled") return isError ? undefined : { action, subject };
+  if (phase !== "settled")
+    return isError
+      ? undefined
+      : { action, subject, ...(action === "result.read" && { compactSubject: "Saved output" }) };
 
   const card = decodeMcpCardDetails(result);
   // The raw card retains notices beyond the semantic issue budget.
@@ -60,6 +63,7 @@ export const projectMcpCompactSummary = ({
     return {
       action,
       subject,
+      ...(action === "result.read" && { compactSubject: "Saved output" }),
       outcome: boundary.outcome,
       counters: [boundary.status.toLowerCase()],
       issues: card.presentation.issues,
@@ -113,6 +117,7 @@ export const projectMcpCompactSummary = ({
     action,
     subject,
     counters,
+    ...(action === "result.read" && { compactSubject: "Saved output" }),
     outcome:
       (retainedRead ? card.outcome : card.presentation.outcome) === "unknown"
         ? "uncertain"

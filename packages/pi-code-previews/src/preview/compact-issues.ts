@@ -38,12 +38,23 @@ export function renderCompactIssues(
   const attributed = attribute;
   const text = issues.entries
     .flatMap((issue) => {
-      const lines = [
-        ...(issue.cause ? [issue.cause] : []),
-        ...issue.recovery.map((instruction) => instruction.text),
-        ...(expanded ? (issue.diagnostics ?? []) : []),
-      ];
-      return attributed
+      const description =
+        issue.description ??
+        (issue.cause
+          ? issue.severity === "error"
+            ? "The tool reported an error."
+            : "The tool reported a warning."
+          : "");
+      const lines = expanded
+        ? [
+            ...(issue.cause ? [issue.cause] : []),
+            ...issue.recovery.map((instruction) => instruction.text),
+            ...(issue.diagnostics ?? []),
+          ]
+        : description
+          ? [description]
+          : [];
+      return expanded && attributed
         ? lines.map((line, index) => (index === 0 ? `${issue.operation}: ${line}` : line))
         : lines;
     })

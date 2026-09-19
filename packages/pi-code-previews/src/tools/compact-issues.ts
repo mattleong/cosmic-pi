@@ -7,6 +7,8 @@ export interface CompactIssue {
   readonly code: string;
   readonly severity: "error" | "warning";
   readonly cause: string;
+  /** Human-facing compact explanation. Empty means agent-only detail. Never ownership evidence. */
+  readonly description?: string | undefined;
   readonly recovery: readonly { readonly code: string; readonly text: string }[];
   readonly diagnostics?: readonly string[];
 }
@@ -16,13 +18,17 @@ export interface CompactIssues {
 }
 
 const Identity = Schema.String.check(Schema.isMinLength(1));
-const IssueSchema = Schema.Struct({
+const IssueEvidenceSchema = Schema.Struct({
   operation: Identity,
   code: Identity,
   severity: Schema.Literals(["error", "warning"]),
   cause: Schema.String,
   recovery: Schema.Array(Schema.Struct({ code: Identity, text: Schema.String })),
   diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+const IssueSchema = Schema.Struct({
+  ...IssueEvidenceSchema.fields,
+  description: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
 });
 export const CompactIssuesSchema = Schema.Struct({
   coverage: Schema.Literals(["complete", "unknown"]),
@@ -59,6 +65,8 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
         const index = entries.indexOf(same);
         entries[index] = {
           ...same,
+          // Conflicting wording cannot conceal distinct or more cautious evidence.
+          description: same.description === issue.description ? same.description : undefined,
           recovery: [...same.recovery, ...recovery],
           ...((same.diagnostics || issue.diagnostics) && {
             diagnostics: [...new Set([...(same.diagnostics ?? []), ...(issue.diagnostics ?? [])])],
@@ -71,7 +79,7 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
 }
 
 /** A detached evidence snapshot, not an identity-based promise about future merges. */
-export interface CompactIssueClaim extends CompactIssue {
+export interface CompactIssueClaim extends Omit<CompactIssue, "description"> {
   readonly fields: {
     readonly cause?: true;
     readonly recovery?: readonly string[];
@@ -80,7 +88,7 @@ export interface CompactIssueClaim extends CompactIssue {
 }
 
 export const CompactIssueClaimSchema = Schema.Struct({
-  ...IssueSchema.fields,
+  ...IssueEvidenceSchema.fields,
   fields: Schema.Struct({
     cause: Schema.optionalKey(Schema.Literal(true)),
     recovery: Schema.optionalKey(Schema.Array(Identity)),
@@ -219,6 +227,7 @@ export function legacyCompactIssues(
               code: notice.code ?? `legacy-${index}`,
               severity: notice.kind === "error" ? ("error" as const) : ("warning" as const),
               cause: notice.text,
+              description: notice.description ?? (notice.kind === "recovery" ? "" : undefined),
               recovery: [],
             },
           ],
@@ -241,6 +250,7 @@ export function withCompactIssues<T extends CompactSummary>(
       code: summary.failureEvidence?.code ?? "failure",
       severity: summary.outcome === "uncertain" ? "warning" : "error",
       cause: summary.failure.cause,
+      description: summary.failure.description,
       recovery: [],
     });
   for (const [index, notice] of (summary.notices ?? []).entries()) {
@@ -250,6 +260,7 @@ export function withCompactIssues<T extends CompactSummary>(
       code: notice.code ?? `notice-${index}`,
       severity: notice.kind === "error" ? "error" : "warning",
       cause: notice.kind === "recovery" ? "" : notice.text,
+      description: notice.description ?? (notice.kind === "recovery" ? "" : undefined),
       recovery:
         notice.kind === "recovery"
           ? [{ code: notice.code ?? `notice-${index}`, text: notice.text }]

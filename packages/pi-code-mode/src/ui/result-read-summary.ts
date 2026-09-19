@@ -35,7 +35,12 @@ export function resultReadCompactSummary<Details>(
 ): CompactSummary | undefined {
   const read = decodeOption(ReadDetails, details)?.resultRead;
   if (!read) return undefined;
-  const heading = { action: "result.read", subject: id, showTiming: true as const };
+  const heading = {
+    action: "result.read",
+    subject: id,
+    compactSubject: "Saved output",
+    showTiming: true as const,
+  };
   if (read.status === "error")
     return {
       ...heading,
@@ -48,6 +53,14 @@ export function resultReadCompactSummary<Details>(
             code: read.code,
             severity: "error",
             cause: resultReadFailures[read.code].cause,
+            description: {
+              "invalid-input": "The saved-output request is invalid.",
+              unavailable: "Saved output is not available.",
+              "invalid-offset":
+                "The requested position is outside the saved output or splits a character.",
+              "page-budget": "The output limit is too small to load this page.",
+              revoked: "Saved output is no longer available in this session.",
+            }[read.code],
             recovery: [],
             diagnostics: ["No execution was run. Do not replay mutations to recover output."],
           },
@@ -79,6 +92,10 @@ export function resultReadCompactSummary<Details>(
               code: `original-${read.originalOutcome}`,
               severity: "warning",
               cause: `Original execution ${read.originalOutcome}; page read succeeded.`,
+              description:
+                read.originalOutcome === "failed"
+                  ? "Output loaded. The earlier run failed."
+                  : "Output loaded. The earlier run was cancelled.",
               recovery: [],
               diagnostics: [
                 "Reading retained output does not rerun the program or undo side effects.",

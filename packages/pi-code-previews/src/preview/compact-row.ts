@@ -27,6 +27,7 @@ export function renderCompactRow(
     elapsedMs?: number | undefined;
     timingEnabled?: boolean;
     animationFrame?: number | undefined;
+    expanded?: boolean;
   },
   theme: Theme,
   width: number,
@@ -37,7 +38,9 @@ export function renderCompactRow(
   const icon = compactStatusIcon(status, theme, input.animationFrame);
   const action = compactSingleLine(summary.action ?? "");
   const prefix = `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
-  const subject = compactSingleLine(summary.subject);
+  const subject = compactSingleLine(
+    !input.expanded ? (summary.compactSubject ?? summary.subject) : summary.subject,
+  );
   const duration =
     input.timingEnabled !== false &&
     phase !== "pending" &&
@@ -76,16 +79,15 @@ export function renderCompactNotices(
   if (width <= 0) return [];
   return (notices ?? []).flatMap((notice) => {
     const attention = isCompactAttention(notice);
-    if (!expanded && !attention) return [];
+    if (!expanded && (!attention || (notice.kind === "recovery" && !notice.description))) return [];
+    const text = expanded
+      ? notice.text
+      : (notice.description ??
+        (notice.kind === "error" ? "The tool reported an error." : "The tool reported a warning."));
+    if (!text) return [];
     const color = notice.kind === "error" ? "error" : attention ? "warning" : "muted";
     // Preserve every notice line, including continuation and recovery instructions.
-    return indentedCompactText(
-      notice.text,
-      decoration === "plain" ? "  " : "  ╰─ ",
-      color,
-      theme,
-      width,
-    );
+    return indentedCompactText(text, decoration === "plain" ? "  " : "  ╰─ ", color, theme, width);
   });
 }
 

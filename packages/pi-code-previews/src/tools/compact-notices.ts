@@ -22,7 +22,14 @@ export function secretNotices(
     sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
   );
   return warnings.size > 0
-    ? [{ code: "possible-secrets", kind: "warning", text: `Possible ${[...warnings].join(", ")}` }]
+    ? [
+        {
+          code: "possible-secrets",
+          kind: "warning",
+          description: "This may contain sensitive information.",
+          text: `Possible ${[...warnings].join(", ")}`,
+        },
+      ]
     : [];
 }
 
@@ -35,6 +42,7 @@ export function bashCommandNotices(
   if (command.length > 16 * 1024) return undefined;
   return getBashWarnings(command).map((text, index) => ({
     code: `command-risk-${index}`,
+    description: text,
     kind: "warning",
     text,
   }));
@@ -49,7 +57,14 @@ export function readNotices<Details>(
   if (getObjectValue(truncation, "firstLineExceedsLimit") === true) {
     // This successful read contains only the host's bash recovery instruction.
     return output
-      ? [{ code: "oversized-first-line", kind: "recovery", text: escapeControlChars(output) }]
+      ? [
+          {
+            code: "oversized-first-line",
+            kind: "recovery",
+            description: "The first line is too large to display.",
+            text: escapeControlChars(output),
+          },
+        ]
       : undefined;
   }
   const truncated = isTruncated(details);
@@ -81,7 +96,14 @@ export function readNotices<Details>(
           expandedOnly: true,
         },
       ];
-    return [{ code: "read-truncated", kind: "recovery", text: escapeControlChars(notice) }];
+    return [
+      {
+        code: "read-truncated",
+        kind: "recovery",
+        description: "Only part of the file was returned.",
+        text: escapeControlChars(notice),
+      },
+    ];
   }
   // An unrecognized host continuation may contain recovery detail we cannot summarize.
   return truncated ? undefined : [];
@@ -103,6 +125,7 @@ export function outputLimitProjection<Details>(
   if (isTruncated(details))
     notices.push({
       code: "output-truncated",
+      description: "Only part of the output was returned.",
       kind: "warning",
       text: `Output truncated by ${tool}`,
     });
@@ -129,6 +152,7 @@ export function outputLimitProjection<Details>(
   if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
     notices.push({
       code: "grep-partial-lines",
+      description: "Some matching lines were cut short.",
       kind: "recovery",
       text: "Some lines truncated. Use read tool to see full lines.",
     });
@@ -168,6 +192,7 @@ export function writeDiffProjection<Before>(
       notices: [
         {
           code: "write-diff-skipped",
+          description: "The file was saved, but its changes cannot be previewed.",
           kind: "warning",
           text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}`,
         },
@@ -181,6 +206,7 @@ export function writeDiffProjection<Before>(
       notices: [
         {
           code: "write-history-unavailable",
+          description: "The file was saved, but its previous contents are unavailable.",
           kind: "warning",
           text: "Write applied; diff unavailable: previous content unavailable",
         },

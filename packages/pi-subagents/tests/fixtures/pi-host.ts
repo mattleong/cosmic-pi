@@ -9,7 +9,7 @@ export const extensionApiFixture = <Fixture extends object>(
   fixture: Fixture,
 ): Fixture & ExtensionAPI => {
   // SAFETY: Each test invokes only the ExtensionAPI members explicitly implemented by its fixture.
-  return fixture as Fixture & ExtensionAPI;
+  return { registerMessageRenderer: () => undefined, ...fixture } as Fixture & ExtensionAPI;
 };
 
 export const extensionContextFixture = <Fixture extends object>(

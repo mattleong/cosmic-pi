@@ -88,7 +88,19 @@ it("renders the registered management actions and task states without parsing fe
                 expect(text).toContain(snapshot.cwd);
                 expect(text).toContain(String(snapshot.pid));
               }
-            } else if (style === "compact") expect(text).not.toContain("fetched-body-marker");
+            } else if (style === "compact") {
+              expect(text).not.toContain("fetched-body-marker");
+              expect(text).not.toMatch(
+                /afterCursor|inspect status before retrying|Request a smaller log slice/,
+              );
+              if (
+                !isError &&
+                details &&
+                "snapshot" in details &&
+                details.snapshot.state === "stopping"
+              )
+                expect(text).toMatch(/processes may still be running/);
+            }
           }
         expect(result).toEqual(before);
       }

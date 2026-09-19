@@ -3,7 +3,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import {
   planCompactPresentation,
   renderCompactRow,
-  renderCompactNotices,
+  renderCompactIssues,
   renderExpandedAttention,
   summaryCompactIssues,
   type CompactSummary,
@@ -63,8 +63,7 @@ export function imageMessagePresentation(
           width,
         ),
       ];
-      if (!expanded)
-        lines.push(...renderCompactNotices(plan.collapsedSummary.notices, theme, width));
+      if (!expanded) lines.push(...renderCompactIssues(plan.issues, theme, width));
       if (expanded)
         lines.push(
           ...renderExpandedAttention(

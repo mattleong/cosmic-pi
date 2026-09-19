@@ -180,6 +180,13 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
             {
               customType: "pi-subagents-completed",
               content: chunk.content,
+              details: {
+                version: 1,
+                kind: "completed",
+                total: chunk.runs.length,
+                failed: chunk.runs.filter((run) => run.outcome === "failed").length,
+                warnings: chunk.runs.filter((run) => Boolean(run.warning?.trim())).length,
+              },
               display: true,
             },
             // Terminal outcomes intentionally join an active orchestration run or wake an idle
@@ -203,6 +210,7 @@ export function makeHostNotifier(pi: ExtensionAPI): SubagentNotifier {
       pi.sendMessage(
         {
           customType: "pi-subagents-question",
+          details: { version: 1, kind: "question" },
           content,
           display: true,
         },
