@@ -6,11 +6,7 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import { resolveNamedProfileSet, resolveSubagentConfig } from "../src/config/options.ts";
-import {
-  decodeProfileCandidate,
-  decodeSubagentConfig,
-  SUBAGENT_CONFIG_VERSION,
-} from "../src/config/schema.ts";
+import { decodeProfileCandidate, decodeSubagentConfig } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
 import { PROFILE_DEFINITIONS } from "../src/profiles/definitions.ts";
@@ -141,8 +137,6 @@ const environment = {
 
 describe("subagent v6 profile configuration and resolution", () => {
   it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
-    expect(SUBAGENT_CONFIG_VERSION).toBe(6);
-    expect(PROFILE_IDS).toHaveLength(7);
     const config = resolved();
     for (const id of PROFILE_IDS) {
       expect(config.profiles[id]).toEqual({

@@ -19,12 +19,12 @@ import {
   isAmbiguousChangedLinePairScore,
   isReciprocalBestChangedLinePair,
   linePairConfidence,
-  matchChangedLinesSparse,
   MIN_CHANGED_LINE_PAIR_SCORE,
   MIN_HIGH_CONFIDENCE_CROSSING_PAIR_SCORE,
   MIN_POSITIONAL_FALLBACK_PAIR_SCORE,
   type TopTwoCandidateValues,
-} from "./sparse-line-matching";
+} from "./line-pair-scoring";
+import { matchChangedLinesSparse } from "./sparse-line-matching";
 
 export type ChangedLinePair = {
   removedIndex: number;

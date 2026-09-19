@@ -3,6 +3,8 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+import { deliverTerminalReport } from "./terminal-report-delivery.ts";
 import * as Stream from "effect/Stream";
 import type { LocalCliProcessContract } from "../boundary/local-cli-process.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../boundary/local-cli-transport.ts";
@@ -121,6 +123,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   child: LocalCliHandle,
   supervisor: SupervisorChannelHandle,
 ) {
+  const scope = yield* Scope.Scope;
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
   const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
@@ -388,14 +391,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
     assignmentEpoch <= 0
       ? Effect.void
       : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
-          Effect.flatMap((report) =>
-            report
-              ? offer({ type: "report", ...report }).pipe(
-                  Effect.timeoutOption("1 second"),
-                  Effect.asVoid,
-                )
-              : Effect.void,
-          ),
+          Effect.flatMap((report) => (report ? offer({ type: "report", ...report }) : Effect.void)),
           Effect.catch((error) =>
             offer({
               type: "protocol_error",
@@ -413,10 +409,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         cancelPending(
           processError("run", "local_codex_transport_closed", "Local Codex transport closed."),
         ),
-      ).pipe(
-        Effect.andThen(preserveAcceptedReport),
-        Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
-      ),
+      ).pipe(Effect.andThen(deliverTerminalReport(events, preserveAcceptedReport, scope))),
     ),
     Effect.forkScoped,
   );

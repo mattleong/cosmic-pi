@@ -40,6 +40,7 @@ export const WorkspaceRecordSchema = Schema.Struct({
     "discarded",
   ]),
   baseline: Schema.String,
+  predecessorWorkspaceId: Schema.optional(Schema.String),
   excludedPaths: Schema.optional(Schema.Array(Schema.String)),
   revision: Schema.optional(WorkspaceRevisionSchema),
   preparation: Schema.optional(WorkspacePreparationSchema),

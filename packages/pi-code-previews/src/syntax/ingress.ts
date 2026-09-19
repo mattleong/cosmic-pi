@@ -82,28 +82,31 @@ export const makeSyntaxIngress = (
       },
     });
 
+    const retainCallback = (pending: PendingRequest, invalidate?: () => void): void => {
+      if (!invalidate) return;
+      if (retainedCallbacks >= CALLBACK_CAPACITY) {
+        invokeHostInvalidation(invalidate);
+        return;
+      }
+      pending.callbacks.push(invalidate);
+      retainedCallbacks++;
+    };
+
     const offerRequest = (request: SyntaxRequest, invalidate?: () => void): void => {
       if (!acceptingRequests) return;
       const key = requestKey(request);
       const pending = pendingRequests.get(key);
       if (pending) {
-        if (invalidate) {
-          if (retainedCallbacks < CALLBACK_CAPACITY) {
-            pending.callbacks.push(invalidate);
-            retainedCallbacks++;
-          } else {
-            invokeHostInvalidation(invalidate);
-          }
-        }
+        retainCallback(pending, invalidate);
         return;
       }
       if (pendingRequests.size >= INGRESS_CAPACITY) {
         invokeHostInvalidation(invalidate);
         return;
       }
-      const callbacks = invalidate ? [invalidate] : [];
-      pendingRequests.set(key, { callbacks });
-      retainedCallbacks += callbacks.length;
+      const admitted: PendingRequest = { callbacks: [] };
+      pendingRequests.set(key, admitted);
+      retainCallback(admitted, invalidate);
       const result = ingress.offer(request);
       switch (result) {
         case "accepted":

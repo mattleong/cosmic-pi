@@ -20,6 +20,7 @@ import {
   workspaceDirectory,
   withWorkspaceStoreLock,
 } from "./git-worktree-store.ts";
+import { listWorkspaceRecords, removeWorkspaceTrees } from "./git-worktree-recovery.ts";
 import { publishWorkspace } from "./git-worktree-integration.ts";
 
 const requiredLeaseDirectories = (record: WorkspaceRecord) =>
@@ -149,7 +150,14 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           sourceRoot: source.sourceRoot,
           cwd: path.join(dir, "worker", source.subdirectory),
         };
-        let record: WorkspaceRecord = { version: 1, handle, status: "creating", baseline: "" };
+        let record: WorkspaceRecord = {
+          version: 1,
+          handle,
+          status: "creating",
+          baseline: "",
+          // The checked predecessor identity is durable before its repository acquires seed.
+          predecessorWorkspaceId: predecessor?.handle.workspaceId,
+        };
         yield* Effect.gen(function* () {
           yield* workspaceIO("create", () => fs.mkdir(dir, { mode: 0o700 }));
           yield* syncWorkspaceDirectory(registry);
@@ -423,6 +431,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             version: 1,
             handle: record.handle,
             baseline: record.baseline,
+            predecessorWorkspaceId: record.predecessorWorkspaceId,
             excludedPaths: record.excludedPaths,
             status: "active",
           };
@@ -452,19 +461,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             "discard",
             "Partial publication backups require manual recovery before discard.",
           );
-        if (record.status === "discarded") return;
-        const names = yield* workspaceIO("discard", () => fs.readdir(directory(record)));
-        for (const name of names.filter(
-          (name) => name === "worker" || /^prepare-[a-f0-9-]{36}$/u.test(name),
-        )) {
-          yield* checkDirectory(path.join(directory(record), name));
-          yield* git(repository(record), [
-            "worktree",
-            "remove",
-            "--force",
-            path.join(directory(record), name),
-          ]);
-        }
+        yield* removeWorkspaceTrees(registry, record);
         // Retain private commits/registry as recovery evidence; discard removes editable trees.
         yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
         owned.delete(target.workspaceId);
@@ -484,23 +481,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
         }),
       );
     const inspect = (target: WorkspaceTarget) => checked(target, true);
-    const listAll = () =>
-      Effect.gen(function* () {
-        yield* checkDirectory(registry, true);
-        const stat = yield* workspaceIO("registry", () =>
-          fs.lstat(registry).catch((error: NodeJS.ErrnoException) => {
-            if (error.code === "ENOENT") return undefined;
-            throw error;
-          }),
-        );
-        if (!stat) return [];
-        if ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()))
-          return yield* workspaceFailure("registry", "Workspace registry permissions are invalid.");
-        const names = yield* workspaceIO("registry", () => fs.readdir(registry));
-        return yield* Effect.forEach(names.filter(validWorkspaceId), (name) =>
-          readWorkspaceRecord(registry, name),
-        );
-      });
+    const listAll = () => listWorkspaceRecords(registry);
     const list = (input: { readonly ownerId: string }) =>
       listAll().pipe(
         Effect.map((records) =>

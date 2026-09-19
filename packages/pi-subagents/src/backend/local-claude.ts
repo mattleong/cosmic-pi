@@ -5,6 +5,12 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+import { deliverTerminalReport } from "./terminal-report-delivery.ts";
+import {
+  makeLocalClaudeInputDelivery,
+  type PendingUserReplay,
+} from "./local-claude-input-delivery.ts";
 import * as Stream from "effect/Stream";
 import type {
   LocalCliProcessContract,
@@ -16,12 +22,7 @@ import type {
   SupervisorChannelHandle,
   SupervisorChannelContract,
 } from "../boundary/supervisor-channel.ts";
-import {
-  isOutcomeUncertain,
-  processError,
-  SubagentProcessError,
-  type SubagentError,
-} from "../run/errors.ts";
+import { processError, type SubagentError } from "../run/errors.ts";
 import type { SupervisorEvent } from "../supervisor/protocol.ts";
 import { classifyLocalCliInterruptOwnership } from "./local-cli-interruption.ts";
 import {
@@ -56,7 +57,6 @@ import {
   claudeInitializeFrame,
   claudeInterruptFrame,
   claudeMcpStatusFrame,
-  claudeUserFrame,
   decodeClaudeInitializeControlResponse,
   decodeClaudeMcpStatusControlResponse,
   decodeClaudeProtocolEvent,
@@ -98,16 +98,6 @@ const unsupported = (capability: string) =>
     `Local Claude Code does not provide a confirmable ${capability} operation.`,
   );
 
-interface PendingUserReplay {
-  readonly uuid: string;
-  readonly operation: "initialize" | "start" | "steer";
-  readonly contentDigest: string;
-  readonly epoch: number;
-  readonly emitRunStarted: boolean;
-  readonly resultKind: "initialization" | "assignment" | undefined;
-  readonly acknowledgement: Deferred.Deferred<void, SubagentError>;
-}
-
 interface PendingControl {
   readonly operation: string;
   readonly deferred: Deferred.Deferred<unknown, SubagentError>;
@@ -139,6 +129,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   child: LocalCliProcessHandle,
   supervisor: SupervisorChannelHandle,
 ) {
+  const scope = yield* Scope.Scope;
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
   const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
@@ -154,7 +145,6 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   const correlation = makeClaudeResultCorrelation();
   const usage = makeLocalClaudeUsage();
   const reports = makeLocalClaudeReportDelivery(offer);
-  let pendingUserReplay: PendingUserReplay | undefined;
   let pendingInterrupt: PendingInterrupt | undefined;
   let assignmentEpoch = 0;
   let nextControlId = 1;
@@ -169,11 +159,23 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     return wireSequence;
   };
 
+  const inputs = makeLocalClaudeInputDelivery(child, scope, (operation, epoch, shouldQuery) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((nowMillis) => {
+        lastOutboundAtMillis = nowMillis;
+        return recordDebug({
+          kind: "outbound-user",
+          sequence: nextWireSequence(),
+          operation,
+          epoch,
+          shouldQuery,
+        });
+      }),
+    ),
+  );
+
   const cancelPending = (error: SubagentError) => {
-    if (pendingUserReplay) {
-      Deferred.doneUnsafe(pendingUserReplay.acknowledgement, Effect.fail(error));
-      pendingUserReplay = undefined;
-    }
+    inputs.cancel(error);
     for (const pending of controlResponses.values())
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
     controlResponses.clear();
@@ -256,7 +258,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     sameSession;
 
   const isQueuedTaskNotificationReplay = (event: ClaudeUserProtocolEvent): boolean =>
-    pendingUserReplay === undefined &&
+    inputs.pending === undefined &&
     claudeSessionDiagnostic(event.sessionId, nativeSessionId) === "match" &&
     assignmentEpoch > 0 &&
     correlation.hasOutstandingAssignment(assignmentEpoch) &&
@@ -286,11 +288,11 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     sameSession;
 
   const pendingDiagnostic = (): ClaudeUserDiagnosticContext["pending"] =>
-    pendingUserReplay?.operation ?? (pendingInterrupt ? "interrupt" : "none");
+    inputs.pending?.operation ?? (pendingInterrupt ? "interrupt" : "none");
 
   const contentMatch = (event: ClaudeUserProtocolEvent): ClaudeSentContentMatch => {
     const digest = userContentDigest(event.text);
-    const pending = pendingUserReplay;
+    const pending = inputs.pending;
     return pending?.contentDigest === digest
       ? sentKindForOperation(pending.operation)
       : correlation.matchSentContent(digest);
@@ -318,7 +320,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
   ) => {
     if (!child.claudeDebug) return Effect.void;
     return Effect.suspend(() => {
-      const pending = pendingUserReplay;
+      const pending = inputs.pending;
       const uuid =
         event.uuid === undefined
           ? "absent"
@@ -422,7 +424,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
 
   const onUser = (event: ClaudeUserProtocolEvent, raw: LocalCliWireEvent, sequence: number) => {
     const sameSession = isSameClaudeSession(event.sessionId, nativeSessionId);
-    const pending = pendingUserReplay;
+    const pending = inputs.pending;
     const interrupt = pendingInterrupt;
     if (event.parentToolUseId !== undefined) {
       // --forward-subagent-text emits nested assistant/user frames with
@@ -442,7 +444,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       return recordUserDecision(event, sequence, "pending-confirmation", "none").pipe(
         Effect.andThen(
           Effect.suspend(() => {
-            pendingUserReplay = undefined;
+            inputs.clear(pending);
             correlation.rememberSentUuid(pending.uuid, {
               contentDigest: pending.contentDigest,
               kind: sentKindForOperation(pending.operation),
@@ -774,11 +776,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
       ? Effect.void
       : supervisor.acceptedReportForEpoch(assignmentEpoch).pipe(
           Effect.flatMap((report) =>
-            report
-              ? reports
-                  .forwardReport({ type: "report", ...report })
-                  .pipe(Effect.timeoutOption("1 second"), Effect.asVoid)
-              : Effect.void,
+            report ? reports.forwardReport({ type: "report", ...report }) : Effect.void,
           ),
           Effect.catch(() =>
             offer({
@@ -802,10 +800,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
             "Local Claude Code transport closed.",
           ),
         ),
-      ).pipe(
-        Effect.andThen(preserveAcceptedReport),
-        Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
-      ),
+      ).pipe(Effect.andThen(deliverTerminalReport(events, preserveAcceptedReport, scope))),
     ),
     Effect.forkScoped,
   );
@@ -815,96 +810,7 @@ const makeLocalClaudeHandle = Effect.fn("LocalClaudeBackend.makeHandle")(functio
     Effect.forkScoped,
   );
 
-  const failUncertainDelivery = <A>(error: SubagentError): Effect.Effect<A, SubagentError> =>
-    child.terminate("force").pipe(
-      Effect.catch(() => Effect.void),
-      Effect.andThen(Effect.fail(error)),
-    );
-
-  const sendUser = (
-    text: string,
-    epoch: number,
-    operation: "initialize" | "start" | "steer",
-    shouldQuery = true,
-  ) =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => {
-        if (pendingUserReplay)
-          return {
-            pending: undefined,
-            error: processError(
-              operation,
-              `${operation}_not_sent`,
-              "Another Claude stream-input delivery is awaiting native replay confirmation.",
-            ),
-          } as const;
-        const pending: PendingUserReplay = {
-          uuid: randomUUID(),
-          operation,
-          contentDigest: userContentDigest(text),
-          epoch,
-          emitRunStarted: operation === "start",
-          // Steering joins the active turn and produces no dedicated result.
-          resultKind:
-            operation === "initialize"
-              ? "initialization"
-              : operation === "start"
-                ? "assignment"
-                : undefined,
-          acknowledgement: Deferred.makeUnsafe<void, SubagentError>(),
-        };
-        pendingUserReplay = pending;
-        return { pending } as const;
-      }),
-      (acquired) => {
-        if (!("pending" in acquired) || !acquired.pending) return Effect.fail(acquired.error);
-        const timeoutError = processError(
-          operation,
-          `${operation}_outcome_uncertain`,
-          "Claude stream input was sent but native replay confirmation did not arrive; the backend was closed to prevent ambiguous retry correlation.",
-        );
-        const recordOutbound = Clock.currentTimeMillis.pipe(
-          Effect.flatMap((nowMillis) => {
-            lastOutboundAtMillis = nowMillis;
-            return recordDebug({
-              kind: "outbound-user",
-              sequence: nextWireSequence(),
-              operation,
-              epoch,
-              shouldQuery,
-            });
-          }),
-        );
-        return recordOutbound.pipe(
-          Effect.andThen(
-            child.send(claudeUserFrame(text, { shouldQuery, uuid: acquired.pending.uuid })),
-          ),
-          Effect.mapError((error) =>
-            error.code === "transport_outcome_uncertain"
-              ? processError(
-                  operation,
-                  `${operation}_outcome_uncertain`,
-                  `Claude stream input may already have been accepted; inspect run status before retrying. (${error.message})`,
-                )
-              : error,
-          ),
-          Effect.catch((error) =>
-            error instanceof SubagentProcessError && isOutcomeUncertain(error)
-              ? failUncertainDelivery(error)
-              : Effect.fail(error),
-          ),
-          Effect.andThen(Deferred.await(acquired.pending.acknowledgement)),
-          Effect.timeout(CONTROL_TIMEOUT),
-          // Interrupt the pending send/acknowledgement before force-closing its transport.
-          Effect.catchTag("TimeoutError", () => failUncertainDelivery(timeoutError)),
-        );
-      },
-      (acquired) =>
-        Effect.sync(() => {
-          if ("pending" in acquired && pendingUserReplay === acquired.pending)
-            pendingUserReplay = undefined;
-        }),
-    );
+  const sendUser = inputs.send;
 
   const requestControl = (
     operation: string,

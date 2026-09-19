@@ -518,7 +518,7 @@ export function rejectCircularInsertion<R>(
     ? value
     : Reflect.ownKeys(value).map((key) => Object.getOwnPropertyDescriptor(value, key)?.value);
   for (const item of items) this.rejectCircularInsertion(container, item, label, node, seen);
-  seen.delete(value);
+  // Keep visited identities for this reachability walk, including completed branches.
 }
 
 export function assignToReference<R>(

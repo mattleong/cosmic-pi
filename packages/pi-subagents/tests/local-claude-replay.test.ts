@@ -1,10 +1,14 @@
 import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { yieldUntil } from "pi-cosmic-core/testing";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
 import {
   decodeClaudeProtocolEvent,
@@ -65,6 +69,9 @@ const launch = (model: ReplayScenario): BackendLaunchRequest => ({
 interface ReplayHarness {
   readonly processes: LocalCliProcessContract;
   readonly supervisors: SupervisorChannelContract;
+  readonly guidanceSent: Effect.Effect<void>;
+  readonly replayGuidance: Effect.Effect<void>;
+  readonly fillProgress: Effect.Effect<void>;
   readonly finishResult: Effect.Effect<void>;
   readonly close: Effect.Effect<void>;
 }
@@ -74,6 +81,8 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     const childEvents = yield* Queue.unbounded<LocalCliWireEvent, Cause.Done>();
     const supervisorEvents = yield* Queue.unbounded<SupervisorEvent, Cause.Done>();
     let pendingResult: ClaudeInboundFrame | undefined;
+    let pendingGuidance: ClaudeUserFrame | undefined;
+    const guidanceSent = Deferred.makeUnsafe<void>();
     const acceptedReport = scenario.startsWith("accepted-report-")
       ? {
           runId: `agent-${scenario}`,
@@ -138,6 +147,11 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         }
 
         if (outbound.type !== "user") return;
+        if (outbound.message.content === "Delayed guidance") {
+          pendingGuidance = outbound;
+          Deferred.doneUnsafe(guidanceSent, Effect.void);
+          return;
+        }
         offerReplay(outbound);
         if (outbound.shouldQuery === false) {
           offerChild({
@@ -325,6 +339,28 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     return {
       processes,
       supervisors,
+      guidanceSent: Deferred.await(guidanceSent),
+      replayGuidance: Effect.sync(() => {
+        if (pendingGuidance) offerReplay(pendingGuidance);
+        offerChild({
+          type: "assistant",
+          session_id: "claude-replay-session",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Guidance consumed" }],
+          },
+        });
+      }),
+      fillProgress: Effect.sync(() => {
+        for (let index = 0; index < 513; index++)
+          Queue.offerUnsafe(supervisorEvents, {
+            type: "supervisor_contact",
+            assignmentEpoch: 12,
+            requestId: `progress-${index}`,
+            kind: "progress",
+            message: "Working",
+          });
+      }),
       finishResult: Effect.sync(() => {
         if (pendingResult) offerChild(pendingResult);
         pendingResult = undefined;
@@ -559,6 +595,52 @@ describe("local Claude replay classification", () => {
         );
       }
     }),
+  );
+
+  it.effect("keeps exact UUID replay correlated after guidance caller cancellation", () =>
+    withReplayHarness(
+      "accepted-report-close",
+      ({ processes, supervisors, guidanceSent, replayGuidance }) =>
+        Effect.gen(function* () {
+          const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
+            launch("accepted-report-close"),
+          );
+          yield* backend.controls.initialize;
+          yield* backend.controls.start("Start", 12);
+          yield* take(backend);
+          yield* take(backend);
+          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+          yield* guidanceSent;
+          yield* Fiber.interrupt(caller);
+          yield* replayGuidance;
+          expect(yield* take(backend)).toMatchObject({
+            type: "assistant_message",
+            text: "Guidance consumed",
+          });
+        }),
+    ),
+  );
+
+  it.effect("preserves accepted evidence behind a full queue and delayed consumer", () =>
+    withReplayHarness("accepted-report-close", ({ processes, supervisors, close, fillProgress }) =>
+      Effect.gen(function* () {
+        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
+          launch("accepted-report-close"),
+        );
+        yield* backend.controls.initialize;
+        yield* backend.controls.start("Start", 12);
+        yield* take(backend);
+        yield* take(backend);
+        yield* fillProgress;
+        yield* yieldUntil(() => Queue.sizeUnsafe(backend.events) >= 512);
+        yield* close;
+        yield* TestClock.adjust("1200 millis");
+        const received = yield* Stream.runCollect(Stream.fromQueue(backend.events));
+        expect(received.filter((event) => event.type === "report")).toMatchObject([
+          { assignmentEpoch: 12, text: "Accepted report text" },
+        ]);
+      }),
+    ),
   );
 
   it.effect("recovers accepted evidence when transport closes before report forwarding", () =>

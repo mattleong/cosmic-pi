@@ -232,6 +232,50 @@ describe("session syntax service", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("a newer theme settles obsolete joiners before their owner finishes", () =>
+    Effect.gen(function* () {
+      setCodePreviewSettings({ ...codePreviewSettings, syntaxHighlighting: true });
+      const started = yield* Deferred.make<void>();
+      const candidate = yield* Deferred.make<ShikiHighlighter>();
+      const joined = yield* Deferred.make<void>();
+      const current = highlighter(() => undefined);
+      const creates: string[] = [];
+      const adapter = ShikiAdapter.of({
+        create: (theme) => {
+          creates.push(theme);
+          return theme === "older"
+            ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(candidate)))
+            : Effect.succeed(current);
+        },
+        loadLanguage: () => Effect.void,
+      });
+      yield* CodePreviewSyntaxService.use((service) =>
+        Effect.gen(function* () {
+          const owner = yield* service.initialize("older").pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+          const waiter = yield* service
+            .initialize("older")
+            .pipe(Effect.andThen(Deferred.succeed(joined, undefined)), Effect.forkScoped);
+          yield* Effect.yieldNow;
+          assert.equal(yield* Deferred.isDone(joined), false);
+          yield* service.initialize("newer");
+          for (let step = 0; step < 20; step++) yield* Effect.yieldNow;
+          assert.equal(yield* Deferred.isDone(joined), true);
+          assert.equal(yield* Deferred.isDone(candidate), false);
+          yield* Fiber.interrupt(owner);
+          yield* Fiber.join(waiter);
+          assert.deepEqual(creates, ["older", "newer"]);
+          assert.equal(syntaxProjection()?.theme, "newer");
+          assert.equal(syntaxProjection()?.highlighter, current);
+        }),
+      ).pipe(
+        provideBuiltLayer(
+          CodePreviewSyntaxService.layer.pipe(Layer.provide(Layer.succeed(ShikiAdapter, adapter))),
+        ),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("disposes a late candidate after returning to the already loaded theme", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

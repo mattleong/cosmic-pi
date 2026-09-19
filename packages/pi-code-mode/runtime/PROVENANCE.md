@@ -209,7 +209,10 @@ Deviation 18 adds host-only pre-truncation result observation.
      mutate them. Supported host getters, including array indices, retain occurrence-based
      evaluation during projection. Expansion never re-enters getters or guest callbacks.
      Existing host getter authority is not made preemptible. Reference reachability checks
-     retain visited identities to avoid expanding shared DAGs before projection. If thrown
+     retain visited identities to avoid expanding shared DAGs before projection. Mutation
+     insertion checks likewise retain identities for each complete reachability walk, while
+     checking destination identity before skipping visited nodes. Shared DAG assignment and
+     push stay linear in reachable graph size without admitting cycles. If thrown
      data cannot be projected, diagnostics use fixed bounded text rather than coercing
      the rejected value; failure observation still runs. These are internal confinement budgets,
      not `maxOutputBytes` or retention limits; observers still receive admitted
@@ -222,7 +225,11 @@ Deviation 18 adds host-only pre-truncation result observation.
      `TimeoutExceeded` diagnostic instead of racing the event-loop-starved timer.
      The deadline is **cooperative**: it cannot interrupt a native call that has
      already started, which is why every admitted native operation above is
-     bounded up front.
+     bounded up front. `host-execution.ts` allocates its deadline, tool runtime and logs inside
+     `Effect.suspend`, so each evaluation of the same Effect owns fresh execution state.
+     Construction delay does not consume the deadline; sequential and concurrent reuse do
+     not share call budgets or logs. Public validation and discovery remain unchanged.
+     Local `tests/execution-isolation.test.ts` covers reuse and delayed evaluation.
    - **Final output bound.** `boundOutput` now reserves its truncation markers
      _inside_ `maxOutputBytes` for both the value and the diagnostic message (a
      hostile thrown string is bounded too), so the runtime's model-facing content

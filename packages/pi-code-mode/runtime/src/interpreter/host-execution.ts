@@ -28,118 +28,121 @@ export const executeWithLimits = <const Tools extends object>(
   options: ExecuteOptions<Tools>,
   limits: ResolvedExecutionLimits,
   searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
-): Effect.Effect<Result, never, Services<Tools>> => {
-  let hooks: ToolCallHooks<Services<Tools>> = {};
-  if (options.onToolCallLifecycle !== undefined)
-    hooks = { ...hooks, onToolCallLifecycle: options.onToolCallLifecycle };
-  if (options.onToolCallStart !== undefined)
-    hooks = { ...hooks, onToolCallStart: options.onToolCallStart };
-  if (options.onToolCallEnd !== undefined)
-    hooks = { ...hooks, onToolCallEnd: options.onToolCallEnd };
-  // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-  const tools = ToolRuntime.make(
-    (options.tools ?? {}) as HostTools<Services<Tools>>,
-    limits.maxToolCalls,
-    searchIndex,
-    hooks,
-  );
-  const logs: Array<string> = [];
-  const logged = () => (logs.length > 0 ? { logs: [...logs] } : {});
-  const observe = (result: Result): Result => {
-    try {
-      options.onResult?.(result);
-    } catch {
-      /* Host capture cannot relabel execution. */
-    }
-    return result;
-  };
-
-  if (options.code.trim().length === 0) {
-    return Effect.succeed({
-      ok: false,
-      error: { kind: "ParseError", message: "Code cannot be empty." },
-      toolCalls: tools.calls,
-    } satisfies Result).pipe(Effect.map(observe));
-  }
-
-  // Confinement: the wall-clock deadline is shared with the interpreter so synchronous
-  // native overruns are normalized to TimeoutExceeded even while the Effect timer is starved.
-  const deadline = new ExecutionDeadline(limits.timeoutMs);
-  const operation = Effect.gen(function* () {
-    const program = parseProgram(options.code);
-    const interpreter = new Interpreter<Services<Tools>>(
-      tools.invoke,
-      tools.keys,
-      logs,
-      deadline,
-      options.onToolCallLifecycle,
-    );
-    const value = yield* interpreter.run(program);
-    // A program whose final synchronous operation ran past the deadline must not race the
-    // (event-loop-starved) Effect timer into an ok result.
-    deadline.check();
+): Effect.Effect<Result, never, Services<Tools>> =>
+  Effect.suspend(() => {
+    let hooks: ToolCallHooks<Services<Tools>> = {};
+    if (options.onToolCallLifecycle !== undefined)
+      hooks = { ...hooks, onToolCallLifecycle: options.onToolCallLifecycle };
+    if (options.onToolCallStart !== undefined)
+      hooks = { ...hooks, onToolCallStart: options.onToolCallStart };
+    if (options.onToolCallEnd !== undefined)
+      hooks = { ...hooks, onToolCallEnd: options.onToolCallEnd };
     // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
-    const result = copyOut(copyIn(value, "Execution result"), true) as DataValue;
-    deadline.check();
-    return {
-      ok: true,
-      value: result,
-      ...logged(),
-      toolCalls: tools.calls,
-    } satisfies Result;
-  }).pipe((program) => {
-    const timeoutMs = limits.timeoutMs;
-    if (timeoutMs === undefined) return program;
-    return program.pipe(
-      Effect.timeoutOrElse({
-        duration: timeoutMs,
-        orElse: () =>
-          Effect.succeed({
+    const tools = ToolRuntime.make(
+      (options.tools ?? {}) as HostTools<Services<Tools>>,
+      limits.maxToolCalls,
+      searchIndex,
+      hooks,
+    );
+    const logs: Array<string> = [];
+    const logged = () => (logs.length > 0 ? { logs: [...logs] } : {});
+    const observe = (result: Result): Result => {
+      try {
+        options.onResult?.(result);
+      } catch {
+        /* Host capture cannot relabel execution. */
+      }
+      return result;
+    };
+
+    if (options.code.trim().length === 0) {
+      return Effect.succeed({
+        ok: false,
+        error: { kind: "ParseError", message: "Code cannot be empty." },
+        toolCalls: tools.calls,
+      } satisfies Result).pipe(Effect.map(observe));
+    }
+
+    // Confinement: the wall-clock deadline is shared with the interpreter so synchronous
+    // native overruns are normalized to TimeoutExceeded even while the Effect timer is starved.
+    const deadline = new ExecutionDeadline(limits.timeoutMs);
+    const operation = Effect.gen(function* () {
+      const program = parseProgram(options.code);
+      const interpreter = new Interpreter<Services<Tools>>(
+        tools.invoke,
+        tools.keys,
+        logs,
+        deadline,
+        options.onToolCallLifecycle,
+      );
+      const value = yield* interpreter.run(program);
+      // A program whose final synchronous operation ran past the deadline must not race the
+      // (event-loop-starved) Effect timer into an ok result.
+      deadline.check();
+      // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
+      const result = copyOut(copyIn(value, "Execution result"), true) as DataValue;
+      deadline.check();
+      return {
+        ok: true,
+        value: result,
+        ...logged(),
+        toolCalls: tools.calls,
+      } satisfies Result;
+    }).pipe((program) => {
+      const timeoutMs = limits.timeoutMs;
+      if (timeoutMs === undefined) return program;
+      return program.pipe(
+        Effect.timeoutOrElse({
+          duration: timeoutMs,
+          orElse: () =>
+            Effect.succeed({
+              ok: false,
+              error: {
+                kind: "TimeoutExceeded",
+                message: `Execution timed out after ${timeoutMs}ms.`,
+              },
+              ...logged(),
+              toolCalls: tools.calls,
+            } satisfies Result),
+        }),
+      );
+    });
+
+    return operation.pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.succeed({
+              ok: false,
+              error: normalizeError(Cause.squash(cause)),
+              ...logged(),
+              toolCalls: tools.calls,
+            } satisfies Result),
+      ),
+      Effect.map((result) => {
+        try {
+          const bounded =
+            limits.maxOutputBytes === undefined
+              ? result
+              : boundOutput(result, limits.maxOutputBytes);
+          // Serialization is synchronous too. Never publish success after a late projection.
+          if (result.ok) deadline.check();
+          observe(result);
+          return bounded;
+        } catch (error) {
+          const failure = observe({
             ok: false,
-            error: {
-              kind: "TimeoutExceeded",
-              message: `Execution timed out after ${timeoutMs}ms.`,
-            },
+            error: normalizeError(error),
             ...logged(),
             toolCalls: tools.calls,
-          } satisfies Result),
+          });
+          return limits.maxOutputBytes === undefined
+            ? failure
+            : boundOutput(failure, limits.maxOutputBytes);
+        }
       }),
     );
   });
-
-  return operation.pipe(
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.interrupt
-        : Effect.succeed({
-            ok: false,
-            error: normalizeError(Cause.squash(cause)),
-            ...logged(),
-            toolCalls: tools.calls,
-          } satisfies Result),
-    ),
-    Effect.map((result) => {
-      try {
-        const bounded =
-          limits.maxOutputBytes === undefined ? result : boundOutput(result, limits.maxOutputBytes);
-        // Serialization is synchronous too. Never publish success after a late projection.
-        if (result.ok) deadline.check();
-        observe(result);
-        return bounded;
-      } catch (error) {
-        const failure = observe({
-          ok: false,
-          error: normalizeError(error),
-          ...logged(),
-          toolCalls: tools.calls,
-        });
-        return limits.maxOutputBytes === undefined
-          ? failure
-          : boundOutput(failure, limits.maxOutputBytes);
-      }
-    }),
-  );
-};
 
 export const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 

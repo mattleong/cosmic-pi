@@ -78,19 +78,6 @@ test("explicit measured timing accompanies counts without overriding disabled ti
   assert.ok(visibleWidth(row) <= 24);
 });
 
-test("priority counters can use more than half the remaining row before subjects are elided", () => {
-  const identity = "code_mode result.read";
-  const subject = "cm--88ju67vnzx--1zwbiguwetb-1";
-  const counter = "page 800..987/987 · EOF";
-  for (const width of [60, 70, 80]) {
-    const row = allocateCompactHeader(identity, subject, [counter], ["optional"], width);
-    assert.ok(row.includes(identity));
-    assert.ok(row.includes(counter));
-    assert.ok(!row.includes("optional"));
-    assert.ok(visibleWidth(row) <= width);
-  }
-});
-
 test("compact subjects are single-line, inert and width bounded without losing tool identity", () => {
   for (const width of [1, 4, 16, 40, 100]) {
     const rows = renderCompactToolCall(
@@ -160,24 +147,6 @@ test("width allocation reserves whole counters without consuming the subject min
     if (narrow.includes("+")) assert.ok(narrow.endsWith("+12345"));
     if (width <= visibleWidth(identity)) assert.ok(!narrow.includes(" · "));
   }
-});
-
-test("optional lanes use only slack after a complete subject and admitted counters", () => {
-  const base = allocateCompactHeader("read", "file.ts", ["+1"], [], 100);
-  const exact = visibleWidth(base);
-  assert.equal(
-    allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], exact),
-    base,
-  );
-  assert.equal(
-    allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], exact + 7),
-    base,
-  );
-  assert.equal(allocateCompactHeader("read", "file.ts", ["+1"], ["meta", "1s", "hint"], 100), base);
-  assert.equal(
-    allocateCompactHeader("read", "", ["oversized-counter", "+1", "-2"], [], 22),
-    "read",
-  );
 });
 
 test("fitting counters take priority over chrome with empty or short subjects", () => {

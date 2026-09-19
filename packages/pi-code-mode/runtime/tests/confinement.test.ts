@@ -3,6 +3,8 @@
 // normalization. Every hostile case asserts *fast* refusal - the point of the confinement
 // layer is that no admitted native operation can block the event loop for seconds.
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vitest";
+import { Interpreter } from "../src/interpreter/runtime.js";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -971,6 +973,51 @@ describe("aggregate data-boundary budgets", () => {
       expect(contains([dag, { hidden: Symbol("opaque") }])).toBe(true);
     }
   });
+
+  it.effect("bounds shared DAG insertion walks for assignment and push without hiding cycles", () =>
+    Effect.gen(function* () {
+      const original = Interpreter.prototype.rejectCircularInsertion;
+      let visits = 0;
+      const guard = vi
+        .spyOn(Interpreter.prototype, "rejectCircularInsertion")
+        .mockImplementation(function (this: Interpreter<unknown>, ...args) {
+          // Stop a regressed exponential walk deterministically, without a timing assertion.
+          if (++visits > 512) throw new Error("Insertion traversal exceeded its work budget");
+          return original.apply(this, args);
+        });
+      try {
+        for (const [container, insert] of [
+          ["{}", "y.x = x"],
+          ["[]", "y.push(x)"],
+        ]) {
+          for (const cyclic of [false, true]) {
+            visits = 0;
+            const result = yield* run(`
+              const y = ${container};
+              let x = {};
+              for (let i = 0; i < 31; i++) x = { a: x, b: x };
+              ${cyclic ? "x = { shared: x, later: y };" : ""}
+              ${insert};
+              return 1;
+            `);
+            if (cyclic) {
+              expect(result).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
+            } else {
+              expect(result).toMatchObject({ ok: true, value: 1 });
+            }
+            expect(visits).toBeLessThanOrEqual(512);
+          }
+          visits = 0;
+          expect(yield* run(`const y = ${container}; const x = y; ${insert};`)).toMatchObject({
+            ok: false,
+            error: { kind: "InvalidDataValue" },
+          });
+        }
+      } finally {
+        guard.mockRestore();
+      }
+    }),
+  );
 
   it.effect("preserves occurrence-based getters in host tool results", () =>
     Effect.gen(function* () {

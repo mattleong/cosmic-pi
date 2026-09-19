@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { SUBSCRIPTION_ID_META_KEY } from "@modelcontextprotocol/client";
@@ -196,6 +197,33 @@ const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const subscribe = { action: "resources.subscribe", server: "fixture", uri: "test://one" };
 const status = { action: "resources.subscriptions", server: "fixture" };
 const unsubscribe = { action: "resources.unsubscribe", server: "fixture", uri: "test://one" };
+const awaitResourceEvents = (count: number) =>
+  Effect.gen(function* () {
+    const execution = yield* McpExecution;
+    const read = execution.execute({ action: "events.read", server: "fixture" }, projection).pipe(
+      Effect.flatMap(({ reply }) =>
+        Schema.decodeUnknownEffect(
+          Schema.Struct({
+            result: Schema.Struct({
+              ingressDropped: Schema.Finite,
+              events: Schema.Array(
+                Schema.Struct({ kind: Schema.String, uri: Schema.String, cursor: Schema.String }),
+              ),
+            }),
+          }),
+        )(reply.data),
+      ),
+      Effect.map(({ result }) => result),
+    );
+    return yield* read.pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced("1 millis"),
+        until: (result) => result.events.length >= count,
+      }),
+      Effect.timeout("1 second"),
+    );
+  });
+
 const streams = (
   ack = true,
   cancel?: () => Promise<void>,
@@ -279,14 +307,8 @@ it.live(
         yield* yieldUntil(() => owned.ids.length === 3);
         yield* Deferred.succeed(delivery, undefined);
         emit(1, "test://two");
-        yield* Effect.sleep(20);
-        expect(
-          (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-            .data,
-        ).toMatchObject({
-          result: {
-            events: [{ kind: "resource-updated", uri: "test://two", cursor: expect.any(String) }],
-          },
+        expect(yield* awaitResourceEvents(1)).toMatchObject({
+          events: [{ kind: "resource-updated", uri: "test://two", cursor: expect.any(String) }],
         });
         yield* execution.execute(unsubscribe, projection);
         expect(Exit.isFailure(yield* Fiber.join(replacement))).toBe(true);
@@ -372,17 +394,17 @@ for (const cancel of [false, true])
           if (cancel) yield* execution.execute(unsubscribe, projection);
           else yield* Deferred.succeed(release, undefined);
           expect(Exit.isSuccess(yield* Fiber.join(opening))).toBe(!cancel);
-          yield* Effect.sleep(10);
-          expect(
-            (yield* execution.execute({ action: "events.read", server: "fixture" }, projection))
-              .reply.data,
-          ).toMatchObject({
-            result: {
-              events: cancel
-                ? []
-                : [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
-            },
-          });
+          if (cancel) {
+            yield* Effect.sleep(10);
+            expect(
+              (yield* execution.execute({ action: "events.read", server: "fixture" }, projection))
+                .reply.data,
+            ).toMatchObject({ result: { events: [] } });
+          } else {
+            expect(yield* awaitResourceEvents(1)).toMatchObject({
+              events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
+            });
+          }
         }).pipe(
           Effect.ensuring(Deferred.succeed(release, undefined)),
           Effect.provide(fixture.layer),
@@ -447,22 +469,9 @@ it.live("ACK-adjacent staging stays bounded and discloses overflow", () => {
   return Effect.gen(function* () {
     const execution = yield* McpExecution;
     yield* execution.execute(subscribe, projection);
-    yield* Effect.sleep(10);
-    const events = (yield* execution.execute(
-      { action: "events.read", server: "fixture" },
-      projection,
-    )).reply.data;
-    const result = (yield* Schema.decodeUnknownEffect(
-      Schema.Struct({
-        result: Schema.Struct({
-          ingressDropped: Schema.Finite,
-          events: Schema.Array(Schema.Struct({ kind: Schema.String, uri: Schema.String })),
-        }),
-      }),
-    )(events)).result;
+    const result = yield* awaitResourceEvents(32);
     expect(result.ingressDropped).toBeGreaterThanOrEqual(8);
-    expect(result.events.length).toBeGreaterThan(0);
-    expect(result.events.length).toBeLessThanOrEqual(32);
+    expect(result.events).toHaveLength(32);
     expect(
       result.events.every(
         (event) => event.kind === "resource-updated" && event.uri === "test://one",
@@ -492,15 +501,8 @@ it.live(
           `data: ${serialize({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { [SUBSCRIPTION_ID_META_KEY]: owned.ids[0] } } })}\n\n`,
         ),
       );
-      yield* Effect.sleep(20);
-      const events = yield* execution.execute(
-        { action: "events.read", server: "fixture" },
-        projection,
-      );
-      expect(events.reply.data).toMatchObject({
-        result: {
-          events: [expect.objectContaining({ kind: "resource-updated", uri: "test://one" })],
-        },
+      expect(yield* awaitResourceEvents(1)).toMatchObject({
+        events: [expect.objectContaining({ kind: "resource-updated", uri: "test://one" })],
       });
       expect(owned.fixture.requests.some((request) => request.method === "resources/read")).toBe(
         false,
@@ -729,14 +731,8 @@ it.live("a queued old subscription generation cannot revive after same-URI repla
           .data,
       ).toMatchObject({ result: { events: [] } });
       emit(1);
-      yield* Effect.sleep(10);
-      expect(
-        (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-          .data,
-      ).toMatchObject({
-        result: {
-          events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
-        },
+      expect(yield* awaitResourceEvents(1)).toMatchObject({
+        events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
       });
     }).pipe(
       Effect.ensuring(Deferred.succeed(delivery, undefined)),

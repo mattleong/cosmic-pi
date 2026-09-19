@@ -114,6 +114,15 @@ export class CodePreviewSyntaxService extends Context.Service<
           ),
         );
 
+      // Pure transitions publish and replace the backing value in one synchronous step.
+      // Lock waiting and the language adapter remain interruptible.
+      const modifyPure = <A>(transition: (current: SyntaxState) => readonly [A, SyntaxState]) =>
+        SynchronizedRef.modify(state, (current) => {
+          const result = transition(current);
+          if (result[1] !== current) publish(result[1]);
+          return result;
+        });
+
       const dispose = highlighterLifecycle.withPermits(1)(
         modify((current) =>
           releaseHighlighter(current.highlighter).pipe(
@@ -154,6 +163,8 @@ export class CodePreviewSyntaxService extends Context.Service<
                     { tag: "Await" as const, done: current.initialization.done },
                     current,
                   ] as const;
+                if (current.initialization)
+                  yield* Deferred.succeed(current.initialization.done, "Completed");
                 const done = yield* Deferred.make<InitializationOutcome>();
                 const flight = { theme, done } satisfies InitializationFlight;
                 return [
@@ -243,20 +254,19 @@ export class CodePreviewSyntaxService extends Context.Service<
       const requestLanguage = Effect.fn("CodePreviewShiki.requestLanguage")(function* (
         language: string,
       ) {
-        const decision = yield* modify<LanguageDecision>((current) => {
+        const decision = yield* modifyPure<LanguageDecision>((current) => {
           if (current.loadedLanguages.has(language) || !current.highlighter)
-            return Effect.succeed([undefined, current] as const);
-          if (current.pendingLanguages.has(language))
-            return Effect.succeed([undefined, current] as const);
+            return [undefined, current] as const;
+          if (current.pendingLanguages.has(language)) return [undefined, current] as const;
           const pending = new Set(current.pendingLanguages);
           pending.add(language);
-          return Effect.succeed([
+          return [
             {
               highlighter: current.highlighter,
               generation: current.generation,
             },
             { ...current, pendingLanguages: pending },
-          ] as const);
+          ] as const;
         });
         if (!decision) return;
         const loadCurrentGeneration = highlighterLifecycle.withPermits(1)(
@@ -275,15 +285,14 @@ export class CodePreviewSyntaxService extends Context.Service<
             onSuccess: () => true,
           }),
           Effect.flatMap((succeeded) =>
-            modify((current) => {
-              if (current.generation !== decision.generation)
-                return Effect.succeed([undefined, current] as const);
+            modifyPure((current) => {
+              if (current.generation !== decision.generation) return [undefined, current] as const;
               const pending = new Set(current.pendingLanguages);
               pending.delete(language);
               const loaded = succeeded
                 ? new Set(current.loadedLanguages).add(language)
                 : current.loadedLanguages;
-              return Effect.succeed([
+              return [
                 undefined,
                 {
                   ...current,
@@ -291,7 +300,7 @@ export class CodePreviewSyntaxService extends Context.Service<
                   pendingLanguages: pending,
                   statusVersion: current.statusVersion + 1,
                 },
-              ] as const);
+              ] as const;
             }),
           ),
         );
