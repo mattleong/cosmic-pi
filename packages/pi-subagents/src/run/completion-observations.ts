@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Scope from "effect/Scope";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
@@ -134,52 +135,56 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
   ) =>
     withCompletionGate(
       withLock(
-        Effect.gen(function* () {
-          const selected = ids.flatMap((id) => {
-            const record = records.get(id);
-            return record ? [record] : [];
-          });
-          const missingIds = ids.filter((id) => !records.has(id));
-          if (!allowMissing && missingIds.length > 0)
-            return yield* new InvalidSubagentRequestError({
-              code: "subagent_runs_not_found",
-              message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
+        // Wait for both permits interruptibly. Mask only insertion and finalizer installation.
+        Effect.acquireRelease(
+          Effect.gen(function* () {
+            const selected = ids.flatMap((id) => {
+              const record = records.get(id);
+              return record ? [record] : [];
             });
-          const claimToken = allocateClaimToken();
-          const desired = claimAll
-            ? selected.flatMap((record) => {
-                const generation = isAssignmentFinishedRunState(record.view.state)
-                  ? record.completionGeneration
-                  : record.completionGeneration + 1;
-                if (generation <= 0) return [];
-                if (
-                  isAssignmentFinishedRunState(record.view.state) &&
-                  !record.completionGenerations.has(generation)
-                )
-                  return [];
-                return [{ record, generation }];
-              })
-            : selected.flatMap((record) =>
-                isAssignmentFinishedRunState(record.view.state) &&
-                record.completionGenerations.has(record.completionGeneration)
-                  ? [{ record, generation: record.completionGeneration }]
-                  : [],
-              );
-          if (claimAll) {
-            const conflict = desired.find(
-              ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
-            );
-            if (conflict)
+            const missingIds = ids.filter((id) => !records.has(id));
+            if (!allowMissing && missingIds.length > 0)
               return yield* new InvalidSubagentRequestError({
-                code: "completion_claim_conflict",
-                message: `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
+                code: "subagent_runs_not_found",
+                message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
               });
-          }
-          const claimed = desired.filter(({ record, generation }) =>
-            claimCompletion(record, generation, claimToken),
-          );
-          return { claimToken, selected, claimed, missingIds } satisfies CompletionClaim;
-        }),
+            const claimToken = allocateClaimToken();
+            const desired = claimAll
+              ? selected.flatMap((record) => {
+                  const generation = isAssignmentFinishedRunState(record.view.state)
+                    ? record.completionGeneration
+                    : record.completionGeneration + 1;
+                  if (generation <= 0) return [];
+                  if (
+                    isAssignmentFinishedRunState(record.view.state) &&
+                    !record.completionGenerations.has(generation)
+                  )
+                    return [];
+                  return [{ record, generation }];
+                })
+              : selected.flatMap((record) =>
+                  isAssignmentFinishedRunState(record.view.state) &&
+                  record.completionGenerations.has(record.completionGeneration)
+                    ? [{ record, generation: record.completionGeneration }]
+                    : [],
+                );
+            if (claimAll) {
+              const conflict = desired.find(
+                ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
+              );
+              if (conflict)
+                return yield* new InvalidSubagentRequestError({
+                  code: "completion_claim_conflict",
+                  message: `Completion report ${conflict.record.view.id} generation ${conflict.generation} is already owned by another operation; wait for that operation to finish or cancel before retrying.`,
+                });
+            }
+            const claimed = desired.filter(({ record, generation }) =>
+              claimCompletion(record, generation, claimToken),
+            );
+            return { claimToken, selected, claimed, missingIds } satisfies CompletionClaim;
+          }),
+          releaseCompletionClaims,
+        ),
       ),
     );
   const releaseCompletionClaims = (claim: CompletionClaim) =>
@@ -190,6 +195,20 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             delivery.wakeCompletionLocked();
       }),
     );
+  const withCompletionClaims = <A, E, R>(
+    ids: ReadonlyArray<string>,
+    claimAll: boolean,
+    allowMissing: boolean,
+    use: (claim: CompletionClaim) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.scopedWith((scope) =>
+      acquireCompletionClaims(ids, claimAll, allowMissing).pipe(
+        Scope.provide(scope),
+        // Do not provide our private claim scope to the caller's use effect.
+        Effect.flatMap(use),
+      ),
+    );
+
   const waitForTerminalObservations = (
     claim: CompletionClaim,
     until: SubagentAwaitUntil,
@@ -255,21 +274,16 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
           message: "Await requires at least one subagent run ID.",
         }),
       );
-    return Effect.acquireUseRelease(
-      acquireCompletionClaims(ids, true),
-      (claim) => waitForTerminalObservations(claim, until, onUpdate).pipe(Effect.flatMap(use)),
-      releaseCompletionClaims,
+    return withCompletionClaims(ids, true, false, (claim) =>
+      waitForTerminalObservations(claim, until, onUpdate).pipe(Effect.flatMap(use)),
     );
   };
   const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
-    Effect.acquireUseRelease(
-      acquireCompletionClaims(ids, false, true),
-      (claim) =>
-        use({
-          observations: claim.selected.map((record) => observeRecord(record, claim.claimToken)),
-          missingIds: claim.missingIds,
-        }),
-      releaseCompletionClaims,
+    withCompletionClaims(ids, false, true, (claim) =>
+      use({
+        observations: claim.selected.map((record) => observeRecord(record, claim.claimToken)),
+        missingIds: claim.missingIds,
+      }),
     );
 
   const awaitTerminal: SubagentServiceContract["awaitTerminal"] = (ids, until, onUpdate) =>

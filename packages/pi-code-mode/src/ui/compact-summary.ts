@@ -13,9 +13,10 @@ import {
   type CompactSummaryProvider,
 } from "pi-code-previews";
 import { isCompactPiTool } from "../tools/mcp-evidence.ts";
-import { codeModeEvidenceNotices, TRUNCATED_OUTPUT_NOTICE } from "./notices.ts";
+import { TRUNCATED_OUTPUT_NOTICE } from "./notices.ts";
+import { compactParentNotices, compactSettledOutcome } from "./compact-summary-context.ts";
 import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
-import { decodeCodeModeRenderDetails } from "./tool-render-details.ts";
+import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
 import { describeCodeModeIntent } from "./tool-renderer.ts";
 
 import { verifiedFailurePresentation } from "./failure-presentation.ts";
@@ -34,8 +35,53 @@ const TextContentSchema = Schema.Array(
 
 type SummaryProvider = CompactSummaryProvider<unknown, unknown, unknown>;
 
+/** Preserve unclassified recovery text unless producer evidence covers the exact failure body. */
+const projectFailureSummary = (
+  textParts: typeof TextContentSchema.Type | undefined,
+  details: CodeModeRenderDetails,
+  base: CompactSummary,
+  notices: CompactNotice[],
+): CompactSummary | undefined => {
+  if (textParts === undefined) return undefined;
+  const text = textParts.map((part) => part.text).join("\n");
+  const known = verifiedFailurePresentation(text, details.failurePresentation);
+  const [first = "", ...rest] = text.split("\n");
+  // Unclassified history may contain recovery instructions. Only verified producer
+  // coverage lets ordinary source/stack output move exclusively to expanded details.
+  const hasContinuation = !known && rest.some((line) => line.trim().length > 0);
+  if (hasContinuation)
+    notices.push({
+      code: "failure-continuation",
+      kind: "recovery",
+      text: rest.join("\n"),
+    });
+  notices.push(...(known?.notices ?? []));
+  // Root provenance has no invocation identity, so it cannot suppress child evidence.
+  if (details.cancelled)
+    notices.push({
+      kind: "warning",
+      text: "Execution cancelled; prior side effects are not rolled back.",
+      description: "The run was cancelled. Earlier changes may remain.",
+    });
+  return {
+    ...base,
+    notices,
+    outcome: details.cancelled ? "cancelled" : "error",
+    ...(text.length > 0 && {
+      failure: {
+        cause: known?.evidence.cause ?? first,
+        description: details.cancelled
+          ? "The run was cancelled."
+          : "The program reported an error.",
+        details: text,
+      },
+    }),
+  };
+};
+
 const projectCodeModeCompactSummary = (
   { phase, args, result, context }: Parameters<SummaryProvider>[0],
+  details: CodeModeRenderDetails | undefined,
   liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
 ): ReturnType<SummaryProvider> => {
   try {
@@ -54,39 +100,13 @@ const projectCodeModeCompactSummary = (
       return phase === "settled"
         ? resultReadCompactSummary(result.details, input.id ?? "")
         : heading;
-    const details = decodeCodeModeRenderDetails(result.details);
-    if (!details.compactEligible) return undefined;
+    if (!details?.compactEligible) return undefined;
     const { total, succeeded, failed, cancelled, running, queued } = details.counts;
     const counters = [
       `${succeeded + failed + cancelled}/${total} done${failed ? ` · ${failed} failed` : ""}`,
     ];
     const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
-    // Keep informational hints parent-owned when an outer failure bypasses details.
-    const notices: CompactNotice[] =
-      details.compactAttention?.version === 2
-        ? codeModeEvidenceNotices({
-            ...details,
-            compactAttention: {
-              ...details.compactAttention,
-              notices: [],
-              issues: { coverage: "complete", entries: [] },
-            },
-            toolCalls: details.toolCalls.map((call) => ({
-              ...call,
-              ...(call.compact && {
-                compact: {
-                  ...call.compact,
-                  ...(call.compact.version === 2 && {
-                    issues: { coverage: "complete" as const, entries: [] },
-                  }),
-                  notices: context.isError
-                    ? call.compact.notices.filter((notice) => !isCompactAttention(notice))
-                    : [],
-                },
-              }),
-            })),
-          })
-        : codeModeEvidenceNotices(details);
+    const notices = compactParentNotices(details, context.isError);
     const selectedCalls = context.expanded
       ? children.entries
       : selectCompactChildren(children).entries;
@@ -133,45 +153,14 @@ const projectCodeModeCompactSummary = (
       return { ...heading, counters, children, notices, outcome: "uncertain" };
     }
     if (context.isError || details.cancelled) {
-      const textParts = decodeOption(TextContentSchema, result.content);
-      if (textParts === undefined) return undefined;
-      const text = textParts.map((part) => part.text).join("\n");
-      const known = verifiedFailurePresentation(text, details.failurePresentation);
-      const [first = "", ...rest] = text.split("\n");
-      // Unclassified history may contain recovery instructions. Only verified producer
-      // coverage lets ordinary source/stack output move exclusively to expanded details.
-      const hasContinuation = !known && rest.some((line) => line.trim().length > 0);
-      if (hasContinuation)
-        notices.push({
-          code: "failure-continuation",
-          kind: "recovery",
-          text: rest.join("\n"),
-        });
-      notices.push(...(known?.notices ?? []));
-      // Root provenance has no invocation identity, so it cannot suppress child evidence.
-      if (details.cancelled)
-        notices.push({
-          kind: "warning",
-          text: "Execution cancelled; prior side effects are not rolled back.",
-          description: "The run was cancelled. Earlier changes may remain.",
-        });
-      return {
-        ...heading,
-        counters,
-        children,
+      return projectFailureSummary(
+        decodeOption(TextContentSchema, result.content),
+        details,
+        { ...heading, counters, children },
         notices,
-        outcome: details.cancelled ? "cancelled" : "error",
-        ...(text.length > 0 && {
-          failure: {
-            cause: known?.evidence.cause ?? first,
-            description: details.cancelled
-              ? "The run was cancelled."
-              : "The program reported an error.",
-            details: text,
-          },
-        }),
-      };
+      );
     }
+
     // Legacy details have no adapter evidence or hidden-call coverage. New evidence must
     // validate completely before reaching this branch; never infer outcomes from guest output.
     if (
@@ -191,20 +180,7 @@ const projectCodeModeCompactSummary = (
       children,
       notices,
       detailsOnExpand: true,
-      outcome:
-        details.compactAttention?.incomplete ||
-        details.compactAttention?.uncertain ||
-        evidence?.unknown
-          ? "uncertain"
-          : details.compactAttention?.errors || evidence?.errors || evidence?.notSent
-            ? "error"
-            : failed + cancelled > 0 ||
-                details.compactAttention?.cancelled ||
-                details.compactAttention?.warnings ||
-                details.truncated ||
-                hasAttention
-              ? "warning"
-              : "success",
+      outcome: compactSettledOutcome(details, hasAttention),
     };
   } catch {
     return undefined;
@@ -242,15 +218,16 @@ const withBodyClaims = (input: CompactSummary): CompactSummary => {
 };
 
 /** The outer shell owns one issue block. V1 history keeps conservative legacy evidence. */
-export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
-  input,
-  liveElapsed,
-) => {
+export const codeModeCompactSummary = (
+  input: Parameters<SummaryProvider>[0],
+  liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
+): ReturnType<SummaryProvider> => {
   try {
-    const summary = projectCodeModeCompactSummary(input, liveElapsed);
+    const details =
+      input.result === undefined ? undefined : decodeCodeModeRenderDetails(input.result.details);
+    const summary = projectCodeModeCompactSummary(input, details, liveElapsed);
     if (!summary || !input.result) return summary;
-    const details = decodeCodeModeRenderDetails(input.result.details);
-    const attention = details.compactAttention;
+    const attention = details?.compactAttention;
     if (attention?.version !== 2) return withBodyClaims(summary);
     const own = legacyCompactIssues(summary.notices?.filter(isCompactAttention), "code-mode");
     const root =

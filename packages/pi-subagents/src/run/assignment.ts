@@ -28,6 +28,12 @@ export interface RunAssignmentDependencies {
   ) => Effect.Effect<SubagentRunView>;
 }
 
+/** Run-start evidence may change the view before the issuing prompt confirms. */
+export const isCurrentIssuingAssignment = (record: RunRecord, attemptToken: string): boolean =>
+  record.assignment.attemptToken === attemptToken &&
+  record.assignment.phase === "issuing" &&
+  !isInactiveRunRecord(record);
+
 /** Owns prompt issue confirmation, rollback, and uncertain assignment retention. */
 export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
   const { withLock, publish, startPrompt, activateAssignmentLocked, replayAssignmentActivation } =
@@ -38,11 +44,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const result = yield* withLock(
         Effect.gen(function* () {
-          if (
-            record.assignment.attemptToken !== attemptToken ||
-            record.assignment.phase !== "issuing" ||
-            isInactiveRunRecord(record)
-          )
+          if (!isCurrentIssuingAssignment(record, attemptToken))
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
           record.assignment.outcomeUncertain = false;
           return yield* activateAssignmentLocked(record, now, {
@@ -71,7 +73,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
         error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
           ? withLock(
               Effect.sync(() => {
-                if (record.assignment.attemptToken === attemptToken)
+                if (isCurrentIssuingAssignment(record, attemptToken))
                   record.assignment.outcomeUncertain = true;
               }),
             )
@@ -101,11 +103,7 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const replay = yield* withLock(
         Effect.gen(function* () {
-          if (
-            record.assignment.attemptToken !== attemptToken ||
-            record.assignment.phase !== "issuing"
-          )
-            return undefined;
+          if (!isCurrentIssuingAssignment(record, attemptToken)) return undefined;
           record.assignment.outcomeUncertain = true;
           const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
           record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);

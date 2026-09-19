@@ -1,4 +1,5 @@
 import { runtimeTypeName } from "../src/runtime-values.js";
+import { boundOutput } from "../src/interpreter/host-execution.js";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -445,6 +446,36 @@ describe("CodeMode output budget", () => {
       expect(result.value).toBe("x".repeat(100_000));
       expect(result.logs).toHaveLength(1);
       expect(result.logs?.[0]).toMatch(/^z+… \[log entry truncated to 8192 characters\]$/);
+    }),
+  );
+
+  it.live("preserves complete replacement characters in bounded values and diagnostics", () =>
+    Effect.gen(function* () {
+      for (const [text, limit, expected] of [
+        ["�x", 3, "�"],
+        ["�x", 2, ""],
+        ["🙂x", 3, ""],
+        ["éx", 2, "é"],
+        ["�", 3, "�"],
+        ["�", 0, ""],
+      ] as const) {
+        const failure = boundOutput(
+          {
+            ok: false,
+            error: { kind: "ExecutionFailure", message: text },
+            toolCalls: [],
+          },
+          limit,
+        );
+        expect(failure.ok).toBe(false);
+        if (!failure.ok) expect(failure.error.message).toBe(expected);
+      }
+      const result = yield* CodeMode.execute({
+        code: 'return "�x";',
+        tools: {},
+        limits: { maxOutputBytes: 4 },
+      });
+      expect(result).toMatchObject({ ok: true, value: '"�', truncated: true });
     }),
   );
 

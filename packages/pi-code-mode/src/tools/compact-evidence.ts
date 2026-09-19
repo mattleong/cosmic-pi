@@ -125,6 +125,40 @@ export const recoverCompactNotices = <Value>(value: Value): readonly (typeof Not
   }
 };
 
+/** Validate the semantic receipt independently of aggregate notice salvage. */
+const decodeSummaryReceipt = (
+  summary: CompactSummary,
+  failureEvidence: typeof FailureEvidenceSchema.Type | undefined,
+  projectedIssues: ReturnType<typeof invocationIssues>,
+  semanticNotices: NonNullable<CompactSummary["notices"]>,
+) => {
+  // Failure.details may contain arbitrary output. Only bounded semantic fields survive.
+  const candidate = {
+    version: 2 as const,
+    issues: projectedIssues ?? { coverage: "unknown", entries: [] },
+    ...(failureEvidence && {
+      failureEvidence: { ...failureEvidence, cause: clean(failureEvidence.cause) },
+    }),
+    subject: clean(summary.subject),
+    ...(summary.compactSubject !== undefined && {
+      compactSubject: clean(summary.compactSubject),
+    }),
+    ...(summary.action !== undefined && { action: clean(summary.action) }),
+    ...(summary.counters !== undefined && { counters: summary.counters.map(clean) }),
+    ...(summary.metadata !== undefined && { metadata: summary.metadata.map(clean) }),
+    ...(summary.outcome !== undefined && { outcome: summary.outcome }),
+    notices: semanticNotices.map((notice) => ({
+      kind: notice.kind,
+      text: clean(notice.text),
+      ...(notice.description !== undefined && { description: clean(notice.description) }),
+      ...(notice.expandedOnly === true && { expandedOnly: true }),
+    })),
+    deliveryFailed: false,
+  };
+  const decoded = decodeOption(CompactReceiptSchema, candidate);
+  return decoded;
+};
+
 /** All methods are guarded: presentation must never change dispatch or output admission. */
 export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceipt) => void) => {
   const fibers = new Map<number, number>();
@@ -262,30 +296,12 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
         if (!projectedIssues) incomplete = true;
         if (projectedIssues?.coverage !== "complete") issueCoverage = "unknown";
         retainIssues(projectedIssues?.entries ?? []);
-        // Failure.details may contain arbitrary output. Only bounded semantic fields survive.
-        const candidate = {
-          version: 2 as const,
-          issues: projectedIssues ?? { coverage: "unknown", entries: [] },
-          ...(failureEvidence && {
-            failureEvidence: { ...failureEvidence, cause: clean(failureEvidence.cause) },
-          }),
-          subject: clean(summary.subject),
-          ...(summary.compactSubject !== undefined && {
-            compactSubject: clean(summary.compactSubject),
-          }),
-          ...(summary.action !== undefined && { action: clean(summary.action) }),
-          ...(summary.counters !== undefined && { counters: summary.counters.map(clean) }),
-          ...(summary.metadata !== undefined && { metadata: summary.metadata.map(clean) }),
-          ...(summary.outcome !== undefined && { outcome: summary.outcome }),
-          notices: semanticNotices.map((notice) => ({
-            kind: notice.kind,
-            text: clean(notice.text),
-            ...(notice.description !== undefined && { description: clean(notice.description) }),
-            ...(notice.expandedOnly === true && { expandedOnly: true }),
-          })),
-          deliveryFailed: false,
-        };
-        const decoded = decodeOption(CompactReceiptSchema, candidate);
+        const decoded = decodeSummaryReceipt(
+          summary,
+          failureEvidence,
+          projectedIssues,
+          semanticNotices,
+        );
         if (decoded === undefined) {
           incomplete = true;
           return;

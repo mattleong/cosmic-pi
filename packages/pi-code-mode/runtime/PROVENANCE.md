@@ -199,7 +199,9 @@ Deviation 18 adds host-only pre-truncation result observation.
    - **Final output bound.** `boundOutput` now reserves its truncation markers
      _inside_ `maxOutputBytes` for both the value and the diagnostic message (a
      hostile thrown string is bounded too), so the runtime's model-facing content
-     never exceeds the byte budget.
+     never exceeds the byte budget. UTF-8 truncation cuts before incomplete encoded
+     sequences rather than deleting a trailing decoded U+FFFD, preserving genuine
+     replacement characters. Decoding is non-streaming, with no cross-call state.
 
    The retained upstream behavioral suites are unchanged and still pass (their patterns
    and sizes are within the confinement envelope); the new behavior is covered by

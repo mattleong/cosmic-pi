@@ -7,16 +7,16 @@ const decoder = new TextDecoder("utf-8");
 export const utf8ByteLength = (value: string): number => encoder.encode(value).byteLength;
 
 /**
- * Code-point-safe UTF-8 truncation to a byte budget. A split multi-byte sequence decodes to
- * the replacement character U+FFFD, which is dropped so the returned text is always valid and
- * never exceeds `maxBytes`.
+ * Cut encoded bytes before a partial sequence, preserving genuine U+FFFD characters.
+ * Non-streaming decoding leaves no state behind for the next call.
  */
 const utf8Truncate = (value: string, maxBytes: number): string => {
   if (maxBytes <= 0) return "";
   const bytes = encoder.encode(value);
   if (bytes.byteLength <= maxBytes) return value;
-  const text = decoder.decode(bytes.slice(0, maxBytes));
-  return text.endsWith("�") ? text.slice(0, -1) : text;
+  let end = Math.floor(maxBytes);
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  return decoder.decode(bytes.subarray(0, end));
 };
 
 /**

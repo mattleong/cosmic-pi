@@ -317,6 +317,7 @@ test("unknown coverage uses content rendering and revokes claims on construction
     h.call({ path: "file" }, { expanded: true });
     h.result(result, { expanded: true });
     const text = h.render().join("\n");
+    expect(text).toContain("unique call");
     expect(text.match(/Failure cause/g)).toHaveLength(1);
     expect(text.match(/Continue with next page/g)).toHaveLength(1);
     expect(text).toContain("Independent recovery");
@@ -324,3 +325,78 @@ test("unknown coverage uses content rendering and revokes claims on construction
     expect(text.includes("RAW diagnostics")).toBe(failure !== "none");
   }
 });
+
+test.each(["on", "off", "border"] as const)(
+  "drawing failures revoke only the failed slot's ownership in %s mode",
+  (mode) => {
+    for (const failedSlot of ["call", "result"] as const) {
+      let hostileDraws = 0;
+      let callConstructions = 0;
+      let resultConstructions = 0;
+      const tool = withCodePreviewShell(
+        {
+          ...createReadToolDefinition("/project"),
+          renderCall: () => {
+            callConstructions++;
+            return {
+              render: () => {
+                if (failedSlot === "call") {
+                  hostileDraws++;
+                  throw new Error("call draw failed");
+                }
+                return ["unique original call"];
+              },
+              invalidate() {},
+            };
+          },
+          renderResult: () => {
+            resultConstructions++;
+            return {
+              render: () => {
+                if (failedSlot === "result") {
+                  hostileDraws++;
+                  throw new Error("result draw failed");
+                }
+                return ["unique original result", "Failure cause"];
+              },
+              invalidate() {},
+            };
+          },
+        },
+        {
+          mode,
+          compactSummary: () => ({
+            subject: "file",
+            outcome: "error",
+            issues: { coverage: "complete", entries: [issue] },
+            // Failed results must release the healthy call they initially suppressed.
+            ...(failedSlot === "result" && { expandedResultOwnsCall: true as const }),
+            expandedResultOwnsIssues: [claimCompactIssue(issue, { cause: true })],
+          }),
+        },
+      );
+      const h = createToolPresentationHarness(tool, { theme });
+      h.call({ path: "file" }, { expanded: true });
+      h.result(result, { expanded: true });
+      for (let redraw = 0; redraw < 2; redraw++) {
+        const text = h.render().join("\n");
+        expect(text).toContain(
+          failedSlot === "result" ? "unique original call" : "unique original result",
+        );
+        expect(text.match(/Failure cause/g)).toHaveLength(1);
+        expect(text).toContain("Independent recovery");
+        expect(text.includes("RAW diagnostics")).toBe(failedSlot === "result");
+      }
+      expect(hostileDraws).toBe(1);
+      expect(callConstructions).toBe(1);
+      expect(resultConstructions).toBe(1);
+      h.invalidate();
+      const refreshed = h.render(100).join("\n");
+      expect(refreshed).toContain(
+        failedSlot === "result" ? "unique original call" : "unique original result",
+      );
+      expect(refreshed.match(/Failure cause/g)).toHaveLength(1);
+      expect(hostileDraws).toBe(1);
+    }
+  },
+);

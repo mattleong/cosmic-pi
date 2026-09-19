@@ -26,7 +26,6 @@ import {
   SubagentNotFoundError,
   SubagentRuntimeClosedError,
   UnsupportedSubagentCapabilityError,
-  subagentErrorCode,
 } from "./errors.ts";
 import { makeRunAssignment } from "./assignment.ts";
 import { makeRunCompletionObservations } from "./completion-observations.ts";
@@ -55,10 +54,7 @@ import { emptyProjection, sortRuns } from "./projection.ts";
 import { sanitizeOutputText, snapshotView } from "./state.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { descendantRunIds, isRunInSubtree, leafFirst, projectRunTree } from "./tree.ts";
-import {
-  decodeQuestionnaireProxyRequest,
-  encodeSubagentProxyPayload,
-} from "../tools/proxy-protocol.ts";
+import { makeRunProxyExecution } from "./proxy-execution.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { makeRunWriteClaimControl } from "./write-claim-control.ts";
 import { makeWorkspaceControl, type WorkspaceCoordinatorContract } from "./workspace-control.ts";
@@ -659,103 +655,23 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       ),
     );
 
-  const handleProxyEvent = (
-    record: RunRecord,
-    event: Extract<
-      import("../backend/model.ts").BackendEvent,
-      { readonly type: "proxy_request" | "proxy_cancel" }
-    >,
-  ): Effect.Effect<void> => {
-    const key = `${record.view.id}:${event.requestId}`;
-    if (event.type === "proxy_cancel")
-      // Nonblocking: the interrupt of the keyed execution is forked into the owner scope with
-      // immediate start so cancel events never wait on the interrupted fiber's finalizers.
-      return FiberMap.remove(proxyRuns, key).pipe(
-        Effect.forkIn(ownerScope, { startImmediately: true }),
-        Effect.asVoid,
-      );
-    if (
-      (event.tool === "ask_user" ? !options.questionnaireHandler : !options.proxyHandler) ||
-      record.view.runtime !== "pi" ||
-      record.stoppedByParent ||
-      !isActiveRunState(record.view.state)
-    )
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_caller_disconnected",
-            message: "Nested Pi coordinator access is unavailable for this run.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
-    const runKeyPrefix = `${record.view.id}:`;
-    let concurrent = 0;
-    for (const [candidateKey] of proxyRuns)
-      if (candidateKey.startsWith(runKeyPrefix)) concurrent += 1;
-    if (concurrent >= 16)
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_capacity",
-            message: "Nested Pi has too many concurrent coordinator calls.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
-    if (FiberMap.hasUnsafe(proxyRuns, key))
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_request_conflict",
-            message: "Nested Pi reused an active coordinator request identity.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
-    const questionnaire =
-      event.tool === "ask_user" ? decodeQuestionnaireProxyRequest(event) : undefined;
-    const dispatch =
-      questionnaire instanceof InvalidSubagentRequestError
-        ? Effect.fail(questionnaire)
-        : questionnaire && options.questionnaireHandler
-          ? questionnaires.own(record, event.requestId, (owner) =>
-              options.questionnaireHandler!(questionnaire, owner),
-            )
-          : options.proxyHandler!(service, record.view.id, event);
-    const execute = dispatch.pipe(
-      Effect.provideService(SubagentProfileService, profileService),
-      Effect.provideService(SubagentBackendRegistry, backendRegistry),
-      Effect.matchEffect({
-        onFailure: (error) =>
-          event.respond(
-            false,
-            encodeSubagentProxyPayload({
-              code: subagentErrorCode(error),
-              message: error.message,
-            }) ?? "{}",
-          ),
-        onSuccess: (result) =>
-          Effect.suspend(() => {
-            const payloadJson = encodeSubagentProxyPayload(result);
-            return payloadJson
-              ? event.respond(true, payloadJson)
-              : event.respond(
-                  false,
-                  encodeSubagentProxyPayload({
-                    code: "proxy_response_oversized",
-                    message: "Nested Pi coordinator response exceeded its bound.",
-                  }) ?? "{}",
-                );
-          }),
-      }),
-      Effect.ignore,
-    );
-    // onlyIfMissing defensively keeps the explicit conflict response authoritative if a
-    // completing same-key execution races this registration. rc.112 runImpl forks immediately
-    // with the current context, so the execution starts at once and leaves the map on exit.
-    return FiberMap.run(proxyRuns, key, execute, { onlyIfMissing: true }).pipe(Effect.asVoid);
-  };
+  const handleProxyEvent = makeRunProxyExecution({
+    ownerScope,
+    executions: proxyRuns,
+    ...(options.proxyHandler && {
+      executeProxy: (callerRunId, request) =>
+        options.proxyHandler!(service, callerRunId, request).pipe(
+          Effect.provideService(SubagentProfileService, profileService),
+          Effect.provideService(SubagentBackendRegistry, backendRegistry),
+        ),
+    }),
+    ...(options.questionnaireHandler && {
+      executeQuestionnaire: (record, requestId, request) =>
+        questionnaires.own(record, requestId, (owner) =>
+          options.questionnaireHandler!(request, owner),
+        ),
+    }),
+  });
 
   const handleWireEvent = makeRunEventHandler({
     mutateView: settlement.mutateEventView,

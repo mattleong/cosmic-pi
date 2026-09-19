@@ -56,8 +56,12 @@ receipts and rejects late observations. Completed writes survive later throws, t
 refusal. Background capability completion does not mean its process exited.
 
 `tools/result-response.ts` places safe recovery before output and applies the final byte clamp.
-It never replays an operation or rolls back a mutation. `tools/execution-progress.ts` owns the
-unchanged progress/count transitions; display and operation evidence remain separate.
+Retention runs in the session after the execution fiber settles. Before final publication,
+the response rechecks cancellation, session currency and availability, suppressing revoked
+output, recovery IDs and failure-detail handoffs. Settled execution outcomes and nested receipts
+remain separate from delivery cancellation. It never replays an operation or rolls back a mutation.
+`tools/execution-progress.ts` owns the unchanged progress/count transitions; display and operation
+evidence remain separate.
 
 ## Grouped ownership
 
@@ -74,7 +78,10 @@ unchanged progress/count transitions; display and operation evidence remain sepa
   raw parser diagnostics with producer-owned, action-specific not-sent repair guidance.
   Neither adapter invokes a registered tool definition.
 - `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
-  legacy details, ignores malformed rows, and retains valid explicit totals. `tool-renderer.ts`
+  legacy details, ignores malformed rows, and retains valid explicit totals. It delegates count
+  reconciliation to `detail-counts.ts` and current/legacy ledger validation to `replay-evidence.ts`.
+  `compact-summary.ts` normalizes details once and uses pure notice and outcome helpers in
+  `compact-summary-context.ts`. `tool-renderer.ts`
   renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
   changing model-visible text. `compact-summary.ts` opts only the outer tool into the shared
   compact shell. It requires consistent current details and explicit execution success evidence,

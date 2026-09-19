@@ -68,17 +68,20 @@ export const makeBackgroundTaskDispatch = (options: {
         const candidates: Array<
           NonNullable<ReturnType<typeof normalizeBackgroundTaskCodeModeCapability>>
         > = [];
+        let discovering = true;
         const emitted = invokeHostCallback(() => {
           options.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
             version: BACKGROUND_TASK_CODE_MODE_VERSION,
             sessionId,
             respond: <Candidate>(candidate: Candidate) => {
+              if (!discovering || candidates.length >= 2) return;
               const normalized = normalizeBackgroundTaskCodeModeCapability(candidate);
               if (normalized?.sessionId === sessionId) candidates.push(normalized);
             },
           });
           return true;
         }, false);
+        discovering = false;
         if (!emitted || candidates.length === 0) {
           return Effect.fail(
             toolError(
@@ -142,13 +145,19 @@ export const makeBackgroundTaskDispatch = (options: {
                   ),
                 ),
                 Effect.flatMap((decoded) =>
-                  backgroundTaskCodeModeOutputFits(decoded, maxOutputBytes)
-                    ? Effect.succeed(decoded)
-                    : Effect.fail(
+                  decoded.action !== input.action
+                    ? Effect.fail(
                         toolError(
-                          "Nested tool 'session.backgroundTask' returned output beyond the current child-output allowance.",
+                          "Nested tool 'session.backgroundTask' returned an unrecognized result shape.",
                         ),
-                      ),
+                      )
+                    : backgroundTaskCodeModeOutputFits(decoded, maxOutputBytes)
+                      ? Effect.succeed(decoded)
+                      : Effect.fail(
+                          toolError(
+                            "Nested tool 'session.backgroundTask' returned output beyond the current child-output allowance.",
+                          ),
+                        ),
                 ),
               );
             }),

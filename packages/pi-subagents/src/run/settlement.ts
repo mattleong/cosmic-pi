@@ -383,7 +383,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       const now = yield* Clock.currentTimeMillis;
       const decision = yield* withLock(
         Effect.gen(function* () {
-          if (record.assignment.epoch !== report.assignmentEpoch)
+          if (isInactiveRunRecord(record) || record.assignment.epoch !== report.assignmentEpoch)
             return { kind: "unchanged" as const, view: snapshotView(record.view) };
           const pair = reportPairStatus(record, report);
           if (pair === "exact-retry")
@@ -426,6 +426,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       const prepared = yield* withLock(
         Effect.sync(() => {
           if (
+            isInactiveRunRecord(record) ||
             record.assignment.epoch !== decision.report.assignmentEpoch ||
             record.assignment.phase !== "running"
           )

@@ -7,12 +7,25 @@ import {
   utf8ByteLength,
 } from "../src/tools/limits.ts";
 
-describe("utf8ByteLength", () => {
-  it("counts UTF-8 bytes, not UTF-16 code units", () => {
-    expect(utf8ByteLength("abc")).toBe(3);
-    expect(utf8ByteLength("é")).toBe(2);
-    expect(utf8ByteLength("→")).toBe(3);
-    expect(utf8ByteLength("🙂")).toBe(4);
+describe("UTF-8 truncation", () => {
+  it("preserves complete replacement characters and drops only partial code points", () => {
+    for (const [text, limit, expected] of [
+      ["�x", 3, "�"],
+      ["�x", 2, ""],
+      ["🙂x", 3, ""],
+      ["éx", 2, "é"],
+      ["�", 3, "�"],
+      ["�", 0, ""],
+    ] as const) {
+      expect(clampModelVisibleText(text, limit)).toBe(expected);
+      const budget = makeCumulativeOutputBudget(limit);
+      expect(budget.admitFailure(text)).toBe(expected);
+      expect(budget.used()).toBe(utf8ByteLength(expected));
+      expect(budget.admitFailure("x".repeat(limit + 1))).toBe(
+        "x".repeat(limit - utf8ByteLength(expected)),
+      );
+      expect(budget.remaining()).toBe(0);
+    }
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import type { CodeModeConfig } from "../src/config/schema.ts";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
@@ -38,6 +39,7 @@ function harness(
   options: {
     readonly config?: Partial<CodeModeConfig>;
     readonly current?: () => boolean;
+    readonly available?: () => boolean;
     readonly executeCodeMode?: CodeModeExecutionEnvironment["executeCodeMode"];
     readonly run?: CodeModeExecutionEnvironment["runInSession"];
     readonly bash?: () => Promise<string>;
@@ -70,7 +72,7 @@ function harness(
   const execute = makeCodeModeToolExecute({
     results,
     isCurrent: options.current ?? (() => true),
-    getState: () => state,
+    getState: () => ({ ...state, available: options.available?.() ?? state.available }),
     runInSession:
       options.run ??
       ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
@@ -91,6 +93,77 @@ function harness(
 }
 
 describe("output recovery without replay", () => {
+  it.effect(
+    "rechecks publication after held retention without losing settled mutation receipts",
+    () =>
+      Effect.gen(function* () {
+        const results = yield* CodeModeResults;
+        for (const failed of [false, true]) {
+          for (const revoke of ["abort", "replacement", "unavailable"] as const) {
+            for (const refuseRetention of [false, true]) {
+              const entered = yield* Deferred.make<void>();
+              const release = yield* Deferred.make<void>();
+              let current = true;
+              let available = true;
+              const controller = new AbortController();
+              const h = harness(
+                {
+                  ...results,
+                  put: (text, outcome, kind) =>
+                    Effect.gen(function* () {
+                      yield* Deferred.succeed(entered, undefined);
+                      yield* Deferred.await(release);
+                      if (refuseRetention) return yield* Effect.die("store unavailable");
+                      return yield* results.put(text, outcome, kind);
+                    }),
+                },
+                {
+                  current: () => current,
+                  available: () => available,
+                  config: { maxOutputBytes: 3000 },
+                },
+              );
+              const pending = yield* Effect.promise(() =>
+                h.run(
+                  {
+                    code:
+                      'await tools.pi.write({path:"x",content:"secret"}); ' +
+                      (failed
+                        ? 'throw new Error("OLD-DIAGNOSTIC");'
+                        : 'return "OLD-OUTPUT".repeat(1000);'),
+                  },
+                  controller.signal,
+                ),
+              ).pipe(Effect.forkChild);
+              yield* Deferred.await(entered);
+              if (revoke === "replacement") current = false;
+              else if (revoke === "unavailable") available = false;
+              else controller.abort();
+              if (revoke === "unavailable") {
+                expect(current).toBe(true);
+                expect(controller.signal.aborted).toBe(false);
+              }
+              yield* Deferred.succeed(release, undefined);
+              const delivered = yield* Fiber.join(pending);
+              expect(delivered.details.cancelled).toBe(true);
+              expect(delivered.details.resultId).toBeUndefined();
+              expect(delivered.details.executionReceipts).toMatchObject({
+                completed: 1,
+                unknown: 0,
+              });
+              expect(textOf(delivered)).toContain("cancelled");
+              expect(textOf(delivered)).toContain(
+                `Original execution: ${failed ? "failed" : "succeeded"}`,
+              );
+              expect(textOf(delivered)).not.toContain("OLD-OUTPUT");
+              expect(textOf(delivered)).not.toContain("OLD-DIAGNOSTIC");
+              expect(h.failure()).toBeUndefined();
+              expect(h.writes()).toBe(1);
+            }
+          }
+        }
+      }).pipe(Effect.provide(CodeModeResults.layer)),
+  );
   it.effect("mutates once and pages exact successful output with original outcome", () =>
     Effect.gen(function* () {
       const results = yield* CodeModeResults;

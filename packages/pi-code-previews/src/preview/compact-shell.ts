@@ -28,11 +28,11 @@ import {
 } from "./bordered-tool-call";
 import { renderCompactFailure, renderCompactToolCall } from "./compact-tool-call";
 import { compactIssueSeverity, summaryCompactIssues } from "../tools/compact-issues";
-import { renderExpandedAttention } from "./compact-issues";
-import { renderCompactRow } from "./compact-row";
 import { planCompactPresentation } from "../tools/compact-presentation";
-import { timingState, updateToolCallTiming, withLastComponent } from "./tool-timing";
+import { timingState, updateToolCallTiming } from "./tool-timing";
 import type { CodePreviewToolShell } from "./tool-shell";
+import { composeCompactDetails } from "./compact-details";
+import { CompactSlots, CompactSlotDrawFailure } from "./compact-slots";
 
 export interface CompactShellOptions {
   name: string;
@@ -50,12 +50,9 @@ class CompactShell implements Component {
   private theme: Theme;
   private callRender: RenderBody | undefined;
   private resultRender: RenderBody | undefined;
-  private callComponent: Component | undefined;
-  private resultComponent: Component | undefined;
   private contentCallRender: RenderBody | undefined;
   private contentResultRender: RenderBody | undefined;
-  private contentCallComponent: Component | undefined;
-  private contentResultComponent: Component | undefined;
+  private readonly slots = new CompactSlots();
   private result: AgentToolResult<unknown> | undefined;
   private resultPartial: boolean | undefined;
   private callMounted = false;
@@ -114,6 +111,7 @@ class CompactShell implements Component {
   }
 
   private update(context: ToolRenderContext, theme: Theme): void {
+    this.slots.update();
     this.context = context;
     this.theme = theme;
     this.display = undefined;
@@ -242,17 +240,15 @@ class CompactShell implements Component {
     // Build bodies only when visible. In particular, pending write/edit diffs stay uncomputed.
     this.display ??= this.renderDetails(result !== undefined, summary);
     let rows: string[];
-    try {
-      rows = this.display.render(width);
-    } catch {
-      // Ownership is accepted only after rendering succeeds, not merely construction.
-      // Never replay a hostile renderer to recover its output.
-      this.callComponent = undefined;
-      this.resultComponent = undefined;
-      this.contentCallComponent = undefined;
-      this.contentResultComponent = undefined;
-      this.display = this.renderDetails(result !== undefined, summary, true);
-      rows = this.display.render(width);
+    for (;;) {
+      try {
+        rows = this.display.render(width);
+        break;
+      } catch (error) {
+        if (!(error instanceof CompactSlotDrawFailure)) throw error;
+        // Failed slots now render safe fallback. Recompose ownership without replaying factories.
+        this.display = this.renderDetails(result !== undefined, summary, true);
+      }
     }
     this.detailBounds = { offset: 0, height: rows.length, width };
     return rows;
@@ -261,7 +257,7 @@ class CompactShell implements Component {
   private renderDetails(
     hasResult: boolean,
     summary: CompactSummary | undefined,
-    fallback = false,
+    reuse = false,
   ): Component {
     const outcome = summary?.outcome;
     const context = this.context;
@@ -277,106 +273,29 @@ class CompactShell implements Component {
       isError: context.isError,
       expanded: context.expanded,
     });
-    const content =
-      !fallback &&
-      plan.useExpandedContent &&
-      Boolean(this.contentCallRender || this.contentResultRender);
-    const contentCall = content && Boolean(this.contentCallRender);
-    const contentResult = content && Boolean(this.contentResultRender);
-    const callContext = withLastComponent(
+    const { callSection, details, content } = composeCompactDetails({
+      name: this.options.name,
       context,
-      contentCall ? this.contentCallComponent : this.callComponent,
-    );
-    const resultContext = withLastComponent(
-      context,
-      contentResult ? this.contentResultComponent : this.resultComponent,
-    );
-    const call = contentCall ? this.contentCallRender : this.callRender;
-    const ownedFailure = content && plan.useFailure ? summary?.failure : undefined;
-    const result = contentResult ? this.contentResultRender : this.resultRender;
-    const renderCall = () =>
-      call
-        ? fallback
-          ? this.fallbackSlot("call", callContext)
-          : this.renderSlot("call", call, callContext, contentCall)
-        : undefined;
-    const renderResult = () =>
-      ownedFailure
-        ? new Text(
-            this.theme.fg(isError ? "error" : "warning", escapeControlChars(ownedFailure.details)),
-            0,
-            0,
-          )
-        : hasResult && result
-          ? fallback
-            ? this.fallbackSlot("result", resultContext)
-            : this.renderSlot("result", result, resultContext, contentResult)
-          : undefined;
-    const callBody =
-      this.mode === "border" ? renderWithBorderSlot(state, "call", renderCall) : renderCall();
-    const resultBody =
-      this.mode === "border" ? renderWithBorderSlot(state, "result", renderResult) : renderResult();
-    // Only a current successful original result can accept shared presentation ownership.
-    const resultRendered =
-      !fallback &&
-      context.expanded &&
-      resultBody !== undefined &&
-      (Boolean(ownedFailure) ||
-        resultBody === (contentResult ? this.contentResultComponent : this.resultComponent));
-    // Each marked issue has its own ownership promise. Unknown aggregate coverage
-    // still forbids taking over the whole call or replacing its original result.
-    const resultOwns =
-      resultRendered &&
-      (!summary ||
-        (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
-        summaryCompactIssues(summary).coverage === "complete");
-    const issues = summary
-      ? summaryCompactIssues(summary, context.expanded)
-      : { coverage: "unknown" as const, entries: [] };
-    const noticeBody: Component = {
-      render: (width) =>
-        renderExpandedAttention(
-          issues,
-          resultRendered
-            ? ownedFailure
-              ? ownedFailure.ownedIssues
-              : summary?.expandedResultOwnsIssues
-            : undefined,
-          this.theme,
-          width,
-        ),
-      invalidate: () => undefined,
-    };
-    const details = new Container();
-    if (resultBody) details.addChild(resultBody);
-    details.addChild(noticeBody);
-    const visibleCall =
-      !content && resultOwns && summary?.expandedResultOwnsCall ? undefined : callBody;
-    const heading: Component | undefined =
-      content && summary
-        ? {
-            render: (width) => [
-              renderCompactRow(
-                {
-                  name: this.options.name,
-                  expanded: true,
-                  phase: this.phase(this.currentResult()),
-                  summary,
-                  duration: this.duration,
-                  elapsedMs: this.elapsedMs,
-                  // Border chrome already owns the parent duration.
-                  timingEnabled: this.mode !== "border" && codePreviewSettings.toolCallTiming,
-                },
-                this.theme,
-                width,
-              ),
-            ],
-            invalidate: () => undefined,
-          }
-        : undefined;
-    const callSection = new Container();
-    if (heading) callSection.addChild(heading);
-    if (visibleCall) callSection.addChild(visibleCall);
+      theme: this.theme,
+      summary,
+      phase: this.phase(this.currentResult()),
+      plan,
+      hasResult,
+      isError,
+      slots: this.slots,
+      call: this.callRender,
+      result: this.resultRender,
+      contentCall: this.contentCallRender,
+      contentResult: this.contentResultRender,
+      reuse,
+      fallback: (slot) => this.fallbackSlot(slot, context),
+      construct: (slot, body) =>
+        this.mode === "border" ? renderWithBorderSlot(state, slot, body) : body(),
+      duration: this.duration,
+      elapsedMs: this.elapsedMs,
+      // Border chrome already owns the parent duration.
+      timingEnabled: this.mode !== "border" && codePreviewSettings.toolCallTiming,
+    });
     if (this.mode === "border") {
       const shell = new BorderedToolCall(this.theme);
       syncBorderShellChrome(shell, state, { ...context, isError }, this.timingLabel);
@@ -400,31 +319,6 @@ class CompactShell implements Component {
     if (this.timingLabel && !content)
       shell.addChild(new Text(this.theme.fg("muted", `╰─ ${this.timingLabel}`), 0, 0));
     return shell;
-  }
-
-  private renderSlot(
-    slot: "call" | "result",
-    render: RenderBody,
-    context: ToolRenderContext,
-    content: boolean,
-  ): Component {
-    try {
-      const component = render(context);
-      if (content) {
-        if (slot === "call") this.contentCallComponent = component;
-        else this.contentResultComponent = component;
-      } else if (slot === "call") this.callComponent = component;
-      else this.resultComponent = component;
-      return component;
-    } catch {
-      // Pi clears a failed slot. Never return fallback Text as a custom renderer's lastComponent.
-      if (content) {
-        if (slot === "call") this.contentCallComponent = undefined;
-        else this.contentResultComponent = undefined;
-      } else if (slot === "call") this.callComponent = undefined;
-      else this.resultComponent = undefined;
-      return this.fallbackSlot(slot, context);
-    }
   }
 
   private fallbackSlot(slot: "call" | "result", context: ToolRenderContext): Component {
@@ -454,10 +348,7 @@ class CompactShell implements Component {
   invalidate(): void {
     this.detailBounds = undefined;
     // Retained bodies must also hear theme invalidation while the compact row hides them.
-    this.callComponent?.invalidate();
-    this.resultComponent?.invalidate();
-    this.contentCallComponent?.invalidate();
-    this.contentResultComponent?.invalidate();
+    this.slots.invalidate();
     this.display = undefined;
   }
 }

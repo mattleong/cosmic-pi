@@ -486,9 +486,9 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
         .join("\n");
       assert.equal(text.split("Owned cause").length - 1, expanded ? 1 : 0);
       assert.match(text, /Independent recovery/u);
-      assert.equal(text.includes("CALL file.ts"), expanded && failure !== "render");
+      assert.equal(text.includes("CALL file.ts"), expanded);
       if (expanded) {
-        if (failure !== "render") assert.ok(text.includes("file.ts"));
+        assert.ok(text.includes("file.ts"));
         assert.ok(
           text.includes(failure === "none" ? "Original diagnostics" : "Fallback diagnostics"),
         );

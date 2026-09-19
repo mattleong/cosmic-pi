@@ -5,6 +5,7 @@ import {
   BACKGROUND_TASK_CODE_MODE_QUERY,
   BACKGROUND_TASK_CODE_MODE_VERSION,
   normalizeBackgroundTaskCodeModeQuery,
+  type BackgroundTaskCodeModeQuery,
 } from "pi-background-task/code-mode";
 import { makeBackgroundTaskDispatch } from "../src/boundary/host-background-task.ts";
 
@@ -29,6 +30,66 @@ const capability = <Output>(output: Output, sessionId = "session-1") => ({
 });
 
 describe("explicit Background Tasks guest adapter", () => {
+  it.effect("rejects mismatched actions while preserving settled operation certainty", () =>
+    Effect.gen(function* () {
+      const operations: string[] = [];
+      const dispatch = makeBackgroundTaskDispatch({
+        events: eventsFor([capability({ action: "clear", text: "DO-NOT-LEAK", removed: 0 })]),
+        sessionId: "session-1",
+        toolCallId: "outer",
+        deadlineMillis: 30_000,
+        maxOutputBytes: () => 1_024,
+        onOperation: (_id, certainty) => operations.push(certainty),
+      });
+      const error = yield* dispatch({ action: "list" }).pipe(Effect.flip);
+      expect(error.message).toContain("unrecognized result shape");
+      expect(error.message).not.toContain("DO-NOT-LEAK");
+      expect(operations.at(-1)).toBe("completed");
+    }),
+  );
+
+  it.effect("closes discovery synchronously and bounds duplicate candidates", () =>
+    Effect.gen(function* () {
+      for (const count of [0, 1, 100]) {
+        const events = createEventBus();
+        let respond: BackgroundTaskCodeModeQuery["respond"] | undefined;
+        let inspected = 0;
+        const candidate = {
+          get version() {
+            inspected++;
+            return BACKGROUND_TASK_CODE_MODE_VERSION;
+          },
+          sessionId: "session-1",
+          execute: () => Promise.resolve({ action: "list", text: "ok", tasks: [] }),
+        };
+        events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) => {
+          const query = normalizeBackgroundTaskCodeModeQuery(value);
+          if (!query) return;
+          respond = query.respond;
+          for (let i = 0; i < count; i++) query.respond(candidate);
+        });
+        const dispatch = makeBackgroundTaskDispatch({
+          events,
+          sessionId: "session-1",
+          toolCallId: "outer",
+          deadlineMillis: 30_000,
+          maxOutputBytes: () => 1_024,
+        });
+        if (count === 1) {
+          expect(yield* dispatch({ action: "list" })).toMatchObject({ action: "list", text: "ok" });
+        } else {
+          const error = yield* dispatch({ action: "list" }).pipe(Effect.flip);
+          expect(error.message).toContain(
+            count === 0 ? "Load and activate" : "multiple background-task providers",
+          );
+        }
+        expect(inspected).toBeLessThanOrEqual(2);
+        const before = inspected;
+        respond?.(candidate);
+        expect(inspected).toBe(before);
+      }
+    }),
+  );
   it.effect("fails closed without a stable session id before querying", () =>
     Effect.gen(function* () {
       let emissions = 0;

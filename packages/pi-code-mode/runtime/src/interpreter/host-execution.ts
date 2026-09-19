@@ -128,13 +128,13 @@ export const executeWithLimits = <const Tools extends object>(
 
 export const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
 
-// Truncates to a UTF-8 byte budget without splitting a code point (a split multi-byte
-// sequence decodes to a replacement character, which is dropped).
+// Cut before a partial UTF-8 sequence without discarding genuine replacement characters.
 export const utf8Truncate = (value: string, maxBytes: number): string => {
   const bytes = new TextEncoder().encode(value);
   if (bytes.byteLength <= maxBytes) return value;
-  const text = new TextDecoder("utf-8").decode(bytes.slice(0, Math.max(0, maxBytes)));
-  return text.endsWith("\uFFFD") ? text.slice(0, -1) : text;
+  let end = Math.max(0, Math.floor(maxBytes));
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  return new TextDecoder("utf-8").decode(bytes.subarray(0, end));
 };
 
 /**

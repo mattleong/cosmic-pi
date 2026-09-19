@@ -1,4 +1,6 @@
 /** Pure defensive normalization of current and legacy `code_mode` render details. */
+import { reconcileDetailCounts } from "./detail-counts.ts";
+import { reconcileReplayEvidence, replayCompactEligible } from "./replay-evidence.ts";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
@@ -6,19 +8,12 @@ import { invocationIssues } from "../tools/issue-evidence.ts";
 import { FailurePresentationSchema, type FailurePresentation } from "../tools/failure-evidence.ts";
 import {
   CompactReceiptSchema,
-  CompactAttentionSchema,
   recoverCompactNotices,
   type CompactAttention,
 } from "../tools/compact-evidence.ts";
-import {
-  McpEvidenceSchema,
-  validMcpCoverage,
-  isCompactPiTool,
-  type McpEvidence,
-} from "../tools/mcp-evidence.ts";
+import { type McpEvidence } from "../tools/mcp-evidence.ts";
 import { MAX_NESTED_SUBJECT_LENGTH, normalizeNestedSubject } from "../tools/compact-subject.ts";
 import {
-  countCallEntries,
   decodeOption,
   MAX_PROGRESS_ENTRIES,
   LiveChildTimingSchema,
@@ -64,15 +59,6 @@ const RenderDetailsInputSchema = Schema.Struct({
   cancelled: Schema.optional(Schema.Unknown),
   truncated: Schema.optional(Schema.Unknown),
 });
-const CallCountsInputSchema = Schema.Struct({
-  total: Schema.Natural,
-  queued: Schema.Natural,
-  running: Schema.Natural,
-  succeeded: Schema.Natural,
-  failed: Schema.Natural,
-  cancelled: Schema.Natural,
-});
-
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
   decodeOption(Schema.Natural, value);
 
@@ -135,115 +121,22 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
   const normalizedCalls = inspectedCalls.map((entry) => decodeCallEntry(entry));
   const toolCalls = normalizedCalls.flatMap(({ call }) => (call === undefined ? [] : [call]));
   const recoveredNotices = normalizedCalls.flatMap(({ notices }) => notices);
-  const legacyArrayTotal = toolCalls.length === inspectedCalls.length ? rawCalls.length : 0;
-  const decodedTotal = nonNegativeInteger(record.totalToolCalls);
-  const suppliedTotal = decodedTotal ?? 0;
-  const rawCounts = decodeOption(CallCountsInputSchema, record.counts);
-  const hasExactCounts = rawCounts !== undefined;
-  const visible = countCallEntries(toolCalls);
-  const { total: visibleTotal, ...visibleCounts } = visible;
-  const suppliedCounts =
-    rawCounts === undefined
-      ? undefined
-      : {
-          queued: Math.max(visible.queued, rawCounts.queued),
-          running: Math.max(visible.running, rawCounts.running),
-          succeeded: Math.max(visible.succeeded, rawCounts.succeeded),
-          failed: Math.max(visible.failed, rawCounts.failed),
-          cancelled: Math.max(visible.cancelled, rawCounts.cancelled),
-        };
-  const suppliedCountTotal =
-    suppliedCounts === undefined
-      ? 0
-      : Object.values(suppliedCounts).reduce((total, count) => total + count, 0);
-  const total = Math.max(
-    visibleTotal,
-    legacyArrayTotal,
-    suppliedTotal,
-    rawCounts?.total ?? 0,
-    suppliedCountTotal,
+  const { counts, total, hasExactCounts, consistent } = reconcileDetailCounts(
+    record,
+    toolCalls,
+    inspectedCalls.length,
+    rawCalls.length,
   );
-  const hiddenLegacySucceeded = hasExactCounts ? 0 : Math.max(0, total - toolCalls.length);
-  const counts: CodeModeCallCounts = hasExactCounts
-    ? { total, ...(suppliedCounts ?? visibleCounts) }
-    : { total, ...visibleCounts, succeeded: visible.succeeded + hiddenLegacySucceeded };
   const outputKind =
     record.outputKind === "text" || record.outputKind === "structured"
       ? record.outputKind
       : undefined;
-  const mcpEvidence = decodeOption(McpEvidenceSchema, record.mcpEvidence);
-  const rawAttention = decodeOption(CompactAttentionSchema, record.compactAttention);
-  const decodedAttention =
-    rawAttention?.version === 2
-      ? {
-          ...rawAttention,
-          issues: invocationIssues(rawAttention.issues) ?? {
-            coverage: "unknown" as const,
-            entries: [],
-          },
-        }
-      : rawAttention;
-  const malformedReceipt = normalizedCalls.some((entry) => entry.malformed);
-  const visibleOutcomes = { errors: 0, warnings: 0, cancelled: 0, uncertain: 0 };
-  for (const call of toolCalls) {
-    const outcome = call.compact?.outcome;
-    if (outcome === "error") visibleOutcomes.errors++;
-    else if (outcome === "warning") visibleOutcomes.warnings++;
-    else if (outcome === "cancelled") visibleOutcomes.cancelled++;
-    else if (outcome === "uncertain") visibleOutcomes.uncertain++;
-  }
-  const invalidAttention =
-    decodedAttention !== undefined &&
-    (decodedAttention.errors < visibleOutcomes.errors ||
-      decodedAttention.warnings < visibleOutcomes.warnings ||
-      decodedAttention.cancelled < visibleOutcomes.cancelled ||
-      decodedAttention.uncertain < visibleOutcomes.uncertain ||
-      decodedAttention.admitted !== total ||
-      decodedAttention.started > total ||
-      decodedAttention.observed > decodedAttention.started ||
-      decodedAttention.errors +
-        decodedAttention.warnings +
-        decodedAttention.cancelled +
-        decodedAttention.uncertain >
-        decodedAttention.observed ||
-      decodedAttention.unsupported > 0 ||
-      (counts.running + counts.queued === 0 &&
-        decodedAttention.started !== decodedAttention.observed) ||
-      decodedAttention.observed < toolCalls.filter((call) => call.compact !== undefined).length);
-  const missingReceipt =
-    decodedAttention !== undefined &&
-    toolCalls.some((call) => call.status === "completed" && call.compact === undefined);
-  const malformedMcp =
-    record.mcpEvidence !== undefined &&
-    (mcpEvidence === undefined ||
-      mcpEvidence.incomplete ||
-      (counts.running + counts.queued === 0 && mcpEvidence.observed !== mcpEvidence.mcp) ||
-      !validMcpCoverage(
-        { ...mcpEvidence, unsupported: 0, pi: mcpEvidence.pi + mcpEvidence.unsupported },
-        total,
-      ));
-  const compactAttention =
-    malformedReceipt ||
-    (record.compactAttention !== undefined && malformedMcp) ||
-    invalidAttention ||
-    missingReceipt ||
-    (record.compactAttention !== undefined && decodedAttention === undefined)
-      ? {
-          ...(decodedAttention ?? {
-            version: 1 as const,
-            admitted: total,
-            started: 0,
-            unsupported: 0,
-            observed: 0,
-            errors: 0,
-            warnings: 0,
-            cancelled: 0,
-            uncertain: 0,
-            notices: recoverCompactNotices(record.compactAttention),
-          }),
-          incomplete: true,
-        }
-      : decodedAttention;
+  const { mcpEvidence, compactAttention } = reconcileReplayEvidence(
+    record,
+    toolCalls,
+    counts,
+    normalizedCalls.some((entry) => entry.malformed),
+  );
   const failurePresentation = decodeOption(FailurePresentationSchema, record.failurePresentation);
   const normalized: CodeModeRenderDetails = {
     ...(failurePresentation !== undefined && { failurePresentation }),
@@ -255,27 +148,12 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     counts,
     hasExactCounts,
     compactEligible:
-      (compactAttention !== undefined ||
-        record.mcpEvidence === undefined ||
-        (mcpEvidence !== undefined &&
-          validMcpCoverage(mcpEvidence, total) &&
-          toolCalls.filter((call) => isCompactPiTool(call.tool)).length <= mcpEvidence.pi &&
-          toolCalls.filter((call) => call.tool === "mcp.request").length <= mcpEvidence.mcp &&
-          toolCalls.every((call) => isCompactPiTool(call.tool) || call.tool === "mcp.request"))) &&
+      replayCompactEligible(record, toolCalls, total, mcpEvidence, compactAttention) &&
       Array.isArray(record.toolCalls) &&
       rawCalls.length <= MAX_PROGRESS_ENTRIES &&
       toolCalls.length === rawCalls.length &&
       toolCalls.every((call) => call.tool.length > 0) &&
-      rawCounts !== undefined &&
-      rawCounts.total === suppliedCountTotal &&
-      rawCounts.total === total &&
-      rawCounts.total ===
-        rawCounts.queued +
-          rawCounts.running +
-          rawCounts.succeeded +
-          rawCounts.failed +
-          rawCounts.cancelled &&
-      (record.totalToolCalls === undefined || decodedTotal === rawCounts.total) &&
+      consistent &&
       (record.outputKind === undefined || outputKind !== undefined) &&
       (record.cancelled === undefined ||
         decodeOption(Schema.Boolean, record.cancelled) !== undefined) &&

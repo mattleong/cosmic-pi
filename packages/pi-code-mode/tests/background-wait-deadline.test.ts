@@ -282,6 +282,24 @@ describe("nested background wait deadlines", () => {
       const dispatch = makeBackgroundTaskDispatch({
         events: eventsFor((_id, input) => {
           received.push(input);
+          if (input.action === "logs")
+            return Promise.resolve({
+              action: "logs",
+              text: "",
+              logs: {
+                id: "bg-1",
+                nextCursor: 0,
+                earliestAvailableCursor: 0,
+                droppedBytes: 0,
+                state: "running",
+              },
+            });
+          if (input.action === "start")
+            return Promise.resolve({
+              action: "start",
+              text: "Started",
+              snapshot: timeoutReply.wait.snapshot,
+            });
           return Promise.resolve(timeoutReply);
         }),
         sessionId: "session-1",

@@ -19,6 +19,7 @@ import {
   UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { hasRetainedAssignmentCapacity } from "./completion.ts";
+import { isCurrentIssuingAssignment } from "./assignment.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
@@ -250,7 +251,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   return retainUncertainAssignment(record, selected.attemptToken, error.message);
                 return withLock(
                   Effect.gen(function* () {
-                    if (record.assignment.attemptToken !== selected.attemptToken) return;
+                    if (!isCurrentIssuingAssignment(record, selected.attemptToken)) return;
                     const sessionEvents = record.view.sessionEvents;
                     record.view = { ...selected.previous.view, sessionEvents };
                     record.latestAssistantText = selected.previous.latestAssistantText;

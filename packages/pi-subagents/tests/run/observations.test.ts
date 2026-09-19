@@ -22,6 +22,102 @@ import {
 } from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
+  for (const operation of ["await", "status"] as const)
+    it.effect(`preserves the caller resource scope through ${operation} observations`, () => {
+      const { layer } = localServiceFixture();
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request());
+        yield* service.stop(run.id);
+        let released = false;
+        const use = () =>
+          Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              released = true;
+            }),
+          );
+        yield* Effect.gen(function* () {
+          if (operation === "await")
+            yield* service.withAwaitTerminalObservations([run.id], "all_finished", undefined, use);
+          else yield* service.withStatusObservations([run.id], use);
+          expect(released).toBe(false);
+        }).pipe(Effect.scoped);
+        expect(released).toBe(true);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
+
+  for (const operation of ["await", "status"] as const)
+    it.effect(
+      `cancels ${operation} before claim ownership while ancestor delivery holds the gate`,
+      () => {
+        const { fake, layer } = localServiceFixture();
+        return Effect.gen(function* () {
+          const service = yield* SubagentService;
+          const parent = yield* service.start(request());
+          yield* service.startSessionOwnedFrom(parent.id, request());
+          const gate = yield* Deferred.make<void>();
+          fake.controls[0]!.gateNextIpcType("proxy_notification", gate);
+          fake.controls[1]!.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Child report." }],
+            },
+          });
+          fake.controls[1]!.offer({ type: "agent_settled" });
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() =>
+            fake.controls[0]!.ipc.some((message) => message.type === "proxy_notification"),
+          );
+          let enteredUse = false;
+          const observation =
+            operation === "await"
+              ? service.withAwaitTerminalObservations([parent.id], "all_finished", undefined, () =>
+                  Effect.sync(() => {
+                    enteredUse = true;
+                  }),
+                )
+              : service.withStatusObservations([parent.id], () =>
+                  Effect.sync(() => {
+                    enteredUse = true;
+                  }),
+                );
+          const waiter = yield* observation.pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          let cancelled = false;
+          const cancellation = yield* Fiber.interrupt(waiter).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                cancelled = true;
+              }),
+            ),
+            Effect.forkScoped,
+          );
+          // Release on assertion failure too, so the regression fails rather than hanging shutdown.
+          yield* Effect.gen(function* () {
+            for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+            expect(cancelled).toBe(true);
+            expect(enteredUse).toBe(false);
+          }).pipe(Effect.ensuring(Deferred.succeed(gate, undefined)));
+          yield* Fiber.join(cancellation);
+          let observed = false;
+          const replacement = yield* service
+            .withAwaitTerminalObservations(
+              [parent.id],
+              "all_finished",
+              () => {
+                observed = true;
+              },
+              () => Effect.void,
+            )
+            .pipe(Effect.forkScoped);
+          yield* yieldUntil(() => observed);
+          yield* Fiber.interrupt(replacement);
+        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      },
+    );
+
   it.effect("rejects parallel await ownership and releases only the cancelled claim", () => {
     const fake = fakeChildLayer();
     const notifications: SubagentNotification[] = [];

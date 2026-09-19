@@ -470,7 +470,7 @@ export const makeCodeModeToolExecute =
           maxBytes: config.maxOutputBytes,
           results: environment.results,
           run: (effect) => environment.runInSession(effect),
-          current: environment.isCurrent,
+          current: () => environment.isCurrent() && environment.getState()?.available === true,
           aborted,
           capture: () => capture,
           settle: settleProgress,

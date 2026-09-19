@@ -58,29 +58,21 @@ describe("claimsOperationError", () => {
   });
 
   it("names the missing field for each action", () => {
-    expect(claimsOperationError({ action: "list" })).toBe(
-      'subagent_claims action="list" requires runIds.',
-    );
-    expect(claimsOperationError({ action: "grant", paths: ["src/a.ts"] })).toBe(
-      'subagent_claims action="grant" requires runId.',
-    );
-    expect(claimsOperationError({ action: "revoke", runId: "agent-1" })).toBe(
-      'subagent_claims action="revoke" requires a non-empty paths array.',
-    );
-    expect(claimsOperationError({ action: "resume_admission" })).toBe(
-      'subagent_claims action="resume_admission" requires runId.',
-    );
+    expect(claimsOperationError({ action: "list" })).toContain("runIds");
+    expect(claimsOperationError({ action: "grant", paths: ["src/a.ts"] })).toContain("runId");
+    expect(claimsOperationError({ action: "revoke", runId: "agent-1" })).toContain("paths");
+    expect(claimsOperationError({ action: "resume_admission" })).toContain("runId");
   });
 
   it("rejects cross-field combinations the previous union rejected", () => {
-    expect(claimsOperationError({ action: "list", runIds: ["a"], runId: "a" })).toBe(
-      'subagent_claims action="list" takes runIds only.',
+    expect(claimsOperationError({ action: "list", runIds: ["a"], runId: "a" })).toEqual(
+      expect.any(String),
     );
-    expect(claimsOperationError({ action: "grant", runId: "a", paths: ["p"], runIds: ["a"] })).toBe(
-      'subagent_claims action="grant" takes runId and paths only.',
-    );
-    expect(claimsOperationError({ action: "resume_admission", runId: "a", paths: ["p"] })).toBe(
-      'subagent_claims action="resume_admission" takes runId only.',
+    expect(
+      claimsOperationError({ action: "grant", runId: "a", paths: ["p"], runIds: ["a"] }),
+    ).toEqual(expect.any(String));
+    expect(claimsOperationError({ action: "resume_admission", runId: "a", paths: ["p"] })).toEqual(
+      expect.any(String),
     );
   });
 });

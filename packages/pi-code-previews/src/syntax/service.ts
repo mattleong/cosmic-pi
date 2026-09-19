@@ -133,98 +133,109 @@ export class CodePreviewSyntaxService extends Context.Service<
         "CodePreviewShiki.initialize",
       )(function* (theme: string) {
         if (!codePreviewSettings.syntaxHighlighting) return;
-        const decision = yield* modify<InitializeDecision>((current) =>
-          Effect.gen(function* () {
-            if (current.highlighter && current.theme === theme)
-              return [{ tag: "Ready" } as const, current] as const;
-            if (current.initialization?.theme === theme)
-              return [
-                { tag: "Await" as const, done: current.initialization.done },
-                current,
-              ] as const;
-            const done = yield* Deferred.make<InitializationOutcome>();
-            const flight = { theme, done } satisfies InitializationFlight;
-            return [
-              { tag: "Start" as const, flight },
-              { ...current, initialization: flight },
-            ] as const;
-          }),
-        );
-        if (decision.tag === "Ready") return;
-        if (decision.tag === "Await") {
-          const outcome = yield* Deferred.await(decision.done);
-          if (outcome === "Interrupted") return yield* initialize(theme);
-          return;
-        }
-
-        const { flight } = decision;
-        const clearInterruptedFlight = modify((current) =>
-          Effect.succeed([
-            undefined,
-            current.initialization === flight
-              ? {
-                  ...current,
-                  initialization: undefined,
-                  statusVersion: current.statusVersion + 1,
-                }
-              : current,
-          ] as const),
-        ).pipe(Effect.andThen(Deferred.succeed(flight.done, "Interrupted")), Effect.asVoid);
+        // Admission and handler installation are one handoff. Only creation and joiner waits
+        // restore caller interruption; acquired candidates retain the existing disposal commit.
         return yield* Effect.uninterruptibleMask((restore) =>
-          restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
-            Effect.matchEffect({
-              onFailure: () =>
-                modify((current) => {
-                  if (current.initialization !== flight)
-                    return Effect.succeed([undefined, current] as const);
-                  // Replacement is transactional: a failed candidate only clears its flight.
-                  // The working highlighter and renderer projection remain installed.
-                  return Effect.succeed([
-                    undefined,
-                    {
+          Effect.gen(function* () {
+            const decision = yield* modify<InitializeDecision>((current) =>
+              Effect.gen(function* () {
+                if (current.highlighter && current.theme === theme) {
+                  if (!current.initialization) return [{ tag: "Ready" } as const, current] as const;
+                  // A return to the installed theme supersedes the pending replacement too.
+                  // Settling as completed prevents its joiners from restarting an obsolete request.
+                  yield* Deferred.succeed(current.initialization.done, "Completed");
+                  return [
+                    { tag: "Ready" } as const,
+                    { ...current, initialization: undefined },
+                  ] as const;
+                }
+                if (current.initialization?.theme === theme)
+                  return [
+                    { tag: "Await" as const, done: current.initialization.done },
+                    current,
+                  ] as const;
+                const done = yield* Deferred.make<InitializationOutcome>();
+                const flight = { theme, done } satisfies InitializationFlight;
+                return [
+                  { tag: "Start" as const, flight },
+                  { ...current, initialization: flight },
+                ] as const;
+              }),
+            );
+            if (decision.tag === "Ready") return;
+            if (decision.tag === "Await") {
+              const outcome = yield* restore(Deferred.await(decision.done));
+              if (outcome === "Interrupted") return yield* restore(initialize(theme));
+              return;
+            }
+
+            const { flight } = decision;
+            const clearInterruptedFlight = modify((current) =>
+              Effect.succeed([
+                undefined,
+                current.initialization === flight
+                  ? {
                       ...current,
                       initialization: undefined,
                       statusVersion: current.statusVersion + 1,
-                    },
-                  ] as const);
-                }).pipe(
-                  Effect.andThen(
-                    Effect.logWarning(
-                      "Shiki failed to initialize; code previews will use plain text.",
-                    ),
-                  ),
-                ),
-              onSuccess: (next) =>
-                highlighterLifecycle.withPermits(1)(
+                    }
+                  : current,
+              ] as const),
+            ).pipe(Effect.andThen(Deferred.succeed(flight.done, "Interrupted")), Effect.asVoid);
+            return yield* restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
+              Effect.matchEffect({
+                onFailure: () =>
                   modify((current) => {
                     if (current.initialization !== flight)
-                      return releaseHighlighter(next).pipe(
-                        Effect.as([undefined, current] as const),
+                      return Effect.succeed([undefined, current] as const);
+                    // Replacement is transactional: a failed candidate only clears its flight.
+                    // The working highlighter and renderer projection remain installed.
+                    return Effect.succeed([
+                      undefined,
+                      {
+                        ...current,
+                        initialization: undefined,
+                        statusVersion: current.statusVersion + 1,
+                      },
+                    ] as const);
+                  }).pipe(
+                    Effect.andThen(
+                      Effect.logWarning(
+                        "Shiki failed to initialize; code previews will use plain text.",
+                      ),
+                    ),
+                  ),
+                onSuccess: (next) =>
+                  highlighterLifecycle.withPermits(1)(
+                    modify((current) => {
+                      if (current.initialization !== flight)
+                        return releaseHighlighter(next).pipe(
+                          Effect.as([undefined, current] as const),
+                        );
+                      return releaseHighlighter(current.highlighter).pipe(
+                        Effect.as([
+                          undefined,
+                          {
+                            ...current,
+                            highlighter: next,
+                            theme,
+                            generation: current.generation + 1,
+                            initialization: undefined,
+                            loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
+                            pendingLanguages: new Set(),
+                            statusVersion: current.statusVersion + 1,
+                          },
+                        ] as const),
                       );
-                    return releaseHighlighter(current.highlighter).pipe(
-                      Effect.as([
-                        undefined,
-                        {
-                          ...current,
-                          highlighter: next,
-                          theme,
-                          generation: current.generation + 1,
-                          initialization: undefined,
-                          loadedLanguages: new Set(PRELOADED_SHIKI_LANGUAGES),
-                          pendingLanguages: new Set(),
-                          statusVersion: current.statusVersion + 1,
-                        },
-                      ] as const),
-                    );
-                  }),
-                ),
-            }),
-          ),
-        ).pipe(
-          Effect.onInterrupt(() => clearInterruptedFlight),
-          Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
-          Effect.withSpan("pi-code-previews.shiki.initialize", {
-            attributes: { operation: "initialize" },
+                    }),
+                  ),
+              }),
+              Effect.onInterrupt(() => clearInterruptedFlight),
+              Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
+              Effect.withSpan("pi-code-previews.shiki.initialize", {
+                attributes: { operation: "initialize" },
+              }),
+            );
           }),
         );
       });

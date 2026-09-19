@@ -30,9 +30,16 @@ export function makeResultResponse(input: {
   ): Promise<AgentToolResult<CodeModeToolDetails>> => {
     const details = input.settle();
     const receipts = input.receipts();
-    const cancelled = input.aborted() || !input.current();
-    const outcome: ExecutionOutcome = cancelled ? "cancelled" : result?.ok ? "succeeded" : "failed";
-    const raw = cancelled
+    const initiallyCancelled = input.aborted() || !input.current();
+    // A settled interpreter result remains known even if delivery is later cancelled.
+    const outcome: ExecutionOutcome = result
+      ? result.ok
+        ? "succeeded"
+        : "failed"
+      : initiallyCancelled
+        ? "cancelled"
+        : "failed";
+    const raw = initiallyCancelled
       ? "Execution cancelled."
       : result === undefined
         ? `code_mode execution did not complete: ${foreignMessage ?? "Unknown failure"}`
@@ -62,25 +69,29 @@ export function makeResultResponse(input: {
             .catch(() => undefined)
         : Promise.resolve(undefined);
     return put.then((id) => {
+      // Retention runs on the session, outside the already-settled execution fiber.
+      // Its Promise may settle after caller cancellation or session revocation.
       const current = input.current();
-      const resultId = current ? id : undefined;
-      const recovery = !needsReceipt
+      const cancelled = initiallyCancelled || input.aborted() || !current;
+      const publishReceipt = needsReceipt || cancelled;
+      const resultId = !cancelled ? id : undefined;
+      const recovery = !publishReceipt
         ? ""
         : resultId
           ? `Read retained ${outcome === "succeeded" ? "output" : "failure receipt"} without rerunning: code_mode({action:"result.read",id:"${resultId}"}). Original execution: ${outcome}.${capture.status === "unavailable" ? ` Full output unavailable (${capture.reason}).` : ""}\n`
-          : `Full output unavailable (${current ? (capture.status === "unavailable" ? capture.reason : "retention-limit") : "revoked"}). Do not rerun mutations to recover output. Original execution: ${outcome}.\n`;
-      const composed = `${recovery}${needsReceipt && receiptText ? `${receiptText}\n\n` : ""}${raw}`;
+          : `Full output unavailable (${!current ? "revoked" : cancelled ? "cancelled" : capture.status === "unavailable" ? capture.reason : "retention-limit"}). Do not rerun mutations to recover output. Original execution: ${outcome}.\n`;
+      const composed = `${recovery}${publishReceipt && receiptText ? `${receiptText}\n\n` : ""}${cancelled ? "Execution cancelled." : raw}`;
       const text = clampModelVisibleText(composed, input.maxBytes);
       const finalDetails: CodeModeToolDetails = {
         ...details,
-        ...(needsReceipt && { executionReceipts: receipts }),
+        ...(publishReceipt && { executionReceipts: receipts }),
         ...(resultId && { resultId }),
         ...((truncated || text !== composed) && { truncated: true }),
         ...(cancelled && { cancelled: true }),
         ...(!cancelled &&
           result?.ok && { outputKind: Predicate.isString(result.value) ? "text" : "structured" }),
       };
-      if (outcome === "failed") {
+      if (!cancelled && outcome === "failed") {
         const presentation = result && !result.ok ? projectFailurePresentation(result) : undefined;
         input.retain({
           ...finalDetails,

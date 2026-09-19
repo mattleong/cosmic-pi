@@ -76,7 +76,7 @@ describe("nested definition factory", () => {
 });
 
 describe("nested dispatch", () => {
-  it.effect("derives deterministic ids across fake definitions", () =>
+  it.effect("correlates unique nested ids with their returned invocation", () =>
     Effect.gen(function* () {
       const ids: string[] = [];
       const definition = {
@@ -91,10 +91,20 @@ describe("nested dispatch", () => {
         toolCallId: "outer",
       });
 
-      expect(yield* dispatch("read", { path: "a" })).toBe("outer/read/1");
-      expect(yield* dispatch("bash", { command: "true" })).toBe("outer/bash/2");
-      expect(yield* dispatch("read", { path: "b" })).toBe("outer/read/3");
-      expect(ids).toEqual(["outer/read/1", "outer/bash/2", "outer/read/3"]);
+      const returned = [
+        yield* dispatch("read", { path: "a" }),
+        yield* dispatch("bash", { command: "true" }),
+        yield* dispatch("read", { path: "b" }),
+      ];
+      expect(new Set(ids).size).toBe(3);
+      expect(returned).toEqual(ids);
+      const other = makeNestedPiToolDispatch({
+        definitions: nestedToolDefinitionsFixture({ read: definition }),
+        ctx,
+        toolCallId: "other-outer",
+      });
+      expect(yield* other("read", { path: "a" })).not.toBe(returned[0]);
+      expect(new Set(ids).size).toBe(4);
     }),
   );
 

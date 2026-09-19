@@ -675,6 +675,84 @@ describe("SubagentService", () => {
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 
+  it.effect("ignores a retained report after terminal failure before process exit", () => {
+    const { backend, projections, layer } = retainedServiceFixture();
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(retainedRequest());
+      const control = backend.controls[0]!;
+      control.offer({ type: "protocol_error", message: "Process failed before report." });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      control.offer(retainedReportFrame(run.id, 1, 1, "late", "Must not resurrect the run."));
+      for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+      expect(yield* service.status(run.id)).toMatchObject({ state: "failed", reportGeneration: 0 });
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  for (const terminal of ["stopped", "failed"] as const)
+    for (const outcome of ["success", "definite", "uncertain"] as const)
+      for (const startedObserved of [false, true])
+        for (const bufferedReport of [false, true])
+          it.effect(
+            `keeps ${terminal} after late ${outcome} assignment confirmation, started=${startedObserved}, report=${bufferedReport}`,
+            () => {
+              const { backend, projections, layer } = retainedServiceFixture();
+              return Effect.gen(function* () {
+                const service = yield* SubagentService;
+                const run = yield* service.start(retainedRequest());
+                const control = backend.controls[0]!;
+                control.offer(retainedReportFrame(run.id, 1, 1, "first", "First report."));
+                yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
+                const gate = yield* Deferred.make<void>();
+                control.gateNextStart(gate);
+                if (outcome !== "success")
+                  control.failNextStart(
+                    outcome === "uncertain" ? "transport_outcome_uncertain" : undefined,
+                  );
+                const sending = yield* service
+                  .send(run.id, "Second assignment.")
+                  .pipe(Effect.exit, Effect.forkScoped);
+                yield* yieldUntil(() => control.assignmentEpochs.at(-1) === 2);
+                if (startedObserved) {
+                  control.offer({ type: "run_started", assignmentEpoch: 2 });
+                  yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+                }
+                if (bufferedReport)
+                  control.offer(
+                    retainedReportFrame(
+                      run.id,
+                      2,
+                      2,
+                      "buffered",
+                      "Must not replace terminal state.",
+                    ),
+                  );
+                yield* Effect.yieldNow;
+                if (terminal === "stopped") yield* service.stop(run.id);
+                else {
+                  control.offer({ type: "protocol_error", message: "Assignment failed." });
+                  yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+                  // The fixture does not emit process exit on terminate. Join cleanup explicitly.
+                  yield* service.stop(run.id);
+                }
+                yield* yieldUntil(() => control.released() === 1);
+                const before = yield* service.status(run.id);
+                yield* Deferred.succeed(gate, undefined);
+                yield* Fiber.join(sending);
+                const after = yield* service.status(run.id);
+                expect(after).toMatchObject({
+                  state: terminal,
+                  reportGeneration: 1,
+                  endedAt: before.endedAt,
+                });
+                expect(after.error).toBe(before.error);
+                expect(after.finalText).toBe(before.finalText);
+                expect(after.warning).toBe(before.warning);
+                expect(control.released()).toBe(1);
+              }).pipe(Effect.scoped, provideBuiltLayer(layer));
+            },
+          );
+
   it.effect("settles a retained issuing assignment when the backend fails its protocol", () => {
     const backend = fakeRetainedBackendLayer();
     const projections: SubagentProjection[] = [];
