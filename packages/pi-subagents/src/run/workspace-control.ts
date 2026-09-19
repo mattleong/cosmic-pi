@@ -453,12 +453,13 @@ export function makeWorkspaceControl(dependencies: {
             yield* Effect.gen(function* () {
               for (const cwd of sources)
                 owned.push(
-                  yield* restore(
-                    leases
-                      .acquire({ cwd, sessionId: ownerId, runId: workspaceId })
-                      .pipe(Effect.mapError(mapWorkspaceError)),
-                  ),
+                  // acquire restores its preownership waits internally. Keep the
+                  // committed lease handoff masked until the finalizer can see it.
+                  yield* leases
+                    .acquire({ cwd, sessionId: ownerId, runId: workspaceId })
+                    .pipe(Effect.mapError(mapWorkspaceError)),
                 );
+              yield* restore(Effect.void);
               // Crash evidence must not be reclaimed as an unused reservation after source publication starts.
               for (const lease of owned)
                 yield* leases.markSpawnStarted(lease).pipe(Effect.mapError(mapWorkspaceError));

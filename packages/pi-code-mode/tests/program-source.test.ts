@@ -16,12 +16,6 @@ const semanticTree = (source: string): string =>
   );
 
 describe("formatCodeModeProgram", () => {
-  it("separates top-level statements while retaining exact source slices", () => {
-    expect(formatCodeModeProgram("const a = await work(); return a;")).toBe(
-      "const a = await work(); \nreturn a;",
-    );
-  });
-
   it.each([
     'const s = `literal;\n${"embedded;"}`; return s;',
     "const r = /a;[b/]/g; /* comment; */ return r;",

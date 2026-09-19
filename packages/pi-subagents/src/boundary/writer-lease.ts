@@ -735,7 +735,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
     );
 
   const release: WriterLeaseContract["release"] = (lease) =>
-    Effect.uninterruptibleMask(() =>
+    Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const expectedPath = writerLeasePath(
           options.agentDirectory,
@@ -750,7 +750,9 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
             message:
               "Writer-lease release ownership evidence was invalid; the lease remains locked.",
           });
-        const current = yield* Effect.interruptible(
+        // Ordinary release may cancel before commit; owned finalizers keep
+        // their caller's mask through evidence validation and release.
+        const current = yield* restore(
           readEvidence(lease.leasePath).pipe(
             Effect.mapError(
               () =>
@@ -769,7 +771,7 @@ export const makeWriterLease = (options: WriterLeaseLayerOptions): WriterLeaseCo
             message: "Writer-lease ownership token did not match; the lease remains locked.",
           });
         if (options.beforeReleaseRename)
-          yield* Effect.interruptible(
+          yield* restore(
             Effect.tryPromise({
               try: options.beforeReleaseRename,
               catch: () =>

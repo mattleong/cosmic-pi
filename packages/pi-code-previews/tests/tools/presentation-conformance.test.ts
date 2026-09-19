@@ -400,3 +400,78 @@ test.each(["on", "off", "border"] as const)(
     }
   },
 );
+
+test.each(["factory", "draw"] as const)(
+  "%s failures survive host invalidation and recover only on changed inputs",
+  (failure) => {
+    for (const contentOnly of [false, true]) {
+      for (const change of ["args", "content", "details", "lifecycle"] as const) {
+        let broken = true;
+        let attempts = 0;
+        const renderResult = () => {
+          if (failure === "factory") {
+            attempts++;
+            if (broken) throw new Error("factory failed");
+          }
+          return {
+            render() {
+              if (failure === "draw") {
+                attempts++;
+                if (broken) throw new Error("draw failed");
+              }
+              return ["Recovered output", "Failure cause"];
+            },
+            invalidate() {},
+          };
+        };
+        const tool = withCodePreviewShell(
+          {
+            ...createReadToolDefinition("/project"),
+            renderCall: () => new Text("Unique arguments", 0, 0),
+            renderResult,
+          },
+          {
+            mode: "off",
+            compactSummary: () => ({
+              subject: "file",
+              outcome: "error",
+              issues: { coverage: "complete", entries: [issue] },
+              expandedResultOwnsIssues: [claimCompactIssue(issue, { cause: true })],
+            }),
+            ...(contentOnly && { expandedContent: { renderResult } }),
+          },
+        );
+        const h = createToolPresentationHarness(tool, { theme });
+        const args = { path: "file" };
+        h.call(args, { expanded: true });
+        h.result(result, { expanded: true });
+        expect(h.render().join("\n")).toContain("RAW diagnostics");
+        broken = false;
+        for (const expanded of [true, false, true]) {
+          // A fresh result envelope is not new host evidence.
+          h.call(args, { expanded });
+          h.result({ ...result }, { expanded });
+          h.invalidate();
+          h.context.invalidate();
+          const text = h.render(100).join("\n");
+          expect(text).not.toContain("Recovered output");
+          expect(text.includes("Unique arguments")).toBe(expanded);
+          expect(text.includes("RAW diagnostics")).toBe(expanded);
+          expect(text.match(/Failure cause/g)).toHaveLength(1);
+          expect(text.includes("Independent recovery")).toBe(expanded);
+          expect(attempts).toBe(1);
+        }
+        if (change === "args") h.call({ path: "changed" });
+        if (change === "content") h.result({ ...result, content: [...result.content] });
+        if (change === "details") h.result({ ...result, details: { repaired: true } });
+        if (change === "lifecycle") h.result(result, { isPartial: true });
+        const text = h.render().join("\n");
+        expect(text).toContain("Recovered output");
+        expect(text).toContain("Unique arguments");
+        expect(text).not.toContain("RAW diagnostics");
+        expect(text.match(/Failure cause/g)).toHaveLength(1);
+        expect(attempts).toBe(2);
+      }
+    }
+  },
+);

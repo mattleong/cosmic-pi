@@ -35,15 +35,42 @@ export function createToolPresentationHarness(
     showImages: true,
     isError: false,
     lastComponent: undefined,
-    invalidate: () => undefined,
+    invalidate: () => invalidate(),
   };
   let call: Component | undefined;
   let result: Component | undefined;
+  let callMounted = false;
+  let resultValue: AgentToolResult<any> | undefined;
+  const renderCall = () => {
+    const render = tool.renderCall;
+    call = render?.(context.args, options.theme, {
+      ...context,
+      lastComponent: call,
+      invalidate: () => context.invalidate(),
+    });
+  };
+  const renderResult = () => {
+    if (!resultValue) return;
+    const render = tool.renderResult;
+    result = render?.(
+      { content: resultValue.content, details: resultValue.details },
+      { expanded: context.expanded, isPartial: context.isPartial },
+      options.theme,
+      { ...context, lastComponent: result, invalidate: () => context.invalidate() },
+    );
+  };
+  function invalidate() {
+    call?.invalidate();
+    result?.invalidate();
+    // ToolExecutionComponent.invalidate rebuilds both slots, with fresh envelopes.
+    if (callMounted) renderCall();
+    renderResult();
+  }
   return {
     call(args, overrides = {}) {
       context = { ...context, ...overrides, args, lastComponent: call };
-      const render = tool.renderCall;
-      call = render?.(args, options.theme, context);
+      callMounted = true;
+      renderCall();
       return call;
     },
     result(value, overrides = {}) {
@@ -54,22 +81,14 @@ export function createToolPresentationHarness(
         ...overrides,
         lastComponent: result,
       };
-      const render = tool.renderResult;
-      result = render?.(
-        value,
-        { expanded: context.expanded, isPartial: context.isPartial },
-        options.theme,
-        context,
-      );
+      resultValue = value;
+      renderResult();
       return result;
     },
     render(width = options.width ?? 80) {
       return [...(call?.render(width) ?? []), ...(result?.render(width) ?? [])];
     },
-    invalidate() {
-      call?.invalidate();
-      result?.invalidate();
-    },
+    invalidate,
     get component() {
       return call ?? result;
     },

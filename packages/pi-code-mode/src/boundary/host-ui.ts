@@ -23,7 +23,7 @@ const dialogAtHostBoundary = <Result>(
 ): Effect.Effect<HostDialogResult> =>
   Effect.tryPromise((signal) => invoke(ctx.ui, signal)).pipe(
     Effect.map(settled),
-    Effect.catch(() => Effect.succeed(UNAVAILABLE)),
+    Effect.orElseSucceed(() => UNAVAILABLE),
   );
 
 /** Guarded `ctx.ui.select`; Effect interruption dismisses the host dialog. */
@@ -120,6 +120,6 @@ export const openSettingsSurfaceAtHostBoundary = (
 
     return Effect.tryPromise(() => ctx.ui.custom<SettingsSurfaceResult>(guardedFactory)).pipe(
       Effect.ensuring(Effect.sync(close)),
-      Effect.catch(() => Effect.succeed(FAILED)),
+      Effect.orElseSucceed(() => FAILED),
     );
   });

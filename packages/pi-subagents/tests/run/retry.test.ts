@@ -33,6 +33,50 @@ const continuation = (
 });
 
 describe("explicit profile-route retry", () => {
+  it.effect("acknowledges retry ownership without making its waiter uncancellable", () => {
+    const promptGate = Deferred.makeUnsafe<void>();
+    const owned = Deferred.makeUnsafe<void>();
+    const { fake, projections, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, {
+        initialSendGates: [{ spawnIndex: 1, type: "prompt", gate: promptGate }],
+      }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const failed = yield* service.start(
+        request({ profile: "reviewer", routeContinuation: continuation(0) }),
+      );
+      fake.controls[0]!.exit(1);
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      const claim = yield* service.claimRetryContinuation(failed.id);
+      const waiting = yield* service
+        .startRetrySessionOwned(
+          {
+            ...request({ profile: "reviewer", routeContinuation: continuation(1) }),
+            supersedes: { runId: failed.id, claimToken: claim.claimToken },
+          },
+          () => {
+            Deferred.doneUnsafe(owned, Effect.void);
+          },
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(owned);
+      yield* Fiber.interrupt(waiting);
+      yield* Deferred.succeed(promptGate, undefined);
+      yield* yieldUntil(() => fake.controls.length === 2);
+      const successorId = (yield* service.status(failed.id)).supersededByRunId!;
+      yield* yieldUntil(
+        () =>
+          projections
+            .at(-1)
+            ?.runs.some((run) => run.id === successorId && run.state === "running") === true,
+      );
+      expect((yield* service.status(successorId)).state).toBe("running");
+      expect((yield* service.status(failed.id)).supersededByRunId).toBe(successorId);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("returns settled eligible recovery for an admitted failed start", () => {
     const { layer } = localServiceFixture(
       {},

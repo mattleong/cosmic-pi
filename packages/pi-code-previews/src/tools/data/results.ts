@@ -1,3 +1,5 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { getCapabilities, imageFallback } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 
 import { getObjectValue } from "../../shared/helpers";
@@ -21,6 +23,19 @@ export function getTextContent(
       .map((part) => part.text ?? "")
       .join("\n") ?? ""
   );
+}
+
+/** Native images remain host-owned; describe attachments when native display is unavailable. */
+export function getFallbackResultText(
+  content: AgentToolResult<unknown>["content"],
+  showImages: boolean,
+): string {
+  const text = getTextContent(content);
+  if (showImages && getCapabilities().images) return text;
+  const images = content.flatMap((part) =>
+    part.type === "image" ? [imageFallback(part.mimeType)] : [],
+  );
+  return [text, ...images].filter(Boolean).join("\n");
 }
 
 /** Decline summary parsing rather than silently dropping output outside the budget. */

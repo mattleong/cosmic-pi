@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
+import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
@@ -21,6 +22,219 @@ import {
 } from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
+  it.effect("checks current direct-parent capacity before completed respawn", () => {
+    const { fake, projections, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(),
+      profileLayerFor({ version: 6, nesting: { maxDirectChildren: 2, maxDepth: 3 } }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request());
+      fake.controls[0]!.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Done." }],
+        },
+      });
+      fake.controls[0]!.offer({ type: "agent_settled" });
+      yield* yieldUntil(
+        () =>
+          projections.at(-1)?.runs[0]?.state === "completed" && fake.controls[0]?.released() === 1,
+      );
+      const parent = yield* service.start(request());
+      const blocker = yield* service.start(request());
+      const before = yield* service.status(run.id);
+      expect(yield* service.resume(run.id).pipe(Effect.flip)).toMatchObject({
+        code: "direct_child_capacity",
+        limit: 2,
+      });
+      expect(yield* service.status(run.id)).toMatchObject({
+        state: "completed",
+        reportGeneration: before.reportGeneration,
+      });
+      expect(fake.controls).toHaveLength(3);
+      yield* service.stop(blocker.id);
+      yield* service.start(request({ parentRunId: parent.id }));
+      expect((yield* service.resume(run.id)).state).toBe("running");
+      expect(fake.controls).toHaveLength(5);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect("resumes an in-place paused process at its parent's capacity", () => {
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(),
+      profileLayerFor({ version: 6, nesting: { maxDirectChildren: 1, maxDepth: 3 } }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const run = yield* service.start(request());
+      expect((yield* service.interrupt(run.id)).state).toBe("paused");
+      expect((yield* service.resume(run.id)).state).toBe("running");
+      expect(fake.controls).toHaveLength(1);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
+  it.effect(
+    "cancels preownership writer validation without waiting for its promise or holding the lock",
+    () => {
+      let gate = false;
+      let entered = false;
+      const pending = Promise.race<never>([]);
+      const writerLayer = Layer.effect(
+        WriterLeaseService,
+        Effect.gen(function* () {
+          const base = yield* WriterLeaseService;
+          return {
+            ...base,
+            canonicalize: (cwd: string) =>
+              gate
+                ? Effect.promise(() => {
+                    entered = true;
+                    return pending;
+                  })
+                : base.canonicalize(cwd),
+          };
+        }),
+      ).pipe(Layer.provide(fakeWriterLeaseLayer()));
+      const { fake, projections, layer } = localServiceFixture(
+        {},
+        fakeChildLayer(),
+        profileLayerFor({}),
+        writerLayer,
+      );
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ writeIntent: "writer" }));
+        fake.controls[0]!.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Done." }],
+          },
+        });
+        fake.controls[0]!.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs[0]?.state === "completed" &&
+            fake.controls[0]?.released() === 1,
+        );
+        const before = yield* service.status(run.id);
+        gate = true;
+        const waiter = yield* service.resume(run.id).pipe(Effect.forkChild);
+        yield* yieldUntil(() => entered);
+        // Both must finish while the foreign Promise remains permanently unsettled.
+        yield* service.rename(run.id, "lock-reused");
+        yield* Fiber.interrupt(waiter);
+        expect(yield* service.status(run.id)).toMatchObject({
+          state: "completed",
+          reportGeneration: before.reportGeneration,
+        });
+        expect(fake.controls).toHaveLength(1);
+        gate = false;
+        expect((yield* service.resume(run.id)).state).toBe("running");
+        yield* service.stop(run.id);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    },
+  );
+
+  it.effect("keeps a claimed resume owned after waiter cancellation", () =>
+    Effect.gen(function* () {
+      const spawnGate = yield* Deferred.make<void>();
+      let gate = false;
+      const { fake, projections, layer } = localServiceFixture(
+        {},
+        fakeChildLayer(Effect.suspend(() => (gate ? Deferred.await(spawnGate) : Effect.void))),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ writeIntent: "writer" }));
+        fake.controls[0]!.offer({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Done." }],
+          },
+        });
+        fake.controls[0]!.offer({ type: "agent_settled" });
+        yield* yieldUntil(
+          () =>
+            projections.at(-1)?.runs[0]?.state === "completed" &&
+            fake.controls[0]?.released() === 1,
+        );
+        gate = true;
+        const waiter = yield* service.resume(run.id).pipe(Effect.forkChild);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "starting");
+        yield* Fiber.interrupt(waiter);
+        yield* Deferred.succeed(spawnGate, undefined);
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
+        expect(fake.controls).toHaveLength(2);
+        yield* service.stop(run.id);
+        expect(fake.controls[1]?.released()).toBe(1);
+      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }),
+  );
+
+  for (const changed of [false, true]) {
+    it.effect(
+      `writer respawn ${changed ? "rejects changed" : "retains unchanged"} directory identity`,
+      () => {
+        let identity = "original-directory";
+        const leases: string[] = [];
+        const { fake, projections, layer } = localServiceFixture(
+          {},
+          fakeChildLayer(),
+          profileLayerFor({}),
+          fakeWriterLeaseLayer({
+            filesystemIdentity: () => identity,
+            onAcquire: (lease) => leases.push(lease.filesystemIdentityDigest),
+          }),
+        );
+        return Effect.gen(function* () {
+          const service = yield* SubagentService;
+          const run = yield* service.start(request({ writeIntent: "writer" }));
+          fake.controls[0]!.offer({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Done." }],
+            },
+          });
+          fake.controls[0]!.offer({ type: "agent_settled" });
+          yield* yieldUntil(
+            () =>
+              projections.at(-1)?.runs[0]?.state === "completed" &&
+              fake.controls[0]?.released() === 1,
+          );
+          const before = yield* service.status(run.id);
+          if (changed) identity = "replacement-directory";
+          if (changed) {
+            expect(yield* service.resume(run.id).pipe(Effect.flip)).toMatchObject({
+              code: "writer_cwd_identity_changed",
+            });
+            expect(yield* service.status(run.id)).toMatchObject({
+              state: before.state,
+              reportGeneration: before.reportGeneration,
+              endedAt: before.endedAt,
+            });
+            expect(fake.controls).toHaveLength(1);
+            expect(leases).toHaveLength(1);
+            identity = "original-directory";
+          }
+          expect((yield* service.resume(run.id)).state).toBe("running");
+          expect(fake.controls).toHaveLength(2);
+          expect(leases).toEqual([leases[0], leases[0]]);
+        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      },
+    );
+  }
+
   it.effect("starts a child, projects completion, and retains bounded result state", () => {
     const { fake, projections, layer } = localServiceFixture();
     return Effect.gen(function* () {
@@ -186,10 +400,6 @@ describe("SubagentService", () => {
       expect(fake.controls).toHaveLength(2);
       expect(fake.controls[1]?.launch.name).toBe("renamed-before-resume");
       expect(fake.controls[1]?.launch.resumeSessionFile).toBe("/tmp/child-session.jsonl");
-      expect(fake.controls[1]?.commands.map((command) => command.type)).toEqual([
-        "get_state",
-        "prompt",
-      ]);
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });
 

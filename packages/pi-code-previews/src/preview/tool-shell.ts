@@ -104,7 +104,6 @@ function renderCodePreviewResult<TState, TArgs>(
 ): Component {
   const timing = updateToolCallTiming(context, { scheduleAnimation });
   if (mode !== "border") {
-    if (!timing?.label) return render(context);
     return renderTimedResultFooter(context, theme, render, timing?.label);
   }
   const state = borderState(context);

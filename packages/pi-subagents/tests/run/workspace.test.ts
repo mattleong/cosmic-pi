@@ -3,6 +3,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Exit from "effect/Exit";
+import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
+import * as os from "node:os";
+import { WriterLeaseService, writerLeasePath } from "../../src/boundary/writer-lease.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { SubagentService } from "../../src/run/service.ts";
 import {
@@ -18,7 +22,11 @@ import {
   serviceLayer,
 } from "./fixtures/service-harness.ts";
 
-function fixture(sourceCwd = "/repo", canonicalize = (cwd: string) => cwd) {
+function fixture(
+  sourceCwd = "/repo",
+  canonicalize = (cwd: string) => cwd,
+  writerLeases?: Layer.Layer<WriterLeaseService>,
+) {
   const entries = new Map<string, WorkspaceRecord>();
   const requireEntry = (target: WorkspaceTarget) =>
     Effect.gen(function* () {
@@ -114,17 +122,81 @@ function fixture(sourceCwd = "/repo", canonicalize = (cwd: string) => cwd) {
       workspaceSourceCwd: sourceCwd,
     },
     undefined,
-    fakeWriterLeaseLayer({
-      canonicalize,
-      onCanonicalize: (cwd) => canonicalized.push(cwd),
-      onAcquire: (lease) => acquired.push(lease.canonicalCwd),
-      onRelease: (lease) => released.push(lease.canonicalCwd),
-    }),
+    writerLeases ??
+      fakeWriterLeaseLayer({
+        canonicalize,
+        onCanonicalize: (cwd) => canonicalized.push(cwd),
+        onAcquire: (lease) => acquired.push(lease.canonicalCwd),
+        onRelease: (lease) => released.push(lease.canonicalCwd),
+      }),
   ).pipe(Layer.provide(children.layer), Layer.provide(Layer.succeed(WorkspaceService, engine)));
   return { entries, engine, children, layer, acquired, released, canonicalized };
 }
 
 describe("writer workspace orchestration", () => {
+  it.live("releases a real source lease when cancellation lands at acquisition handoff", () =>
+    Effect.gen(function* () {
+      const temporary = yield* Effect.acquireRelease(
+        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "workspace-handoff-"))),
+        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+      );
+      const root = path.join(temporary, "source");
+      const worker = path.join(temporary, "worker");
+      yield* Effect.promise(() => fs.mkdir(path.join(root, "packages/b"), { recursive: true }));
+      yield* Effect.promise(() => fs.mkdir(worker));
+      const leases = yield* WriterLeaseService.pipe(
+        Effect.provide(WriterLeaseService.layer({ agentDirectory: temporary })),
+      );
+      const cwd = yield* leases.canonicalize(root);
+      const wrapped = Layer.succeed(WriterLeaseService, {
+        ...leases,
+        canonicalize: (directory) =>
+          leases.canonicalize(directory.startsWith("/private/") ? worker : directory),
+        acquire: (input) =>
+          leases
+            .acquire(input)
+            .pipe(
+              Effect.tap(() =>
+                input.cwd.digest === cwd.digest
+                  ? Effect.withFiber((fiber) => Effect.sync(() => fiber.interruptUnsafe()))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const f = fixture(root, (directory) => directory, wrapped);
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ cwd: root, writeIntent: "writer" }));
+        yield* service.stop(run.id);
+        const id = run.workspaceId!;
+        const review = yield* service.workspaceReview(id);
+        yield* service.workspaceReview(id, {
+          revisionId: review.revisionId,
+          offset: review.nextOffset!,
+        });
+        const prepared = yield* service.workspacePrepare(id, review.revisionId);
+        const integrating = yield* service
+          .workspaceIntegrate(id, review.revisionId, prepared.preparationId)
+          .pipe(Effect.forkChild);
+        expect(Exit.isFailure(yield* Fiber.await(integrating))).toBe(true);
+        expect(f.entries.get(id)?.status).toBe("prepared");
+        expect(
+          yield* Effect.promise(() =>
+            fs.access(writerLeasePath(temporary, cwd.digest)).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false);
+        const replacement = yield* leases.acquire({
+          cwd,
+          sessionId: "other",
+          runId: "replacement",
+        });
+        yield* leases.release(replacement);
+      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    }).pipe(Effect.scoped),
+  );
   it.effect("shows repository orphans through a cwd alias and blocks mode changes", () => {
     const f = fixture("/alias/package", (cwd) =>
       cwd === "/alias/package" ? "/repo/package" : cwd,

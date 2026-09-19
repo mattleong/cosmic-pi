@@ -29,8 +29,9 @@ src/
   failure.ts            # closed internal RuntimeFailure union
   tool.ts               # Tool.make and tool definition types
   tool-error.ts         # ToolError: safe model-visible tool refusal
-  tool-runtime.ts       # tool tree walking, catalog/search/instructions, limits,
-                        # data-boundary copying, diagnostics + lifecycle types (internal)
+  tool-runtime.ts       # tool tree walking, catalog/search/instructions, limits + lifecycle
+  tool-runtime-data.ts  # bounded data projection, expanded-cost preflight and copying
+  tool-runtime-error.ts # shared tagged runtime error leaf
   tool-schema.ts        # Effect Schema / JSON Schema signature rendering (internal)
   values.ts             # sandbox value wrappers (Date, RegExp, Map, Set, URL, promises)
   runtime-values.ts     # owned runtime-type predicates used instead of host `typeof`
@@ -108,8 +109,9 @@ bodies so host scheduling and guest language semantics stay separate.
 ## Result observation
 
 `ExecuteOptions.onResult` is an optional synchronous host callback in `host-execution.ts`.
-It sees the final plain-data copy after validation or the normalized failure, before output
-bounding. It sees no opaque interpreter object. Hosts must use a bounded traversal and must
+It receives the full final plain-data copy or normalized failure, not the truncated output.
+Success observation follows final projection and deadline checks. It sees no opaque
+interpreter object. Hosts must use a bounded traversal and must
 not retain or mutate the supplied graph. A thrown callback is ignored, never converted into
 a program failure. Host interruption remains interruption and need not produce a callback.
 Without the hook, returned results and execution limits are unchanged. Storage, quotas,
@@ -141,7 +143,7 @@ including computed keys, defaults and rest. Writes still use the guarded member/
 `values.ts` owns opaque `SandboxBytes`, `SandboxTextEncoder` and `SandboxTextDecoder` values.
 `stdlib/bytes.ts` and `encoding.ts` own bounded byte operations and pure encodings; interpreter
 constructor, member, iterator and callable dispatch admit only their explicit methods.
-`subarray` may share owned storage; `slice` copies. `tool-runtime.ts` rejects these values at
+`subarray` may share owned storage; `slice` copies. `tool-runtime-data.ts` rejects these values at
 nested data boundaries with an encode-first hint. No host buffer or ambient I/O is exposed.
 
 `namespace.ts` keeps descriptions outside the guest tool tree. `tool-runtime.ts` indexes ancestor
@@ -244,11 +246,23 @@ Confinement bounds every such operation up front:
   URLSearchParams doors, URL query pair counts before URL construction and
   `search`/`href` writes, and percent-encoding expansion included), with the
   shared `copyIn` data checkpoint re-checking everything that crosses it.
+  `tool-runtime-data.ts` memoizes inert normalized data by identity and depth, charging
+  repeated references by expanded visit/container/serialization costs before
+  tree expansion. Accessors invalidate prior memo entries and prevent caching their
+  active ancestors, preserving occurrence-based host getter evaluation. Tool arguments
+  share one budget. A separate bounded expansion preserves independent ordinary branches
+  without rereading host getters. Reference reachability retains visited identities rather
+  than expanding DAGs. Thrown-data projection refusal produces a bounded diagnostic,
+  not another coercion attempt or an escaped defect that skips failure observation.
+  Fixed aggregate budgets admit full-size primitive pair collections and strings;
+  they are independent of public output and retention policy. Deviation 8 records
+  their values and supported getter semantics.
   Regex `split` and `matchAll` results are bounded post-checks, not preflights:
   the admitted subject cap bounds the match count (and the native `split` limit
   clamps materialization to the entry cap) before the entry cap is applied.
-- **Deadline** - a shared `ExecutionDeadline` checked between interpreter steps
-  and after the run normalizes a synchronous overrun to `TimeoutExceeded` without
+- **Deadline** - a shared `ExecutionDeadline` checked between interpreter steps,
+  after the run, after final copying and after serialization before success
+  observation normalizes a synchronous overrun to `TimeoutExceeded` without
   a multi-second event-loop block. It is cooperative - it cannot interrupt a
   native call that already started - which is why the two guards above bound
   every admitted native operation up front.

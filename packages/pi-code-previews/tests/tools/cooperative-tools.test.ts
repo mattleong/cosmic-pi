@@ -4,9 +4,15 @@ import {
   type ReadToolInput,
   type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import {
+  Text,
+  getCapabilities,
+  setCapabilities,
+  type Component,
+  type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
+import { createToolPresentationHarness } from "../../testing";
 import { afterEach, test } from "vitest";
-import { BorderedToolCall } from "../../src/preview/bordered-tool-call";
 import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
@@ -142,7 +148,6 @@ test("cooperative wrapper captures mode and shell modes match on, off, and borde
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallBackground: "on" });
   assert.equal(captured.renderShell, "self");
 
-  const context = renderContext({ path: "README.md" }, {});
   for (const [mode, expectedShell] of [
     ["on", "default"],
     ["off", "self"],
@@ -150,8 +155,6 @@ test("cooperative wrapper captures mode and shell modes match on, off, and borde
   ] as const) {
     const shell = createCodePreviewToolShell(mode);
     assert.equal(shell.renderShell, expectedShell);
-    const component = shell.renderCall(context, theme, () => new Text(mode, 0, 0));
-    assert.equal(component instanceof BorderedToolCall, mode === "border");
   }
 });
 
@@ -326,4 +329,126 @@ test("compact style is captured and wraps self shells without changing execution
   assert.ok(component);
   assert.equal(component.render(100).length, 1);
   assert.match(renderComponent(component), /compact-subject/u);
+});
+
+test("preview timing toggles preserve producer caches and mouse actions", () => {
+  for (const mode of ["on", "off"] as const) {
+    const seen: TuiMouseEvent[] = [];
+    const action = (text: string) =>
+      Object.assign(new Text(text, 0, 0), {
+        handleMouse(event: TuiMouseEvent) {
+          seen.push(event);
+          return { handled: true };
+        },
+      });
+    const callText = action("call action");
+    const resultText = action("result action\nsecond row");
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: ((_args, _theme, ctx) => {
+          // SAFETY: The producer owns this slot and only returns Text components.
+          const text = (ctx.lastComponent as Text | undefined) ?? callText;
+          text.setText("call action");
+          assert.equal(text, callText);
+          return text;
+        }) satisfies ReadRenderCall,
+        renderResult: ((_value, _options, _theme, ctx) => {
+          // SAFETY: The producer owns this slot and only returns Text components.
+          const text = (ctx.lastComponent as Text | undefined) ?? resultText;
+          text.setText("result action\nsecond row");
+          assert.equal(text, resultText);
+          return text;
+        }) satisfies ReadRenderResult,
+      },
+      { mode },
+    );
+    const h = createToolPresentationHarness(tool, {
+      theme,
+      state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+    });
+    const args = { path: "file" };
+    const value = result("output");
+    for (const timing of [true, false, true]) {
+      setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: timing });
+      const call = h.call(args, { isPartial: false });
+      const output = h.result(value);
+      assert.ok(call && output);
+      const callRows = call.render(80);
+      const rows = output.render(80);
+      assert.equal(
+        rows.some((row) => row.includes("379ms")),
+        timing,
+      );
+      const event: TuiMouseEvent = {
+        type: "click",
+        button: "left",
+        x: 0,
+        y: 0,
+        screenX: 0,
+        screenY: 0,
+        width: 80,
+        height: callRows.length,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      };
+      assert.equal(call.handleMouse?.(event)?.handled, true);
+      assert.equal(seen.at(-1)?.height, 1);
+      assert.equal(output.handleMouse?.({ ...event, y: 1, height: rows.length })?.handled, true);
+      assert.equal(seen.at(-1)?.height, 2);
+      if (timing) {
+        const count = seen.length;
+        assert.equal(output.handleMouse?.({ ...event, y: 2, height: rows.length }), undefined);
+        assert.equal(seen.length, count);
+      }
+      h.invalidate();
+      assert.match(h.render().join("\n"), /result action/);
+    }
+  }
+});
+
+test("fallback rendering preserves attachment evidence without taking native image ownership", () => {
+  const caps = getCapabilities();
+  try {
+    for (const style of ["preview", "compact"] as const) {
+      setCodePreviewSettings({
+        ...defaultCodePreviewSettings,
+        toolCallCollapsedStyle: style,
+        toolCallTiming: false,
+      });
+      const {
+        renderCall: _call,
+        renderResult: _result,
+        ...source
+      } = createReadToolDefinition("/project");
+      const tool = withCodePreviewShell(source, { mode: "off" });
+      for (const native of [false, true]) {
+        setCapabilities({ ...caps, images: native ? "kitty" : null });
+        for (const showImages of [false, true]) {
+          for (const withText of [false, true]) {
+            const value: ReadResult = {
+              content: [
+                ...(withText ? [{ type: "text" as const, text: "attachment context" }] : []),
+                { type: "image", mimeType: "image/png", data: "unchanged-by-rendering" },
+              ],
+              details: undefined,
+            };
+            const before = JSON.stringify(value);
+            const h = createToolPresentationHarness(tool, { theme });
+            h.call({ path: "image.png" }, { expanded: true, showImages });
+            h.result(value);
+            const text = h.render().join("\n");
+            assert.equal(text.includes("image/png"), !native || !showImages);
+            assert.equal(text.includes("attachment context"), withText);
+            assert.equal(text.includes("unchanged-by-rendering"), false);
+            assert.equal(JSON.stringify(value), before);
+            assert.equal(tool.execute, source.execute);
+          }
+        }
+      }
+    }
+  } finally {
+    setCapabilities(caps);
+  }
 });

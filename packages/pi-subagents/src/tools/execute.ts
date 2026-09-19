@@ -284,11 +284,9 @@ export const executeSubagentActionEffect = (
                   return finalize.pipe(Effect.andThen(Effect.fail(error)));
                 }),
                 Effect.flatMap((request) =>
-                  Effect.uninterruptibleMask((restore) =>
-                    Effect.sync(() => {
-                      handedOff = true;
-                    }).pipe(Effect.andThen(restore(service.startRetrySessionOwned(request)))),
-                  ),
+                  service.startRetrySessionOwned(request, () => {
+                    handedOff = true;
+                  }),
                 ),
               ),
             (claim) => (handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken)),

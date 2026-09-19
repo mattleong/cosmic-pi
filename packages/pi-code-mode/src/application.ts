@@ -52,6 +52,10 @@ import {
 import { CodeModeResults, type ResultsContract } from "./results/service.ts";
 import { makeCodeModeToolExecute } from "./tools/execution.ts";
 import {
+  makeHostExecutionOwner,
+  type HostExecutionOwner,
+} from "./boundary/host-execution-owner.ts";
+import {
   applyRetainedCodeModeFailureDetails,
   makeFailureDetailsRetention,
 } from "./tools/retention.ts";
@@ -63,7 +67,7 @@ interface CodeModeSessionInput extends CodeModeLayerInput {
   /** Revoked before this session's runtime can finish a late uninterruptible publication. */
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
   /** Disabling revokes execution and result access until the next activation. */
-  readonly executionOwner: MutableRef.MutableRef<boolean>;
+  readonly executionOwner: HostExecutionOwner;
 }
 
 /** Host boundaries injected here so tests can control settings latency and nested tools. */
@@ -153,7 +157,7 @@ export function registerCodeModeApplication(
         Layer.merge(
           (boundaries.makeLayer ?? makeCodeModeLayer)(input, (state) => {
             if (MutableRef.get(input.publicationOwner)) {
-              if (!state.available) MutableRef.set(input.executionOwner, false);
+              if (!state.available) input.executionOwner.revoke();
               MutableRef.set(stateRef, state);
             }
           }),
@@ -188,9 +192,12 @@ export function registerCodeModeApplication(
             includePowerShell: definitions.powershell !== undefined,
             execute: makeCodeModeToolExecute({
               results,
-              isCurrent: () => isCurrent() && MutableRef.get(input.executionOwner),
+              isCurrent: () => isCurrent() && input.executionOwner.current(),
               getState: () => MutableRef.get(stateRef),
-              runInSession: (effect, signal) => slot.run(effect, signal),
+              runInSession: (effect, signal) =>
+                input.executionOwner.run(effect, signal, (owned, linked) =>
+                  slot.run(owned, linked),
+                ),
               definitions,
               events: pi.events,
               sessionId: input.sessionId,
@@ -218,7 +225,7 @@ export function registerCodeModeApplication(
     },
     onDeactivated: (input) => {
       MutableRef.set(input.publicationOwner, false);
-      MutableRef.set(input.executionOwner, false);
+      input.executionOwner.revoke();
       MutableRef.set(stateRef, undefined);
       tearDownTool();
     },
@@ -264,7 +271,7 @@ export function registerCodeModeApplication(
           cwd: captured.cwd,
           projectTrusted,
           publicationOwner,
-          executionOwner: MutableRef.make(true),
+          executionOwner: makeHostExecutionOwner(),
           sessionId: sessionKey,
         },
         captured.signal,

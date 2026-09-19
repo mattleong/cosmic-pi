@@ -13,6 +13,7 @@ import {
   type CodeModeApplicationBoundaries,
 } from "../src/application.ts";
 import { CodeModeConfigStore } from "../src/config/store.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import {
   codeModeStateFixture,
   extensionApiFixture,
@@ -397,6 +398,96 @@ describe("code mode application lifecycle at the Pi boundary", () => {
             ),
           ).rejects.toThrow(),
         );
+      }),
+  );
+
+  it.effect(
+    "disabling interrupts active and queued dispatch without closing settings or reviving on enable",
+    () =>
+      Effect.gen(function* () {
+        const queued = Deferred.makeUnsafe<void>();
+        const signals: AbortSignal[] = [];
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+        const lateRead = Deferred.makeUnsafe<{
+          content: { type: "text"; text: string }[];
+          details: object;
+        }>();
+        const write = vi.fn(() =>
+          Promise.resolve({ content: [{ type: "text", text: "written" }], details: {} }),
+        );
+        const h = applicationHarness({
+          makeNestedDefinitions: () =>
+            nestedToolDefinitionsFixture({
+              read: {
+                execute: (_id: string, _args: { readonly path: string }, signal: AbortSignal) => {
+                  signals.push(signal);
+                  return runPromise(Deferred.await(lateRead));
+                },
+              },
+              write: { execute: write },
+            }),
+        });
+        const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+        yield* Effect.promise(() => h.start(ctx));
+        yield* Effect.promise(() => h.command("global maxToolCalls 100", ctx));
+        const hasCounts = Schema.is(
+          Schema.Struct({
+            counts: Schema.Struct({
+              total: Schema.Finite,
+              queued: Schema.Finite,
+              running: Schema.Finite,
+            }),
+          }),
+        );
+        const tool = h.registerTool.mock.calls.at(-1)![0];
+        const pending = tool.execute(
+          "in-flight",
+          {
+            code: 'await Promise.all(Array.from({length:40}, (_, i) => tools.pi.read({path:String(i)}))); return await tools.pi.write({path:"forbidden",content:"no"});',
+          },
+          undefined,
+          (update) => {
+            const details = update.details;
+            if (
+              hasCounts(details) &&
+              details.counts.total === 40 &&
+              details.counts.queued > 0 &&
+              details.counts.running > 0
+            )
+              Deferred.doneUnsafe(queued, Effect.void);
+          },
+          ctx,
+        );
+        yield* Deferred.await(queued);
+        expect(signals.length).toBeGreaterThan(0);
+        expect(signals.length).toBeLessThan(40);
+        const dispatched = signals.length;
+        yield* Effect.promise(() => h.command("global enabled false", ctx));
+        const result = yield* Effect.promise(() => pending);
+        expect(result.details).toMatchObject({ cancelled: true });
+        expect(signals.every((signal) => signal.aborted)).toBe(true);
+        expect(signals).toHaveLength(dispatched);
+        expect(write).not.toHaveBeenCalled();
+        yield* Effect.promise(() => h.command("global enabled true", ctx));
+        yield* Effect.promise(() =>
+          expect(
+            tool.execute("stale", { code: "return 1;" }, undefined, undefined, ctx),
+          ).rejects.toThrow(),
+        );
+        yield* Effect.promise(() => h.start(ctx, "reload"));
+        const replacement = h.registerTool.mock.calls.at(-1)![0];
+        const fresh = yield* Effect.promise(() =>
+          replacement.execute("fresh", { code: "return 1;" }, undefined, undefined, ctx),
+        );
+        expect(fresh.content).toEqual([{ type: "text", text: "1" }]);
+        yield* Deferred.succeed(lateRead, {
+          content: [{ type: "text" as const, text: "late" }],
+          details: {},
+        });
+        yield* Effect.promise(() => runPromise(Deferred.await(lateRead)));
+        expect(write).not.toHaveBeenCalled();
+        expect(signals).toHaveLength(dispatched);
+        yield* Effect.promise(() => h.shutdown(ctx));
       }),
   );
 

@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
@@ -21,6 +22,7 @@ type Entry = {
 /** Original and content-only slots never share lastComponent or failure evidence. */
 export class CompactSlots {
   private readonly entries = new Map<string, Entry>();
+  private inputs: readonly unknown[] = [];
 
   private entry(slot: CompactSlot, content: boolean): Entry {
     const key = `${slot}:${content}`;
@@ -37,8 +39,22 @@ export class CompactSlots {
     return entry.component !== undefined && !entry.failed;
   }
 
-  update(): void {
-    // New host inputs may repair a failed renderer. Invalidation alone may not replay it.
+  update(context: ToolRenderContext<any, any>, result: AgentToolResult<unknown> | undefined): void {
+    // Pi recreates callbacks, contexts and result envelopes on invalidation, but retains
+    // these input references. Expansion and theme changes are not new execution evidence.
+    const inputs = [
+      context.args,
+      result?.content,
+      result?.details,
+      context.executionStarted,
+      context.argsComplete,
+      context.isPartial,
+      context.isError,
+      context.showImages,
+    ];
+    const changed = inputs.some((value, index) => !Object.is(value, this.inputs[index]));
+    this.inputs = inputs;
+    if (!changed) return;
     for (const entry of this.entries.values()) {
       if (entry.failed) entry.body = undefined;
     }

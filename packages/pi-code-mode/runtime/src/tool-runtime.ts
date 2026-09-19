@@ -1,24 +1,12 @@
 import * as Predicate from "effect/Predicate";
 import type { CatalogSnapshot } from "./catalog.js";
 import { description as namespaceDescription } from "./namespace.js";
-import { hasObjectRuntimeType } from "./runtime-values.js";
 import * as Clock from "effect/Clock";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import {
-  MAX_GUEST_COLLECTION_ENTRIES,
-  MAX_GUEST_STRING_LENGTH,
-  queryPairsUpperBound,
-} from "./interpreter/confinement.js";
 import type { RuntimeFailure } from "./failure.js";
 import { runHost, ToolError } from "./tool-error.js";
-import {
-  type InterpreterValue,
-  makeInterpreterObject,
-  ToolReference,
-} from "./interpreter/model.js";
-import { isoString } from "./stdlib/epoch.js";
+import { type InterpreterValue, ToolReference } from "./interpreter/model.js";
 export { ToolReference } from "./interpreter/model.js";
 import {
   decodeInput as decodeToolInput,
@@ -29,18 +17,17 @@ import {
   outputTypeScript,
 } from "./tool-schema.js";
 import { isDefinition as isToolDefinition, type Definition } from "./tool.js";
-import {
-  SandboxBytes,
-  SandboxTextEncoder,
-  SandboxTextDecoder,
-  SandboxDate,
-  SandboxMap,
-  SandboxPromise,
-  SandboxRegExp,
-  SandboxSet,
-  SandboxURL,
-  SandboxURLSearchParams,
-} from "./values.js";
+import { copyArguments, copyIn, isBlockedMember } from "./tool-runtime-data.js";
+import { ToolRuntimeError } from "./tool-runtime-error.js";
+export {
+  copyIn,
+  copyOut,
+  isBlockedMember,
+  type SerializableValue,
+  type SerializableArray,
+  type SerializableObject,
+} from "./tool-runtime-data.js";
+export { ToolRuntimeError } from "./tool-runtime-error.js";
 
 const estimateTokens = (input: string) => Math.max(0, Math.round(input.length / 4));
 const compareText = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
@@ -174,294 +161,9 @@ const toolExpression = (path: ReadonlyArray<string>) =>
     )
     .join("");
 
-/**
- * Maximum nesting depth for values crossing a data boundary. Fixed (not a configurable
- * limit) purely because it produces a clearer diagnostic than a native stack-overflow
- * RangeError would.
- */
-const MAX_VALUE_DEPTH = 32;
-
-type ToolRuntimeErrorKind =
-  | "UnknownTool"
-  | "InvalidToolInput"
-  | "InvalidToolOutput"
-  | "InvalidDataValue"
-  | "ToolCallLimitExceeded";
-
-export class ToolRuntimeError extends Data.TaggedError("ToolRuntimeError")<{
-  readonly kind: ToolRuntimeErrorKind;
-  readonly message: string;
-  readonly suggestions: ReadonlyArray<string>;
-}> {
-  constructor(
-    kind: ToolRuntimeErrorKind,
-    message: string,
-    suggestions: ReadonlyArray<string> = [],
-  ) {
-    super({ kind, message, suggestions });
-  }
-}
-
 const isDefinition = <R>(
   value: HostTool<R> | Definition<R> | HostTools<R>,
 ): value is Definition<R> => isToolDefinition<R>(value);
-
-const blockedMemberNames = new Set(["__proto__", "constructor", "prototype"]);
-
-export const isBlockedMember = (name: string): boolean => blockedMemberNames.has(name);
-
-/**
- * Validates and copies a value against the plain-data contract (depth, circularity, plain
- * objects only, blocked properties, data-only leaves).
- *
- * Two modes share the walk:
- * - **Boundary** (`preserveSandboxValues` false, the default): the host<->sandbox boundary -
- *   final results, tool-call arguments, `JSON.stringify`. Sandbox value types serialize
- *   exactly as JSON.stringify would: Date/URL -> strings, the remaining value types -> {}.
- * - **Intra-sandbox checkpoint** (`preserveSandboxValues` true; see `boundedData` in
- *   codemode.ts): standard-library value instances pass through untouched (treated as leaves,
- *   contents not walked), so values flowing through `Object.*` helpers, coercion inputs, and
- *   other in-sandbox checkpoints stay fully usable (`.getTime()`, `.has()`, ...).
- *
- * Both modes reject un-awaited promises with an await-hinting diagnostic.
- */
-export const copyIn = <Value>(
-  value: Value,
-  label: string,
-  preserveSandboxValues = false,
-): InterpreterValue => copyBounded(value, label, 0, new Set(), preserveSandboxValues);
-
-const copyBounded = <Value>(
-  value: Value,
-  label: string,
-  depth: number,
-  seen: Set<object>,
-  preserveSandboxValues: boolean,
-): InterpreterValue => {
-  if (depth > MAX_VALUE_DEPTH) {
-    throw new ToolRuntimeError(
-      "InvalidDataValue",
-      `${label} exceeds the maximum value depth of ${MAX_VALUE_DEPTH}.`,
-    );
-  }
-  // Confinement: string leaves and collection sizes are bounded at every data checkpoint,
-  // so amplified intermediates are refused wherever they first cross shared machinery.
-  if (Predicate.isString(value)) {
-    if (value.length > MAX_GUEST_STRING_LENGTH) {
-      throw new ToolRuntimeError(
-        "InvalidDataValue",
-        `${label} contains a string of ${value.length} characters, over the CodeMode maximum of ${MAX_GUEST_STRING_LENGTH}.`,
-      );
-    }
-    return value;
-  }
-  if (value === null) return null;
-  if (value === undefined) return undefined;
-  if (Predicate.isBoolean(value)) return value;
-  // NaN/Infinity are allowed to exist as in-sandbox intermediates (matching real JS and a real
-  // engine) so defensive guards like `Number.isNaN(x)` / `parseInt(x) || 0` can run. They are
-  // normalized to `null` when the value leaves the sandbox - see copyOut - exactly as
-  // JSON.stringify already does at any tool boundary.
-  if (Predicate.isNumber(value)) return value;
-
-  if (!hasObjectRuntimeType(value)) {
-    throw new ToolRuntimeError("InvalidDataValue", `${label} must contain data only.`);
-  }
-
-  // An un-awaited promise never crosses a data checkpoint as `{}`; the diagnostic tells the
-  // model exactly how to fix the program instead.
-  if (value instanceof SandboxPromise) {
-    throw new ToolRuntimeError(
-      "InvalidDataValue",
-      `${label} contains an un-awaited Promise; await tool calls (e.g. \`const result = await tools.ns.tool(...)\`) before using their results.`,
-    );
-  }
-
-  if (
-    value instanceof SandboxBytes ||
-    value instanceof SandboxTextEncoder ||
-    value instanceof SandboxTextDecoder
-  ) {
-    if (preserveSandboxValues) return value;
-    throw new ToolRuntimeError(
-      "InvalidDataValue",
-      `${label} contains an opaque byte value; encode bytes as text before crossing a data boundary.`,
-    );
-  }
-
-  if (preserveSandboxValues) {
-    // Intra-sandbox checkpoints keep sandbox value instances alive as leaves; their contents
-    // are never walked here (Map/Set members are validated where mutation happens, and the
-    // real boundary still serializes them below).
-    if (
-      value instanceof SandboxDate ||
-      value instanceof SandboxRegExp ||
-      value instanceof SandboxMap ||
-      value instanceof SandboxSet ||
-      value instanceof SandboxURL ||
-      value instanceof SandboxURLSearchParams
-    ) {
-      return value;
-    }
-    // Host instances cannot normally reach an intra-sandbox checkpoint (tool results cross
-    // the boundary first), but wrap them defensively rather than degrading to JSON forms.
-    if (value instanceof Date) return new SandboxDate(value.getTime());
-    if (value instanceof RegExp) return new SandboxRegExp(value.source, value.flags);
-    if (value instanceof Map) {
-      const wrapped = new SandboxMap();
-      for (const [key, item] of value.entries()) {
-        wrapped.map.set(
-          copyBounded(key, label, depth + 1, seen, true),
-          copyBounded(item, label, depth + 1, seen, true),
-        );
-      }
-      return wrapped;
-    }
-    if (value instanceof Set) {
-      const wrapped = new SandboxSet();
-      for (const item of value.values())
-        wrapped.set.add(copyBounded(item, label, depth + 1, seen, true));
-      return wrapped;
-    }
-    if (value instanceof URL) {
-      // Confinement preflight: charge the host URL's query pair count before the
-      // SandboxURL wrapper eagerly materializes its searchParams entry list.
-      if (queryPairsUpperBound(value.search) > MAX_GUEST_COLLECTION_ENTRIES) {
-        throw new ToolRuntimeError(
-          "InvalidDataValue",
-          `${label} URL query would parse into more than ${MAX_GUEST_COLLECTION_ENTRIES} parameters.`,
-        );
-      }
-      return new SandboxURL(new URL(value.href));
-    }
-    if (value instanceof URLSearchParams) {
-      // Confinement preflight: charge the copy's entry count before the native copy runs.
-      if (value.size > MAX_GUEST_COLLECTION_ENTRIES) {
-        throw new ToolRuntimeError(
-          "InvalidDataValue",
-          `${label} URLSearchParams would hold more than ${MAX_GUEST_COLLECTION_ENTRIES} entries.`,
-        );
-      }
-      return new SandboxURLSearchParams(new URLSearchParams(value));
-    }
-  }
-
-  // Sandbox value types (and their host counterparts, which a host tool may legitimately
-  // return) serialize exactly as JSON.stringify would at the data boundary: Date/URL use
-  // toJSON(), while RegExp/Map/Set/URLSearchParams have no JSON form beyond {}.
-  if (value instanceof SandboxDate) {
-    return Number.isFinite(value.time) ? isoString(value.time) : null;
-  }
-  if (value instanceof Date) {
-    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
-  }
-  if (value instanceof SandboxURL) return value.url.href;
-  if (value instanceof URL) return value.href;
-  if (
-    value instanceof SandboxRegExp ||
-    value instanceof SandboxMap ||
-    value instanceof SandboxSet ||
-    value instanceof SandboxURLSearchParams ||
-    value instanceof RegExp ||
-    value instanceof Map ||
-    value instanceof Set ||
-    value instanceof URLSearchParams
-  ) {
-    return makeInterpreterObject();
-  }
-
-  if (seen.has(value)) {
-    throw new ToolRuntimeError("InvalidDataValue", `${label} contains a circular value.`);
-  }
-
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    if (value.length > MAX_GUEST_COLLECTION_ENTRIES) {
-      throw new ToolRuntimeError(
-        "InvalidDataValue",
-        `${label} contains an array of ${value.length} entries, over the CodeMode maximum of ${MAX_GUEST_COLLECTION_ENTRIES}.`,
-      );
-    }
-    const copied = value.map((item) =>
-      copyBounded(item, label, depth + 1, seen, preserveSandboxValues),
-    );
-    seen.delete(value);
-    return copied;
-  }
-
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw new ToolRuntimeError("InvalidDataValue", `${label} must contain plain objects only.`);
-  }
-
-  const entries = Object.entries(value);
-  if (entries.length > MAX_GUEST_COLLECTION_ENTRIES) {
-    throw new ToolRuntimeError(
-      "InvalidDataValue",
-      `${label} contains an object with ${entries.length} entries, over the CodeMode maximum of ${MAX_GUEST_COLLECTION_ENTRIES}.`,
-    );
-  }
-  const copied = makeInterpreterObject();
-  for (const [key, item] of entries) {
-    if (isBlockedMember(key)) {
-      throw new ToolRuntimeError(
-        "InvalidDataValue",
-        `${label} contains blocked property '${key}'.`,
-      );
-    }
-    copied[key] = copyBounded(item, label, depth + 1, seen, preserveSandboxValues);
-  }
-  seen.delete(value);
-  return copied;
-};
-
-export interface SerializableObject {
-  [key: string]: SerializableValue;
-}
-export interface SerializableArray extends Array<SerializableValue> {}
-export type SerializableValue =
-  | undefined
-  | null
-  | string
-  | number
-  | boolean
-  | bigint
-  | symbol
-  | SerializableObject
-  | SerializableArray;
-
-export const copyOut = (value: InterpreterValue, undefinedAsNull = false): SerializableValue => {
-  if (
-    value instanceof SandboxBytes ||
-    value instanceof SandboxTextEncoder ||
-    value instanceof SandboxTextDecoder
-  ) {
-    throw new ToolRuntimeError(
-      "InvalidDataValue",
-      "Opaque byte values cannot cross a data boundary; encode bytes as text first.",
-    );
-  }
-  if (value === undefined && undefinedAsNull) return null;
-  // Normalize non-finite numbers to null as the value crosses out of the sandbox (final return
-  // and tool-call arguments both funnel through here), matching JSON semantics - NaN/Infinity
-  // have no JSON representation, so JSON.stringify would produce null anyway.
-  if (Predicate.isNumber(value) && !Number.isFinite(value)) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => copyOut(item, undefinedAsNull));
-  }
-
-  if (value instanceof ToolReference) return undefined;
-  if (value !== null && hasObjectRuntimeType(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, copyOut(item, undefinedAsNull)]),
-    );
-  }
-
-  return value;
-};
 
 const definitions = <R>(
   tools: HostTools<R>,
@@ -1054,9 +756,7 @@ export const make = <R>(
     invoke: (path, args, lifecycleId) =>
       Effect.gen(function* () {
         const name = path.join(".");
-        const externalArgs = args.map((arg) =>
-          copyOut(copyIn(arg, `Arguments for tool '${name}'`)),
-        );
+        const externalArgs = copyArguments(args, `Arguments for tool '${name}'`);
         const call = { name };
         const recordAndObserve = <Input>(input: Input) =>
           Effect.sync(() => {

@@ -5,7 +5,7 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { getTextContent } from "./data/results";
+import { getFallbackResultText } from "./data/results";
 import { type ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -95,7 +95,7 @@ export function withCodePreviewShell<
     renderResult: (result, resultOptions, theme, context) =>
       originalRenderResult
         ? originalRenderResult(result, resultOptions, theme, context)
-        : renderFallbackToolResult(result, resultOptions, theme, context.isError),
+        : renderFallbackToolResult(result, resultOptions, theme, context),
   });
 }
 
@@ -110,11 +110,11 @@ function renderFallbackToolResult(
   result: AgentToolResult<unknown>,
   options: ToolRenderResultOptions,
   theme: Theme,
-  isError: boolean,
+  context: ToolRenderContext<unknown, unknown>,
 ): Component {
-  const output = getTextContent(result.content);
+  const output = getFallbackResultText(result.content, context.showImages);
   if (!output) return new Container();
-  const color = isError ? "error" : options.isPartial ? "warning" : "toolOutput";
+  const color = context.isError ? "error" : options.isPartial ? "warning" : "toolOutput";
   const text = output
     .split("\n")
     .map((line) => theme.fg(color, escapeControlChars(line)))

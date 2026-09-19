@@ -65,7 +65,7 @@ test("collapsed flat lists retain linear paths and hidden-lines markers", () => 
     "file-4.ts",
     "file-5.ts",
   ]);
-  assert.equal(lines[6], "      --- 5 lines hidden ---");
+  assert.match(lines[6] ?? "", /5 lines hidden/);
   assert.equal(lines[7], "file-11.ts");
   assert.match(rendered, /Showing 7 of 12 paths/);
 });

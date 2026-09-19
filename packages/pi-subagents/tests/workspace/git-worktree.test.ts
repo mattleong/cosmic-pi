@@ -1,11 +1,13 @@
 import { it } from "@effect/vitest";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import * as publication from "../../src/boundary/git-worktree-integration.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as os from "node:os";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { git, workspaceFailure } from "../../src/boundary/git-worktree-process.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
+import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import type { WorkspaceHandle } from "../../src/workspace/model.ts";
 
 const io = <A>(run: () => PromiseLike<A>) =>
@@ -45,6 +47,103 @@ const target = (handle: WorkspaceHandle) => ({
   ownerId: handle.ownerId,
   processCleanupConfirmed: true as const,
 });
+
+it.live(
+  "rejects an empty ancestor created after prepare, including an active nested writer",
+  () =>
+    fixture((root, agent) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        yield* io(() => fs.mkdir(path.join(handle.cwd, "feature/nested"), { recursive: true }));
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "feature/nested/new.ts"), "new\n"));
+        const revision = yield* service.freeze(target(handle));
+        const prepared = yield* service.prepare({
+          ...target(handle),
+          revisionId: revision.revisionId,
+        });
+        const ancestor = path.join(root, "feature");
+        yield* io(() => fs.mkdir(ancestor));
+        const integration = {
+          ...target(handle),
+          revisionId: revision.revisionId,
+          preparationId: prepared.preparationId,
+        };
+        expect((yield* service.integrate(integration).pipe(Effect.flip)).message).toContain(
+          "ancestors changed",
+        );
+        const leases = yield* WriterLeaseService.pipe(
+          Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
+        );
+        const cwd = yield* leases.canonicalize(ancestor);
+        yield* Effect.acquireUseRelease(
+          leases.acquire({ cwd, sessionId: "other", runId: "nested-writer" }),
+          () =>
+            Effect.gen(function* () {
+              expect((yield* service.integrate(integration).pipe(Effect.flip)).message).toContain(
+                "ancestors changed",
+              );
+              expect(yield* io(() => fs.readdir(ancestor))).toEqual([]);
+              expect((yield* service.inspect(target(handle))).status).toBe("prepared");
+            }),
+          (lease) => leases.release(lease).pipe(Effect.orDie),
+        );
+      }),
+    ),
+  60_000,
+);
+
+it.live(
+  "rejects an unleased ancestor appearing between lease revalidation and publication discovery",
+  () =>
+    fixture((root, agent) =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceService;
+        const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+        yield* io(() => fs.mkdir(path.join(handle.cwd, "feature")));
+        yield* io(() => fs.writeFile(path.join(handle.cwd, "feature/new.ts"), "new\n"));
+        const revision = yield* service.freeze(target(handle));
+        const prepared = yield* service.prepare({
+          ...target(handle),
+          revisionId: revision.revisionId,
+        });
+        const leases = yield* WriterLeaseService.pipe(
+          Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
+        );
+        const ancestor = path.join(root, "feature");
+        const original = publication.publishWorkspace;
+        let acquired = false;
+        const spy = vi.spyOn(publication, "publishWorkspace").mockImplementation((...args) =>
+          Effect.gen(function* () {
+            // This owned boundary is called only after requiredLeaseDirectories succeeds.
+            yield* io(() => fs.mkdir(ancestor));
+            const cwd = yield* leases.canonicalize(ancestor).pipe(Effect.orDie);
+            return yield* Effect.acquireUseRelease(
+              leases.acquire({ cwd, sessionId: "other", runId: "gap-writer" }).pipe(Effect.orDie),
+              () =>
+                Effect.gen(function* () {
+                  acquired = true;
+                  return yield* original(...args);
+                }),
+              (lease) => leases.release(lease).pipe(Effect.orDie),
+            );
+          }),
+        );
+        const failure = yield* service
+          .integrate({
+            ...target(handle),
+            revisionId: revision.revisionId,
+            preparationId: prepared.preparationId,
+          })
+          .pipe(Effect.flip, Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+        expect(acquired).toBe(true);
+        expect(failure.message).toContain("ancestors changed");
+        expect(yield* io(() => fs.readdir(ancestor))).toEqual([]);
+        expect((yield* service.inspect(target(handle))).status).toBe("prepared");
+      }),
+    ),
+  60_000,
+);
 
 const addInternalAliases = (root: string) =>
   Effect.gen(function* () {

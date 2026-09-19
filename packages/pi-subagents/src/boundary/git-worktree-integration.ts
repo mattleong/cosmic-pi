@@ -91,7 +91,14 @@ export const publishWorkspace = (
           ),
         );
         if (!exists) missingDirectories.add(parent);
-        else if (!directories.has(full)) directories.set(full, yield* directoryIdentity(full));
+        else {
+          if (!record.preparation!.leaseDirectories.includes(full))
+            return yield* workspaceFailure(
+              "integrate",
+              "Changed-file ancestors changed; prepare and test again before integration.",
+            );
+          if (!directories.has(full)) directories.set(full, yield* directoryIdentity(full));
+        }
         parent = path.dirname(parent);
       }
       yield* checkPreimage(root, name, previous.get(name));

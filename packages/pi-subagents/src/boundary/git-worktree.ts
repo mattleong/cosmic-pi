@@ -22,6 +22,35 @@ import {
 } from "./git-worktree-store.ts";
 import { publishWorkspace } from "./git-worktree-integration.ts";
 
+const requiredLeaseDirectories = (record: WorkspaceRecord) =>
+  Effect.gen(function* () {
+    const directories = new Set([record.handle.sourceRoot, record.handle.sourceCwd]);
+    for (const name of record.revision!.changedPaths) {
+      let directory = record.handle.sourceRoot;
+      for (const part of path
+        .dirname(name)
+        .split(path.sep)
+        .filter((part) => part !== ".")) {
+        directory = path.join(directory, part);
+        const stat = yield* workspaceIO("prepare", () =>
+          fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined;
+            throw error;
+          }),
+        );
+        if (!stat) break;
+        if (!stat.isDirectory() || stat.isSymbolicLink())
+          return yield* workspaceFailure(
+            "prepare",
+            "Changed-file ancestor is not a real directory.",
+          );
+        yield* checkDirectory(directory);
+        directories.add(directory);
+      }
+    }
+    return [...directories].sort();
+  });
+
 export const makeGitWorkspaceEngine = (agentDirectory: string) =>
   Effect.sync(() => {
     const registry = path.resolve(agentDirectory, "git-workspaces");
@@ -300,30 +329,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             yield* git(preparedRoot, ["apply", "--binary", "--whitespace=nowarn", "-"], { stdin });
           }
           const combined = yield* capture(record, preparedRoot, `prepared-${preparationId}`);
-          const leaseDirectories = new Set([record.handle.sourceRoot, record.handle.sourceCwd]);
-          for (const name of record.revision!.changedPaths) {
-            let directory = record.handle.sourceRoot;
-            for (const part of path
-              .dirname(name)
-              .split(path.sep)
-              .filter((part) => part !== ".")) {
-              directory = path.join(directory, part);
-              const stat = yield* workspaceIO("prepare", () =>
-                fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
-                  if (error.code === "ENOENT") return undefined;
-                  throw error;
-                }),
-              );
-              if (!stat) break;
-              if (!stat.isDirectory() || stat.isSymbolicLink())
-                return yield* workspaceFailure(
-                  "prepare",
-                  "Changed-file ancestor is not a real directory.",
-                );
-              yield* checkDirectory(directory);
-              leaseDirectories.add(directory);
-            }
-          }
+          const leaseDirectories = yield* requiredLeaseDirectories(record);
           const result = {
             preparationId,
             revisionId: target.revisionId,
@@ -331,7 +337,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
               preparedRoot,
               path.relative(record.handle.sourceRoot, record.handle.sourceCwd),
             ),
-            leaseDirectories: [...leaseDirectories].sort(),
+            leaseDirectories,
           };
           yield* checkDirectory(result.cwd);
           yield* saveWorkspaceRecord(registry, {
@@ -378,6 +384,16 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             return yield* workspaceFailure(
               "integrate",
               "Worker, test tree, source, branch or index changed; review and test again.",
+            );
+          // Empty directories are absent from Git trees. Recheck under the
+          // coordinator's source leases before any journal or source publication.
+          const required = yield* requiredLeaseDirectories(record);
+          if (
+            required.some((directory) => !record.preparation!.leaseDirectories.includes(directory))
+          )
+            return yield* workspaceFailure(
+              "integrate",
+              "Changed-file ancestors changed; prepare and test again before integration.",
             );
           const result = yield* publishWorkspace(registry, record, before, prepared);
           const after = yield* sourceIdentity(record.handle.sourceRoot);

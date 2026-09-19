@@ -32,6 +32,7 @@ copy or the file layout of upstream v2:
 - `src/tool.ts`
 - `src/tool-error.ts`
 - `src/tool-runtime.ts`
+- `src/tool-runtime-data.ts` and `src/tool-runtime-error.ts` (local boundary extraction; deviation 8)
 - `src/tool-schema.ts`
 - `src/values.ts`
 - `src/runtime-values.ts` (local type-narrowing support; see deviation 10)
@@ -189,8 +190,34 @@ Deviation 18 adds host-only pre-truncation result observation.
      limit to the entry cap) and the result is re-checked against the entry cap
      and at the shared data checkpoint (`copyIn`) and string-coercion budget -
      a bounded post-check, not a preflight.
+   - **Aggregate data projection.** `tool-runtime-data.ts` extracts data copying
+     from `tool-runtime.ts`; `tool-runtime-error.ts` is the shared error leaf.
+     Existing exports remain compatible. Both copy doors first build a bounded,
+     memoized normalized graph, charging repeated references by their expanded
+     cost before tree copying or native serialization. The fixed budgets are
+     786,433 visits and allocation slots, 262,145 containers, and 50,331,680 estimated serialized UTF-16
+     units. These allow a 262,144-entry array of primitive key/value pairs plus
+     its root, or a maximum-size string, while refusing small exponentially shared
+     DAGs. Slots are charged before descending into collection copies, including
+     sparse arrays; holes also count as visits. Strings and keys cost up to six units per code
+     unit for JSON escapes; each visit reserves 32 units for scalars and syntax.
+     Tool arguments share one budget rather than resetting it for each argument.
+     The final expansion has its own bounded walk and copies ordinary shared
+     branches independently. Memoization is keyed by identity and depth for inert
+     data only. Accessor-bearing objects and their active ancestors are not cached;
+     encountering accessors also invalidates prior memo entries because getters may
+     mutate them. Supported host getters, including array indices, retain occurrence-based
+     evaluation during projection. Expansion never re-enters getters or guest callbacks.
+     Existing host getter authority is not made preemptible. Reference reachability checks
+     retain visited identities to avoid expanding shared DAGs before projection. If thrown
+     data cannot be projected, diagnostics use fixed bounded text rather than coercing
+     the rejected value; failure observation still runs. These are internal confinement budgets,
+     not `maxOutputBytes` or retention limits; observers still receive admitted
+     pre-truncation data. This is a local correction under deviation 8, not an
+     upstream resync or a base-pin change.
    - **Wall-clock deadline.** A shared `ExecutionDeadline` is checked between
-     interpreter steps (statement/expression entry) and after the run, so an
+     interpreter steps (statement/expression entry), after the run, after final
+     data copying and after output serialization before success observation, so an
      overrun inside synchronous native work is normalized to the same
      `TimeoutExceeded` diagnostic instead of racing the event-loop-starved timer.
      The deadline is **cooperative**: it cannot interrupt a native call that has
@@ -349,7 +376,8 @@ Deviation 18 adds host-only pre-truncation result observation.
 
 18. **Pre-truncation result observation.** `src/codemode.ts` adds optional synchronous
     `onResult(result)` host observation. `interpreter/host-execution.ts` calls it after
-    final plain-data validation or normalized failure, before `boundOutput`. Empty-source
+    final plain-data validation or normalized failure, supplying full pre-truncation data.
+    Success observation follows output projection and the deviation-8 deadline checks. Empty-source
     diagnostics are also observed. Host interruption remains interruption. Observer throws
     cannot relabel execution; hosts must bound capture work and must not retain or mutate
     the supplied graph. The hook has no guest authority, retention policy, persistence,

@@ -66,7 +66,7 @@ class StatefulText extends Text {
   }
 }
 
-test("transient renderer failures clear original slot caches so later calls recover", () => {
+test("transient renderer failures clear original slot caches so changed inputs recover", () => {
   let callFails = true;
   let resultFails = true;
   const recovered = (last: Component | undefined, value: string) => {
@@ -95,6 +95,7 @@ test("transient renderer failures clear original slot caches so later calls reco
   const tool = withCodePreviewShell(definition, { mode: "off", compactSummary: () => undefined });
   const ctx = context();
   assert.match(paint(tool, ctx).rows.join("\n"), /raw result/u);
+  ctx.args = { path: "changed.ts" };
   for (let attempt = 0; attempt < 2; attempt++) {
     const text = paint(tool, ctx).rows.join("\n");
     assert.match(text, /call recovered/u);
@@ -531,6 +532,8 @@ test("render-time failures revoke component ownership before invalidation and re
     failed.output.invalidate();
   });
   fails = false;
+  assert.match(paint(tool, ctx).rows.join("\n"), /raw result/u);
+  ctx.args = { path: "repaired.ts" };
   assert.match(paint(tool, ctx).rows.join("\n"), /Recovered original result/u);
   assert.equal(inherited, undefined);
 });

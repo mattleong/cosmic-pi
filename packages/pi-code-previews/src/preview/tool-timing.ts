@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { synchronousNow } from "pi-cosmic-core";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
@@ -144,6 +144,10 @@ export class TimingPreservedComponent implements Component {
     return this.component.render(width);
   }
 
+  handleMouse(event: TuiMouseEvent) {
+    return this.component.handleMouse?.(event);
+  }
+
   invalidate(): void {
     this.component.invalidate();
   }
@@ -152,6 +156,7 @@ export class TimingPreservedComponent implements Component {
 class ToolTimingFooter implements Component {
   private readonly component: Component;
   private readonly footer: string;
+  private bounds: { width: number; height: number } | undefined;
 
   constructor(component: Component, footer: string) {
     this.component = component;
@@ -159,10 +164,20 @@ class ToolTimingFooter implements Component {
   }
 
   render(width: number): string[] {
-    return [...this.component.render(width), truncateToWidth(this.footer, width, "")];
+    const rows = this.component.render(width);
+    this.bounds = { width, height: rows.length };
+    return [...rows, truncateToWidth(this.footer, width, "")];
+  }
+
+  handleMouse(event: TuiMouseEvent) {
+    const bounds = this.bounds;
+    if (!bounds || event.width !== bounds.width || event.y < 0 || event.y >= bounds.height)
+      return undefined;
+    return this.component.handleMouse?.({ ...event, height: bounds.height });
   }
 
   invalidate(): void {
+    this.bounds = undefined;
     this.component.invalidate();
   }
 }

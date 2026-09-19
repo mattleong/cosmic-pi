@@ -55,11 +55,11 @@ export const containsRuntimeReference = (
   if (value === null || !hasObjectRuntimeType(value)) return false;
   if (seen.has(value)) return false;
   seen.add(value);
-  const contains = Array.isArray(value)
+  // Reachability depends on identity, not occurrence. Retain completed branches so
+  // a small shared DAG is not traversed as an exponentially expanded tree.
+  return Array.isArray(value)
     ? value.some((item) => containsRuntimeReference(item, seen))
     : Object.values(value).some((item) => containsRuntimeReference(item, seen));
-  seen.delete(value);
-  return contains;
 };
 
 // Like containsRuntimeReference, but sandbox standard-library values count as data:
@@ -74,11 +74,9 @@ export const containsOpaqueReference = (
   if (value === null || !hasObjectRuntimeType(value)) return false;
   if (seen.has(value)) return false;
   seen.add(value);
-  const contains = Array.isArray(value)
+  return Array.isArray(value)
     ? value.some((item) => containsOpaqueReference(item, seen))
     : Object.values(value).some((item) => containsOpaqueReference(item, seen));
-  seen.delete(value);
-  return contains;
 };
 
 // `typeof` never throws in JS; map every interpreter value to its JS-visible category.

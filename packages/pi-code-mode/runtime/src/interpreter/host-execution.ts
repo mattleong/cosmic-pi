@@ -80,6 +80,7 @@ export const executeWithLimits = <const Tools extends object>(
     deadline.check();
     // SAFETY: The interpreter's preceding variant checks establish the narrowed runtime representation used here.
     const result = copyOut(copyIn(value, "Execution result"), true) as DataValue;
+    deadline.check();
     return {
       ok: true,
       value: result,
@@ -118,10 +119,24 @@ export const executeWithLimits = <const Tools extends object>(
           } satisfies Result),
     ),
     Effect.map((result) => {
-      observe(result);
-      return limits.maxOutputBytes === undefined
-        ? result
-        : boundOutput(result, limits.maxOutputBytes);
+      try {
+        const bounded =
+          limits.maxOutputBytes === undefined ? result : boundOutput(result, limits.maxOutputBytes);
+        // Serialization is synchronous too. Never publish success after a late projection.
+        if (result.ok) deadline.check();
+        observe(result);
+        return bounded;
+      } catch (error) {
+        const failure = observe({
+          ok: false,
+          error: normalizeError(error),
+          ...logged(),
+          toolCalls: tools.calls,
+        });
+        return limits.maxOutputBytes === undefined
+          ? failure
+          : boundOutput(failure, limits.maxOutputBytes);
+      }
     }),
   );
 };

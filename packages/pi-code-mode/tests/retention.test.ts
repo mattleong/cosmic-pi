@@ -1,4 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { CodeModeResults } from "../src/results/service.ts";
+import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import {
   applyRetainedCodeModeFailureDetails,
   makeFailureDetailsRetention,
@@ -17,6 +24,47 @@ const details = (tool: string) => ({
 });
 
 describe("failure details retention", () => {
+  it.effect(
+    "suppresses a retained page when caller abort wins after the session Promise settles",
+    () =>
+      Effect.gen(function* () {
+        const results = yield* CodeModeResults;
+        const id = yield* results.put("PRIVATE_PAGE", "failed", "failure-receipt");
+        expect(id).toBeDefined();
+        const caller = new AbortController();
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+        const execute = makeCodeModeToolExecute({
+          results,
+          isCurrent: () => true,
+          getState: () => codeModeStateFixture(),
+          runInSession: (effect) =>
+            runPromise(effect).then((value) => {
+              caller.abort();
+              return value;
+            }),
+          definitions: nestedToolDefinitionsFixture({}),
+          events: createEventBus(),
+          sessionId: "retention-race",
+        });
+        const result = yield* Effect.promise(() =>
+          execute(
+            "read",
+            { action: "result.read", id: id! },
+            caller.signal,
+            undefined,
+            extensionContextFixture({}),
+          ),
+        );
+        expect(result.details).toMatchObject({ cancelled: true });
+        expect(result.details.resultRead).toBeUndefined();
+        const serialized = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+          result,
+        );
+        expect(serialized).not.toContain("PRIVATE_PAGE");
+        expect(serialized).not.toContain(id!);
+        expect((yield* results.get(id!))?.outcome).toBe("failed");
+      }).pipe(Effect.provide(CodeModeResults.layer)),
+  );
   it("reattaches only owned thrown-error details and consumes them once", () => {
     const retention = makeFailureDetailsRetention();
     const original = details("pi.bash");

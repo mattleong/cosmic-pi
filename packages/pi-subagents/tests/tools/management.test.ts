@@ -1056,8 +1056,9 @@ describe("subagent tool", () => {
       ...startCapturingService([]),
       claimRetryContinuation: () =>
         Effect.succeed({ source: failed, continuation: route, claimToken: "retry-1" }),
-      startRetrySessionOwned: (request) =>
+      startRetrySessionOwned: (request, onOwned) =>
         Effect.sync(() => {
+          onOwned?.();
           requests.push(request);
           return view({
             id: "agent-2",

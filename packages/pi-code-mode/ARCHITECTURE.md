@@ -20,7 +20,7 @@ availability and reads a retained text artifact without building an interpreter 
 It rejects `code`, invalid offsets, split surrogate offsets and invalid limits. Paging uses UTF-16
 offsets, preserves code points and checks the complete JSON envelope against `maxOutputBytes`.
 A page that cannot fit metadata and one code point has no continuation cursor. Reads recheck
-publication authority after the session Promise settles. Reading output does not change its
+caller cancellation and publication authority after the session Promise settles. Reading output does not change its
 original `succeeded`, `failed` or `cancelled` outcome. `results/read-presentation.ts` defines
 producer-owned page metadata and fixed read-failure reasons. Projection returns that metadata
 beside the unchanged model-visible text; publication revocation replaces both together.
@@ -172,6 +172,19 @@ file remains, the prior projection stays authoritative, and a later write re-der
 capture failure shuts the old slot down. Each private slot input carries its own
 `MutableRef<boolean>` publication owner, created immediately before `slot.start`. The Layer
 publisher writes `stateRef` only while that owner is true.
+
+Each activation also owns `boundary/host-execution-owner.ts`, a native cancellation bridge into
+the existing session runner. Effective unavailability and deactivation synchronously revoke it,
+interrupting interpreter fibers and queued guest calls without disposing the settings runtime.
+Re-enabling settings cannot restore that owner; reload creates a new one. Per-run caller and
+activation listeners are released on settlement. A pre-run Effect gate and lazy dispatch gates
+refuse revoked work even before the pinned runner installs its abort listener. Cancellation cannot
+undo dispatched mutations or stop a foreign Promise that ignores its signal; late settlement has
+no guest continuation or publication authority.
+
+`tools/execution.ts` owns request admission and retained-read publication. `execution-run.ts`
+assembles one interpreter run, its guest adapters, progress and settlement. `result-response.ts`
+continues to own retention and receipts; these modules add no runtime or lifecycle authority.
 
 `onDeactivated` first sets the owner false, then clears `stateRef` and deactivates `code_mode`.
 This ordering blocks a prior session's uninterruptible commit from publishing after replacement

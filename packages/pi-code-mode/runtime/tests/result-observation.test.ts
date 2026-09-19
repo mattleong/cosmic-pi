@@ -2,8 +2,46 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { CodeMode } from "../src/index.js";
+import { vi } from "vitest";
+import { setDeadlineClockForTesting } from "../src/interpreter/confinement.js";
 
 describe("host result observation", () => {
+  for (const phase of ["copy", "serialization"] as const) {
+    it.effect(`never observes success when final ${phase} exceeds the deadline`, () =>
+      Effect.gen(function* () {
+        let now = 0;
+        let observedOk: boolean | undefined;
+        setDeadlineClockForTesting(() => now);
+        const fromEntries = Object.fromEntries;
+        const stringify = JSON.stringify;
+        const copy = vi.spyOn(Object, "fromEntries").mockImplementation((entries) => {
+          const result = fromEntries(entries);
+          if (phase === "copy" && result.lateProjection === true) now = 100;
+          return result;
+        });
+        const serialize = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+          const result = stringify(...args);
+          if (phase === "serialization" && result === '{"lateProjection":true}') now = 100;
+          return result;
+        });
+        try {
+          const result = yield* CodeMode.execute({
+            code: "return { lateProjection: true };",
+            limits: { timeoutMs: 50, maxOutputBytes: 1000 },
+            onResult: (value) => {
+              observedOk = value.ok;
+            },
+          });
+          expect(result).toMatchObject({ ok: false, error: { kind: "TimeoutExceeded" } });
+          expect(observedOk).toBe(false);
+        } finally {
+          copy.mockRestore();
+          serialize.mockRestore();
+          setDeadlineClockForTesting(undefined);
+        }
+      }),
+    );
+  }
   it.effect(
     "observes validated full output before bounding without changing the returned result",
     () =>
@@ -44,6 +82,26 @@ describe("host result observation", () => {
         expect(result).toEqual(original);
       }),
   );
+  it.effect("observes a bounded failed Result for a thrown shared DAG", () =>
+    Effect.gen(function* () {
+      const observed: Array<CodeMode.Result> = [];
+      const result = yield* CodeMode.execute({
+        // Eighteen levels exceed the projection budget without making a regressed walk unbounded.
+        code: "let a = [0]; for (let i = 0; i < 18; i++) a = [a, a]; throw a;",
+        limits: { maxOutputBytes: 32 },
+        onResult: (value) => {
+          observed.push(value);
+        },
+      });
+      expect(result).toMatchObject({ ok: false, error: { kind: "ExecutionFailure" } });
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({ ok: false, error: { kind: "ExecutionFailure" } });
+      if (result.ok || observed[0]?.ok !== false) throw new Error("expected failure");
+      expect(new TextEncoder().encode(result.error.message).length).toBeLessThanOrEqual(32);
+      expect(observed[0].error.message.length).toBeLessThan(128);
+    }),
+  );
+
   it.effect("observes normalized failure and its pre-failure logs", () =>
     Effect.gen(function* () {
       let message = "";

@@ -136,6 +136,7 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
   /** Submit an exclusively claimed successor; waiter cancellation never abandons ownership. */
   readonly startRetrySessionOwned: (
     request: StartSubagentRequest & { readonly supersedes: SubagentRetrySupersession },
+    onOwned?: () => void,
   ) => Effect.Effect<SubagentRunView, SubagentError>;
   /**
    * Await selected observations. The optional update projection is the root-owned immutable
@@ -748,6 +749,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     retainUncertainAssignment: assignment.retainUncertainAssignment,
     sendPeerNotices,
     invalidateWorkspace: workspaces.invalidateForResume,
+    currentChildLimit: profileService.capture.pipe(
+      Effect.map((snapshot) => snapshot.effectiveConfig.nesting.maxDirectChildren),
+    ),
   });
 
   const writeClaims = makeRunWriteClaimControl({
@@ -759,13 +763,20 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     sendPeerNotices,
   });
 
-  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (request) =>
-    runSessionOwned(ownerScope, Effect.void, () =>
-      startWithWorkspace(request).pipe(
-        Effect.ensuring(
-          retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
+  const startRetrySessionOwned: SubagentServiceContract["startRetrySessionOwned"] = (
+    request,
+    onOwned,
+  ) =>
+    runSessionOwned(
+      ownerScope,
+      Effect.void,
+      () =>
+        startWithWorkspace(request).pipe(
+          Effect.ensuring(
+            retry.releaseRetryClaim(request.supersedes.runId, request.supersedes.claimToken),
+          ),
         ),
-      ),
+      onOwned,
     ).pipe(Effect.map((view) => observations.redactCompletionReport(view)));
 
   const list = SubscriptionRef.get(projectionRef).pipe(Effect.map((current) => current.runs));

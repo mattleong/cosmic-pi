@@ -7,6 +7,13 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { CodeMode, Tool } from "../src/index.js";
+import { copyIn, copyOut } from "../src/tool-runtime.js";
+import type { InterpreterValue } from "../src/interpreter/model.js";
+import { hostDate } from "../src/stdlib/epoch.js";
+import {
+  containsOpaqueReference,
+  containsRuntimeReference,
+} from "../src/interpreter/references.js";
 import {
   MAX_GUEST_COLLECTION_ENTRIES,
   MAX_GUEST_STRING_LENGTH,
@@ -847,6 +854,218 @@ describe("JSON and log growth limits", () => {
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.logs?.[0]?.length).toBeLessThanOrEqual(MAX_LOG_ENTRY_LENGTH + 64);
+    }),
+  );
+});
+
+describe("aggregate data-boundary budgets", () => {
+  it("refuses shared DAG expansion at both copy doors without materializing the tree", () => {
+    let value: InterpreterValue = [0];
+    for (let i = 0; i < 18; i++) value = [value, value];
+    expect(() => copyIn(value, "DAG")).toThrow(/expanded data budget/);
+    expect(() => copyOut(value)).toThrow(/expanded data budget/);
+    const text = "x".repeat(MAX_GUEST_STRING_LENGTH);
+    expect(() => copyIn([text, text, text], "Text DAG")).toThrow(/expanded data budget/);
+    expect(() => copyOut([text, text, text])).toThrow(/expanded data budget/);
+  });
+
+  it("charges sparse container slots before descending into more allocations", () => {
+    let value: InterpreterValue = null;
+    for (let i = 0; i < 4; i++) {
+      const sparse: Array<InterpreterValue> = [];
+      sparse.length = MAX_GUEST_COLLECTION_ENTRIES;
+      sparse[0] = value;
+      value = sparse;
+    }
+    expect(() => copyIn(value, "Sparse amplification")).toThrow(/expanded data budget/);
+    expect(() => copyOut(value)).toThrow(/expanded data budget/);
+  });
+
+  it("keeps full-size flat values, pair collections, sparse arrays and boundary scalars", () => {
+    const array = Array.from({ length: MAX_GUEST_COLLECTION_ENTRIES }, () => 1);
+    expect(copyOut(copyIn(array, "Exact fit"))).toEqual(array);
+    const pairs = array.map((value, index) => [index, value]);
+    expect(copyOut(copyIn(pairs, "Exact pairs"))).toEqual(pairs);
+    const sparse: Array<InterpreterValue> = [];
+    sparse.length = MAX_GUEST_COLLECTION_ENTRIES;
+    sparse[1] = undefined;
+    const result = copyOut(copyIn(sparse, "Sparse"), true);
+    expect(Array.isArray(result)).toBe(true);
+    if (!Array.isArray(result)) throw new Error("expected array");
+    expect(result).toHaveLength(MAX_GUEST_COLLECTION_ENTRIES);
+    expect(0 in result).toBe(false);
+    expect(result[1]).toBe(null);
+    expect(
+      copyOut(copyIn([NaN, Infinity, hostDate(0), new URL("https://example.com")], "Scalars")),
+    ).toEqual([null, null, "1970-01-01T00:00:00.000Z", "https://example.com/"]);
+    const text = "\u0000".repeat(MAX_GUEST_STRING_LENGTH);
+    expect(copyOut(copyIn(text, "Exact string"))).toBe(text);
+  });
+
+  it("evaluates shared getters per occurrence, including accessor-dependent ancestors", () => {
+    for (const copy of [copyIn, (value: InterpreterValue) => copyOut(value)]) {
+      let reads = 0;
+      const shared = {
+        get value() {
+          return ++reads;
+        },
+      };
+      const ancestor = { child: [shared] };
+      const result = copy([shared, shared, ancestor, ancestor], "Host data");
+      expect(reads).toBe(4);
+      expect(result).toEqual([
+        { value: 1 },
+        { value: 2 },
+        { child: [{ value: 3 }] },
+        { child: [{ value: 4 }] },
+      ]);
+      if (!Array.isArray(result)) throw new Error("expected array");
+      expect(result[0]).not.toBe(result[1]);
+      expect(result[2]).not.toBe(result[3]);
+    }
+    expect(() => copyIn({ toJSON: () => 1 }, "Callback")).toThrow(/data only/);
+  });
+
+  it("preserves sparse getter indices and invalidates data memoized before getter mutations", () => {
+    let reads = 0;
+    const sparse: Array<InterpreterValue> = [];
+    sparse.length = 3;
+    Object.defineProperty(sparse, 1, { get: () => ++reads, enumerable: true });
+    const copied = copyIn([sparse, sparse], "Sparse getters");
+    if (!Array.isArray(copied)) throw new Error("expected array");
+    for (const [index, item] of copied.entries()) {
+      if (!Array.isArray(item)) throw new Error("expected nested array");
+      expect(item).toHaveLength(3);
+      expect(0 in item).toBe(false);
+      expect(item[1]).toBe(index + 1);
+      expect(2 in item).toBe(false);
+    }
+    expect(reads).toBe(2);
+    const plain = { value: 1 };
+    const accessor = {
+      get change() {
+        plain.value++;
+        return 0;
+      },
+    };
+    expect(copyIn([plain, accessor, plain], "Mutation")).toEqual([
+      { value: 1 },
+      { change: 0 },
+      { value: 2 },
+    ]);
+  });
+
+  it("checks shared DAG reachability once per identity without hiding later references", () => {
+    let visits = 0;
+    const leaf = {
+      get value() {
+        // Fail promptly if visited-identity tracking regresses, rather than traversing 2^31 leaves.
+        if (++visits > 64) throw new Error("Shared graph traversal exceeded its work budget");
+        return 0;
+      },
+    };
+    let dag: InterpreterValue = [leaf];
+    for (let i = 0; i < 31; i++) dag = [dag, dag];
+    for (const contains of [containsRuntimeReference, containsOpaqueReference]) {
+      expect(contains(dag)).toBe(false);
+      expect(contains([dag, { hidden: Symbol("opaque") }])).toBe(true);
+    }
+  });
+
+  it.effect("preserves occurrence-based getters in host tool results", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const shared = {
+        get value() {
+          return ++reads;
+        },
+      };
+      const ancestor = { child: shared };
+      const result = yield* CodeMode.execute({
+        code: "const result = await tools.load({}); result[0].child.value = 99; return result;",
+        tools: {
+          load: Tool.make({
+            description: "Load getter data",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            run: () => Effect.succeed([ancestor, ancestor]),
+          }),
+        },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        value: [{ child: { value: 99 } }, { child: { value: 2 } }],
+      });
+      expect(reads).toBe(2);
+    }),
+  );
+
+  it.effect("refuses amplified final returns and tool inputs before dispatch", () =>
+    Effect.gen(function* () {
+      const seed = "let a = [0]; for (let i = 0; i < 18; i++) a = [a, a];";
+      let dispatched = false;
+      for (const code of [
+        `${seed} return a;`,
+        `${seed} return await tools.take(a);`,
+        `const a = "x".repeat(${MAX_GUEST_STRING_LENGTH}); return await tools.take(a, a, a);`,
+      ]) {
+        const result = yield* CodeMode.execute({
+          code,
+          tools: {
+            take: Tool.make({
+              description: "Accept data",
+              input: Schema.Unknown,
+              output: Schema.Boolean,
+              run: () =>
+                Effect.sync(() => {
+                  dispatched = true;
+                  return true;
+                }),
+            }),
+          },
+          limits: { maxOutputBytes: 1000 },
+        });
+        expect(result).toMatchObject({ ok: false, error: { kind: "InvalidDataValue" } });
+      }
+      expect(dispatched).toBe(false);
+    }),
+  );
+
+  it.effect("refuses amplified host output and admits a full-size primitive tool argument", () =>
+    Effect.gen(function* () {
+      let value: InterpreterValue = [0];
+      for (let i = 0; i < 18; i++) value = [value, value];
+      const rejected = yield* CodeMode.execute({
+        code: "return await tools.load({});",
+        tools: {
+          load: Tool.make({
+            description: "Return shared data",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            run: () => Effect.succeed(value),
+          }),
+        },
+      });
+      expect(rejected).toMatchObject({ ok: false, error: { kind: "InvalidToolOutput" } });
+      const array = Array.from({ length: MAX_GUEST_COLLECTION_ENTRIES }, () => 1);
+      const admitted = yield* CodeMode.execute({
+        code: "const a = await tools.load({}); return await tools.take(a);",
+        tools: {
+          load: Tool.make({
+            description: "Return full array",
+            input: Schema.Unknown,
+            output: Schema.Unknown,
+            run: () => Effect.succeed(array),
+          }),
+          take: Tool.make({
+            description: "Count input",
+            input: Schema.Unknown,
+            output: Schema.Finite,
+            run: (input) => Effect.succeed(Array.isArray(input) ? input.length : -1),
+          }),
+        },
+      });
+      expect(admitted).toMatchObject({ ok: true, value: MAX_GUEST_COLLECTION_ENTRIES });
     }),
   );
 });

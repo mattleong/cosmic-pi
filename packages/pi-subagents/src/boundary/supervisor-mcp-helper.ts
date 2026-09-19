@@ -2,30 +2,23 @@
 // The executable MCP edge deliberately owns native stdio and no-follow config reads.
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
-import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FiberMap from "effect/FiberMap";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
-import * as Queue from "effect/Queue";
 import * as Runtime from "effect/Runtime";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { RpcClient, RpcClientError, RpcSerialization } from "effect/unstable/rpc";
 import { Socket } from "effect/unstable/socket";
-import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
+import { isJsonObject } from "pi-cosmic-core";
 import { randomUUID } from "node:crypto";
 import { attachBoundedLineParser } from "./bounded-line-parser.ts";
-import { nodeFsConstants as constants, nodeFsPromises, nodePath } from "./node-builtins.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 import {
   MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
-  MAX_SUPERVISOR_CONFIG_BYTES,
   SUPERVISOR_CHANNEL_VERSION,
-  SupervisorChannelConfigSchema,
   SupervisorChannelIdSchema,
   SupervisorDeliveryIdSchema,
   type SupervisorChannelConfig,
@@ -33,26 +26,28 @@ import {
   SupervisorRpcGroup,
 } from "../supervisor/protocol.ts";
 import {
-  isSupervisorMcpMessageArguments,
-  isSupervisorMcpProxyArguments,
-  isSupervisorMcpReportArguments,
-  MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-  MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
-  MAX_SUPERVISOR_MCP_REPORT_CHARS,
-  MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS,
-  MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS,
-  SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
-  SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
-  SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
-  SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
   SUPERVISOR_MCP_PROXY_TOOL_NAME,
-  SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
-
-const { lstat, open } = nodeFsPromises;
-const { dirname, isAbsolute, resolve } = nodePath;
+import {
+  boundedString,
+  validRpcId,
+  rpcKey,
+  toolDefinitions,
+  proxyToolDefinition,
+  decodeToolArguments,
+  decodeMcpMessage,
+  toolResult,
+  toolResponseFromExit,
+  McpToolCallFailure,
+  type RpcId,
+  type DecodedMcpMessage,
+  type ToolCall,
+  type McpToolResult,
+} from "../supervisor/mcp-wire.ts";
+import { configArgument, readConfig } from "./supervisor-mcp-config.ts";
+import { makeSerializedWriter, McpWriteFailure } from "./supervisor-mcp-writer.ts";
 
 // The helper scrubs its entire inherited environment snapshot before any other work.
 const scrubEnvironment = (environment: NodeJS.ProcessEnv): void => {
@@ -62,14 +57,6 @@ scrubEnvironment(process.env);
 
 const VERSION = SUPERVISOR_CHANNEL_VERSION;
 const SERVER_NAME = "pi-subagents-supervisor";
-
-class McpToolCallFailure extends Data.TaggedError("McpToolCallFailure")<{
-  readonly failure: unknown;
-}> {}
-
-class McpWriteFailure extends Data.TaggedError("McpWriteFailure")<{
-  readonly reason: "capacity" | "closed" | "size" | "stream";
-}> {}
 
 class HelperStartupFailure extends Data.TaggedError("HelperStartupFailure")<{
   readonly diagnostic: string;
@@ -82,237 +69,19 @@ const startupFailure = (diagnostic: string) => new HelperStartupFailure({ diagno
 const SERVER_VERSION = "3.0.0";
 const MAX_LINE_BYTES = MAX_SUPERVISOR_CHANNEL_LINE_BYTES;
 const MAX_QUEUED_INPUT_BYTES = 2 * MAX_LINE_BYTES;
-const MAX_ID_CHARS = 256;
 const MAX_CONCURRENT_CALLS = 16;
-const MAX_PENDING_WRITES = 64;
 const CHANNEL_TIMEOUT_MILLIS = 10_000;
 const CONNECT_TIMEOUT_MILLIS = 5_000;
-
-type RpcId = string | number;
-
-type DecodedMcpMessage =
-  | {
-      readonly method: "initialize";
-      readonly id: RpcId;
-      readonly protocolVersion: string;
-      readonly piBridge: boolean;
-    }
-  | { readonly method: "notifications/initialized" }
-  | { readonly method: "notifications/cancelled"; readonly requestId: RpcId }
-  | { readonly method: "ping" | "tools/list"; readonly id: RpcId }
-  | {
-      readonly method: "tools/call";
-      readonly id: RpcId;
-      readonly name: string;
-      readonly arguments: JsonValue | undefined;
-    }
-  | {
-      readonly method: "unknown";
-      readonly requestedMethod: string;
-      readonly id?: RpcId | undefined;
-    };
-
-type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call" }>;
-
-type DecodedToolArguments =
-  | { readonly kind: "message"; readonly message: string }
-  | { readonly kind: "proxy"; readonly tool: string; readonly argumentsJson: string }
-  | {
-      readonly kind: "report";
-      readonly deliveryId: ReturnType<typeof SupervisorDeliveryIdSchema.make>;
-      readonly report: string;
-    };
 
 interface SerializedWriter {
   readonly write: <ValueInput>(value: ValueInput) => Promise<void>;
   readonly close: () => void;
 }
 
-interface McpToolResult {
-  readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
-  isError?: true;
-}
-
-const own = (value: JsonObject, key: string): boolean =>
-  Object.prototype.hasOwnProperty.call(value, key);
-
-const exactKeys = <ValueInput>(
-  value: ValueInput,
-  allowed: ReadonlyArray<string>,
-  required: ReadonlyArray<string> = [],
-): value is ValueInput & JsonObject =>
-  isJsonObject(value) &&
-  Object.keys(value).every((key) => allowed.includes(key)) &&
-  required.every((key) => own(value, key));
-
-const boundedString = <ValueInput>(
-  value: ValueInput,
-  maximum: number,
-  nonEmpty = true,
-): value is ValueInput & string =>
-  Predicate.isString(value) && value.length <= maximum && (!nonEmpty || value.trim().length > 0);
-
-const validRpcId = <ValueInput>(value: ValueInput): value is ValueInput & RpcId =>
-  (Predicate.isString(value) && value.length > 0 && value.length <= MAX_ID_CHARS) ||
-  (Predicate.isNumber(value) && Number.isSafeInteger(value));
-
-const rpcKey = (value: RpcId): string => `${runtimeTypeName(value)}:${String(value)}`;
-
-const boundedMetadata = <ValueInput>(value: ValueInput, depth = 0): boolean => {
-  if (depth > 6) return false;
-  if (value === null || Predicate.isBoolean(value)) return true;
-  if (Predicate.isNumber(value)) return Number.isFinite(value);
-  if (Predicate.isString(value)) return value.length <= 4096;
-  if (Array.isArray(value))
-    return value.length <= 64 && value.every((entry) => boundedMetadata(entry, depth + 1));
-  if (!isJsonObject(value)) return false;
-  const entries = Object.entries(value);
-  return (
-    entries.length <= 64 &&
-    entries.every(([key, entry]) => key.length <= 128 && boundedMetadata(entry, depth + 1))
-  );
-};
-
-const validMeta = <ParamsInput>(params: ParamsInput): boolean =>
-  params === undefined ||
-  (exactKeys(params, ["_meta"]) && (!own(params, "_meta") || boundedMetadata(params._meta)));
-
 const fixedDiagnostic = <MessageInput>(message: MessageInput): void => {
   const text = boundedString(message, 512) ? message : "Private supervisor helper failed.";
   process.stderr.write(`${text}\n`);
 };
-
-const configArgument = (): string | undefined => {
-  const argument = process.argv[3];
-  if (
-    process.argv.length !== 4 ||
-    process.argv[2] !== "--config" ||
-    !boundedString(argument, 4096) ||
-    !isAbsolute(argument) ||
-    argument.includes("\0")
-  )
-    return undefined;
-  return resolve(argument);
-};
-
-class HelperConfigError extends Schema.TaggedError<HelperConfigError>()("HelperConfigError", {
-  code: Schema.String,
-}) {}
-
-const helperConfigError = (code: string) => new HelperConfigError({ code });
-const decodeConfigJsonOption = Schema.decodeUnknownOption(
-  Schema.fromJsonString(SupervisorChannelConfigSchema),
-  { onExcessProperty: "error" },
-);
-
-const readConfig = (path: string): Effect.Effect<SupervisorChannelConfig, HelperConfigError> =>
-  Effect.gen(function* () {
-    const directoryStat = yield* Effect.tryPromise({
-      try: () => lstat(dirname(path)),
-      catch: () => helperConfigError("unsafe-config-directory"),
-    });
-    if (
-      !directoryStat.isDirectory() ||
-      directoryStat.isSymbolicLink() ||
-      (directoryStat.mode & 0o077) !== 0
-    )
-      return yield* helperConfigError("unsafe-config-directory");
-    const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
-    return yield* Effect.acquireUseRelease(
-      Effect.tryPromise({
-        try: () => open(path, constants.O_RDONLY | noFollow),
-        catch: () => helperConfigError("unsafe-config-file"),
-      }),
-      (handle) =>
-        Effect.gen(function* () {
-          const stat = yield* Effect.tryPromise({
-            try: () => handle.stat(),
-            catch: () => helperConfigError("unsafe-config-file"),
-          });
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SUPERVISOR_CONFIG_BYTES)
-            return yield* helperConfigError("unsafe-config-file");
-          if ((stat.mode & 0o077) !== 0) return yield* helperConfigError("unsafe-config-mode");
-          const source = yield* Effect.tryPromise({
-            try: () => handle.readFile({ encoding: "utf8" }),
-            catch: () => helperConfigError("invalid-config"),
-          });
-          if (Buffer.byteLength(source, "utf8") > MAX_SUPERVISOR_CONFIG_BYTES)
-            return yield* helperConfigError("oversized-config");
-          const decoded = decodeConfigJsonOption(source);
-          if (Option.isNone(decoded)) return yield* helperConfigError("invalid-config");
-          return decoded.value;
-        }),
-      (handle) =>
-        Effect.tryPromise({
-          try: () => handle.close(),
-          catch: () => helperConfigError("config-close-failed"),
-        }).pipe(Effect.ignore),
-    );
-  });
-
-const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerializedWriter")(function* (
-  stream: NodeJS.WritableStream,
-  maximumWrites = MAX_PENDING_WRITES,
-) {
-  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const frames = yield* Queue.bounded<{
-    readonly line: string;
-    readonly ack: Deferred.Deferred<void, McpWriteFailure>;
-  }>(maximumWrites);
-  const acknowledgements = new Set<Deferred.Deferred<void, McpWriteFailure>>();
-  let pending = 0;
-  let closed = false;
-  const writeLine = (line: string) =>
-    Effect.callback<void, McpWriteFailure>((resume) => {
-      stream.write(line, "utf8", (error?: Error | null) =>
-        resume(error ? Effect.fail(new McpWriteFailure({ reason: "stream" })) : Effect.void),
-      );
-    });
-  yield* Effect.forever(
-    Queue.take(frames).pipe(
-      Effect.flatMap((frame) =>
-        Effect.exit(writeLine(frame.line)).pipe(
-          Effect.flatMap((exit) => Deferred.done(frame.ack, exit)),
-          Effect.ensuring(
-            Effect.sync(() => {
-              acknowledgements.delete(frame.ack);
-              pending = Math.max(0, pending - 1);
-            }),
-          ),
-        ),
-      ),
-    ),
-  ).pipe(Effect.forkScoped({ startImmediately: true }));
-  const write = <ValueInput>(value: ValueInput): Promise<void> => {
-    if (closed) return runPromise(Effect.fail(new McpWriteFailure({ reason: "closed" })));
-    if (pending >= maximumWrites)
-      return runPromise(Effect.fail(new McpWriteFailure({ reason: "capacity" })));
-    const line = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES)
-      return runPromise(Effect.fail(new McpWriteFailure({ reason: "size" })));
-    const ack = Deferred.makeUnsafe<void, McpWriteFailure>();
-    acknowledgements.add(ack);
-    pending += 1;
-    if (!Queue.offerUnsafe(frames, { line, ack })) {
-      acknowledgements.delete(ack);
-      pending -= 1;
-      return runPromise(Effect.fail(new McpWriteFailure({ reason: "capacity" })));
-    }
-    return runPromise(Deferred.await(ack));
-  };
-  return {
-    write,
-    close: () => {
-      if (closed) return;
-      closed = true;
-      const failure = new McpWriteFailure({ reason: "closed" });
-      for (const acknowledgement of acknowledgements)
-        Deferred.doneUnsafe(acknowledgement, Effect.fail(failure));
-      acknowledgements.clear();
-      pending = 0;
-    },
-  } satisfies SerializedWriter;
-});
 
 let config: SupervisorChannelConfig;
 let stdout: SerializedWriter;
@@ -340,12 +109,6 @@ const sendRpc = <MessageInput>(message: MessageInput): Promise<void> =>
 
 const rpcError = (id: RpcId | null, code: number, message: string): Promise<void> =>
   sendRpc({ jsonrpc: "2.0", id, error: { code, message } });
-
-const toolResult = (text: string, isError = false): McpToolResult => {
-  const result: McpToolResult = { content: [{ type: "text", text }] };
-  if (isError) result.isError = true;
-  return result;
-};
 
 const authenticatedPayload = () => ({
   version: VERSION,
@@ -470,212 +233,8 @@ const callProxy = (
   );
 };
 
-const messageInputSchema = {
-  type: "object",
-  properties: {
-    message: {
-      type: "string",
-      minLength: 1,
-      maxLength: MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
-      pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
-    },
-  },
-  required: SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
-  additionalProperties: false,
-} as const;
-const toolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: false,
-} as const;
-const toolDefinitions = [
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[0],
-    description: "Publish bounded assignment progress to the parent projection.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[1],
-    description:
-      "Record one bounded non-blocking assignment warning in parent-visible run status; repeat it in the final report. Ask a question instead when the risk could invalidate work the parent is doing now.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
-  {
-    name: SUPERVISOR_MCP_MESSAGE_TOOL_NAMES[2],
-    description:
-      "Ask the parent this assignment's one correlated blocking question and wait for its exact reply.",
-    inputSchema: messageInputSchema,
-    annotations: toolAnnotations,
-  },
-  {
-    name: SUPERVISOR_MCP_TOOL_NAMES[3],
-    description:
-      "Submit the complete bounded final report with a stable delivery identity for explicit idempotent retry.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        delivery_id: {
-          type: "string",
-          minLength: 1,
-          maxLength: MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
-          pattern: SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
-        },
-        report: {
-          type: "string",
-          minLength: 1,
-          maxLength: MAX_SUPERVISOR_MCP_REPORT_CHARS,
-          pattern: SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
-        },
-      },
-      required: SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
-      additionalProperties: false,
-    },
-    annotations: { ...toolAnnotations, idempotentHint: true },
-  },
-];
-
-const proxyToolDefinition = {
-  name: SUPERVISOR_MCP_PROXY_TOOL_NAME,
-  description: "Private delegated-Pi coordinator proxy.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      tool: { type: "string", minLength: 1, maxLength: MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS },
-      arguments_json: { type: "string", maxLength: MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS },
-    },
-    required: SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
-    additionalProperties: false,
-  },
-  annotations: toolAnnotations,
-} as const;
-
-const decodeToolArguments = <ValueInput>(
-  name: string,
-  value: ValueInput,
-): DecodedToolArguments | undefined => {
-  if (name === SUPERVISOR_MCP_PROXY_TOOL_NAME) {
-    if (!piBridgeClient || !isSupervisorMcpProxyArguments(value)) return undefined;
-    return { kind: "proxy", tool: value.tool, argumentsJson: value.arguments_json };
-  }
-  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
-    if (!isSupervisorMcpReportArguments(value)) return undefined;
-    const deliveryId = SupervisorDeliveryIdSchema.makeOption(value.delivery_id);
-    if (Option.isNone(deliveryId)) return undefined;
-    return { kind: "report", deliveryId: deliveryId.value, report: value.report };
-  }
-  if (
-    !SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.some((toolName) => toolName === name) ||
-    !isSupervisorMcpMessageArguments(value)
-  )
-    return undefined;
-  return { kind: "message", message: value.message };
-};
-
-const decodeInitializeMessage = <ParamsInput>(
-  params: ParamsInput,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id === undefined ||
-    !exactKeys(
-      params,
-      ["protocolVersion", "capabilities", "clientInfo", "_meta"],
-      ["protocolVersion"],
-    ) ||
-    !boundedString(params.protocolVersion, 64) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
-  )
-    return undefined;
-  return {
-    method: "initialize",
-    id,
-    protocolVersion: params.protocolVersion,
-    piBridge:
-      isJsonObject(params.clientInfo) && params.clientInfo.name === "pi-subagents-pi-bridge",
-  };
-};
-
-const decodeInitializedMessage = <ParamsInput>(
-  params: ParamsInput,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined =>
-  id === undefined && validMeta(params) ? { method: "notifications/initialized" } : undefined;
-
-const decodeCancelledMessage = <ParamsInput>(
-  params: ParamsInput,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id !== undefined ||
-    !exactKeys(params, ["requestId", "reason", "_meta"], ["requestId"]) ||
-    !validRpcId(params.requestId) ||
-    (params.reason !== undefined && !boundedString(params.reason, 512, false)) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
-  )
-    return undefined;
-  return { method: "notifications/cancelled", requestId: params.requestId };
-};
-
-const decodeRequestMessage = <ParamsInput>(
-  method: "ping" | "tools/list",
-  params: ParamsInput,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined =>
-  id !== undefined && validMeta(params) ? { method, id } : undefined;
-
-const decodeToolCallMessage = <ParamsInput>(
-  params: ParamsInput,
-  id: RpcId | undefined,
-): DecodedMcpMessage | undefined => {
-  if (
-    id === undefined ||
-    !exactKeys(params, ["name", "arguments", "_meta"], ["name", "arguments"]) ||
-    !boundedString(params.name, 128) ||
-    (own(params, "_meta") && !boundedMetadata(params._meta))
-  )
-    return undefined;
-  return { method: "tools/call", id, name: params.name, arguments: params.arguments };
-};
-
-const decodeUnknownMessage = (requestedMethod: string, id: RpcId | undefined): DecodedMcpMessage =>
-  id === undefined
-    ? { method: "unknown", requestedMethod }
-    : { method: "unknown", requestedMethod, id };
-
-const decodeMcpMessage = <ValueInput>(value: ValueInput): DecodedMcpMessage | undefined => {
-  if (
-    !exactKeys(value, ["jsonrpc", "id", "method", "params"], ["jsonrpc", "method"]) ||
-    value.jsonrpc !== "2.0" ||
-    !Predicate.isString(value.method) ||
-    value.method.length < 1 ||
-    value.method.length > 128
-  )
-    return undefined;
-  const rawId = value.id;
-  const id = validRpcId(rawId) ? rawId : undefined;
-  if (own(value, "id") && id === undefined) return undefined;
-  switch (value.method) {
-    case "initialize":
-      return decodeInitializeMessage(value.params, id);
-    case "notifications/initialized":
-      return decodeInitializedMessage(value.params, id);
-    case "notifications/cancelled":
-      return decodeCancelledMessage(value.params, id);
-    case "ping":
-    case "tools/list":
-      return decodeRequestMessage(value.method, value.params, id);
-    case "tools/call":
-      return decodeToolCallMessage(value.params, id);
-    default:
-      return decodeUnknownMessage(value.method, id);
-  }
-};
-
 const executeTool = (request: ToolCall, signal: AbortSignal): Promise<McpToolResult> => {
-  const args = decodeToolArguments(request.name, request.arguments);
+  const args = decodeToolArguments(request.name, request.arguments, piBridgeClient);
   const malformed = () =>
     Promise.resolve(toolResult("Tool input is malformed, excessive, or unsupported.", true));
   if (!args) return malformed();
@@ -709,47 +268,6 @@ const executeTool = (request: ToolCall, signal: AbortSignal): Promise<McpToolRes
       );
   }
   return malformed();
-};
-
-const failureCode = <FailureInput>(failure: FailureInput): string | undefined =>
-  failure instanceof SupervisorRpcFailure
-    ? failure.code
-    : isJsonObject(failure) && Predicate.isString(failure.code)
-      ? failure.code
-      : undefined;
-
-const failureMessage = <FailureInput>(failure: FailureInput): string | undefined =>
-  failure instanceof SupervisorRpcFailure
-    ? failure.message
-    : isJsonObject(failure) && boundedString(failure.message, 512)
-      ? failure.message
-      : undefined;
-
-const isCancellationCode = (code: string | undefined): boolean =>
-  code === "request_cancelled" ||
-  code === "question_cancelled" ||
-  code === "question_cancelled_by_report" ||
-  code === "question_assignment_advanced";
-
-const toolResponseFromExit = (id: RpcId, exit: Exit.Exit<McpToolResult, McpToolCallFailure>) => {
-  if (Exit.isSuccess(exit)) return { jsonrpc: "2.0", id, result: exit.value };
-  if (Cause.hasInterruptsOnly(exit.cause))
-    return {
-      jsonrpc: "2.0",
-      id,
-      error: { code: -32800, message: "MCP request was cancelled." },
-    };
-  const wrapped = Cause.findErrorOption(exit.cause);
-  const failure = Option.isSome(wrapped) ? wrapped.value.failure : undefined;
-  const code = failureCode(failure);
-  return {
-    jsonrpc: "2.0",
-    id,
-    error: {
-      code: isCancellationCode(code) ? -32800 : -32000,
-      message: failureMessage(failure) ?? "Private supervisor tool delivery failed.",
-    },
-  };
 };
 
 const writeToolResponse = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
@@ -831,7 +349,7 @@ const dispatchMcp = (request: DecodedMcpMessage): void => {
 };
 
 const main = Effect.gen(function* () {
-  const configPath = configArgument();
+  const configPath = configArgument(process.argv);
   if (!configPath)
     return yield* startupFailure("Private supervisor helper configuration argument is invalid.");
   config = yield* readConfig(configPath).pipe(
@@ -839,7 +357,9 @@ const main = Effect.gen(function* () {
       startupFailure("Private supervisor helper could not open its bounded channel configuration."),
     ),
   );
-  stdout = yield* makeSerializedWriter(process.stdout);
+  const writer = yield* makeSerializedWriter(process.stdout);
+  const runWriter = Effect.runPromiseWith(yield* Effect.context<never>());
+  stdout = { write: (value) => runWriter(writer.write(value)), close: writer.close };
   activeCalls = yield* FiberMap.make<string>();
   const done = yield* Deferred.make<void>();
   requestMainShutdown = () => {

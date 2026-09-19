@@ -11,7 +11,11 @@ import {
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
 import { CodeModeResults } from "../src/results/service.ts";
-import { callEntryDetails, type CodeModeToolDetails } from "../src/tools/format.ts";
+import {
+  callEntryDetails,
+  formatForeignRejection,
+  type CodeModeToolDetails,
+} from "../src/tools/format.ts";
 import { resultReadCompactSummary } from "../src/ui/result-read-summary.ts";
 import {
   codeModeStateFixture,
@@ -251,14 +255,14 @@ describe("registered expanded Code Mode views", () => {
     () =>
       Effect.gen(function* () {
         const results = yield* CodeModeResults;
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
         let retained: CodeModeToolDetails | undefined;
         const state = codeModeStateFixture();
         const execute = makeCodeModeToolExecute({
           isCurrent: () => true,
           getState: () => state,
           results,
-          runInSession: (effect, signal) =>
-            Effect.runPromise(effect, signal ? { signal } : undefined),
+          runInSession: (effect, signal) => runPromise(effect, signal ? { signal } : undefined),
           definitions: nestedToolDefinitionsFixture({}),
           events: createEventBus(),
           sessionId: "expanded-test",
@@ -270,13 +274,11 @@ describe("registered expanded Code Mode views", () => {
           code: 'throw new Error("UNCLASSIFIED_FAILURE");',
           intent: "Failure ownership",
         };
-        const failure = yield* Effect.tryPromise({
-          try: () => execute("outer", args, undefined, undefined, extensionContextFixture({})),
-          catch: (error) =>
-            error instanceof Error ? error : new Error("Unexpected non-Error rejection"),
-        }).pipe(Effect.flip);
+        const failure = yield* Effect.tryPromise(() =>
+          execute("outer", args, undefined, undefined, extensionContextFixture({})),
+        ).pipe(Effect.flip);
         expect(retained?.resultId).toBeTruthy();
-        const raw = failure.message;
+        const raw = formatForeignRejection(failure.cause);
         const diagnostic = raw.split("\n").at(-1)!;
         const instruction = raw.split("\n")[0]!;
         const previous = codePreviewSettings;

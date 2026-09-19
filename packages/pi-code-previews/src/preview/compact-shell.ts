@@ -1,17 +1,9 @@
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  Container,
-  Text,
-  getCapabilities,
-  imageFallback,
-  type Component,
-  type TuiMouseEvent,
-} from "@earendil-works/pi-tui";
+import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
-import { getTextContent } from "../tools/data/results";
+import { getFallbackResultText } from "../tools/data/results";
 import {
   resolveCompactSummary,
   type CompactAnimationScheduler,
@@ -111,7 +103,7 @@ class CompactShell implements Component {
   }
 
   private update(context: ToolRenderContext, theme: Theme): void {
-    this.slots.update();
+    this.slots.update(context, this.result);
     this.context = context;
     this.theme = theme;
     this.display = undefined;
@@ -328,13 +320,7 @@ class CompactShell implements Component {
   }
 
   private fallbackResultText(): string {
-    const content = this.currentResult()?.content ?? [];
-    const text = getTextContent(content);
-    if (this.context.showImages && getCapabilities().images) return text;
-    const images = content.flatMap((part) =>
-      part.type === "image" ? [imageFallback(part.mimeType)] : [],
-    );
-    return [text, ...images].filter(Boolean).join("\n");
+    return getFallbackResultText(this.currentResult()?.content ?? [], this.context.showImages);
   }
 
   handleMouse(event: TuiMouseEvent) {

@@ -10,6 +10,8 @@ import {
   writeWorkspaceFile,
 } from "./git-worktree-process.ts";
 
+const MAX_RECORD_BYTES = 64 * 1024 * 1024;
+
 export const newWorkspaceId = () =>
   Effect.try({
     try: () => process.getBuiltinModule("node:crypto").randomUUID(),
@@ -68,6 +70,12 @@ export const saveWorkspaceRecord = (root: string, record: WorkspaceRecord) =>
     const data = yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(
       record,
     ).pipe(Effect.mapError(() => workspaceFailure("registry", "Invalid workspace record.")));
+    // JSON escaping can exceed the reader's bound even for an allowed raw diff.
+    if (Buffer.byteLength(data, "utf8") > MAX_RECORD_BYTES)
+      return yield* workspaceFailure(
+        "registry",
+        "Encoded workspace record exceeds recovery size limit.",
+      );
     // Exclusive creation owns the temporary. A crash leaves it for manual recovery.
     yield* writeWorkspaceFile(temporary, new TextEncoder().encode(data), 0o600);
     // Rename is not durable until its containing directory is flushed. Failure after
@@ -88,7 +96,7 @@ export const readWorkspaceRecord = (root: string, id: string) =>
     yield* checkDirectory(directory);
     const safe = yield* SafeFile;
     const { bytes } = yield* safe
-      .readContainedRegularFile(path.join(directory, "record.json"), root, 64 * 1024 * 1024)
+      .readContainedRegularFile(path.join(directory, "record.json"), root, MAX_RECORD_BYTES)
       .pipe(
         Effect.mapError(() =>
           workspaceFailure("registry", "Cannot read workspace recovery record."),

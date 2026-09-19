@@ -89,23 +89,25 @@ export const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
   if (error instanceof ProgramThrow) {
     const value = error.value;
     let message: string;
-    if (containsRuntimeReference(value)) {
-      // A thrown tool/function reference must not leak its internal structure.
-      message = "a non-data value";
-    } else if (Predicate.isString(value)) {
-      message = value;
-    } else if (value !== null && hasObjectRuntimeType(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, "message");
-      message =
-        descriptor && "value" in descriptor && Predicate.isString(descriptor.value)
-          ? descriptor.value
-          : (JSON.stringify(copyOut(value)) ?? String(value));
-    } else {
-      try {
+    try {
+      if (containsRuntimeReference(value)) {
+        // A thrown tool/function reference must not leak its internal structure.
+        message = "a non-data value";
+      } else if (Predicate.isString(value)) {
+        message = value;
+      } else if (value !== null && hasObjectRuntimeType(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, "message");
+        message =
+          descriptor && "value" in descriptor && Predicate.isString(descriptor.value)
+            ? descriptor.value
+            : (JSON.stringify(copyOut(value)) ?? "a non-data value");
+      } else {
         message = JSON.stringify(copyOut(value)) ?? String(value);
-      } catch {
-        message = String(value);
       }
+    } catch {
+      // Normalization runs inside the Effect failure handler. Projection refusal must
+      // remain a failed Result, without retrying coercion or inspecting rejected data.
+      message = "a value that could not be safely projected";
     }
     return { kind: "ExecutionFailure", message: `Uncaught: ${message}` };
   }
