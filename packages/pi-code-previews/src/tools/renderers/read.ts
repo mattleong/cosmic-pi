@@ -1,3 +1,4 @@
+import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import type { ReadToolOptions } from "@earendil-works/pi-coding-agent";
@@ -22,6 +23,7 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
 
   return createCodePreviewToolDefinition(originalRead, {
     compactSummary: (input) => createBuiltinCompactSummary("read", input),
+    expandedContent: builtinExpandedContent<typeof originalRead>("read", cwd),
     renderCall(args, theme) {
       const path = getPathArg(args);
       const lang = resolvePreviewLanguage({ path, piLanguage: getLanguageFromPath(path) });

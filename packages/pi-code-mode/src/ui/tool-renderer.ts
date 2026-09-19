@@ -75,6 +75,16 @@ export const codeModeSource = <Args>(args: Args): string | undefined => {
   return Predicate.isString(code) ? code : undefined;
 };
 
+/** Content-only call slot survives shared failure-body rendering. */
+export const renderCodeModeProgramContent = <Args>(args: Args): Component => {
+  if (codeModeReadRequest(args)) return new Container();
+  const source = truncateDisplay(
+    stripTerminalControls(formatCodeModeProgram(codeModeSource(args) ?? "(program not available)")),
+    MAX_SOURCE_DISPLAY_LENGTH,
+  );
+  return new Text(`Program\n${source}`, 0, 0);
+};
+
 export interface CodeModeRenderContext {
   readonly expanded: boolean;
   readonly isError?: boolean;
@@ -245,7 +255,10 @@ const renderCodeModeToolResultUnsafe = (
       animationFrame,
       {
         ...presentation,
-        fallbackStatus: presentation.ownsCall ? "" : footerLine(details, isPartial, isError, theme),
+        fallbackStatus:
+          presentation.ownsCall || presentation.contentOnly
+            ? ""
+            : footerLine(details, isPartial, isError, theme),
         summary: presentation.summary ?? {
           subject: "Tool orchestration",
           counters: [`${details.totalToolCalls} tools`],
@@ -325,6 +338,7 @@ export const renderCodeModeToolResult = (
         isError,
         expanded,
         theme,
+        presentation.contentOnly,
       ),
       shouldAnimate: false,
     };
@@ -354,21 +368,23 @@ export const renderCodeModeToolResult = (
         ),
       );
     }
-    component.addChild(
-      new Text(
-        isPartial ? "Code Mode running" : isError ? "Code Mode failed" : "Code Mode result",
-        0,
-        0,
-      ),
-    );
+    if (!presentation.contentOnly)
+      component.addChild(
+        new Text(
+          isPartial ? "Code Mode running" : isError ? "Code Mode failed" : "Code Mode result",
+          0,
+          0,
+        ),
+      );
     if (!isPartial && output.length > 0) {
       if (!expanded)
         component.addChild(new Text(`▸ ${isError ? "error" : "output"} · expand`, 0, 0));
       else {
-        component.addChild(new Text(isError ? "Error" : "Output", 0, 0));
+        component.addChild(new Text(isError ? "Raw error" : "Raw output", 0, 0));
         component.addChild(new Text(output, 0, 0));
       }
     }
+    if (presentation.contentOnly) return component;
     for (const notice of new Set([
       ...visibleNotices(details, expanded),
       ...(presentation.summary?.notices

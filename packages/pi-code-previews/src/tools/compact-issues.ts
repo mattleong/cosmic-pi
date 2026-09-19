@@ -9,9 +9,6 @@ export interface CompactIssue {
   readonly cause: string;
   readonly recovery: readonly { readonly code: string; readonly text: string }[];
   readonly diagnostics?: readonly string[];
-  /** This issue's complete cause, recovery and diagnostics appear in the original
-   * expanded result, independently of aggregate coverage. Revoked on render failure. */
-  readonly expandedInResult?: true;
 }
 export interface CompactIssues {
   readonly coverage: "complete" | "unknown";
@@ -19,19 +16,17 @@ export interface CompactIssues {
 }
 
 const Identity = Schema.String.check(Schema.isMinLength(1));
+const IssueSchema = Schema.Struct({
+  operation: Identity,
+  code: Identity,
+  severity: Schema.Literals(["error", "warning"]),
+  cause: Schema.String,
+  recovery: Schema.Array(Schema.Struct({ code: Identity, text: Schema.String })),
+  diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
+});
 export const CompactIssuesSchema = Schema.Struct({
   coverage: Schema.Literals(["complete", "unknown"]),
-  entries: Schema.Array(
-    Schema.Struct({
-      operation: Identity,
-      code: Identity,
-      severity: Schema.Literals(["error", "warning"]),
-      cause: Schema.String,
-      recovery: Schema.Array(Schema.Struct({ code: Identity, text: Schema.String })),
-      diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
-      expandedInResult: Schema.optionalKey(Schema.Literal(true)),
-    }),
-  ),
+  entries: Schema.Array(IssueSchema),
 });
 export const isCompactIssues = Schema.is(CompactIssuesSchema);
 
@@ -48,11 +43,7 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
         (old) => old.operation === issue.operation && old.code === issue.code,
       );
       const same = sameIdentity.find(
-        (old) =>
-          old.severity === issue.severity &&
-          old.cause === issue.cause &&
-          old.expandedInResult === issue.expandedInResult &&
-          JSON.stringify(old.diagnostics) === JSON.stringify(issue.diagnostics),
+        (old) => old.severity === issue.severity && old.cause === issue.cause,
       );
       if (sameIdentity.length && !same) complete = false;
       const recovery = issue.recovery.filter((instruction) => {
@@ -66,35 +57,142 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
       });
       if (same) {
         const index = entries.indexOf(same);
-        entries[index] = { ...same, recovery: [...same.recovery, ...recovery] };
+        entries[index] = {
+          ...same,
+          recovery: [...same.recovery, ...recovery],
+          ...((same.diagnostics || issue.diagnostics) && {
+            diagnostics: [...new Set([...(same.diagnostics ?? []), ...(issue.diagnostics ?? [])])],
+          }),
+        };
       } else entries.push({ ...issue, recovery: [...recovery] });
     }
   }
   return { coverage: complete ? "complete" : "unknown", entries };
 }
 
-/** The producer names root causes copied from the outer failure body. Additional
- * recovery/diagnostics and conflicting identities remain independent. No text matching. */
-export function withoutFailureBodyIssues(
+/** A detached evidence snapshot, not an identity-based promise about future merges. */
+export interface CompactIssueClaim extends CompactIssue {
+  readonly fields: {
+    readonly cause?: true;
+    readonly recovery?: readonly string[];
+    readonly diagnostics?: readonly number[];
+  };
+}
+
+export const CompactIssueClaimSchema = Schema.Struct({
+  ...IssueSchema.fields,
+  fields: Schema.Struct({
+    cause: Schema.optionalKey(Schema.Literal(true)),
+    recovery: Schema.optionalKey(Schema.Array(Identity)),
+    diagnostics: Schema.optionalKey(Schema.Array(Schema.Natural)),
+  }),
+});
+const isClaim = Schema.is(CompactIssueClaimSchema);
+
+export function claimCompactIssue(
+  issue: CompactIssue,
+  fields: CompactIssueClaim["fields"],
+): CompactIssueClaim {
+  return {
+    operation: issue.operation,
+    code: issue.code,
+    severity: issue.severity,
+    cause: issue.cause,
+    recovery: issue.recovery.map((entry) => ({ ...entry })),
+    ...(issue.diagnostics && { diagnostics: [...issue.diagnostics] }),
+    fields: {
+      ...(fields.cause && { cause: true }),
+      ...(fields.recovery && { recovery: [...fields.recovery] }),
+      ...(fields.diagnostics && { diagnostics: [...fields.diagnostics] }),
+    },
+  };
+}
+
+/** Validate against the entire aggregate before subtracting any selected field.
+ * Conflicting causes/severity or operation-scoped recovery codes revoke ownership.
+ */
+export function subtractCompactIssueClaims(
   issues: CompactIssues,
-  owned: NonNullable<CompactSummary["failure"]>["ownedIssues"],
+  claims: readonly CompactIssueClaim[] | undefined = undefined,
 ): CompactIssues {
+  const valid = (claims ?? []).filter((claim) => {
+    if (!isClaim(claim)) return false;
+    const same = issues.entries.filter(
+      (entry) => entry.operation === claim.operation && entry.code === claim.code,
+    );
+    if (
+      !same.length ||
+      same.some((entry) => entry.cause !== claim.cause || entry.severity !== claim.severity)
+    )
+      return false;
+    const evidence = issues.entries
+      .filter((entry) => entry.operation === claim.operation)
+      .flatMap((entry) => entry.recovery);
+    const snapshot = new Map<string, string>();
+    for (const entry of claim.recovery) {
+      if (snapshot.has(entry.code) && snapshot.get(entry.code) !== entry.text) return false;
+      snapshot.set(entry.code, entry.text);
+      if (!evidence.some((current) => current.code === entry.code && current.text === entry.text))
+        return false;
+    }
+    if (
+      evidence.some((entry) =>
+        evidence.some((other) => other.code === entry.code && other.text !== entry.text),
+      )
+    )
+      return false;
+    if (claim.fields.recovery?.some((code) => !snapshot.has(code))) return false;
+    if (
+      claim.fields.diagnostics?.some(
+        (index) =>
+          !Number.isInteger(index) || index < 0 || claim.diagnostics?.[index] === undefined,
+      )
+    )
+      return false;
+    const diagnostics = same.flatMap((entry) => entry.diagnostics ?? []);
+    return (
+      (claim.diagnostics ?? []).every((text) => diagnostics.includes(text)) &&
+      (claim.fields.diagnostics ?? []).every((index) => {
+        const text = claim.diagnostics?.[index];
+        return (
+          claim.diagnostics?.filter((entry) => entry === text).length === 1 &&
+          diagnostics.filter((entry) => entry === text).length === 1
+        );
+      })
+    );
+  });
   return {
     ...issues,
     entries: issues.entries.flatMap((issue) => {
-      if (!owned?.some((key) => key.operation === issue.operation && key.code === issue.code))
-        return [issue];
-      const sameIdentity = issues.entries.filter(
-        (entry) => entry.operation === issue.operation && entry.code === issue.code,
+      const own = valid.filter(
+        (claim) => claim.operation === issue.operation && claim.code === issue.code,
       );
-      const recoveryCodes = new Set(issue.recovery.map((entry) => entry.code));
-      if (sameIdentity.length > 1 || recoveryCodes.size !== issue.recovery.length) return [issue];
-      // Normalization may merge an independent instruction onto an owned cause.
-      // Body ownership never absorbs that extra evidence, even with a distinct code.
-      return issue.recovery.length || issue.diagnostics?.length ? [{ ...issue, cause: "" }] : [];
+      const cause = own.some((claim) => claim.fields.cause) ? "" : issue.cause;
+      const recovery = issue.recovery.filter(
+        (entry) =>
+          !valid.some(
+            (claim) =>
+              claim.operation === issue.operation &&
+              claim.fields.recovery?.includes(entry.code) &&
+              claim.recovery.some(
+                (snapshot) => snapshot.code === entry.code && snapshot.text === entry.text,
+              ),
+          ),
+      );
+      const diagnostics = issue.diagnostics?.filter(
+        (text) =>
+          !own.some((claim) =>
+            claim.fields.diagnostics?.some((index) => claim.diagnostics?.[index] === text),
+          ),
+      );
+      return cause || recovery.length || diagnostics?.length
+        ? [{ ...issue, cause, recovery, ...(diagnostics && { diagnostics }) }]
+        : [];
     }),
   };
 }
+
+export const withoutFailureBodyIssues = subtractCompactIssueClaims;
 
 export function compactIssueSeverity(issues: CompactIssues): "error" | "warning" | undefined {
   return issues.entries.some((issue) => issue.severity === "error")
@@ -122,7 +220,6 @@ export function legacyCompactIssues(
               severity: notice.kind === "error" ? ("error" as const) : ("warning" as const),
               cause: notice.text,
               recovery: [],
-              ...(notice.expandedInResult && { expandedInResult: true as const }),
             },
           ],
     ),
@@ -145,7 +242,6 @@ export function withCompactIssues<T extends CompactSummary>(
       severity: summary.outcome === "uncertain" ? "warning" : "error",
       cause: summary.failure.cause,
       recovery: [],
-      expandedInResult: true,
     });
   for (const [index, notice] of (summary.notices ?? []).entries()) {
     if (notice.code && notice.kind === "recovery" && notice.expandedOnly) continue;
@@ -158,7 +254,6 @@ export function withCompactIssues<T extends CompactSummary>(
         notice.kind === "recovery"
           ? [{ code: notice.code ?? `notice-${index}`, text: notice.text }]
           : [],
-      ...(notice.expandedInResult && { expandedInResult: true }),
     });
   }
   return {

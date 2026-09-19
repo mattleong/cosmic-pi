@@ -46,7 +46,6 @@ export function resultReadCompactSummary<Details>(
           {
             operation: "result.read",
             code: read.code,
-            expandedInResult: true,
             severity: "error",
             cause: resultReadFailures[read.code].cause,
             recovery: [],
@@ -78,7 +77,6 @@ export function resultReadCompactSummary<Details>(
             {
               operation: "original-execution",
               code: `original-${read.originalOutcome}`,
-              expandedInResult: true,
               severity: "warning",
               cause: `Original execution ${read.originalOutcome}; page read succeeded.`,
               recovery: [],
@@ -98,7 +96,6 @@ export function resultReadCompactSummary<Details>(
               kind: "recovery",
               text: `Continue with result.read id="${id}" offset=${read.next}.`,
               expandedOnly: true,
-              expandedInResult: true,
             },
           ],
   };

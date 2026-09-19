@@ -82,12 +82,7 @@ export function renderCompactFailure(
       ...header,
       ...indentedCompactText(failure.details, "  ", color, theme, width),
       ...renderCompactIssues(
-        failure.ownedIssues !== undefined
-          ? withoutFailureBodyIssues(issues, failure.ownedIssues)
-          : {
-              ...issues,
-              entries: issues.entries.filter((issue) => !summary.issues || !issue.expandedInResult),
-            },
+        withoutFailureBodyIssues(issues, failure.ownedIssues),
         theme,
         width,
         true,

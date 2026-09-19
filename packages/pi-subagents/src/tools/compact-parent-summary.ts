@@ -1,4 +1,5 @@
-import { withCompactIssues } from "pi-code-previews";
+import { withCompactIssues, type CodePreviewShellOptions } from "pi-code-previews";
+import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
@@ -39,6 +40,43 @@ const decodeReceipt = Schema.decodeUnknownOption(
   }),
   { onExcessProperty: "error" },
 );
+
+/** Input evidence and replies only; the shared shell owns acknowledgement and warning rows. */
+export function createParentExpandedContent(
+  toolName: string,
+): NonNullable<CodePreviewShellOptions["expandedContent"]> {
+  const project = createParentCompactSummary(toolName);
+  return {
+    renderCall: (args, theme, context) => {
+      if (!Predicate.isObject(args)) return new Text("", 0, 0);
+      const warning =
+        toolName === "supervisor_warning" || ("kind" in args && args.kind === "warning");
+      const message = "report" in args ? args.report : "message" in args ? args.message : undefined;
+      return new Text(
+        (!warning || context.isError) && Predicate.isString(message)
+          ? theme.fg("toolOutput", stripTerminalControls(message))
+          : "",
+        0,
+        0,
+      );
+    },
+    renderResult: (result, options, theme, context) => {
+      const summary = project({
+        phase: options.isPartial ? "running" : "settled",
+        args: context?.args,
+        result,
+        context,
+      });
+      const text = summary
+        ? ""
+        : result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n");
+      return new Text(theme.fg("toolOutput", stripTerminalControls(text)), 0, 0);
+    },
+  };
+}
 
 /** Only owned acknowledgements may replace a settled child result. Replies stay verbatim. */
 export function createParentCompactSummary(

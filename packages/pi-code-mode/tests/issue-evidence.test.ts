@@ -8,6 +8,8 @@ import {
   type CompactReceipt,
 } from "../src/tools/compact-evidence.ts";
 import { decodeOption } from "../src/tools/format.ts";
+import { BoundedIssuesSchema, invocationIssues } from "../src/tools/issue-evidence.ts";
+import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { opaqueHostFixture } from "./support/host.ts";
 
@@ -25,6 +27,56 @@ const issues: CompactIssues = {
 };
 
 describe("bounded v2 issue evidence", () => {
+  it("detaches and retains diagnostic evidence through nested correlation, replay and aggregation", () => {
+    const diagnostics = [
+      "Inspect the original execution; reading output does not undo side effects.",
+    ];
+    const original = {
+      ...issues,
+      entries: [{ ...issues.entries[0]!, diagnostics, expandedInResult: true }],
+    };
+    const before = JSON.stringify(original);
+    const receipts: CompactReceipt[] = [];
+    const collector = makeCompactEvidence((_id, receipt) => receipts.push(receipt));
+    collector.admit("mcp.request");
+    collector.start(1, 1);
+    collector.observe(1, () => ({ subject: "MCP", outcome: "error", issues: original }));
+    collector.end(1);
+    collector.close();
+    const retained = receipts[0]!;
+    const replay = decodeCodeModeRenderDetails({
+      toolCalls: [{ id: 1, tool: "mcp.request", status: "error", compact: retained }],
+      counts: { total: 1, running: 0, queued: 0, failed: 1, cancelled: 0, succeeded: 0 },
+      compactAttention: collector.snapshot(),
+    });
+    expect(retained.version).toBe(2);
+    if (retained.version !== 2 || replay.compactAttention?.version !== 2)
+      throw new Error("Expected v2 evidence");
+    expect(retained.issues.entries[0]?.diagnostics).toEqual(diagnostics);
+    expect(Object.isFrozen(retained.issues.entries[0]?.diagnostics)).toBe(true);
+    expect(JSON.stringify(retained)).not.toContain("expandedInResult");
+    expect(replay.compactAttention.issues.entries[0]?.diagnostics).toEqual(diagnostics);
+    expect(JSON.stringify(original)).toBe(before);
+    diagnostics.push("late mutation");
+    expect(retained.issues.entries[0]?.diagnostics).toHaveLength(1);
+  });
+
+  it("bounds diagnostics by UTF-16 units and count before retaining them", () => {
+    const candidate = (diagnostics: string[]) => ({
+      ...issues,
+      entries: [{ ...issues.entries[0]!, diagnostics }],
+    });
+    expect(invocationIssues(candidate(["😀".repeat(512)]), 1)).toBeDefined();
+    expect(invocationIssues(candidate(["😀".repeat(512) + "x"]), 1)).toBeUndefined();
+    expect(decodeOption(BoundedIssuesSchema, candidate(Array(9).fill("detail")))).toBeUndefined();
+    const sanitized = invocationIssues(candidate(["hello\u001b[31mworld"]), 1);
+    expect(sanitized?.entries[0]?.diagnostics?.[0]).not.toContain("\u001b");
+    expect(
+      recoverCompactNotices({ issues: candidate(["Retained diagnostic"]), outcome: "bad" }).map(
+        (notice) => notice.text,
+      ),
+    ).toContain("Retained diagnostic");
+  });
   it("does not convert cancellation diagnostics into an independent error", () => {
     const collector = makeCompactEvidence(() => undefined);
     collector.close();

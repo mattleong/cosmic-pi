@@ -21,6 +21,7 @@ export function compactRunNotices(
   reportsOnlyOmitted = false,
   quietHistory = false,
   quietChildWarnings = false,
+  includeQuietHistory?: boolean,
 ) {
   const notices: CompactNotice[] = [];
   let skipped = 0;
@@ -94,9 +95,22 @@ export function compactRunNotices(
           `${skipped.candidate}: ${skipped.reason}`,
           "warning",
         );
-    else skipped += card.selection.skippedCandidates.length;
+    else {
+      skipped += card.selection.skippedCandidates.length;
+      notices.push(...quietHistoryNotices(card, includeQuietHistory));
+    }
   }
   return { notices, skipped };
+}
+
+function quietHistoryNotices(card: SubagentRunCard, include: boolean | undefined): CompactNotice[] {
+  if (!include) return [];
+  return card.selection.skippedCandidates.map((candidate) => ({
+    code: `${card.id}:selection:${candidate.candidate}:${candidate.code}`,
+    kind: "recovery",
+    expandedOnly: true,
+    text: `${card.name}: ${candidate.candidate}: ${candidate.reason}`,
+  }));
 }
 
 function evidenceNotices(

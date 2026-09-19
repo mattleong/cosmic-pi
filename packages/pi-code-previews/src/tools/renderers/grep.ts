@@ -1,3 +1,4 @@
+import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import { createGrepToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -25,6 +26,7 @@ export function createGrepPreviewTool(cwd: string) {
 
   return createCodePreviewToolDefinition(originalGrep, {
     compactSummary: (input) => createBuiltinCompactSummary("grep", input),
+    expandedContent: builtinExpandedContent<typeof originalGrep>("grep", cwd),
     renderCall(args, theme) {
       const pattern = Predicate.isString(args.pattern) ? args.pattern : "";
       const path = Predicate.isString(args.path) && args.path ? args.path : ".";

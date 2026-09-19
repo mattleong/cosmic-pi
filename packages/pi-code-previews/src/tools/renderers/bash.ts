@@ -1,3 +1,4 @@
+import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import type { BashToolOptions } from "@earendil-works/pi-coding-agent";
@@ -33,6 +34,7 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
 
   return createCodePreviewToolDefinition(originalBash, {
     compactSummary: (input) => createBuiltinCompactSummary("bash", input),
+    expandedContent: builtinExpandedContent<typeof originalBash>("bash", cwd),
     renderCall(args, theme, renderContext) {
       const command = Predicate.isString(args.command) ? args.command : "";
       const timeout = Predicate.isNumber(args.timeout)

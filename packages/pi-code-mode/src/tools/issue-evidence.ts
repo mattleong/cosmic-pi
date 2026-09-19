@@ -1,25 +1,18 @@
 /** Bounded display evidence; never execution or retry authority. */
-import * as Schema from "effect/Schema";
-import { legacyCompactIssues, type CompactIssues } from "pi-code-previews";
+import {
+  createBoundedCompactIssuesSchema,
+  legacyCompactIssues,
+  type CompactIssues,
+} from "pi-code-previews";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import { decodeOption } from "./format.ts";
 
-const Text = Schema.String.check(Schema.isMaxLength(1024));
-const Identity = Text.check(Schema.isMinLength(1));
-export const BoundedIssuesSchema = Schema.Struct({
-  coverage: Schema.Literals(["complete", "unknown"]),
-  entries: Schema.Array(
-    Schema.Struct({
-      operation: Identity,
-      code: Identity,
-      severity: Schema.Literals(["error", "warning"]),
-      cause: Text,
-      recovery: Schema.Array(Schema.Struct({ code: Identity, text: Text })).check(
-        Schema.isMaxLength(8),
-      ),
-      expandedInResult: Schema.optionalKey(Schema.Literal(true)),
-    }),
-  ).check(Schema.isMaxLength(32)),
+// Ownership belongs to a rendered card, never to a nested receipt.
+export const BoundedIssuesSchema = createBoundedCompactIssuesSchema({
+  maxTextLength: 1024,
+  maxEntries: 32,
+  maxRecoveryEntries: 8,
+  maxDiagnosticEntries: 8,
 });
 export const freezeIssues = (issues: CompactIssues): CompactIssues =>
   Object.freeze({
@@ -29,6 +22,7 @@ export const freezeIssues = (issues: CompactIssues): CompactIssues =>
         Object.freeze({
           ...issue,
           recovery: Object.freeze(issue.recovery.map((item) => Object.freeze({ ...item }))),
+          ...(issue.diagnostics && { diagnostics: Object.freeze([...issue.diagnostics]) }),
         }),
       ),
     ),
@@ -46,6 +40,7 @@ export const invocationIssues = (issues: CompactIssues, id?: number): CompactIss
       code: clean(issue.code),
       cause: clean(issue.cause),
       recovery: issue.recovery.map((item) => ({ code: clean(item.code), text: clean(item.text) })),
+      ...(issue.diagnostics && { diagnostics: issue.diagnostics.map(clean) }),
     })),
   });
 };

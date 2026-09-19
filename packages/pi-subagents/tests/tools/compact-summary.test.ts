@@ -456,7 +456,7 @@ describe("subagent compact semantic policy", () => {
       );
       expect(summary?.counters).toContain("finished");
       expect(summary?.subject).toBe("auth-review");
-      expect(summary?.expandedResultOwnsCall).toBe(true);
+      expect(summary?.expandedResultOwnsCall).toBeUndefined();
       expect(summary?.metadata).not.toContain("target");
       expect(summary?.metadata).not.toContain("1 paused");
     },
@@ -841,7 +841,7 @@ describe("subagent compact semantic policy", () => {
     const next = summarize("await", snapshot(true, "new warning"), "running");
     expect(first?.counters).toEqual(["1/2 finished"]);
     expect(first?.metadata).toEqual([]);
-    expect(first?.expandedResultOwnsCall).toBe(true);
+    expect(first?.expandedResultOwnsCall).toBeUndefined();
     expect(next?.counters).toEqual(first?.counters);
     expect(next?.notices?.some((notice) => notice.text.includes("new warning"))).toBe(true);
     const completed = snapshot(false);

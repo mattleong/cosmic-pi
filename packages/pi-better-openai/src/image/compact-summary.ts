@@ -1,5 +1,9 @@
 import * as Predicate from "effect/Predicate";
-import { withCompactIssues, type CompactSummaryProvider } from "pi-code-previews";
+import {
+  claimCompactIssue,
+  withCompactIssues,
+  type CompactSummaryProvider,
+} from "pi-code-previews";
 import type { ToolParams } from "./types.ts";
 
 const short = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 100);
@@ -19,7 +23,10 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
   if (phase !== "settled") return { action, subject };
 
   // Only text-only failures can replace the complete original presentation.
-  if (context.isError) {
+  if (
+    context.isError &&
+    !(Predicate.isObject(result?.details) && result.details.status === "cancelled")
+  ) {
     if (
       !result?.content.length ||
       result.details !== undefined ||
@@ -119,9 +126,17 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
 
 export const imageCompactSummary: CompactSummaryProvider<ToolParams> = (input) => {
   const summary = projectImageSummary(input);
-  return summary?.issues
-    ? summary
-    : summary
-      ? withCompactIssues(summary, "openai-image")
-      : undefined;
+  if (!summary) return undefined;
+  const projected = summary.issues ? summary : withCompactIssues(summary, "openai-image");
+  if (!projected.failure) return projected;
+  // This producer copies the complete text-only error into both the cause and raw body.
+  // Claim that root alone; independently merged recovery remains shell-owned.
+  const claims = (projected.issues?.entries ?? [])
+    .filter((issue) => issue.operation === "openai-image" && issue.code === "failure")
+    .map((issue) => claimCompactIssue(issue, { cause: true }));
+  return {
+    ...projected,
+    failure: { ...projected.failure, ownedIssues: claims },
+    expandedResultOwnsIssues: claims,
+  };
 };

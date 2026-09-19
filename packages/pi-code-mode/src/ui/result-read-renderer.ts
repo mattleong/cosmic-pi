@@ -1,6 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { summaryCompactIssues, type CompactSummary } from "pi-code-previews";
+import {
+  renderCompactIssues,
+  renderExpandedAttention,
+  summaryCompactIssues,
+  type CompactSummary,
+} from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { decodeOption } from "../tools/format.ts";
@@ -26,6 +31,7 @@ export function renderCodeModeResultRead(
   isError: boolean,
   expanded: boolean,
   theme: Theme,
+  contentOnly = false,
 ): Component {
   const failed = isError || summary?.outcome === "error";
   const status = isPartial
@@ -38,24 +44,15 @@ export function renderCodeModeResultRead(
   const lines: Array<{ text: string; color: "muted" | "error" | "warning" | "toolOutput" }> = [
     { text: [status, ...(summary?.counters ?? [])].join(" · "), color: failed ? "error" : "muted" },
   ];
-  if (summary) {
-    for (const issue of summaryCompactIssues(summary, expanded).entries) {
-      if (issue.cause) lines.push({ text: issue.cause, color: issue.severity });
-      for (const recovery of issue.recovery)
-        lines.push({ text: recovery.text, color: issue.severity });
-      if (expanded)
-        for (const diagnostic of issue.diagnostics ?? [])
-          lines.push({ text: diagnostic, color: "muted" });
-    }
-  }
+  if (contentOnly && summary) lines.length = 0;
+  const issues = summary && !contentOnly ? summaryCompactIssues(summary, expanded) : undefined;
   if (expanded && !isPartial && raw.length) {
     lines.push(
-      { text: "Result", color: "muted" },
+      { text: "Raw output", color: "muted" },
       { text: codeModeOutputText(raw), color: "toolOutput" },
     );
   }
-  // Rendering failures cannot invalidate the per-issue ownership promise. Keep
-  // the same complete evidence in plain text if the host theme is unavailable.
+  // A hostile host theme cannot hide retained recovery evidence.
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
@@ -69,7 +66,24 @@ export function renderCodeModeResultRead(
           }
         })
         .join("\n");
-      return new Text(text, 0, 0).render(Math.floor(width));
+      const body = new Text(text, 0, 0).render(Math.floor(width));
+      if (!issues) return body;
+      try {
+        const attention = expanded
+          ? renderExpandedAttention(issues, [], theme, width)
+          : renderCompactIssues(issues, theme, width);
+        return [...attention, ...body];
+      } catch {
+        const evidence = issues.entries.flatMap((issue) => [
+          issue.cause,
+          ...issue.recovery.map((item) => item.text),
+          ...(expanded ? (issue.diagnostics ?? []) : []),
+        ]);
+        return [
+          ...new Text(evidence.map(codeModeOutputText).join("\n"), 0, 0).render(Math.floor(width)),
+          ...body,
+        ];
+      }
     },
     invalidate() {},
   };

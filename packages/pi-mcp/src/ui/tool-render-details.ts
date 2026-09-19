@@ -295,9 +295,15 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     (item) => own(item, "type").value === "image",
   ).length;
   const resultId = presentation.resultId;
+  const historicalText =
+    currentOutcome === undefined
+      ? list(own(result, "content").value, 128)
+          .filter((part) => own(part, "type").value === "text")
+          .map((part) => own(part, "text").value)
+      : undefined;
   const preview = mcpContentPreview(
     action,
-    data ?? details,
+    historicalText?.length ? { details, content: historicalText } : (data ?? details),
     own(data, "result").value !== undefined,
   );
   let projection: McpCardDetails = {
@@ -320,7 +326,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     failurePreview: preview.readable ?? preview.combined,
     preview:
       details === undefined
-        ? "Details are unavailable for this historical result."
+        ? `Details are unavailable for this historical result.\n${preview.combined}`
         : preview.combined,
   };
   if (currentOutcome) projection = { ...projection, outcome: currentOutcome };

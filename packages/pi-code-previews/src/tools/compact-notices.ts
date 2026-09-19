@@ -79,7 +79,6 @@ export function readNotices<Details>(
           kind: "recovery",
           text: escapeControlChars(notice),
           expandedOnly: true,
-          expandedInResult: true,
         },
       ];
     return [{ code: "read-truncated", kind: "recovery", text: escapeControlChars(notice) }];

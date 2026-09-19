@@ -8,7 +8,7 @@ import { getObjectValue } from "../shared/helpers";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { isCompactAttention, type CompactSummary, type CompactPhase } from "./compact-summary";
 import { builtinFailure } from "./builtin-failure";
-import { withCompactIssues } from "./compact-issues";
+import { claimCompactIssue, summaryCompactIssues, withCompactIssues } from "./compact-issues";
 import {
   bashCommandNotices,
   outputLimitProjection,
@@ -53,7 +53,33 @@ export function projectBuiltinCompactSummary(
   const summary = projectBuiltinSummary(tool, input);
   // Unclassified diagnostic bodies retain the pre-existing full-text failure renderer.
   if (summary?.failure && summary.failureEvidence?.coverage !== "complete") return summary;
-  return summary && withCompactIssues(summary, tool);
+  if (!summary) return undefined;
+  const projected = withCompactIssues(summary, tool);
+  // These parser-owned envelopes are fully retained by the detailed content callback.
+  // Claims snapshot the current evidence so later merged recovery stays shell-owned.
+  const owned =
+    summaryCompactIssues(projected, true).entries.filter(
+      (issue) =>
+        (tool === "read" && issue.code === "read-continuation") ||
+        (summary.failureEvidence?.coverage === "complete" &&
+          (issue.code === summary.failureEvidence.code ||
+            [
+              "shell-retained-output",
+              "edit-add-context",
+              "edit-match-original",
+              "edit-disjoint-regions",
+            ].includes(issue.code))),
+    ) ?? [];
+  return {
+    ...projected,
+    expandedResultOwnsIssues: owned.map((issue) =>
+      claimCompactIssue(issue, {
+        cause: true,
+        recovery: issue.recovery.map((entry) => entry.code),
+        ...(issue.diagnostics && { diagnostics: issue.diagnostics.map((_, index) => index) }),
+      }),
+    ),
+  };
 }
 
 function projectBuiltinSummary(

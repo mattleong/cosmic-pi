@@ -147,7 +147,7 @@ it("keeps the sole await heading when the live panel owns the result", () => {
           context,
         );
         const text = [...call.render(120), ...result.render(120)].join("\n");
-        if (expanded) expect(text.match(/Waiting for subagents/g)).toHaveLength(1);
+        expect(text.match(/subagent_await/g)).toHaveLength(1);
       }
     }
   } finally {

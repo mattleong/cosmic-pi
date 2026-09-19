@@ -202,6 +202,39 @@ describe("producer MCP presentation", () => {
       expect(receipt.notices.join(" ")).toMatch(/cleanup is unconfirmed/);
     },
   );
+  it("shares boundary diagnostics between standalone and nested projections without renderer ownership", () => {
+    const output = reply(
+      {
+        kind: "invalid-input",
+        reason: "gateway-request-invalid",
+        message: "Unclassified producer detail",
+      },
+      { outcome: "not-sent", isError: true },
+    );
+    const receipt = projectMcpPresentation(output);
+    const summary = projectMcpCompactSummary({
+      phase: "settled",
+      args: { action: "tools.call" },
+      result: { details: output },
+      isError: true,
+    });
+    expect(summary?.issues).toEqual(receipt.issues);
+    expect(receipt.issues.entries[0]?.diagnostics?.length).toBeGreaterThan(0);
+    expect(receipt.notices.join(" ")).toContain("Unclassified producer detail");
+    expect(JSON.stringify(receipt.issues)).not.toContain("expandedInResult");
+    expect(JSON.stringify(receipt.issues)).not.toContain("ownedIssues");
+  });
+  it("does not authorize complete coverage when combined remote evidence exceeds bounds", () => {
+    const receipt = projectMcpPresentation(
+      reply(
+        { content: Array.from({ length: 10 }, () => ({ type: "text", text: "x".repeat(400) })) },
+        { isError: true },
+      ),
+    );
+    expect(receipt.issues.coverage).toBe("unknown");
+    expect(receipt.issues.entries.every((issue) => issue.cause.length <= 2048)).toBe(true);
+    expect(receipt.issues.entries.some((issue) => issue.code === "evidence-incomplete")).toBe(true);
+  });
   it("does not expose unknown rejection messages", () => {
     const receipt = projectMcpFailurePresentation(new Error("secret-body"));
     expect(receipt.outcome).toBe("unknown");

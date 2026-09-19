@@ -2,10 +2,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import {
+  planCompactPresentation,
   renderCompactChildren,
-  renderCompactIssues,
+  renderExpandedAttention,
   summaryCompactIssues,
-  withoutFailureBodyIssues,
   renderCompactRow,
   type CompactSummary,
 } from "pi-code-previews";
@@ -20,6 +20,8 @@ import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 import { addCodeModeSection } from "./sections.ts";
 
 export interface ExpandedPresentation {
+  /** Common shell supplies heading and attention around this body. */
+  readonly contentOnly?: boolean;
   readonly readRequest?: { readonly id: string };
   readonly source?: string | undefined;
   readonly summary?: CompactSummary | undefined;
@@ -43,17 +45,20 @@ export const renderExpandedCodeModeResult = (
     total: details.totalToolCalls,
     entries: codeModeCallRows(details, phase, presentation.liveElapsed),
   };
-  const summary = presentation.summary;
+  const { summary } = planCompactPresentation({
+    summary: presentation.summary,
+    phase,
+    isError,
+    expanded: true,
+  });
   const allIssues = summary ? summaryCompactIssues(summary, true) : undefined;
   // Only this exact outer body can own its copied root/continuation issues.
   // Nested result ownership is unrelated and must not erase independent recovery.
-  const issues =
-    allIssues && !isPartial && raw === summary?.failure?.details
-      ? withoutFailureBodyIssues(allIssues, summary.failure.ownedIssues)
-      : allIssues;
+  const claims =
+    !isPartial && raw === summary?.failure?.details ? summary.failure.ownedIssues : undefined;
   const body = new Container();
   if (presentation.ownsCall) {
-    if (summary)
+    if (summary && !presentation.contentOnly)
       body.addChild({
         render: (width) => [
           renderCompactRow(
@@ -70,7 +75,7 @@ export const renderExpandedCodeModeResult = (
         ],
         invalidate() {},
       });
-    else body.addChild(new Text("Code Mode", 0, 0));
+    else if (!presentation.contentOnly) body.addChild(new Text("Code Mode", 0, 0));
     const program = addCodeModeSection(body, "Program", theme);
     program.addChild(
       new Text(
@@ -111,10 +116,10 @@ export const renderExpandedCodeModeResult = (
     if (fallbackStatus) calls.addChild(new Text(fallbackStatus, 0, 0));
   }
   // Aggregate/evicted recovery belongs to the parent, not the last visible call.
-  if (issues?.entries.length) {
-    const attention = addCodeModeSection(body, "Notices", theme);
-    attention.addChild({
-      render: (width) => renderCompactIssues(issues, theme, width, true, true),
+  if (!presentation.contentOnly && allIssues) {
+    body.addChild({
+      render: (width) =>
+        renderExpandedAttention(allIssues, claims, theme, width, children.total > 0),
       invalidate() {},
     });
   }
@@ -123,7 +128,8 @@ export const renderExpandedCodeModeResult = (
       !isError && !details.cancelled && !details.truncated && details.outputKind === "structured"
         ? formatStructuredCodeModeOutput(raw)
         : undefined;
-    const output = addCodeModeSection(body, isError ? "Error" : "Result", theme);
+    const label = formatted !== undefined ? "Result" : isError ? "Raw error" : "Raw output";
+    const output = addCodeModeSection(body, label, theme);
     output.addChild(
       new Text(
         theme.fg(isError ? "error" : "toolOutput", formatted ?? codeModeOutputText(raw)),

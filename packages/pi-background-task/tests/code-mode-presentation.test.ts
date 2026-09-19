@@ -123,6 +123,50 @@ it("marks oversized semantic evidence incomplete instead of silently clipping", 
   expect(receipt).toEqual({ version: 1, incomplete: true, overflow: true });
 });
 
+it("roundtrips diagnostic evidence without transporting standalone renderer ownership", () => {
+  const issue = {
+    operation: "background-task:status",
+    code: "diagnostic",
+    severity: "warning",
+    cause: "Inspect task",
+    recovery: [{ code: "status", text: "Read status" }],
+    diagnostics: ["Diagnostic detail"],
+    expandedInResult: true,
+  };
+  const input = {
+    version: 1,
+    incomplete: false,
+    overflow: false,
+    summary: {
+      action: "status",
+      subject: "task-1",
+      outcome: "warning",
+      metadata: [],
+      counters: [],
+      notices: [],
+      detailsOnExpand: true,
+      issues: { coverage: "complete", entries: [issue] },
+      expandedResultOwnsIssues: [issue],
+    },
+  };
+  const normalized = normalizeBackgroundTaskPresentation(input);
+  expect(normalized?.summary?.issues?.entries[0]?.diagnostics).toEqual(issue.diagnostics);
+  expect(JSON.stringify(normalized)).not.toContain("expandedInResult");
+  expect(JSON.stringify(normalized)).not.toContain("expandedResultOwnsIssues");
+  expect(
+    normalizeBackgroundTaskPresentation({ ...input, incomplete: true })?.summary?.issues?.coverage,
+  ).toBe("unknown");
+  expect(
+    normalizeBackgroundTaskPresentation({
+      ...input,
+      summary: {
+        ...input.summary,
+        issues: { coverage: "complete", entries: [{ ...issue, diagnostics: ["x".repeat(2049)] }] },
+      },
+    }),
+  ).toBeUndefined();
+});
+
 it.effect("keeps old providers and optional hostile acknowledgement compatible", () =>
   Effect.gen(function* () {
     const output = { action: "clear" as const, text: "clear", removed: 0 };

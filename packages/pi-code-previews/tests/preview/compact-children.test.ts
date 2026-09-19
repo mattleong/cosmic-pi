@@ -76,7 +76,6 @@ describe("compact child selection", () => {
         text: "Continue at offset=143",
         code: "read-pagination",
         expandedOnly: true,
-        expandedInResult: true,
       },
       { kind: "warning", text: "Sensitive content", expandedOnly: true },
       { kind: "error", text: "Independent error", expandedOnly: true },

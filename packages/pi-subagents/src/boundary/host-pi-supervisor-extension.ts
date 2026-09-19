@@ -42,7 +42,10 @@ import { registerSubagentProxyManagerCommand } from "../settings/proxy-controlle
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
-import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
+import {
+  createParentCompactSummary,
+  createParentExpandedContent,
+} from "../tools/compact-parent-summary.ts";
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
@@ -368,6 +371,7 @@ export default function registerPiSubagentSupervisorBridge(
         withCodePreviewShell(tool, {
           scheduleAnimation,
           compactSummary: createParentCompactSummary(tool.name),
+          expandedContent: createParentExpandedContent(tool.name),
         }),
       );
     pi.setActiveTools([

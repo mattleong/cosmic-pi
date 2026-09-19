@@ -443,21 +443,24 @@ describe("expanded retained presentation", () => {
 
   it("preserves raw text and errors and retains source/recovery when expanded drawing fails", () => {
     const raw = '{"answer":1}';
-    for (const [outputKind, isError, truncated] of [
-      ["text", false, false],
-      ["structured", true, false],
-      ["structured", false, true],
+    for (const [outputKind, isError, truncated, cancelled] of [
+      ["text", false, false, false],
+      ["structured", true, false, false],
+      ["structured", false, true, false],
+      ["structured", false, false, true],
     ] as const) {
       const rendered = renderCodeModeToolResult(
         {
           content: [{ type: "text", text: raw }],
-          details: { ...result().details, outputKind, truncated },
+          details: { ...result().details, outputKind, truncated, cancelled },
         },
         { isPartial: false },
         opaqueHostFixture(theme),
         { expanded: true, isError },
       );
-      expect(rendered.component.render(120).join("\n")).toContain(raw);
+      const text = rendered.component.render(120).join("\n");
+      expect(text).toContain(raw);
+      expect(text).toMatch(/\braw\b/i);
     }
     const rendered = renderCodeModeToolResult(
       result(),
@@ -483,6 +486,7 @@ describe("expanded retained presentation", () => {
     const text = rendered.component.render(120).join("\n");
     expect(text).toContain("SOURCE_RECOVERY");
     expect(text).toContain("safe output");
+    expect(text).toMatch(/\braw\b/i);
     expect(text).toContain("Never replay automatically.");
   });
 });

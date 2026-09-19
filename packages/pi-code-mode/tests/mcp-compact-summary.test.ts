@@ -179,8 +179,6 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       expect(projected?.children?.entries).toMatchObject([{ label: "mcp", status: outcome }]);
       expect(projected?.detailsOnExpand).toBe(true);
       expect(projected?.failure).toBeUndefined();
-      // Detailed rendering owns retained MCP attention, so the shell must not append it again.
-      expect(projected?.notices?.every((notice) => notice.expandedInResult === true)).toBe(true);
     }),
   );
   it.effect.each([

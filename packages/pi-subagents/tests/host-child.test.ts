@@ -1,5 +1,11 @@
 // Promise-shaped child Pi host boundary tests.
 import { EventEmitter } from "node:events";
+import { createToolPresentationHarness } from "pi-code-previews/testing";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import {
+  codePreviewSettings,
+  setCodePreviewSettings,
+} from "../../pi-code-previews/src/config/state.ts";
 import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
@@ -158,6 +164,35 @@ afterEach(() => {
 });
 
 describe("local Pi child bridge", () => {
+  effectTest("renders registered child tools without sending parent requests", function* () {
+    const saved = { ...codePreviewSettings };
+    setCodePreviewSettings({ ...saved, toolCallCollapsedStyle: "compact", toolCallTiming: false });
+    const bridge = makeHarness();
+    // SAFETY: The render-only theme implements the styling callbacks.
+    const theme = {
+      fg: (_key: string, text: string) => text,
+      bg: (_key: string, text: string) => text,
+      bold: (text: string) => text,
+    } as Theme;
+    try {
+      yield* step(() => bridge.start());
+      for (const name of [...SUBAGENT_TOOL_NAMES, "contact_parent"]) {
+        const render = createToolPresentationHarness(bridge.latestTool(name), { theme });
+        for (const expanded of [false, true, false, true]) {
+          render.call({ kind: "question", message: "input evidence" }, { expanded });
+          render.result(
+            { content: [{ type: "text", text: "reply evidence sentinel" }], details: {} },
+            { expanded },
+          );
+          if (expanded) expect(render.render(80).join("\n")).toContain("reply evidence sentinel");
+        }
+      }
+      expect(bridge.contacts).toEqual([]);
+    } finally {
+      yield* step(bridge.shutdown);
+      setCodePreviewSettings(saved);
+    }
+  });
   effectTest("retires compact animation with the child session", function* () {
     const registration = vi.spyOn(subagentTools, "registerSubagentTools");
     const harness = makeHarness();

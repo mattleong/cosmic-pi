@@ -56,6 +56,16 @@ describe("workspace tool", () => {
       expect(secondText?.type === "text" && secondText.text.includes(diff.slice(16_000))).toBe(
         true,
       );
+      for (const [page, expected] of [
+        [first, diff.slice(0, 16_000)],
+        [second, diff.slice(16_000)],
+      ] as const) {
+        const content = page.content[0];
+        const span = page.details.displayContent!;
+        expect(
+          content?.type === "text" && content.text.slice(span.offset, span.offset + span.length),
+        ).toBe(expected);
+      }
       expect(JSON.stringify(first.details)).not.toContain("content");
       expect(JSON.stringify(second.details)).not.toContain("content");
     },

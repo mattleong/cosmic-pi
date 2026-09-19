@@ -590,8 +590,7 @@ describe("compact semantic evidence", () => {
       counts: { total: 33, succeeded: 33, failed: 0, cancelled: 0, running: 0, queued: 0 },
       compactAttention: collector.snapshot(),
     };
-    const summary = project(details)!;
-    expect(summary.notices?.filter((notice) => !notice.expandedInResult)).toEqual([]);
+    expect(project(details)?.outcome).toBe("uncertain");
     const theme = opaqueHostFixture({
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
@@ -722,9 +721,7 @@ describe("compact semantic evidence", () => {
           context: opaqueHostFixture({ isError: true, expanded: true }),
         });
         expect(summary?.outcome).toBe("error");
-        expect(summary?.notices).toContainEqual(
-          expect.objectContaining({ expandedOnly: true, expandedInResult: true }),
-        );
+        expect(summary?.notices).toContainEqual(expect.objectContaining({ expandedOnly: true }));
         expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(2);
         expect(
           summary?.issues?.entries.some((issue) =>

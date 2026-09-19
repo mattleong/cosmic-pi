@@ -3,7 +3,24 @@ import type { McpCardDetails } from "./tool-render-details.ts";
 
 /** Only fixed, validated boundary diagnostics enter this view. Remote messages stay
  * in the original raw details; unclassified notices keep their own attention. */
-export function mcpBoundaryFailure(card: McpCardDetails):
+export function mcpBoundaryFailure(
+  card: Pick<
+    McpCardDetails,
+    | "known"
+    | "noticesComplete"
+    | "displayCuts"
+    | "isError"
+    | "diagnostic"
+    | "failureKind"
+    | "failureReason"
+    | "origin"
+    | "outcome"
+    | "action"
+    | "truncated"
+    | "recoveryHint"
+    | "notices"
+  >,
+):
   | {
       readonly outcome: NonNullable<CompactSummary["outcome"]>;
       readonly status: string;
@@ -58,7 +75,6 @@ export function mcpBoundaryFailure(card: McpCardDetails):
           : card.diagnostic.title,
       recovery,
       diagnostics,
-      expandedInResult: true,
     },
   ];
   if (card.notices.length)
@@ -68,7 +84,6 @@ export function mcpBoundaryFailure(card: McpCardDetails):
       severity: "warning",
       cause: card.notices.join("\n"),
       recovery: [],
-      expandedInResult: true,
     });
   return {
     outcome: uncertain ? "uncertain" : card.failureKind === "cancelled" ? "cancelled" : "error",

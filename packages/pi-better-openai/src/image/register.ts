@@ -8,8 +8,14 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
-import { sanitizeDiagnosticError } from "pi-cosmic-core";
+import {
+  captureCodePreviewPresentationPolicy,
+  withCompactIssues,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
+import { imageMessagePresentation, renderImageContent } from "./presentation.ts";
+import { sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import { imageCompactSummary } from "./compact-summary.ts";
 import { OpenAIImageService } from "./service.ts";
@@ -75,7 +81,8 @@ export function registerOpenAIImage(
     updateContext(ctx);
     return run(generateEffect(params), signal);
   };
-  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, _options, theme) => {
+  const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
+  pi.registerMessageRenderer<CodexImageDetails>("openai-image", (message, options, theme) => {
     const details = isCodexImageDetails(message.details) ? message.details : undefined;
     const text = details
       ? resultText(details)
@@ -101,7 +108,43 @@ export function registerOpenAIImage(
         : { data: message.details.data, mimeType: message.details.mimeType };
     const container = new Container();
     const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
-    box.addChild(new Text(`${theme.fg("accent", theme.bold("[openai-image]"))}\n\n${text}`, 0, 0));
+    const outcome =
+      details?.status === "cancelled"
+        ? "cancelled"
+        : details?.status === "failed"
+          ? "error"
+          : details?.status === "completed" && image
+            ? "success"
+            : "uncertain";
+    box.addChild(
+      compact
+        ? imageMessagePresentation(
+            details
+              ? withCompactIssues(
+                  {
+                    subject: details.savedPath || details.prompt,
+                    action: details.action,
+                    outcome,
+                    notices:
+                      outcome === "uncertain"
+                        ? [
+                            {
+                              code: "image-status",
+                              kind: "warning" as const,
+                              text: `Image generation is ${details.status}.`,
+                            },
+                          ]
+                        : [],
+                  },
+                  `image:${details.id}`,
+                )
+              : undefined,
+            text,
+            options.expanded,
+            theme,
+          )
+        : new Text(`${theme.fg("accent", theme.bold("[openai-image]"))}\n\n${text}`, 0, 0),
+    );
     if (image)
       box.addChild(
         new Image(
@@ -205,6 +248,13 @@ export function registerOpenAIImage(
     },
   });
   pi.registerTool(
-    withCodePreviewShell(tool, { compactSummary: imageCompactSummary, scheduleAnimation }),
+    withCodePreviewShell(tool, {
+      compactSummary: imageCompactSummary,
+      expandedContent: {
+        renderCall: (args) => new Text(stripTerminalControls(JSON.stringify(args, null, 2)), 0, 0),
+        renderResult: renderImageContent,
+      },
+      scheduleAnimation,
+    }),
   );
 }

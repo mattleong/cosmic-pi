@@ -1,6 +1,6 @@
 // Pi tool execution is a Promise-shaped host boundary.
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, Text } from "@earendil-works/pi-tui";
+import { Container, getKeybindings, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
@@ -108,6 +108,28 @@ export function registerBackgroundTaskTool(
   pi.registerTool(
     withCodePreviewShell(tool, {
       compactSummary: backgroundTaskCompactSummary,
+      expandedContent: {
+        renderCall: () => new Container(),
+        renderResult(result, _options, theme) {
+          // Preserve fetched output and cursor text verbatim apart from terminal controls.
+          // Task attention is projected from typed details, never parsed from this body.
+          let text = sanitizeTerminalText(
+            result.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+          );
+          // SAFETY: The owned executor constructs this union; compact projection validates its snapshot.
+          const details = result.details as BackgroundTaskToolDetails | undefined;
+          if (
+            details &&
+            (details.action === "start" || details.action === "status" || details.action === "stop")
+          ) {
+            text += `\n${sanitizeTerminalLine(details.snapshot.cwd)}${details.snapshot.pid ? ` · pid ${details.snapshot.pid}` : ""}`;
+          }
+          return new Text(theme.fg("toolOutput", text), 0, 0);
+        },
+      },
       scheduleAnimation: runner.scheduleAnimation,
     }),
   );

@@ -9,8 +9,9 @@ import { getTextContent } from "./data/results";
 import { type ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
-import { createCodePreviewToolDefinition } from "./renderer-adapter";
+import { createCodePreviewToolDefinition, type CodePreviewToolRenderers } from "./renderer-adapter";
 import type { CompactAnimationScheduler, CompactSummaryProvider } from "./compact-summary";
+import type { ToolRenderContext } from "./renderers/shared/types";
 
 export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TState = unknown> {
   /**
@@ -27,6 +28,21 @@ export interface CodePreviewShellOptions<TArgs = unknown, TDetails = unknown, TS
 
   /** Supply semantic compact details. Declining uses a generic row with details on expansion. */
   compactSummary?: CompactSummaryProvider<TArgs, TDetails, TState>;
+
+  /** Unique expanded content only: no heading or shared attention container. */
+  expandedContent?: {
+    renderCall?: (
+      args: Partial<TArgs>,
+      theme: Theme,
+      context: ToolRenderContext<TState, Partial<TArgs>>,
+    ) => Component;
+    renderResult?: (
+      result: AgentToolResult<TDetails>,
+      options: ToolRenderResultOptions,
+      theme: Theme,
+      context: ToolRenderContext<TState, Partial<TArgs>>,
+    ) => Component;
+  };
 
   /** Session-owned scheduler. Independent extension loaders cannot share previews' runtime. */
   scheduleAnimation?: CompactAnimationScheduler | undefined;
@@ -70,6 +86,8 @@ export function withCodePreviewShell<
     mode,
     compactSummary: options.compactSummary,
     scheduleAnimation: options.scheduleAnimation,
+    // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
+    expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],
     renderCall: (args, theme, context) =>
       originalRenderCall
         ? originalRenderCall(args, theme, context)

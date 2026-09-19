@@ -45,7 +45,6 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
             code: "shell-retained-output",
             kind: "recovery",
             text: line,
-            expandedInResult: true,
           });
         }
       }
@@ -83,7 +82,6 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
           code: "edit-add-context",
           kind: "recovery",
           text: "Add context to make it unique.",
-          expandedInResult: true,
         });
       } else if (missing) {
         code = "edit-no-match";
@@ -92,7 +90,6 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
           code: "edit-match-original",
           kind: "recovery",
           text: "Match the original text, including whitespace.",
-          expandedInResult: true,
         });
       } else if (overlap) {
         code = "edit-overlap";
@@ -101,7 +98,6 @@ export function builtinFailure(tool: BuiltinCompactTool, output: string) {
           code: "edit-disjoint-regions",
           kind: "recovery",
           text: "Merge them or target disjoint regions.",
-          expandedInResult: true,
         });
       } else if (
         /^No changes made to .+\. The replacements produced identical content\.$/u.test(details)

@@ -27,12 +27,14 @@ export interface CodePreviewToolShell {
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
     render: (context: ToolRenderContext<TState, TArgs>) => Component,
+    expandedContent?: (context: ToolRenderContext<TState, TArgs>) => Component,
   ): Component;
   renderResult<TState, TArgs>(
     context: ToolRenderContext<TState, TArgs>,
     theme: Theme,
     render: (context: ToolRenderContext<TState, TArgs>) => Component,
     result?: AgentToolResult<unknown>,
+    expandedContent?: (context: ToolRenderContext<TState, TArgs>) => Component,
   ): Component;
 }
 

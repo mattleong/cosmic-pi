@@ -45,6 +45,12 @@ export interface CodePreviewToolRenderers<TTool extends AdaptableToolDefinition>
         Parameters<RenderCall<TTool>>[2]["state"]
       >
     | undefined;
+  readonly expandedContent?:
+    | {
+        readonly renderCall?: PreviewRenderCall<TTool>;
+        readonly renderResult?: PreviewRenderResult<TTool>;
+      }
+    | undefined;
   readonly execute?: (
     ...args: Parameters<TTool["execute"]>
   ) => ReturnType<AdaptableToolDefinition["execute"]>;
@@ -72,6 +78,8 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
   );
   const renderCall = renderers.renderCall;
   const renderResult = renderers.renderResult;
+  const expandedCall = renderers.expandedContent?.renderCall;
+  const expandedResult = renderers.expandedContent?.renderResult;
 
   // SAFETY: The adapter preserves the definition's generic schema, details, and renderer state.
   return {
@@ -79,13 +87,24 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
     execute: renderers.execute ?? tool.execute,
     renderShell: previewShell.renderShell,
     renderCall(args, theme, context) {
-      return previewShell.renderCall(context, theme, (renderContext) =>
-        // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
-        renderCall(
-          args,
-          theme,
-          asPreviewContext<WithPreviewState<Parameters<RenderCall<TTool>>[2]>>(renderContext),
-        ),
+      return previewShell.renderCall(
+        context,
+        theme,
+        (renderContext) =>
+          // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
+          renderCall(
+            args,
+            theme,
+            asPreviewContext<WithPreviewState<Parameters<RenderCall<TTool>>[2]>>(renderContext),
+          ),
+        expandedCall
+          ? (renderContext) =>
+              expandedCall(
+                args,
+                theme,
+                asPreviewContext<WithPreviewState<Parameters<RenderCall<TTool>>[2]>>(renderContext),
+              )
+          : undefined,
       );
     },
     renderResult(result, options, theme, context) {
@@ -101,6 +120,17 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
             asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(renderContext),
           ),
         result,
+        expandedResult
+          ? (renderContext) =>
+              expandedResult(
+                result,
+                options,
+                theme,
+                asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(
+                  renderContext,
+                ),
+              )
+          : undefined,
       );
     },
   } as TTool;

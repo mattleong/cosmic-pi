@@ -33,7 +33,10 @@ import type { SubagentToolInput } from "../tools/schema.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
-import { createParentCompactSummary } from "../tools/compact-parent-summary.ts";
+import {
+  createParentCompactSummary,
+  createParentExpandedContent,
+} from "../tools/compact-parent-summary.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
@@ -410,7 +413,11 @@ export function registerSubagentChildBridge(
               );
           },
         },
-        { scheduleAnimation, compactSummary: createParentCompactSummary("contact_parent") },
+        {
+          scheduleAnimation,
+          compactSummary: createParentCompactSummary("contact_parent"),
+          expandedContent: createParentExpandedContent("contact_parent"),
+        },
       ),
     );
   };

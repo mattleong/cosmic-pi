@@ -1,5 +1,10 @@
-import type { CompactIssues } from "./compact-issues";
-import { compactIssueSeverity, summaryCompactIssues, legacyCompactIssues } from "./compact-issues";
+import type { CompactIssues, CompactIssueClaim } from "./compact-issues";
+import {
+  compactIssueSeverity,
+  summaryCompactIssues,
+  legacyCompactIssues,
+  claimCompactIssue,
+} from "./compact-issues";
 import { isSafeCompactSummary } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
@@ -20,10 +25,6 @@ export interface CompactNotice {
   text: string;
   /** Informational recovery shown only on expansion. Ignored for warnings and errors. */
   expandedOnly?: true;
-  /** The original expanded result renders this complete notice. Defaults to shell-owned.
-   * Ignored for owned failures, collapsed views, or a failed original result renderer.
-   */
-  expandedInResult?: true;
 }
 
 /** Warnings and errors always require attention, even if marked expanded-only. */
@@ -78,8 +79,8 @@ export interface CompactSummary {
    */
   children?: { entries: readonly CompactChild[]; total: number };
   /** Legacy provider marker for details available on expansion. All collapsed outcomes
-   * now use compact rows regardless of this flag. Expansion retains original renderers;
-   * a covered failure takes precedence. Unknown or malformed results must decline
+   * use compact rows regardless of this flag. Expansion prefers content-only callbacks;
+   * a covered failure owns only its diagnostic body. Unknown or malformed results must decline
    * semantic projection and use the shell's generic compact row.
    */
   detailsOnExpand?: true;
@@ -88,16 +89,17 @@ export interface CompactSummary {
    * diffs, targets, and other unique call content must never be hidden through this flag.
    */
   expandedResultOwnsCall?: true;
-  /** Owns failure presentation instead of the original renderers. Details must be complete.
+  /** Exact fields rendered by the current expanded result; revoked on rendering failure. */
+  expandedResultOwnsIssues?: readonly CompactIssueClaim[];
+  /** Owns the failure diagnostic body. Unique expanded call content remains. Details must be complete.
    * Unknown causes may retain multiple lines rather than hide unclassified recovery text.
    * Notices contain independent safety/recovery information, not another error copy.
    */
   failure?: {
     cause: string;
     details: string;
-    /** Root cause identities represented by this exact failure body. Additional
-     * recovery and diagnostics stay independent, as does child result ownership. */
-    ownedIssues?: readonly { readonly operation: string; readonly code: string }[];
+    /** Snapshot fields represented by this exact failure body. */
+    ownedIssues?: readonly CompactIssueClaim[];
   };
   failureEvidence?: CompactFailureEvidence;
 }
@@ -141,15 +143,24 @@ export function resolveCompactSummary(
         ],
         "outer",
       );
+    const hostFailure = {
+      operation: "outer",
+      code: "pi-error",
+      severity: "error" as const,
+      cause: summary.failure?.cause || "Tool reported a failure.",
+      recovery: [],
+    };
     return {
       ...summary,
-      ...(summary.failure?.cause &&
-        summary.failure.ownedIssues !== undefined && {
-          failure: {
-            ...summary.failure,
-            ownedIssues: [...summary.failure.ownedIssues, { operation: "outer", code: "pi-error" }],
-          },
-        }),
+      ...(summary.failure && {
+        failure: {
+          ...summary.failure,
+          ownedIssues: [
+            ...(summary.failure.ownedIssues ?? []),
+            claimCompactIssue(hostFailure, { cause: true }),
+          ],
+        },
+      }),
       issues: {
         ...issues,
         coverage: summary.issues?.coverage ?? "complete",
@@ -166,14 +177,7 @@ export function resolveCompactSummary(
                 },
               ]
             : []),
-          {
-            operation: "outer",
-            code: "pi-error",
-            severity: "error",
-            cause: summary.failure?.cause || "Tool reported a failure.",
-            recovery: [],
-            ...(summary.failure && { expandedInResult: true as const }),
-          },
+          hostFailure,
         ],
       },
     };

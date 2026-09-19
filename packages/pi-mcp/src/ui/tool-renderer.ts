@@ -11,6 +11,24 @@ import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
 import { mcpBoundaryFailure } from "./boundary-failure.ts";
 
 type CardTheme = Pick<Theme, "fg" | "bold">;
+
+/** Compact expansion owns content only. The shell renders status and semantic attention. */
+export const renderMcpExpandedContent = <Result>(
+  result: Result,
+  _options: { readonly expanded: boolean; readonly isPartial: boolean },
+  theme: CardTheme,
+): Component => {
+  const details = decodeMcpCardDetails(result);
+  const boundary = mcpBoundaryFailure(details);
+  const issues = boundary?.issues ?? details.presentation.issues;
+  const navigation =
+    details.recoveryHint &&
+    !boundary &&
+    !issues.entries.some((issue) => issue.code === "retained-output")
+      ? `${theme.fg("accent", details.recoveryHint)}\n`
+      : "";
+  return new Text(navigation + theme.fg("toolOutput", details.preview), 0, 0);
+};
 export const renderMcpCall = <Args>(args: Args, theme: CardTheme): Component => {
   const call = mcpCallSummary(args);
   return composeToolComponent((width) =>

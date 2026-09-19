@@ -1,3 +1,4 @@
+import { builtinExpandedContent } from "./shared/builtin-expanded-content";
 import * as Predicate from "effect/Predicate";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -28,6 +29,7 @@ export function createEditPreviewTool(cwd: string) {
 
   return createCodePreviewToolDefinition(originalEdit, {
     compactSummary: (input) => createBuiltinCompactSummary("edit", input),
+    expandedContent: builtinExpandedContent<typeof originalEdit>("edit", cwd),
     renderCall(args, theme, renderContext) {
       const path = getPathArg(args);
       const operations = getEditPreviewOperations(args);

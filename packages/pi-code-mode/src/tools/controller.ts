@@ -4,7 +4,10 @@ import { getKeybindings } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { captureCodePreviewPresentationPolicy } from "pi-code-previews";
+import {
+  captureCodePreviewPresentationPolicy,
+  type CodePreviewShellOptions,
+} from "pi-code-previews";
 import { codeModeCompactSummary } from "../ui/compact-summary.ts";
 import { codeModeReadRequest } from "../ui/result-read-renderer.ts";
 import { liveChildElapsed } from "../boundary/host-child-timing.ts";
@@ -13,6 +16,7 @@ import { Type } from "typebox";
 import { animationFrame, syncProgressTicker } from "../boundary/host-render-ticker.ts";
 import {
   codeModeSource,
+  renderCodeModeProgramContent,
   renderCodeModeToolCall,
   renderCodeModeToolResult,
 } from "../ui/tool-renderer.ts";
@@ -124,7 +128,6 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       ? {
           ...summary,
           expandedResultOwnsCall: true,
-          notices: (summary.notices ?? []).map((notice) => ({ ...notice, expandedInResult: true })),
         }
       : summary;
   };
@@ -206,7 +209,37 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       return rendered.component;
     },
   });
-  return Object.assign(definition, { compactSummary });
+  const expandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> = {
+    renderCall: (args) => renderCodeModeProgramContent(args),
+    renderResult: (result, options, theme, context) => {
+      const readRequest = codeModeReadRequest(context.args);
+      const rendered = renderCodeModeToolResult(
+        result,
+        options,
+        theme,
+        context,
+        animationFrame(),
+        capturedExpandKeys,
+        {
+          contentOnly: true,
+          ...(readRequest && { readRequest }),
+          ownsCall: false,
+          source: codeModeSource(context.args),
+          summary: codeModeCompactSummary({
+            phase: options.isPartial ? "running" : "settled",
+            args: context.args,
+            result,
+            context,
+          }),
+          timingEnabled: captureCodePreviewPresentationPolicy().toolCallTiming,
+          liveElapsed: options.isPartial ? liveChildElapsed() : undefined,
+        },
+      );
+      syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker ?? startHostUiTicker);
+      return rendered.component;
+    },
+  };
+  return Object.assign(definition, { compactSummary, expandedContent });
 }
 export type CodeModeToolDefinition = ReturnType<typeof buildCodeModeToolDefinition>;
 

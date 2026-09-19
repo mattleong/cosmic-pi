@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { CompactIssuesSchema } from "./compact-issues";
+import { CompactIssuesSchema, CompactIssueClaimSchema } from "./compact-issues";
 
 const Outcome = Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]);
 const Labels = Schema.Array(Schema.String);
@@ -14,7 +14,6 @@ const Notices = Schema.Array(
     kind: Schema.Literals(["warning", "error", "recovery"]),
     text: Schema.String,
     expandedOnly: Schema.optionalKey(Schema.Literal(true)),
-    expandedInResult: Schema.optionalKey(Schema.Literal(true)),
   }),
 );
 const Fields = {
@@ -32,18 +31,12 @@ const Summary = Schema.Struct({
   subject: Schema.String,
   detailsOnExpand: Schema.optionalKey(Schema.Literal(true)),
   expandedResultOwnsCall: Schema.optionalKey(Schema.Literal(true)),
+  expandedResultOwnsIssues: Schema.optionalKey(Schema.Array(CompactIssueClaimSchema)),
   failure: Schema.optionalKey(
     Schema.Struct({
       cause: Schema.String,
       details: Schema.String,
-      ownedIssues: Schema.optionalKey(
-        Schema.Array(
-          Schema.Struct({
-            operation: Schema.String.check(Schema.isMinLength(1)),
-            code: Schema.String.check(Schema.isMinLength(1)),
-          }),
-        ),
-      ),
+      ownedIssues: Schema.optionalKey(Schema.Array(CompactIssueClaimSchema)),
     }),
   ),
   children: Schema.optionalKey(

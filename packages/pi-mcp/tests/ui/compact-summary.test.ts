@@ -129,10 +129,10 @@ describe("MCP compact summaries", () => {
     expect(summary?.subject).toBe("catalog");
     expect(summary?.counters).toHaveLength(1);
     expect(summary?.counters?.join(" ")).toContain("more available");
-    expect(
-      summary?.notices?.find((notice) => notice.text.startsWith("Discovery is incomplete"))
-        ?.expandedInResult,
-    ).toBe(true);
+    expect(summary?.issues?.entries.some((issue) => issue.code === "discovery-incomplete")).toBe(
+      true,
+    );
+    expect(summary?.expandedResultOwnsIssues).toBeUndefined();
     expect(summary?.notices?.some(isCompactAttention)).toBe(true);
   });
   it("omits routine retained IDs without changing result access", () => {
@@ -178,7 +178,6 @@ describe("MCP compact summaries", () => {
           kind: "recovery",
           text: stale,
           expandedOnly: true,
-          expandedInResult: true,
         }),
       );
       expect(decodeMcpCardDetails({ details }).notices).toContain(stale);
@@ -264,7 +263,6 @@ describe("MCP compact summaries", () => {
     expect(summary?.notices).toContainEqual({
       kind: "warning",
       text: "Remote notice",
-      expandedInResult: true,
     });
     expect(JSON.stringify(summary)).not.toContain("retained-1");
   });

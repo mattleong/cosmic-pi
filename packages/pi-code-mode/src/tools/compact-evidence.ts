@@ -103,6 +103,11 @@ export const recoverCompactNotices = <Value>(value: Value): readonly (typeof Not
         collection?.entries.flatMap((issue) => [
           ...(issue.cause ? [{ kind: issue.severity, text: clean(issue.cause) }] : []),
           ...issue.recovery.map((item) => ({ kind: "recovery" as const, text: clean(item.text) })),
+          ...(issue.diagnostics ?? []).map((text) => ({
+            kind: "recovery" as const,
+            text: clean(text),
+            expandedOnly: true as const,
+          })),
         ]) ?? []
       );
     });

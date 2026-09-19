@@ -1,206 +1,139 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
-import { createCompactToolShell } from "../../../pi-code-previews/src/preview/compact-shell.ts";
-import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
-import { renderMcpCall, renderMcpResult } from "../../src/ui/tool-renderer.ts";
-import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
-import { Text } from "@earendil-works/pi-tui";
-import { mcpBoundaryFailure } from "../../src/ui/boundary-failure.ts";
+import { afterEach, expect, it } from "vitest";
+import { createToolPresentationHarness } from "pi-code-previews/testing";
+import {
+  codePreviewSettings,
+  setCodePreviewSettings,
+} from "../../../pi-code-previews/src/config/state.ts";
+import { buildMcpTool, wrapMcpTool } from "../../src/tools/controller.ts";
+import { makeMcpErrorReceipts } from "../../src/boundary/host-tool-result.ts";
+import { projectMcpCompactSummary } from "../../src/ui/compact-summary.ts";
 
-it("rejected retained reads and missing details never force a full collapsed card", () => {
-  // SAFETY: The fixture supplies all styling methods used by the shell.
-  const theme = {
-    fg: (_key: string, text: string) => text,
-    bg: (_key: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
-  for (const isError of [false, true]) {
-    for (const details of [
-      undefined,
-      {
-        action: "result.read",
-        outcome: "not-sent",
-        isError: true,
-        notices: [],
-        data: {
-          kind: "invalid-input",
-          message: "result.read requires id, not server.",
-          reason: "gateway-request-invalid",
-        },
-      },
+const settings = { ...codePreviewSettings };
+afterEach(() => setCodePreviewSettings(settings));
+// SAFETY: These are all styling operations used by the registered tool.
+const theme = {
+  fg: (_key: string, text: string) => text,
+  bg: (_key: string, text: string) => text,
+  bold: (text: string) => text,
+} as Theme;
+const registered = (mode: "on" | "off" | "border", style: "compact" | "preview" = "compact") => {
+  setCodePreviewSettings({
+    ...settings,
+    toolCallBackground: mode,
+    toolCallCollapsedStyle: style,
+    toolCallTiming: false,
+  });
+  return wrapMcpTool(
+    buildMcpTool({
+      owner: Symbol("presentation"),
+      receipts: makeMcpErrorReceipts(),
+      execute: () => Promise.reject(new Error("Rendering must not execute")),
+    }),
+  );
+};
+
+it("renders unknown-coverage boundary attention once through the real MCP factory", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const failure of [
+      { kind: "stale", outcome: "not-sent" },
+      { kind: "cleanup", outcome: "unknown" },
+      { kind: "auth-required", reason: "oauth-mutation-unresolved", outcome: "unknown" },
     ]) {
-      const shell = createCompactToolShell("border", {
-        name: "mcp",
-        compactSummary: mcpCompactSummary,
-      });
-      const args = { action: "result.read", server: "wrong-field" };
-      const state = {};
+      const args = { action: "result.read", id: "retained-1" };
       const result = {
-        content: [{ type: "text" as const, text: "Complete recovery diagnostic" }],
-        details,
-      };
-      for (const expanded of [false, true, false]) {
-        const context = {
-          args,
-          state,
-          cwd: "/project",
-          toolCallId: "rejected-read",
-          lastComponent: undefined,
-          expanded,
-          executionStarted: false,
-          argsComplete: true,
-          isPartial: false,
-          isError,
-          showImages: false,
-          invalidate: () => undefined,
-        };
-        const call = shell.renderCall(context, theme, () => new Text("Original call body", 0, 0));
-        const body = shell.renderResult(
-          context,
-          theme,
-          () => new Text("Complete recovery diagnostic", 0, 0),
-          result,
-        );
-        const text = [...call.render(200), ...body.render(200)].join("\n");
-        expect(text.includes("Original call body")).toBe(expanded);
-        expect(text.includes("Complete recovery diagnostic")).toBe(expanded);
-        expect(text.includes("result.read")).toBe(!expanded);
-        expect(text.includes("MCP arguments rejected")).toBe(details !== undefined && !expanded);
-      }
-    }
-  }
-});
-
-it("gives the real expanded boundary view sole ownership of each typed cause and recovery", () => {
-  // SAFETY: The fixture supplies the styling methods used by both renderers.
-  const theme = {
-    fg: (_key: string, text: string) => text,
-    bg: (_key: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
-  for (const failure of [
-    { kind: "stale", outcome: "not-sent" },
-    { kind: "cleanup", outcome: "unknown" },
-    { kind: "auth-required", reason: "oauth-mutation-unresolved", outcome: "unknown" },
-  ]) {
-    const args = { action: "result.read", id: "retained-1" };
-    const result = {
-      content: [],
-      details: {
-        action: args.action,
-        outcome: failure.outcome,
-        isError: true,
-        notices: ["Independent operator recovery"],
-        data: {
-          kind: failure.kind,
-          ...("reason" in failure && { reason: failure.reason }),
-          message: "Original raw diagnostic",
+        content: [],
+        details: {
+          action: args.action,
+          outcome: failure.outcome,
+          isError: true,
+          notices: ["Independent operator recovery"],
+          data: { ...failure, message: "Original raw diagnostic" },
         },
-      },
-    };
-    const view = mcpBoundaryFailure(decodeMcpCardDetails(result))!;
-    expect(view.issues.coverage).toBe("unknown");
-    const shell = createCompactToolShell("border", {
-      name: "mcp",
-      compactSummary: mcpCompactSummary,
-    });
-    const state = {};
-    for (const expanded of [false, true, false]) {
-      const context = {
-        args,
-        state,
-        cwd: "/project",
-        toolCallId: "boundary-owned",
-        lastComponent: undefined,
-        expanded,
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: false,
-        isError: true,
-        showImages: false,
-        invalidate: () => undefined,
       };
-      const call = shell.renderCall(context, theme, () => renderMcpCall(args, theme));
-      const body = shell.renderResult(
-        context,
-        theme,
-        () => renderMcpResult(result, { expanded, isPartial: false, isError: true }, theme),
-        result,
-      );
-      const text = [...call.render(400), ...body.render(400)].join("\n");
-      expect(text.includes("Original raw diagnostic")).toBe(expanded);
-      for (const issue of view.issues.entries) {
-        if (issue.cause) expect(text.split(issue.cause).length - 1).toBe(1);
-        for (const recovery of issue.recovery) expect(text.split(recovery.text).length - 1).toBe(1);
-        for (const detail of issue.diagnostics ?? [])
-          expect(text.split(detail).length - 1).toBe(expanded ? 1 : 0);
+      const before = structuredClone(result);
+      const summary = projectMcpCompactSummary({ phase: "settled", args, result, isError: true })!;
+      expect(summary.issues?.coverage).toBe("unknown");
+      const harness = createToolPresentationHarness(registered(mode), { theme });
+      for (const expanded of [false, true, false, true]) {
+        harness.call(args, { expanded, isPartial: false, isError: true });
+        harness.result(result, { expanded, isError: true });
+        harness.invalidate();
+        const text = harness.render(400).join("\n");
+        expect(text.includes("Original raw diagnostic")).toBe(expanded);
+        for (const issue of summary.issues!.entries) {
+          if (issue.cause) expect(text.split(issue.cause).length - 1).toBe(1);
+          for (const recovery of issue.recovery)
+            expect(text.split(recovery.text).length - 1).toBe(1);
+          for (const detail of issue.diagnostics ?? [])
+            expect(text.split(detail).length - 1).toBe(expanded ? 1 : 0);
+        }
       }
-      expect(text).not.toContain("compact-shell:");
-      expect(text).not.toContain("mcp:");
+      expect(result).toEqual(before);
     }
   }
 });
 
-it("shares known MCP notices and recovery with the expanded result, retaining discovery guidance", () => {
-  // SAFETY: This render-only theme supplies the shell and MCP card styling callbacks.
-  const theme = {
-    fg: (_key: string, text: string) => text,
-    bg: (_key: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
+it("preserves retained read delivery and original outcome separately", () => {
+  const args = { action: "result.read", id: "retained-1" };
   const result = {
     content: [],
     details: {
-      action: "tools.list",
+      action: "result.read",
       outcome: "completed",
       isError: false,
-      notices: ["Operator notice"],
-      resultId: "retained-1",
-      data: { truncated: true, result: { undiscovered: ["other"] } },
+      notices: [],
+      data: {
+        offset: 0,
+        next: null,
+        total: 12,
+        text: "retained raw",
+        origin: { action: "tools.call", outcome: "unknown", isError: false },
+      },
     },
   };
-  const before = structuredClone(result);
-  const card = decodeMcpCardDetails(result);
+  const summary = projectMcpCompactSummary({ phase: "settled", args, result, isError: false });
+  expect(summary?.outcome).toBe("warning");
+  expect(summary?.counters?.[0]).toContain("0..12/12");
+  expect(summary?.issues?.entries.some((issue) => issue.code === "execution-unknown")).toBe(true);
+  const harness = createToolPresentationHarness(registered("border"), { theme });
+  harness.call(args, { expanded: true, isPartial: false });
+  harness.result(result);
+  const text = harness.render(200).join("\n");
+  expect(text).toContain("retained raw");
+  expect(text).toContain("do not replay");
+});
+
+it("retains unclassified and display-cut recovery through fallback cards", () => {
   for (const mode of ["on", "off", "border"] as const) {
-    const shell = createCompactToolShell(mode, { name: "mcp", compactSummary: mcpCompactSummary });
-    const state = {};
-    for (const expanded of [true, false, true]) {
-      const args = { action: "tools.list", server: "catalog" };
-      const context = {
-        args,
-        state,
-        cwd: "/project",
-        toolCallId: "mcp",
-        lastComponent: undefined,
-        expanded,
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: false,
-        isError: false,
-        showImages: false,
-        invalidate: () => undefined,
-      };
-      const call = shell.renderCall(context, theme, () => renderMcpCall(args, theme));
-      const body = shell.renderResult(
-        context,
-        theme,
-        () => renderMcpResult(result, { expanded, isPartial: false }, theme, "expand"),
-        result,
-      );
-      const text = [...call.render(200), ...body.render(200)].join("\n");
-      if (expanded) {
-        for (const notice of [...card.warnings, ...card.notices]) expect(text).toContain(notice);
-        expect(text).toContain(card.recoveryHint);
-        expect(text).toContain("Discovery is incomplete");
-      } else {
-        for (const issue of card.presentation.issues.entries) {
-          expect(text).toContain(issue.cause);
-          for (const recovery of issue.recovery) expect(text).toContain(recovery.text);
+    for (const style of ["compact", "preview"] as const) {
+      for (const details of [
+        undefined,
+        { malformed: true },
+        {
+          action: "tools.call",
+          outcome: "unknown",
+          isError: true,
+          notices: ["Unclassified recovery instruction"],
+          data: {
+            kind: "unknown-kind",
+            message: "Original recovery diagnostic",
+            result: "large-output ".repeat(6000),
+          },
+        },
+      ]) {
+        const args = { action: "tools.call", server: "server", tool: "tool" };
+        const result = { content: [{ type: "text" as const, text: "Historical output" }], details };
+        const harness = createToolPresentationHarness(registered(mode, style), { theme });
+        for (const expanded of [false, true, false]) {
+          harness.call(args, { expanded, isPartial: false, isError: true });
+          harness.result(result, { expanded, isError: true });
+          const text = harness.render(200).join("\n");
+          if (expanded && details && "action" in details)
+            expect(text).toContain("Unclassified recovery instruction");
+          expect(result.content[0]?.text).toBe("Historical output");
         }
       }
-      // Actual output loss keeps access instructions visible, unlike routine retained IDs.
-      expect(text).toContain(card.resultId);
     }
   }
-  expect(result).toEqual(before);
 });

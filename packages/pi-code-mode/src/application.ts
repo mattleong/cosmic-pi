@@ -87,8 +87,12 @@ const LIVE_APPLICATION_BOUNDARIES: CodeModeApplicationBoundaries = {
   loadSettings: loadCodePreviewSettings,
   wrapTool: (tool, scheduleAnimation) =>
     Object.assign(
-      withCodePreviewShell(tool, { compactSummary: tool.compactSummary, scheduleAnimation }),
-      { compactSummary: tool.compactSummary },
+      withCodePreviewShell(tool, {
+        compactSummary: tool.compactSummary,
+        expandedContent: tool.expandedContent,
+        scheduleAnimation,
+      }),
+      { compactSummary: tool.compactSummary, expandedContent: tool.expandedContent },
     ),
   makeNestedDefinitions: makeNestedPiToolDefinitions,
 };

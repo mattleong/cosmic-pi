@@ -1,9 +1,19 @@
 import type { CompactIssue, CompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import { McpBoundaryError } from "../client/errors.ts";
+import { mcpDiagnostic } from "../client/diagnostics.ts";
+import { mcpBoundaryFailure } from "../ui/boundary-failure.ts";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
 import { isOwnedValidationNotice, validationNoticeIdentity } from "../ui/validation-notices.ts";
 import type { McpPresentation } from "./presentation.ts";
+
+const FailureEvidence = Schema.Struct({
+  kind: McpBoundaryError.fields.kind,
+  reason: McpBoundaryError.fields.reason,
+});
 
 /** Additive display evidence. The v1 capability and its bounded notice projection are unchanged. */
 export function projectMcpIssues<Reply>(
@@ -31,13 +41,60 @@ export function projectMcpIssues<Reply>(
     Predicate.isString(action) && /^[a-z][a-z.]{0,63}$/.test(action) ? action : "request";
   if (actionName !== action) complete = false;
   const operation = `mcp:${actionName}`;
+  const evidence = Option.getOrUndefined(
+    Schema.decodeUnknownOption(FailureEvidence)({
+      kind: field(data, "kind").value,
+      ...(field(data, "reason").value !== undefined && { reason: field(data, "reason").value }),
+    }),
+  );
+  if (evidence && !origin && field(reply, "isError").value === true) {
+    const diagnostic = mcpDiagnostic(
+      { ...evidence, outcome: presentation.outcome },
+      { action: actionName },
+    );
+    const rawNotices = field(reply, "notices").value;
+    const count = field(rawNotices, "length").value;
+    const notices: string[] = [];
+    let noticesComplete = isArray(rawNotices) && Predicate.isNumber(count) && count <= 32;
+    for (let index = 0; noticesComplete && index < Number(count); index++) {
+      const notice = field(rawNotices, String(index)).value;
+      if (!Predicate.isString(notice) || notice.length > 512) noticesComplete = false;
+      else
+        notices.push(
+          sanitizeDiagnosticContent(sanitizeTerminalLine(notice), { maximumLength: 512 }),
+        );
+    }
+    const boundary = mcpBoundaryFailure({
+      known: true,
+      noticesComplete,
+      displayCuts: [],
+      isError: true,
+      diagnostic,
+      failureKind: evidence.kind,
+      failureReason: evidence.reason,
+      outcome: presentation.outcome,
+      action: actionName,
+      truncated: presentation.truncated,
+      notices,
+      ...(presentation.resultId
+        ? { recoveryHint: `/mcp result ${presentation.resultId}` }
+        : diagnostic.recovery.length
+          ? { recoveryHint: "Open /mcp to inspect current server details." }
+          : {}),
+    });
+    if (boundary && notices.join("\n").length <= 2048) return boundary.issues;
+  }
   const add = (
     code: string,
     severity: CompactIssue["severity"],
     cause: string,
     recovery: CompactIssue["recovery"] = [],
   ) => {
-    entries.push({ operation, code, severity, cause, recovery, expandedInResult: true });
+    if (cause.length > 2048 || entries.length >= 31) {
+      complete = false;
+      return;
+    }
+    entries.push({ operation, code, severity, cause, recovery });
   };
   const noReplay = { code: "no-replay", text: "Do not replay the operation to recover output." };
   const safe = <Value>(value: Value): string | undefined => {

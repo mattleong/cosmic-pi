@@ -21,6 +21,7 @@
   },
   "files": [
     "index.ts",
+    "testing.ts",
     "src/**/*.ts",
     "docs",
     "README.md",
@@ -32,6 +33,7 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
+    "./testing": "./testing.ts",
     "./package.json": "./package.json"
   },
   "scripts": {

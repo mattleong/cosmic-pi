@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Container,
@@ -18,6 +19,7 @@ import type { SubagentAwaitUntil } from "../run/service.ts";
 import { clipWithMarker } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import {
+  WorkspaceToolDetailsSchema,
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
   type CompactSubagentToolDetails,
@@ -258,6 +260,7 @@ interface RunOverviewOptions {
   readonly showOutcomeDetails?: boolean | undefined;
   readonly showReportAffordance?: boolean | undefined;
   readonly showContextOmission?: boolean | undefined;
+  readonly contentOnly?: boolean | undefined;
 }
 
 const runOverviewComponent = (
@@ -288,7 +291,7 @@ const runOverviewComponent = (
             ),
           ]
         : []),
-      ...(!isAwaitHierarchy && usage
+      ...((!isAwaitHierarchy || options.contentOnly) && usage
         ? [truncateToWidth(theme.fg("dim", `Total usage · ${usage}`), safeWidth)]
         : []),
       ...(showRunRows
@@ -298,7 +301,37 @@ const runOverviewComponent = (
           })
         : []),
       ...(options.expanded && showRunRows
-        ? runs.flatMap((run) => expandedRunDiagnostics(run, safeWidth, theme, !isAwaitHierarchy))
+        ? runs.flatMap((run) =>
+            options.contentOnly
+              ? [
+                  ...routineRunDiagnostics(
+                    run,
+                    safeWidth,
+                    theme,
+                    runSelectionSummary(run),
+                    runRetentionLabel(run),
+                  ),
+                  ...(run.progress && !isAssignmentFinishedRunState(run.state)
+                    ? wrapTextWithAnsi(
+                        theme.fg("accent", sanitizeTerminalLine(run.progress)),
+                        safeWidth,
+                      )
+                    : []),
+                  ...(runWriterSummary(run)
+                    ? wrapTextWithAnsi(theme.fg("dim", runWriterSummary(run)!), safeWidth)
+                    : []),
+                  ...(run.writeAudit?.violations ?? []).flatMap((violation) =>
+                    wrapTextWithAnsi(
+                      theme.fg(
+                        "dim",
+                        sanitizeTerminalLine(`${violation.path} · ${violation.toolName}`),
+                      ),
+                      safeWidth,
+                    ),
+                  ),
+                ]
+              : expandedRunDiagnostics(run, safeWidth, theme, !isAwaitHierarchy),
+          )
         : []),
       ...outcomeRuns
         .filter(
@@ -343,7 +376,7 @@ const runOverviewComponent = (
         : []),
       ...(showOutcomeDetails
         ? runs
-            .filter((run) => run.state === "paused")
+            .filter((run) => !options.contentOnly && run.state === "paused")
             .map((run) =>
               truncateToWidth(
                 theme.fg(
@@ -358,7 +391,7 @@ const runOverviewComponent = (
               ),
             )
         : []),
-      ...(showOutcomeDetails
+      ...(showOutcomeDetails && !options.contentOnly
         ? attentionRecoveryText(runs)
             .split("\n")
             .filter(Boolean)
@@ -529,6 +562,26 @@ const recoveredOmittedFallback = (
 export const renderSubagentCall = (name: string, target: string, theme: Theme): Component =>
   new Text(renderToolHeader({ title: name, subtitle: target }, theme), 0, 0);
 
+const decodeInputEvidence = Schema.decodeUnknownOption(
+  Schema.Struct({
+    message: Schema.optionalKey(Schema.String),
+    name: Schema.optionalKey(Schema.String),
+    paths: Schema.optionalKey(Schema.Array(Schema.String)),
+  }),
+);
+
+/** Unique input evidence not carried by the semantic heading or result cards. */
+export const renderSubagentInputContent = <ValueInput>(
+  args: ValueInput,
+  theme: Theme,
+): Component => {
+  const decoded = decodeInputEvidence(args);
+  if (decoded._tag === "None") return new Text("", 0, 0);
+  const input = decoded.value;
+  const lines = [input.message, input.name, ...(input.paths ?? [])].filter(Boolean);
+  return new Text(theme.fg("toolOutput", sanitizeTerminalText(lines.join("\n"))), 0, 0);
+};
+
 const awaitTargets = (details: {
   readonly cards: ReadonlyArray<SubagentRunCard>;
   readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
@@ -676,6 +729,87 @@ const renderTextFallback = (
     0,
     0,
   );
+};
+
+const decodeWorkspaceDisplay = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema, {
+  onExcessProperty: "error",
+});
+
+const renderWorkspaceContent = (
+  result: { readonly content: ToolTextContent; readonly details?: unknown },
+  theme: Theme,
+): Component | undefined => {
+  const workspace = decodeWorkspaceDisplay(result.details);
+  if (workspace._tag === "Some") {
+    const receipt = workspace.value;
+    const span = receipt.displayContent;
+    const raw = joinTextContent(result.content);
+    const missingPreparationPath =
+      receipt.operation === "prepare" && !receipt.preparedCwd && !span?.length;
+    if (
+      !missingPreparationPath &&
+      span &&
+      span.offset <= raw.length &&
+      span.length <= raw.length - span.offset
+    ) {
+      const text = [
+        receipt.workspaceId,
+        receipt.revisionId,
+        receipt.preparationId,
+        raw.slice(span.offset, span.offset + span.length),
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return new Text(theme.fg("toolOutput", sanitizeTerminalText(text)), 0, 0);
+    }
+    return recoveredOmittedFallback(result.content, theme) ?? renderComponent(() => []);
+  }
+  return undefined;
+};
+
+/** Compact expansion supplies evidence only. The shell owns headings and attention. */
+export const renderSubagentExpandedContent = (
+  result: { readonly content: ToolTextContent; readonly details?: unknown },
+  isPartial: boolean,
+  theme: Theme,
+  options: SubagentResultRenderOptions = {},
+): Component => {
+  const workspace = renderWorkspaceContent(result, theme);
+  if (workspace) return workspace;
+  const details = decodeStartAwaitCardDetails(result.details);
+  const compact = decodeCompactToolDetails(result.details);
+  if (details && isPartial && options.panelOwnsLiveHierarchy) return renderComponent(() => []);
+  if (details?.action === "start")
+    return (isPartial ? renderStartProgressComponent : renderStartReceiptComponent)(
+      details.startFailures ?? [],
+      details.startEntries,
+      true,
+      theme,
+      true,
+    );
+  if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme, true);
+  const projection = details ?? compact;
+  if (!projection) return renderTextFallback(result.content, isPartial, true, theme);
+  if (projection.contentOmitted)
+    return recoveredOmittedFallback(result.content, theme) ?? renderComponent(() => []);
+  const runs = projection.cards;
+  const targets = details?.action === "await" ? awaitTargets(details) : runs;
+  const sections = expandedRunReportSections(targets).filter(
+    (section) => section.kind === "report",
+  );
+  const container = new Container();
+  appendReportSections(container, sections, theme);
+  container.addChild(
+    runOverviewComponent(runs, theme, {
+      expanded: true,
+      reportSections: [],
+      showReportAffordance: false,
+      showContextOmission: false,
+      contentOnly: true,
+      hierarchy: details?.action === "await" ? awaitHierarchy(details) : undefined,
+    }),
+  );
+  return container;
 };
 
 export const renderSubagentResult = (

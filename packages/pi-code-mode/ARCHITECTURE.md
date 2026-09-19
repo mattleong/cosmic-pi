@@ -27,9 +27,9 @@ beside the unchanged model-visible text; publication revocation replaces both to
 `ui/result-read-summary.ts` validates saved metadata before showing page ranges and original
 execution warnings. Page counters take priority over opaque retained IDs at narrow widths; routine
 read-recovery explanations use expanded-only diagnostics. `ui/result-read-renderer.ts` owns the
-read-specific expanded status, recovery and raw page view, including unknown historical reads.
-It omits execution-only Program/Calls sections and renders its owned notices once without internal
-operation labels. Read views never parse guest page text or treat a successful read as execution success.
+read-specific status and raw page view, including unknown historical reads.
+It omits execution-only Program/Calls sections and uses shared attention rendering without internal
+operation labels. Compact expansion supplies only page content; the common shell owns attention. Read views never parse guest page text or treat a successful read as execution success.
 
 `src/results/service.ts` owns a scoped Effect Ref of settled artifacts. Limits are fixed at
 8 MiB UTF-8 per artifact, 64 MiB conservatively charged session storage, and 32 entries. Charges
@@ -100,18 +100,24 @@ unchanged progress/count transitions; display and operation evidence remain sepa
   receipts supply semantic child statuses; delivery failures override successful operation colors
   without changing the recorded operation outcome. `call-rows.ts` shares this receipt projection
   with `expanded-result.ts`. Execution expansion renders Program, Calls, and Result sections.
-  Failure bodies declare the identities of their own root and copied continuation issues. Both
-  expanded paths omit only those body-owned copies; independent nested recovery remains visible,
-  even with identical wording. Original rendering accepts this ownership only for the exact body.
+  Failure bodies declare detached evidence claims for their copied root and continuation causes.
+  Shared subtraction checks the full aggregate before suppressing those exact fields. Independent
+  recovery and diagnostics remain visible, even after merges. Original rendering accepts claims
+  only for the exact body.
   `notices.ts` collects evidence for detailed and emergency views without text-based deduplication.
   The shared issue reducer merges only matching operation/code evidence. Replay normalizes each
   row once, salvaging bounded valid notices and structured recovery when sibling fields fail.
   `sections.ts` owns real spacer rows and width-aware indentation. Calls reuse flat compact
   rows with plain hints beneath each row; the collapsed tree remains unchanged. Aggregate
-  recovery has its own Notices section so it cannot appear to belong to the last visible call. `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
-  prints only complete successful structured output. The controller captures shell style with
-  its definition-owned summary provider. Compact expansion owns one header/source; preview style
-  keeps the call slot. Render failures retain bounded source and independent recovery text.
+  recovery uses the shared attention block so it cannot appear to belong to the last visible call.
+  `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
+  prints only complete successful structured output. The controller supplies content-only call
+  and result callbacks to the shared shell. The call callback retains program source even when
+  the shared failure view owns the diagnostic body. The result callback retains child rows and
+  raw output, using the same host ticker as the original renderer for expanded live progress.
+  Preview style and direct renderers retain their existing call/result slots. Shared presentation
+  policy and attention rendering govern expansion; renderer failure retains bounded source and
+  independent recovery text.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
   MCP compact outcomes use versioned, schema-validated execution evidence, not guest return
@@ -336,8 +342,9 @@ arguments do not. Exact admission, observation and attention counts survive row 
 are detached and frozen, including failure retention; settlement revokes late callbacks. The older
 `tools/mcp-evidence.ts` only decodes and renders historical MCP-specific ledgers. New executions
 publish v2 receipts and one v2 generic attention ledger. `tools/issue-evidence.ts` bounds each
-collection to 32 issues, each issue to eight recovery instructions, and each string to 1024
-UTF-16 units. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
+collection to 32 issues, each issue to eight recovery instructions and eight diagnostics, and each
+string to 1024 UTF-16 units through the shared bounded issue schema. Correlation, sanitization and
+frozen replay preserve those diagnostics. Renderer ownership is never retained in nested receipts. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
 failures have independent identities and never rewrite captured operation outcomes. Structured
 coverage is separate from outcome counters. Unknown coverage uses a generic compact row while
 collapsed and retains the original renderer on expansion. Retained reads keep their `result.read`

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   compactIssueSeverity,
+  claimCompactIssue,
+  subtractCompactIssueClaims,
   normalizeCompactIssues,
   summaryCompactIssues,
   withCompactIssues,
@@ -210,12 +212,16 @@ describe("semantic compact issues", () => {
             code: "inspect",
             kind: "recovery" as const,
             text: "Inspect state.",
-            expandedInResult: true as const,
           },
         ],
       },
       "call-1",
     );
+    Object.assign(summary.failure, {
+      ownedIssues: summary.issues.entries.map((entry) =>
+        claimCompactIssue(entry, { cause: true, recovery: entry.recovery.map(({ code }) => code) }),
+      ),
+    });
     for (const expanded of [false, true]) {
       const text = renderCompactFailure(
         { name: "edit", phase: "settled", summary, failure: summary.failure, expanded },
@@ -235,7 +241,7 @@ test("outer failure ownership cannot consume nested evidence, even with identica
     cause: "Same diagnostic",
     recovery: [],
   });
-  const nested = issue({ operation: "child-1", cause: "Same diagnostic", expandedInResult: true });
+  const nested = issue({ operation: "child-1", cause: "Same diagnostic" });
   const summary: CompactSummary = {
     subject: "execute",
     outcome: "error",
@@ -243,7 +249,7 @@ test("outer failure ownership cannot consume nested evidence, even with identica
     failure: {
       cause: root.cause,
       details: root.cause,
-      ownedIssues: [{ operation: root.operation, code: root.code }],
+      ownedIssues: [claimCompactIssue(root, { cause: true })],
     },
   };
   const text = renderCompactFailure(
@@ -279,6 +285,43 @@ test("outer failure ownership cannot consume nested evidence, even with identica
   expect(
     withoutFailureBodyIssues(collection(conflictingRecovery), summary.failure!.ownedIssues).entries,
   ).toEqual([conflictingRecovery]);
+});
+
+test("claims select detached fields without absorbing merged or conflicting evidence", () => {
+  const original = issue({ diagnostics: ["first diagnostic"] });
+  const claim = claimCompactIssue(original, {
+    cause: true,
+    recovery: ["inspect"],
+    diagnostics: [0],
+  });
+  const added = issue({
+    recovery: [{ code: "other", text: "New recovery" }],
+    diagnostics: ["second diagnostic"],
+  });
+  const merged = normalizeCompactIssues([collection(original), collection(added)]);
+  expect(subtractCompactIssueClaims(merged, [claim]).entries).toEqual([
+    { ...merged.entries[0], cause: "", recovery: added.recovery, diagnostics: added.diagnostics },
+  ]);
+  const secondClaim = claimCompactIssue(added, { diagnostics: [0] });
+  expect(subtractCompactIssueClaims(merged, [secondClaim]).entries[0]?.diagnostics).toEqual([
+    "first diagnostic",
+  ]);
+  const sibling = issue({ code: "sibling" });
+  const across = normalizeCompactIssues([collection(original, sibling)]);
+  expect(
+    subtractCompactIssueClaims(across, [
+      claimCompactIssue(sibling, { recovery: ["inspect"] }),
+    ]).entries.flatMap((entry) => entry.recovery),
+  ).toEqual([]);
+  for (const conflicting of [
+    issue({ cause: "changed cause" }),
+    issue({ recovery: [{ code: "inspect", text: "changed instruction" }] }),
+  ]) {
+    const aggregate = normalizeCompactIssues([collection(original, conflicting)]);
+    expect(subtractCompactIssueClaims(aggregate, [claim])).toEqual(aggregate);
+  }
+  const stale = collection(issue({ diagnostics: ["changed diagnostic"] }));
+  expect(subtractCompactIssueClaims(stale, [claim])).toEqual(stale);
 });
 
 test("Pi failure cannot be hidden by a success summary with an owned failure body", () => {

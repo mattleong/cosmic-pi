@@ -1,0 +1,58 @@
+# Shared tool presentation
+
+This is the normative contract for workspace-owned visible tools. `pi-code-previews` owns presentation policy and composition. Each tool package owns domain classification and its unique content. Rendering must not change tool execution, permissions, result content, retained artifacts, or native images.
+
+## Registration and policy
+
+Load trusted preview settings before wrapping and registering owned definitions. Wrapping captures collapsed style and background mode until reload. Never wrap another extension's tools. Extensions importing the shell declare `pi-code-previews` as a runtime dependency.
+
+Use `CompactSummary` for semantic action, target, counts, metadata, outcome, and issues. A settled summary must explicitly classify its domain outcome. A successful transport or a false Pi error flag does not prove operation success. Cancellation, uncertainty, delivery failure, and cleanup blockers remain distinct. `planCompactPresentation` reconciles Pi error evidence and supplies generic fallback, coverage, severity, and expansion decisions. It does not parse diagnostics or classify domains.
+
+Collapsed views use one semantic heading and at most one routine detail. Counters precede metadata, then enabled measured timing. Warnings, failures, and required recovery stay outside that row budget. All retained children contribute issues before visible child selection. Missing, malformed, or incomplete summaries retain a compact fallback and an expansion notice rather than a full collapsed card.
+
+## Expanded composition
+
+`expandedContent.renderCall` and `expandedContent.renderResult` use the original callback signatures. They return unique content only, without a second heading, summary, or shared attention block. Supply an empty `Container` when a slot intentionally has no unique content. An omitted callback retains the original slot; it does not discard it.
+
+For valid summaries, compact expansion composes the shared heading, unique call content, unique result content, and remaining attention within the selected frame. Unknown issue coverage does not prohibit full-content callbacks. Those callbacks must retain unknown diagnostics. Preview style and malformed or absent summaries use original renderers. Keep raw output available when a structured projection does not account for every field. Label that raw section rather than matching its prose to remove duplicates; raw records may repeat facts shown in the generated view.
+
+Complete aggregate coverage is required for `failure` takeover. Its details replace only the diagnostic body when content hooks participate. Full program source, commands, proposed edits, and other unique call content must remain accessible. The legacy `expandedResultOwnsCall` promise requires complete coverage and all call information in the successful result, not a similar heading.
+
+Original and content-only renderers have independent call/result `lastComponent` caches. Call construction precedes result construction. Shared state, live panels, mouse routing, invalidation, and session-owned animation keep their existing lifecycle. A construction or drawing failure revokes ownership, restores raw-result fallback and attention, and never replays the failing renderer. Pi owns native images and transcript separators.
+
+## Exact issue ownership
+
+`CompactIssue` contains `operation`, `code`, `severity`, `cause`, ordered coded recovery, and optional diagnostics. Operation/code identities coalesce compatible evidence. Recovery codes are operation-scoped. Diagnostic strings are expanded-only evidence; safety instructions belong in visible cause or recovery fields.
+
+A `CompactIssueClaim` snapshots the complete issue evidence and selects fields through `fields.cause`, recovery codes, and diagnostic snapshot indices. Use `claimCompactIssue(issue, fields)` to detach the snapshot. Claims belong to the current renderer, not retained tool receipts.
+
+`subtractCompactIssueClaims` validates the entire aggregate before subtracting fields. Conflicting causes, severity, recovery text, malformed selectors, or stale evidence withdraw ownership. Recovery claims follow operation-scoped evidence after normalization. Diagnostic indices select exact unique strings in the snapshot, not array positions after merging. Added recovery or diagnostics never become owned merely because their issue identity matches.
+
+`expandedResultOwnsIssues` applies only to the current successful expanded result. `failure.ownedIssues` applies only to that failure body. A failure must not borrow result claims. Identity-only claims and the retired `expandedInResult` flag grant no suppression. Never infer ownership by substring, ANSI color, rendered-component inspection, or matching prose.
+
+Use `renderExpandedAttention(issues, claims, theme, width, attribute?)` in shells and nested or asynchronous consumers. Attribution defaults to false because operation IDs are internal identities. Request it explicitly when a child-call view needs attribution.
+
+## Retention and validation
+
+`createBoundedCompactIssuesSchema` takes existing producer limits for text, issue count, recovery count, and diagnostics count. It contains semantic evidence only, excluding renderer ownership. Overflow rejects the receipt; consumers downgrade coverage or retain conservative diagnostics. Do not increase existing retention limits to make rendering pass. Strip arbitrary failure bodies, redact sensitive content, and bound retained evidence before storage.
+
+The source-only `pi-code-previews/testing` export provides `createToolPresentationHarness`. It invokes real registered render callbacks with separate call/result slots, supports lifecycle overrides, rendering at chosen widths, and invalidation. It never invokes execute and has no Vitest dependency. Conformance tests cover compact toggles, preview fallback, widths/backgrounds, uncertainty, issue merges/conflicts, construction/drawing failures, source preservation, and unchanged execution/result objects.
+
+## Inventory
+
+| Owner                                | Visible tools or presentations                                                                                                                                                                                 | Unique expanded content                                                                                               |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Code Previews                        | `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`                                                                                                                                                          | File output, commands, proposed/applied diffs, search/path output                                                     |
+| Code Mode                            | `code_mode`, including retained result reads                                                                                                                                                                   | Program source and nested call output for execution; retained reads show only the retained output and paging evidence |
+| MCP                                  | `mcp` gateway and retained result reads                                                                                                                                                                        | Authorized readable/raw output, bounded metadata, receipts, native images                                             |
+| Background Tasks                     | `background_task`                                                                                                                                                                                              | Process state, log pages, task diagnostics                                                                            |
+| Ask User                             | `ask_user`, `ask_user_async`, `ask_user_async_control`; async answer messages                                                                                                                                  | Question/answer content, selected values, notes, delivery state                                                       |
+| Better OpenAI                        | `openai_image`; `openai-image` command messages                                                                                                                                                                | Prompt, image metadata, saved paths; Pi renders native images                                                         |
+| Subagents                            | `subagent_models`, `subagent_start`, `subagent_list`, `subagent_status`, `subagent_await`, `subagent_send`, `subagent_reply`, `subagent_lifecycle`, `subagent_rename`, `subagent_claims`, `subagent_workspace` | Run/report details, admission and cleanup evidence, workspace review data                                             |
+| Subagent children and private bridge | `contact_parent`, `supervisor_progress`, `supervisor_warning`, `supervisor_question`, `supervisor_submit_report`                                                                                               | Coordination questions, reports, acknowledgements; live-panel awaits retain their existing replacement behavior       |
+
+The private `supervisor_pi_proxy` transport is not a visible Pi tool row. Code Mode's seven direct builtin adapters and Windows-only PowerShell execute headlessly; their bounded nested receipts use Code Mode's shared presentation, not a second registered shell.
+
+Advisor's private `read`, `grep`, `find`, and `ls` definitions execute inside a headless child. They are not parent TUI tool presentations and must not acquire preview dependencies for this standard. Advisor root review cards are message presentations, not tool results.
+
+Better xAI, Directory Models, Herdr BTW, Cosmic UI, Cosmic Core, and Advisor root register no visible tool renderer to migrate. Their commands, settings, footer, manager, and review-card interfaces remain outside this tool contract. Third-party tools are outside workspace ownership.

@@ -1,10 +1,14 @@
 /** Pure Code Mode projection for the opt-in shared compact shell. */
 import * as Schema from "effect/Schema";
 import {
+  claimCompactIssue,
   isCompactAttention,
   legacyCompactIssues,
   normalizeCompactIssues,
+  planCompactPresentation,
   selectCompactChildren,
+  summaryCompactIssues,
+  type CompactSummary,
   type CompactNotice,
   type CompactSummaryProvider,
 } from "pi-code-previews";
@@ -17,6 +21,7 @@ import { describeCodeModeIntent } from "./tool-renderer.ts";
 import { verifiedFailurePresentation } from "./failure-presentation.ts";
 import { codeModeCallRows } from "./call-rows.ts";
 import { resultReadCompactSummary } from "./result-read-summary.ts";
+import { codeModeOutputText } from "./result-output.ts";
 
 const ArgsSchema = Schema.Struct({
   intent: Schema.optional(Schema.Unknown),
@@ -52,7 +57,7 @@ const projectCodeModeCompactSummary = (
     ];
     const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
     // Keep informational hints parent-owned when an outer failure bypasses details.
-    const notices: CompactNotice[] = (
+    const notices: CompactNotice[] =
       details.compactAttention?.version === 2
         ? codeModeEvidenceNotices({
             ...details,
@@ -76,11 +81,7 @@ const projectCodeModeCompactSummary = (
               }),
             })),
           })
-        : codeModeEvidenceNotices(details)
-    ).map((notice) => ({
-      ...notice,
-      expandedInResult: true,
-    }));
+        : codeModeEvidenceNotices(details);
     const selectedCalls = context.expanded
       ? children.entries
       : selectCompactChildren(children).entries;
@@ -136,7 +137,6 @@ const projectCodeModeCompactSummary = (
           code: "failure-continuation",
           kind: "recovery",
           text: rest.join("\n"),
-          expandedInResult: true,
         });
       notices.push(...(known?.notices ?? []));
       // Root provenance has no invocation identity, so it cannot suppress child evidence.
@@ -155,24 +155,6 @@ const projectCodeModeCompactSummary = (
           failure: {
             cause: known?.evidence.cause ?? first,
             details: text,
-            ownedIssues: [
-              ...(hasContinuation
-                ? [
-                    {
-                      operation: details.compactAttention?.version === 2 ? "code-mode" : "outer",
-                      code: "failure-continuation",
-                    },
-                  ]
-                : []),
-              ...(details.compactAttention?.version === 2 && !details.cancelled
-                ? [
-                    {
-                      operation: "code-mode",
-                      code: "program-failure",
-                    },
-                  ]
-                : []),
-            ],
           },
         }),
       };
@@ -216,6 +198,36 @@ const projectCodeModeCompactSummary = (
   }
 };
 
+/** Only producer-identified text copied into this exact body can suppress attention. */
+const withBodyClaims = (input: CompactSummary): CompactSummary => {
+  const summary =
+    planCompactPresentation({
+      summary: input,
+      phase: "settled",
+      isError: input.outcome === "error",
+      expanded: true,
+    }).summary ?? input;
+  const failure = summary.failure;
+  if (!failure || codeModeOutputText(failure.details) !== failure.details) return summary;
+  const claims = summaryCompactIssues(summary, true).entries.flatMap((issue) => {
+    const copiedRoot =
+      ((issue.operation === "code-mode" && issue.code === "program-failure") ||
+        (issue.operation === "outer" && issue.code === "pi-error")) &&
+      issue.cause === failure.cause &&
+      failure.details.split("\n")[0] === issue.cause;
+    const copiedContinuation =
+      (issue.operation === "code-mode" || issue.operation === "outer") &&
+      issue.code === "failure-continuation" &&
+      issue.cause === failure.details.split("\n").slice(1).join("\n");
+    return copiedRoot || copiedContinuation ? [claimCompactIssue(issue, { cause: true })] : [];
+  });
+  return {
+    ...summary,
+    failure: { ...failure, ownedIssues: claims },
+    expandedResultOwnsIssues: claims,
+  };
+};
+
 /** The outer shell owns one issue block. V1 history keeps conservative legacy evidence. */
 export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
   input,
@@ -226,7 +238,7 @@ export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
     if (!summary || !input.result) return summary;
     const details = decodeCodeModeRenderDetails(input.result.details);
     const attention = details.compactAttention;
-    if (attention?.version !== 2) return summary;
+    if (attention?.version !== 2) return withBodyClaims(summary);
     const own = legacyCompactIssues(summary.notices?.filter(isCompactAttention), "code-mode");
     const root =
       summary.outcome !== "cancelled" && summary.failure?.cause
@@ -237,11 +249,10 @@ export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
               severity: "error" as const,
               cause: summary.failure.cause,
               recovery: [],
-              expandedInResult: true as const,
             },
           ]
         : [];
-    return {
+    return withBodyClaims({
       ...summary,
       issues: normalizeCompactIssues([
         attention.issues,
@@ -250,7 +261,7 @@ export const codeModeCompactSummary: typeof projectCodeModeCompactSummary = (
           entries: [...own.entries, ...root],
         },
       ]),
-    };
+    });
   } catch {
     return undefined;
   }

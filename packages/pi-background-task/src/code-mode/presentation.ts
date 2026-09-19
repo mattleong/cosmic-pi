@@ -2,6 +2,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { createBoundedCompactIssuesSchema } from "pi-code-previews";
 import { projectBackgroundTaskCompactSummary } from "../ui/compact-summary.ts";
 import type { BackgroundTaskCodeModeInput } from "./protocol.ts";
 
@@ -35,20 +36,11 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
         }),
       ).check(Schema.isMaxLength(32)),
       issues: Schema.optionalKey(
-        Schema.Struct({
-          coverage: Schema.Literals(["complete", "unknown"]),
-          entries: Schema.Array(
-            Schema.Struct({
-              operation: Text,
-              code: Text,
-              severity: Schema.Literals(["error", "warning"]),
-              cause: Text,
-              recovery: Schema.Array(Schema.Struct({ code: Text, text: Text })).check(
-                Schema.isMaxLength(8),
-              ),
-              expandedInResult: Schema.optionalKey(Schema.Literal(true)),
-            }),
-          ).check(Schema.isMaxLength(32)),
+        createBoundedCompactIssuesSchema({
+          maxTextLength: 2048,
+          maxEntries: 32,
+          maxRecoveryEntries: 8,
+          maxDiagnosticEntries: 16,
         }),
       ),
       detailsOnExpand: Schema.Literal(true),
@@ -81,12 +73,15 @@ export const normalizeBackgroundTaskPresentation = <Value>(
           subject: sanitizeTerminalLine(s.subject),
           ...(s.issues && {
             issues: {
-              coverage: s.issues.coverage,
+              coverage: decoded.incomplete || decoded.overflow ? "unknown" : s.issues.coverage,
               entries: s.issues.entries.map((issue) => ({
                 ...issue,
                 operation: sanitizeTerminalLine(issue.operation),
                 code: sanitizeTerminalLine(issue.code),
                 cause: sanitizeTerminalLine(issue.cause),
+                ...(issue.diagnostics && {
+                  diagnostics: issue.diagnostics.map(sanitizeTerminalLine),
+                }),
                 recovery: issue.recovery.map((instruction) => ({
                   code: sanitizeTerminalLine(instruction.code),
                   text: sanitizeTerminalLine(instruction.text),

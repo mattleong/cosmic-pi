@@ -23,6 +23,12 @@ export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): Compact
             kind: "recovery" as const,
             text: `${issue.operation}: ${item.text}`,
           })),
+          ...(issue.diagnostics ?? []).map((text, index) => ({
+            code: `${issue.operation}/${issue.code}/diagnostic-${index}`,
+            kind: "recovery" as const,
+            text: `${issue.operation}: ${text}`,
+            expandedOnly: true as const,
+          })),
         ])
       : (details.compactAttention?.notices ?? [])),
     ...details.toolCalls.flatMap((call) =>

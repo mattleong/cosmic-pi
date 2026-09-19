@@ -173,6 +173,7 @@ export function createSubagentCompactSummary(
       projectedSubject(details, input, phase, lanes.subject, targets),
       targets,
       Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
+      context.expanded,
     );
     applyArgumentLanes(summary, details, phase, lanes);
     const projected = withCompactIssues(summary, `subagent:${operation}`);
@@ -226,7 +227,11 @@ function summarizeStart(
       );
   }
   for (const failure of details.startFailures ?? []) {
-    add(undefined, `${failure.name ?? `Launch ${failure.index + 1}`}: ${failure.message}`, "error");
+    add(
+      undefined,
+      `${failure.name ?? `Launch ${failure.index + 1}`}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+      "error",
+    );
     const recovery = failure.admittedRun;
     if (recovery) {
       add(`run:${recovery.runId}:cleanup-receipt`, formatFailedStartRecovery(recovery));
@@ -262,7 +267,6 @@ function awaitNotices(
     ["reported", "completed", "failed", "stopped"].includes(card.state),
   ).length;
   const settledMetadata: string[] = [];
-  summary.expandedResultOwnsCall = true;
   summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
   summary.metadata = settledMetadata;
   if (cards.length < targets.length) {
@@ -329,7 +333,11 @@ function runNotices(
     );
   }
   for (const failure of details.actionFailures ?? []) {
-    add(undefined, `${failure.id}: ${failure.message}`, "error");
+    add(
+      undefined,
+      `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+      "error",
+    );
     add(
       `run:${failure.id}:action-recovery`,
       "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
@@ -383,6 +391,7 @@ function appendRunHistory(
   phase: Phase,
   reportsOnlyOmitted: boolean,
   quietChildWarnings: boolean,
+  expanded: boolean,
 ): void {
   const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
   const { notices: cardNotices } = compactRunNotices(
@@ -390,6 +399,7 @@ function appendRunHistory(
     reportsOnlyOmitted,
     quietHistory,
     quietChildWarnings,
+    expanded,
   );
   notices.push(...cardNotices);
 }
@@ -411,6 +421,7 @@ function summarizeDetails(
   subject: string,
   targets?: readonly string[],
   requested?: readonly string[],
+  expanded = false,
 ): CompactSummary {
   const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
   const summary: CompactSummary = { subject, metadata: [], notices, detailsOnExpand: true };
@@ -451,7 +462,8 @@ function summarizeDetails(
     cards,
     phase,
     details.reportsOnlyOmitted === true,
-    details.action === "await",
+    details.action === "await" && !expanded,
+    expanded,
   );
   if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
   else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))

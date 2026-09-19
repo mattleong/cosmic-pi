@@ -7,7 +7,12 @@ import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { decodeStartAwaitCardDetails } from "./details-schema.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
-import { renderSubagentCall, renderSubagentResult } from "./render.ts";
+import {
+  renderSubagentCall,
+  renderSubagentResult,
+  renderSubagentExpandedContent,
+  renderSubagentInputContent,
+} from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
 
 import {
@@ -316,21 +321,44 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
     pi.registerTool(
       withCodePreviewShell(tool, {
         ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
+        expandedContent: {
+          renderCall: (args, theme) =>
+            tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
+              ? renderSubagentStartCall(args.agents, theme, true, true)
+              : renderSubagentInputContent(args, theme),
+          renderResult: (result, options, theme, context) => {
+            const panelOwnsLiveHierarchy =
+              options.isPartial && runtime.toolPresentation?.isLiveHierarchyAvailable() === true;
+            syncAwaitProgressTicker(
+              decodeStartAwaitCardDetails(result.details),
+              options.isPartial && !panelOwnsLiveHierarchy,
+              context,
+              startUiTicker,
+            );
+            const summary = project({
+              phase: options.isPartial ? "running" : "settled",
+              args: context.args,
+              result,
+              context,
+            });
+            if (!summary)
+              return renderSubagentResult(
+                { content: result.content },
+                options.isPartial,
+                true,
+                theme,
+              );
+            return renderSubagentExpandedContent(result, options.isPartial, theme, {
+              panelOwnsLiveHierarchy,
+            });
+          },
+        },
         compactSummary: (input) => {
           const summary = project(input);
           // Compact mode owns every collapsed row, even when projection declines.
           // Hidden original renderers cannot retire a ticker started while expanded.
           if (!input.context.isPartial || !input.context.expanded)
             syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
-          // The live panel intentionally empties the original result, not the call heading.
-          if (
-            summary?.expandedResultOwnsCall &&
-            input.context.isPartial &&
-            runtime.toolPresentation?.isLiveHierarchyAvailable() === true
-          ) {
-            const { expandedResultOwnsCall: _ownedCall, ...retained } = summary;
-            return retained;
-          }
           return summary;
         },
       }),

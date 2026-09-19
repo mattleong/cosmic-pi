@@ -2,7 +2,9 @@
  * retain bounded sanitized remote error text. Nested consumers enforce receipt limits.
  */
 import * as Predicate from "effect/Predicate";
-import type { CompactIssues } from "pi-code-previews";
+import { createBoundedCompactIssuesSchema, type CompactIssues } from "pi-code-previews";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { projectMcpIssues } from "./issues.ts";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
@@ -12,6 +14,13 @@ import {
   validationNoticeIdentity,
 } from "../ui/validation-notices.ts";
 import { normalizeMcpCodeModeError } from "./protocol.ts";
+
+const BoundedIssues = createBoundedCompactIssuesSchema({
+  maxTextLength: 2048,
+  maxEntries: 32,
+  maxRecoveryEntries: 8,
+  maxDiagnosticEntries: 16,
+});
 
 export interface McpPresentation {
   readonly issues: CompactIssues;
@@ -228,11 +237,33 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
     notices,
   };
   const retained = resultId ? { ...evidence, resultId } : evidence;
-  const issues = projectMcpIssues(field, reply, retained);
+  const projected = projectMcpIssues(field, reply, retained);
+  const issues = Option.getOrUndefined(Schema.decodeOption(BoundedIssues)(projected));
+  incomplete ||= issues === undefined;
   return {
     ...retained,
     incomplete,
-    issues: incomplete ? { ...issues, coverage: "unknown" } : issues,
+    issues: issues
+      ? incomplete
+        ? { ...issues, coverage: "unknown" }
+        : issues
+      : {
+          coverage: "unknown",
+          entries: [
+            {
+              operation: "mcp",
+              code: "evidence-overflow",
+              severity: "warning",
+              cause: "MCP presentation evidence exceeded its bounds.",
+              recovery: [
+                {
+                  code: "no-replay",
+                  text: "Inspect retained output; do not replay operations to recover output.",
+                },
+              ],
+            },
+          ],
+        },
   };
 };
 

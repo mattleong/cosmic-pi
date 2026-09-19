@@ -141,16 +141,21 @@ export const renderProfileRoutesComponent = (
   details: ModelsToolDetails,
   expanded: boolean,
   theme: Theme,
+  contentOnly = false,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const profiles = details.profiles ?? [];
-    const lines: string[] = [
-      theme.fg(
-        "accent",
-        `Profile routes · static eligibility only${details.fallbackProfile ? ` · fallback ${details.fallbackProfile}` : ""}`,
-      ),
-    ];
+    const lines: string[] = contentOnly
+      ? []
+      : [
+          theme.fg(
+            "accent",
+            `Profile routes · static eligibility only${details.fallbackProfile ? ` · fallback ${details.fallbackProfile}` : ""}`,
+          ),
+        ];
+    if (contentOnly && details.fallbackProfile)
+      lines.push(theme.fg("dim", `Fallback profile: ${details.fallbackProfile}`));
     for (const profile of profiles) {
       const eligible = profile.candidates.filter(
         (candidate) => candidate.status === "eligible",
@@ -185,7 +190,7 @@ export const renderProfileRoutesComponent = (
     }
     if (profiles.length === 0)
       lines.push(theme.fg("muted", "No profile route details were persisted."));
-    if (details.contentOmitted)
+    if (details.contentOmitted && !contentOnly)
       lines.push(theme.fg("warning", "Long model or route-detail text was omitted."));
     lines.push(
       theme.fg(

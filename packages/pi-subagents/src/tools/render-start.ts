@@ -32,6 +32,7 @@ export const renderSubagentStartCall = (
   agents: ReadonlyArray<SubagentStartSpec>,
   theme: Theme,
   expanded: boolean,
+  contentOnly = false,
 ): Component => {
   const count = agents.length;
   const title = `Start ${count} subagent${count === 1 ? "" : "s"}`;
@@ -51,7 +52,7 @@ export const renderSubagentStartCall = (
   );
   if (!expanded) return header;
   const container = new Container();
-  container.addChild(header);
+  if (!contentOnly) container.addChild(header);
   for (const [index, agent] of agents.entries()) {
     container.addChild(
       new Text(
@@ -110,6 +111,7 @@ const receiptRow = (
   width: number,
   theme: Theme,
   failure?: SubagentStartFailure,
+  contentOnly = false,
 ): string[] => {
   const safeWidth = Math.max(1, width);
   const { glyph, color } = receiptPresentation(entry);
@@ -123,9 +125,10 @@ const receiptRow = (
       : recovery
         ? sanitizeTerminalLine(shortRunId(recovery.runId))
         : "";
-  const recoveryStatus = recovery
-    ? ` · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`
-    : "";
+  const recoveryStatus =
+    recovery && !contentOnly
+      ? ` · cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`
+      : "";
   const raw = `${glyph} ${name} · ${profile} · ${route}${id ? ` · ${id}` : ""}${recoveryStatus}`;
   const routeLines =
     visibleWidth(raw) <= safeWidth
@@ -141,14 +144,14 @@ const receiptRow = (
             ),
           );
           if (id) lines.push(`  ${theme.fg("muted", id)}`);
-          if (recovery)
+          if (recovery && !contentOnly)
             lines.push(
               `  ${theme.fg("muted", `cleanup ${recovery.cleanupDisposition} · retry ${recovery.retryDisposition}`)}`,
             );
           return lines.map((line) => truncateToWidth(line, safeWidth));
         })();
   const warningLines =
-    selectedRoute(entry) && entry.warning
+    !contentOnly && selectedRoute(entry) && entry.warning
       ? wrapTextWithAnsi(
           theme.fg(
             "warning",
@@ -201,6 +204,7 @@ const startReceiptComponent = (
   partial: boolean,
   expanded: boolean,
   theme: Theme,
+  contentOnly = false,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
@@ -213,7 +217,7 @@ const startReceiptComponent = (
             selectedRoute(entry) && entry.candidateIndex !== undefined && entry.candidateIndex > 0
               ? `${entry.status === "started" ? "Selected" : "Attempted"} candidate ${entry.candidateIndex + 1} after ${entry.candidateIndex} earlier candidate${entry.candidateIndex === 1 ? " was" : "s were"} unavailable.`
               : undefined;
-          const failure = entry.status === "failed" ? failureOf(entry) : undefined;
+          const failure = !contentOnly && entry.status === "failed" ? failureOf(entry) : undefined;
           return [
             ...(fallback ? wrapTextWithAnsi(theme.fg("dim", `  ${fallback}`), safeWidth) : []),
             ...(failure
@@ -272,9 +276,11 @@ const startReceiptComponent = (
           ];
         });
     return [
-      truncateToWidth(receiptHeader(entries, partial, theme), safeWidth),
+      ...(!contentOnly ? [truncateToWidth(receiptHeader(entries, partial, theme), safeWidth)] : []),
       ...(showAllEntries
-        ? entries.flatMap((entry) => receiptRow(entry, safeWidth, theme, failureOf(entry)))
+        ? entries.flatMap((entry) =>
+            receiptRow(entry, safeWidth, theme, failureOf(entry), contentOnly),
+          )
         : collapsedOutcomes),
       ...failureDetails,
       ...(!partial &&
@@ -296,11 +302,13 @@ export const renderStartProgressComponent = (
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => startReceiptComponent(failures, entries, true, expanded, theme);
+  contentOnly = false,
+): Component => startReceiptComponent(failures, entries, true, expanded, theme, contentOnly);
 
 export const renderStartReceiptComponent = (
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
   expanded: boolean,
   theme: Theme,
-): Component => startReceiptComponent(failures, entries, false, expanded, theme);
+  contentOnly = false,
+): Component => startReceiptComponent(failures, entries, false, expanded, theme, contentOnly);

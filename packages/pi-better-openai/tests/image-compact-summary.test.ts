@@ -24,6 +24,11 @@ const input = (status = "completed"): Input => ({
 });
 
 describe("image compact summary", () => {
+  it("preserves a validated cancellation despite host isError", () => {
+    const call = input("cancelled");
+    call.context.isError = true;
+    expect(imageCompactSummary(call)?.outcome).toBe("cancelled");
+  });
   it.each(["pending", "running"] as const)("reports %s without claiming success", (phase) => {
     const summary = imageCompactSummary({ ...input(), phase, result: undefined });
     expect(summary?.outcome).toBeUndefined();
@@ -87,7 +92,7 @@ describe("image compact summary", () => {
     call.context.isError = true;
     const text = "Save failed.\nOutput may exist; inspect the destination before retrying.";
     call.result = { content: [{ type: "text", text }], details: undefined };
-    expect(imageCompactSummary(call)?.failure).toEqual({ cause: text, details: text });
+    expect(imageCompactSummary(call)?.failure).toMatchObject({ cause: text, details: text });
     expect(imageCompactSummary(call)?.issues).toMatchObject({
       coverage: "unknown",
       entries: [{ cause: text }],

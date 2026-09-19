@@ -11,7 +11,6 @@ import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
 import {
   loadCodePreviewSettings,
-  withCodePreviewShell,
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
   type CompactAnimationScheduler,
@@ -43,7 +42,7 @@ import {
   type McpLayerInput,
   type McpRuntimeError,
 } from "../layer.ts";
-import { buildMcpTool, type McpToolDefinition } from "../tools/controller.ts";
+import { buildMcpTool, wrapMcpTool, type McpToolDefinition } from "../tools/controller.ts";
 import type { McpProgress } from "../observations/model.ts";
 import type { McpGatewayExecution, McpGatewayReply } from "../tools/model.ts";
 import { McpExecution, type McpExecutionContract } from "../tools/service.ts";
@@ -51,7 +50,6 @@ import { McpManager } from "../manager/service.ts";
 import type { McpManagerContract } from "../manager/model.ts";
 import { runMcpManager } from "../manager/controller.ts";
 import { managerSelection } from "../ui/manager-state.ts";
-import { mcpCompactSummary } from "../ui/compact-summary.ts";
 import { McpActivity } from "../activity/service.ts";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { acquireMcpStatusHost, type McpStatusHost } from "../boundary/host-mcp-status.ts";
@@ -116,8 +114,7 @@ const liveBoundaries: McpApplicationBoundaries = {
   makeLayer: makeMcpLayer,
   loadSettings: (cwd, trusted, signal) =>
     loadCodePreviewSettings(cwd, trusted, signal).then(() => undefined),
-  wrapTool: (tool, scheduleAnimation) =>
-    withCodePreviewShell(tool, { compactSummary: mcpCompactSummary, scheduleAnimation }),
+  wrapTool: wrapMcpTool,
 };
 export interface McpCommandPort {
   readonly run: <A, E>(

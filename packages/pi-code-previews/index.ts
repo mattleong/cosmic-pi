@@ -38,6 +38,9 @@ export { builtinFailure as projectBuiltinFailure } from "./src/tools/builtin-fai
 export { isCompactAttention } from "./src/tools/compact-summary";
 export {
   CompactIssuesSchema,
+  claimCompactIssue,
+  subtractCompactIssueClaims,
+  type CompactIssueClaim,
   isCompactIssues,
   normalizeCompactIssues,
   compactIssueSeverity,
@@ -48,7 +51,9 @@ export {
   type CompactIssue,
   type CompactIssues,
 } from "./src/tools/compact-issues";
-export { renderCompactIssues } from "./src/preview/compact-issues";
+export { renderCompactIssues, renderExpandedAttention } from "./src/preview/compact-issues";
+export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
+export { planCompactPresentation } from "./src/tools/compact-presentation";
 
 /** Semantic compact summaries for cooperating tools. */
 export type {

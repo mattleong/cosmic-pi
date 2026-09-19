@@ -361,7 +361,13 @@ describe("notices independent of hidden preview bodies", () => {
       const value = summary("read", page.args, page.output);
       expect(value?.outcome).toBe("success");
       expect(value?.notices).toEqual([
-        expect.objectContaining({ kind: "recovery", expandedOnly: true, expandedInResult: true }),
+        expect.objectContaining({ kind: "recovery", expandedOnly: true }),
+      ]);
+      expect(value?.expandedResultOwnsIssues).toEqual([
+        expect.objectContaining({
+          code: "read-continuation",
+          fields: expect.objectContaining({ cause: true }),
+        }),
       ]);
       const sensitive = summary("read", page.args, {
         ...page.output,
@@ -902,7 +908,8 @@ describe("builtin factory compact integration", () => {
           .join("\n");
         expect(text.match(/failureLineOne/gu)).toHaveLength(1);
         expect(text.match(/Inspect the destination before retrying\./gu)).toHaveLength(1);
-        expect(text.match(/file\.ts|printf value/gu)).toHaveLength(1);
+        // Expanded content retains full arguments as well as the elidable semantic target.
+        expect(text).toMatch(/file\.ts|printf value/u);
       }
     }
   });

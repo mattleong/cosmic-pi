@@ -1,6 +1,28 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { compactIssueSeverity, type CompactIssues } from "../tools/compact-issues";
+import {
+  compactIssueSeverity,
+  subtractCompactIssueClaims,
+  type CompactIssueClaim,
+  type CompactIssues,
+} from "../tools/compact-issues";
 import { indentedCompactText } from "./compact-row";
+
+/** Shared expanded attention after exact evidence subtraction. */
+export function renderExpandedAttention(
+  issues: CompactIssues,
+  claims: readonly CompactIssueClaim[] | undefined,
+  theme: Theme,
+  width: number,
+  attribute = false,
+): string[] {
+  return renderCompactIssues(
+    subtractCompactIssueClaims(issues, claims),
+    theme,
+    width,
+    true,
+    attribute,
+  );
+}
 
 /** One container owns all causes and essential recovery. Wrapping never clips instructions. */
 export function renderCompactIssues(
@@ -13,7 +35,7 @@ export function renderCompactIssues(
 ): string[] {
   const severity = compactIssueSeverity(issues);
   if (!severity || width <= 0) return [];
-  const attributed = attribute || new Set(issues.entries.map((issue) => issue.operation)).size > 1;
+  const attributed = attribute;
   const text = issues.entries
     .flatMap((issue) => {
       const lines = [

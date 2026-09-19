@@ -75,6 +75,26 @@ export function registerAskUserTool(
   pi.registerTool(
     withCodePreviewShell(tool, {
       compactSummary: askUserCompactSummary,
+      expandedContent: {
+        renderCall: (args) => new Text(stripTerminalControls(JSON.stringify(args, null, 2)), 0, 0),
+        renderResult(result, _options, theme) {
+          const details = decodeOutcomeDetails(result.details);
+          return new Text(
+            details?.outcome === "submitted"
+              ? [
+                  ...details.answers.map((answer) => answerLine(answer, theme)),
+                  ...(fallbackText(result.content)
+                    ? ["Raw result", fallbackText(result.content)]
+                    : []),
+                ].join("\n")
+              : details?.outcome === "cancelled"
+                ? "Do not immediately ask the same questions again."
+                : fallbackText(result.content),
+            0,
+            0,
+          );
+        },
+      },
       scheduleAnimation,
     }),
   );

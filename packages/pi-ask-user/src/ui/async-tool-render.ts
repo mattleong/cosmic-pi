@@ -1,5 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
+import {
+  planCompactPresentation,
+  renderCompactRow,
+  renderCompactNotices,
+  renderExpandedAttention,
+  summaryCompactIssues,
+  type CompactSummary,
+} from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -19,6 +27,11 @@ const Snapshot = Schema.Struct({
   status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
   delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
   outcome: Schema.optional(Outcome),
+  independentWork: Schema.optional(Schema.String),
+  blockedWork: Schema.optional(Schema.String),
+  presentation: Schema.optional(
+    Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
+  ),
 });
 
 const envelope = projection(
@@ -146,27 +159,106 @@ export function renderAsyncResult<Input>(
   return new Text(lines?.join("\n") ?? fallback(result?.content), 0, 0);
 }
 
+export function renderAsyncContent<Input>(
+  input: Input,
+  _options: { expanded: boolean; isPartial: boolean },
+  theme: Theme,
+): Text {
+  const result = envelope(input);
+  const single = snapshot(result?.details);
+  const rows = single ? [single] : requests(result?.details)?.requests;
+  if (
+    !rows ||
+    rows.some(
+      (row) => row.status === "failed" || (row.outcome && row.status !== row.outcome.outcome),
+    )
+  )
+    return new Text(fallback(result?.content), 0, 0);
+  return new Text(
+    rows
+      .flatMap((row) => [
+        ...outcomeLines(row.outcome, theme),
+        `Request ${stripTerminalControls(row.requestId)} · delivery ${stripTerminalControls(row.deliveryId)} · ${row.status} · delivery status ${row.delivery}`,
+        ...(row.independentWork
+          ? [`Independent work: ${stripTerminalControls(row.independentWork)}`]
+          : []),
+        ...(row.blockedWork
+          ? [`Wait for answers before: ${stripTerminalControls(row.blockedWork)}`]
+          : []),
+        ...(row.presentation
+          ? [`Presentation: ${row.presentation}. Queued admission is not a mount or an answer.`]
+          : []),
+        ...(row.outcome?.outcome === "cancelled"
+          ? ["Do not immediately ask the same questions again."]
+          : []),
+        "Treat repeated delivery IDs as the same result. Sent means the host call returned, not model acknowledgement.",
+      ])
+      .concat(fallback(result?.content) ? ["Raw result", fallback(result?.content)] : [])
+      .join("\n"),
+    0,
+    0,
+  );
+}
+
 export function renderAsyncMessage<Input>(
   input: Input,
   options: { expanded: boolean; outputPad: number },
   theme: Theme,
   compact = false,
-): Text {
+): Component {
   const message = envelope(input);
   const details = notification(message?.details);
-  if (compact && !options.expanded) {
+  if (compact) {
     const outcome = details?.outcome;
-    const label =
-      outcome?.outcome === "submitted"
-        ? `Answers submitted · ${outcome.answers.length} answers`
-        : outcome?.outcome === "cancelled"
+    const projected: CompactSummary = {
+      subject: !outcome
+        ? "Questionnaire update"
+        : outcome.outcome === "cancelled"
           ? "Questionnaire cancelled"
-          : "Questionnaire update. Expand for details.";
-    return new Text(
-      toolStatusLine(theme, outcome?.outcome === "submitted" ? "success" : "warning", label),
-      options.outputPad,
-      0,
-    );
+          : "Answers submitted",
+      counters: outcome?.outcome === "submitted" ? [`${outcome.answers.length} answers`] : [],
+      issues: { coverage: outcome ? "complete" : "unknown", entries: [] },
+    };
+    if (outcome) projected.outcome = outcome.outcome === "cancelled" ? "cancelled" : "success";
+    const plan = planCompactPresentation({
+      summary: projected,
+      phase: "settled",
+      isError: false,
+      expanded: options.expanded,
+    });
+    return {
+      invalidate() {},
+      render(width) {
+        const inner = Math.max(1, width - options.outputPad * 2);
+        const lines = [
+          renderCompactRow(
+            { name: "ask_user_async", phase: "settled", summary: plan.collapsedSummary },
+            theme,
+            inner,
+          ),
+        ];
+        if (!options.expanded)
+          lines.push(...renderCompactNotices(plan.collapsedSummary.notices, theme, inner));
+        if (options.expanded && !details) lines.push(fallback(message?.content));
+        if (options.expanded && details)
+          lines.push(
+            ...renderExpandedAttention(
+              summaryCompactIssues(projected),
+              projected.expandedResultOwnsIssues,
+              theme,
+              inner,
+            ),
+            ...outcomeLines(outcome, theme),
+            `Request ${stripTerminalControls(details.requestId)} · delivery ${stripTerminalControls(details.deliveryId)} · generation ${stripTerminalControls(details.generation)}`,
+            ...(outcome?.outcome === "cancelled"
+              ? ["Do not immediately ask the same questions again."]
+              : []),
+            "This notification does not confirm model acknowledgement of the answers.",
+            ...(fallback(message?.content) ? ["Raw result", fallback(message?.content)] : []),
+          );
+        return new Text(lines.join("\n"), options.outputPad, 0).render(width);
+      },
+    };
   }
   if (!details) return new Text(fallback(message?.content), options.outputPad, 0);
   const lines = summary(details.outcome.outcome, details.outcome, theme);

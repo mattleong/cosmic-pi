@@ -101,9 +101,9 @@ function selectedChoice<Args>(
 
 /** Transcript summaries never change the separate questionnaire overlay. */
 export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
-  if (context.isError) return undefined;
-  if (phase !== "settled") return liveSummary(args);
+  if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const decoded = outcome(result?.details);
+  if (context.isError && decoded?.outcome !== "cancelled") return undefined;
   if (!decoded || (decoded.outcome === "submitted" && decoded.answers.length === 0))
     return undefined;
   const summary = summarize([decoded]);
@@ -115,11 +115,15 @@ export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, res
 };
 
 const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
-  if (context.isError) return undefined;
-  if (phase !== "settled") return liveSummary(args);
+  if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const single = snapshot(result?.details);
   const rows = single ? [single] : requests(result?.details)?.requests;
   if (!rows?.length) return undefined;
+  if (
+    context.isError &&
+    !rows.every((row) => row.status === "cancelled" && row.outcome?.outcome === "cancelled")
+  )
+    return undefined;
   const input = control(args);
   const identity: Partial<CompactSummary> = {};
   if (input) identity.action = input.action;

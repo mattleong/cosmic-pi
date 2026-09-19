@@ -61,7 +61,7 @@ ARCHITECTURE.md
 
 ## Tool rendering
 
-Tools with previewable code, file, diff, or command output use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Other tools need neither.
+Workspace-owned visible tools use `withCodePreviewShell` and list `pi-code-previews` as a runtime dependency. Follow `docs/architecture/tool-presentation.md` for compact policy, content-only expansion, exact warning ownership, and conservative fallback. Exercise actual registered definitions with `pi-code-previews/testing`; preserve input, output, recovery, and native images through expansion. Headless tools and non-tool command/settings interfaces do not need the shell.
 
 When trusted project settings apply, call `loadCodePreviewSettings(ctx.cwd, ctx.isProjectTrusted())` before wrapping and registering tools inside `session_start`. The wrapper captures its shell mode at registration time. Wrap only tools owned by the extension, never another extension's tools.
 

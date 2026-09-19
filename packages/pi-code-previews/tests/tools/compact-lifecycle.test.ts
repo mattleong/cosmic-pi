@@ -19,6 +19,7 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../../src/config/schema";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
+import { claimCompactIssue } from "../../src/tools/compact-issues";
 import type {
   CompactAnimationScheduler,
   CompactSummary,
@@ -397,7 +398,6 @@ test("expanded ownership survives neither factory nor component rendering failur
                 severity: "warning",
                 cause: "Cleanup is unconfirmed.",
                 recovery: [{ code: "inspect", text: "Inspect state before retrying." }],
-                expandedInResult: true,
               },
             ],
           },
@@ -432,6 +432,18 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
         subject: "file.ts",
         outcome: "error",
         expandedResultOwnsCall: true,
+        expandedResultOwnsIssues: [
+          claimCompactIssue(
+            {
+              operation: "read-1",
+              code: "owned",
+              severity: "error",
+              cause: "Owned cause",
+              recovery: [],
+            },
+            { cause: true },
+          ),
+        ],
         issues: {
           coverage: "unknown",
           entries: [
@@ -441,7 +453,6 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
               severity: "error",
               cause: "Owned cause",
               recovery: [],
-              expandedInResult: true,
             },
             {
               operation: "read-1",

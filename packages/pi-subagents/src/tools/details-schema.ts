@@ -78,6 +78,13 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   listedCount: Schema.optionalKey(nonNegativeInteger),
   preparedCwd: Schema.optionalKey(boundedString(1_024, 1)),
   successorRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),
+  /** Producer-computed UTF-16 span of list metadata or the immutable diff, never parsed. */
+  displayContent: Schema.optionalKey(
+    Schema.Struct({
+      offset: nonNegativeInteger,
+      length: nonNegativeInteger,
+    }),
+  ),
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 const boundedArray = <S extends Schema.Constraint>(schema: S, maximum: number) =>

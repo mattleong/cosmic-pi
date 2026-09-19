@@ -1,4 +1,10 @@
 // Promise-shaped Pi host boundary test.
+import { createToolPresentationHarness } from "pi-code-previews/testing";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import {
+  codePreviewSettings,
+  setCodePreviewSettings,
+} from "../../pi-code-previews/src/config/state.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
@@ -124,6 +130,37 @@ const assistantMessage = (text: string, stopReason: "stop" | "aborted" = "stop")
 });
 
 describe("Herdr-hosted Pi bridge extension", () => {
+  effectTest("renders registered supervisor and proxy tools without transport calls", function* () {
+    const saved = { ...codePreviewSettings };
+    setCodePreviewSettings({ ...saved, toolCallCollapsedStyle: "compact", toolCallTiming: false });
+    const bridge = yield* step(startBridgeHarness);
+    // SAFETY: The render-only theme implements the styling callbacks.
+    const theme = {
+      fg: (_key: string, text: string) => text,
+      bg: (_key: string, text: string) => text,
+      bold: (text: string) => text,
+    } as Theme;
+    try {
+      for (const tool of bridge.tools) {
+        const render = createToolPresentationHarness(tool, { theme });
+        for (const expanded of [false, true, false, true]) {
+          render.call(
+            { message: "input evidence", report: "report evidence", delivery_id: "delivery" },
+            { expanded },
+          );
+          render.result(
+            { content: [{ type: "text", text: "historical reply sentinel" }], details: {} },
+            { expanded },
+          );
+          if (expanded) expect(render.render(80).join("\n")).toContain("historical reply sentinel");
+        }
+      }
+      expect(bridgeCalls).toEqual([]);
+    } finally {
+      yield* step(() => bridge.handlers.get("session_shutdown")?.({}, bridgeContext));
+      setCodePreviewSettings(saved);
+    }
+  });
   effectTest("revokes compact animation when the supervisor session shuts down", function* () {
     const registration = vi.spyOn(subagentTools, "registerSubagentTools");
     const harness = yield* step(startBridgeHarness);

@@ -35,7 +35,11 @@ const definition = () =>
 
 const renderer = <Args, Result>(args: Args, result: Result, isError = false) => {
   const owned = definition();
-  const tool = withCodePreviewShell(owned, { mode: "off", compactSummary: owned.compactSummary });
+  const tool = withCodePreviewShell(owned, {
+    mode: "off",
+    compactSummary: owned.compactSummary,
+    expandedContent: owned.expandedContent,
+  });
   const state = {};
   return (expanded: boolean, width = 400) => {
     const context = opaqueHostFixture({
@@ -290,7 +294,7 @@ describe("registered expanded Code Mode views", () => {
               const text = render(expanded);
               expect(text).toContain(diagnostic);
               expect(text.split(diagnostic).length - 1).toBe(1);
-              expect(text.split(instruction).length - 1).toBe(1);
+              expect(text.split(instruction).length - 1, text).toBe(1);
             }
           }
         } finally {

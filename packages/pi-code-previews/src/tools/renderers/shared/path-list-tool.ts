@@ -1,3 +1,4 @@
+import { builtinExpandedContent } from "./builtin-expanded-content";
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { createCodePreviewToolDefinition } from "../../renderer-adapter";
@@ -21,6 +22,7 @@ export function createPathListPreviewTool<Tool extends CurrentToolDefinition>(
   const originalTool = options.createToolDefinition(cwd);
   return createCodePreviewToolDefinition(originalTool, {
     compactSummary: (input) => createBuiltinCompactSummary(options.name, input),
+    expandedContent: builtinExpandedContent<Tool>(options.name, cwd),
     renderCall: (args, theme) => options.renderCall(args, theme, cwd),
     renderResult: (result, resultOptions, theme, renderContext) =>
       renderPathListResult(result, resultOptions, theme, renderContext, options.resultConfig(cwd)),

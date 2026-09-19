@@ -13,14 +13,22 @@ import {
   type SubagentWorkspaceInput,
 } from "./schema.ts";
 
-const preparedCwdMetadata = (cwd: string) => (cwd.length <= 1_024 ? { preparedCwd: cwd } : {});
+const preparedCwdMetadata = (
+  cwd: string,
+  span: NonNullable<WorkspaceToolDetails["displayContent"]>,
+) => (cwd.length <= 1_024 ? { preparedCwd: cwd } : { displayContent: span });
 
 const result = (
   text: string,
   details: Omit<WorkspaceToolDetails, "version" | "action">,
 ): AgentToolResult<WorkspaceToolDetails> => ({
   content: [{ type: "text", text }],
-  details: { version: 1, action: "workspace", ...details },
+  details: {
+    version: 1,
+    action: "workspace",
+    displayContent: { offset: 0, length: 0 },
+    ...details,
+  },
 });
 
 const WorkspaceMetadataSchema = Schema.Struct({
@@ -86,6 +94,7 @@ const executeWorkspaceList = (
         offset,
         workspaceCount: records.length,
         listedCount: lines.length,
+        displayContent: { offset: 0, length: lines.join("\n").length },
         ...(nextOffset !== undefined && { nextOffset }),
       },
     );
@@ -122,39 +131,41 @@ export const executeWorkspaceAction = (
           },
           callerRunId,
         );
-        return result(
-          [
-            `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
-            `Diff characters ${review.offset}..${review.offset + review.diff.length} of ${review.totalChars}.`,
-            review.nextOffset !== undefined
-              ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare/integrate.`
-              : "End of diff. After reviewing every page, prepare this exact revision and run relevant tests in the returned combined cwd before integrate.",
-            "BEGIN IMMUTABLE DIFF PAGE",
-            review.diff,
-            "END IMMUTABLE DIFF PAGE",
-          ].join("\n"),
-          {
-            ...receipt,
-            revisionId: review.revisionId,
-            offset: review.offset,
-            totalChars: review.totalChars,
-            ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
-          },
-        );
+        const prefix = [
+          `Workspace ${workspaceId}; immutable revision ${review.revisionId}.`,
+          `Diff characters ${review.offset}..${review.offset + review.diff.length} of ${review.totalChars}.`,
+          review.nextOffset !== undefined
+            ? `Incomplete review. Call review with workspaceId=${workspaceId}, revisionId=${review.revisionId}, offset=${review.nextOffset}. Read ALL pages before prepare/integrate.`
+            : "End of diff. After reviewing every page, prepare this exact revision and run relevant tests in the returned combined cwd before integrate.",
+          "BEGIN IMMUTABLE DIFF PAGE",
+        ].join("\n");
+        return result([prefix, review.diff, "END IMMUTABLE DIFF PAGE"].join("\n"), {
+          ...receipt,
+          revisionId: review.revisionId,
+          offset: review.offset,
+          totalChars: review.totalChars,
+          displayContent: { offset: prefix.length + 1, length: review.diff.length },
+          ...(review.nextOffset !== undefined && { nextOffset: review.nextOffset }),
+        });
       }
       case "prepare": {
         const preparation = yield* service.workspacePrepare(workspaceId, revisionId, callerRunId);
+        const prefix = `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`;
+        const cwdLine = `Combined test cwd: ${preparation.cwd}`;
         return result(
           [
-            `Prepared revision ${preparation.revisionId}; preparationId=${preparation.preparationId}.`,
-            `Combined test cwd: ${preparation.cwd}`,
+            prefix,
+            cwdLine,
             "Run relevant tests in this cwd, which combines the proposal with current parent edits. Do not edit this prepared tree. After passing tests and complete diff review, integrate with this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
           ].join("\n"),
           {
             ...receipt,
             revisionId: preparation.revisionId,
             preparationId: preparation.preparationId,
-            ...preparedCwdMetadata(preparation.cwd),
+            ...preparedCwdMetadata(preparation.cwd, {
+              offset: prefix.length + 1,
+              length: cwdLine.length,
+            }),
           },
         );
       }

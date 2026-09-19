@@ -13,7 +13,6 @@ import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getTextContent } from "../tools/data/results";
 import {
-  compactSummaryNeedsDetails,
   resolveCompactSummary,
   type CompactAnimationScheduler,
   type CompactPhase,
@@ -29,7 +28,9 @@ import {
 } from "./bordered-tool-call";
 import { renderCompactFailure, renderCompactToolCall } from "./compact-tool-call";
 import { compactIssueSeverity, summaryCompactIssues } from "../tools/compact-issues";
-import { renderCompactIssues } from "./compact-issues";
+import { renderExpandedAttention } from "./compact-issues";
+import { renderCompactRow } from "./compact-row";
+import { planCompactPresentation } from "../tools/compact-presentation";
 import { timingState, updateToolCallTiming, withLastComponent } from "./tool-timing";
 import type { CodePreviewToolShell } from "./tool-shell";
 
@@ -51,6 +52,10 @@ class CompactShell implements Component {
   private resultRender: RenderBody | undefined;
   private callComponent: Component | undefined;
   private resultComponent: Component | undefined;
+  private contentCallRender: RenderBody | undefined;
+  private contentResultRender: RenderBody | undefined;
+  private contentCallComponent: Component | undefined;
+  private contentResultComponent: Component | undefined;
   private result: AgentToolResult<unknown> | undefined;
   private resultPartial: boolean | undefined;
   private callMounted = false;
@@ -82,9 +87,15 @@ class CompactShell implements Component {
     };
   }
 
-  setCall(context: ToolRenderContext, theme: Theme, render: RenderBody): void {
+  setCall(
+    context: ToolRenderContext,
+    theme: Theme,
+    render: RenderBody,
+    content?: RenderBody,
+  ): void {
     this.callMounted = true;
     this.callRender = render;
+    this.contentCallRender = content;
     this.update(context, theme);
   }
 
@@ -93,10 +104,12 @@ class CompactShell implements Component {
     theme: Theme,
     render: RenderBody,
     result: AgentToolResult<unknown>,
+    content?: RenderBody,
   ): void {
     this.result = result;
     this.resultPartial = context.isPartial;
     this.resultRender = render;
+    this.contentResultRender = content;
     this.update(context, theme);
   }
 
@@ -149,64 +162,22 @@ class CompactShell implements Component {
     }
   }
 
-  private collapsedSummary(
-    summary: CompactSummary | undefined,
-    phase: CompactPhase,
-    covered: boolean,
-  ): CompactSummary {
-    if (summary && covered) return summary;
-    const isError = this.context.isError && summary?.outcome !== "cancelled";
-    // Reuse argument-only identity, never a previous result's outcome or ownership flags.
-    const heading = summary ?? this.summary("pending", undefined, true);
-    return {
-      ...(summary ?? {
-        subject: heading?.subject ?? "",
-        ...(heading?.action !== undefined && { action: heading.action }),
-        ...(heading?.showTiming && { showTiming: true }),
-        ...(phase === "settled" && {
-          outcome: isError ? ("error" as const) : ("uncertain" as const),
-        }),
-      }),
-      ...(summary?.issues &&
-        phase === "settled" && {
-          issues: {
-            ...summary.issues,
-            entries: [
-              ...summary.issues.entries,
-              {
-                operation: summary.issues.entries[0]?.operation ?? "outer",
-                code: "details-on-expand",
-                severity: isError ? ("error" as const) : ("warning" as const),
-                cause: "Expand for details.",
-                recovery: [],
-              },
-            ],
-          },
-        }),
-      notices: [
-        ...(summary?.notices ?? []),
-        ...(phase === "settled"
-          ? [
-              {
-                kind: isError ? ("error" as const) : ("warning" as const),
-                text: "Expand for details.",
-              },
-            ]
-          : []),
-      ],
-    };
-  }
-
   render(width: number): string[] {
     const result = this.currentResult();
     const phase = this.phase(result);
     const summary = this.summary(phase, result);
-    const failure = summary && compactSummaryNeedsDetails(summary);
-    const covered =
-      !summary ||
-      (!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
-      summaryCompactIssues(summary).coverage === "complete";
-    if (failure && summary.failure && covered) {
+    const plan = planCompactPresentation({
+      summary,
+      phase,
+      isError: this.context.isError,
+      expanded: this.context.expanded,
+      heading: summary ?? this.summary("pending", undefined, true),
+    });
+    if (
+      plan.useFailure &&
+      summary?.failure &&
+      !(this.context.expanded && (this.contentCallRender || this.contentResultRender))
+    ) {
       this.detailBounds = undefined;
       const input = {
         name: this.options.name,
@@ -258,7 +229,7 @@ class CompactShell implements Component {
         {
           name: this.options.name,
           phase,
-          summary: this.collapsedSummary(summary, phase, covered),
+          summary: plan.collapsedSummary,
           duration: this.duration,
           elapsedMs: this.elapsedMs,
           timingEnabled: codePreviewSettings.toolCallTiming,
@@ -278,6 +249,8 @@ class CompactShell implements Component {
       // Never replay a hostile renderer to recover its output.
       this.callComponent = undefined;
       this.resultComponent = undefined;
+      this.contentCallComponent = undefined;
+      this.contentResultComponent = undefined;
       this.display = this.renderDetails(result !== undefined, summary, true);
       rows = this.display.render(width);
     }
@@ -298,22 +271,47 @@ class CompactShell implements Component {
         outcome !== "uncertain" &&
         (context.isError || outcome === "error"));
     const state = borderState(context);
-    const callContext = withLastComponent(context, this.callComponent);
-    const resultContext = withLastComponent(context, this.resultComponent);
-    const call = this.callRender;
-    const result = this.resultRender;
+    const plan = planCompactPresentation({
+      summary,
+      phase: this.phase(this.currentResult()),
+      isError: context.isError,
+      expanded: context.expanded,
+    });
+    const content =
+      !fallback &&
+      plan.useExpandedContent &&
+      Boolean(this.contentCallRender || this.contentResultRender);
+    const contentCall = content && Boolean(this.contentCallRender);
+    const contentResult = content && Boolean(this.contentResultRender);
+    const callContext = withLastComponent(
+      context,
+      contentCall ? this.contentCallComponent : this.callComponent,
+    );
+    const resultContext = withLastComponent(
+      context,
+      contentResult ? this.contentResultComponent : this.resultComponent,
+    );
+    const call = contentCall ? this.contentCallRender : this.callRender;
+    const ownedFailure = content && plan.useFailure ? summary?.failure : undefined;
+    const result = contentResult ? this.contentResultRender : this.resultRender;
     const renderCall = () =>
       call
         ? fallback
           ? this.fallbackSlot("call", callContext)
-          : this.renderSlot("call", call, callContext)
+          : this.renderSlot("call", call, callContext, contentCall)
         : undefined;
     const renderResult = () =>
-      hasResult && result
-        ? fallback
-          ? this.fallbackSlot("result", resultContext)
-          : this.renderSlot("result", result, resultContext)
-        : undefined;
+      ownedFailure
+        ? new Text(
+            this.theme.fg(isError ? "error" : "warning", escapeControlChars(ownedFailure.details)),
+            0,
+            0,
+          )
+        : hasResult && result
+          ? fallback
+            ? this.fallbackSlot("result", resultContext)
+            : this.renderSlot("result", result, resultContext, contentResult)
+          : undefined;
     const callBody =
       this.mode === "border" ? renderWithBorderSlot(state, "call", renderCall) : renderCall();
     const resultBody =
@@ -323,7 +321,8 @@ class CompactShell implements Component {
       !fallback &&
       context.expanded &&
       resultBody !== undefined &&
-      resultBody === this.resultComponent;
+      (Boolean(ownedFailure) ||
+        resultBody === (contentResult ? this.contentResultComponent : this.resultComponent));
     // Each marked issue has its own ownership promise. Unknown aggregate coverage
     // still forbids taking over the whole call or replacing its original result.
     const resultOwns =
@@ -334,32 +333,55 @@ class CompactShell implements Component {
     const issues = summary
       ? summaryCompactIssues(summary, context.expanded)
       : { coverage: "unknown" as const, entries: [] };
-    const visibleIssues = {
-      ...issues,
-      entries: issues.entries.filter((issue) => !resultRendered || !issue.expandedInResult),
-    };
     const noticeBody: Component = {
       render: (width) =>
-        renderCompactIssues(
-          visibleIssues,
+        renderExpandedAttention(
+          issues,
+          resultRendered
+            ? ownedFailure
+              ? ownedFailure.ownedIssues
+              : summary?.expandedResultOwnsIssues
+            : undefined,
           this.theme,
           width,
-          context.expanded,
-          Boolean(summary?.children?.total),
-          isError,
         ),
       invalidate: () => undefined,
     };
     const details = new Container();
     if (resultBody) details.addChild(resultBody);
     details.addChild(noticeBody);
-    const visibleCall = resultOwns && summary?.expandedResultOwnsCall ? undefined : callBody;
+    const visibleCall =
+      !content && resultOwns && summary?.expandedResultOwnsCall ? undefined : callBody;
+    const heading: Component | undefined =
+      content && summary
+        ? {
+            render: (width) => [
+              renderCompactRow(
+                {
+                  name: this.options.name,
+                  phase: this.phase(this.currentResult()),
+                  summary,
+                  duration: this.duration,
+                  elapsedMs: this.elapsedMs,
+                  // Border chrome already owns the parent duration.
+                  timingEnabled: this.mode !== "border" && codePreviewSettings.toolCallTiming,
+                },
+                this.theme,
+                width,
+              ),
+            ],
+            invalidate: () => undefined,
+          }
+        : undefined;
+    const callSection = new Container();
+    if (heading) callSection.addChild(heading);
+    if (visibleCall) callSection.addChild(visibleCall);
     if (this.mode === "border") {
       const shell = new BorderedToolCall(this.theme);
       syncBorderShellChrome(shell, state, { ...context, isError }, this.timingLabel);
       if (!isError && outcome === "cancelled") shell.setBorderColor("borderMuted");
       else if (!isError && outcome === "uncertain") shell.setBorderColor("warning");
-      shell.setCall(visibleCall);
+      shell.setCall(callSection);
       shell.setResult(details);
       return shell;
     }
@@ -372,9 +394,9 @@ class CompactShell implements Component {
       this.mode === "on"
         ? new Box(1, 1, (text) => this.theme.bg(background, text))
         : new Container();
-    if (visibleCall) shell.addChild(visibleCall);
+    shell.addChild(callSection);
     shell.addChild(details);
-    if (this.timingLabel)
+    if (this.timingLabel && !content)
       shell.addChild(new Text(this.theme.fg("muted", `╰─ ${this.timingLabel}`), 0, 0));
     return shell;
   }
@@ -383,15 +405,22 @@ class CompactShell implements Component {
     slot: "call" | "result",
     render: RenderBody,
     context: ToolRenderContext,
+    content: boolean,
   ): Component {
     try {
       const component = render(context);
-      if (slot === "call") this.callComponent = component;
+      if (content) {
+        if (slot === "call") this.contentCallComponent = component;
+        else this.contentResultComponent = component;
+      } else if (slot === "call") this.callComponent = component;
       else this.resultComponent = component;
       return component;
     } catch {
       // Pi clears a failed slot. Never return fallback Text as a custom renderer's lastComponent.
-      if (slot === "call") this.callComponent = undefined;
+      if (content) {
+        if (slot === "call") this.contentCallComponent = undefined;
+        else this.contentResultComponent = undefined;
+      } else if (slot === "call") this.callComponent = undefined;
       else this.resultComponent = undefined;
       return this.fallbackSlot(slot, context);
     }
@@ -426,6 +455,8 @@ class CompactShell implements Component {
     // Retained bodies must also hear theme invalidation while the compact row hides them.
     this.callComponent?.invalidate();
     this.resultComponent?.invalidate();
+    this.contentCallComponent?.invalidate();
+    this.contentResultComponent?.invalidate();
     this.display = undefined;
   }
 }
@@ -444,16 +475,16 @@ export function createCompactToolShell(
   };
   return {
     renderShell: "self",
-    renderCall(context, theme, render) {
+    renderCall(context, theme, render, content) {
       const shell = row(context, theme);
-      shell.setCall(context, theme, render);
+      shell.setCall(context, theme, render, content);
       return shell;
     },
-    renderResult(context, theme, render, result) {
+    renderResult(context, theme, render, result, content) {
       // The adapter supplies results. Direct shell consumers without one keep their body.
       if (!result) return render(context);
       const shell = row(context, theme);
-      shell.setResult(context, theme, render, result);
+      shell.setResult(context, theme, render, result, content);
       return shell.resultSlot;
     },
   };

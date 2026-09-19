@@ -6,6 +6,12 @@ import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { testTheme } from "../support/render";
+import { claimCompactIssue } from "../../src/tools/compact-issues";
+const claimNotice = (text: string, code = "legacy-0") =>
+  claimCompactIssue(
+    { operation: "outer", code, severity: "warning", cause: text, recovery: [] },
+    { cause: true },
+  );
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Context = Parameters<NonNullable<Definition["renderCall"]>>[2];
@@ -265,8 +271,9 @@ test("expanded ownership requires a current successful result and survives toggl
           subject: "compact subject",
           outcome: "warning",
           expandedResultOwnsCall: true,
+          expandedResultOwnsIssues: [claimNotice("complete recovery")],
           notices: [
-            { kind: "recovery", text: "complete recovery", expandedInResult: true },
+            { kind: "recovery", text: "complete recovery" },
             { kind: "warning", text: "independent guidance" },
           ],
         }),
@@ -313,7 +320,7 @@ test("owned failure keeps independent notices even when marked for original resu
           outcome: "error",
           expandedResultOwnsCall: true,
           failure: { cause: "owned cause", details: "complete owned failure" },
-          notices: [{ kind: "recovery", text: "independent recovery", expandedInResult: true }],
+          notices: [{ kind: "recovery", text: "independent recovery" }],
         }),
       },
     );
@@ -343,13 +350,13 @@ test("expanded-only hints render once on expansion, including renderer fallback"
           compactSummary: () => ({
             subject: "file",
             outcome: "success",
+            expandedResultOwnsIssues: [claimNotice("Continue at offset=143", "read-pagination")],
             notices: [
               {
                 kind: "recovery",
                 text: "Continue at offset=143",
                 code: "read-pagination",
                 expandedOnly: true,
-                expandedInResult: true,
               },
             ],
           }),
@@ -379,7 +386,8 @@ test("result-only rows share notices only after their original result succeeds",
         compactSummary: () => ({
           subject: "result only",
           outcome: "warning",
-          notices: [{ kind: "recovery", text: "complete recovery", expandedInResult: true }],
+          expandedResultOwnsIssues: [claimNotice("complete recovery")],
+          notices: [{ kind: "recovery", text: "complete recovery" }],
         }),
       },
     );

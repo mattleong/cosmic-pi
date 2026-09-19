@@ -1,9 +1,12 @@
 import { keyText, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Container } from "@earendil-works/pi-tui";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import { progressData } from "../ui/remote-events.ts";
 import type { McpProgress } from "../observations/model.ts";
-import { renderMcpCall, renderMcpResult } from "../ui/tool-renderer.ts";
+import { renderMcpCall, renderMcpResult, renderMcpExpandedContent } from "../ui/tool-renderer.ts";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import { mcpCompactSummary } from "../ui/compact-summary.ts";
 import {
   boundedMcpReply,
   type McpErrorReceipts,
@@ -127,6 +130,20 @@ export const McpToolParameters = Type.Object(
 );
 
 export type McpToolDefinition = ToolDefinition<typeof McpToolParameters, McpGatewayReply>;
+/** Capture presentation settings only at the session registration boundary. */
+export const wrapMcpTool = (
+  tool: McpToolDefinition,
+  scheduleAnimation?: CompactAnimationScheduler,
+): McpToolDefinition =>
+  withCodePreviewShell(tool, {
+    compactSummary: mcpCompactSummary,
+    expandedContent: {
+      renderCall: () => new Container(),
+      renderResult: renderMcpExpandedContent,
+    },
+    scheduleAnimation,
+  });
+
 export interface McpToolControllerOptions {
   readonly owner: McpActivationMarker;
   readonly receipts: McpErrorReceipts;

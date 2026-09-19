@@ -17,7 +17,14 @@ import type {
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../ui/compact-summary.ts";
 import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
-import { renderAsyncCall, renderAsyncResult, renderAsyncMessage } from "../ui/async-tool-render.ts";
+import {
+  renderAsyncCall,
+  renderAsyncResult,
+  renderAsyncMessage,
+  renderAsyncContent,
+} from "../ui/async-tool-render.ts";
+import { Text } from "@earendil-works/pi-tui";
+import { stripTerminalControls } from "pi-cosmic-core";
 
 export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
@@ -26,6 +33,11 @@ export function registerAsyncAskUserTools(
   scheduleAnimation?: CompactAnimationScheduler,
 ): void {
   const compact = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
+  const expandedContent = {
+    renderCall: (args: Partial<AskUserAsyncRequest> | Partial<AskUserAsyncControl>) =>
+      new Text(stripTerminalControls(JSON.stringify(args, null, 2) ?? ""), 0, 0),
+    renderResult: renderAsyncContent,
+  };
   pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, (message, options, theme) =>
     renderAsyncMessage(message, options, theme, compact),
   );
@@ -63,6 +75,7 @@ export function registerAsyncAskUserTools(
       }),
       {
         compactSummary: asyncAskUserCompactSummary,
+        expandedContent,
         scheduleAnimation,
       },
     ),
@@ -98,6 +111,7 @@ export function registerAsyncAskUserTools(
       }),
       {
         compactSummary: asyncAskUserCompactSummary,
+        expandedContent,
         scheduleAnimation,
       },
     ),

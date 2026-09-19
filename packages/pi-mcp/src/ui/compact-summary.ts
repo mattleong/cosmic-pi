@@ -50,14 +50,20 @@ export const projectMcpCompactSummary = ({
   if (phase !== "settled") return isError ? undefined : { action, subject };
 
   const card = decodeMcpCardDetails(result);
+  // The raw card retains notices beyond the semantic issue budget.
+  if (card.notices.join("\n").length > 2048) return undefined;
   const boundary = card.action === action ? mcpBoundaryFailure(card) : undefined;
-  if (boundary)
+  if (
+    boundary &&
+    card.presentation.issues.entries.some((issue) => issue.code === "boundary-failure")
+  )
     return {
       action,
       subject,
       outcome: boundary.outcome,
       counters: [boundary.status.toLowerCase()],
-      issues: boundary.issues,
+      issues: card.presentation.issues,
+      detailsOnExpand: true,
     };
   const retainedRead =
     card.action === "result.read" &&
@@ -100,16 +106,15 @@ export const projectMcpCompactSummary = ({
           kind: "recovery",
           text,
           expandedOnly: true,
-          expandedInResult: true,
         }
-      : { kind: "warning", text, expandedInResult: true };
+      : { kind: "warning", text };
   });
   return {
     action,
     subject,
     counters,
     outcome:
-      card.presentation.outcome === "unknown"
+      (retainedRead ? card.outcome : card.presentation.outcome) === "unknown"
         ? "uncertain"
         : isError || (card.presentation.isError && !retainedRead)
           ? "error"

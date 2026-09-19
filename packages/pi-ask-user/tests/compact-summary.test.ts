@@ -33,6 +33,14 @@ function summarize<Details>(provider: CompactSummaryProvider, details: Details, 
 }
 
 describe("questionnaire compact outcome projection", () => {
+  it("keeps domain cancellation when Pi marks the result as an error", () => {
+    expect(summarize(askUserCompactSummary, cancelled, true)?.outcome).toBe("cancelled");
+    expect(
+      summarize(asyncAskUserCompactSummary, row({ status: "cancelled", outcome: cancelled }), true)
+        ?.outcome,
+    ).toBe("cancelled");
+    expect(summarize(askUserCompactSummary, submitted, true)).toBeUndefined();
+  });
   it("summarizes live transcript args without claiming an answer", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
       for (const phase of ["pending", "running"] as const) {
