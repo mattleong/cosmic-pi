@@ -336,8 +336,17 @@ export const openSdkStdio = (
                     opening === undefined ? Effect.void : Fiber.interrupt(opening),
                   ),
                 ),
-                Effect.andThen(Effect.suspend(() => cleanup)),
-                Effect.ensuring(Scope.close(owner, Exit.void)),
+                // Subscription finalizers must send cancellation before the SDK
+                // settles its listens and the native writer becomes unavailable.
+                Effect.andThen(Scope.close(owner, Exit.void)),
+                Effect.ensuring(
+                  Effect.suspend(() => cleanup).pipe(
+                    Effect.exit,
+                    Effect.map((exit) => {
+                      state.cleanupUnconfirmed ||= Exit.isFailure(exit);
+                    }),
+                  ),
+                ),
                 Effect.exit,
                 Effect.flatMap((exit) => {
                   state.closed = true;

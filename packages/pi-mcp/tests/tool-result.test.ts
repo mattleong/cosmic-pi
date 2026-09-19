@@ -12,7 +12,7 @@ import {
 } from "../src/boundary/host-tool-result.ts";
 import { boundaryError } from "../src/client/errors.ts";
 import { buildMcpTool } from "../src/tools/controller.ts";
-import type { McpGatewayReply } from "../src/tools/model.ts";
+import type { McpGatewayReply, McpGatewayExecution } from "../src/tools/model.ts";
 
 const failure: McpGatewayReply = {
   action: "tools.call",
@@ -36,6 +36,37 @@ const event = (details: McpGatewayReply, toolCallId = "call"): ToolResultEvent =
 });
 
 describe("owned MCP error delivery", () => {
+  it.effect.each(["completed", "unknown", "not-sent"] as const)(
+    "withdraws output cancelled at final host publication without changing %s certainty",
+    (outcome) =>
+      Effect.gen(function* () {
+        const receipts = makeMcpErrorReceipts();
+        const owner = Symbol();
+        receipts.activate(owner);
+        const abort = new AbortController();
+        const execution: McpGatewayExecution = {
+          reply: { ...failure, outcome, data: { secret: "private-body" } },
+          images: [{ type: "image", data: "private-image", mimeType: "image/png" }],
+        };
+        const tool = buildMcpTool({ owner, receipts, execute: () => Promise.resolve(execution) });
+        const result = yield* Effect.tryPromise(() => {
+          const pending = tool.execute("call", {}, abort.signal, undefined, unusedContext);
+          // Execution is already resolved. Abort before the controller's publication continuation.
+          abort.abort();
+          return pending;
+        });
+        expect(result.details).toMatchObject({
+          outcome,
+          isError: true,
+          data: { kind: "cancelled" },
+        });
+        expect(result.details.resultId).toBeUndefined();
+        expect(result.content).toHaveLength(1);
+        expect(serialize(result)).not.toMatch(/private-body|private-image|retained-1/);
+        expect(receipts.apply(event(result.details))).toEqual({ isError: true });
+      }),
+  );
+
   it.effect(
     "rendering preserves the machine envelope, native images and receipt identity without another execution",
     () =>

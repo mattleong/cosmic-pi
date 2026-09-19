@@ -72,7 +72,9 @@ describe("producer MCP presentation", () => {
     { kind: "output-limit" },
     { result: { truncated: true } },
   ])("keeps output loss and recovery together: %j", (data) => {
-    const receipt = projectMcpPresentation(reply(data, { resultId: "saved" }));
+    const receipt = projectMcpPresentation(
+      reply(data, { action: "server.instructions", resultId: "saved" }),
+    );
     expect(receipt.truncated).toBe(true);
     expect(
       receipt.notices.filter((notice) => notice.includes("truncated or omitted")),
@@ -88,7 +90,7 @@ describe("producer MCP presentation", () => {
           message: "safe failure detail",
           result: { undiscovered: ["server"], secretBody: "do not retain this" },
         },
-        { isError: true },
+        { action: "tools.list", isError: true },
       ),
     );
     expect(receipt.notices.join(" ")).toMatch(/cleanup is unconfirmed/);
@@ -153,7 +155,7 @@ describe("producer MCP presentation", () => {
         reply(unreadable(key)),
       ),
       reply({ origin }),
-      reply({ result: unreadable("truncated") }),
+      reply({ result: unreadable("truncated") }, { action: "server.instructions" }),
       Object.assign(unreadable("resultId"), reply({})),
       reply(
         new Proxy(

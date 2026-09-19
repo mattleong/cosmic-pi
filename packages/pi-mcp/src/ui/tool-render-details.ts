@@ -1,3 +1,9 @@
+import {
+  ownPresentationField as own,
+  presentationArrayLength as arrayLength,
+  presentationOutcome as outcome,
+  presentationEvidence,
+} from "../code-mode/presentation-evidence.ts";
 /** Display-only normalization. Descriptor reads never invoke historical getters or toJSON. */
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -15,32 +21,12 @@ export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
   readonly value: unknown;
 }
-const own = <Value>(value: Value, key: string): McpRenderField => {
-  if (!Predicate.isObjectOrArray(value)) return { value: undefined };
-  try {
-    const field = Object.getOwnPropertyDescriptor(value, key);
-    return { value: field && "value" in field ? field.value : undefined };
-  } catch {
-    return { value: undefined };
-  }
-};
 const safeText = <Value>(value: Value, maximum = 512): string | undefined =>
   Predicate.isString(value)
     ? sanitizeDiagnosticContent(sanitizeTerminalLine(value), {
         maximumLength: maximum,
       })
     : undefined;
-const arrayLength = <Value>(value: Value): number | undefined => {
-  try {
-    if (!Array.isArray(value)) return undefined;
-    const length = own(value, "length").value;
-    return Predicate.isNumber(length) && Number.isSafeInteger(length) && length >= 0
-      ? length
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
 const list = <Value>(value: Value, maximum: number): unknown[] => {
   const length = arrayLength(value);
   if (length === undefined) return [];
@@ -49,14 +35,6 @@ const list = <Value>(value: Value, maximum: number): unknown[] => {
     (_, index) => own(value, String(index)).value,
   );
 };
-const outcome = <Value>(value: Value): McpCardOutcome | undefined =>
-  value === "completed"
-    ? "completed"
-    : value === "unknown"
-      ? "unknown"
-      : value === "not-sent"
-        ? "not-sent"
-        : undefined;
 export type McpCardOutcome = "completed" | "unknown" | "not-sent";
 export interface McpCardOrigin {
   readonly action: string;
@@ -182,8 +160,7 @@ const attachments = <Value>(value: Value) => {
 
 export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => {
   const details = legacyDetails(result).value;
-  const data = own(details, "data").value;
-  const payload = own(data, "result").value ?? data;
+  const { data, payload, page: rawPage, undiscovered, counterKeys } = presentationEvidence(details);
   const currentOutcome = outcome(own(details, "outcome").value);
   const action = safeText(own(details, "action").value, 64) ?? "MCP result";
   const currentError = own(details, "isError").value === true;
@@ -247,21 +224,10 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     counts.push(label);
     counters.push(label);
   };
-  for (const key of [
-    "servers",
-    "tools",
-    "resources",
-    "templates",
-    "prompts",
-    "items",
-    "content",
-    "contents",
-    "messages",
-  ]) {
+  for (const key of counterKeys) {
     const length = arrayLength(own(payload, key).value);
     if (length !== undefined) addCounter(`${length} ${key === "content" ? "content blocks" : key}`);
   }
-  const rawPage = own(payload, "page").value;
   const returned = arrayLength(own(rawPage, "items").value);
   const rawTotal = natural(own(rawPage, "total").value);
   const cursor = own(rawPage, "nextCursor").value;
@@ -284,7 +250,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
       metadata.push("more metadata available");
     }
   }
-  const undiscoveredCount = arrayLength(own(payload, "undiscovered").value) ?? 0;
+  const undiscoveredCount = arrayLength(undiscovered) ?? 0;
   if (undiscoveredCount) addCounter(`${undiscoveredCount} undiscovered servers`);
   const descriptors = attachments(payload);
   const attachmentCount = Math.max(

@@ -101,6 +101,19 @@ export const makeMcpAuthWithAuthority = (
           ? live.check(server)
           : Effect.fail(stale()),
       );
+    const captureAuthority = (server: McpEffectiveServer) => {
+      const authority = authorityFor(server.identity);
+      const generation = authority.generation;
+      const session = sessionGeneration;
+      const evidence = authority.evidenceRevision;
+      const current = () =>
+        !disposed &&
+        live.isTrusted() &&
+        sessionGeneration === session &&
+        authority.generation === generation &&
+        authority.evidenceRevision === evidence;
+      return { authority, generation, session, evidence, current };
+    };
     const owned = <A>(
       server: McpEffectiveServer,
       work: Effect.Effect<A, McpBoundaryError>,
@@ -108,17 +121,8 @@ export const makeMcpAuthWithAuthority = (
     ) =>
       Effect.suspend(() => {
         const signal = revoked;
-        const generation = sessionGeneration;
-        const authority = authorityFor(server.identity);
+        const { authority, current } = captureAuthority(server);
         const serverSignal = authority.revoked;
-        const serverGeneration = authority.generation;
-        const evidence = authority.evidenceRevision;
-        const current = () =>
-          generation === sessionGeneration &&
-          !disposed &&
-          live.isTrusted() &&
-          serverGeneration === authority.generation &&
-          evidence === authority.evidenceRevision;
         const check = Effect.andThen(
           checkServer(server),
           Effect.suspend(() => (current() ? Effect.void : Effect.fail(stale()))),
@@ -175,16 +179,7 @@ export const makeMcpAuthWithAuthority = (
               return token;
             }
             if (anonymous) return undefined;
-            const authority = authorityFor(server.identity);
-            const generation = authority.generation;
-            const session = sessionGeneration;
-            const evidence = authority.evidenceRevision;
-            const current = () =>
-              !disposed &&
-              live.isTrusted() &&
-              sessionGeneration === session &&
-              authority.generation === generation &&
-              authority.evidenceRevision === evidence;
+            const { authority, current } = captureAuthority(server);
             return yield* store
               .withTransaction(
                 server.identity,
@@ -225,16 +220,7 @@ export const makeMcpAuthWithAuthority = (
           const failure = authCommandFailure(server, "login");
           if (failure) return yield* failure;
           pendingLogins.delete(server.identity);
-          const authority = authorityFor(server.identity);
-          const generation = authority.generation;
-          const session = sessionGeneration;
-          const evidence = authority.evidenceRevision;
-          const current = () =>
-            !disposed &&
-            live.isTrusted() &&
-            sessionGeneration === session &&
-            authority.generation === generation &&
-            authority.evidenceRevision === evidence;
+          const { authority, generation, session, evidence, current } = captureAuthority(server);
           return yield* store
             .withTransaction(
               server.identity,

@@ -361,6 +361,45 @@ describe("MCP session ownership", () => {
     }),
   );
 
+  it.live("withholds completed output cancelled between execution and host publication", () =>
+    Effect.gen(function* () {
+      const controller = new AbortController();
+      const h = harness({
+        execute: () =>
+          Effect.sync(() => {
+            // Execution settles first; cancellation precedes the host Promise continuation.
+            queueMicrotask(() => controller.abort());
+            return {
+              reply: {
+                action: "tools.call",
+                outcome: "completed" as const,
+                isError: false,
+                data: { private: "completed payload" },
+                resultId: "retained-private-output",
+                notices: [],
+              },
+              images: [{ type: "image" as const, data: "private-image", mimeType: "image/png" }],
+            };
+          }),
+      });
+      yield* host(() => h.lifecycle.start(h.ctx));
+      try {
+        const result = yield* host(() =>
+          h.tool.execute("cancelled-publication", {}, controller.signal, undefined, h.ctx),
+        );
+        expect(controller.signal.aborted).toBe(true);
+        expect(result.details).toMatchObject({ outcome: "completed", isError: true });
+        expect(result.details?.resultId).toBeUndefined();
+        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(result)).not.toContain(
+          "private",
+        );
+        expect(result.content.some((item) => item.type === "image")).toBe(false);
+      } finally {
+        yield* host(() => h.lifecycle.shutdown());
+      }
+    }),
+  );
+
   it.live("defers resources to startup and leaves a foreign mcp untouched", () =>
     Effect.gen(function* () {
       const h = harness();

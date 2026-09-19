@@ -1,3 +1,10 @@
+import {
+  ownPresentationField as own,
+  presentationArrayLength as lengthOf,
+  presentationOutcome as outcomeOf,
+  presentationEvidence,
+  type PresentationField,
+} from "./presentation-evidence.ts";
 /** Pure, bounded recovery evidence. No arguments or general result bodies; issues may
  * retain bounded sanitized remote error text. Nested consumers enforce receipt limits.
  */
@@ -31,46 +38,11 @@ export interface McpPresentation {
   readonly notices: readonly string[];
   readonly resultId?: string;
 }
-interface PresentationField {
-  readonly value: unknown;
-  readonly unreadable?: true;
-}
-const own = <Value>(value: Value, key: string): PresentationField => {
-  try {
-    if (!Predicate.isObjectOrArray(value)) return { value: undefined };
-    const field = Object.getOwnPropertyDescriptor(value, key);
-    if (field && !("value" in field)) return { value: undefined, unreadable: true };
-    return { value: field?.value };
-  } catch {
-    return { value: undefined, unreadable: true };
-  }
-};
 const object = <Value>(value: Value): boolean => {
   try {
     return Predicate.isObjectOrArray(value) && !Array.isArray(value);
   } catch {
     return false;
-  }
-};
-const outcomeOf = <Value>(value: Value): McpPresentation["outcome"] | undefined =>
-  value === "completed"
-    ? "completed"
-    : value === "not-sent"
-      ? "not-sent"
-      : value === "unknown"
-        ? "unknown"
-        : undefined;
-const lengthOf = <Value>(value: Value): number | undefined => {
-  try {
-    const length = own(value, "length").value;
-    return Array.isArray(value) &&
-      Predicate.isNumber(length) &&
-      Number.isSafeInteger(length) &&
-      length >= 0
-      ? length
-      : undefined;
-  } catch {
-    return undefined;
   }
 };
 
@@ -110,16 +82,17 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
     }
     notices.push(text);
   };
-  const data = field(reply, "data").value;
+  const { data, payload, origin, undiscovered, payloadTruncation } = presentationEvidence(
+    reply,
+    field,
+  );
   if (data !== null && !object(data)) incomplete = true;
-  const result = field(data, "result").value;
-  const payload = result ?? data;
   const kind = field(data, "kind").value;
   const message = field(data, "message").value;
   if (kind !== undefined && !Predicate.isString(kind)) incomplete = true;
   if (message !== undefined && (!Predicate.isString(message) || message.length > 512))
     incomplete = true;
-  for (const source of [data, object(payload) ? payload : undefined]) {
+  for (const source of [data, payloadTruncation ? payload : undefined]) {
     for (const key of ["truncated", "omitted"]) {
       const flag = field(source, key).value;
       if (flag !== undefined && !Predicate.isBoolean(flag)) incomplete = true;
@@ -129,9 +102,8 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
     field(data, "truncated").value === true ||
     field(data, "omitted").value === true ||
     kind === "output-limit" ||
-    field(payload, "truncated").value === true;
+    (payloadTruncation && field(payload, "truncated").value === true);
   let recovery = truncated;
-  const origin = field(data, "origin").value;
   const validationIdentity = validationNoticeIdentity({
     action,
     outcome: envelopeOutcome,
@@ -180,7 +152,6 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
   if (kind === "cleanup") add("MCP cleanup is unconfirmed. Reconnection is not safe recovery yet.");
   if (truncated)
     add("MCP output is truncated or omitted. Do not replay the operation to recover output.");
-  const undiscovered = field(payload, "undiscovered").value;
   const undiscoveredCount = lengthOf(undiscovered);
   if (undiscovered !== undefined && undiscoveredCount === undefined) incomplete = true;
   if (undiscoveredCount) add(mcpUndiscoveredNotice(undiscoveredCount));

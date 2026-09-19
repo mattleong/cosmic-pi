@@ -411,9 +411,12 @@ describe("MCP card projections", () => {
       },
     };
     const result = {
-      ...reply({
-        result: { tools: [{ name: "one" }, { name: "two" }], attachments: [{ kind: "image" }] },
-      }),
+      details: {
+        ...reply({
+          result: { tools: [{ name: "one" }, { name: "two" }], attachments: [{ kind: "image" }] },
+        }).details,
+        action: "tools.list",
+      },
       content: [image],
     };
     const projection = decodeMcpCardDetails(result);

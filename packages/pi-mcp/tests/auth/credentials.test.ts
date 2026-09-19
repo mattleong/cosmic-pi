@@ -54,6 +54,11 @@ it.effect("reads legacy grants and preserves durable quarantine and requested pe
 
 it.effect("bounds the entire credential envelope and redacts malformed records", () =>
   Effect.gen(function* () {
+    const rejected = yield* decodeGrant('{"version":99,"secret":"private-token"}').pipe(
+      Effect.flip,
+    );
+    expect(rejected.kind).toBe("unavailable");
+    expect(serialize(rejected)).not.toContain("private-token");
     const part = "private-secret".repeat(Math.ceil(maximumGrantBytes / 24));
     const oversized = {
       version: 2 as const,

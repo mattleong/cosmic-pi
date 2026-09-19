@@ -6,6 +6,7 @@ import {
   renderToolHeader,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
+import { renderMcpCallContent } from "./call-content.ts";
 import { progressLabel } from "./remote-events.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
 import { mcpBoundaryFailure } from "./boundary-failure.ts";
@@ -29,15 +30,18 @@ export const renderMcpExpandedContent = <Result>(
       : "";
   return new Text(navigation + theme.fg("toolOutput", details.preview), 0, 0);
 };
-export const renderMcpCall = <Args>(args: Args, theme: CardTheme): Component => {
+export const renderMcpCall = <Args>(args: Args, theme: CardTheme, expanded = false): Component => {
   const call = mcpCallSummary(args);
   return composeToolComponent((width) =>
     Number.isFinite(width) && width >= 1
-      ? new Text(
-          renderToolHeader({ title: `MCP ${call.action}`, subtitle: call.target }, theme),
-          0,
-          0,
-        ).render(Math.floor(width))
+      ? [
+          ...new Text(
+            renderToolHeader({ title: `MCP ${call.action}`, subtitle: call.target }, theme),
+            0,
+            0,
+          ).render(Math.floor(width)),
+          ...(expanded ? renderMcpCallContent(args, theme).render(Math.floor(width)) : []),
+        ]
       : [],
   );
 };

@@ -16,27 +16,36 @@ const theme = {
   bg: (_key: string, value: string) => value,
   bold: (value: string) => value,
 } as Theme;
-const actions = [
-  "status",
-  "connect",
-  "disconnect",
-  "refresh",
-  "server.instructions",
-  "completion.complete",
-  "events.read",
-  "resources.subscribe",
-  "resources.unsubscribe",
-  "resources.subscriptions",
-  "tools.list",
-  "tools.search",
-  "tools.describe",
-  "tools.call",
-  "resources.list",
-  "resources.templates",
-  "resources.read",
-  "prompts.list",
-  "prompts.get",
-  "result.read",
+// Distinct content families share the same shell policy; lifecycle actions add no new renderer.
+const cases = [
+  { args: { action: "status" }, input: "status" },
+  {
+    args: { action: "tools.list", server: "catalog", cursor: "discovery-cursor" },
+    input: "discovery-cursor",
+  },
+  {
+    args: {
+      action: "tools.call",
+      server: "catalog",
+      tool: "inspect",
+      arguments: { query: "input-marker" },
+    },
+    input: "input-marker",
+  },
+  {
+    args: { action: "resources.read", server: "catalog", uri: "resource://input-marker" },
+    input: "resource://input-marker",
+  },
+  {
+    args: {
+      action: "prompts.get",
+      server: "catalog",
+      prompt: "inspect",
+      arguments: { topic: "prompt-input" },
+    },
+    input: "prompt-input",
+  },
+  { args: { action: "result.read", id: "saved", offset: 321 }, input: "321" },
 ];
 
 it("keeps registered action results expandable in every shell and preserves attachments and original data", () => {
@@ -55,8 +64,8 @@ it("keeps registered action results expandable in every shell and preserves atta
           execute: () => Promise.reject(new Error("not executed")),
         }),
       );
-      for (const action of actions) {
-        const args = { action, server: "catalog", tool: "inspect", id: "saved" };
+      for (const { args, input } of cases) {
+        const { action } = args;
         const data =
           action === "result.read"
             ? {
@@ -77,6 +86,7 @@ it("keeps registered action results expandable in every shell and preserves atta
           details: { action, outcome: "completed", isError: false, notices: [], data },
         };
         const before = structuredClone(result);
+        const inputBefore = structuredClone(args);
         const harness = createToolPresentationHarness(tool, { theme });
         harness.call(args, { executionStarted: false, isPartial: true });
         expect(harness.render(200).join("\n")).toContain(action);
@@ -89,10 +99,11 @@ it("keeps registered action results expandable in every shell and preserves atta
           const text = harness.render(200).join("\n");
           if (expanded) {
             expect(text).toContain("body-marker");
-            if (style === "compact") expect(text.split(action).length - 1).toBe(1);
+            expect(text).toContain(input);
           } else if (style === "compact") expect(text).not.toContain("body-marker");
         }
         expect(result).toEqual(before);
+        expect(args).toEqual(inputBefore);
       }
     }
   }

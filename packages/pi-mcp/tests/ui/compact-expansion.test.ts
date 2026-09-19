@@ -33,6 +33,47 @@ const registered = (mode: "on" | "off" | "border", style: "compact" | "preview" 
   );
 };
 
+it("renders bounded sanitized arguments without invoking historical accessors", () => {
+  let reads = 0;
+  const argumentsValue = {
+    query: "input-marker",
+    token: "private-credential",
+    oversized: "x".repeat(100_000),
+    get historical() {
+      reads++;
+      throw new Error("accessor");
+    },
+    toJSON() {
+      reads++;
+      throw new Error("toJSON");
+    },
+  };
+  const args = { action: "tools.call", server: "docs", tool: "inspect", arguments: argumentsValue };
+  for (const style of ["compact", "preview"] as const) {
+    const harness = createToolPresentationHarness(registered("off", style), { theme });
+    harness.call(args, { expanded: true });
+    harness.result(
+      {
+        content: [],
+        details: {
+          action: "tools.call",
+          outcome: "completed",
+          isError: false,
+          notices: [],
+          data: { result: {} },
+        },
+      },
+      { expanded: true },
+    );
+    const text = harness.render(120).join("\n");
+    expect(text).toContain("input-marker");
+    expect(text).not.toContain("private-credential");
+    expect(text.length).toBeLessThan(20_000);
+    expect(args.arguments).toBe(argumentsValue);
+  }
+  expect(reads).toBe(0);
+});
+
 it("renders unknown-coverage boundary attention once through the real MCP factory", () => {
   for (const mode of ["on", "off", "border"] as const) {
     for (const failure of [

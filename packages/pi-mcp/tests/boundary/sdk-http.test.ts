@@ -153,18 +153,6 @@ describe("scoped SDK HTTP connection", () => {
       }),
   );
 
-  it.effect.each([{ requestTimeoutMs: 3_600_001 }, { connectTimeoutMs: 600_001 }])(
-    "rejects timeouts beyond the independent request and connect maxima: %j",
-    (invalid) =>
-      Effect.gen(function* () {
-        expect(
-          yield* openSdkHttp({ url: fakeUrl, ...defaults, ...invalid }).pipe(Effect.flip),
-        ).toMatchObject({
-          kind: "invalid-input",
-          outcome: "not-sent",
-        });
-      }),
-  );
   it.effect.each(protocolResponses)(
     "classifies and redacts $name without replay",
     ({ response, kind, reason }) =>

@@ -201,21 +201,25 @@ export const makeMcpLifecycle = (
     // than exposing Effect's FiberFailure wrapper to Code Mode certainty handling.
     return slot.run(Effect.result(execution.execute(request, observedProjection)), signal).then(
       (result) => {
+        const outcome = Result.isFailure(result)
+          ? result.failure.outcome
+          : result.success.reply.outcome;
+        if (!current(input, token))
+          throw boundaryError("stale", outcome, "MCP session was replaced.");
+        // Cancellation can arrive after the Effect settles but before this host continuation.
+        if (signal?.aborted)
+          throw boundaryError("cancelled", outcome, "MCP operation was cancelled.");
         if (Result.isFailure(result)) {
           const action = failureAction(request);
           if (
             result.failure.kind === "auth-required" ||
             promptArgumentHint(action, result.failure) !== undefined
           ) {
-            if (!current(input, token))
-              throw boundaryError("stale", result.failure.outcome, "MCP session was replaced.");
             // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
             return { reply: mcpFailureReply(action, result.failure), images: [] };
           }
           throw result.failure;
         }
-        if (!current(input, token))
-          throw boundaryError("stale", result.success.reply.outcome, "MCP session was replaced.");
         return result.success;
       },
       () => {

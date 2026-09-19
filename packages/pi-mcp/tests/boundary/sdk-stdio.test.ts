@@ -24,6 +24,8 @@ import { afterEach, vi } from "vitest";
 import { McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpConnection } from "../../src/client/model.ts";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
+import { McpConnector } from "../../src/boundary/sdk-connection.ts";
+import type { McpEffectiveServer, McpSettings } from "../../src/config/model.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
 import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
 import {
@@ -783,6 +785,74 @@ it.effect("keeps unconfirmed process cleanup distinct from a request failure", (
     expect(String(result)).not.toContain("private-");
     expect(fake.state.readers).toBe(0);
   }),
+);
+
+it.live.each(["explicit close", "scope teardown"])(
+  "modern metadata subscriptions confirm cleanup and allow same-server reopen after %s",
+  (mode) =>
+    macOnly(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const script = `
+            import readline from "node:readline";
+            const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+            readline.createInterface({ input: process.stdin }).on("line", line => {
+              const m = JSON.parse(line);
+              if (m.method === "server/discover") send({ jsonrpc: "2.0", id: m.id, result: {
+                resultType: "complete", supportedVersions: ["2026-07-28"],
+                capabilities: { tools: { listChanged: true } }
+              } });
+              if (m.method === "subscriptions/listen") send({ jsonrpc: "2.0",
+                method: "notifications/subscriptions/acknowledged", params: {
+                  notifications: m.params.notifications,
+                  _meta: { "io.modelcontextprotocol/subscriptionId": m.id }
+                }
+              });
+            });
+          `;
+          const connector = yield* McpConnector.pipe(Effect.provide(McpConnector.layer));
+          const server: McpEffectiveServer = {
+            id: `metadata-cleanup-${mode}`,
+            identity: `metadata-cleanup-${mode}`,
+            directory: process.cwd(),
+            scope: "project",
+            enabled: true,
+            definition: {
+              transport: "stdio",
+              command: process.execPath,
+              args: ["--input-type=module", "-e", script],
+              environment: {},
+              denyTools: [],
+            },
+          };
+          const settings: McpSettings = {
+            enabled: true,
+            connectTimeoutMs: 2_000,
+            requestTimeoutMs: 2_000,
+            idleTimeoutMs: 1_000,
+            maxConcurrent: 8,
+            maxPerServer: 4,
+            maxQueued: 64,
+          };
+          const cleanup: boolean[] = [];
+          for (let round = 0; round < 2; round++) {
+            const owner = yield* Scope.fork(yield* Effect.scope);
+            const connection = yield* connector
+              .open(server, settings, undefined, (confirmed) => cleanup.push(confirmed))
+              .pipe(Effect.provideService(Scope.Scope, owner));
+            expect(connection.protocolVersion).toBe("2026-07-28");
+            if (mode === "explicit close") yield* connection.close;
+            yield* Scope.close(owner, Exit.void);
+            expect(yield* connection.health).toMatchObject({
+              closed: true,
+              cleanupUnconfirmed: false,
+            });
+            yield* connection.close;
+            expect(cleanup).toEqual(Array.from({ length: round + 1 }, () => true));
+          }
+        }),
+      ),
+    ),
 );
 
 it.live(

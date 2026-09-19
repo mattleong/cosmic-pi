@@ -6,9 +6,13 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
-import type { McpGrant, McpRegistrationReceipt } from "../../src/auth/credentials.ts";
+import {
+  decodeGrant,
+  encodeGrant,
+  type McpGrant,
+  type McpRegistrationReceipt,
+} from "../../src/auth/credentials.ts";
 import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
-import { decodeGrant, encodeGrant } from "../../src/auth/credentials.ts";
 import type { McpLoginOptions, McpLoginUi } from "../../src/auth/model.ts";
 import { transactionStore } from "../fixtures/credential-store.ts";
 import { makeMcpAuth, makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
@@ -1062,19 +1066,5 @@ describe("user-only authentication ownership", () => {
         yield* auth.login(current, ui).pipe(Effect.result);
         expect(checkpoints).toBe(2);
       }),
-  );
-
-  it.effect("versioned grants round-trip and malformed records redact rejected secrets", () =>
-    Effect.gen(function* () {
-      const value = grant("6".repeat(64));
-      expect(yield* decodeGrant(yield* encodeGrant(value))).toEqual(value);
-      const rejected = yield* decodeGrant('{"version":99,"secret":"private-token"}').pipe(
-        Effect.result,
-      );
-      expect(rejected._tag).toBe("Failure");
-      expect(rejected._tag === "Failure" && rejected.failure.message).not.toContain(
-        "private-token",
-      );
-    }),
   );
 });

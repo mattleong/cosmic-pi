@@ -169,11 +169,19 @@ describe("MCP execution evidence in compact Code Mode results", () => {
     [reply({ outcome: "unknown" }), "uncertain"],
     [reply({ outcome: "not-sent" }), "warning"],
     [reply({ notices: ["Inspect server access before continuing."] }), "warning"],
-    [reply({ data: { result: { undiscovered: ["server"] } } }), "warning"],
-    [reply({ data: { result: { truncated: true } } }), "warning"],
+    [reply({ action: "tools.list", data: { result: { undiscovered: ["server"] } } }), "warning"],
+    [reply({ data: { truncated: true } }), "warning"],
+    [reply({ data: { result: { undiscovered: ["server"] } } }), "success"],
+    [reply({ data: { result: { truncated: true } } }), "success"],
   ] as const)("uses validated envelopes independently of guest output: %j", ([output, outcome]) =>
     Effect.gen(function* () {
-      const result = yield* Effect.promise(() => harness(() => Promise.resolve(output)).run());
+      const result = yield* Effect.promise(() =>
+        harness(() => Promise.resolve(output)).run(
+          output.action === "tools.list"
+            ? 'await tools.mcp.request({action:"tools.list"}); return "discarded"'
+            : undefined,
+        ),
+      );
       const projected = summary(result.details);
       expect(projected?.outcome).toBe(outcome);
       expect(projected?.children?.entries).toMatchObject([{ label: "mcp", status: outcome }]);

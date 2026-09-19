@@ -1,8 +1,66 @@
 import { isCompactAttention } from "pi-code-previews";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { normalizeResult } from "../../src/results/normalize.ts";
+import { projectPrepared } from "../../src/results/projection.ts";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
 import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
+
+it.effect("classifies normalized discovery by operation, not remote lookalike fields", () =>
+  Effect.gen(function* () {
+    const payload = {
+      content: [{ type: "text", text: "remote-body" }],
+      tools: [{ name: "fake" }],
+      resources: [{}],
+      prompts: [{}],
+      page: { items: [{}], total: 4, nextCursor: "remote-cursor" },
+      undiscovered: ["remote-server"],
+      truncated: true,
+    };
+    for (const action of [
+      "tools.call",
+      "resources.read",
+      "prompts.get",
+      "tools.list",
+      "tools.search",
+    ]) {
+      const normalized = normalizeResult({
+        owner: "owner",
+        server: "docs",
+        action,
+        reply: { outcome: "completed", result: payload },
+      });
+      const execution = yield* projectPrepared(
+        {
+          ...normalized,
+          owner: "owner",
+          server: "docs",
+          activation: {},
+          generation: 0,
+          serverGeneration: 0,
+        },
+        { status: "retained", resultId: "saved" },
+        { maxOutputBytes: 51_200, images: false },
+      );
+      for (const retained of [false, true]) {
+        const details = retained ? { ...execution.reply, action: "result.read" } : execution.reply;
+        const card = decodeMcpCardDetails({ details, content: [] });
+        const discovery = action === "tools.list" || action === "tools.search";
+        expect(card.undiscoveredCount).toBe(discovery ? 1 : 0);
+        expect(card.page !== undefined).toBe(discovery);
+        expect(
+          card.presentation.issues.entries.some((issue) => issue.code === "discovery-incomplete"),
+        ).toBe(discovery);
+        expect(card.presentation.truncated).toBe(false);
+        if (!discovery)
+          expect(card.counters.join(" ")).not.toMatch(/tools|resources|prompts|entries/);
+        expect(card.preview).toContain("remote-server");
+        expect(card.preview).toContain("remote-cursor");
+      }
+    }
+  }),
+);
 
 type Input = Parameters<typeof mcpCompactSummary>[0];
 const reply = (data: McpGatewayReply["data"] = {}, fields: Partial<McpGatewayReply> = {}) => ({
@@ -41,6 +99,24 @@ function summarize<Details>(
 }
 
 describe("MCP compact summaries", () => {
+  it.each(["status", "connect", "disconnect"])(
+    "preserves gateway-owned server counts for %s and its retained origin",
+    (action) => {
+      for (const retained of [false, true]) {
+        const details = reply(
+          {
+            origin: { action, outcome: "completed", isError: false },
+            result: { servers: ["first", "second"] },
+          },
+          { action: retained ? "result.read" : action },
+        );
+        const card = decodeMcpCardDetails({ details, content: [] });
+        expect(card.counts).toHaveLength(1);
+        expect(card.counts[0]).toContain("2");
+        expect(card.undiscoveredCount).toBe(0);
+      }
+    },
+  );
   it("projects complete remote causes without generic replacement and retains unknown fallback", () => {
     const details = reply(
       {

@@ -1,3 +1,8 @@
+import {
+  presentationEvidence,
+  presentationArrayLength,
+  type PresentationReader,
+} from "./presentation-evidence.ts";
 import { mcpIssueDescription } from "../ui/compact-descriptions.ts";
 import type { CompactIssue, CompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
@@ -16,32 +21,14 @@ const FailureEvidence = Schema.Struct({
   reason: McpBoundaryError.fields.reason,
 });
 
-/** Additive display evidence. The v1 capability and its bounded notice projection are unchanged. */
-export function projectMcpIssues<Reply>(
-  field: <Value>(value: Value, key: string) => { readonly value: unknown },
+function boundaryFailureIssues<Reply, Data, Origin>(
+  field: PresentationReader,
   reply: Reply,
+  data: Data,
+  origin: Origin,
+  actionName: string,
   presentation: Omit<McpPresentation, "issues">,
-): CompactIssues {
-  const entries: CompactIssue[] = [];
-  // Non-completed envelopes can carry transport-specific recovery outside the bounded
-  // display fields. Classify their known facts, but keep original presentation ownership.
-  let complete = !presentation.incomplete && presentation.outcome === "completed";
-  const isArray = <Value>(value: Value): boolean => {
-    try {
-      return Array.isArray(value);
-    } catch {
-      complete = false;
-      return false;
-    }
-  };
-  const action = field(reply, "action").value;
-  const data = field(reply, "data").value;
-  const origin = field(data, "origin").value;
-  const payload = field(data, "result").value ?? data;
-  const actionName =
-    Predicate.isString(action) && /^[a-z][a-z.]{0,63}$/.test(action) ? action : "request";
-  if (actionName !== action) complete = false;
-  const operation = `mcp:${actionName}`;
+): CompactIssues | undefined {
   const evidence = Option.getOrUndefined(
     Schema.decodeUnknownOption(FailureEvidence)({
       kind: field(data, "kind").value,
@@ -56,7 +43,8 @@ export function projectMcpIssues<Reply>(
     const rawNotices = field(reply, "notices").value;
     const count = field(rawNotices, "length").value;
     const notices: string[] = [];
-    let noticesComplete = isArray(rawNotices) && Predicate.isNumber(count) && count <= 32;
+    let noticesComplete =
+      presentationArrayLength(rawNotices) !== undefined && Predicate.isNumber(count) && count <= 32;
     for (let index = 0; noticesComplete && index < Number(count); index++) {
       const notice = field(rawNotices, String(index)).value;
       if (!Predicate.isString(notice) || notice.length > 512) noticesComplete = false;
@@ -85,6 +73,68 @@ export function projectMcpIssues<Reply>(
     });
     if (boundary && notices.join("\n").length <= 2048) return boundary.issues;
   }
+  return undefined;
+}
+
+function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payload, data: Data) {
+  let complete =
+    field(payload, "structuredContent").value === undefined &&
+    field(payload, "_meta").value === undefined;
+  const texts: string[] = [];
+  const add = <Value>(value: Value) => {
+    if (!Predicate.isString(value) || value.length > 512) {
+      complete = false;
+      return;
+    }
+    const text = sanitizeDiagnosticContent(sanitizeTerminalLine(value), { maximumLength: 512 });
+    if (text) texts.push(text);
+  };
+  const content = field(payload, "content").value;
+  const count = presentationArrayLength(content);
+  if (count !== undefined && count <= 32) {
+    for (let index = 0; index < count; index++) {
+      const part = field(content, String(index)).value;
+      if (field(part, "type").value !== "text") {
+        complete = false;
+        continue;
+      }
+      add(field(part, "text").value);
+    }
+  } else complete = false;
+  const message = field(data, "message").value;
+  if (message !== undefined) {
+    add(message);
+    // Adapter messages may contain recovery not owned by this text projection.
+    complete = false;
+  }
+  return { text: texts.join("\n"), complete };
+}
+
+/** Additive display evidence. The v1 capability and its bounded notice projection are unchanged. */
+export function projectMcpIssues<Reply>(
+  field: <Value>(value: Value, key: string) => { readonly value: unknown },
+  reply: Reply,
+  presentation: Omit<McpPresentation, "issues">,
+): CompactIssues {
+  const entries: CompactIssue[] = [];
+  // Non-completed envelopes can carry transport-specific recovery outside the bounded
+  // display fields. Classify their known facts, but keep original presentation ownership.
+  let complete = !presentation.incomplete && presentation.outcome === "completed";
+  const isArray = <Value>(value: Value): boolean => {
+    try {
+      return Array.isArray(value);
+    } catch {
+      complete = false;
+      return false;
+    }
+  };
+  const { action, data, origin, payload, undiscovered } = presentationEvidence(reply, field);
+  const actionName =
+    Predicate.isString(action) && /^[a-z][a-z.]{0,63}$/.test(action) ? action : "request";
+  if (actionName !== action) complete = false;
+  const operation = `mcp:${actionName}`;
+  const boundary = boundaryFailureIssues(field, reply, data, origin, actionName, presentation);
+  if (boundary) return boundary;
   const add = (
     code: string,
     severity: CompactIssue["severity"],
@@ -177,38 +227,13 @@ export function projectMcpIssues<Reply>(
     !validation &&
     (field(origin, "isError").value !== true || action === "result.read")
   ) {
-    // Structured output and metadata can carry diagnostics beyond the text blocks.
-    if (
-      field(payload, "structuredContent").value !== undefined ||
-      field(payload, "_meta").value !== undefined
-    )
-      complete = false;
-    const content = field(payload, "content").value;
-    const count = field(content, "length").value;
-    const texts: string[] = [];
-    if (isArray(content) && Predicate.isNumber(count) && count <= 32) {
-      for (let i = 0; i < count; i++) {
-        const part = field(content, String(i)).value;
-        if (field(part, "type").value !== "text") {
-          complete = false;
-          continue;
-        }
-        const text = safe(field(part, "text").value);
-        if (text) texts.push(text);
-      }
-    }
-    const message = field(data, "message").value;
-    if (message !== undefined) {
-      const text = safe(message);
-      if (text) texts.push(text);
-      // Adapter messages can contain unclassified recovery; retain the original card.
-      complete = false;
-    }
-    if (texts.length)
+    const remote = remoteErrorText(field, payload, data);
+    complete &&= remote.complete;
+    if (remote.text)
       add(
         action === "result.read" ? "retained-read-failed" : "remote-failure",
         "error",
-        texts.join("\n"),
+        remote.text,
         [noReplay],
       );
     else {
@@ -249,8 +274,7 @@ export function projectMcpIssues<Reply>(
       add("unclassified-notices", "warning", unknown.join("\n"));
     }
   } else complete = false;
-  const undiscovered = field(payload, "undiscovered").value;
-  const undiscoveredCount = field(undiscovered, "length").value;
+  const undiscoveredCount = presentationArrayLength(undiscovered);
   if (Predicate.isNumber(undiscoveredCount) && undiscoveredCount > 0)
     add(
       "discovery-incomplete",
