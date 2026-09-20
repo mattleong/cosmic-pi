@@ -8,6 +8,7 @@ import type {
   WorkspaceError,
   WorkspaceHandle,
   WorkspaceIntegrationTarget,
+  WorkspaceListing,
   WorkspacePreparation,
   WorkspaceRecord,
   WorkspaceRevision,
@@ -42,7 +43,7 @@ export interface WorkspaceServiceContract {
   readonly list: (input: {
     readonly ownerId: string;
   }) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
-  readonly listAll: () => Effect.Effect<ReadonlyArray<WorkspaceRecord>, WorkspaceError>;
+  readonly listAll: () => Effect.Effect<WorkspaceListing, WorkspaceError>;
 }
 
 export class WorkspaceService extends Context.Service<WorkspaceService, WorkspaceServiceContract>()(

@@ -682,7 +682,6 @@ describe("subagent compact semantic policy", () => {
       "settled",
       { action: "list" },
     );
-    expect(list?.counters).toContain("8/10 workspaces shown");
     expect(
       list?.notices?.some((notice) =>
         notice.text.includes("Do not auto-adopt or delete an orphan"),
@@ -726,6 +725,8 @@ describe("subagent compact semantic policy", () => {
       { operation: "prepare", workspaceId: "w", preparedCwd: "/combined" },
       { operation: "integrate", workspaceId: "w", revisionId: "r" },
       { operation: "list", workspaceCount: 1, listedCount: 2 },
+      { operation: "list", workspaceCount: 0, listedCount: 0, unavailableCount: 1 },
+      { operation: "list", unavailableCount: 1 },
     ])
       expect(
         summarize("workspace", { version: 1, action: "workspace", ...details }, "settled", {

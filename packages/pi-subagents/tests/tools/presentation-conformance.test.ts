@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { effectTest } from "../support/effect-test.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
+import { compactWorkspaceSummary } from "../../src/tools/compact-workspace-summary.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { afterEach, expect, it } from "vitest";
@@ -104,6 +105,48 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
     expect(text.match(/subagent_await/g)?.length).toBeGreaterThan(0);
   }
 });
+
+effectTest(
+  "preserves unavailable-only workspace diagnostics through compact expansion",
+  function* () {
+    const artifact = {
+      workspaceId: "unavailable-artifact",
+      status: "unavailable",
+      reason: "recovery-record-unavailable",
+    } as const;
+    const response = yield* executeWorkspaceAction({ action: "list" }).pipe(
+      Effect.provideService(
+        SubagentService,
+        subagentServiceDouble({
+          workspaceList: () => Effect.succeed({ records: [], unavailable: [artifact] }),
+        }),
+      ),
+      Effect.orDie,
+    );
+    expect(response.details).toMatchObject({
+      workspaceCount: 1,
+      listedCount: 1,
+      unavailableCount: 1,
+    });
+    const summary = compactWorkspaceSummary(response.details, "list")!;
+    expect(summary.outcome).toBe("warning");
+    const warning = summary.notices!.find((notice) => notice.kind === "warning")!;
+    expect(warning.description).toBeTruthy();
+    const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
+    const harness = createToolPresentationHarness(tool, { theme });
+    for (const expanded of [false, true, false, true]) {
+      harness.call({ action: "list" }, { expanded });
+      harness.result(response, { expanded });
+      const text = harness.render(200).join("\n");
+      expect(text).toContain(expanded ? warning.text : warning.description!);
+      if (expanded) {
+        expect(text).toContain(artifact.workspaceId);
+        expect(text).toContain(artifact.reason);
+        expect(text).toContain("Do not auto-adopt or delete an orphan");
+      }
+    }
+  },
+);
 
 it("keeps workspace diff bytes without repeating generated recovery", () => {
   const tool = registered().find((tool) => tool.name === "subagent_workspace")!;

@@ -3,6 +3,7 @@ import type { WriterLease, WriterLeaseContract } from "../boundary/writer-lease.
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   WorkspaceHandle,
+  WorkspaceListing,
   WorkspacePreparation,
   WorkspaceRecord,
   WorkspaceRevision,
@@ -25,9 +26,7 @@ export interface WorkspaceReview extends WorkspaceRevision {
   readonly nextOffset?: number;
 }
 export interface WorkspaceCoordinatorContract {
-  readonly workspaceList: (
-    callerRunId?: string,
-  ) => Effect.Effect<ReadonlyArray<WorkspaceRecord>, SubagentError>;
+  readonly workspaceList: (callerRunId?: string) => Effect.Effect<WorkspaceListing, SubagentError>;
   readonly workspaceReview: (
     workspaceId: string,
     options?: { readonly revisionId?: string; readonly offset?: number; readonly limit?: number },
@@ -97,8 +96,9 @@ export function makeWorkspaceControl(dependencies: {
   let reservations = 0;
   const bindings = new Map<string, Binding>();
   const ownerFor = (caller: string) => `${ownerId}/${caller}`;
-  const sourceRecords = (entries: ReadonlyArray<WorkspaceRecord>) =>
+  const sourceRecords = (listing: WorkspaceListing) =>
     Effect.gen(function* () {
+      const entries = listing.records;
       const owned = (record: WorkspaceRecord) => record.handle.ownerId.startsWith(`${ownerId}/`);
       // Resolve aliases only when inspecting foreign artifacts, never during reader startup.
       const source =
@@ -107,13 +107,17 @@ export function makeWorkspaceControl(dependencies: {
               .canonicalize(dependencies.sourceCwd)
               .pipe(Effect.mapError(mapWorkspaceError))).path
           : undefined;
-      return entries.filter(
-        (record) =>
-          owned(record) ||
-          (source !== undefined &&
-            (source === record.handle.sourceRoot ||
-              source.startsWith(`${record.handle.sourceRoot.replace(/\/$/, "")}/`))),
-      );
+      return {
+        // Unknown source identity cannot justify hiding an artifact from the root.
+        unavailable: listing.unavailable,
+        records: entries.filter(
+          (record) =>
+            owned(record) ||
+            (source !== undefined &&
+              (source === record.handle.sourceRoot ||
+                source.startsWith(`${record.handle.sourceRoot.replace(/\/$/, "")}/`))),
+        ),
+      };
     });
   let integrationQuarantined = false;
   const requireEngine = () =>
@@ -150,7 +154,7 @@ export function makeWorkspaceControl(dependencies: {
   const all = () =>
     engine
       ? engine.listAll().pipe(Effect.mapError(mapWorkspaceError))
-      : Effect.succeed<ReadonlyArray<WorkspaceRecord>>([]);
+      : Effect.succeed<WorkspaceListing>({ records: [], unavailable: [] });
   const blockedReason = () =>
     Effect.gen(function* () {
       if (
@@ -168,7 +172,10 @@ export function makeWorkspaceControl(dependencies: {
       )
         return "Writers, admission reservations, or quarantined writer ownership remain.";
       // Unknown previous-session artifacts are not evidence of process death. Never silently adopt them.
-      const pending = (yield* all().pipe(Effect.flatMap(sourceRecords))).find(
+      const listing = yield* all();
+      if (listing.unavailable.length > 0)
+        return "Workspace recovery metadata is unavailable. Ownership, source identity, and cleanup are unknown; preserve the artifacts and resolve them manually before changing workspace mode.";
+      const pending = (yield* sourceRecords(listing)).records.find(
         (record) => record.status !== "integrated" && record.status !== "discarded",
       );
       if (pending)
@@ -312,9 +319,10 @@ export function makeWorkspaceControl(dependencies: {
         ? yield* service
             .listAll()
             .pipe(Effect.mapError(mapWorkspaceError), Effect.flatMap(sourceRecords))
-        : yield* service
-            .list({ ownerId: ownerFor(caller) })
-            .pipe(Effect.mapError(mapWorkspaceError));
+        : yield* service.list({ ownerId: ownerFor(caller) }).pipe(
+            Effect.mapError(mapWorkspaceError),
+            Effect.map((records): WorkspaceListing => ({ records, unavailable: [] })),
+          );
     });
   const workspaceReview: WorkspaceCoordinatorContract["workspaceReview"] = (
     workspaceId,

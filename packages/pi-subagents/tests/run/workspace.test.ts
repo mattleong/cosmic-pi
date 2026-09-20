@@ -11,6 +11,7 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { SubagentService } from "../../src/run/service.ts";
 import {
   WorkspaceError,
+  type UnavailableWorkspaceArtifact,
   type WorkspaceRecord,
   type WorkspaceTarget,
 } from "../../src/workspace/model.ts";
@@ -28,6 +29,7 @@ function fixture(
   writerLeases?: Layer.Layer<WriterLeaseService>,
 ) {
   const entries = new Map<string, WorkspaceRecord>();
+  const unavailable: UnavailableWorkspaceArtifact[] = [];
   const requireEntry = (target: WorkspaceTarget) =>
     Effect.gen(function* () {
       const entry = entries.get(target.workspaceId);
@@ -55,7 +57,7 @@ function fixture(
     inspect: requireEntry,
     list: ({ ownerId }) =>
       Effect.sync(() => [...entries.values()].filter((entry) => entry.handle.ownerId === ownerId)),
-    listAll: () => Effect.sync(() => [...entries.values()]),
+    listAll: () => Effect.sync(() => ({ records: [...entries.values()], unavailable })),
     freeze: (target) =>
       requireEntry(target).pipe(
         Effect.map((entry) => {
@@ -130,7 +132,7 @@ function fixture(
         onRelease: (lease) => released.push(lease.canonicalCwd),
       }),
   ).pipe(Layer.provide(children.layer), Layer.provide(Layer.succeed(WorkspaceService, engine)));
-  return { entries, engine, children, layer, acquired, released, canonicalized };
+  return { entries, unavailable, engine, children, layer, acquired, released, canonicalized };
 }
 
 describe("writer workspace orchestration", () => {
@@ -224,9 +226,9 @@ describe("writer workspace orchestration", () => {
       expect(f.canonicalized).toEqual([]);
       expect(f.acquired).toEqual([]);
       expect(f.entries.size).toBe(2);
-      expect((yield* service.workspaceList()).map((entry) => entry.handle.workspaceId)).toEqual([
-        "orphan",
-      ]);
+      expect(
+        (yield* service.workspaceList()).records.map((entry) => entry.handle.workspaceId),
+      ).toEqual(["orphan"]);
       expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: false });
       let persisted = false;
       expect(
@@ -246,6 +248,101 @@ describe("writer workspace orchestration", () => {
       f.entries.set("orphan", { ...f.entries.get("orphan")!, status: "discarded" });
       expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: true });
       expect(f.acquired).toEqual([]);
+    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+  });
+
+  it.effect(
+    "keeps unknown artifacts root-only and blocks mode changes without granting ownership",
+    () => {
+      const f = fixture();
+      const artifact = {
+        workspaceId: "unknown",
+        status: "unavailable",
+        reason: "recovery-record-unavailable",
+      } as const;
+      f.unavailable.push(artifact);
+      return Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const reader = yield* service.start(request({ cwd: "/repo", writeIntent: "read-only" }));
+        expect(f.canonicalized).toEqual([]);
+        for (const [workspaceId, ownerId, sourceRoot, status] of [
+          ["settled", "session-1/root", "/repo", "discarded"],
+          ["nested", `session-1/${reader.id}`, "/repo", "integrated"],
+          ["unrelated", "old-session/root", "/elsewhere", "active"],
+        ] as const) {
+          f.entries.set(workspaceId, {
+            version: 1,
+            handle: {
+              workspaceId,
+              ownerId,
+              sourceRoot,
+              sourceCwd: sourceRoot,
+              cwd: `/private/${workspaceId}`,
+            },
+            status,
+            baseline: "baseline",
+          });
+        }
+        const root = yield* service.workspaceList();
+        expect(root.records.map((entry) => entry.handle.workspaceId)).toEqual([
+          "settled",
+          "nested",
+        ]);
+        expect(root.unavailable).toEqual([artifact]);
+        const nested = yield* service.workspaceList(reader.id);
+        expect(nested.records.map((entry) => entry.handle.workspaceId)).toEqual(["nested"]);
+        expect(nested.unavailable).toEqual([]);
+        expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: false });
+        let persisted = false;
+        expect(
+          yield* service
+            .setWriterWorkspaceMode(
+              "shared-checkout",
+              Effect.sync(() => {
+                persisted = true;
+              }),
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ code: "workspace_mode_busy" });
+        expect(persisted).toBe(false);
+        for (const operation of [
+          service.workspaceReview(artifact.workspaceId),
+          service.workspacePrepare(artifact.workspaceId, "revision"),
+          service.workspaceIntegrate(artifact.workspaceId, "revision", "preparation"),
+          service.workspaceRevise(artifact.workspaceId, "repair"),
+          service.workspaceDiscard(artifact.workspaceId),
+        ]) {
+          expect(yield* operation.pipe(Effect.flip)).toMatchObject({
+            code: "workspace_owner_unavailable",
+          });
+        }
+        expect(f.unavailable).toEqual([artifact]);
+        f.unavailable.length = 0;
+        expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: true });
+      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    },
+  );
+
+  it.effect("can review and prepare an owned proposal beside unavailable artifacts", () => {
+    const f = fixture();
+    f.unavailable.push({
+      workspaceId: "unknown",
+      status: "unavailable",
+      reason: "recovery-record-unavailable",
+    });
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const writer = yield* service.start(request({ cwd: "/repo", writeIntent: "writer" }));
+      yield* service.stop(writer.id);
+      const workspaceId = writer.workspaceId!;
+      const first = yield* service.workspaceReview(workspaceId);
+      yield* service.workspaceReview(workspaceId, {
+        revisionId: first.revisionId,
+        offset: first.nextOffset!,
+      });
+      const prepared = yield* service.workspacePrepare(workspaceId, first.revisionId);
+      expect(prepared.revisionId).toBe(first.revisionId);
+      expect((yield* service.workspaceList()).unavailable).toHaveLength(1);
     }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
   });
 

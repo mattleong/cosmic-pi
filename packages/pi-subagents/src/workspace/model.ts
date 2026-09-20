@@ -68,6 +68,18 @@ export const WorkspaceRecordSchema = Schema.Struct({
   createdDirectoryCount: Schema.optional(Schema.Finite),
 });
 export type WorkspaceRecord = typeof WorkspaceRecordSchema.Type;
+
+/** Registry evidence only: never a handle, owner, source identity, or cleanup receipt. */
+export const UnavailableWorkspaceArtifactSchema = Schema.Struct({
+  workspaceId: Schema.String,
+  status: Schema.Literal("unavailable"),
+  reason: Schema.Literal("recovery-record-unavailable"),
+});
+export type UnavailableWorkspaceArtifact = typeof UnavailableWorkspaceArtifactSchema.Type;
+export interface WorkspaceListing {
+  readonly records: ReadonlyArray<WorkspaceRecord>;
+  readonly unavailable: ReadonlyArray<UnavailableWorkspaceArtifact>;
+}
 export interface WorkspaceTarget {
   readonly workspaceId: string;
   readonly ownerId: string;

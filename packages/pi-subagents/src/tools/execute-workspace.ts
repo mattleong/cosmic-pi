@@ -5,7 +5,7 @@ import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
-import { WorkspaceRecordSchema } from "../workspace/model.ts";
+import { UnavailableWorkspaceArtifactSchema, WorkspaceRecordSchema } from "../workspace/model.ts";
 import type { WorkspaceToolDetails } from "./details-schema.ts";
 import {
   WorkspaceParameters,
@@ -40,7 +40,11 @@ const WorkspaceMetadataSchema = Schema.Struct({
   revisionId: Schema.optional(Schema.String),
   preparationId: Schema.optional(Schema.String),
 });
-const encodeWorkspaceMetadata = Schema.encodeEffect(Schema.fromJsonString(WorkspaceMetadataSchema));
+const encodeWorkspaceMetadata = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Union([WorkspaceMetadataSchema, UnavailableWorkspaceArtifactSchema]),
+  ),
+);
 
 const executeWorkspaceList = (
   service: SubagentServiceContract,
@@ -48,11 +52,9 @@ const executeWorkspaceList = (
   offset: number,
 ) =>
   Effect.gen(function* () {
-    const records = yield* service.workspaceList(callerRunId);
-    const lines: string[] = [];
-    let chars = 0;
-    for (const record of records.slice(offset, offset + 8)) {
-      const line = yield* encodeWorkspaceMetadata({
+    const listing = yield* service.workspaceList(callerRunId);
+    const entries = [
+      ...listing.records.map((record) => ({
         workspaceId: record.handle.workspaceId,
         ownerId: record.handle.ownerId,
         status: record.status,
@@ -60,7 +62,13 @@ const executeWorkspaceList = (
         sourceCwd: record.handle.sourceCwd,
         ...(record.revision && { revisionId: record.revision.revisionId }),
         ...(record.preparation && { preparationId: record.preparation.preparationId }),
-      }).pipe(
+      })),
+      ...listing.unavailable,
+    ].sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
+    const lines: string[] = [];
+    let chars = 0;
+    for (const entry of entries.slice(offset, offset + 8)) {
+      const line = yield* encodeWorkspaceMetadata(entry).pipe(
         Effect.mapError(
           () =>
             new InvalidSubagentRequestError({
@@ -80,10 +88,15 @@ const executeWorkspaceList = (
       chars += line.length;
       lines.push(line);
     }
-    const nextOffset = offset + lines.length < records.length ? offset + lines.length : undefined;
+    const nextOffset = offset + lines.length < entries.length ? offset + lines.length : undefined;
     return result(
       [
         ...lines,
+        ...(listing.unavailable.length > 0
+          ? [
+              "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+            ]
+          : []),
         nextOffset === undefined
           ? "End of workspace list."
           : `More workspaces: call list with offset=${nextOffset}.`,
@@ -92,7 +105,8 @@ const executeWorkspaceList = (
       {
         operation: "list",
         offset,
-        workspaceCount: records.length,
+        workspaceCount: entries.length,
+        unavailableCount: listing.unavailable.length,
         listedCount: lines.length,
         displayContent: { offset: 0, length: lines.join("\n").length },
         ...(nextOffset !== undefined && { nextOffset }),

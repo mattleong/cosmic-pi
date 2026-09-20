@@ -74,7 +74,9 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
   offset: Schema.optionalKey(nonNegativeInteger),
   totalChars: Schema.optionalKey(nonNegativeInteger),
   nextOffset: Schema.optionalKey(nonNegativeInteger),
+  /** Total entries, including artifacts whose records are unavailable. */
   workspaceCount: Schema.optionalKey(nonNegativeInteger),
+  unavailableCount: Schema.optionalKey(nonNegativeInteger),
   listedCount: Schema.optionalKey(nonNegativeInteger),
   preparedCwd: Schema.optionalKey(boundedString(1_024, 1)),
   successorRunId: Schema.optionalKey(boundedString(MAX_PROTOCOL_ID_CHARS, 1)),

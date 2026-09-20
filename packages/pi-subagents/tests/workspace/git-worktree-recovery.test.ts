@@ -56,7 +56,7 @@ for (const mismatch of ["none", "missing provenance", "owner", "source", "regist
           yield* service
             .fork({ ...predecessor, processCleanupConfirmed: true })
             .pipe(Effect.flip, Effect.ensuring(Effect.sync(() => spy.mockRestore())));
-          const records = yield* service.listAll();
+          const { records } = yield* service.listAll();
           const failed = records.find((record) => record.status === "creating")!;
           expect(failed.predecessorWorkspaceId).toBe(predecessor.workspaceId);
           const directory = path.join(agent, "git-workspaces", failed.handle.workspaceId);

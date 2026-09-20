@@ -12,6 +12,13 @@ function validPagination(details: WorkspaceToolDetails): boolean {
     details.listedCount > details.workspaceCount
   )
     return false;
+  if (
+    details.unavailableCount !== undefined &&
+    (details.operation !== "list" ||
+      details.workspaceCount === undefined ||
+      details.unavailableCount > details.workspaceCount)
+  )
+    return false;
   if (details.nextOffset !== undefined && details.nextOffset <= (details.offset ?? 0)) return false;
   if (details.operation !== "review") return true;
   return (
@@ -36,6 +43,20 @@ function hasOperationReceipt(details: WorkspaceToolDetails): boolean {
   return (
     !["prepare", "integrate"].includes(details.operation) || details.preparationId !== undefined
   );
+}
+
+function unavailableNotices(details: WorkspaceToolDetails): NonNullable<CompactSummary["notices"]> {
+  return (details.unavailableCount ?? 0) > 0
+    ? [
+        {
+          code: "workspace-records-unavailable",
+          kind: "warning",
+          text: "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+          description:
+            "Some workspace artifacts lack readable recovery metadata; ownership and cleanup remain unknown.",
+        },
+      ]
+    : [];
 }
 
 export function compactWorkspaceSummary<ValueInput>(
@@ -63,8 +84,9 @@ export function compactWorkspaceSummary<ValueInput>(
   switch (details.operation) {
     case "list":
       if (details.workspaceCount !== undefined && details.listedCount !== undefined)
-        counters.push(`${details.listedCount}/${details.workspaceCount} workspaces shown`);
+        counters.push(`${details.listedCount}/${details.workspaceCount} workspace entries shown`);
       else metadata.push("workspace metadata");
+      notices.push(...unavailableNotices(details));
       if (!isEmptyList(details))
         add(
           "orphan-recovery",
@@ -121,7 +143,7 @@ export function compactWorkspaceSummary<ValueInput>(
       counters,
       metadata,
       notices,
-      outcome: "success",
+      outcome: notices.some((notice) => notice.kind === "warning") ? "warning" : "success",
       detailsOnExpand: true,
     },
     workspaceIdentity(details),

@@ -484,7 +484,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
     const listAll = () => listWorkspaceRecords(registry);
     const list = (input: { readonly ownerId: string }) =>
       listAll().pipe(
-        Effect.map((records) =>
+        Effect.map(({ records }) =>
           records.filter((record) => record.handle.ownerId === input.ownerId),
         ),
       );

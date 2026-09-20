@@ -227,7 +227,7 @@ for (const linkTarget of [
               yield* Effect.exit(service.create({ sourceCwd: root, ownerId: "parent" })),
             ),
           ).toBe(true);
-          expect(yield* service.listAll()).toEqual([]);
+          expect(yield* service.listAll()).toEqual({ records: [], unavailable: [] });
           expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
         }),
       ),
@@ -253,7 +253,7 @@ it.live(
             yield* Effect.exit(service.create({ sourceCwd: root, ownerId: "parent" })),
           ),
         ).toBe(true);
-        expect(yield* service.listAll()).toEqual([]);
+        expect(yield* service.listAll()).toEqual({ records: [], unavailable: [] });
         expect(yield* io(() => fs.readFile(path.join(outside, "AGENTS.md"), "utf8"))).toBe(
           "outside instructions\n",
         );
@@ -461,7 +461,7 @@ it.live(
         ).toBe(true);
         yield* Effect.gen(function* () {
           const recovered = yield* WorkspaceService;
-          expect((yield* recovered.listAll()).length).toBe(2);
+          expect((yield* recovered.listAll()).records.length).toBe(2);
           expect(Exit.isFailure(yield* Effect.exit(recovered.freeze(target(handle))))).toBe(true);
           yield* recovered.recoverDiscard({ ...target(handle), recoveryRiskAccepted: true });
         }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
@@ -517,7 +517,7 @@ it.live(
             yield* Effect.exit(service.create({ sourceCwd: root, ownerId: "parent" })),
           ),
         ).toBe(true);
-        expect(yield* service.listAll()).toEqual([]);
+        expect(yield* service.listAll()).toEqual({ records: [], unavailable: [] });
       }),
     ),
   60_000,
@@ -534,7 +534,7 @@ it.live(
         const index = yield* io(() => fs.readFile(path.join(root, ".git/index")));
         const result = yield* Effect.exit(service.create({ sourceCwd: root, ownerId: "parent" }));
         expect(Exit.isFailure(result)).toBe(true);
-        expect(yield* service.listAll()).toEqual([]);
+        expect(yield* service.listAll()).toEqual({ records: [], unavailable: [] });
         expect(yield* io(() => fs.readFile(path.join(root, "src/main.ts")))).toEqual(bytes);
         expect(yield* io(() => fs.readFile(path.join(root, ".git/index")))).toEqual(index);
       }),
@@ -548,7 +548,7 @@ it.live(
     fixture((root, agent) =>
       Effect.gen(function* () {
         const service = yield* WorkspaceService;
-        expect(yield* service.listAll()).toEqual([]);
+        expect(yield* service.listAll()).toEqual({ records: [], unavailable: [] });
         expect(
           yield* io(() =>
             fs.access(path.join(agent, "git-workspaces")).then(

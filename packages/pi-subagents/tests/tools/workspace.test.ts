@@ -1,9 +1,12 @@
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
+import { compactWorkspaceSummary } from "../../src/tools/compact-workspace-summary.ts";
+import type { WorkspaceRecord } from "../../src/workspace/model.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 
 describe("workspace tool", () => {
@@ -107,7 +110,7 @@ describe("workspace tool", () => {
     const response = yield* executeWorkspaceAction({ action: "list" }).pipe(
       Effect.provideService(SubagentService, {
         ...subagentServiceDouble({}),
-        workspaceList: () => Effect.succeed([]),
+        workspaceList: () => Effect.succeed({ records: [], unavailable: [] }),
       }),
       Effect.orDie,
     );
@@ -120,6 +123,76 @@ describe("workspace tool", () => {
       "Do not auto-adopt or delete an orphan.",
     );
   });
+
+  effectTest(
+    "pages healthy and unavailable entries in stable order and warns even off-page",
+    function* () {
+      const records = Array.from(
+        { length: 9 },
+        (_, index): WorkspaceRecord => ({
+          version: 1,
+          handle: {
+            workspaceId: `0${index}`,
+            ownerId: "parent",
+            sourceRoot: "/repo",
+            sourceCwd: "/repo",
+            cwd: `/private/${index}`,
+          },
+          status: "discarded",
+          baseline: "baseline",
+        }),
+      ).reverse();
+      const artifact = {
+        workspaceId: "99",
+        status: "unavailable",
+        reason: "recovery-record-unavailable",
+      } as const;
+      const service = subagentServiceDouble({
+        workspaceList: () => Effect.succeed({ records, unavailable: [artifact] }),
+      });
+      const all: unknown[] = [];
+      for (const offset of [0, 8]) {
+        const response = yield* executeWorkspaceAction({ action: "list", offset }).pipe(
+          Effect.provideService(SubagentService, service),
+          Effect.orDie,
+        );
+        expect(response.details).toMatchObject({
+          workspaceCount: 10,
+          unavailableCount: 1,
+          listedCount: offset === 0 ? 8 : 2,
+        });
+        expect(response.details.nextOffset).toBe(offset === 0 ? 8 : undefined);
+        const text = response.content[0];
+        const span = response.details.displayContent!;
+        expect(text?.type).toBe("text");
+        if (text?.type === "text") {
+          const rows = text.text.slice(span.offset, span.offset + span.length).split("\n");
+          all.push(
+            ...rows.map((line) =>
+              Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(line),
+            ),
+          );
+          if (offset === 0) expect(rows.join("\n")).not.toContain(artifact.workspaceId);
+          const summary = compactWorkspaceSummary(response.details, "list");
+          expect(summary?.outcome).toBe("warning");
+          const warning = summary?.notices?.find((notice) => notice.kind === "warning");
+          expect(warning?.code).toBe("workspace-records-unavailable");
+          expect(text.text).toContain(warning!.text);
+        }
+      }
+      expect(all).toHaveLength(10);
+      expect(all.slice(0, 9)).toEqual(
+        [...records].reverse().map((entry) => ({
+          workspaceId: entry.handle.workspaceId,
+          ownerId: entry.handle.ownerId,
+          sourceCwd: entry.handle.sourceCwd,
+          cwd: entry.handle.cwd,
+          status: entry.status,
+        })),
+      );
+      expect(all[9]).toEqual(artifact);
+    },
+  );
 
   effectTest("rejects incomplete integration before calling the service", function* () {
     const failed = yield* executeWorkspaceAction({

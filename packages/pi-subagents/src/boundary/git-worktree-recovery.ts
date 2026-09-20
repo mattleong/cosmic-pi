@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { WorkspaceRecord } from "../workspace/model.ts";
+import type { UnavailableWorkspaceArtifact, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
 import { checkDirectory, git, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
 import { readWorkspaceRecord, validWorkspaceId, workspaceDirectory } from "./git-worktree-store.ts";
@@ -93,7 +93,7 @@ export const removeWorkspaceTrees = (registry: string, record: WorkspaceRecord) 
       );
   });
 
-export const listWorkspaceRecords = (registry: string) =>
+const inspectRegistry = (registry: string) =>
   Effect.gen(function* () {
     yield* checkDirectory(registry, true);
     const stat = yield* workspaceIO("registry", () =>
@@ -102,11 +102,43 @@ export const listWorkspaceRecords = (registry: string) =>
         throw error;
       }),
     );
-    if (!stat) return [];
-    if ((stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()))
-      return yield* workspaceFailure("registry", "Workspace registry permissions are invalid.");
+    if (!stat) return undefined;
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      (stat.mode & 0o077) !== 0 ||
+      (process.getuid && stat.uid !== process.getuid())
+    )
+      return yield* workspaceFailure(
+        "registry",
+        "Workspace registry path or permissions are invalid.",
+      );
+    return stat;
+  });
+
+export const listWorkspaceRecords = (registry: string) =>
+  Effect.gen(function* () {
+    const records: WorkspaceRecord[] = [];
+    const unavailable: UnavailableWorkspaceArtifact[] = [];
+    const before = yield* inspectRegistry(registry);
+    if (!before) return { records, unavailable };
     const names = yield* workspaceIO("registry", () => fs.readdir(registry));
-    return yield* Effect.forEach(names.filter(validWorkspaceId), (name) =>
-      readWorkspaceRecord(registry, name),
-    );
+    for (const workspaceId of names.filter(validWorkspaceId).sort()) {
+      const record = yield* readWorkspaceRecord(registry, workspaceId).pipe(
+        Effect.catchTag("WorkspaceError", () => Effect.succeed(undefined)),
+      );
+      if (record) records.push(record);
+      else
+        unavailable.push({
+          workspaceId,
+          status: "unavailable",
+          reason: "recovery-record-unavailable",
+        });
+    }
+    // A strict record read also checks registry ancestors. Never downgrade a registry
+    // failure discovered during the scan to an individual unavailable artifact.
+    const after = yield* inspectRegistry(registry);
+    if (!after || before.dev !== after.dev || before.ino !== after.ino)
+      return yield* workspaceFailure("registry", "Workspace registry changed during listing.");
+    return { records, unavailable };
   });
