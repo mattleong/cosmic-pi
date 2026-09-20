@@ -19,6 +19,7 @@ import {
   serviceLayer,
   contactParentFrame,
   localServiceFixture,
+  waitForCompleted,
 } from "./fixtures/service-harness.ts";
 
 describe("SubagentService", () => {
@@ -54,7 +55,7 @@ describe("SubagentService", () => {
         return Effect.gen(function* () {
           const service = yield* SubagentService;
           const parent = yield* service.start(request());
-          yield* service.startSessionOwnedFrom(parent.id, request());
+          const child = yield* service.startSessionOwnedFrom(parent.id, request());
           const gate = yield* Deferred.make<void>();
           fake.controls[0]!.gateNextIpcType("proxy_notification", gate);
           fake.controls[1]!.offer({
@@ -66,6 +67,7 @@ describe("SubagentService", () => {
             },
           });
           fake.controls[1]!.offer({ type: "agent_settled" });
+          yield* waitForCompleted(service, child.id);
           yield* TestClock.adjust("100 millis");
           yield* yieldUntil(() =>
             fake.controls[0]!.ipc.some((message) => message.type === "proxy_notification"),

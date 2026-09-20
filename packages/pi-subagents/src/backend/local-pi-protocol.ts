@@ -315,6 +315,7 @@ export const assistantText = (message: Schema.Schema.Type<typeof AssistantMessag
 
 type CorrelatedRpcCommand =
   | { readonly type: "get_state"; readonly id?: string | undefined }
+  | { readonly type: "get_session_stats"; readonly id?: string | undefined }
   | { readonly type: "prompt"; readonly id?: string | undefined; readonly message: string }
   | { readonly type: "steer"; readonly id?: string | undefined; readonly message: string }
   | { readonly type: "clear_queue"; readonly id?: string | undefined }

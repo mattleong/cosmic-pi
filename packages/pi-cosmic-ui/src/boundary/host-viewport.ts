@@ -5,7 +5,7 @@ import { screenViewport, type TerminalSize } from "../manager/viewport.ts";
 export const createScreenViewport = (fallbackAnchor: OverlayAnchor = "top-left") => {
   let readTerminal: () => TerminalSize = () => ({ columns: 0, rows: 0 });
   const getSize = () => screenViewport(readTerminal());
-  // Pi 0.85.1 resolves overlayOptions callbacks only at mount. Its TUI retains this
+  // Pi 0.86.0 resolves overlayOptions callbacks only at mount. Its TUI retains this
   // object and reads these getters on each render; spreading it loses live sizing.
   const overlayOptions: OverlayOptions = {
     get anchor() {

@@ -71,6 +71,8 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   const execute = () => Promise.resolve(resultValue);
   const parameters = createReadToolDefinition("/project").parameters;
   const promptGuidelines = ["Keep this metadata reference."];
+  const constrainedSampling = { type: "json_schema", strict: "prefer" } as const;
+  const prepareArguments: NonNullable<ReadDefinition["prepareArguments"]> = () => args;
   let observedCall: readonly unknown[] | undefined;
   let observedResult: readonly unknown[] | undefined;
   const callComponent = new Text("call", 0, 0);
@@ -103,6 +105,8 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
     description: "characterized description",
     parameters,
     promptGuidelines,
+    constrainedSampling,
+    prepareArguments,
     execute,
     renderCall,
     renderResult,
@@ -126,6 +130,9 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   assert.equal(wrapped.execute, execute);
   assert.equal(wrapped.parameters, parameters);
   assert.equal(wrapped.promptGuidelines, promptGuidelines);
+  assert.equal(wrapped.constrainedSampling, constrainedSampling);
+  assert.equal(wrapped.prepareArguments, prepareArguments);
+  assert.equal(wrapped.prepareArguments({ legacyPath: "src/example.ts" }), args);
   assert.equal(wrapped.description, tool.description);
 });
 

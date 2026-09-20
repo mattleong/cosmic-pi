@@ -90,6 +90,7 @@ export type BackendEvent =
     }
   | ({ readonly type: "report" } & BackendReport)
   | { readonly type: "activity"; readonly assignmentEpoch: number }
+  | { readonly type: "usage"; readonly usage: SubagentUsage }
   | {
       readonly type: "native_agent_activity";
       readonly assignmentEpoch: number;

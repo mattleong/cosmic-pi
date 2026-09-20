@@ -13,6 +13,7 @@ import {
   request,
   serviceLayer,
   localServiceFixture,
+  waitForCompleted,
 } from "./fixtures/service-harness.ts";
 
 const policy = (maxDirectChildren: number, maxDepth: number) => ({
@@ -160,6 +161,7 @@ describe("root-owned subagent run tree", () => {
           },
         });
         fake.controls[1]?.offer({ type: "agent_settled" });
+        yield* waitForCompleted(service, child.id);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
           () =>
@@ -193,6 +195,7 @@ describe("root-owned subagent run tree", () => {
           },
         });
         fake.controls[2]?.offer({ type: "agent_settled" });
+        yield* waitForCompleted(service, fallback.id);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
           () =>
@@ -241,6 +244,7 @@ describe("root-owned subagent run tree", () => {
           },
         });
         fake.controls[1]?.offer({ type: "agent_settled" });
+        yield* waitForCompleted(service, child.id);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(
           () =>
@@ -301,6 +305,7 @@ describe("root-owned subagent run tree", () => {
             },
           });
           fake.controls[1]?.offer({ type: "agent_settled" });
+          yield* waitForCompleted(service, first.id);
           yield* TestClock.adjust("100 millis");
           yield* yieldUntil(
             () =>
@@ -333,6 +338,7 @@ describe("root-owned subagent run tree", () => {
             },
           });
           fake.controls[2]?.offer({ type: "agent_settled" });
+          yield* waitForCompleted(service, second.id);
           yield* TestClock.adjust("100 millis");
           yield* yieldUntil(() =>
             notifications.some(

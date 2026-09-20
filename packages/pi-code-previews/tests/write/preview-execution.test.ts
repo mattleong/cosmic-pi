@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { layer } from "@effect/vitest";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { createWriteTool, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as Deferred from "effect/Deferred";
@@ -314,7 +314,119 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
     ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
   );
 
-  it.effect("interruption keeps the path semaphore until an uninterruptible write settles", () =>
+  it.effect("captures before-state only after a native predecessor has committed", () =>
+    withTempDirectory("pi-code-preview-native-first-", (dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const target = join(dir, "file");
+        yield* fs.writeFileString(target, "original");
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const run = Effect.runPromiseWith(yield* Effect.context<never>());
+        const native = createWriteTool(dir, {
+          operations: {
+            mkdir: () => Promise.resolve(),
+            writeFile: (path, content) =>
+              run(
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(fs.writeFileString(path, content)),
+                ),
+              ),
+          },
+        });
+        const predecessor = yield* Effect.promise(() =>
+          native.execute("native-first", { path: "file", content: "native" }, undefined),
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const preview = yield* executeWriteWithPreviewEffect(
+          "preview-after-native",
+          "file",
+          "preview",
+          dir,
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        assert.equal(preview.pollUnsafe(), undefined);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(predecessor);
+        yield* Fiber.join(preview);
+        assert.deepEqual(lookupBeforeWrite("preview-after-native"), {
+          kind: "content",
+          content: "native",
+        });
+        assert.equal(yield* fs.readFileString(target), "preview");
+      }).pipe(Effect.scoped),
+    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+  );
+
+  it.effect("cancellation during mkdir settles the operation without admitting a write", () =>
+    withTempDirectory("pi-code-preview-mkdir-", (dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let wrote = false;
+        const delayed = FileSystem.FileSystem.of({
+          ...fs,
+          makeDirectory: (directory, options) =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(fs.makeDirectory(directory, options)),
+            ),
+          writeFileString: (target, next, options) =>
+            Effect.sync(() => {
+              wrote = true;
+            }).pipe(Effect.andThen(fs.writeFileString(target, next, options))),
+        });
+        const first = yield* executeWriteWithPreviewEffect(
+          "mkdir-cancelled",
+          "new/file",
+          "stale",
+          dir,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
+        yield* Deferred.await(started);
+        const cancellation = yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        assert.equal(cancellation.pollUnsafe(), undefined);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(cancellation);
+        const result = yield* executeWriteWithPreviewEffect("mkdir-next", "new/file", "fresh", dir);
+        assert.equal(wrote, false);
+        assert.equal(lookupBeforeWrite("mkdir-cancelled"), undefined);
+        assert.equal(result.details.codePreviewBeforeWrite, undefined);
+        assert.equal(yield* fs.readFileString(join(dir, "new/file")), "fresh");
+      }).pipe(Effect.scoped),
+    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+  );
+
+  it.effect("cancellation during the queued before-state read cannot mutate the file", () =>
+    withTempDirectory("pi-code-preview-read-", (dir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const target = join(dir, "file");
+        yield* fs.writeFileString(target, "before");
+        const started = yield* Deferred.make<void>();
+        const delayed = FileSystem.FileSystem.of({
+          ...fs,
+          open: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        });
+        const first = yield* executeWriteWithPreviewEffect(
+          "read-cancelled",
+          "file",
+          "stale",
+          dir,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(first);
+        const next = yield* executeWriteWithPreviewEffect("read-next", "file", "fresh", dir);
+        assert.deepEqual(lookupBeforeWrite("read-next"), { kind: "content", content: "before" });
+        assert.equal(lookupBeforeWrite("read-cancelled"), undefined);
+        assert.deepEqual(next.details.codePreviewBeforeWrite, { kind: "content", byteLength: 6 });
+      }).pipe(Effect.scoped),
+    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+  );
+
+  it.effect("interruption holds Pi's queue through mutation and correlation settlement", () =>
     withTempDirectory("pi-code-preview-write-", (dir) =>
       Effect.gen(function* () {
         yield* testFileSystem("write fixture", () => writeFile(join(dir, "target.txt"), "before"));
@@ -340,12 +452,13 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           dir,
         ).pipe(provideBuiltLayer(providers), Effect.forkScoped);
         yield* Deferred.await(started);
-        const second = yield* executeWriteWithPreviewEffect(
-          "tool-2",
-          "target.txt",
-          "second",
-          dir,
-        ).pipe(provideBuiltLayer(providers), Effect.forkScoped);
+        const second = yield* Effect.promise(() =>
+          createWriteTool(dir).execute(
+            "native-tool",
+            { path: "target.txt", content: "second" },
+            undefined,
+          ),
+        ).pipe(Effect.forkScoped);
         yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         const pendingBeforeRelease = second.pollUnsafe();
@@ -359,7 +472,10 @@ layer(CodePreviewWriteService.layer)("session write service", (it) => {
           "second",
         );
         assert.deepEqual(lookupBeforeWrite("tool-1"), { kind: "content", content: "before" });
-        assert.deepEqual(lookupBeforeWrite("tool-2"), { kind: "content", content: "first" });
+        yield* executeWriteWithPreviewEffect("tool-2", "target.txt", "third", dir).pipe(
+          provideBuiltLayer(providers),
+        );
+        assert.deepEqual(lookupBeforeWrite("tool-2"), { kind: "content", content: "second" });
       }).pipe(Effect.scoped),
     ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
   );

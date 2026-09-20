@@ -253,7 +253,11 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   Effect.gen(function* () {
                     if (!isCurrentIssuingAssignment(record, selected.attemptToken)) return;
                     const sessionEvents = record.view.sessionEvents;
-                    record.view = { ...selected.previous.view, sessionEvents };
+                    record.view = {
+                      ...selected.previous.view,
+                      sessionEvents,
+                      usage: record.view.usage,
+                    };
                     record.latestAssistantText = selected.previous.latestAssistantText;
                     record.warningSlots = selected.previous.warningSlots;
                     record.assignment = selected.previous.assignment;

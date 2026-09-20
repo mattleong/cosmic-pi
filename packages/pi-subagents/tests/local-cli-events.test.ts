@@ -1,12 +1,14 @@
 // Explicit test entry-point Layer provision owns the captured logger.
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as EffectScope from "effect/Scope";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 import type { Scope } from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
@@ -19,6 +21,266 @@ import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { BackendEvent, BackendHandle, BackendLaunchRequest } from "../src/backend/model.ts";
 import type { SubagentError } from "../src/run/errors.ts";
+
+it.effect("Pi reconciles cumulative charges before settlement without blocking RPC dispatch", () =>
+  Effect.gen(function* () {
+    const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+    let tokens = 100;
+    let closeOnStats = false;
+    const driver = makeLocalPiBackendDriver({
+      spawn: () =>
+        Effect.succeed({
+          pid: 4242,
+          events: childEvents,
+          awaitExit: Effect.never,
+          send: (command) =>
+            closeOnStats && command.type === "get_session_stats"
+              ? Effect.sync(() => Queue.endUnsafe(childEvents))
+              : Queue.offer(childEvents, {
+                  type: "rpc_message",
+                  value: {
+                    type: "response",
+                    id: command.id,
+                    command: command.type,
+                    success: true,
+                    data:
+                      command.type === "get_state"
+                        ? { sessionId: "child", thinkingLevel: "high" }
+                        : command.type === "get_session_stats"
+                          ? {
+                              tokens: {
+                                input: tokens,
+                                output: 0,
+                                cacheRead: 0,
+                                cacheWrite: 0,
+                                total: tokens,
+                              },
+                              cost: tokens / 100,
+                            }
+                          : undefined,
+                  },
+                }).pipe(Effect.asVoid),
+          sendContactControl: () => Effect.void,
+          terminate: () => Effect.void,
+        }),
+      reclaimRunState: () => Effect.void,
+    });
+    const backend = yield* driver.spawn(codexLaunch);
+    yield* backend.controls.initialize;
+    yield* backend.controls.start("first", 1);
+    yield* Queue.offer(childEvents, {
+      type: "rpc_message",
+      value: {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Final report" }],
+          usage: { input: 999, totalTokens: 999 },
+        },
+      },
+    });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "assistant_message",
+      text: "Final report",
+      usage: { input: 0, totalTokens: 0 },
+    });
+    tokens = 110;
+    yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "agent_settled" } });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "usage",
+      usage: { input: 10 },
+    });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "run_settled",
+      assignmentEpoch: 1,
+      terminal: { stopReason: "stop", text: "Final report" },
+    });
+    // An idle cache-warm entry belongs to the retained assignment, not a new assistant message.
+    tokens = 115;
+    yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "entry_appended" } });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "usage",
+      usage: { input: 5 },
+    });
+    yield* backend.controls.start("second", 2);
+    tokens = 118;
+    yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "compaction_end" } });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "usage",
+      usage: { input: 3 },
+    });
+    yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "agent_settled" } });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "run_settled",
+      assignmentEpoch: 2,
+    });
+    closeOnStats = true;
+    yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "agent_settled" } });
+    expect(yield* Queue.take(backend.events)).toMatchObject({
+      type: "run_settled",
+      assignmentEpoch: 2,
+    });
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "Pi retains delayed process usage across assignments and cancels blocked reads on shutdown",
+  () =>
+    Effect.gen(function* () {
+      const scope = yield* EffectScope.make();
+      const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+      const requested = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      let block = false;
+      let tokens = 100;
+      let delay = false;
+      let prompts = 0;
+      const driver = makeLocalPiBackendDriver({
+        spawn: () =>
+          Effect.succeed({
+            pid: 4242,
+            events: childEvents,
+            awaitExit: Effect.never,
+            send: (command) =>
+              Effect.gen(function* () {
+                if (command.type === "prompt") prompts++;
+                const snapshot = tokens;
+                if (command.type === "get_session_stats" && block) {
+                  yield* Deferred.succeed(blocked, undefined);
+                  return yield* Effect.never;
+                }
+                if (command.type === "get_session_stats" && delay) {
+                  delay = false;
+                  yield* Deferred.succeed(requested, undefined);
+                  yield* Deferred.await(release);
+                }
+                yield* Queue.offer(childEvents, {
+                  type: "rpc_message",
+                  value: {
+                    type: "response",
+                    id: command.id,
+                    command: command.type,
+                    success: true,
+                    data:
+                      command.type === "get_state"
+                        ? { sessionId: "child", thinkingLevel: "high" }
+                        : command.type === "get_session_stats"
+                          ? {
+                              tokens: {
+                                input: snapshot,
+                                output: 0,
+                                cacheRead: 0,
+                                cacheWrite: 0,
+                                total: snapshot,
+                              },
+                              cost: 0,
+                            }
+                          : undefined,
+                  },
+                });
+              }),
+            sendContactControl: () => Effect.void,
+            terminate: () => Effect.void,
+          }),
+        reclaimRunState: () => Effect.void,
+      });
+      const backend = yield* driver
+        .spawn(codexLaunch)
+        .pipe(Effect.provideService(EffectScope.Scope, scope));
+      yield* backend.controls.initialize;
+      yield* backend.controls.start("first", 1);
+      tokens = 110;
+      delay = true;
+      yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "entry_appended" } });
+      yield* Deferred.await(requested);
+      const next = yield* backend.controls.start("second", 2).pipe(Effect.forkChild);
+      yield* Fiber.join(next);
+      expect(prompts).toBe(2);
+      yield* Deferred.succeed(release, undefined);
+      expect(yield* Queue.take(backend.events)).toMatchObject({
+        type: "usage",
+        usage: { input: 10 },
+      });
+      tokens = 120;
+      yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "agent_settled" } });
+      expect(yield* Queue.take(backend.events)).toMatchObject({
+        type: "usage",
+        usage: { input: 10 },
+      });
+      expect(yield* Queue.take(backend.events)).toMatchObject({
+        type: "run_settled",
+        assignmentEpoch: 2,
+      });
+      block = true;
+      yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "entry_appended" } });
+      yield* Deferred.await(blocked);
+      yield* EffectScope.close(scope, Exit.void);
+    }),
+);
+
+for (const failure of ["malformed", "rejected", "timeout"] as const)
+  it.effect(`Pi refuses work without a valid startup usage baseline: ${failure}`, () =>
+    Effect.gen(function* () {
+      const scope = yield* EffectScope.make();
+      const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
+      const requested = yield* Deferred.make<void>();
+      const commands: string[] = [];
+      let released = false;
+      const driver = makeLocalPiBackendDriver({
+        spawn: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              pid: 42,
+              events,
+              awaitExit: Effect.never,
+              send: (command: import("../src/backend/local-pi-protocol.ts").RpcCommand) =>
+                Effect.gen(function* () {
+                  commands.push(command.type);
+                  if (command.type === "get_session_stats") {
+                    yield* Deferred.succeed(requested, undefined);
+                    if (failure === "timeout") return;
+                  }
+                  yield* Queue.offer(events, {
+                    type: "rpc_message",
+                    value: {
+                      type: "response",
+                      id: command.id,
+                      command: command.type,
+                      success: command.type !== "get_session_stats" || failure !== "rejected",
+                      data:
+                        command.type === "get_state"
+                          ? { sessionId: "child", thinkingLevel: "high" }
+                          : {},
+                    },
+                  });
+                }),
+              sendContactControl: () => Effect.void,
+              terminate: () => Effect.void,
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+        reclaimRunState: () => Effect.void,
+      });
+      const backend = yield* driver
+        .spawn(codexLaunch)
+        .pipe(Effect.provideService(EffectScope.Scope, scope));
+      const initializing = yield* backend.controls.initialize.pipe(Effect.forkChild);
+      yield* Deferred.await(requested);
+      if (failure === "timeout") yield* TestClock.adjust("10 seconds");
+      expect((yield* Fiber.join(initializing).pipe(Effect.exit))._tag).toBe("Failure");
+      expect((yield* backend.controls.start("must not run", 1).pipe(Effect.exit))._tag).toBe(
+        "Failure",
+      );
+      expect(commands).not.toContain("prompt");
+      yield* EffectScope.close(scope, Exit.void);
+      expect(released).toBe(true);
+    }),
+  );
 
 const rawEvent = (id: number): LocalCliWireEvent => ({
   type: "exit",

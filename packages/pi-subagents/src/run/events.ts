@@ -1,6 +1,11 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import type { BackendAssistantTerminal, BackendEvent, BackendReport } from "../backend/model.ts";
+import type {
+  BackendAssistantTerminal,
+  BackendEvent,
+  BackendReport,
+  BackendHandle,
+} from "../backend/model.ts";
 import type { SubagentNotification } from "../boundary/host-notifier.ts";
 import type { SubagentError } from "./errors.ts";
 import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
@@ -45,6 +50,11 @@ export interface RunEventDependencies {
     assignmentEpoch: number,
     usage: import("./model.ts").SubagentUsage,
   ) => Effect.Effect<void>;
+  readonly mergeProcessUsage: (
+    record: RunRecord,
+    source: BackendHandle | undefined,
+    usage: import("./model.ts").SubagentUsage,
+  ) => Effect.Effect<void>;
   readonly runStarted: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
   readonly runSettled: (
     record: RunRecord,
@@ -83,6 +93,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
   const {
     mutateView,
     mergeLateUsage,
+    mergeProcessUsage,
     runStarted,
     runSettled,
     acceptReport,
@@ -208,7 +219,12 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
       : settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
   };
 
-  return (record: RunRecord, event: BackendEvent): Effect.Effect<void, SubagentError> => {
+  return (
+    record: RunRecord,
+    event: BackendEvent,
+    source?: BackendHandle,
+  ): Effect.Effect<void, SubagentError> => {
+    if (event.type === "usage") return mergeProcessUsage(record, source, event.usage);
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event);
     if (event.type !== "exit" && isInactiveRunRecord(record))

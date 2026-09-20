@@ -1,10 +1,6 @@
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as RcMap from "effect/RcMap";
-import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import { makeFrozenProjection, type ProjectionError } from "pi-cosmic-core";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import type { CodePreviewBeforeWrite } from "./preview-execution";
@@ -22,10 +18,6 @@ export interface CodePreviewWriteServiceContract {
     toolCallId: string,
     before: CodePreviewBeforeWrite,
   ) => Effect.Effect<void, ProjectionError>;
-  readonly withPathLock: <A, E, R>(
-    path: string,
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>;
 }
 
 export class CodePreviewWriteService extends Context.Service<
@@ -36,10 +28,6 @@ export class CodePreviewWriteService extends Context.Service<
     this,
     Effect.acquireRelease(
       Effect.gen(function* () {
-        const pathLocks = yield* RcMap.make({
-          lookup: (_path: string) => Semaphore.make(1),
-          idleTimeToLive: Duration.zero,
-        });
         const projectionOwner = acquireProjectionOwnership("code-preview-write-projection");
         const projection = yield* makeFrozenProjection<WriteState, CodePreviewWriteSnapshot>(
           { entries: [] },
@@ -59,13 +47,6 @@ export class CodePreviewWriteService extends Context.Service<
 
         const service = CodePreviewWriteService.of({
           rememberBeforeWrite,
-          withPathLock: (path, effect) =>
-            Effect.scopedWith((leaseScope) =>
-              RcMap.get(pathLocks, path).pipe(
-                Effect.provideService(Scope.Scope, leaseScope),
-                Effect.flatMap((lock) => lock.withPermit(effect)),
-              ),
-            ),
         });
         return { service, projectionOwner };
       }),

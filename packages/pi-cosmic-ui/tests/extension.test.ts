@@ -521,11 +521,123 @@ describe("Cosmic UI extension", () => {
         yield* emit(h, "session_start", {}, secondContext);
         const secondFooter = capturedFooter(h, -1);
         expect(secondFooter.render(100).join("\n")).not.toContain("↑100");
+        h.ctx.sessionManager.getEntries = vi.fn(() => assistantEntries(900));
+        yield* emit(h, "message_start", {}, h.ctx);
+        yield* emit(h, "turn_end", {}, h.ctx);
+        yield* emit(h, "agent_settled", {}, h.ctx);
+        expect(secondFooter.render(100).join("\n")).not.toContain("↑900");
         yield* emit(h, "session_shutdown");
       }),
   );
 
-  it.effect("retains complete totals when a turn usage getter throws", () =>
+  it.live("refreshes idle persisted warming usage through the existing ticker", () => {
+    const h = harness();
+    return Effect.gen(function* () {
+      const entries = assistantEntries(10);
+      h.ctx.sessionManager.getEntries = vi.fn(() => entries);
+      yield* emit(h, "session_start");
+      const footer = capturedFooter(h);
+      const base = { id: "warm", parentId: null, timestamp: "2026-01-01T00:00:00Z" };
+      entries.push({
+        ...base,
+        type: "custom",
+        customType: "cache_warming_decision",
+        data: { estimatedInput: 999 },
+      });
+      entries.push({
+        ...base,
+        type: "usage",
+        kind: "cache_warm",
+        provider: "test",
+        model: "test",
+        usage: {
+          input: 90,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 90,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      });
+      yield* Effect.promise(() =>
+        vi.waitFor(
+          () => {
+            expect(footer.render(100).join("\n")).toContain("↑100");
+          },
+          { timeout: 2500, interval: 10 },
+        ),
+      );
+    }).pipe(Effect.ensuring(emit(h, "session_shutdown")));
+  });
+
+  it.effect("reconciles native usage records without double charging message events", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const usage = {
+        input: 10,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 10,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      const base = { id: "entry", parentId: null, timestamp: "2026-01-01T00:00:00Z" };
+      const entries: ReturnType<ExtensionContext["sessionManager"]["getEntries"]> = [
+        ...assistantEntries(50),
+        {
+          ...base,
+          type: "usage",
+          kind: "future-operation",
+          provider: "test",
+          model: "test",
+          usage,
+        },
+        {
+          ...base,
+          type: "compaction",
+          summary: "summary",
+          firstKeptEntryId: "entry",
+          tokensBefore: 50,
+          usage,
+        },
+        { ...base, type: "branch_summary", fromId: "entry", summary: "summary", usage },
+        {
+          ...base,
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call",
+            toolName: "nested",
+            content: [],
+            isError: false,
+            timestamp: 0,
+            usage,
+          },
+        },
+      ];
+      h.ctx.sessionManager.getEntries = vi.fn(() => entries);
+      yield* emit(h, "session_start");
+      const footer = capturedFooter(h);
+      expect(footer.render(100).join("\n")).toContain("↑90");
+      yield* emit(h, "message_end", { message: { role: "assistant", usage } });
+      yield* emit(h, "turn_end", { message: { role: "assistant", usage } });
+      yield* emit(h, "agent_settled");
+      expect(footer.render(100).join("\n")).toContain("↑90");
+      entries.push({
+        ...base,
+        type: "usage",
+        kind: "cache_warm",
+        provider: "test",
+        model: "test",
+        usage,
+      });
+      yield* emit(h, "agent_settled");
+      expect(footer.render(100).join("\n")).toContain("↑100");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
+  it.effect("ignores event usage getters and reads persisted usage only", () =>
     Effect.gen(function* () {
       const h = harness();
       const getEntries = vi.fn(() => assistantEntries(50));
@@ -542,8 +654,7 @@ describe("Cosmic UI extension", () => {
       );
 
       yield* emit(h, "turn_end", { message: { role: "assistant", usage } });
-      expect(input).toHaveBeenCalledOnce();
-      expect(getEntries).toHaveBeenCalledOnce();
+      expect(input).not.toHaveBeenCalled();
       expect(footer.render(100).join("\n")).toContain("↑50");
       yield* emit(h, "session_shutdown");
     }),
@@ -556,7 +667,6 @@ describe("Cosmic UI extension", () => {
       h.ctx.sessionManager.getEntries = initialEntries;
       yield* emit(h, "session_start");
       yield* emit(h, "turn_end", { message: { role: "assistant", usage: assistantUsage(0) } });
-      expect(initialEntries).toHaveBeenCalledOnce();
       const footer = capturedFooter(h);
       expect(footer.render(100).join("\n")).toContain("↑50");
 
@@ -568,11 +678,9 @@ describe("Cosmic UI extension", () => {
 
       yield* emit(h, "turn_end");
       yield* emit(h, "turn_end", { message: { role: "user" } });
-      expect(rescannedEntries).toHaveBeenCalledTimes(3);
       yield* emit(h, "turn_end", {
         message: { role: "assistant", usage: assistantUsage(Number.POSITIVE_INFINITY) },
       });
-      expect(rescannedEntries).toHaveBeenCalledTimes(3);
       expect(footer.render(100).join("\n")).toContain("↑50");
       yield* emit(h, "session_shutdown");
     }),

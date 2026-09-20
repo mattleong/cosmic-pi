@@ -15,7 +15,7 @@ import {
   type HostCallbackOperation,
 } from "./boundary/host-callback.ts";
 import { addAssistantUsage, decodeAssistantUsage } from "./boundary/host-usage.ts";
-import { shutdownHostUiTickers } from "./boundary/host-status.ts";
+import { shutdownHostUiTickers, startHostUiTicker } from "./boundary/host-status.ts";
 import { makeDefaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
 import type { FooterTotals } from "./footer/component.ts";
 import {
@@ -114,22 +114,40 @@ export function cosmicUiWithDependencies(
         };
   };
   let lifecycleGeneration = 0;
+  let stopUsageTicker: (() => void) | undefined;
   let lastCompleteTotals = emptyTotals();
+  let usageSessionManager: ExtensionContext["sessionManager"] | undefined;
   const rememberTotals = (totals: FooterTotals) => {
     lastCompleteTotals = totals;
     return totals;
   };
   const resetTotals = () => {
+    usageSessionManager = undefined;
     lastCompleteTotals = emptyTotals();
   };
   const totalsFromSession = (ctx: ExtensionContext): FooterTotals => {
+    const generation = lifecycleGeneration;
     const read = callbacks.invoke<FooterTotals | undefined>(
       "host-query",
       () => {
         let totals = emptyTotals();
         for (const entry of ctx.sessionManager.getEntries()) {
-          if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-          const usage = decodeAssistantUsage(entry.message.usage);
+          const rawUsage =
+            entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary"
+              ? entry.usage
+              : entry.type === "message" &&
+                  (entry.message.role === "assistant" || entry.message.role === "toolResult")
+                ? entry.message.usage
+                : undefined;
+          if (
+            rawUsage === undefined &&
+            !(
+              entry.type === "usage" ||
+              (entry.type === "message" && entry.message.role === "assistant")
+            )
+          )
+            continue;
+          const usage = decodeAssistantUsage(rawUsage);
           if (usage === undefined) throw new Error("Invalid assistant usage.");
           const next = addAssistantUsage(totals, usage);
           if (next === undefined) throw new Error("Assistant usage totals overflowed.");
@@ -139,10 +157,21 @@ export function cosmicUiWithDependencies(
       },
       undefined,
     );
-    return read === undefined ? lastCompleteTotals : rememberTotals(read);
+    return read === undefined || generation !== lifecycleGeneration
+      ? lastCompleteTotals
+      : rememberTotals(read);
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let subscriptions: Array<() => void> = [];
+  const ownsUsageContext = (ctx: ExtensionContext) =>
+    callbacks.invoke(
+      "host-query",
+      () =>
+        currentContext !== undefined &&
+        usageSessionManager !== undefined &&
+        usageSessionManager === ctx.sessionManager,
+      false,
+    );
 
   const config = (): ResolvedCosmicUiConfig =>
     MutableRef.get(projection).config ?? makeDefaultResolvedCosmicUiConfig();
@@ -360,6 +389,8 @@ export function cosmicUiWithDependencies(
 
   pi.on("session_start", (_event, ctx) => {
     const generation = ++lifecycleGeneration;
+    stopUsageTicker?.();
+    stopUsageTicker = undefined;
     const shutdownFailedStart = () =>
       slot.shutdown().then(() => {
         if (generation !== lifecycleGeneration) return;
@@ -377,6 +408,7 @@ export function cosmicUiWithDependencies(
     ensureSubscriptions();
     footerInstallation.uninstall();
     resetTotals();
+    usageSessionManager = callbacks.invoke("host-query", () => ctx.sessionManager, undefined);
     const initialTotals = totalsFromSession(ctx);
     resetProjection(projection, initialTotals);
     const context = MutableRef.make(ctx);
@@ -396,6 +428,12 @@ export function cosmicUiWithDependencies(
       )
       .then(
         (token) => {
+          if (token !== undefined && generation === lifecycleGeneration) {
+            stopUsageTicker = startHostUiTicker(1_000, () => {
+              if (generation === lifecycleGeneration && currentContext === context)
+                void refreshTotals(MutableRef.get(context), true);
+            });
+          }
           if (token === undefined) {
             // A superseded start never activates: stop publishing this dead context
             // unless a newer start already replaced it.
@@ -415,27 +453,10 @@ export function cosmicUiWithDependencies(
       );
   });
 
-  pi.on("turn_end", (event, ctx) => {
+  pi.on("turn_end", (_event, ctx) => {
+    if (!ownsUsageContext(ctx)) return;
     updateContext(ctx);
-    const read = callbacks.invoke<FooterTotals | undefined | null>(
-      "host-query",
-      () => {
-        const message: unknown = event.message;
-        if (message === undefined) return undefined;
-        if (!Predicate.isObject(message)) throw new Error("Invalid turn message.");
-        const role = message.role;
-        if (!Predicate.isString(role)) throw new Error("Invalid turn message role.");
-        if (role !== "assistant") return undefined;
-        const usage = decodeAssistantUsage(message.usage);
-        if (usage === undefined) throw new Error("Invalid assistant usage.");
-        const totals = addAssistantUsage(lastCompleteTotals, usage);
-        if (totals === undefined) throw new Error("Assistant usage totals overflowed.");
-        return rememberTotals(totals);
-      },
-      null,
-    );
-    const totals =
-      read === undefined ? totalsFromSession(ctx) : read === null ? lastCompleteTotals : read;
+    const totals = totalsFromSession(ctx);
     footerInstallation.invalidateContextUsage();
     requestRender();
     return runFrom(
@@ -445,17 +466,33 @@ export function cosmicUiWithDependencies(
       ctx,
     ).catch(() => undefined);
   });
-  const refreshTotals = (ctx: ExtensionContext) => {
+  const refreshTotals = (ctx: ExtensionContext, idle = false) => {
+    if (!ownsUsageContext(ctx)) return;
+    const previous = lastCompleteTotals;
+    const totals = totalsFromSession(ctx);
+    if (
+      idle &&
+      totals.input === previous.input &&
+      totals.output === previous.output &&
+      totals.cacheRead === previous.cacheRead &&
+      totals.cacheWrite === previous.cacheWrite &&
+      totals.cost === previous.cost
+    )
+      return;
     updateContext(ctx);
     footerInstallation.invalidateContextUsage();
     requestRender();
+    const generation = lifecycleGeneration;
     return runFrom(
-      CosmicUiService.use((service) => service.setTotals(totalsFromSession(ctx))),
+      CosmicUiService.use((service) =>
+        generation === lifecycleGeneration ? service.setTotals(totals) : Effect.void,
+      ),
       ctx,
     ).catch(() => undefined);
   };
   pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
   pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
+  pi.on("agent_settled", (_event, ctx) => refreshTotals(ctx));
   const invalidateContextUsage = <Event>(_event: Event, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerInstallation.invalidateContextUsage();
@@ -518,6 +555,9 @@ export function cosmicUiWithDependencies(
   });
   pi.on("session_shutdown", () => {
     const generation = ++lifecycleGeneration;
+    stopUsageTicker?.();
+    stopUsageTicker = undefined;
+    usageSessionManager = undefined;
     workingOwners.clearRun();
     footerInstallation.uninstall();
     disposeSubscriptions();

@@ -32,6 +32,7 @@
   "type": "module",
   "imports": {
     "#pi-ai-openai-codex-responses": "@earendil-works/pi-ai/api/openai-codex-responses",
+    "#pi-ai-constrained-sampling": "@earendil-works/pi-ai/api/constrained-sampling",
     "#pi-ai-openai-responses-shared": "@earendil-works/pi-ai/api/openai-responses-shared"
   },
   "exports": {

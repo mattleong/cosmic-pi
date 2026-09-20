@@ -34,6 +34,11 @@ const CompactedResponseSchema = Schema.Struct({
   output: Schema.Array(JsonObjectSchema),
   usage: Schema.Struct({
     input_tokens: NonNegativeIntegerSchema,
+    input_tokens_details: Schema.optional(
+      Schema.Struct({
+        cached_tokens: NonNegativeIntegerSchema,
+      }),
+    ),
     output_tokens: NonNegativeIntegerSchema,
     total_tokens: NonNegativeIntegerSchema,
   }),
@@ -75,6 +80,7 @@ export interface OpenAICompactResult {
   readonly output: readonly OpenAICompactionJsonObject[];
   readonly usage: {
     readonly inputTokens: number;
+    readonly cachedInputTokens?: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
   };
@@ -169,14 +175,14 @@ export class OpenAICompactionClient extends Context.Service<
               "decode",
               "OpenAI compaction response did not contain a compaction item.",
             );
-          return {
-            output: decoded.output,
-            usage: {
-              inputTokens: decoded.usage.input_tokens,
-              outputTokens: decoded.usage.output_tokens,
-              totalTokens: decoded.usage.total_tokens,
-            },
+          const usage: Types.Mutable<OpenAICompactResult["usage"]> = {
+            inputTokens: decoded.usage.input_tokens,
+            outputTokens: decoded.usage.output_tokens,
+            totalTokens: decoded.usage.total_tokens,
           };
+          if (decoded.usage.input_tokens_details)
+            usage.cachedInputTokens = decoded.usage.input_tokens_details.cached_tokens;
+          return { output: decoded.output, usage };
         });
         return OpenAICompactionClient.of({ compact });
       }),

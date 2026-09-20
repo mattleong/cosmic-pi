@@ -4,6 +4,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import { decodeRpcUsageOption } from "../../../src/backend/local-pi-protocol.ts";
 import { makeLocalPiBackendDriver } from "../../../src/backend/local-pi.ts";
 import type { BackendDriver, BackendEvent, BackendReport } from "../../../src/backend/model.ts";
 import {
@@ -35,6 +37,18 @@ import { SubagentProcessError } from "../../../src/run/errors.ts";
 import type { StartSubagentRequest, SubagentProjection } from "../../../src/run/model.ts";
 import type { SubagentNotification } from "../../../src/boundary/host-notifier.ts";
 import { SubagentService, type SubagentServiceOptions } from "../../../src/run/service.ts";
+
+export const waitForCompleted = (
+  service: import("../../../src/run/service.ts").SubagentServiceContract,
+  id: string,
+) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((yield* service.list).some((run) => run.id === id && run.state === "completed")) return;
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error("Run did not complete before the delivery clock advance."));
+  });
 
 type RpcWireValue = Extract<ChildWireEvent, { readonly type: "rpc_message" }>["value"];
 type IpcWireValue = Extract<ChildWireEvent, { readonly type: "parent_contact" }>["value"];
@@ -194,8 +208,32 @@ export function fakeChildLayer(
           const beforeNextResponse = (type: RpcCommand["type"], value: RpcWireValue) => {
             beforeResponses.push({ type, value });
           };
-          const offer = (value: RpcWireValue) =>
-            Queue.offerUnsafe(events, { type: "rpc_message", value });
+          const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+          let cost = 0;
+          const persistedMessage = Schema.Struct({
+            type: Schema.Literal("message_end"),
+            message: Schema.Struct({
+              role: Schema.Literals(["assistant", "toolResult"]),
+              usage: Schema.optional(Schema.Unknown),
+            }),
+          });
+          const offer = (value: RpcWireValue) => {
+            // Persist accounting when the fixture emits a completed message, never on a stats read.
+            const message = Schema.decodeUnknownOption(persistedMessage)(value);
+            const usage =
+              message._tag === "Some"
+                ? decodeRpcUsageOption(message.value.message.usage)
+                : undefined;
+            if (usage) {
+              tokens.input += usage.input ?? 0;
+              tokens.output += usage.output ?? 0;
+              tokens.cacheRead += usage.cacheRead ?? 0;
+              tokens.cacheWrite += usage.cacheWrite ?? 0;
+              tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
+              cost += usage.cost?.total ?? 0;
+            }
+            return Queue.offerUnsafe(events, { type: "rpc_message", value });
+          };
           const offerIpc = (value: IpcWireValue) =>
             Queue.offerUnsafe(events, { type: "parent_contact", value });
           const emitNormalIpcAck = (message: LocalPiParentControl) => {
@@ -317,7 +355,9 @@ export function fakeChildLayer(
                                 };
                                 return withThinkingLevelAndAdditionalFields;
                               })()
-                            : undefined,
+                            : command.type === "get_session_stats"
+                              ? { tokens: { ...tokens }, cost }
+                              : undefined,
                       },
                 );
               }),

@@ -40,7 +40,7 @@ Every child launch receives fixed extension flags containing the parent ID, pare
 - a bounded no-follow parent-header probe succeeds
 - the probed parent ID matches the parent marker
 
-`before_agent_start` repeats the filesystem-identity comparison and header probe for every child run. A same-file result or unavailable probe deactivates the reference. It appends a stable system-prompt instruction with the JSON-quoted parent path and expected ID. No transcript content is read or imported. There is no polling, cursor, dedicated tool, automatic synchronization, or return channel.
+`before_agent_start` repeats the filesystem-identity comparison and header probe for every child run. A same-file result or unavailable probe deactivates the reference. It assigns only `systemPromptOptions.sections.herdr_btw_parent_reference`, containing the JSON-quoted parent path and expected ID. Every invocation removes that owned section before checking activation and identity, so clearing or failed revalidation removes stale instructions without touching other extensions' sections. Pi records section deltas rather than a whole-prompt override. No transcript content is read or imported. There is no polling, cursor, dedicated tool, automatic synchronization, or return channel.
 
 The synchronous reference value is a plain host projection. The generation-checked application slot controls activation and clearing; the Effect runtime remains the owner of session lifetime.
 

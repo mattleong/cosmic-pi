@@ -21,14 +21,14 @@ import {
   SubagentProtocolError,
   type SubagentError,
 } from "../run/errors.ts";
-import { PI_SUBAGENT_CAPABILITIES, type SubagentUsage } from "../run/model.ts";
+import { PI_SUBAGENT_CAPABILITIES, emptyUsage } from "../run/model.ts";
+import { makeLocalPiUsage } from "./local-pi-usage.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
 import {
   assistantText,
   decodeAssistantMessage,
   decodeRpcEnvelope,
   decodeRpcStateData,
-  decodeRpcUsageOption,
   rpcStateModelId,
   type LocalPiParentControl,
   type RpcCommand,
@@ -56,14 +56,6 @@ const STARTUP_RPC_TIMEOUT = "30 seconds";
 const EVENT_CAPACITY = 512;
 
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
-const usageFromRpc = (usage: ReturnType<typeof decodeRpcUsageOption>): SubagentUsage => ({
-  input: usage?.input ?? 0,
-  output: usage?.output ?? 0,
-  cacheRead: usage?.cacheRead ?? 0,
-  cacheWrite: usage?.cacheWrite ?? 0,
-  totalTokens: usage?.totalTokens ?? 0,
-  ...(usage?.cost?.total !== undefined && { cost: usage.cost.total }),
-});
 
 const rpcOutcomeCode = (command: string): string => {
   switch (command) {
@@ -121,7 +113,7 @@ const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: numbe
                 type: "assistant_message",
                 assignmentEpoch,
                 ...(text && { text }),
-                usage: usageFromRpc(decodeRpcUsageOption(message.usage)),
+                usage: emptyUsage(),
                 terminal: {
                   stopReason: message.stopReason,
                   text,
@@ -300,6 +292,48 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       awaitEarlyResponse: true,
     });
 
+  const usageRequests = yield* Queue.dropping<void>(1);
+  const accountUsage = makeLocalPiUsage();
+  const usageControl = yield* Semaphore.make(1);
+  const withUsageControl = usageControl.withPermits(1);
+  let transportClosed = false;
+  let usageDirty = false;
+  let usageReady = false;
+  let pendingSettlement: Extract<BackendEvent, { type: "run_settled" }> | undefined;
+  const reconcileUsage = Effect.gen(function* () {
+    if (transportClosed) return;
+    const response = yield* rpc({ type: "get_session_stats" });
+    const usage = accountUsage.account(response.data);
+    if (usage) yield* offer({ type: "usage", usage });
+  }).pipe(Effect.catch(() => Effect.void));
+  const requireUsageBaseline = Effect.suspend(() =>
+    accountUsage.hasBaseline()
+      ? Effect.void
+      : Effect.fail(
+          protocolError("Subagent did not provide valid startup usage totals; no prompt was sent."),
+        ),
+  );
+  const drainUsage = Effect.gen(function* () {
+    if (!usageReady) return;
+    while (usageDirty || pendingSettlement) {
+      usageDirty = false;
+      const settlement = pendingSettlement;
+      yield* reconcileUsage;
+      if (settlement && settlement === pendingSettlement) {
+        pendingSettlement = undefined;
+        if (settlement.assignmentEpoch === assignmentEpoch) yield* offer(settlement);
+      }
+    }
+  });
+  const requestUsage = () => {
+    usageDirty = true;
+    Queue.offerUnsafe(usageRequests, undefined);
+  };
+  yield* Stream.fromQueue(usageRequests).pipe(
+    Stream.runForEach(() => withUsageControl(drainUsage)),
+    Effect.forkScoped,
+  );
+
   const consumeChildEvent = (event: ChildWireEvent): Effect.Effect<void> => {
     if (event.type === "protocol_error")
       return offer({ type: "protocol_error", message: event.message }, event);
@@ -414,18 +448,29 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               Effect.catch(() => Effect.void),
               Effect.ensuring(Effect.sync(() => acknowledgeRaw(event))),
             );
+        if (
+          envelope.type === "ignored" &&
+          ["turn_end", "compaction_end", "entry_appended"].includes(envelope.eventType)
+        )
+          requestUsage();
         // A new attempt invalidates earlier success, including retries and queued continuations.
         if (
           envelope.type === "agent_start" ||
           (envelope.type === "message_start" && envelope.message.role === "assistant")
-        )
+        ) {
           latestTerminal = undefined;
+          pendingSettlement = undefined;
+        }
         const eventAssignmentEpoch = assignmentEpoch;
         return normalizeRpcEvent(event.value, eventAssignmentEpoch).pipe(
           Effect.flatMap((normalized) => {
             if (normalized?.type === "assistant_message") latestTerminal = normalized.terminal;
-            if (normalized?.type === "run_settled")
-              return offer({ ...normalized, terminal: latestTerminal }, event);
+            if (normalized?.type === "run_settled") {
+              pendingSettlement = { ...normalized, terminal: latestTerminal };
+              requestUsage();
+              acknowledgeRaw(event);
+              return Effect.void;
+            }
             if (normalized) return offer(normalized, event);
             acknowledgeRaw(event);
             return Effect.void;
@@ -448,14 +493,18 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     Stream.runForEach(consumeChildEvent),
     Effect.catchCause(() => Effect.void),
     Effect.ensuring(
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        transportClosed = true;
         cancelPending(
           new SubagentProcessError({
             operation: "run",
             message: "Subagent backend transport closed.",
           }),
         );
-        Queue.endUnsafe(events);
+        yield* withUsageControl(drainUsage).pipe(
+          Effect.interruptible,
+          Effect.ensuring(Effect.sync(() => Queue.endUnsafe(events))),
+        );
       }),
     ),
     Effect.forkScoped,
@@ -466,6 +515,18 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       Effect.flatMap((response) =>
         decodeRpcStateData(response.data).pipe(
           Effect.mapError(() => protocolError("Subagent returned invalid startup state.")),
+        ),
+      ),
+      Effect.tap(() =>
+        withUsageControl(
+          reconcileUsage.pipe(
+            Effect.andThen(requireUsageBaseline),
+            Effect.andThen(
+              Effect.sync(() => {
+                usageReady = true;
+              }),
+            ),
+          ),
         ),
       ),
       Effect.map((state) => {
@@ -482,25 +543,29 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       }),
     ),
     start: (message: string, nextAssignmentEpoch: number) =>
-      Effect.suspend(() => {
-        const previousAssignmentEpoch = assignmentEpoch;
-        const previousTerminal = latestTerminal;
-        assignmentEpoch = nextAssignmentEpoch;
-        latestTerminal = undefined;
-        return rpc({ type: "prompt", message }).pipe(
-          Effect.tapError((error) =>
-            Effect.sync(() => {
-              const outcomeUncertain =
-                error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
-              if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch) {
-                assignmentEpoch = previousAssignmentEpoch;
-                latestTerminal = previousTerminal;
-              }
-            }),
-          ),
-          Effect.asVoid,
-        );
-      }),
+      requireUsageBaseline.pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            const previousAssignmentEpoch = assignmentEpoch;
+            const previousTerminal = latestTerminal;
+            assignmentEpoch = nextAssignmentEpoch;
+            latestTerminal = undefined;
+            return rpc({ type: "prompt", message }).pipe(
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  const outcomeUncertain =
+                    error._tag === "SubagentProcessError" && isOutcomeUncertain(error);
+                  if (!outcomeUncertain && assignmentEpoch === nextAssignmentEpoch) {
+                    assignmentEpoch = previousAssignmentEpoch;
+                    latestTerminal = previousTerminal;
+                  }
+                }),
+              ),
+              Effect.asVoid,
+            );
+          }),
+        ),
+      ),
     steer: (message: string) =>
       withTurnControl(rpc({ type: "steer", message }).pipe(Effect.asVoid)),
     interrupt: withTurnControl(

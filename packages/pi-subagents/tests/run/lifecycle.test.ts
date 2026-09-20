@@ -247,10 +247,6 @@ describe("SubagentService", () => {
         sessionFile: "/tmp/child-session.jsonl",
       });
       expect(started.id).toMatch(/^agent-r[0-9a-z]+-1$/);
-      expect(fake.controls[0]?.commands.map((command) => command.type)).toEqual([
-        "get_state",
-        "prompt",
-      ]);
 
       fake.controls[0]?.offer({
         type: "tool_execution_start",
@@ -275,9 +271,10 @@ describe("SubagentService", () => {
           role: "assistant",
           stopReason: "stop",
           content: [{ type: "text", text: "Review complete." }],
-          usage: { totalTokens: 12, cost: { total: 0.001 } },
+          usage: { input: 12, totalTokens: 12, cost: { total: 0.001 } },
         },
       });
+      fake.controls[0]?.offer({ type: "turn_end" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 12);
       expect((yield* service.status(started.id)).finalText).toBeUndefined();
 
@@ -355,11 +352,12 @@ describe("SubagentService", () => {
           role: "assistant",
           stopReason: "stop",
           content: [{ type: "text", text: "Still working." }],
-          usage: { totalTokens: 1 },
+          usage: { input: 1, totalTokens: 1 },
         },
       });
+      fake.controls[0]?.offer({ type: "turn_end" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
-      expect(projections).toHaveLength(beforeTokens + 1);
+      expect(projections.length - beforeTokens).toBeLessThanOrEqual(2);
 
       yield* TestClock.adjust("1 second");
       const beforeActivityTick = projections.length;

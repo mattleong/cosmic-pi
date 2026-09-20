@@ -10,6 +10,7 @@ import { it } from "@effect/vitest";
 import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import { makeLifecycleProbe } from "pi-cosmic-core/testing";
@@ -29,7 +30,11 @@ import { setCodePreviewSettings } from "../../src/config/state";
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { registerToolRenderers } from "../../src/tools/renderers/registration";
 import { effectTest, settle, step } from "../support/effect-test";
-import { executeWriteWithPreview } from "../../src/write/preview-execution";
+import {
+  executeWriteWithPreview,
+  executeWriteWithPreviewEffect,
+} from "../../src/write/preview-execution";
+import { lookupBeforeWrite } from "../../src/write/projection";
 
 for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
   it.effect(`revokes a queued write on ${cancellation} before its predecessor releases`, () =>
@@ -100,6 +105,54 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
         yield* step(() => executeWriteWithPreview("fresh", path, "fresh", directory, undefined));
         assert.equal(yield* fs.readFileString(path), "fresh");
       }
+    }).pipe(provideBuiltLayer(nodeFilePlatformLayer)),
+  );
+}
+
+for (const closing of ["replacement", "shutdown"] as const) {
+  it.effect(`${closing} joins admitted native write callbacks and clears their evidence`, () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-closing-write-" });
+      const path = `${directory}/target.txt`;
+      yield* fs.writeFileString(path, "before");
+      const h = harness();
+      yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+      yield* step(() => start(h));
+      const owner = captureCodePreviewSessionCapability();
+      assert.ok(owner);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const delayed = FileSystem.FileSystem.of({
+        ...fs,
+        writeFileString: (target, next, options) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(fs.writeFileString(target, next, options)),
+          ),
+      });
+      const pending = owner
+        .run(
+          executeWriteWithPreviewEffect("closing-write", path, "after", directory).pipe(
+            Effect.provideService(FileSystem.FileSystem, delayed),
+          ),
+        )
+        .then(
+          () => "success" as const,
+          () => "failure" as const,
+        );
+      yield* Deferred.await(entered);
+      const close = yield* step(() => (closing === "replacement" ? start(h) : shutdown(h))).pipe(
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      assert.equal(close.pollUnsafe(), undefined);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(close);
+      assert.equal(yield* step(() => pending), "failure");
+      assert.equal(yield* fs.readFileString(path), "after");
+      assert.equal(lookupBeforeWrite("closing-write"), undefined);
+      if (closing === "replacement") yield* step(() => shutdown(h));
     }).pipe(provideBuiltLayer(nodeFilePlatformLayer)),
   );
 }

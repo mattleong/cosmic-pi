@@ -6,6 +6,7 @@ import { nodeFsPromises, nodePath } from "./node-builtins.ts";
 import {
   getAgentDir,
   getPackageDir,
+  parseSessionEntries,
   SessionManager,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -16,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import {
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
@@ -33,7 +35,7 @@ import type {
 } from "../backend/local-pi-protocol.ts";
 import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 
-const { mkdir, rm, rmdir, writeFile } = nodeFsPromises;
+const { mkdir, readFile, rm, rmdir, writeFile } = nodeFsPromises;
 const { join } = nodePath;
 
 const RUNTIME_API_KEY_ENV = "PI_SUBAGENT_RUNTIME_API_KEY";
@@ -182,7 +184,32 @@ function sanitizedEnvironment(request: ChildLaunchRequest): NodeJS.ProcessEnv {
   };
 }
 
+// Children do not load Better OpenAI's checkpoint decoder. Restore its plaintext branch
+// instead of inheriting an opaque checkpoint with only one retained conversation entry.
+const isEncryptedWorkspaceCheckpoint = Schema.is(
+  Schema.Struct({ type: Schema.Literal("pi-better-openai.compaction.v1") }),
+);
+
 const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry => {
+  if (
+    entry.type === "label" ||
+    (entry.type === "message" && entry.message.role === "system") ||
+    (entry.type === "compaction" && isEncryptedWorkspaceCheckpoint(entry.details))
+  ) {
+    // Keep tree/compaction anchors, but never inherit parent prompt or tool authority.
+    return {
+      type: "custom",
+      customType: "pi-subagents-fork-anchor",
+      id: entry.id,
+      parentId,
+      timestamp: entry.timestamp,
+    };
+  }
+  if (entry.type === "compaction") {
+    const cloned = { ...entry, parentId };
+    delete cloned.systemMessage;
+    return cloned;
+  }
   if (entry.type === "message" && entry.message.role === "assistant") {
     return {
       ...entry,
@@ -197,34 +224,71 @@ const cloneEntry = (entry: SessionEntry, parentId: string | null): SessionEntry 
   return { ...entry, parentId };
 };
 
-function createForkedSession(request: ChildLaunchRequest, runDir: string): Promise<string> {
-  if (!request.parentSessionFile || !request.parentLeafId)
-    return Promise.reject(
-      new Error("Forked context requires a persisted parent session and stable parent leaf."),
+export const createForkedSession = Effect.fn("ChildProcess.createForkedSession")(
+  function* (request: ChildLaunchRequest, runDir: string) {
+    if (!request.parentSessionFile || !request.parentLeafId)
+      return yield* Effect.fail(
+        processError(
+          "fork parent session",
+          "Forked context requires a persisted parent session and stable parent leaf.",
+        ),
+      );
+    const parentSessionFile = request.parentSessionFile;
+    const content = yield* Effect.tryPromise({
+      try: () => readFile(parentSessionFile, "utf8"),
+      catch: (error) => processError("read parent session", error),
+    });
+    const parsedEntries = yield* Effect.try({
+      try: () => parseSessionEntries(content),
+      catch: (error) => processError("parse parent session", error),
+    });
+    if (
+      !Schema.is(Schema.Struct({ type: Schema.Literal("session"), id: Schema.String }))(
+        parsedEntries[0],
+      )
+    )
+      return yield* Effect.fail(
+        processError("fork parent session", "The parent session has no valid session header."),
+      );
+    // Native loading migrates entries, but persistence must stay disabled: open() can repair the parent.
+    const branch = yield* Effect.try({
+      try: () =>
+        SessionManager.inMemory(request.cwd, undefined, parsedEntries).getBranch(
+          request.parentLeafId,
+        ),
+      catch: (error) => processError("load parent branch", error),
+    });
+    if (branch.length === 0)
+      return yield* Effect.fail(
+        processError("fork parent session", "The selected parent session branch is empty."),
+      );
+    const sessionId = randomUUID();
+    const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
+    const header = {
+      type: "session" as const,
+      version: 3,
+      id: sessionId,
+      timestamp: DateTime.formatIso(DateTime.makeUnsafe(synchronousNow())),
+      cwd: request.cwd,
+      parentSession: request.parentSessionFile,
+    };
+    let parentId: string | null = null;
+    const entries = branch.map((entry) => {
+      const cloned = cloneEntry(entry, parentId);
+      parentId = cloned.id;
+      return cloned;
+    });
+    const lines = yield* Effect.forEach([header, ...entries], (entry) =>
+      Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(entry),
     );
-  const source = SessionManager.open(request.parentSessionFile);
-  const branch = source.getBranch(request.parentLeafId).filter((entry) => entry.type !== "label");
-  if (branch.length === 0)
-    return Promise.reject(new Error("The selected parent session branch is empty."));
-  const sessionId = randomUUID();
-  const sessionFile = join(runDir, `session-${sessionId}.jsonl`);
-  const header = {
-    type: "session" as const,
-    version: 3,
-    id: sessionId,
-    timestamp: DateTime.formatIso(DateTime.makeUnsafe(synchronousNow())),
-    cwd: request.cwd,
-    parentSession: request.parentSessionFile,
-  };
-  let parentId: string | null = null;
-  const entries = branch.map((entry) => {
-    const cloned = cloneEntry(entry, parentId);
-    parentId = cloned.id;
-    return cloned;
-  });
-  const content = [header, ...entries].map((entry) => JSON.stringify(entry)).join("\n") + "\n";
-  return writeFile(sessionFile, content, { encoding: "utf8", mode: 0o600 }).then(() => sessionFile);
-}
+    yield* Effect.tryPromise({
+      try: () => writeFile(sessionFile, lines.join("\n") + "\n", { encoding: "utf8", mode: 0o600 }),
+      catch: (error) => processError("write forked session", error),
+    });
+    return sessionFile;
+  },
+  Effect.mapError((error) => processError("fork parent session", error)),
+);
 
 function extensionPath(): string {
   return fileURLToPath(new URL("./host-child.ts", import.meta.url));
@@ -250,10 +314,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   });
   const sessionFile =
     request.resumeSessionFile === undefined && request.context === "fork"
-      ? yield* Effect.tryPromise({
-          try: () => createForkedSession(request, runDir),
-          catch: (error) => processError("fork parent session", error),
-        })
+      ? yield* createForkedSession(request, runDir)
       : undefined;
 
   // Pi's published CLI bundles dependencies absent from the unbundled dist/cli.js.

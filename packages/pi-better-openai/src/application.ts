@@ -30,6 +30,7 @@ import {
   resetOpenAICodexTransport,
 } from "./boundary/host-provider-routing.ts";
 import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
+import { latestOwnedCompaction } from "./compaction/context.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
 import type { ResolvedConfig } from "./config/schema.ts";
@@ -392,23 +393,46 @@ export function betterOpenAIWithDependencies(
     updateContext(ctx);
     updateFooter(ctx);
   };
+  const needsContextRepair = (ctx: ExtensionContext) => {
+    try {
+      return Boolean(latestOwnedCompaction(ctx.sessionManager.getBranch()));
+    } catch {
+      return true;
+    }
+  };
+  const abortIncompleteContext = (ctx: ExtensionContext) => {
+    // Pi contains extension exceptions. Aborting the run is required to fail closed.
+    safeHostUi(() => ctx.abort());
+    safeHostUi(() =>
+      ctx.ui.notify("Unable to restore the complete conversation; request cancelled.", "warning"),
+    );
+  };
   pi.on("session_before_compact", (event, ctx) => {
     updateContext(ctx);
-    if (!currentContext) return undefined;
-    return run(
-      OpenAICompactionService.use((service) => service.compact(event)),
-      event.signal,
-    )
+    if (!currentContext) return needsContextRepair(ctx) ? { cancel: true } : undefined;
+    return Promise.resolve()
+      .then(() =>
+        run(
+          OpenAICompactionService.use((service) => service.compact(event)),
+          event.signal,
+        ),
+      )
       .then((compaction) => {
         if (!compaction) return undefined;
         return { compaction };
       })
       .catch(() => {
+        const cancel = event.signal.aborted || needsContextRepair(ctx);
         if (!event.signal.aborted)
           safeHostUi(() =>
-            ctx.ui.notify("OpenAI compaction failed; using Pi compaction.", "warning"),
+            ctx.ui.notify(
+              cancel
+                ? "Compaction cancelled to preserve the complete conversation."
+                : "OpenAI compaction failed; using Pi compaction.",
+              "warning",
+            ),
           );
-        return undefined;
+        return cancel ? { cancel: true } : undefined;
       });
   });
   pi.on("session_compact", (event, ctx) => {
@@ -416,7 +440,18 @@ export function betterOpenAIWithDependencies(
     if (event.fromExtension && decodeOpenAICompactionDetails(event.compactionEntry.details))
       safeHostUi(() => ctx.ui.notify("Context compacted using OpenAI.", "info"));
   });
-  pi.on("session_tree", (_event, ctx) => refreshFooter(ctx));
+  pi.on("session_tree", (_event, ctx) => {
+    refreshFooter(ctx);
+    if (!currentContext) return undefined;
+    return Promise.resolve()
+      .then(() =>
+        run(
+          OpenAICompactionService.use((service) => service.resetRetryOmissions()),
+          safeHostSignal(ctx),
+        ),
+      )
+      .catch(() => undefined);
+  });
   pi.on("model_select", (_event, ctx) => {
     const signal = safeHostSignal(ctx);
     resetProviderTransport(ctx);
@@ -450,13 +485,22 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("context", (event, ctx) => {
     updateContext(ctx);
-    if (!currentContext) return undefined;
-    return run(
-      OpenAICompactionService.use((service) => service.filterContext(event.messages)),
-      safeHostSignal(ctx),
-    )
+    if (!currentContext) {
+      if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
+      return undefined;
+    }
+    return Promise.resolve()
+      .then(() =>
+        run(
+          OpenAICompactionService.use((service) => service.filterContext(event.messages)),
+          safeHostSignal(ctx),
+        ),
+      )
       .then((messages) => (messages ? { messages } : undefined))
-      .catch(() => undefined);
+      .catch(() => {
+        if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
+        return undefined;
+      });
   });
   pi.on("before_provider_headers", (event, ctx) => {
     updateContext(ctx);

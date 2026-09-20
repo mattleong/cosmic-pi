@@ -1,8 +1,8 @@
 import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { executeNativeWrite } from "../boundary/host-write";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   captureCodePreviewSessionCapability,
@@ -64,50 +64,48 @@ export const executeWriteWithPreviewEffect = Effect.fn("CodePreviewWrite.execute
   path: string,
   content: string,
   cwd: string,
+  ctx?: ExtensionContext,
 ) {
-  const absolutePath = resolvePreviewPath(path, cwd);
+  const executionCwd = ctx?.cwd || cwd;
+  const absolutePath = resolvePreviewPath(path, executionCwd);
   const writeService = yield* CodePreviewWriteService;
-  return yield* writeService.withPathLock(
-    absolutePath,
-    Effect.gen(function* () {
-      const before = yield* readExistingFileForPreviewEffect(path, cwd, content);
-      const fs = yield* FileSystem.FileSystem;
-      const pathService = yield* Path.Path;
-      yield* Effect.uninterruptible(
+  const fs = yield* FileSystem.FileSystem;
+  let before: CodePreviewBeforeWrite;
+  const failure = () =>
+    new CodePreviewWriteError({
+      operation: "write",
+      path: absolutePath,
+      message: `Unable to write ${path}.`,
+    });
+  const result = yield* executeNativeWrite(
+    toolCallId,
+    path,
+    content,
+    executionCwd,
+    {
+      mkdir: (directory) =>
+        fs
+          .makeDirectory(directory, { recursive: true })
+          .pipe(Effect.uninterruptible, Effect.mapError(failure)),
+      writeFile: (target, next, signal) =>
         Effect.gen(function* () {
-          // Match Pi's write semantics: only create the requested path's parent.
-          // A dangling link whose target parent is absent must still fail.
-          yield* fs.makeDirectory(pathService.dirname(absolutePath), { recursive: true });
-          // Delegate symlink traversal to the operating system, matching Pi's writeFile
-          // semantics even when a relative final link sits below symlinked directories.
-          // Direct truncation also preserves hard-link aliases, open descriptors, inode
-          // identity, modes, and normal umask-derived creation modes.
-          yield* fs.writeFileString(absolutePath, content);
-          // Once the mutation commits, publish its correlation before honoring a pending
-          // interruption so renderers can always explain the applied write deterministically.
-          yield* writeService.rememberBeforeWrite(toolCallId, before);
-        }).pipe(
-          Effect.mapError(
-            () =>
-              new CodePreviewWriteError({
-                operation: "write",
-                path: absolutePath,
-                message: `Unable to write ${path}.`,
-              }),
-          ),
-        ),
-      );
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${path}`,
-          },
-        ],
-        details: { codePreviewBeforeWrite: redactedBeforeWriteDetail(before) },
-      };
-    }),
+          // Pi already holds the canonical mutation queue. Read only after admission.
+          before = yield* readExistingFileForPreviewEffect(target, executionCwd, next);
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (signal.aborted) return yield* Effect.interrupt;
+              // Direct truncation retains native symlink, inode, hard-link and mode semantics.
+              yield* fs.writeFileString(target, next);
+              // Commit evidence before Pi observes cancellation after writeFile settles.
+              yield* writeService.rememberBeforeWrite(toolCallId, before);
+            }),
+          );
+        }).pipe(Effect.mapError(failure)),
+    },
+    failure,
+    ctx,
   );
+  return { ...result, details: { codePreviewBeforeWrite: redactedBeforeWriteDetail(before) } };
 });
 
 export function executeWriteWithPreview(
@@ -116,8 +114,8 @@ export function executeWriteWithPreview(
   content: string,
   cwd: string,
   signal: AbortSignal | undefined,
+  ctx?: ExtensionContext,
 ) {
-  const absolutePath = resolvePreviewPath(path, cwd);
   const owner = captureCodePreviewSessionCapability();
   if (!owner)
     return Promise.reject(
@@ -126,34 +124,9 @@ export function executeWriteWithPreview(
         message: "Code preview session is not active.",
       }),
     );
-  // The originating runtime owns the foreign queue wait as well as the mutation.
-  // Interruption detaches the wait and revokes its delayed callback even if Pi's
-  // preceding mutation never settles. The callback cannot enter a replacement slot.
-  return owner.run(
-    Effect.tryPromise({
-      try: (queueSignal) =>
-        withFileMutationQueue(absolutePath, () => {
-          if (queueSignal.aborted)
-            return Promise.reject(
-              new CodePreviewSessionUnavailable({
-                operation: "write",
-                message: "Code preview write was cancelled.",
-              }),
-            );
-          return owner.run(
-            executeWriteWithPreviewEffect(toolCallId, path, content, cwd),
-            queueSignal,
-          );
-        }),
-      catch: () =>
-        new CodePreviewWriteError({
-          operation: "write",
-          path: absolutePath,
-          message: `Unable to write ${path}.`,
-        }),
-    }),
-    signal,
-  );
+  // One native queue only: wrapping native execute in another queue deadlocks.
+  // The captured runtime owns its wait and every admitted operation callback.
+  return owner.run(executeWriteWithPreviewEffect(toolCallId, path, content, cwd, ctx), signal);
 }
 
 function redactedBeforeWriteDetail(before: CodePreviewBeforeWrite): RedactedCodePreviewBeforeWrite {

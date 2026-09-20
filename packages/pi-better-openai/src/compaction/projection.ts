@@ -1,4 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  getDeclaredTools,
+  normalizeContext,
+  resolveTranscript,
+  type Api,
+  type Model,
+} from "@earendil-works/pi-ai";
+import { createGrammarToolInputProperties } from "#pi-ai-constrained-sampling";
 // Keep Pi's jiti root alias from treating this deep export as a child of compat.js.
 import { convertResponsesMessages } from "#pi-ai-openai-responses-shared";
 import {
@@ -15,8 +22,22 @@ import {
   type OpenAICompactionJsonObject,
 } from "./protocol.ts";
 
+import { hasExactPrefix } from "./context.ts";
+
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const JsonObjectArraySchema = Schema.Array(Schema.Record(Schema.String, Schema.Json));
+const NativeJsonSchema = Schema.fromJsonString(Schema.Unknown);
+const InputJsonSchema = Schema.fromJsonString(JsonObjectArraySchema);
+
+function leadingInstructionCount(input: readonly unknown[]): number {
+  let count = 0;
+  while (count < input.length) {
+    const item = input[count];
+    if (!Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer")) break;
+    count++;
+  }
+  return count;
+}
 
 export function isEligibleOpenAICompactionModel(
   model: Model<Api> | null | undefined,
@@ -54,37 +75,52 @@ export function projectOpenAIResponseInput(
   const messages = convertToLlm(
     entries.flatMap((entry) =>
       entry.type === "compaction" && decodeOpenAICompactionDetails(entry.details)
-        ? []
+        ? entry.systemMessage
+          ? [entry.systemMessage]
+          : []
         : sessionEntryToContextMessages(entry),
     ),
   );
-  const converted = convertResponsesMessages(model, { messages }, OPENAI_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: false,
+  const context = resolveTranscript(
+    normalizeContext({ messages }),
+    model.compat?.supportsMidConvoSystemMessages ?? false,
+  );
+  const converted = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    grammarToolInputProperties: createGrammarToolInputProperties(
+      getDeclaredTools(context.messages),
+      model.compat?.supportsOpenAIGrammarTools ?? false,
+    ),
+    supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
+    supportsAdditionalTools: model.compat?.supportsAdditionalTools ?? false,
+    supportsToolSearch: model.compat?.supportsToolSearch ?? false,
+    toolOptions: {
+      supportsStrictMode: model.compat?.supportsStrictMode ?? false,
+      supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
+    },
   });
-  return Option.getOrUndefined(Schema.decodeUnknownOption(JsonObjectArraySchema)(converted));
+  // The native SDK serializes optional undefined fields away before sending.
+  const json = Schema.encodeSync(NativeJsonSchema)(converted);
+  const input = Option.getOrUndefined(Schema.decodeOption(InputJsonSchema)(json));
+  return input?.slice(leadingInstructionCount(input));
 }
 
 /** Apply an extension checkpoint to the already-built provider payload. */
 export function injectOpenAICompactionCheckpoint<PayloadInput>(
   payload: PayloadInput,
   checkpoint: OpenAICompactionCheckpoint,
+  coveredInput: readonly OpenAICompactionJsonObject[],
 ) {
   if (!Predicate.isObject(payload) || !Array.isArray(payload.input)) return undefined;
   const input = payload.input;
-  let instructionCount = 0;
-  while (instructionCount < input.length) {
-    const item = input[instructionCount];
-    if (!Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer")) break;
-    instructionCount++;
-  }
+  const instructionCount = leadingInstructionCount(input);
   const providerInput = input.slice(instructionCount);
-  if (providerInput.length < checkpoint.rawInputCount) return undefined;
+  if (!hasExactPrefix(providerInput, coveredInput)) return undefined;
   return {
     ...payload,
     input: [
       ...input.slice(0, instructionCount),
       ...checkpoint.output,
-      ...providerInput.slice(checkpoint.rawInputCount),
+      ...providerInput.slice(coveredInput.length),
     ],
   };
 }

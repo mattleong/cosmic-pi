@@ -9,6 +9,7 @@ const NonNegativeIntSchema = Schema.Number.check(Schema.isInt(), Schema.isGreate
 const JsonObjectSchema = Schema.Record(Schema.String, Schema.Json);
 const UsageSchema = Schema.Struct({
   inputTokens: NonNegativeIntSchema,
+  cachedInputTokens: Schema.optional(NonNegativeIntSchema),
   outputTokens: NonNegativeIntSchema,
   totalTokens: NonNegativeIntSchema,
 });
@@ -20,6 +21,7 @@ export const OpenAICompactionCheckpointSchema = Schema.Struct({
   model: Schema.String,
   output: Schema.Array(JsonObjectSchema),
   rawInputCount: NonNegativeIntSchema,
+  omittedEntryIds: Schema.optional(Schema.Array(Schema.String)),
   createdAt: NonNegativeIntSchema,
   tokensBefore: NonNegativeIntSchema,
   usage: Schema.optional(UsageSchema),

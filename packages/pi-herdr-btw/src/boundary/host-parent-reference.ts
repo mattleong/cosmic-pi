@@ -89,6 +89,8 @@ export const registerHerdrBtwParentReference = (
     captureParentReference(pi, ctx, probe, compareIdentity);
 
   pi.on("before_agent_start", (event, ctx) => {
+    // Options may survive repeated hooks: remove only our section before revalidation.
+    delete event.systemPromptOptions.sections.herdr_btw_parent_reference;
     if (!activeReference) return undefined;
     // Revalidate the bounded parent header for every child run. This is an
     // identity check only; no transcript content is read or imported.
@@ -98,9 +100,10 @@ export const registerHerdrBtwParentReference = (
       return undefined;
     }
     activeReference = current;
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${parentReferenceInstruction(current.path, current.id)}`,
-    };
+    event.systemPromptOptions.sections.herdr_btw_parent_reference = parentReferenceInstruction(
+      current.path,
+      current.id,
+    );
   });
 
   return {

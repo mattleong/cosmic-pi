@@ -7,6 +7,7 @@ import {
   MAX_BACKEND_REPORT_ID_CHARS,
   MAX_BACKEND_REPORT_TEXT_CHARS,
   type BackendAssistantTerminal,
+  type BackendHandle,
   type BackendReport,
 } from "../backend/model.ts";
 import { type SubagentError, SubagentProcessError } from "./errors.ts";
@@ -144,8 +145,8 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
   /**
    * Merges exact-epoch usage that a backend reported only at its final native
    * result, after an accepted report already settled the run. Only the completed
-   * outcome of the same assignment may absorb it; idle retained `reported`,
-   * stopped, failed, and parent-stopped records ignore late usage entirely.
+   * outcome of the same assignment may absorb it; idle retained, stopped,
+   * failed, and parent-stopped records ignore late assistant usage.
    */
   const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
     withLock(
@@ -162,6 +163,31 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
         yield* publish;
       }),
     );
+  // Native session stats describe process/run work, including idle cache warming.
+  // Assignment changes do not reset run totals. Check process ownership under the mutation lock.
+  const mergeProcessUsage = (
+    record: RunRecord,
+    source: BackendHandle | undefined,
+    usage: SubagentUsage,
+  ) =>
+    withLock(
+      Effect.gen(function* () {
+        if (
+          !source ||
+          record.process !== source ||
+          record.stoppedByParent ||
+          record.view.state === "stopping" ||
+          record.view.state === "stopped" ||
+          record.view.state === "failed"
+        )
+          return;
+        const merged = addUsage(record.view.usage, usage);
+        if (merged === record.view.usage) return;
+        record.view = { ...record.view, usage: merged };
+        yield* publish;
+      }),
+    );
+
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
     withLock(
       Effect.gen(function* () {
@@ -634,6 +660,7 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     mutateEventView,
     /** Locked exact-epoch usage merge for results arriving after report settlement. */
     mergeLateUsage,
+    mergeProcessUsage,
     failPendingResponses,
     /** One locked idempotent terminal transaction plus post-commit peer notification. */
     settle,

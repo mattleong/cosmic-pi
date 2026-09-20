@@ -57,6 +57,7 @@ export interface RunProcessInitializerDependencies {
   readonly handleBackendEvent: (
     record: RunRecord,
     event: BackendEvent,
+    source: BackendHandle,
   ) => Effect.Effect<void, SubagentError>;
   /** Must durably confirm writer spawn-started evidence before a driver spawn is invoked. */
   readonly prepareBackendSpawn: (record: RunRecord) => Effect.Effect<void, SubagentError>;
@@ -150,7 +151,7 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
           isCurrentProcess.pipe(
             Effect.flatMap((isCurrent) =>
               isCurrent
-                ? handleBackendEvent(record, event).pipe(
+                ? handleBackendEvent(record, event, process).pipe(
                     Effect.catch((error) =>
                       failRun(record, error.message, error).pipe(Effect.asVoid),
                     ),
@@ -171,7 +172,7 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
                 ? markCleanupPending(record).pipe(
                     Effect.andThen(
                       Fiber.join(eventConsumer).pipe(
-                        Effect.andThen(handleBackendEvent(record, event)),
+                        Effect.andThen(handleBackendEvent(record, event, process)),
                       ),
                     ),
                   )

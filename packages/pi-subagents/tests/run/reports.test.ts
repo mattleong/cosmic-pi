@@ -80,9 +80,10 @@ describe("local Pi terminal evidence", () => {
           stopReason: "error",
           errorMessage: "Transient failure",
           content: [],
-          usage: { totalTokens: 1 },
+          usage: { input: 1, totalTokens: 1 },
         },
       });
+      fake.controls[0]!.offer({ type: "turn_end" });
       fake.controls[0]!.offer({ type: "agent_end", willRetry: true });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
       expect((yield* service.status(run.id)).state).toBe("running");
@@ -119,9 +120,10 @@ describe("local Pi terminal evidence", () => {
             role: "assistant",
             stopReason: "stop",
             content: [{ type: "text", text: "Previous attempt." }],
-            usage: { totalTokens: 1 },
+            usage: { input: 1, totalTokens: 1 },
           },
         });
+        fake.controls[0]!.offer({ type: "turn_end" });
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
         expect((yield* service.interrupt(run.id)).state).toBe("paused");
         yield* service.resume(run.id, "Continue");
@@ -158,7 +160,7 @@ describe("local Pi terminal evidence", () => {
               role: "assistant",
               stopReason,
               content: [{ type: "text", text: "Buffered report." }],
-              usage: { totalTokens: 1 },
+              usage: { input: 1, totalTokens: 1 },
             },
           });
           fake.controls[0]!.offer({ type: "agent_settled" });

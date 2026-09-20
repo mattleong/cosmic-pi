@@ -1,5 +1,6 @@
 import type {
   ExtensionAPI,
+  BeforeAgentStartEvent,
   ExtensionContext,
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
@@ -89,14 +90,24 @@ const harness = (options: HarnessOptions = {}) => {
   };
   const sessionStart = (ctx = makeCtx()) => bridge.activate(bridge.capture(ctx));
   const sessionShutdown = () => bridge.clear();
-  const beforeAgentStart = () =>
-    // SAFETY: The registered before_agent_start handler only ever returns this
-    // optional system-prompt result shape.
-    invoke(
+  const sections: BeforeAgentStartEvent["systemPromptOptions"]["sections"] = {
+    another_extension: "keep me",
+  };
+  const beforeAgentStart = () => {
+    const result = invoke(
       "before_agent_start",
-      { type: "before_agent_start", prompt: "p", systemPrompt: BASE_PROMPT },
+      {
+        type: "before_agent_start",
+        prompt: "p",
+        systemPrompt: BASE_PROMPT,
+        systemPromptOptions: { sections },
+      },
       makeCtx(),
-    ) as { systemPrompt?: string } | undefined;
+    );
+    expect(result).toBeUndefined();
+    expect(sections.another_extension).toBe("keep me");
+    return sections.herdr_btw_parent_reference;
+  };
 
   return {
     beforeAgentStart,
@@ -145,11 +156,11 @@ describe("herdr-btw parent reference", () => {
     const h = harness({ flag: PARENT_ID, parentSession: parentFile });
     h.sessionStart();
     const result = h.beforeAgentStart();
-    expect(result?.systemPrompt?.startsWith(BASE_PROMPT)).toBe(true);
-    expect(result?.systemPrompt).toContain(JSON.stringify(parentFile));
-    expect(result?.systemPrompt).toContain(PARENT_ID);
-    expect(result?.systemPrompt).toContain("append-only");
-    expect(result?.systemPrompt).toContain("read-only");
+    expect(result).toContain(JSON.stringify(parentFile));
+    expect(result).toContain(PARENT_ID);
+    expect(result).toContain("append-only");
+    expect(result).toContain("read-only");
+    expect(h.beforeAgentStart()).toBe(result);
   });
 
   it("drops the instruction when per-run parent identity revalidation fails", () => {
@@ -161,6 +172,7 @@ describe("herdr-btw parent reference", () => {
     for (const failure of failures) {
       const h = harness({ flag: PARENT_ID, parentSession: PARENT_FILE });
       h.sessionStart();
+      expect(h.beforeAgentStart()).toBeDefined();
       if (failure instanceof Error)
         h.probe.mockImplementationOnce(() => {
           throw failure;
@@ -169,7 +181,7 @@ describe("herdr-btw parent reference", () => {
 
       expect(h.beforeAgentStart()).toBeUndefined();
       expect(h.beforeAgentStart()).toBeUndefined();
-      expect(h.probe).toHaveBeenCalledTimes(2);
+      expect(h.probe).toHaveBeenCalledTimes(3);
     }
   });
 

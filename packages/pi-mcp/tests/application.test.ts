@@ -273,17 +273,15 @@ describe("pinned Pi MCP application", () => {
               text: Schema.encodeSync(Schema.fromJsonString(McpGatewayReplySchema))(failure),
             },
           ]);
-          expect(
-            session.sessionManager
-              .getEntries()
-              .some(
-                (entry) =>
-                  entry.type === "message" &&
-                  entry.message.role === "toolResult" &&
-                  entry.message.isError &&
-                  entry.message.details.resultId === "recoverable",
-              ),
-          ).toBe(true);
+          const persisted = session.sessionManager
+            .getEntries()
+            .find(
+              (entry) =>
+                entry.type === "message" &&
+                entry.message.role === "toolResult" &&
+                entry.message.toolCallId === "owned-call",
+            );
+          expect(persisted).toMatchObject({ message: { isError: true, details: failure } });
           expect(fake.state.callCount).toBe(2);
         }),
       );

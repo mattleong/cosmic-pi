@@ -677,6 +677,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const handleWireEvent = makeRunEventHandler({
     mutateView: settlement.mutateEventView,
     mergeLateUsage: settlement.mergeLateUsage,
+    mergeProcessUsage: settlement.mergeProcessUsage,
     runStarted: settlement.runStartedFromBackend,
     runSettled: settlement.runSettledFromBackend,
     settle: settlement.settle,

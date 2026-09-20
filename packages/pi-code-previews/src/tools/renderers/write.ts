@@ -58,7 +58,7 @@ export function createWritePreviewTool(cwd: string) {
             .then((result) => withCodePreviewBeforeWrite(result, snapshot, toolCallId)),
         );
       }
-      return executeWriteWithPreview(toolCallId, path, content, cwd, signal);
+      return executeWriteWithPreview(toolCallId, path, content, cwd, signal, ctx);
     },
 
     renderCall(args, theme, renderContext) {
