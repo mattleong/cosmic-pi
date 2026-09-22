@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn } from "@earendil-works/pi-tui";
 import { managerTabs } from "pi-cosmic-ui/manager";
 import { framedFill, framedScreen } from "pi-cosmic-ui/manager/list-detail-shell";
-import { profileFrame, profileTone } from "./profile-style.ts";
+import { profileFrame } from "./profile-style.ts";
 
 /** Framed children share the dashboard's outer border; plain dialogs sit inside it. */
 export const profileDashboardChildHeight = (height: number, framed = true): number =>
@@ -27,7 +27,7 @@ export function renderProfileDashboard(
     const active = state.tab === id;
     const text = `${active ? "[" : " "}${label}${active ? "]" : " "}`;
     return options.theme.fg(
-      profileTone[id],
+      active ? "accent" : "muted",
       active ? options.theme.bold(options.theme.underline(text)) : text,
     );
   };
