@@ -36,7 +36,7 @@ export interface PiHostLogTarget {
   readonly packageName: string;
 }
 
-/** One retained generation, matching the advisor failure log's bound. */
+/** Retain one rotated log generation. */
 const MAX_HOST_LOG_BYTES = 1_000_000;
 
 /**

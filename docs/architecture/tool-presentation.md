@@ -54,6 +54,4 @@ The source-only `pi-code-previews/testing` export provides `createToolPresentati
 
 The private `supervisor_pi_proxy` transport is not a visible Pi tool row. Code Mode's seven direct builtin adapters and Windows-only PowerShell execute headlessly; their bounded nested receipts use Code Mode's shared presentation, not a second registered shell.
 
-Advisor's private `read`, `grep`, `find`, and `ls` definitions execute inside a headless child. They are not parent TUI tool presentations and must not acquire preview dependencies for this standard. Advisor root review cards are message presentations, not tool results.
-
-Better xAI, Directory Models, Herdr BTW, Cosmic UI, Cosmic Core, and Advisor root register no visible tool renderer to migrate. Their commands, settings, footer, manager, and review-card interfaces remain outside this tool contract. Third-party tools are outside workspace ownership.
+Better xAI, Directory Models, Herdr BTW, Cosmic UI, and Cosmic Core register no visible tool renderer to migrate. Their commands, settings, footer, and manager interfaces remain outside this tool contract. Third-party tools are outside workspace ownership.

@@ -15,7 +15,6 @@ const extensionPackages = [
   "pi-code-mode",
   "pi-code-previews",
   "pi-directory-models",
-  "pi-advisor",
   "pi-background-task",
   "pi-subagents",
   "pi-mcp",
@@ -105,11 +104,7 @@ try {
           ...tarballDependencies,
         },
         pnpm: {
-          overrides: Object.fromEntries(
-            Object.entries(tarballDependencies).filter(
-              ([packageName]) => packageName !== "pi-advisor",
-            ),
-          ),
+          overrides: tarballDependencies,
         },
       },
       null,

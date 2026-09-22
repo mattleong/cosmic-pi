@@ -13,17 +13,7 @@ Do not use stale examples containing `it.scoped` or `it.scopedLive`; those helpe
 
 ## Required coverage
 
-Resource-owning services test acquisition and release counts on success, failure, replacement, interruption, and repeated shutdown. Time-dependent behavior uses `TestClock`; sleeping work is forked before the clock is advanced. Tests cover interruption during auth lookup, HTTP requests, streams, configuration writes, image writes, Shiki initialization, advisor checkpoints, session replacement, and shutdown. Shared deterministic platform fakes and acquisition probes live under the published `pi-cosmic-core/testing` test-kit subpath.
-
-Advisor lifecycle tests use `TestClock` to prove that a never-settling child abort reaches forced
-disposal at the configured operation deadline and remains reset-required until a clean re-prime.
-Promise-boundary tests also prove that timed-out child creation cannot delay replacement or
-shutdown, and that a never-installed late session is synchronously disposed exactly once.
-Advisor host-boundary tests inject throwing getters, session methods, abort signals, tool metadata,
-status renderers, and timer callbacks; replacement tests prove exact listener release. Configuration
-tests interrupt inside `afterCommit` and require the renamed document and authoritative publication
-to remain aligned. Checkpoint finalizer tests deactivate the outer executor before scope closure and
-still require inline cancellation, fiber interruption, and exact-once bookkeeping.
+Resource-owning services test acquisition and release counts on success, failure, replacement, interruption, and repeated shutdown. Time-dependent behavior uses `TestClock`; sleeping work is forked before the clock is advanced. Tests cover interruption during auth lookup, HTTP requests, streams, configuration writes, image writes, Shiki initialization, session replacement, and shutdown. Shared deterministic platform fakes and acquisition probes live under the published `pi-cosmic-core/testing` test-kit subpath.
 
 Concurrency tests pause at the exact ownership or publication boundary with `Deferred`, then
 force the competing operation through that window. A test named atomic, serialized, stale-safe,
@@ -58,7 +48,7 @@ Async questionnaire tests separate the TUI factory from the `onHandle` mount han
 
 - Projection tests interrupt update preparation and lock waiting, then require reuse. Publication tests require the external snapshot, internal snapshot, and authoritative state to commit together. Refresh tests interrupt admission before work starts and require shared waiters to settle and later refreshes to proceed.
 - Preview tests hold a predecessor in Pi's native mutation queue across cancellation, replacement, and shutdown. The caller must settle without that predecessor; releasing that predecessor must not execute the revoked write or enter the replacement runtime.
-- Advisor onboarding tests separate factory execution from mount, preserve unrelated overlays, and require typed finish failure even when Pi's custom Promise never settles. Ask User editor tests hold process cleanup through interruption and require file removal and TUI restoration before dialog-permit or session transfer, without waiting for the custom Promise.
+- Ask User editor tests hold process cleanup through interruption and require file removal and TUI restoration before dialog-permit or session transfer, without waiting for the custom Promise.
 - Background process tests interrupt cwd inspection before spawn, exercise graceful-helper timeout and force escalation, and require process-scope helper cleanup. Subagent tests cancel a subtree-stop waiter between descendants and require the complete traversal to continue under session ownership. Failed or interrupted bridge opening must release its child resources while the parent scope stays open.
 - Settings tests replace the session during inspection and registry refresh, including a registry Promise that ignores abort. No stale picker or catalog may publish. Cosmic UI tests delay old shutdown and failed-start cleanup across replacement and require replacement state to survive.
 - Decoder tests exercise full-page validation, malformed and oversized input, output and format-schema bounds, deadlines, cancellation, and immediate cross-runtime admission. Fault-injected kill failure and incomplete acquisition must leave decoding disabled unless cleanup explicitly confirms exit, on success, failure, and interruption. No raw pixels or native diagnostics may escape. Real-process fixtures prove termination and permit ownership through cleanup; they do not claim an OS memory sandbox or unconditional shutdown deadline.

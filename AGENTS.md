@@ -4,7 +4,6 @@
 
 This is a pnpm workspace. Shared configuration lives at the root; package source and tests live inside each package.
 
-- `packages/pi-advisor/`: automatic advisor and revision extension.
 - `packages/pi-ask-user/`: structured user questionnaires.
 - `packages/pi-background-task/`: session-scoped background tasks.
 - `packages/pi-better-openai/`: Better OpenAI extension.

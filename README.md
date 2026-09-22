@@ -4,7 +4,6 @@ A pnpm workspace for Pi extensions.
 
 ## Packages
 
-- [`pi-advisor`](packages/pi-advisor) — active second-model advice with bounded interventions and local review cards.
 - [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
 - [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-better-xai`](packages/pi-better-xai) — xAI/Grok subscription usage visibility and Cosmic UI footer polish.
@@ -39,13 +38,12 @@ pi install npm:pi-directory-models
 pi install npm:pi-subagents
 ```
 
-`pi-advisor`, `pi-herdr-btw`, and `pi-mcp` are local-only. Clone this repository, install the workspace dependencies, and register their local paths for persistent use:
+`pi-herdr-btw` and `pi-mcp` are local-only. Clone this repository, install the workspace dependencies, and register their local paths for persistent use:
 
 ```bash
 git clone https://github.com/mattleong/cosmic-pi.git
 cd cosmic-pi
 pnpm install
-pi install "$PWD/packages/pi-advisor"
 pi install "$PWD/packages/pi-herdr-btw"
 pi install "$PWD/packages/pi-mcp"
 ```
@@ -62,7 +60,6 @@ The workspace uses TypeScript-Go for typechecking, Oxlint, and `@effect/tsgo` fo
 Run a command for one package with a filter:
 
 ```bash
-pnpm --filter pi-advisor test
 pnpm --filter pi-ask-user test
 pnpm --filter pi-better-openai test
 pnpm --filter pi-code-mode test
@@ -79,7 +76,6 @@ pnpm --filter pi-subagents test
 ## Try the local packages with pi
 
 ```bash
-pi -e ./packages/pi-advisor
 pi -e ./packages/pi-ask-user
 pi -e ./packages/pi-better-openai
 pi -e ./packages/pi-code-mode
@@ -95,7 +91,7 @@ To add a package to project-local Pi settings, use `pi install -l` with its loca
 
 ## Releases
 
-All workspace packages use the same version. The public packages are published together; private `pi-advisor`, `pi-herdr-btw`, and `pi-mcp` remain local-only. Set the next version from the repository root:
+All workspace packages use the same version. The public packages are published together; private `pi-herdr-btw` and `pi-mcp` remain local-only. Set the next version from the repository root:
 
 ```bash
 pnpm version:set 0.2.1

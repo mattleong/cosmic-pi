@@ -1,6 +1,6 @@
 # Releasing cosmic-pi
 
-All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-advisor` and `pi-herdr-btw` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its TypeScript source ships inside the `pi-code-mode` tarball and loads through Pi/Jiti). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
+All workspace packages use the same version. The public `pi-ask-user`, `pi-background-task`, `pi-better-openai`, `pi-better-xai`, `pi-code-mode`, `pi-code-previews`, `pi-cosmic-core`, `pi-cosmic-ui`, `pi-directory-models`, and `pi-subagents` packages are published together; private `pi-herdr-btw` and `pi-mcp` remain local-only, and the nested private `pi-code-mode-runtime` is never published on its own (its TypeScript source ships inside the `pi-code-mode` tarball and loads through Pi/Jiti). A published GitHub Release triggers [the release workflow](.github/workflows/release.yml), which validates the entire workspace, skips private packages, and publishes each public package to npm — shared runtime dependencies (`pi-cosmic-core`, `pi-cosmic-ui`, `pi-code-previews`) first, then the remaining public packages.
 
 ## One-time setup
 
@@ -114,7 +114,7 @@ Do not create a new version solely because one package published before another 
 ## Important constraints
 
 - Keep the root and every package version synchronized.
-- Keep `pi-advisor` and `pi-herdr-btw` private and local-only; do not publish them to npm.
+- Keep `pi-herdr-btw` and `pi-mcp` private and local-only; do not publish them to npm.
 - Use stable `vMAJOR.MINOR.PATCH` release tags, such as `v0.2.1`.
 - Publish through the GitHub Release workflow rather than running `npm publish` locally.
 - Never reuse or move a tag after npm publication.
