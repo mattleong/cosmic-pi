@@ -124,6 +124,64 @@ describe("profile dashboard actions", () => {
         expect(preview).toContain(`${profile}:`);
     },
   );
+  effectTest("marks fast-mode candidates in the Use confirmation", function* () {
+    const value = makeProfileSettingsInspection({
+      globalDocument: {
+        version: 6,
+        profileSets: {
+          fast: {
+            profiles: {
+              scout: {
+                host: "local",
+                runtime: "codex",
+                model: "gpt-5.6-codex",
+                effort: "default",
+                context: "fresh",
+                writeIntent: "read-only",
+                openaiFastMode: true,
+              },
+              researcher: [
+                {
+                  host: "local",
+                  runtime: "codex",
+                  model: "gpt-5.6-codex-fast",
+                  effort: "default",
+                  context: "fresh",
+                  writeIntent: "read-only",
+                  openaiFastMode: true,
+                },
+                {
+                  host: "local",
+                  runtime: "codex",
+                  model: "gpt-5.6-codex-standard",
+                  effort: "default",
+                  context: "fresh",
+                  writeIntent: "read-only",
+                },
+              ],
+            },
+          },
+        },
+      },
+      projectDocument: undefined,
+      projectTrusted: true,
+    });
+    const f = fixture();
+    const host = { ...f.host, inspection: () => value, refresh: () => Promise.resolve(value) };
+
+    yield* step(() =>
+      runProfileSetAction(host, {
+        action: "use-current",
+        target: { scope: "global", name: "fast" },
+      }),
+    );
+
+    const preview = vi.mocked(f.host.confirm).mock.calls[0]![1];
+    expect(preview).toContain("scout: local/codex gpt-5.6-codex ⚡ · default");
+    expect(preview).toContain(
+      "researcher: local/codex gpt-5.6-codex-fast ⚡ · default → local/codex gpt-5.6-codex-standard · default",
+    );
+  });
   effectTest("rechecks trust and lifetime after confirmation before replacement", function* () {
     for (const revoke of ["untrust", "revoke"] as const) {
       const f = fixture();
