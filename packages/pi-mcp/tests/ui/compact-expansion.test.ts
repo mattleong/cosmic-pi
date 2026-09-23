@@ -116,6 +116,98 @@ it("renders unknown-coverage boundary attention once through the real MCP factor
   }
 });
 
+it("renders a complete remote error once outside labeled raw JSON in all compact shells", () => {
+  const args = { action: "tools.call", server: "docs", tool: "lookup", arguments: {} };
+  const marker = "REMOTE_FAILURE_MARKER";
+  const result = {
+    content: [],
+    details: {
+      action: "tools.call",
+      outcome: "completed",
+      isError: true,
+      notices: [],
+      data: { result: { isError: true, content: [{ type: "text", text: marker }] } },
+    },
+  };
+  const before = structuredClone(result);
+  const summary = projectMcpCompactSummary({ phase: "settled", args, result, isError: true });
+  expect(summary?.issues?.entries.some((issue) => issue.code === "remote-failure")).toBe(true);
+  expect(summary?.failure?.ownedIssues).toHaveLength(1);
+  for (const mode of ["on", "off", "border"] as const) {
+    const harness = createToolPresentationHarness(registered(mode), { theme });
+    for (const expanded of [false, true, false, true]) {
+      harness.call(args, { expanded, isError: true });
+      harness.result(result, { expanded, isError: true });
+      const text = harness.render(240).join("\n");
+      if (expanded) {
+        const [readable, raw] = text.split("Raw JSON");
+        expect(readable?.split(marker)).toHaveLength(2);
+        expect(raw).toContain(marker);
+      } else {
+        expect(text.split("The server reported an error.")).toHaveLength(2);
+        expect(text).not.toContain("The tool reported an error.");
+      }
+    }
+  }
+  expect(result).toEqual(before);
+});
+
+it("keeps readable error ownership when only labeled raw metadata is cut", () => {
+  const args = { action: "tools.call", server: "docs", tool: "lookup", arguments: {} };
+  const marker = "REMOTE_FAILURE_MARKER";
+  const result = {
+    content: [],
+    details: {
+      action: "tools.call",
+      outcome: "completed",
+      isError: true,
+      notices: [],
+      data: {
+        result: {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: marker,
+              _meta: { blob: "x".repeat(2_001) },
+            },
+          ],
+        },
+      },
+    },
+  };
+  const summary = projectMcpCompactSummary({ phase: "settled", args, result, isError: true });
+  expect(summary?.issues?.coverage).toBe("complete");
+  expect(summary?.expandedResultOwnsIssues).toHaveLength(1);
+  for (const mode of ["on", "off", "border"] as const) {
+    const harness = createToolPresentationHarness(registered(mode), { theme });
+    harness.call(args, { expanded: true, isError: true });
+    harness.result(result, { expanded: true, isError: true });
+    const [readable, raw] = harness.render(240).join("\n").split("Raw JSON");
+    expect(readable?.split(marker)).toHaveLength(2);
+    expect(raw).toContain(marker);
+  }
+});
+
+it("does not claim remote errors when the readable result is cut", () => {
+  const summary = projectMcpCompactSummary({
+    phase: "settled",
+    args: { action: "tools.call", server: "docs", tool: "lookup", arguments: {} },
+    result: {
+      details: {
+        action: "tools.call",
+        outcome: "completed",
+        isError: true,
+        notices: [],
+        data: { result: { isError: true, content: [{ type: "text", text: "X\n".repeat(90) }] } },
+      },
+    },
+    isError: false,
+  });
+  expect(summary?.issues?.entries.some((issue) => issue.code === "remote-failure")).toBe(true);
+  expect(summary?.expandedResultOwnsIssues).toBeUndefined();
+});
+
 it("preserves retained read delivery and original outcome separately", () => {
   const args = { action: "result.read", id: "retained-1" };
   const result = {

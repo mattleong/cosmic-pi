@@ -94,6 +94,7 @@ export function makeExecutionReceipts() {
   const calls = new Map<number, ExecutionReceipt>();
   const active = new Set<number>();
   let closed = false;
+  let outputLost = false;
   let total = 0;
   let completed = 0;
   let unknown = 0;
@@ -102,6 +103,11 @@ export function makeExecutionReceipts() {
     if (certainty === "unknown") unknown += change;
   };
   return {
+    /** Host loss is independent of UI projection and survives bounded row eviction. */
+    recordOutputLoss() {
+      if (!closed) outputLost = true;
+    },
+    hasOutputLoss: () => outputLost,
     admit(id: number, tool: string) {
       if (closed || calls.has(id)) return;
       total++;

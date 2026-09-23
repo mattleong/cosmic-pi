@@ -18,6 +18,7 @@ import {
 } from "./format.ts";
 import { projectFailurePresentation } from "./failure-evidence.ts";
 import { clampModelVisibleText, utf8ByteLength } from "./limits.ts";
+import { composeRecoveryResponse } from "./recovery-response.ts";
 
 export function makeResultResponse(input: {
   readonly maxBytes: number;
@@ -28,6 +29,7 @@ export function makeResultResponse(input: {
   readonly capture: () => ResultCapture;
   readonly settle: () => CodeModeToolDetails;
   readonly receipts: () => ExecutionReceipts;
+  readonly nestedOutputLost: () => boolean;
   readonly retain: (details: CodeModeToolDetails) => void;
 }) {
   const finish = (
@@ -36,6 +38,8 @@ export function makeResultResponse(input: {
   ): Promise<AgentToolResult<CodeModeToolDetails>> => {
     const details = input.settle();
     const receipts = input.receipts();
+    const nestedOutputLost = input.nestedOutputLost();
+    const needsSafetyBackstop = nestedOutputLost || receipts.unknown > 0;
     const initiallyCancelled = input.aborted() || !input.current();
     // A settled interpreter result remains known even if delivery is later cancelled.
     const outcome: ExecutionOutcome = result
@@ -53,7 +57,16 @@ export function makeResultResponse(input: {
           ? formatCodeModeSuccess(result)
           : formatCodeModeFailure(result);
     const truncated = result?.truncated === true || utf8ByteLength(raw) > input.maxBytes;
-    const needsReceipt = outcome !== "succeeded" || truncated;
+    const safetyDisplacesOutput =
+      needsSafetyBackstop &&
+      composeRecoveryResponse({
+        raw,
+        recovery: "",
+        receipts,
+        nestedOutputLost,
+        maxBytes: input.maxBytes,
+      }).outputTruncated;
+    const needsRetainedOutput = outcome !== "succeeded" || truncated || safetyDisplacesOutput;
     const capture = input.capture();
     const receiptText = formatExecutionReceipts(receipts);
     const retainedText =
@@ -63,7 +76,7 @@ export function makeResultResponse(input: {
           : undefined
         : `${receiptText}\n\n${capture.status === "captured" ? capture.text : `Full output unavailable (${capture.reason}).\n${clampModelVisibleText(raw, input.maxBytes)}`}`;
     const put =
-      needsReceipt && retainedText !== undefined && input.current() && input.results
+      needsRetainedOutput && retainedText !== undefined && input.current() && input.results
         ? input
             .run(
               input.results.put(
@@ -79,22 +92,36 @@ export function makeResultResponse(input: {
       // Its Promise may settle after caller cancellation or session revocation.
       const current = input.current();
       const cancelled = initiallyCancelled || input.aborted() || !current;
-      const publishReceipt = needsReceipt || cancelled;
+      const publishReceipt = needsRetainedOutput || needsSafetyBackstop || cancelled;
       const resultId = !cancelled ? id : undefined;
       const readOnly = hasCompleteReadOnlyReceipts(receipts);
       const replayCaution = readOnly
         ? "Do not rerun the program to recover output."
         : "Do not rerun mutations to recover output.";
-      const recovery = !publishReceipt
-        ? ""
-        : resultId
-          ? `Read retained ${outcome === "succeeded" ? "output" : "failure receipt"} without rerunning: code_mode({action:"result.read",id:"${resultId}"}). Original execution: ${outcome}.${capture.status === "unavailable" ? ` Full output unavailable (${capture.reason}).` : ""}\n`
-          : `Full output unavailable (${!current ? "revoked" : cancelled ? "cancelled" : capture.status === "unavailable" ? capture.reason : "retention-limit"}). ${replayCaution} Original execution: ${outcome}.\n`;
-      const composed = `${recovery}${publishReceipt && receiptText ? `${receiptText}\n\n` : ""}${cancelled ? "Execution cancelled." : raw}`;
-      let text = clampModelVisibleText(composed, input.maxBytes);
+      const recovery =
+        !needsRetainedOutput && !cancelled
+          ? ""
+          : resultId
+            ? `Read retained ${outcome === "succeeded" ? "output" : "failure receipt"} without rerunning: code_mode({action:"result.read",id:"${resultId}"}). Original execution: ${outcome}.${capture.status === "unavailable" ? ` Full output unavailable (${capture.reason}).` : ""}\n`
+            : `Full output unavailable (${!current ? "revoked" : cancelled ? "cancelled" : capture.status === "unavailable" ? capture.reason : "retention-limit"}). ${replayCaution} Original execution: ${outcome}.\n`;
+      const visibleRaw = cancelled ? "Execution cancelled." : raw;
+      const composed = publishReceipt
+        ? composeRecoveryResponse({
+            raw: visibleRaw,
+            recovery,
+            receipts,
+            nestedOutputLost,
+            maxBytes: input.maxBytes,
+          })
+        : {
+            text: clampModelVisibleText(visibleRaw, input.maxBytes),
+            truncated: utf8ByteLength(visibleRaw) > input.maxBytes,
+          };
+      let text = composed.text;
       let initialPreview: CodeModeToolDetails["initialPreview"];
       if (
         !cancelled &&
+        !needsSafetyBackstop &&
         outcome === "succeeded" &&
         truncated &&
         resultId !== undefined &&
@@ -133,7 +160,7 @@ export function makeResultResponse(input: {
         ...details,
         ...(publishReceipt && { executionReceipts: receipts }),
         ...(resultId && { resultId, ...(initialPreview && { initialPreview }) }),
-        ...((truncated || text !== composed) && { truncated: true }),
+        ...((truncated || composed.truncated) && { truncated: true }),
         ...(cancelled && { cancelled: true }),
         ...(!cancelled &&
           result?.ok && { outputKind: Predicate.isString(result.value) ? "text" : "structured" }),

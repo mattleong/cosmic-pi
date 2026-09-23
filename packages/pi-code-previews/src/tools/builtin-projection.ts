@@ -61,7 +61,8 @@ export function projectBuiltinCompactSummary(
   const owned =
     summaryCompactIssues(projected, true).entries.filter(
       (issue) =>
-        (tool === "read" && issue.code === "read-continuation") ||
+        (tool === "read" &&
+          ["read-continuation", "read-truncated", "oversized-first-line"].includes(issue.code)) ||
         (summary.failureEvidence?.coverage === "complete" &&
           (issue.code === summary.failureEvidence.code ||
             [
@@ -71,16 +72,22 @@ export function projectBuiltinCompactSummary(
               "edit-disjoint-regions",
             ].includes(issue.code))),
     ) ?? [];
-  return {
-    ...projected,
-    expandedResultOwnsIssues: owned.map((issue) =>
-      claimCompactIssue(issue, {
-        cause: true,
-        recovery: issue.recovery.map((entry) => entry.code),
-        ...(issue.diagnostics && { diagnostics: issue.diagnostics.map((_, index) => index) }),
-      }),
-    ),
-  };
+  const claims = owned.map((issue) =>
+    claimCompactIssue(issue, {
+      cause: true,
+      recovery: issue.recovery.map((entry) => entry.code),
+      ...(issue.diagnostics && { diagnostics: issue.diagnostics.map((_, index) => index) }),
+    }),
+  );
+  return projected.failure
+    ? {
+        ...projected,
+        failure: {
+          ...projected.failure,
+          ownedIssues: [...(projected.failure.ownedIssues ?? []), ...claims],
+        },
+      }
+    : { ...projected, expandedResultOwnsIssues: claims };
 }
 
 function projectBuiltinSummary(

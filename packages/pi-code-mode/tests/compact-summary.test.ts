@@ -9,7 +9,9 @@ import {
   codeModeCompactSummaryAtHost,
   syncProgressTicker,
 } from "../src/boundary/host-render-ticker.ts";
-import { callEntryDetails } from "../src/tools/format.ts";
+import { callEntryDetails, type CodeModeCallEntry } from "../src/tools/format.ts";
+import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
+import { summaryCompactIssues } from "pi-code-previews";
 import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
 import {
   codeModeStateFixture,
@@ -39,6 +41,77 @@ const summarize = <Details>(
 const success = { ...callEntryDetails([]), outputKind: "text" as const };
 
 describe("Code Mode compact outcomes", () => {
+  it("does not add a generic host failure to a body-owned v2 program failure", () => {
+    const ledger = makeCompactEvidence(() => undefined);
+    ledger.close();
+    const summary = summarize(
+      { ...callEntryDetails([]), compactAttention: ledger.snapshot() },
+      { isError: true, text: "PROGRAM_FAILURE" },
+    );
+    const issues = summary && summaryCompactIssues(summary, true).entries;
+    expect(issues?.filter((issue) => issue.cause === "PROGRAM_FAILURE")).toHaveLength(1);
+    expect(issues?.some((issue) => issue.code === "pi-error")).toBe(false);
+  });
+
+  it("does not repeat hidden v2 failures already represented by exact child issues", () => {
+    for (const unclassified of [false, true]) {
+      const rows: CodeModeCallEntry[] = [];
+      const ledger = makeCompactEvidence((id, compact) => {
+        rows[id - 1] = { tool: "pi.read", status: "error", compact };
+      });
+      for (let id = 1; id <= 6; id++) {
+        ledger.admit("pi.read");
+        ledger.start(id, id);
+        ledger.observe(id, () => ({
+          subject: `file-${id}`,
+          outcome: "error",
+          issues: {
+            coverage: "complete",
+            entries: [
+              {
+                operation: "read",
+                code: "failure",
+                severity: "error",
+                cause: `read failure ${id}`,
+                recovery: [],
+              },
+            ],
+          },
+        }));
+        ledger.end(id);
+      }
+      if (unclassified) ledger.admit("pi.read");
+      ledger.close();
+      const details = {
+        ...callEntryDetails(
+          rows,
+          unclassified
+            ? { total: 7, queued: 0, running: 0, succeeded: 0, failed: 7, cancelled: 0 }
+            : undefined,
+        ),
+        outputKind: "text" as const,
+        compactAttention: ledger.snapshot(),
+      };
+      const summary = summarize(details);
+      expect(summary).toBeDefined();
+      expect(summary?.children?.entries).toHaveLength(6);
+      expect(
+        summary &&
+          summaryCompactIssues(summary).entries.filter((issue) => issue.code === "failure"),
+      ).toHaveLength(6);
+      expect(
+        summary?.notices?.filter((notice) =>
+          notice.text.includes("additional nested operations failed"),
+        ),
+      ).toHaveLength(unclassified ? 1 : 0);
+      if (unclassified)
+        expect(
+          summary?.notices?.find((notice) =>
+            notice.text.includes("additional nested operations failed"),
+          )?.text,
+        ).toContain("1 additional");
+    }
+  });
   it("retained reads stay compact for both returned pages and host failures", () => {
     const definition = buildCodeModeToolDefinition({
       catalogBudget: 0,

@@ -107,6 +107,99 @@ it("renders the registered management actions and task states without parsing fe
     }
 });
 
+it("renders each classified task warning once beside labeled raw output", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    setCodePreviewSettings({
+      ...settings,
+      toolCallBackground: mode,
+      toolCallCollapsedStyle: "compact",
+      toolCallTiming: false,
+    });
+    let registered: ToolDefinition | undefined;
+    // SAFETY: Only registration is exercised; the runner must not execute.
+    const pi = {
+      registerTool: (tool: ToolDefinition) => {
+        registered = tool;
+      },
+    } as ExtensionAPI;
+    registerBackgroundTaskTool(pi, { run: () => Promise.reject(new Error("not executed")) });
+    const result = {
+      content: [{ type: "text" as const, text: "Original task result marker" }],
+      details: {
+        action: "status",
+        snapshot: { ...snapshot, state: "failed", exitCode: 9, droppedLogBytes: 50 },
+      },
+    };
+    const before = structuredClone(result);
+    const harness = createToolPresentationHarness(registered!, { theme });
+    for (const expanded of [false, true, false, true]) {
+      harness.call({ action: "status", id: snapshot.id }, { expanded });
+      harness.result(result, { expanded });
+      const text = harness.render(240).join("\n");
+      expect(
+        text.split(
+          expanded
+            ? "50 log bytes discarded; discarded output cannot be recovered."
+            : "Some task output was discarded and cannot be recovered.",
+        ),
+      ).toHaveLength(2);
+      expect(
+        text.split(expanded ? "Process exited with code 9." : "The task exited with code 9."),
+      ).toHaveLength(2);
+      if (expanded) {
+        expect(text).toContain("Raw task result");
+        expect(text).toContain("Original task result marker");
+      } else expect(text).not.toContain("Original task result marker");
+    }
+    expect(result).toEqual(before);
+  }
+});
+
+it("attributes same-named tasks' independent warnings by task ID", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    setCodePreviewSettings({
+      ...settings,
+      toolCallBackground: mode,
+      toolCallCollapsedStyle: "compact",
+      toolCallTiming: false,
+    });
+    let registered: ToolDefinition | undefined;
+    // SAFETY: Only registration is exercised; the runner must not execute.
+    const pi = {
+      registerTool: (tool: ToolDefinition) => {
+        registered = tool;
+      },
+    } as ExtensionAPI;
+    registerBackgroundTaskTool(pi, { run: () => Promise.reject(new Error("not executed")) });
+    const result = {
+      content: [{ type: "text" as const, text: "Original task list marker" }],
+      details: {
+        action: "list",
+        tasks: [
+          { ...snapshot, id: "task-a", name: "worker", state: "stopping" },
+          { ...snapshot, id: "task-b", name: "worker", state: "stopping" },
+        ],
+      },
+    };
+    const before = structuredClone(result);
+    const harness = createToolPresentationHarness(registered!, { theme });
+    for (const expanded of [false, true, false, true]) {
+      harness.call({ action: "list" }, { expanded });
+      harness.result(result, { expanded });
+      const text = harness.render(240).join("\n");
+      for (const id of ["task-a", "task-b"]) {
+        const warning = expanded
+          ? `${id}: Process-tree cleanup is not confirmed; inspect status before retrying work.`
+          : `${id}: Some task processes may still be running.`;
+        expect(text.split(warning)).toHaveLength(2);
+      }
+      if (expanded) expect(text).toContain("Raw task result");
+      else expect(text).not.toContain("Original task list marker");
+    }
+    expect(result).toEqual(before);
+  }
+});
+
 it("keeps successful command delivery distinct from failed task state and discarded logs", () => {
   const summary = projectBackgroundTaskCompactSummary({
     phase: "settled",

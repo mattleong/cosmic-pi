@@ -83,10 +83,14 @@ export function runCodeModeExecution(
   // Adapter completion is not guest delivery. Only the terminal runtime hook observes
   // output-schema decoding and the interpreter's stricter data boundary.
   const returnedOutputs = new Set<number>();
+  const recordDeliveryFailure = (id: number | undefined) => {
+    receipts.recordOutputLoss();
+    compact.deliveryFailure(id);
+  };
   const endDelivery = (fiber: number, failed: boolean) => {
     const id = compact.identity(fiber);
     const returned = id !== undefined && returnedOutputs.delete(id);
-    if (returned && failed) compact.deliveryFailure(id);
+    if (returned && failed) recordDeliveryFailure(id);
     receipts.delivery(id, returned && !failed);
     compact.end(fiber);
   };
@@ -139,7 +143,7 @@ export function runCodeModeExecution(
         toolCallId,
         observationId: compact.identity,
         onOperation: receipts.observe,
-        onDeliveryFailure: compact.deliveryFailure,
+        onDeliveryFailure: recordDeliveryFailure,
         observe: (id, name, args, result, isError) =>
           compact.observe(id, () => {
             if (policy === undefined || presentationCwd === undefined || name === "powershell")
@@ -165,7 +169,7 @@ export function runCodeModeExecution(
         missingPresentation: compact.missing,
         onOperation: receipts.observe,
         observationId: compact.identity,
-        onDeliveryFailure: compact.deliveryFailure,
+        onDeliveryFailure: recordDeliveryFailure,
         observePresentation: (id, receipt) => {
           if (receipt.incomplete || receipt.overflow) compact.missing();
           compact.observe(id, () => receipt.summary);
@@ -178,6 +182,7 @@ export function runCodeModeExecution(
         toolCallId,
         maxOutputBytes: () => Math.min(budget.remaining(), MCP_CODE_MODE_MAX_OUTPUT_BYTES),
         observationId: compact.identity,
+        onDeliveryFailure: recordDeliveryFailure,
         observePresentation: (id, args, observation, reply) => {
           receipts.observe(id, observation.outcome, observation.resultId, observation.isError);
           compact.observe(id, () => {
@@ -252,7 +257,7 @@ export function runCodeModeExecution(
           {
             includePowerShell: environment.definitions.powershell !== undefined,
             observationId: compact.identity,
-            onDeliveryFailure: compact.deliveryFailure,
+            onDeliveryFailure: recordDeliveryFailure,
             onOutputReturned: (id) => {
               if (id !== undefined) returnedOutputs.add(id);
             },
@@ -380,7 +385,7 @@ export function runCodeModeExecution(
       acceptingCapture = false;
       childTimings.close();
       // Legacy hooks cannot prove delivery for interrupted calls that never emit an end.
-      for (const id of returnedOutputs) compact.deliveryFailure(id);
+      for (const id of returnedOutputs) recordDeliveryFailure(id);
       returnedOutputs.clear();
       for (const call of calls.values()) delete call.liveTiming;
       const changed = settlePendingAsCancelled(calls, counts);
@@ -406,6 +411,7 @@ export function runCodeModeExecution(
       capture: () => capture,
       settle: settleProgress,
       receipts: receipts.close,
+      nestedOutputLost: receipts.hasOutputLoss,
       retain: (details) => environment.retainFailureDetails?.(toolCallId, details),
     });
     return environment

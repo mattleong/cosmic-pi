@@ -39,6 +39,7 @@ export interface McpContentPreview {
   readonly readable?: string;
   readonly combined: string;
   readonly cuts: readonly McpDisplayCut[];
+  readonly readableCuts: readonly McpDisplayCut[];
 }
 
 /** UTF-16 limits match retained cursors, without emitting half a surrogate pair. */
@@ -231,9 +232,10 @@ export const mcpContentPreview = <Value>(
 ): McpContentPreview => {
   const limits = MCP_DISPLAY_LIMITS;
   const cuts = new Set<McpDisplayCut>();
+  const readableCuts = new Set<McpDisplayCut>();
   const safe = displayCopy(value, limits, cuts);
   const content = resultEnvelope ? own(value, "result").value : value;
-  const readable = readableText(action, content, limits, cuts);
+  const readable = readableText(action, content, limits, readableCuts);
   const raw = JSON.stringify(safe, null, 2);
   // Reserve fixed room for the bounded cut categories and headings before splitting the budget.
   const characters = limits.text - 256;
@@ -247,7 +249,8 @@ export const mcpContentPreview = <Value>(
   const readableBounded =
     readable === undefined
       ? undefined
-      : bound(readable, Math.floor(characters / 2), Math.floor(lines / 2), cuts);
+      : bound(readable, Math.floor(characters / 2), Math.floor(lines / 2), readableCuts);
+  for (const cut of readableCuts) cuts.add(cut);
   const note = omission(cuts);
   const combined = [
     ...(readableBounded === undefined ? [] : ["Readable text", readableBounded]),
@@ -259,6 +262,7 @@ export const mcpContentPreview = <Value>(
     raw: [rawBounded, ...(note ? [note] : [])].join("\n"),
     combined,
     cuts: [...cuts],
+    readableCuts: [...readableCuts],
   };
   if (readableBounded !== undefined)
     preview = { ...preview, readable: [readableBounded, ...(note ? [note] : [])].join("\n") };
@@ -268,6 +272,7 @@ export const mcpContentPreview = <Value>(
 /** Complete authorized JSON only. Raw preserves the full page allowance, not the card prefix. */
 export const mcpPageContentPreview = <Value>(action: string, value: Value) => {
   const cuts = new Set<McpDisplayCut>();
+  const readableCuts = new Set<McpDisplayCut>();
   const safe = displayCopy(value, PAGE_DISPLAY_LIMITS, cuts);
   const raw = bound(
     JSON.stringify(safe),
@@ -275,15 +280,17 @@ export const mcpPageContentPreview = <Value>(action: string, value: Value) => {
     PAGE_DISPLAY_LIMITS.lines - 1,
     cuts,
   );
-  const text = readableText(action, value, PAGE_DISPLAY_LIMITS, cuts);
+  const text = readableText(action, value, PAGE_DISPLAY_LIMITS, readableCuts);
   const readable =
     text === undefined
       ? undefined
-      : bound(text, PAGE_DISPLAY_LIMITS.text - 256, PAGE_DISPLAY_LIMITS.lines - 1, cuts);
+      : bound(text, PAGE_DISPLAY_LIMITS.text - 256, PAGE_DISPLAY_LIMITS.lines - 1, readableCuts);
+  for (const cut of readableCuts) cuts.add(cut);
   const note = omission(cuts, true);
   let preview: Omit<McpContentPreview, "combined"> = {
     raw: [raw, ...(note ? [note] : [])].join("\n"),
     cuts: [...cuts],
+    readableCuts: [...readableCuts],
   };
   if (readable !== undefined)
     preview = { ...preview, readable: [readable, ...(note ? [note] : [])].join("\n") };

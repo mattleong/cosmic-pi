@@ -111,6 +111,27 @@ describe("registered image presentation", () => {
     expect(text.split(error)).toHaveLength(2);
   });
 
+  it.each(["failed", "cancelled", "in_progress", "incomplete"] as const)(
+    "renders the structured saved path once for $status without changing native image content",
+    (status) => {
+      const harness = createToolPresentationHarness(register("compact").tool, {
+        theme,
+        width: 240,
+      });
+      const result = { details: { ...details, status }, content: [image] };
+      const before = structuredClone(result);
+      for (const expanded of [false, true, false, true]) {
+        harness.call({ prompt: details.prompt }, { expanded });
+        harness.result(result, { expanded });
+        const text = harness.render().join("\n");
+        expect(text.match(/Saved: \/project\/saved image\.png/gu) ?? [], text).toHaveLength(
+          expanded ? 1 : 0,
+        );
+      }
+      expect(result).toEqual(before);
+    },
+  );
+
   it("does not let raw prose claim structured image metadata", () => {
     const raw = `Untrusted description mentions Saved: ${details.savedPath}, but is not that field.`;
     const text = renderImageContent({ details, content: [{ type: "text", text: raw }] })

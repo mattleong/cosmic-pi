@@ -70,10 +70,11 @@ export interface RunEventDependencies {
     state: "completed" | "failed" | "stopped",
     error?: string,
   ) => Effect.Effect<SubagentRunView>;
-  readonly notify: (
+  /** Called inside mutateView's locked transition before projection publication. */
+  readonly queueQuestionLocked: (
     record: RunRecord,
     notification: Omit<Extract<SubagentNotification, { type: "question" }>, "generation">,
-  ) => Effect.Effect<void>;
+  ) => void;
   readonly failRun: (
     record: RunRecord,
     message: string,
@@ -98,7 +99,7 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     runSettled,
     acceptReport,
     settle,
-    notify,
+    queueQuestionLocked,
     failRun,
     onWriteClaimViolation,
     onProxyEvent,
@@ -142,10 +143,17 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         });
         return;
       }
-      const view = yield* mutateView(record, envelope.assignmentEpoch, (current) => {
+      yield* mutateView(record, envelope.assignmentEpoch, (current) => {
         if (current.state !== "running") return undefined;
         if (record.replyPendingRequestId === envelope.requestId) return undefined;
         record.replyPendingRequestId = undefined;
+        queueQuestionLocked(record, {
+          type: "question",
+          id: current.id,
+          name: current.name,
+          requestId: envelope.requestId,
+          message,
+        });
         return {
           ...current,
           state: "waiting_for_parent",
@@ -153,14 +161,6 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           question: { requestId: envelope.requestId, message, createdAt: now },
           sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
         };
-      });
-      if (!view) return;
-      yield* notify(record, {
-        type: "question",
-        id: view.id,
-        name: view.name,
-        requestId: envelope.requestId,
-        message,
       });
     });
 

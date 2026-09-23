@@ -104,6 +104,7 @@ const execute = (
       capture: () => ({ status: "captured", text: exact }),
       settle: () => callEntryDetails([]),
       receipts: () => receipts,
+      nestedOutputLost: () => false,
       retain: () => undefined,
     });
     const delivered = yield* Effect.promise(() => response.success(result));

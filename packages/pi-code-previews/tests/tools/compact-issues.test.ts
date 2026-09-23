@@ -323,6 +323,83 @@ test("claims select detached fields without absorbing merged or conflicting evid
   expect(subtractCompactIssueClaims(stale, [claim])).toEqual(stale);
 });
 
+test("Pi failure fallback uses a matching owned issue, not identical sibling prose", () => {
+  const root = issue({
+    operation: "outer",
+    code: "provider-failed",
+    severity: "error",
+    cause: "same error",
+  });
+  const sibling = issue({
+    operation: "child-1",
+    code: "provider-failed",
+    severity: "error",
+    cause: "same error",
+  });
+  const failure = {
+    cause: "same error",
+    details: "same error",
+    ownedIssues: [claimCompactIssue(root, { cause: true })],
+  };
+  const covered = resolveCompactSummary(
+    { subject: "work", outcome: "error", failure, issues: collection(root) },
+    "settled",
+    true,
+  );
+  expect(covered?.issues?.entries.filter((entry) => entry.code === "pi-error")).toHaveLength(0);
+  const unrelated = resolveCompactSummary(
+    { subject: "work", outcome: "error", failure, issues: collection(sibling) },
+    "settled",
+    true,
+  );
+  expect(unrelated?.issues?.entries.filter((entry) => entry.code === "pi-error")).toHaveLength(1);
+  expect(unrelated?.issues?.entries.some((entry) => entry.operation === "child-1")).toBe(true);
+  const distinctHost = resolveCompactSummary(
+    {
+      subject: "work",
+      outcome: "error",
+      failure: { ...failure, cause: "HOST_FAILURE", details: "same error\nHOST_FAILURE" },
+      issues: collection(root),
+    },
+    "settled",
+    true,
+  );
+  expect(
+    distinctHost?.issues?.entries.some(
+      (entry) => entry.code === "pi-error" && entry.cause === "HOST_FAILURE",
+    ),
+  ).toBe(true);
+  const stale = resolveCompactSummary(
+    {
+      subject: "work",
+      outcome: "error",
+      failure,
+      issues: collection(issue({ operation: "outer", code: "pi-error", cause: "OLD_FAILURE" })),
+    },
+    "settled",
+    true,
+  );
+  expect(
+    stale?.issues?.entries.some(
+      (entry) => entry.code === "pi-error" && entry.cause === "same error",
+    ),
+  ).toBe(true);
+  const wrongSeverity = resolveCompactSummary(
+    {
+      subject: "work",
+      outcome: "error",
+      failure: {
+        ...failure,
+        ownedIssues: [claimCompactIssue({ ...root, severity: "warning" }, { cause: true })],
+      },
+      issues: collection(root),
+    },
+    "settled",
+    true,
+  );
+  expect(wrongSeverity?.issues?.entries.some((entry) => entry.code === "pi-error")).toBe(true);
+});
+
 test("Pi failure cannot be hidden by a success summary with an owned failure body", () => {
   const resolved = resolveCompactSummary(
     {

@@ -47,7 +47,13 @@ describe("completion admission", () => {
           currentProjection: () => ({ revision: 1, runs: [record.view] }),
           waitForRevision: () => Effect.never,
           allocateClaimToken: () => `claim-${++token}`,
-          delivery: { wakeCompletionLocked: () => undefined },
+          delivery: {
+            wakeCompletionLocked: () => undefined,
+            claimQuestionsLocked: () => undefined,
+            questionReceiptLocked: () => undefined,
+            acknowledgeQuestionsLocked: () => undefined,
+            releaseQuestionClaimsLocked: () => undefined,
+          },
         });
         let enteredUse = false;
         const use = () =>

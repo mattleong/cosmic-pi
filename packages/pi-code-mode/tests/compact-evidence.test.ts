@@ -724,8 +724,12 @@ describe("compact semantic evidence", () => {
           context: opaqueHostFixture({ isError: true, expanded: true }),
         });
         expect(summary?.outcome).toBe("error");
-        expect(summary?.notices).toContainEqual(expect.objectContaining({ expandedOnly: true }));
-        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(2);
+        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(0);
+        expect(
+          summary?.children?.entries
+            .flatMap((child) => child.notices ?? [])
+            .filter((notice) => notice.expandedOnly),
+        ).toHaveLength(2);
         expect(
           summary?.issues?.entries.some((issue) =>
             issue.recovery.some((instruction) => instruction.text.includes("/tmp/recovery-output")),

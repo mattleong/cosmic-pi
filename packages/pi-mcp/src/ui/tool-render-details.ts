@@ -62,6 +62,7 @@ export interface McpCardDetails {
   readonly warnings: readonly string[];
   readonly truncated: boolean;
   readonly displayCuts: readonly McpDisplayCut[];
+  readonly hasCompleteReadableText: boolean;
   readonly attachmentCount: number;
   readonly attachmentsLimited: boolean;
   readonly imageCount: number;
@@ -285,6 +286,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     warnings,
     truncated,
     displayCuts: preview.cuts,
+    hasCompleteReadableText: preview.readable !== undefined && preview.readableCuts.length === 0,
     attachmentCount,
     attachmentsLimited: descriptors.limited,
     imageCount,

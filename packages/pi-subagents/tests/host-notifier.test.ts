@@ -33,6 +33,27 @@ describe("subagent host notifier", () => {
     expect(options).toEqual({ deliverAs: "steer", triggerTurn: true });
   });
 
+  it("keeps a recorded warning when a report quotes the same words without a warning identity", () => {
+    const sendMessage = vi.fn();
+    const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
+    notify({
+      type: "completed",
+      runs: [
+        {
+          id: "agent-1",
+          name: "writer",
+          generation: 1,
+          outcome: "completed",
+          finalText: "Warning: Check write state before retrying.",
+          warning: "Check write state before retrying.",
+        },
+      ],
+    });
+    // SAFETY: The completion notifier sends text content through this fixture.
+    const text = sendMessage.mock.calls[0]?.[0].content as string;
+    expect(text.split("Check write state before retrying.")).toHaveLength(3);
+  });
+
   it("wakes the parent once for a retained report generation", () => {
     const sendMessage = vi.fn();
     // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.

@@ -217,6 +217,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     record.executionReceipts !== undefined,
     executionReceipts,
     compactAttention,
+    toolCalls,
   );
   const receiptsReadOnly =
     executionReceipts !== undefined &&

@@ -1,6 +1,7 @@
 import * as Predicate from "effect/Predicate";
 import {
   claimCompactIssue,
+  summaryCompactIssues,
   withCompactIssues,
   type CompactSummaryProvider,
 } from "pi-code-previews";
@@ -138,7 +139,13 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = (input) =
   const summary = projectImageSummary(input);
   if (!summary) return undefined;
   const projected = summary.issues ? summary : withCompactIssues(summary, "openai-image");
-  if (!projected.failure) return projected;
+  // Structured savedPath is already rendered by renderImageContent. Only that exact
+  // producer-owned recovery is claimed; unrelated notices remain shell-owned.
+  const savedClaims = summaryCompactIssues(projected, true)
+    .entries.filter((issue) => issue.code === "saved-path")
+    .map((issue) => claimCompactIssue(issue, { cause: true }));
+  if (!projected.failure)
+    return savedClaims.length ? { ...projected, expandedResultOwnsIssues: savedClaims } : projected;
   // This producer copies the complete text-only error into both the cause and raw body.
   // Claim that root alone; independently merged recovery remains shell-owned.
   const claims = (projected.issues?.entries ?? [])
@@ -147,6 +154,6 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = (input) =
   return {
     ...projected,
     failure: { ...projected.failure, ownedIssues: claims },
-    expandedResultOwnsIssues: claims,
+    expandedResultOwnsIssues: [...claims, ...savedClaims],
   };
 };

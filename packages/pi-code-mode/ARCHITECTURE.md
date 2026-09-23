@@ -42,8 +42,8 @@ and result-access owner until reload. Late callbacks cannot advertise old artifa
 
 `results/serialize.ts` captures only bounded text from the runtime's optional pre-bound `onResult`
 hook, with at most 100,000 visits and depth 32. It uses own data descriptors, never guest getters
-or `toJSON`, and retains no guest graph. Small successful responses remain unchanged. A successful
-response that needs saved paging publishes valid JSON with the original `id`, `outcome`, `kind`,
+or `toJSON`, and retains no guest graph. Small successful responses without host loss or unknown
+nested outcomes remain unchanged. A successful response that needs saved paging publishes valid JSON with the original `id`, `outcome`, `kind`,
 `offset`, `next`, `total`, and `text`. A numeric `next` adds an exact `result.read` recovery object
 whose offset starts after that page. All-present, non-error, completed and delivered allowlisted
 read receipts may compact to `{total,completed}`; risky and failed operations retain full bounded
@@ -62,9 +62,22 @@ cover every admitted call while at most 256 receipt rows survive; active dispatc
 evicted. Receipts contain IDs, names, bounded redacted targets, certainty, delivery and validated
 provider recovery IDs, never argument objects, write bodies or raw errors. Settlement freezes
 receipts and rejects late observations. Completed writes survive later throws, timeouts and output
-refusal. Background capability completion does not mean its process exited.
+refusal. An execution-local sticky host-loss flag survives row eviction and does not depend on UI
+projection. Builtin, Background Tasks, MCP, catalog, and interpreter conversion failures record
+loss before settlement closes the collector. Fully delivered native errors do not set this flag.
+Background capability completion does not mean its process exited.
 
-`tools/result-response.ts` places safe recovery before output and applies the final byte clamp.
+`tools/result-response.ts` separates retention from mandatory model-visible safety evidence.
+Host loss or unknown nested outcomes publish operation totals and no-replay guidance even when the
+guest catches an error and returns a short success. This does not create an artifact merely to retain
+that short result. If safety framing displaces otherwise-fitting guest output, it requests the usual
+bounded output retention instead. Saved guest output never claims to recover discarded child data. These paths
+use prose rather than allowing a successful JSON page to replace the warning.
+`tools/recovery-response.ts` reserves bytes for both the root diagnostic and safety/recovery block
+before optional receipt rows. Risky rows take priority; omitted text or rows are explicit. Exact
+aggregate counts do not depend on displayed rows. The final code-point-safe clamp remains
+mandatory, including at tiny or zero budgets. Artifact contents and ordinary page contracts stay
+unchanged.
 Retention runs in the session after the execution fiber settles. Before final publication,
 the response rechecks cancellation, session currency and availability, suppressing revoked
 output, recovery IDs and failure-detail handoffs. Settled execution outcomes and nested receipts

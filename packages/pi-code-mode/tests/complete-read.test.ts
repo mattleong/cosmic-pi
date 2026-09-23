@@ -17,6 +17,7 @@ import {
 } from "../src/tools/read-result.ts";
 import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { captureGuestResult } from "./support/guest-result.ts";
 
 const context = extensionContextFixture({
   cwd: "/project",
@@ -104,7 +105,9 @@ const executeWith = (
   retainFailureDetails?: Parameters<typeof makeCodeModeToolExecute>[0]["retainFailureDetails"],
 ) => {
   const state = codeModeStateFixture(config);
+  const guest = captureGuestResult();
   const base = {
+    executeCodeMode: guest.executeCodeMode,
     isCurrent: () => true,
     getState: () => state,
     runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) =>
@@ -115,7 +118,10 @@ const executeWith = (
   };
   const environment = retainFailureDetails === undefined ? base : { ...base, retainFailureDetails };
   const execute = makeCodeModeToolExecute(environment);
-  return (id: string, code: string) => execute(id, { code }, undefined, undefined, context);
+  return Object.assign(
+    (id: string, code: string) => execute(id, { code }, undefined, undefined, context),
+    { guestValue: guest.value },
+  );
 };
 
 describe("complete read execution", () => {
@@ -317,8 +323,11 @@ describe("complete read execution", () => {
       );
       expect(textOf(admitted)).toBe(serialized);
 
+      const refusingExecute = executeWith(definitions, {
+        maxCumulativeChildOutputBytes: exactBytes - 1,
+      });
       const refused = yield* Effect.promise(() =>
-        executeWith(definitions, { maxCumulativeChildOutputBytes: exactBytes - 1 })(
+        refusingExecute(
           "unicode-over",
           `
             try {
@@ -330,7 +339,9 @@ describe("complete read execution", () => {
           `,
         ),
       );
-      expect(utf8ByteLength(textOf(refused))).toBe(exactBytes - 1);
+      // SAFETY: This guest returns its caught error.message string.
+      expect(utf8ByteLength(refusingExecute.guestValue() as string)).toBe(exactBytes - 1);
+      expect(textOf(refused)).toContain("Do not replay");
       expect(textOf(refused)).not.toContain("�");
     }),
   );
@@ -347,8 +358,9 @@ describe("complete read execution", () => {
         nativeReads += 1;
         return Promise.resolve(nativeText(structured.text));
       });
+      const readExecute = executeWith(definitions, { maxCumulativeChildOutputBytes: oneReadBytes });
       const readResult = yield* Effect.promise(() =>
-        executeWith(definitions, { maxCumulativeChildOutputBytes: oneReadBytes })(
+        readExecute(
           "concurrent-structured",
           `
             const calls = ["a", "b"].map(path =>
@@ -361,8 +373,9 @@ describe("complete read execution", () => {
           `,
         ),
       );
+      expect(textOf(readResult)).toContain("Do not replay");
       // SAFETY: The guest program returns only the two literal settlement object shapes above.
-      const settled = parseGuestJson(readResult) as Array<{
+      const settled = readExecute.guestValue() as Array<{
         ok: boolean;
         value?: unknown;
         message?: string;
@@ -372,10 +385,11 @@ describe("complete read execution", () => {
       expect(nativeReads).toBe(2);
 
       nativeReads = 0;
+      const guardExecute = executeWith(definitions, {
+        maxCumulativeChildOutputBytes: utf8ByteLength(REQUIRE_COMPLETE_INPUT_REFUSAL),
+      });
       const guardResult = yield* Effect.promise(() =>
-        executeWith(definitions, {
-          maxCumulativeChildOutputBytes: utf8ByteLength(REQUIRE_COMPLETE_INPUT_REFUSAL),
-        })(
+        guardExecute(
           "concurrent-guards",
           `
             const calls = ["a", "b"].map(path =>
@@ -388,8 +402,9 @@ describe("complete read execution", () => {
           `,
         ),
       );
+      expect(textOf(guardResult)).toContain("Do not replay");
       // SAFETY: Both guest branches return error.message strings.
-      const messages = parseGuestJson(guardResult) as string[];
+      const messages = guardExecute.guestValue() as string[];
       expect(messages.sort((left, right) => left.length - right.length)).toEqual([
         "",
         REQUIRE_COMPLETE_INPUT_REFUSAL,

@@ -10,6 +10,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Duration from "effect/Duration";
 import { makePiManagedRuntime } from "pi-cosmic-core";
 import { expect } from "vitest";
 import { SubagentService } from "../../src/run/service.ts";
@@ -18,6 +19,56 @@ import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { retainedRequest, retainedServiceFixture } from "../run/fixtures/service-harness.ts";
 import { step } from "../support/effect-test.ts";
 import { context } from "./fixtures/tool-harness.ts";
+
+it.live("returns a parent question in the await result without a second notification", () =>
+  Effect.gen(function* () {
+    const fixture = retainedServiceFixture(undefined, {}, { notifications: true });
+    const tools = new Map<string, ToolDefinition>();
+    const piFixture = { registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool) };
+    // SAFETY: Registration only uses registerTool; the managed runtime stores this Pi capability.
+    const pi = piFixture as typeof piFixture & ExtensionAPI;
+    const runtime = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
+      ),
+      (owned) => step(() => owned.dispose()),
+    );
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run: (effect, signal) => runtime.run(effect, signal),
+    });
+    const service = yield* step(() => runtime.run(SubagentService));
+    const child = yield* step(() => runtime.run(service.startSessionOwned(retainedRequest())));
+    const progress = Deferred.makeUnsafe<void>();
+    const pending = tools
+      .get("subagent_await")!
+      .execute(
+        "question-await",
+        { runIds: [child.id], until: "all_finished" },
+        undefined,
+        () => Deferred.doneUnsafe(progress, Effect.void),
+        context,
+      );
+    yield* Deferred.await(progress);
+    fixture.backend.controls[0]!.offer({
+      type: "supervisor_contact",
+      assignmentEpoch: 1,
+      requestId: "question-from-child",
+      kind: "question",
+      message: "Which change should I make?",
+    });
+    const result = yield* step(() => pending);
+    expect(result.details).toMatchObject({
+      action: "await",
+      cards: [{ id: child.id, state: "waiting_for_parent" }],
+    });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining("Which change should I make?"),
+    });
+    yield* Effect.sleep(Duration.millis(50));
+    expect(fixture.notifications.filter((item) => item.type === "question")).toHaveLength(0);
+  }),
+);
 
 it.live(
   "cancels a registered root await on the real revision stream without stopping its child",

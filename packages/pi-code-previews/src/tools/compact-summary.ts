@@ -136,7 +136,22 @@ export function resolveCompactSummary(
   if (
     isError &&
     summary.outcome !== "cancelled" &&
-    !summary.issues?.entries.some((issue) => issue.severity === "error")
+    !(summary.issues ?? legacyCompactIssues(summary.notices, "outer")).entries.some(
+      (issue) =>
+        issue.severity === "error" &&
+        ((issue.operation === "outer" &&
+          issue.code === "pi-error" &&
+          issue.cause === (summary.failure?.cause ?? "Tool reported a failure.")) ||
+          summary.failure?.ownedIssues?.some(
+            (claim) =>
+              claim.fields.cause === true &&
+              claim.operation === issue.operation &&
+              claim.code === issue.code &&
+              claim.severity === issue.severity &&
+              claim.cause === issue.cause &&
+              issue.cause === summary.failure?.cause,
+          )),
+    )
   ) {
     const issues =
       summary.issues ??
@@ -154,11 +169,7 @@ export function resolveCompactSummary(
       code: "pi-error",
       severity: "error" as const,
       cause: summary.failure?.cause || "Tool reported a failure.",
-      description:
-        summary.failure?.description ??
-        (summary.outcome === "uncertain"
-          ? "Could not confirm what happened."
-          : "The tool reported an error."),
+      description: summary.failure?.description ?? "The tool reported an error.",
       recovery: [],
     };
     return {

@@ -157,19 +157,30 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
       counters: [statuses.join(", ")],
       issues: {
         coverage: "complete",
-        entries: rows.map((row) => ({
-          operation: `questionnaire:${row.requestId}`,
-          code: "answers-pending",
-          severity: "warning",
-          cause: "No answers yet.",
-          description: "Waiting for answers.",
-          recovery: [
-            {
-              code: "await-answers",
-              text: "Continue only independent work; use ask_user_async_control await when it is exhausted.",
-            },
-          ],
-        })),
+        entries: rows.map((row, index) => {
+          const request = stripTerminalControls(row.requestId);
+          return {
+            operation: `questionnaire:${row.requestId}`,
+            code: "answers-pending",
+            severity: "warning" as const,
+            cause: rows.length === 1 ? "No answers yet." : `Request ${request}: no answers yet.`,
+            description:
+              index === 0
+                ? rows.length === 1
+                  ? "Waiting for answers."
+                  : `${rows.length} questionnaires are waiting for answers.`
+                : "",
+            recovery: [
+              {
+                code: "await-answers",
+                text:
+                  rows.length === 1
+                    ? "Continue only independent work; use ask_user_async_control await when it is exhausted."
+                    : `Request ${request}: continue only independent work; use ask_user_async_control await when it is exhausted.`,
+              },
+            ],
+          };
+        }),
       },
       notices: [
         {
@@ -209,22 +220,36 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
         coverage: "complete",
         entries: rows
           .filter((row) => row.delivery === "failed")
-          .map((row) => ({
-            operation: `questionnaire:${row.requestId}:${row.deliveryId}`,
-            code: "delivery-failed",
-            severity: "warning",
-            cause: "Automatic delivery failed.",
-            description:
-              row.outcome?.outcome === "submitted"
-                ? "Answers were saved, but automatic delivery failed."
-                : "The cancellation was saved, but automatic delivery failed.",
-            recovery: [
-              {
-                code: "retrieve-delivery",
-                text: "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.",
-              },
-            ],
-          })),
+          .map((row, index, failed) => {
+            const request = stripTerminalControls(row.requestId);
+            const delivery = stripTerminalControls(row.deliveryId);
+            return {
+              operation: `questionnaire:${row.requestId}:${row.deliveryId}`,
+              code: "delivery-failed",
+              severity: "warning" as const,
+              cause:
+                failed.length === 1
+                  ? "Automatic delivery failed."
+                  : `Request ${request} (delivery ${delivery}): automatic delivery failed.`,
+              description:
+                index === 0
+                  ? failed.length > 1
+                    ? `Automatic delivery failed for ${failed.length} saved questionnaire results.`
+                    : row.outcome?.outcome === "submitted"
+                      ? "Answers were saved, but automatic delivery failed."
+                      : "The cancellation was saved, but automatic delivery failed."
+                  : "",
+              recovery: [
+                {
+                  code: "retrieve-delivery",
+                  text:
+                    failed.length === 1
+                      ? "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result."
+                      : `Request ${request} (delivery ${delivery}): retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.`,
+                },
+              ],
+            };
+          }),
       },
       notices: [
         {

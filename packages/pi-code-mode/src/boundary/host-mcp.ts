@@ -50,6 +50,7 @@ export const makeMcpDispatch = (options: {
   readonly toolCallId: string;
   readonly maxOutputBytes: () => number;
   readonly observationId?: (fiber: number) => number | undefined;
+  readonly onDeliveryFailure?: (invocationId: number | undefined) => void;
   readonly observePresentation?: (
     invocationId: number | undefined,
     input: McpCodeModeInput,
@@ -63,6 +64,7 @@ export const makeMcpDispatch = (options: {
       Effect.suspend(() => {
         const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
         let validatedReply: McpCodeModeOutput | undefined;
+        let outputLost = false;
         let observation = projectMcpPresentation({
           action: input.action,
           outcome: "not-sent",
@@ -71,6 +73,12 @@ export const makeMcpDispatch = (options: {
           notices: [],
         });
         const failed = (decoded: McpCodeModeInput, error: McpCodeModeError): ToolError => {
+          outputLost ||=
+            error.outcome !== "not-sent" &&
+            (error.kind === "output-limit" ||
+              error.kind === "protocol" ||
+              error.kind === "stale" ||
+              error.kind === "cancelled");
           observation = projectMcpFailurePresentation(error);
           return failure(decoded, error);
         };
@@ -176,6 +184,8 @@ export const makeMcpDispatch = (options: {
                   ),
                 undefined,
               );
+              if (outputLost)
+                invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
             }),
           ),
         );

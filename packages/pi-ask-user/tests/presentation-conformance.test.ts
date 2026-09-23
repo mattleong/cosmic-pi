@@ -31,8 +31,12 @@ const snapshot = {
 const noExecution = () => {
   throw new Error("Rendering must not execute");
 };
-function register(style: "compact" | "preview") {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallCollapsedStyle: style });
+function register(style: "compact" | "preview", mode?: "on" | "off" | "border") {
+  setCodePreviewSettings({
+    ...defaultCodePreviewSettings,
+    toolCallCollapsedStyle: style,
+    ...(mode && { toolCallBackground: mode }),
+  });
   const tools: ToolDefinition[] = [];
   const messages: Parameters<ExtensionAPI["registerMessageRenderer"]>[1][] = [];
   const pi: ExtensionAPI = fixture({
@@ -163,6 +167,58 @@ describe("registered questionnaire presentation", () => {
         .render(160)
         .join("\n"),
     ).toContain("ACTUAL_VALUE");
+  });
+
+  it("groups compact attention for distinct pending requests and failed deliveries", () => {
+    const pending = ["request-a", "request-b", "request-c"].map((requestId) => ({
+      requestId,
+      deliveryId: `delivery-${requestId}`,
+      status: "pending" as const,
+      delivery: "pending" as const,
+      presentation: "open" as const,
+    }));
+    const failures = ["request-a", "request-b"].map((requestId) => ({
+      requestId,
+      deliveryId: `delivery-${requestId}`,
+      status: "submitted" as const,
+      delivery: "failed" as const,
+      outcome,
+    }));
+    for (const mode of ["on", "off", "border"] as const) {
+      const tool = register("compact", mode).tools.find(
+        (entry) => entry.name === "ask_user_async_control",
+      )!;
+      for (const [rows, description] of [
+        [pending, "3 questionnaires are waiting for answers."],
+        [failures, "Automatic delivery failed for 2 saved questionnaire results."],
+      ] as const) {
+        const result = {
+          details: { requests: rows },
+          content: [{ type: "text" as const, text: "Independent raw result marker" }],
+        };
+        const before = structuredClone(result);
+        const harness = createToolPresentationHarness(tool, { theme, width: 200 });
+        for (const expanded of [false, true, false, true]) {
+          harness.call({ action: "status" }, { expanded });
+          harness.result(result, { expanded });
+          const text = harness.render().join("\n");
+          if (expanded) {
+            for (const row of rows) {
+              const cause =
+                rows === pending
+                  ? `Request ${row.requestId}: no answers yet.`
+                  : `Request ${row.requestId} (delivery ${row.deliveryId}): automatic delivery failed.`;
+              expect(text.split(cause)).toHaveLength(2);
+            }
+            expect(text).toContain("Independent raw result marker");
+          } else {
+            expect(text.split(description)).toHaveLength(2);
+            expect(text).not.toContain("Independent raw result marker");
+          }
+        }
+        expect(result).toEqual(before);
+      }
+    }
   });
 
   it("describes failed answer delivery without showing agent procedures or identities", () => {

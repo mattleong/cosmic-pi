@@ -34,7 +34,10 @@ import { makeRunControls } from "./control.ts";
 import { makeRunEventHandler } from "./events.ts";
 import { makeRunLaunch } from "./launch.ts";
 import type { RunRecord } from "./internal.ts";
-import { makeRunNotificationDelivery } from "./notification-delivery.ts";
+import {
+  makeRunNotificationDelivery,
+  type QuestionNotificationReceipt,
+} from "./notification-delivery.ts";
 import { makeRunProcessControls, makeRunProcessInitializer } from "./process-lifecycle.ts";
 import { makeRunRecordCleanup } from "./record-cleanup.ts";
 import { makeRunResume } from "./resume.ts";
@@ -103,6 +106,8 @@ export interface SubagentCompletionReceipt {
 export interface SubagentRunObservation {
   readonly run: SubagentRunView;
   readonly completionReceipt?: SubagentCompletionReceipt | undefined;
+  /** Exact pending question owned by this await, never by status. */
+  readonly questionReceipt?: QuestionNotificationReceipt | undefined;
 }
 
 export interface SubagentStatusObservations {
@@ -160,6 +165,8 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
         ) => void)
       | undefined,
     use: (observations: ReadonlyArray<SubagentRunObservation>) => Effect.Effect<A, E, R>,
+    /** A bounded result may omit a question even when its observation was claimed. */
+    questionCoverage?: (result: A) => ReadonlySet<string>,
   ) => Effect.Effect<A, SubagentError | E, R>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentRunView>>;
   readonly status: (id: string) => Effect.Effect<SubagentRunView, SubagentNotFoundError>;
@@ -390,7 +397,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       32 * 1024,
     );
   };
-  const deliverToNearestAncestor = (sourceRunId: string, message: string): Effect.Effect<boolean> =>
+  const deliverToNearestAncestor = (
+    sourceRunId: string,
+    message: string,
+  ): Effect.Effect<boolean | "uncertain"> =>
     Effect.suspend(() => {
       let parentRunId = records.get(sourceRunId)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       const candidates: RunRecord[] = [];
@@ -408,7 +418,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           candidates.push(parent);
         parentRunId = parent.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
       }
-      const attempt = (index: number): Effect.Effect<boolean> => {
+      const attempt = (index: number): Effect.Effect<boolean | "uncertain"> => {
         const candidate = candidates[index];
         if (!candidate) return Effect.succeed(false);
         return Effect.acquireUseRelease(
@@ -437,7 +447,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           Effect.flatMap((delivered) => (delivered ? Effect.succeed(true) : attempt(index + 1))),
           Effect.catch((error) =>
             error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
-              ? Effect.succeed(true)
+              ? Effect.succeed("uncertain" as const)
               : attempt(index + 1),
           ),
         );
@@ -458,7 +468,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     if (notification.type === "question")
       return deliverToNearestAncestor(notification.id, ancestorMessage(notification)).pipe(
         Effect.map((delivered) =>
-          delivered ? { actionAccepted: true } : notifyRoot(notification),
+          delivered === "uncertain"
+            ? { actionAccepted: false }
+            : delivered
+              ? { actionAccepted: true }
+              : notifyRoot(notification),
         ),
       );
     return Effect.forEach(
@@ -466,6 +480,8 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       (run) =>
         deliverToNearestAncestor(run.id, ancestorMessage({ type: "completed", runs: [run] })).pipe(
           Effect.map((delivered) => {
+            // A completion sent to an ancestor may be outcome-uncertain; unlike an
+            // unacknowledged question it must not replay the full report.
             if (delivered) return `${run.id}:${run.generation}`;
             const rootDelivery = notifyRoot({ type: "completed", runs: [run] });
             return rootDelivery?.deliveredCompletionKeys?.includes(`${run.id}:${run.generation}`)
@@ -682,7 +698,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     runSettled: settlement.runSettledFromBackend,
     settle: settlement.settle,
     acceptReport: settlement.acceptBackendReport,
-    notify: delivery.queueActionNotification,
+    queueQuestionLocked: delivery.queueActionNotificationLocked,
     failRun: settlement.failRun,
     onWriteClaimViolation: containWriteClaimViolation,
     onProxyEvent: handleProxyEvent,

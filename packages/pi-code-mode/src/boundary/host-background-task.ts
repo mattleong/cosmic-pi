@@ -57,6 +57,7 @@ export const makeBackgroundTaskDispatch = (options: {
         const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
         let accepting = true;
         let observed = false;
+        let returned = false;
         const sessionId = options.sessionId;
         if (sessionId === undefined) {
           return Effect.fail(
@@ -137,6 +138,7 @@ export const makeBackgroundTaskDispatch = (options: {
               ),
             ),
             Effect.flatMap((output) => {
+              returned = true;
               invokeHostCallback(() => options.onOperation?.(invocationId, "completed"), undefined);
               return decodeOutput(output).pipe(
                 Effect.mapError(() =>
@@ -163,9 +165,9 @@ export const makeBackgroundTaskDispatch = (options: {
             }),
             Effect.onExit((exit) =>
               Effect.sync(() => {
-                // A presentation receipt precedes companion output projection. Rejection after
-                // that receipt is loss of the reply, unlike a received native tool exception.
-                if (observed && exit._tag === "Failure")
+                // Either producer observation or a returned reply proves post-operation loss.
+                // Legacy providers need not supply presentation evidence before consumer rejection.
+                if ((observed || returned) && exit._tag === "Failure")
                   invokeHostCallback(() => options.onDeliveryFailure?.(invocationId), undefined);
               }),
             ),

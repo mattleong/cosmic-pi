@@ -429,9 +429,17 @@ copying snapshots; the consumer repeats that aggregate check before charging com
 same cumulative budget. MCP applies the same cumulative accounting to its checked JSON replies
 and catchable failures. Its own retention and projection limits also apply.
 
+Host-detected output loss has a separate model-visible safety backstop. If the child budget clips
+an error to a fragment or nothing, catching it does not hide the loss: the final response reports
+missing output, operation certainty, and no-replay guidance. Unknown nested outcomes also trigger
+this backstop. Fully delivered errors intentionally handled by the program do not. This does not
+increase the child budget, recover discarded child data, or retry an operation. The outer byte cap
+still applies; a tiny or zero cap cannot carry every diagnostic.
+
 ## Recovering output without rerunning
 
-Small successful responses remain unchanged. When a successful response needs saved paging, its
+Small successful responses without host loss or unknown nested outcomes remain unchanged.
+When a successful response needs saved paging and no safety backstop is required, its
 initial model-visible response is valid JSON with `id`, original `outcome`, `kind`, `offset`, `next`,
 `total`, and `text`. A numeric `next` also adds
 `recovery: {"action":"result.read","id":id,"offset":next}`, so recovery starts after the included
@@ -440,7 +448,11 @@ may compact their receipts to `{total,completed}`. Risky or failed operations ke
 `ExecutionReceipts`. Producer details use `initialPreview` only for a valid page and label its
 `receiptMode` as `none`, `read-only`, or `full`; they never reuse `resultRead` metadata. Tiny output
 budgets, unavailable capture, or store refusal fall back to bounded prose without a fake cursor.
-Successful output artifacts contain output only, never execution receipts.
+Successful output artifacts contain output only, never execution receipts. Host-loss and unknown-
+outcome warnings use bounded prose so paging cannot replace them. Prose responses reserve room for
+both the root diagnostic and safety/recovery facts before detailed receipt rows. Receipt-heavy
+responses keep aggregate counts, prioritize risky rows, and explicitly report omissions. Discarded
+child diagnostics and omitted receipt rows are not restored by reading a successful output artifact.
 
 When output is truncated or a program fails, Code Mode reports a retained ID when capture fits.
 Continue a successful initial page from its exact `recovery.offset`, without a `code` or `intent`

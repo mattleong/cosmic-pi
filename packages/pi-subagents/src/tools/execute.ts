@@ -180,19 +180,25 @@ export const executeSubagentActionEffect = (
       observations: ReadonlyArray<SubagentRunObservation>,
       fullyRenderedIds: ReadonlySet<string>,
     ) => service.consumeCompletions(renderedCompletionReceipts(observations, fullyRenderedIds));
-    // Shared observed-run completion: ordered sections, then attention recovery, then
-    // detailed runs; consumes completion receipts for fully rendered runs.
+    // Construct the complete result inside the claim scope. A formatting or details
+    // defect leaves the report available to the notification outbox.
     const completeObservations = (
       observations: ReadonlyArray<SubagentRunObservation>,
       sections: ReadonlyArray<string>,
+      extra: () => {
+        readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
+        readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
+      } = () => ({}),
     ) =>
       Effect.gen(function* () {
         const runs = observations.map((observation) => observation.run);
         const attentionRequired = runs.some(isParentActionRequiredRun);
         const prefix = joinSections([...sections, attentionRecoveryText(runs)]);
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
+        const outcome = { runs, attentionRequired, text: formatted.text, ...extra() };
+        const prebuiltResult = yield* Effect.sync(() => present(outcome));
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-        return { runs, attentionRequired, text: formatted.text };
+        return { ...outcome, prebuiltResult, fullyRenderedIds: formatted.fullyRenderedIds };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
       authorize(ids).pipe(
@@ -205,9 +211,12 @@ export const executeSubagentActionEffect = (
                 message: `Subagent run not found: ${id}. Use subagent_list to refresh active run IDs.`,
               }),
             );
-            return Effect.map(
-              completeObservations(observations, [formatActionFailures(actionFailures)]),
-              (outcome) => ({ ...outcome, actionFailures }),
+            return completeObservations(
+              observations,
+              [formatActionFailures(actionFailures)],
+              () => ({
+                actionFailures,
+              }),
             );
           }),
         ),
@@ -238,11 +247,12 @@ export const executeSubagentActionEffect = (
           until,
           state.update,
           (observations) =>
-            Effect.gen(function* () {
-              const runs = observations.map((observation) => observation.run);
-              const outcome = yield* completeObservations(observations, [state.progressText(runs)]);
-              return { ...outcome, awaitContextRuns: state.contextRuns() };
-            }),
+            completeObservations(
+              observations,
+              [state.progressText(observations.map((observation) => observation.run))],
+              () => ({ awaitContextRuns: state.contextRuns() }),
+            ),
+          (outcome) => outcome.fullyRenderedIds,
         );
       }
       case "send": {
@@ -345,72 +355,70 @@ export const executeSubagentActionEffect = (
     }
   });
 
-  return effect.pipe(
-    Effect.map(
-      (executionResult: {
-        readonly runs: ReadonlyArray<SubagentRunView>;
-        readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
-        readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
-        readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
-        readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
-        readonly attentionRequired?: boolean;
-        readonly text?: string;
-      }): AgentToolResult<unknown> => {
-        const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
-        const startFailures = executionResult.startFailures ?? [];
-        const actionFailures = executionResult.actionFailures ?? [];
-        const details: unknown =
-          input.action === "start"
-            ? makeStartDetails({
-                // Every start result contains the complete request-ordered receipt.
-                startEntries: executionResult.startEntries ?? [],
-                ...(startFailures.length > 0 && { startFailures }),
-              })
-            : input.action === "await"
-              ? makeAwaitDetails({
-                  runs,
-                  contextRuns: awaitContextRuns,
-                  awaitedRunIds: requestedAwaitIds,
-                  awaitUntil: input.until,
-                  ...(attentionRequired === true && { attentionRequired: true as const }),
-                })
-              : makeCompactToolDetails({
-                  action: input.action,
-                  runs,
-                  ...(actionFailures.length > 0 && { actionFailures }),
-                });
-        const detailedText = () => formattedText ?? formatDetailedRuns(runs).text;
-        const resultText = (): string => {
-          if (input.action === "start")
-            return formattedText ?? formatStartResult(runs, startFailures);
-          const acknowledgement = () =>
-            managementAcknowledgement(
-              input.action,
+  const present = (executionResult: {
+    readonly runs: ReadonlyArray<SubagentRunView>;
+    readonly awaitContextRuns?: ReadonlyArray<SubagentRunView>;
+    readonly startFailures?: ReadonlyArray<SubagentStartFailure>;
+    readonly startEntries?: ReadonlyArray<SubagentStartEntry>;
+    readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
+    readonly attentionRequired?: boolean;
+    readonly text?: string;
+    readonly prebuiltResult?: AgentToolResult<unknown>;
+  }): AgentToolResult<unknown> => {
+    if (executionResult.prebuiltResult) return executionResult.prebuiltResult;
+    const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
+    const startFailures = executionResult.startFailures ?? [];
+    const actionFailures = executionResult.actionFailures ?? [];
+    const details: unknown =
+      input.action === "start"
+        ? makeStartDetails({
+            // Every start result contains the complete request-ordered receipt.
+            startEntries: executionResult.startEntries ?? [],
+            ...(startFailures.length > 0 && { startFailures }),
+          })
+        : input.action === "await"
+          ? makeAwaitDetails({
               runs,
-              input.action === "claims" ? input.operation.action : undefined,
-            );
-          // Status keeps its detailed text even when some targets failed.
-          if (actionFailures.length > 0)
-            return input.action === "status"
-              ? detailedText()
-              : joinBoundedToolText([acknowledgement(), formatActionFailures(actionFailures)]);
-          if (runs.length === 0) return "No subagent runs.";
-          switch (input.action) {
-            case "list":
-              return projectRunCardTree(runs)
-                .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
-                .join("\n");
-            case "status":
-            case "await":
-              return detailedText();
-            default:
-              return acknowledgement();
-          }
-        };
-        return { content: [{ type: "text", text: boundToolOutput(resultText()) }], details };
-      },
-    ),
-  );
+              contextRuns: awaitContextRuns,
+              awaitedRunIds: requestedAwaitIds,
+              awaitUntil: input.until,
+              ...(attentionRequired === true && { attentionRequired: true as const }),
+            })
+          : makeCompactToolDetails({
+              action: input.action,
+              runs,
+              ...(actionFailures.length > 0 && { actionFailures }),
+            });
+    const detailedText = () => formattedText ?? formatDetailedRuns(runs).text;
+    const resultText = (): string => {
+      if (input.action === "start") return formattedText ?? formatStartResult(runs, startFailures);
+      const acknowledgement = () =>
+        managementAcknowledgement(
+          input.action,
+          runs,
+          input.action === "claims" ? input.operation.action : undefined,
+        );
+      // Status keeps its detailed text even when some targets failed.
+      if (actionFailures.length > 0)
+        return input.action === "status"
+          ? detailedText()
+          : joinBoundedToolText([acknowledgement(), formatActionFailures(actionFailures)]);
+      if (runs.length === 0) return "No subagent runs.";
+      switch (input.action) {
+        case "list":
+          return projectRunCardTree(runs)
+            .map((row) => `${runTreeBranch(row)}${formatRun(row.run)}`)
+            .join("\n");
+        case "status":
+        case "await":
+          return detailedText();
+        default:
+          return acknowledgement();
+      }
+    };
+    return { content: [{ type: "text", text: boundToolOutput(resultText()) }], details };
+  };
+  return effect.pipe(Effect.map(present));
 };
 
 export const executeSubagentAction = (

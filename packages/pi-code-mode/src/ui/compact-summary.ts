@@ -106,7 +106,7 @@ const projectCodeModeCompactSummary = (
       `${succeeded + failed + cancelled}/${total} done${failed ? ` · ${failed} failed` : ""}`,
     ];
     const children = { total, entries: codeModeCallRows(details, phase, liveElapsed) };
-    const notices = compactParentNotices(details, context.isError);
+    const notices = compactParentNotices(details);
     const selectedCalls = context.expanded
       ? children.entries
       : selectCompactChildren(children).entries;
@@ -115,7 +115,17 @@ const projectCodeModeCompactSummary = (
     const visibleFailed = selectedCalls.filter(
       (child) => details.toolCalls[children.entries.indexOf(child)]?.status === "error",
     ).length;
-    const hiddenFailed = Math.max(0, failed - visibleFailed);
+    // Hidden v2 children still contribute their exact issues to the shared attention block.
+    // Only failures with no represented error need a generic fallback count.
+    const visibleRows = new Set(selectedCalls);
+    const representedHiddenFailed = details.toolCalls.filter(
+      (call, index) =>
+        call.status === "error" &&
+        !visibleRows.has(children.entries[index]!) &&
+        call.compact?.version === 2 &&
+        call.compact.issues.entries.some((issue) => issue.severity === "error"),
+    ).length;
+    const hiddenFailed = Math.max(0, failed - visibleFailed - representedHiddenFailed);
     if (hiddenFailed > 0)
       notices.push({
         kind: "warning",
@@ -192,17 +202,10 @@ const projectCodeModeCompactSummary = (
 };
 
 /** Only producer-identified text copied into this exact body can suppress attention. */
-const withBodyClaims = (input: CompactSummary): CompactSummary => {
-  const summary =
-    planCompactPresentation({
-      summary: input,
-      phase: "settled",
-      isError: input.outcome === "error",
-      expanded: true,
-    }).summary ?? input;
+const bodyClaims = (summary: CompactSummary) => {
   const failure = summary.failure;
-  if (!failure || codeModeOutputText(failure.details) !== failure.details) return summary;
-  const claims = summaryCompactIssues(summary, true).entries.flatMap((issue) => {
+  if (!failure || codeModeOutputText(failure.details) !== failure.details) return [];
+  return summaryCompactIssues(summary, true).entries.flatMap((issue) => {
     const copiedRoot =
       ((issue.operation === "code-mode" && issue.code === "program-failure") ||
         (issue.operation === "outer" && issue.code === "pi-error")) &&
@@ -214,9 +217,30 @@ const withBodyClaims = (input: CompactSummary): CompactSummary => {
       issue.cause === failure.details.split("\n").slice(1).join("\n");
     return copiedRoot || copiedContinuation ? [claimCompactIssue(issue, { cause: true })] : [];
   });
+};
+
+const withBodyClaims = (input: CompactSummary): CompactSummary => {
+  const prepared = input.failure
+    ? {
+        ...input,
+        failure: {
+          ...input.failure,
+          ownedIssues: [...(input.failure.ownedIssues ?? []), ...bodyClaims(input)],
+        },
+      }
+    : input;
+  const summary =
+    planCompactPresentation({
+      summary: prepared,
+      phase: "settled",
+      isError: prepared.outcome === "error",
+      expanded: true,
+    }).summary ?? prepared;
+  if (!summary.failure) return summary;
+  const claims = bodyClaims(summary);
   return {
     ...summary,
-    failure: { ...failure, ownedIssues: claims },
+    failure: { ...summary.failure, ownedIssues: claims },
     expandedResultOwnsIssues: claims,
   };
 };

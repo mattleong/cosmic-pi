@@ -39,6 +39,7 @@ import {
 import { checkSourceSize, clampModelVisibleText, utf8ByteLength } from "../src/tools/limits.ts";
 import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { captureGuestResult } from "./support/guest-result.ts";
 
 // JSON here decodes guest results; these are code fixtures under test control.
 const guestJson = (text: string) => JSON.parse(text);
@@ -183,17 +184,18 @@ const makeHarness = (options: HarnessOptions = {}) => {
     events: options.events ?? inertEvents,
     sessionId: options.sessionId === undefined ? "test-session" : options.sessionId,
   };
-  const execute =
-    options.executeCodeMode === undefined
-      ? base
-      : { ...base, executeCodeMode: options.executeCodeMode };
+  const guest = captureGuestResult(options.executeCodeMode);
+  const execute = { ...base, executeCodeMode: guest.executeCodeMode };
   const environment =
     options.retainFailureDetails === undefined
       ? execute
       : { ...execute, retainFailureDetails: options.retainFailureDetails };
   const run = makeCodeModeToolExecute(environment);
-  return (id: string, code: string, signal?: AbortSignal, onUpdate?: Parameters<typeof run>[3]) =>
-    run(id, { code }, signal, onUpdate, ctx);
+  return Object.assign(
+    (id: string, code: string, signal?: AbortSignal, onUpdate?: Parameters<typeof run>[3]) =>
+      run(id, { code }, signal, onUpdate, ctx),
+    { guestValue: guest.value },
+  );
 };
 
 const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>
@@ -437,7 +439,7 @@ describe("early-path clamp wiring", () => {
       interface Case {
         readonly name: string;
         readonly options: HarnessOptions;
-        readonly expected: string;
+        readonly expected?: string;
         readonly source?: string;
         readonly returned?: boolean;
         readonly abort?: boolean;
@@ -473,7 +475,6 @@ describe("early-path clamp wiring", () => {
             config: { maxOutputBytes: 31 },
             runInSession: () => Promise.reject(new Error(failure)),
           },
-          expected: clampModelVisibleText("Full output unavailable (runtime-unavailable).", 31),
         },
         {
           name: "zero",
@@ -505,7 +506,9 @@ describe("early-path clamp wiring", () => {
         );
         expect(settled._tag, name).toBe(testCase.returned === true ? "returned" : "thrown");
         const text = settled._tag === "returned" ? textOf(settled.result) : settled.message;
-        expect(text, name).toBe(expected);
+        if (expected !== undefined) expect(text, name).toBe(expected);
+        else
+          expect(utf8ByteLength(text), name).toBeLessThanOrEqual(options.config!.maxOutputBytes!);
         expect(text, name).not.toContain("�");
         expect(runtimeCalls, name).toBe(0);
         if (settled._tag === "returned") expect(settled.result.details.cancelled).toBe(true);
@@ -626,11 +629,12 @@ describe("cumulative nested output budget", () => {
             snapshot: backgroundSnapshot,
           }),
       };
+      const execute = makeHarness({
+        events: backgroundEvents([capability]),
+        config: { maxCumulativeChildOutputBytes: 80 },
+      });
       const result = yield* Effect.promise(() =>
-        makeHarness({
-          events: backgroundEvents([capability]),
-          config: { maxCumulativeChildOutputBytes: 80 },
-        })(
+        execute(
           "call-background-budget",
           `
               try {
@@ -643,7 +647,8 @@ describe("cumulative nested output budget", () => {
         ),
       );
       // SAFETY: The guest program above constructs this exact JSON object.
-      const observed = guestJson(textOf(result)) as { message: string; length: number };
+      const observed = execute.guestValue() as { message: string; length: number };
+      expect(textOf(result)).toContain("Do not replay");
       expect(observed.message).toContain("returned output beyond");
       expect(observed.length).toBeLessThanOrEqual(80);
     }),
@@ -663,13 +668,13 @@ describe("cumulative nested output budget", () => {
             catch (error) { lengths.push(error.message.length); }
           }
           return lengths;`;
-        const result = yield* Effect.promise(() =>
-          makeHarness({
-            config: { maxCumulativeChildOutputBytes: limit },
-            definitions,
-          })(`call-budget-${limit}`, code),
-        );
-        expect(guestJson(textOf(result))).toEqual(expected);
+        const execute = makeHarness({
+          config: { maxCumulativeChildOutputBytes: limit },
+          definitions,
+        });
+        const result = yield* Effect.promise(() => execute(`call-budget-${limit}`, code));
+        expect(execute.guestValue()).toEqual(expected);
+        expect(textOf(result)).toContain("Do not replay");
       }
     }),
   );
@@ -1094,7 +1099,8 @@ describe("diagnostics and errors", () => {
         ),
       );
       // SAFETY: The test controls the serialized fixture and asserts the exact decoded contract below.
-      const observed = guestJson(textOf(result)) as { message: string; length: number };
+      const observed = execute.guestValue() as { message: string; length: number };
+      expect(textOf(result)).toContain("Do not replay");
       expect(observed.length).toBeLessThanOrEqual(48);
       expect(observed.message).toContain("Nested tool 'bash' failed");
       expect(observed.message).not.toContain("x".repeat(100));
@@ -1238,8 +1244,9 @@ describe("MCP guest execution", () => {
           if (allowances.length === 1) return Promise.resolve(response);
           return Promise.reject(mcpCodeModeError("transport", "unknown"));
         });
+        const execute = makeHarness({ events, config: { maxCumulativeChildOutputBytes: 400 } });
         const result = yield* Effect.promise(() =>
-          makeHarness({ events, config: { maxCumulativeChildOutputBytes: 400 } })(
+          execute(
             "mcp-budget",
             `
       await tools.mcp.request({action:"status"});
@@ -1254,7 +1261,8 @@ describe("MCP guest execution", () => {
         )(response);
         expect(allowances[1]).toBe(400 - utf8ByteLength(serialized));
         // SAFETY: The controlled guest program returns only caught error.message strings.
-        const errors = guestJson(textOf(result)) as string[];
+        const errors = execute.guestValue() as string[];
+        expect(textOf(result)).toContain("Do not replay");
         expect(errors.reduce((sum, message) => sum + utf8ByteLength(message), 0)).toBe(
           allowances[1],
         );

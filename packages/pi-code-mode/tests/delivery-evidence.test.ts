@@ -74,6 +74,9 @@ describe("interpreter delivery evidence", () => {
           expect(completed.content[0]).toMatchObject({
             text: expect.stringContaining("Invalid output"),
           });
+          expect(completed.content[0]).toMatchObject({
+            text: expect.stringContaining("Do not replay completed or uncertain operations"),
+          });
           const receipt = completed.details!.toolCalls[0]!.compact!;
           expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
           expect(recovery(receipt)).toHaveLength(1);

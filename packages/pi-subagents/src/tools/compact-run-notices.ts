@@ -2,7 +2,12 @@ import { runNoticeDescription } from "./compact-descriptions.ts";
 import type { CompactNotice } from "pi-code-previews";
 import type { SubagentRunCard } from "./details-schema.ts";
 
-type AddNotice = (code: string | undefined, text: string, kind?: CompactNotice["kind"]) => void;
+type AddNotice = (
+  code: string | undefined,
+  text: string,
+  kind?: CompactNotice["kind"],
+  description?: string,
+) => void;
 
 // Only static alternative selection is routine history. Unknown launch evidence stays visible.
 const staticSkipCodes = new Set([
@@ -21,7 +26,6 @@ export function compactRunNotices(
   cards: readonly SubagentRunCard[],
   reportsOnlyOmitted = false,
   quietHistory = false,
-  quietChildWarnings = false,
   includeQuietHistory?: boolean,
 ) {
   const notices: CompactNotice[] = [];
@@ -29,8 +33,8 @@ export function compactRunNotices(
   for (const card of cards) {
     const noticeStart = notices.length;
     const id = JSON.stringify(card.id);
-    const add: AddNotice = (code, text, kind = "recovery") => {
-      const description = runNoticeDescription(code, kind);
+    const add: AddNotice = (code, text, kind = "recovery", explicitDescription) => {
+      const description = explicitDescription ?? runNoticeDescription(code, kind);
       const notice: CompactNotice = {
         kind,
         description: description
@@ -87,7 +91,7 @@ export function compactRunNotices(
         "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
       );
     }
-    evidenceNotices(card, add, reportsOnlyOmitted, quietChildWarnings);
+    evidenceNotices(card, add, reportsOnlyOmitted);
     if (
       !quietHistory ||
       !["completed", "reported"].includes(card.state) ||
@@ -118,12 +122,7 @@ function quietHistoryNotices(card: SubagentRunCard, include: boolean | undefined
   }));
 }
 
-function evidenceNotices(
-  card: SubagentRunCard,
-  add: AddNotice,
-  reportsOnlyOmitted: boolean,
-  quietChildWarnings: boolean,
-): void {
+function evidenceNotices(card: SubagentRunCard, add: AddNotice, reportsOnlyOmitted: boolean): void {
   if (card.error || card.state === "failed") {
     add(
       card.error ? undefined : "run-failed",
@@ -145,11 +144,25 @@ function evidenceNotices(
       "stopped-cleanup",
       "Stopped. Inspect full status for cleanup confirmation before replacement or recovery.",
     );
-  const warning = quietChildWarnings
-    ? (card.systemWarning ?? (card.warningSource === "child" ? undefined : card.warning))
-    : card.warning;
-  for (const notice of new Set([warning, card.selection.warning]))
-    if (notice) add(undefined, notice, "warning");
+  // Source identity, not prose, determines whether the system slot repeats the current warning.
+  // Arbitrary warning content stays uncoded so aggregate coverage remains unknown.
+  if (card.warningSource === "system") {
+    if (card.warning) add(undefined, card.warning, "warning", "A system warning needs review.");
+    // Inconsistent historical projections cannot establish that these are one event.
+    if (card.systemWarning && card.systemWarning !== card.warning)
+      add(
+        undefined,
+        card.systemWarning,
+        "warning",
+        card.warning ? "Another system warning needs review." : "A system warning needs review.",
+      );
+  } else {
+    if (card.warning) add(undefined, card.warning, "warning", "The worker reported a warning.");
+    if (card.systemWarning)
+      add(undefined, card.systemWarning, "warning", "A system warning needs review.");
+  }
+  if (card.selection.warning)
+    add(undefined, card.selection.warning, "warning", "A worker option produced a warning.");
   reportEvidenceNotices(card, add, reportsOnlyOmitted);
 }
 

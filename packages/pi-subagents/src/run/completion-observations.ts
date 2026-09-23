@@ -21,7 +21,7 @@ export interface RunCompletionObservationDependencies {
   readonly records: ReadonlyMap<string, RunRecord>;
   /** The shared service lock. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** The shared completion gate serializing claim acquisition against delivery. */
+  /** The shared notification gate serializing claim acquisition against delivery. */
   readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** The stored immutable snapshot, captured under the shared lock to prevent missed publications. */
   readonly currentProjection: () => SubagentProjection;
@@ -29,7 +29,14 @@ export interface RunCompletionObservationDependencies {
   readonly waitForRevision: (after: number) => Effect.Effect<void, SubagentRuntimeClosedError>;
   /** Claim-token allocation stays owned by the service. */
   readonly allocateClaimToken: () => string;
-  readonly delivery: Pick<RunNotificationDelivery, "wakeCompletionLocked">;
+  readonly delivery: Pick<
+    RunNotificationDelivery,
+    | "wakeCompletionLocked"
+    | "claimQuestionsLocked"
+    | "questionReceiptLocked"
+    | "acknowledgeQuestionsLocked"
+    | "releaseQuestionClaimsLocked"
+  >;
 }
 
 /**
@@ -72,7 +79,13 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
   const observeRecord = (record: RunRecord, claimToken?: string): SubagentRunObservation => {
     const generation = record.completionGeneration;
     const view = withTreeMetadata(record.view);
-    if (!isAssignmentFinishedRunState(view.state)) return { run: view };
+    if (!isAssignmentFinishedRunState(view.state))
+      return {
+        run: view,
+        ...(claimToken && {
+          questionReceipt: delivery.questionReceiptLocked(record, claimToken),
+        }),
+      };
     const unresolved = record.completionGenerations.has(generation);
     const owns =
       unresolved &&
@@ -127,6 +140,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       readonly generation: number;
     }>;
     readonly missingIds: ReadonlyArray<string>;
+    readonly ownsQuestions: boolean;
   }
   const acquireCompletionClaims = (
     ids: ReadonlyArray<string>,
@@ -181,7 +195,14 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             const claimed = desired.filter(({ record, generation }) =>
               claimCompletion(record, generation, claimToken),
             );
-            return { claimToken, selected, claimed, missingIds } satisfies CompletionClaim;
+            if (claimAll) delivery.claimQuestionsLocked(selected, claimToken);
+            return {
+              claimToken,
+              selected,
+              claimed,
+              missingIds,
+              ownsQuestions: claimAll,
+            } satisfies CompletionClaim;
           }),
           releaseCompletionClaims,
         ),
@@ -193,6 +214,8 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
         for (const claimed of claim.claimed)
           if (releaseCompletionClaim(claimed.record, claimed.generation, claim.claimToken))
             delivery.wakeCompletionLocked();
+        if (claim.ownsQuestions)
+          delivery.releaseQuestionClaimsLocked(claim.selected, claim.claimToken);
       }),
     );
   const withCompletionClaims = <A, E, R>(
@@ -266,6 +289,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     until,
     onUpdate,
     use,
+    questionCoverage,
   ) => {
     if (ids.length === 0)
       return Effect.fail(
@@ -275,7 +299,29 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
         }),
       );
     return withCompletionClaims(ids, true, false, (claim) =>
-      waitForTerminalObservations(claim, until, onUpdate).pipe(Effect.flatMap(use)),
+      waitForTerminalObservations(claim, until, onUpdate).pipe(
+        Effect.flatMap((observations) =>
+          use(observations).pipe(
+            // Only a successfully constructed result owns the question. On cancellation,
+            // failure, or defect the scoped claim release wakes the outbox instead.
+            Effect.flatMap((result) => {
+              const covered = questionCoverage?.(result);
+              return withLock(
+                Effect.sync(() =>
+                  delivery.acknowledgeQuestionsLocked(
+                    observations.flatMap((observation) =>
+                      observation.questionReceipt &&
+                      (covered === undefined || covered.has(observation.run.id))
+                        ? [observation.questionReceipt]
+                        : [],
+                    ),
+                  ),
+                ),
+              ).pipe(Effect.as(result), Effect.uninterruptible);
+            }),
+          ),
+        ),
+      ),
     );
   };
   const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>

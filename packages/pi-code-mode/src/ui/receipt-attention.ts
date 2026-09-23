@@ -2,6 +2,7 @@
 import type { CompactNotice } from "pi-code-previews";
 import type { CompactAttention } from "../tools/compact-evidence.ts";
 import type { ExecutionReceipts } from "../tools/execution-receipts.ts";
+import type { CodeModeCallEntry } from "../tools/format.ts";
 
 export interface ReceiptAttention {
   readonly outcome: "uncertain" | "warning" | "error";
@@ -12,6 +13,7 @@ export const replayReceiptAttention = (
   present: boolean,
   receipts: ExecutionReceipts | undefined,
   attention: CompactAttention | undefined,
+  toolCalls: readonly CodeModeCallEntry[],
 ): ReceiptAttention | undefined => {
   if (!present) return undefined;
   const recovery =
@@ -55,7 +57,28 @@ export const replayReceiptAttention = (
       },
     };
   if (
-    receipts.calls.some((call) => call.delivery === "not-delivered" && call.isError !== true) &&
+    receipts.calls.some(
+      (call) =>
+        call.delivery === "not-delivered" &&
+        call.isError !== true &&
+        // Delivery loss does not rewrite the operation-outcome counters. A producer's
+        // invocation-scoped issue already reports this loss; unrelated issues do not.
+        !(
+          attention?.version === 2 &&
+          attention.issues.entries.some(
+            (issue) =>
+              issue.operation === `call-${call.id}/delivery` && issue.code === "delivery-failed",
+          )
+        ) &&
+        !toolCalls.some(
+          (row) =>
+            row.compact?.version === 2 &&
+            row.compact.issues.entries.some(
+              (issue) =>
+                issue.operation === `call-${call.id}/delivery` && issue.code === "delivery-failed",
+            ),
+        ),
+    ) &&
     !attention?.warnings &&
     !attention?.errors &&
     !attention?.uncertain &&

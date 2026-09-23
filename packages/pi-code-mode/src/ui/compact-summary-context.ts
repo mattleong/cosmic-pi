@@ -1,40 +1,33 @@
 /** Pure compact notice ownership and settled outcome policy over normalized details. */
-import { isCompactAttention, type CompactNotice, type CompactSummary } from "pi-code-previews";
+import type { CompactNotice, CompactSummary } from "pi-code-previews";
 import { codeModeEvidenceNotices } from "./notices.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
-export const compactParentNotices = (
-  details: CodeModeRenderDetails,
-  isError: boolean,
-): CompactNotice[] => {
-  // Keep informational hints parent-owned when an outer failure bypasses details.
-  const notices: CompactNotice[] =
-    details.compactAttention?.version === 2
-      ? codeModeEvidenceNotices({
-          ...details,
-          compactAttention: {
-            ...details.compactAttention,
-            notices: [],
-            issues: { coverage: "complete", entries: [] },
-          },
-          toolCalls: details.toolCalls.map((call) => ({
-            ...call,
-            ...(call.compact && {
-              compact: {
-                ...call.compact,
-                ...(call.compact.version === 2 && {
-                  issues: { coverage: "complete" as const, entries: [] },
-                }),
-                notices: isError
-                  ? call.compact.notices.filter((notice) => !isCompactAttention(notice))
-                  : [],
-              },
-            }),
-          })),
-        })
-      : codeModeEvidenceNotices(details);
-  return notices;
-};
+export const compactParentNotices = (details: CodeModeRenderDetails): CompactNotice[] =>
+  codeModeEvidenceNotices({
+    ...details,
+    ...(details.compactAttention?.version === 2 && {
+      compactAttention: {
+        ...details.compactAttention,
+        notices: [],
+        issues: { coverage: "complete", entries: [] },
+      },
+    }),
+    // The shared shell aggregates every child, even rows omitted from the collapsed view.
+    // Parent notices must not echo those facts on outer failures or legacy replay.
+    toolCalls: details.toolCalls.map((call) => ({
+      ...call,
+      ...(call.compact && {
+        compact: {
+          ...call.compact,
+          ...(call.compact.version === 2 && {
+            issues: { coverage: "complete" as const, entries: [] },
+          }),
+          notices: [],
+        },
+      }),
+    })),
+  });
 
 export const compactSettledOutcome = (
   details: CodeModeRenderDetails,

@@ -874,6 +874,74 @@ describe("builtin factory compact integration", () => {
     },
   );
 
+  test.each(["on", "off", "border"] as const)(
+    "recognized edit failure and nonroutine read recovery render once in %s mode",
+    (mode) => {
+      setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
+      const edit = createEditPreviewTool("/project");
+      const editOutput = result<undefined>(
+        "No changes made to /project/file.ts. The replacements produced identical content.",
+      );
+      for (const expanded of [false, true, false, true]) {
+        const ctx = { ...context({ isError: true, expanded }), state: {} };
+        const call = edit.renderCall?.(args, theme, ctx);
+        const body = edit.renderResult?.(editOutput, { expanded, isPartial: false }, theme, ctx);
+        const text = [call, body]
+          .flatMap((part) => (part ? [renderComponent(part)] : []))
+          .join("\n");
+        expect(text.split("The replacements produced identical content.")).toHaveLength(
+          expanded ? 2 : 1,
+        );
+      }
+      const read = createReadPreviewTool("/project");
+      const truncation = {
+        content: "slice",
+        truncated: true,
+        truncatedBy: "bytes" as const,
+        totalLines: 10,
+        totalBytes: 100_000,
+        outputLines: 2,
+        outputBytes: 5,
+        lastLinePartial: true,
+        firstLineExceedsLimit: false,
+        maxLines: 2_000,
+        maxBytes: 51_200,
+      };
+      for (const sample of [
+        {
+          output: result(
+            "slice\n\n[Showing lines 1-2 of 10 (50KB limit). Use offset=3 to continue.]",
+            { truncation },
+          ),
+          phrase: "offset=3",
+        },
+        {
+          output: result("[Line 1 exceeds the read limit. Use bash: head -c 51200 file]", {
+            truncation: { ...truncation, firstLineExceedsLimit: true },
+          }),
+          phrase: "head -c 51200",
+        },
+      ]) {
+        const before = structuredClone(sample.output);
+        for (const expanded of [false, true, false, true]) {
+          const ctx = context({ expanded });
+          const call = read.renderCall?.(args, theme, ctx);
+          const body = read.renderResult?.(
+            sample.output,
+            { expanded, isPartial: false },
+            theme,
+            ctx,
+          );
+          const text = [call, body]
+            .flatMap((part) => (part ? [renderComponent(part)] : []))
+            .join("\n");
+          expect(text.split(sample.phrase)).toHaveLength(expanded ? 2 : 1);
+        }
+        expect(sample.output).toEqual(before);
+      }
+    },
+  );
+
   test.each([
     ["read", createReadPreviewTool],
     ["bash", createBashPreviewTool],

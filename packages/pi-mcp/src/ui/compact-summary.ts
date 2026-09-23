@@ -1,4 +1,5 @@
 import {
+  claimCompactIssue,
   isCompactAttention,
   type CompactNotice,
   type CompactSummaryProvider,
@@ -113,10 +114,28 @@ export const projectMcpCompactSummary = ({
         }
       : { kind: "warning", text };
   });
+  // A complete tools.call error already appears in the readable result. Raw JSON
+  // metadata may be cut independently; it cannot revoke readable cause ownership.
+  const remoteClaims =
+    action === "tools.call" &&
+    card.presentation.issues.coverage === "complete" &&
+    card.hasCompleteReadableText
+      ? card.presentation.issues.entries
+          .filter((issue) => issue.code === "remote-failure")
+          .map((issue) => claimCompactIssue(issue, { cause: true }))
+      : [];
   return {
     action,
     subject,
     counters,
+    ...(remoteClaims.length > 0 && {
+      expandedResultOwnsIssues: remoteClaims,
+      failure: {
+        cause: remoteClaims[0]!.cause,
+        details: card.preview,
+        ownedIssues: remoteClaims,
+      },
+    }),
     ...(action === "result.read" && { compactSubject: "Saved output" }),
     outcome:
       (retainedRead ? card.outcome : card.presentation.outcome) === "unknown"

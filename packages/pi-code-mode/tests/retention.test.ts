@@ -68,6 +68,7 @@ describe("failure details retention", () => {
               omitted: 0,
               calls: [],
             }),
+            nestedOutputLost: () => false,
             retain: () => undefined,
           });
           const pending = yield* Effect.promise(() =>

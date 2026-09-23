@@ -234,16 +234,17 @@ const projectTaskSummary = ({
       const counters: string[] = [`${tasks.length} tasks`];
       const notices: CompactNotice[] = [];
       let outcome: CompactOutcome = "success";
-      for (const task of tasks) {
+      for (const [index, task] of tasks.entries()) {
+        const taskId = details.tasks[index]!.id;
         if (task.outcome === "error") outcome = "error";
         else if (outcome !== "error" && task.outcome === "uncertain") outcome = "uncertain";
         else if (outcome === "success" && task.outcome === "cancelled") outcome = "cancelled";
         notices.push(
           ...(task.notices ?? []).map((notice) => ({
             ...notice,
-            text: `${task.subject}: ${notice.text}`,
+            text: `${taskId}: ${notice.text}`,
             ...(notice.description && {
-              description: `${(task.compactSubject ?? "Task").slice(0, 60)}: ${notice.description}`,
+              description: `${taskId.slice(0, 60)}: ${notice.description}`,
             }),
           })),
         );

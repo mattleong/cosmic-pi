@@ -431,7 +431,6 @@ function appendRunHistory(
   cards: readonly SubagentRunCard[],
   phase: Phase,
   reportsOnlyOmitted: boolean,
-  quietChildWarnings: boolean,
   expanded: boolean,
 ): void {
   const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
@@ -439,7 +438,6 @@ function appendRunHistory(
     cards,
     reportsOnlyOmitted,
     quietHistory,
-    quietChildWarnings,
     expanded,
   );
   notices.push(...cardNotices);
@@ -497,15 +495,7 @@ function summarizeDetails(
   }
   if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!, phase);
   else runNotices(details, summary, notices, cards);
-  appendRunHistory(
-    summary,
-    notices,
-    cards,
-    phase,
-    details.reportsOnlyOmitted === true,
-    details.action === "await" && !expanded,
-    expanded,
-  );
+  appendRunHistory(summary, notices, cards, phase, details.reportsOnlyOmitted === true, expanded);
   if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
   else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
     summary.outcome = "warning";

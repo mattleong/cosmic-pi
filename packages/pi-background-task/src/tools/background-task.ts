@@ -127,7 +127,11 @@ export function registerBackgroundTaskTool(
           ) {
             text += `\n${sanitizeTerminalLine(details.snapshot.cwd)}${details.snapshot.pid ? ` · pid ${details.snapshot.pid}` : ""}`;
           }
-          return new Text(theme.fg("toolOutput", text), 0, 0);
+          return new Text(
+            theme.fg("toolOutput", text ? `Raw task result\n${text}` : "Raw task result (empty)"),
+            0,
+            0,
+          );
         },
       },
       scheduleAnimation: runner.scheduleAnimation,

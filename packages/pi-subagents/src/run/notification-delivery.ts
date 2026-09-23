@@ -26,12 +26,19 @@ export interface RunNotificationDeliveryDependencies {
   readonly records: ReadonlyMap<string, RunRecord>;
   /** The shared service lock. Every `*Locked` method requires the caller to hold it. */
   readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Serializes completion delivery ownership against claim acquisition. */
+  /** Serializes both delivery workers against await claim acquisition. */
   readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Host/ancestor boundary; must be called outside the service lock. */
   readonly notify: (
     notification: SubagentNotification,
   ) => Effect.Effect<SubagentNotificationDelivery | undefined>;
+}
+
+export interface QuestionNotificationReceipt {
+  readonly id: string;
+  readonly generation: number;
+  readonly requestId: string;
+  readonly claimToken: string;
 }
 
 type ActionDeliveryState =
@@ -47,6 +54,9 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
 ) {
   const { ownerScope, records, withLock, withCompletionGate, notify } = dependencies;
   const pendingActionNotifications = new Map<string, SubagentQuestionNotification>();
+  // Await owns the carrier from admission through successful result construction. A
+  // claim can precede its question, so publication cannot race an active await.
+  const questionClaims = new Map<string, string>();
   const completionWake = yield* Latch.make();
   const actionWake = yield* Latch.make();
   let completionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
@@ -102,61 +112,67 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
     );
   };
 
-  const flushPendingActions: Effect.Effect<ActionDeliveryState> = withLock(
-    Effect.sync(() => {
-      Latch.closeUnsafe(actionWake);
-      const notifications = [...pendingActionNotifications.values()].filter((notification) => {
-        if (actionRelevant(notification)) return true;
-        if (pendingActionNotifications.get(notification.id) === notification)
-          pendingActionNotifications.delete(notification.id);
-        return false;
-      });
-      if (notifications.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-      return notifications;
-    }),
-  ).pipe(
-    Effect.flatMap((notifications) =>
-      notifications.length === 0
-        ? Effect.succeed<ActionDeliveryState>({ _tag: "Idle" })
-        : Effect.forEach(
-            notifications,
-            (notification) =>
-              notify(notification).pipe(
-                Effect.map((delivery) => ({
-                  notification,
-                  accepted: delivery?.actionAccepted ?? true,
-                })),
-              ),
-            { concurrency: 4 },
-          ).pipe(
-            Effect.flatMap((deliveries) =>
-              withLock(
-                Effect.sync<ActionDeliveryState>(() => {
-                  let acknowledged = 0;
-                  const attempted = new Set(deliveries.map(({ notification }) => notification));
-                  for (const { notification, accepted } of deliveries) {
-                    if (!accepted) continue;
-                    if (pendingActionNotifications.get(notification.id) === notification)
-                      pendingActionNotifications.delete(notification.id);
-                    acknowledged += 1;
-                  }
-                  actionRetryDelayMillis =
-                    pendingActionNotifications.size === 0 || acknowledged > 0
-                      ? COMPLETION_RETRY_INITIAL_MILLIS
-                      : Math.min(COMPLETION_RETRY_MAX_MILLIS, actionRetryDelayMillis * 2);
-                  if (pendingActionNotifications.size === 0) return { _tag: "Idle" };
-                  const immediate = [...pendingActionNotifications.values()].some(
-                    (notification) => !attempted.has(notification),
-                  );
-                  return {
-                    _tag: "Retry",
-                    immediate,
-                    delayMillis: actionRetryDelayMillis,
-                  };
-                }),
+  const flushPendingActions: Effect.Effect<ActionDeliveryState> = withCompletionGate(
+    withLock(
+      Effect.sync(() => {
+        Latch.closeUnsafe(actionWake);
+        const notifications = [...pendingActionNotifications.values()].filter((notification) => {
+          if (questionClaims.has(notification.id)) return false;
+          if (actionRelevant(notification)) return true;
+          if (pendingActionNotifications.get(notification.id) === notification)
+            pendingActionNotifications.delete(notification.id);
+          return false;
+        });
+        if (notifications.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+        return notifications;
+      }),
+    ).pipe(
+      Effect.flatMap((notifications) =>
+        notifications.length === 0
+          ? Effect.succeed<ActionDeliveryState>({ _tag: "Idle" })
+          : Effect.forEach(
+              notifications,
+              (notification) =>
+                notify(notification).pipe(
+                  Effect.map((delivery) => ({
+                    notification,
+                    accepted: delivery?.actionAccepted ?? true,
+                  })),
+                ),
+              { concurrency: 4 },
+            ).pipe(
+              Effect.flatMap((deliveries) =>
+                withLock(
+                  Effect.sync<ActionDeliveryState>(() => {
+                    let acknowledged = 0;
+                    const attempted = new Set(deliveries.map(({ notification }) => notification));
+                    for (const { notification, accepted } of deliveries) {
+                      if (!accepted) continue;
+                      if (pendingActionNotifications.get(notification.id) === notification)
+                        pendingActionNotifications.delete(notification.id);
+                      acknowledged += 1;
+                    }
+                    actionRetryDelayMillis =
+                      pendingActionNotifications.size === 0 || acknowledged > 0
+                        ? COMPLETION_RETRY_INITIAL_MILLIS
+                        : Math.min(COMPLETION_RETRY_MAX_MILLIS, actionRetryDelayMillis * 2);
+                    if (pendingActionNotifications.size === 0) return { _tag: "Idle" };
+                    const immediate = [...pendingActionNotifications.values()].some(
+                      (notification) =>
+                        !attempted.has(notification) &&
+                        actionRelevant(notification) &&
+                        !questionClaims.has(notification.id),
+                    );
+                    return {
+                      _tag: "Retry",
+                      immediate,
+                      delayMillis: actionRetryDelayMillis,
+                    };
+                  }),
+                ),
               ),
             ),
-          ),
+      ),
     ),
   );
 
@@ -181,23 +197,63 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   yield* Effect.forkIn(completionWorker, ownerScope, { startImmediately: true });
   yield* Effect.forkIn(actionWorker, ownerScope, { startImmediately: true });
 
-  const queueActionNotification = (
+  // These operations require the service lock. Await admission also takes the
+  // completion gate, in the same order as both notification workers.
+  const queueActionNotificationLocked = (
     record: RunRecord,
     notification: Omit<SubagentQuestionNotification, "generation">,
-  ) =>
-    withLock(
-      Effect.sync(() => {
-        const generation = ++record.notificationGeneration;
-        // SAFETY: The typed owner constructs the queued notification on this path.
-        const queued = { ...notification, generation } as SubagentQuestionNotification;
-        pendingActionNotifications.set(record.view.id, queued);
-        Latch.openUnsafe(actionWake);
-      }),
-    );
+  ): void => {
+    const queued: SubagentQuestionNotification = {
+      ...notification,
+      generation: ++record.notificationGeneration,
+    };
+    pendingActionNotifications.set(record.view.id, queued);
+    Latch.openUnsafe(actionWake);
+  };
+  const claimQuestionsLocked = (records: ReadonlyArray<RunRecord>, token: string): void => {
+    for (const record of records) questionClaims.set(record.view.id, token);
+  };
+  const questionReceiptLocked = (
+    record: RunRecord,
+    token: string,
+  ): QuestionNotificationReceipt | undefined => {
+    const pending = pendingActionNotifications.get(record.view.id);
+    return questionClaims.get(record.view.id) === token && pending && actionRelevant(pending)
+      ? {
+          id: pending.id,
+          generation: pending.generation,
+          requestId: pending.requestId,
+          claimToken: token,
+        }
+      : undefined;
+  };
+  const acknowledgeQuestionsLocked = (
+    receipts: ReadonlyArray<QuestionNotificationReceipt>,
+  ): void => {
+    for (const receipt of receipts) {
+      const pending = pendingActionNotifications.get(receipt.id);
+      if (
+        questionClaims.get(receipt.id) === receipt.claimToken &&
+        pending?.generation === receipt.generation &&
+        pending.requestId === receipt.requestId
+      )
+        pendingActionNotifications.delete(receipt.id);
+    }
+  };
+  const releaseQuestionClaimsLocked = (records: ReadonlyArray<RunRecord>, token: string): void => {
+    for (const record of records) {
+      if (questionClaims.get(record.view.id) !== token) continue;
+      questionClaims.delete(record.view.id);
+      if (pendingActionNotifications.has(record.view.id)) Latch.openUnsafe(actionWake);
+    }
+  };
 
   return {
-    /** Locks internally, stamps the question generation, queues it, and wakes delivery. */
-    queueActionNotification,
+    queueActionNotificationLocked,
+    claimQuestionsLocked,
+    questionReceiptLocked,
+    acknowledgeQuestionsLocked,
+    releaseQuestionClaimsLocked,
     /** Caller must hold the service lock; inserts one payload and wakes delivery atomically. */
     insertCompletionLocked: (record: RunRecord, completion: CompletionGenerationRecord): void => {
       record.completionGenerations.set(completion.generation, completion);

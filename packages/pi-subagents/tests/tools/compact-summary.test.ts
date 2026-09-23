@@ -757,7 +757,7 @@ describe("subagent compact semantic policy", () => {
     );
   });
 
-  it("deduplicates repeated warnings within each run without losing attribution", () => {
+  it("keeps distinct run and selection warning identities even when their text matches", () => {
     const warning = "Inspect the changed route";
     const details = makeCompactToolDetails({
       action: "status",
@@ -768,12 +768,50 @@ describe("subagent compact semantic policy", () => {
     const notices = summarize("status", details)?.notices?.filter((notice) =>
       notice.text.includes(warning),
     );
-    expect(notices).toHaveLength(2);
-    for (const id of ["agent-a", "agent-b"])
-      expect(notices?.filter((notice) => notice.text.includes(id))).toHaveLength(1);
+    expect(notices).toHaveLength(4);
+    for (const id of ["agent-a", "agent-b"]) {
+      const owned = notices?.filter((notice) => notice.text.includes(id));
+      expect(owned).toHaveLength(2);
+      expect(owned?.map((notice) => notice.code)).toEqual([undefined, undefined]);
+      expect(owned?.[0]?.description).not.toBe(owned?.[1]?.description);
+    }
   });
 
-  it("quiets only child-authored await warnings without dropping safety evidence", () => {
+  it("keeps system and child warning slots separate without matching their prose", () => {
+    for (const source of ["child", "system"] as const) {
+      const details = makeCompactToolDetails({
+        action: "status",
+        runs: [
+          view({
+            warning: "Same warning words",
+            warningSource: source,
+            systemWarning: "Same warning words",
+          }),
+        ],
+      });
+      const summary = summarize("status", details);
+      expect(
+        summary?.notices?.filter((notice) => notice.text.includes("Same warning words")),
+      ).toHaveLength(source === "child" ? 2 : 1);
+      expect(summary?.issues?.coverage).toBe("unknown");
+    }
+    const inconsistent = summarize(
+      "status",
+      makeCompactToolDetails({
+        action: "status",
+        runs: [
+          view({
+            warning: "Latest system warning",
+            warningSource: "system",
+            systemWarning: "Older unmatched system warning",
+          }),
+        ],
+      }),
+    );
+    expect(inconsistent?.notices?.filter((notice) => notice.kind === "warning")).toHaveLength(2);
+  });
+
+  it("retains child warnings when await output has no exact warning-coverage receipt", () => {
     for (const phase of ["running", "settled"] as const) {
       for (const extra of [
         {},
@@ -799,7 +837,7 @@ describe("subagent compact semantic policy", () => {
           phase,
         );
         const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
-        expect(text.includes("Child advisory")).toBe("warningSource" in extra);
+        expect(text).toContain("Child advisory");
         if ("systemWarning" in extra) expect(text).toContain(extra.systemWarning);
         if ("selection" in extra) expect(text).toContain("Route recovery");
         if ("error" in extra) expect(summary?.outcome).toBe("error");
