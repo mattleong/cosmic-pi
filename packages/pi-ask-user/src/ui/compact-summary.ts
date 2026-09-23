@@ -1,39 +1,21 @@
-import * as Schema from "effect/Schema";
 import {
   withCompactIssues,
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
+  asyncOutcome,
+  decodeAsyncControl,
   decodeCallTitles,
+  decodeCompactAsyncRows,
   decodeCompactChoices,
-  outcomeProjection,
   projection,
 } from "./tool-render-projection.ts";
 
-const Outcome = outcomeProjection({ note: Schema.optional(Schema.String) });
-const outcome = projection(Outcome);
-const Identity = Schema.String.check(Schema.isLengthBetween(1, 256));
-const Snapshot = Schema.Struct({
-  requestId: Identity,
-  deliveryId: Identity,
-  status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
-  delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
-  outcome: Schema.optional(Outcome),
-  presentation: Schema.optional(
-    Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
-  ),
-});
-const snapshot = projection(Snapshot);
-const requests = projection(
-  Schema.Struct({
-    requests: Schema.Array(Snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
-  }),
-);
+const outcome = projection(asyncOutcome);
 
-function summarize(outcomes: readonly (typeof Outcome.Type)[]): CompactSummary {
+function summarize(outcomes: readonly (typeof asyncOutcome.Type)[]): CompactSummary {
   const cancelled = outcomes.filter((entry) => entry.outcome === "cancelled").length;
   const answers = outcomes.reduce(
     (count, entry) => count + (entry.outcome === "submitted" ? entry.answers.length : 0),
@@ -47,13 +29,6 @@ function summarize(outcomes: readonly (typeof Outcome.Type)[]): CompactSummary {
   };
 }
 
-const control = projection(
-  Schema.Struct({
-    action: Schema.Literals(["status", "await", "cancel"]),
-    requestId: Schema.optional(Schema.String),
-  }),
-);
-
 function liveSummary<Args>(args: Args): CompactSummary | undefined {
   const questions = decodeCallTitles(args)?.questions;
   if (questions?.length)
@@ -61,7 +36,7 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
       subject: questions.map((question) => stripTerminalControls(question.title)).join(", "),
       counters: [`${questions.length} ${questions.length === 1 ? "question" : "questions"}`],
     };
-  const input = control(args);
+  const input = decodeAsyncControl(args);
   if (!input || (input.action !== "status" && !input.requestId)) return undefined;
   return {
     action: input.action,
@@ -72,7 +47,7 @@ function liveSummary<Args>(args: Args): CompactSummary | undefined {
 
 function selectedChoice<Args>(
   args: Args,
-  value: typeof Outcome.Type | undefined,
+  value: typeof asyncOutcome.Type | undefined,
 ): Partial<CompactSummary> {
   if (value?.outcome !== "submitted" || value.answers.length !== 1) return {};
   const questions = decodeCompactChoices(args)?.questions;
@@ -117,15 +92,14 @@ export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, res
 
 const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
-  const single = snapshot(result?.details);
-  const rows = single ? [single] : requests(result?.details)?.requests;
+  const rows = decodeCompactAsyncRows(result?.details);
   if (!rows?.length) return undefined;
   if (
     context.isError &&
     !rows.every((row) => row.status === "cancelled" && row.outcome?.outcome === "cancelled")
   )
     return undefined;
-  const input = control(args);
+  const input = decodeAsyncControl(args);
   const identity: Partial<CompactSummary> = {};
   if (input) {
     identity.action = input.action;

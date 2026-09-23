@@ -11,7 +11,7 @@ import {
   codePreviewSettings,
   setCodePreviewSettings,
 } from "../../pi-code-previews/src/config/state.ts";
-import { DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
+import { CODE_MODE_INTEGER_BOUNDS, DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
 import type { ResultsContract } from "../src/results/service.ts";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import {
@@ -318,6 +318,49 @@ describe("registered status presentation and discovery", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps status replay bounds and tolerant historical fields", () => {
+    const base = codeModeStatusResult(codeModeStateFixture({ maxOutputBytes: 512 }).config).details
+      .status;
+    const limits = {
+      timeoutMs: CODE_MODE_INTEGER_BOUNDS.timeoutMs.minimum,
+      maxToolCalls: CODE_MODE_INTEGER_BOUNDS.maxToolCalls.minimum,
+      maxOutputBytes: CODE_MODE_INTEGER_BOUNDS.maxOutputBytes.maximum,
+      maxSourceBytes: CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.minimum,
+      maxCumulativeChildOutputBytes: CODE_MODE_INTEGER_BOUNDS.maxCumulativeChildOutputBytes.maximum,
+      historicalField: true,
+    };
+    expect(
+      decodeCodeModeStatus({
+        status: { ...base, limits, historicalField: true },
+        historicalField: true,
+      }),
+    ).toMatchObject({
+      action: "status",
+      limits: {
+        timeoutMs: limits.timeoutMs,
+        maxToolCalls: limits.maxToolCalls,
+        maxOutputBytes: limits.maxOutputBytes,
+        maxSourceBytes: limits.maxSourceBytes,
+        maxCumulativeChildOutputBytes: limits.maxCumulativeChildOutputBytes,
+      },
+    });
+    for (const invalid of [
+      { timeoutMs: 0 },
+      { maxToolCalls: -1 },
+      { maxOutputBytes: CODE_MODE_INTEGER_BOUNDS.maxOutputBytes.maximum + 1 },
+      { maxSourceBytes: 0 },
+      { maxCumulativeChildOutputBytes: Number.MAX_SAFE_INTEGER + 1 },
+      { maxToolCalls: 1.5 },
+      { timeoutMs: "1000" },
+    ]) {
+      expect(
+        decodeCodeModeStatus({ status: { ...base, limits: { ...limits, ...invalid } } }),
+      ).toBeUndefined();
+    }
+    expect(decodeCodeModeStatus({ status: { ...base, action: "run" } })).toBeUndefined();
+    expect(decodeCodeModeStatus({ status: base, truncated: "yes" })).toBeUndefined();
   });
 
   it("labels generated defaults and registration snapshots without presenting them as live", () => {

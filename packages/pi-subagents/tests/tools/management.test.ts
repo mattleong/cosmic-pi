@@ -768,6 +768,57 @@ describe("subagent tool", () => {
     });
   });
 
+  effectTest("keeps completion available when detailed result presentation fails", function* () {
+    const completed = view({ state: "completed", endedAt: 2, finalText: "Report to deliver." });
+    const receipt = { id: completed.id, generation: 1, claimToken: "claim-1" };
+    const consumed: Array<typeof receipt> = [];
+    const service = subagentServiceDouble({
+      withStatusObservations: (_ids, use) =>
+        use({ observations: [{ run: completed, completionReceipt: receipt }], missingIds: [] }),
+      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+        use([{ run: completed, completionReceipt: receipt }]),
+      consumeCompletions: (receipts) => Effect.sync(() => void consumed.push(...receipts)),
+    });
+    const tools = captureSubagentTools(service);
+    // Text formatting succeeds, but projection of the persisted details fails.
+    Object.defineProperty(completed, "warningSource", {
+      configurable: true,
+      get: () => {
+        throw new Error("detail projection failed");
+      },
+    });
+    yield* step(() =>
+      expect(
+        tools
+          .get("subagent_status")!
+          .execute("call", { runIds: [completed.id] }, undefined, undefined, context),
+      ).rejects.toThrow("detail projection failed"),
+    );
+    yield* step(() =>
+      expect(
+        tools
+          .get("subagent_await")!
+          .execute(
+            "call",
+            { runIds: [completed.id], until: "all_finished" },
+            undefined,
+            undefined,
+            context,
+          ),
+      ).rejects.toThrow("detail projection failed"),
+    );
+    expect(consumed).toEqual([]);
+
+    Object.defineProperty(completed, "warningSource", { value: "child" });
+    const delivered = yield* invokeOptionalTool(tools.get("subagent_await"), {
+      runIds: [completed.id],
+      until: "all_finished",
+    });
+    expect(delivered?.content[0]?.text).toContain("Report to deliver.");
+    expect(delivered?.details).toMatchObject({ action: "await", cards: [{ id: completed.id }] });
+    expect(consumed).toEqual([receipt]);
+  });
+
   effectTest("returns await immediately when a subagent needs a parent reply", function* () {
     const waiting = view({
       state: "waiting_for_parent",

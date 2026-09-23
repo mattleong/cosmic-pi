@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { clampModelVisibleText } from "../tools/limits.ts";
 import type { ExecutionOutcome } from "./model.ts";
 
@@ -27,6 +28,40 @@ export const resultReadFailures = {
     message: "Retained result revoked. No execution was run.",
   },
 } as const;
+
+/** Structural replay bounds. Page ordering and identity still belong to each UI consumer. */
+const OffsetSchema = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+export const ResultIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128));
+const ResultPageFields = {
+  status: Schema.Literal("page"),
+  id: ResultIdSchema,
+  originalOutcome: Schema.Literals(["succeeded", "failed", "cancelled"]),
+  offset: OffsetSchema,
+  end: OffsetSchema,
+  next: Schema.NullOr(OffsetSchema),
+  total: OffsetSchema,
+};
+
+export const ResultReadPresentationSchema = Schema.Union([
+  Schema.Struct(ResultPageFields),
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    code: Schema.Literals([
+      "invalid-input",
+      "unavailable",
+      "invalid-offset",
+      "page-budget",
+      "revoked",
+    ]),
+  }),
+]);
+
+export const InitialPreviewPresentationSchema = Schema.Struct({
+  ...ResultPageFields,
+  originalOutcome: Schema.Literal("succeeded"),
+  kind: Schema.Literal("output"),
+  receiptMode: Schema.Literals(["none", "read-only", "full"]),
+});
 
 export interface ResultPagePresentation {
   readonly status: "page";

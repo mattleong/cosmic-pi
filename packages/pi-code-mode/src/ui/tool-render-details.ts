@@ -19,7 +19,11 @@ import {
   hasConsistentExecutionReceipts,
   type ExecutionReceipts,
 } from "../tools/execution-receipts.ts";
-import type { InitialPreviewPresentation } from "../results/read-presentation.ts";
+import {
+  InitialPreviewPresentationSchema,
+  ResultIdSchema,
+  type InitialPreviewPresentation,
+} from "../results/read-presentation.ts";
 import { replayReceiptAttention, type ReceiptAttention } from "./receipt-attention.ts";
 import {
   decodeOption,
@@ -76,22 +80,9 @@ const RenderDetailsInputSchema = Schema.Struct({
 });
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
   decodeOption(Schema.Natural, value);
-const OffsetSchema = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
-const ResultIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128));
-const InitialPreviewInputSchema = Schema.Struct({
-  status: Schema.Literal("page"),
-  id: ResultIdSchema,
-  originalOutcome: Schema.Literal("succeeded"),
-  kind: Schema.Literal("output"),
-  offset: OffsetSchema,
-  end: OffsetSchema,
-  next: Schema.NullOr(OffsetSchema),
-  total: OffsetSchema,
-  receiptMode: Schema.Literals(["none", "read-only", "full"]),
-});
 
 const validInitialPreview = (
-  preview: typeof InitialPreviewInputSchema.Type | undefined,
+  preview: typeof InitialPreviewPresentationSchema.Type | undefined,
   resultId: string | undefined,
   receipts: ExecutionReceipts | undefined,
   counts: CodeModeCallCounts,
@@ -228,7 +219,7 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     counts.queued === 0 &&
     hasCompleteReadOnlyReceipts(executionReceipts);
   const initialPreview = validInitialPreview(
-    decodeOption(InitialPreviewInputSchema, record.initialPreview),
+    decodeOption(InitialPreviewPresentationSchema, record.initialPreview),
     decodeOption(ResultIdSchema, record.resultId),
     executionReceipts,
     counts,

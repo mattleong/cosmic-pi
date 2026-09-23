@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { CodeModeConfig } from "../config/schema.ts";
+import * as Schema from "effect/Schema";
+import { CODE_MODE_FIELD_SCHEMAS, type CodeModeConfig } from "../config/schema.ts";
 import { callEntryDetails, type CodeModeToolDetails } from "./format.ts";
 import { clampModelVisibleText, utf8ByteLength } from "./limits.ts";
 
@@ -13,6 +14,18 @@ export type CodeModeEffectiveLimits = Readonly<
     | "maxCumulativeChildOutputBytes"
   >
 >;
+
+/** Replay checks reuse the configuration's numeric bounds without validating producer output. */
+export const CodeModeStatusSchema = Schema.Struct({
+  action: Schema.Literal("status"),
+  limits: Schema.Struct({
+    timeoutMs: CODE_MODE_FIELD_SCHEMAS.timeoutMs,
+    maxToolCalls: CODE_MODE_FIELD_SCHEMAS.maxToolCalls,
+    maxOutputBytes: CODE_MODE_FIELD_SCHEMAS.maxOutputBytes,
+    maxSourceBytes: CODE_MODE_FIELD_SCHEMAS.maxSourceBytes,
+    maxCumulativeChildOutputBytes: CODE_MODE_FIELD_SCHEMAS.maxCumulativeChildOutputBytes,
+  }),
+});
 
 export interface CodeModeStatus {
   readonly action: "status";

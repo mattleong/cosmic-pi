@@ -3,6 +3,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
   renderAsyncCall,
+  renderAsyncContent,
   renderAsyncMessage,
   renderAsyncResult,
 } from "../src/ui/async-tool-render.ts";
@@ -116,6 +117,58 @@ describe("async questionnaire replay rendering", () => {
     }
   });
 
+  it("retains expanded legacy IDs and work fields without accepting malformed work", () => {
+    for (const id of ["", "x".repeat(257)]) {
+      const legacy = {
+        ...snapshot,
+        requestId: id,
+        deliveryId: id,
+        independentWork: "Inspect first",
+        blockedWork: "Wait for decision",
+      };
+      for (const details of [legacy, { requests: [legacy] }]) {
+        expect(result(details, true)).toContain("Avoid tolls");
+        const content = output(
+          renderAsyncContent({ details }, { expanded: true, isPartial: false }, theme),
+        );
+        expect(content).toContain("Independent work: Inspect first");
+        expect(content).toContain("Wait for answers before: Wait for decision");
+      }
+      expect(
+        output(
+          renderAsyncMessage(
+            { details: { requestId: id, deliveryId: id, generation: "", outcome } },
+            { expanded: true, outputPad: 0 },
+            theme,
+          ),
+        ),
+      ).toContain("Avoid tolls");
+    }
+    const invalid = { ...snapshot, independentWork: 123 };
+    expect(result(invalid, false, "raw fallback").trimEnd()).toBe("raw fallback");
+    expect(
+      output(
+        renderAsyncContent(
+          { details: invalid, content: "raw fallback" },
+          { expanded: true, isPartial: false },
+          theme,
+        ),
+      ).trimEnd(),
+    ).toBe("raw fallback");
+  });
+
+  it("prefers a valid single snapshot over an invalid list", () => {
+    const details = { ...snapshot, requests: [{ ...snapshot, delivery: 123 }] };
+    expect(result(details)).toContain("Avoid tolls");
+    expect(
+      result(
+        { requests: [snapshot, { ...snapshot, delivery: 123 }] },
+        false,
+        "raw fallback",
+      ).trimEnd(),
+    ).toBe("raw fallback");
+  });
+
   it("does not show stale submitted answers for pending, failed, cancelled, or partial results", () => {
     for (const status of ["pending", "failed", "cancelled"]) {
       expect(result({ ...snapshot, status })).not.toContain("Scenic");
@@ -164,7 +217,12 @@ describe("async questionnaire replay rendering", () => {
       { type: "text", text: 123 },
       null,
     ];
-    for (const details of invalid) {
+    const hostileId = Object.defineProperty({ ...snapshot }, "requestId", {
+      get() {
+        throw new Error("hostile ID getter");
+      },
+    });
+    for (const details of [...invalid, hostileId, { requests: [hostileId] }]) {
       const rendered = result(details, false, content);
       expect(rendered).toContain("safe fallback");
       expect(rendered).not.toContain("secret");

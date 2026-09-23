@@ -13,30 +13,14 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import { decodeOption } from "../tools/format.ts";
-import { codeModeStatusFits, type CodeModeStatus } from "../tools/status.ts";
+import { CodeModeStatusSchema, codeModeStatusFits, type CodeModeStatus } from "../tools/status.ts";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import { codeModeOutputText } from "./result-output.ts";
 
-const boundedInteger = (bounds: { readonly minimum: number; readonly maximum: number }) =>
-  Schema.Int.check(Schema.isBetween(bounds));
-
 const StatusRequestSchema = Schema.Struct({ action: Schema.Literal("status") });
-const StatusSchema = Schema.Struct({
-  action: Schema.Literal("status"),
-  limits: Schema.Struct({
-    timeoutMs: boundedInteger(CODE_MODE_INTEGER_BOUNDS.timeoutMs),
-    maxToolCalls: boundedInteger(CODE_MODE_INTEGER_BOUNDS.maxToolCalls),
-    maxOutputBytes: boundedInteger(CODE_MODE_INTEGER_BOUNDS.maxOutputBytes),
-    maxSourceBytes: boundedInteger(CODE_MODE_INTEGER_BOUNDS.maxSourceBytes),
-    maxCumulativeChildOutputBytes: boundedInteger(
-      CODE_MODE_INTEGER_BOUNDS.maxCumulativeChildOutputBytes,
-    ),
-  }),
-});
 const StatusDetailsSchema = Schema.Struct({
-  status: StatusSchema,
+  status: CodeModeStatusSchema,
   cancelled: Schema.optional(Schema.Boolean),
   truncated: Schema.optional(Schema.Boolean),
 });

@@ -11,28 +11,16 @@ import {
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
-import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import {
   answerLine,
+  asyncOutcome,
+  decodeAsyncControl,
   decodeCallTitles,
+  decodeExpandedAsyncRows,
+  expandedAsyncSnapshot,
   fallbackText,
-  outcomeProjection,
   projection,
 } from "./tool-render-projection.ts";
-
-const Outcome = outcomeProjection({ note: Schema.optional(Schema.String) });
-const Snapshot = Schema.Struct({
-  requestId: Schema.String,
-  deliveryId: Schema.String,
-  status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
-  delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
-  outcome: Schema.optional(Outcome),
-  independentWork: Schema.optional(Schema.String),
-  blockedWork: Schema.optional(Schema.String),
-  presentation: Schema.optional(
-    Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
-  ),
-});
 
 const envelope = projection(
   Schema.Struct({
@@ -40,29 +28,17 @@ const envelope = projection(
     content: Schema.optional(Schema.Unknown),
   }),
 );
-const snapshot = projection(Snapshot);
-const requests = projection(
-  Schema.Struct({
-    requests: Schema.Array(Snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
-  }),
-);
 const notification = projection(
   Schema.Struct({
     requestId: Schema.String,
     deliveryId: Schema.String,
     generation: Schema.String,
-    outcome: Outcome,
-  }),
-);
-const control = projection(
-  Schema.Struct({
-    action: Schema.Literals(["status", "await", "cancel"]),
-    requestId: Schema.optional(Schema.String),
+    outcome: asyncOutcome,
   }),
 );
 const fallback = <Content>(content: Content): string => fallbackText(content, true);
 
-function outcomeLines(outcome: typeof Outcome.Type | undefined, theme: Theme): string[] {
+function outcomeLines(outcome: typeof asyncOutcome.Type | undefined, theme: Theme): string[] {
   if (outcome?.outcome !== "submitted") return [];
   return outcome.answers.flatMap((answer) => {
     const lines = [answerLine(answer, theme)];
@@ -72,8 +48,8 @@ function outcomeLines(outcome: typeof Outcome.Type | undefined, theme: Theme): s
 }
 
 function summary(
-  status: (typeof Snapshot.Type)["status"],
-  outcome: typeof Outcome.Type | undefined,
+  status: (typeof expandedAsyncSnapshot.Type)["status"],
+  outcome: typeof asyncOutcome.Type | undefined,
   theme: Theme,
 ): string[] {
   const label = {
@@ -98,7 +74,7 @@ export function renderAsyncCall<Input>(
   expanded: boolean,
   isControl = false,
 ): Text {
-  const call = control(input);
+  const call = decodeAsyncControl(input);
   const questions = decodeCallTitles(input)?.questions;
   const title = isControl
     ? {
@@ -123,9 +99,7 @@ export function renderAsyncResult<Input>(
   if (options.isPartial)
     return new Text(toolStatusLine(theme, "warning", "Waiting for questionnaire update"), 0, 0);
   const result = envelope(input);
-  const single = snapshot(result?.details);
-  const list = requests(result?.details)?.requests;
-  const rows = single ? [single] : list;
+  const rows = decodeExpandedAsyncRows(result?.details);
   const lines = rows?.flatMap((row) => [
     ...summary(row.status, row.outcome, theme),
     ...(row.delivery === "failed"
@@ -165,8 +139,7 @@ export function renderAsyncContent<Input>(
   theme: Theme,
 ): Text {
   const result = envelope(input);
-  const single = snapshot(result?.details);
-  const rows = single ? [single] : requests(result?.details)?.requests;
+  const rows = decodeExpandedAsyncRows(result?.details);
   if (
     !rows ||
     rows.some(

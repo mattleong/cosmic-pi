@@ -1,32 +1,9 @@
 import * as Schema from "effect/Schema";
 import type { CompactSummary } from "pi-code-previews";
 import { decodeOption } from "../tools/format.ts";
-import { resultReadFailures } from "../results/read-presentation.ts";
+import { ResultReadPresentationSchema, resultReadFailures } from "../results/read-presentation.ts";
 
-const Offset = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
-const ReadDetails = Schema.Struct({
-  resultRead: Schema.Union([
-    Schema.Struct({
-      status: Schema.Literal("page"),
-      id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
-      originalOutcome: Schema.Literals(["succeeded", "failed", "cancelled"]),
-      offset: Offset,
-      end: Offset,
-      next: Schema.NullOr(Offset),
-      total: Offset,
-    }),
-    Schema.Struct({
-      status: Schema.Literal("error"),
-      code: Schema.Literals([
-        "invalid-input",
-        "unavailable",
-        "invalid-offset",
-        "page-budget",
-        "revoked",
-      ]),
-    }),
-  ]),
-});
+const ReadDetails = Schema.Struct({ resultRead: ResultReadPresentationSchema });
 
 /** Read delivery is separate from the retained execution. Never inspect page text. */
 export function resultReadCompactSummary<Details>(

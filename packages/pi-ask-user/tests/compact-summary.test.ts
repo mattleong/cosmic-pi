@@ -227,6 +227,32 @@ describe("questionnaire compact outcome projection", () => {
       expect(summarize(asyncAskUserCompactSummary, details)).toBeUndefined();
   });
 
+  it("bounds compact replay IDs for both single and list snapshots", () => {
+    for (const id of ["", "x".repeat(257)]) {
+      for (const field of ["requestId", "deliveryId"] as const) {
+        const snapshot = row({ [field]: id });
+        expect(summarize(asyncAskUserCompactSummary, snapshot)).toBeUndefined();
+        expect(summarize(asyncAskUserCompactSummary, { requests: [snapshot] })).toBeUndefined();
+      }
+    }
+    for (const id of ["x", "x".repeat(256)]) {
+      expect(summarize(asyncAskUserCompactSummary, row({ requestId: id }))?.outcome).toBe(
+        "success",
+      );
+    }
+  });
+
+  it("prefers a valid single snapshot over malformed list data", () => {
+    const details = { ...row(), requests: [row({ status: "pending" })] };
+    expect(summarize(asyncAskUserCompactSummary, details)?.outcome).toBe("success");
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [row(), row({ delivery: 3 })] }),
+    ).toBeUndefined();
+    expect(summarize(asyncAskUserCompactSummary, row({ independentWork: 123 }))?.outcome).toBe(
+      "success",
+    );
+  });
+
   it("declines missing, malformed, inconsistent, and error-marked replies", () => {
     for (const details of [undefined, {}, { outcome: "submitted" }, { ...submitted, answers: [] }])
       expect(summarize(askUserCompactSummary, details)).toBeUndefined();
@@ -246,6 +272,13 @@ describe("questionnaire compact outcome projection", () => {
       },
     });
     expect(summarize(askUserCompactSummary, hostile)).toBeUndefined();
+    const hostileId = Object.defineProperty(row(), "requestId", {
+      get() {
+        throw new Error("untrusted replay ID");
+      },
+    });
+    expect(summarize(asyncAskUserCompactSummary, hostileId)).toBeUndefined();
+    expect(summarize(asyncAskUserCompactSummary, { requests: [hostileId] })).toBeUndefined();
   });
 });
 

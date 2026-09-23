@@ -196,9 +196,9 @@ export const executeSubagentActionEffect = (
         const prefix = joinSections([...sections, attentionRecoveryText(runs)]);
         const formatted = formatDetailedRuns(runs, prefix ? `${prefix}\n\n` : "");
         const outcome = { runs, attentionRequired, text: formatted.text, ...extra() };
-        const prebuiltResult = yield* Effect.sync(() => present(outcome));
+        const result = yield* Effect.sync(() => present(outcome));
         yield* consumeCompletions(observations, formatted.fullyRenderedIds);
-        return { ...outcome, prebuiltResult, fullyRenderedIds: formatted.fullyRenderedIds };
+        return { result, fullyRenderedIds: formatted.fullyRenderedIds };
       });
     const finishStatus = (ids: ReadonlyArray<string>) =>
       authorize(ids).pipe(
@@ -220,20 +220,25 @@ export const executeSubagentActionEffect = (
             );
           }),
         ),
+        Effect.map(({ result }) => result),
       );
 
     switch (input.action) {
       case "start":
-        return yield* executeStartBatch({
-          agents: input.agents,
-          pi,
-          ctx,
-          environment,
-          startOwned,
-          onUpdate,
-        });
+        return present(
+          yield* executeStartBatch({
+            agents: input.agents,
+            pi,
+            ctx,
+            environment,
+            startOwned,
+            onUpdate,
+          }),
+        );
       case "list":
-        return { runs: yield* callerRunId ? service.visibleList(callerRunId) : service.list };
+        return present({
+          runs: yield* callerRunId ? service.visibleList(callerRunId) : service.list,
+        });
       case "status":
         return yield* finishStatus(yield* requiredTargetIds(input.action, input.runIds));
       case "await": {
@@ -242,67 +247,72 @@ export const executeSubagentActionEffect = (
         yield* authorize(ids);
         // The action discriminator above always constructs this call's await state.
         const state = awaitState!;
-        return yield* service.withAwaitTerminalObservations(
-          ids,
-          until,
-          state.update,
-          (observations) =>
-            completeObservations(
-              observations,
-              [state.progressText(observations.map((observation) => observation.run))],
-              () => ({ awaitContextRuns: state.contextRuns() }),
-            ),
-          (outcome) => outcome.fullyRenderedIds,
-        );
+        return yield* service
+          .withAwaitTerminalObservations(
+            ids,
+            until,
+            state.update,
+            (observations) =>
+              completeObservations(
+                observations,
+                [state.progressText(observations.map((observation) => observation.run))],
+                () => ({ awaitContextRuns: state.contextRuns() }),
+              ),
+            (outcome) => outcome.fullyRenderedIds,
+          )
+          .pipe(Effect.map(({ result }) => result));
       }
       case "send": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const message = yield* requiredMessage(input.action, input.message);
         yield* authorize(ids);
-        return yield* forEachOutcome(ids, (id) => service.send(id, message));
+        return present(yield* forEachOutcome(ids, (id) => service.send(id, message)));
       }
       case "reply": {
         const id = yield* requiredRunId(input.action, input.runId);
         const message = yield* requiredMessage(input.action, input.message);
         yield* authorize([id]);
-        return yield* forEachOutcome([id], (runId) => service.reply(runId, message));
+        return present(yield* forEachOutcome([id], (runId) => service.reply(runId, message)));
       }
       case "retry": {
         const ids = yield* requiredTargetIds(input.action, input.runIds);
         const profileService = yield* SubagentProfileService;
         const policySnapshot = yield* profileService.capture;
         yield* authorize(ids);
-        return yield* forEachOutcome(ids, (id) => {
-          let handedOff = false;
-          const operation = Effect.acquireUseRelease(
-            service.claimRetryContinuation(id),
-            (claim) =>
-              resolveProfileRetry(pi, claim, ctx, environment).pipe(
-                Effect.map((request) => ({
-                  ...request,
-                  parentRunId: claim.source.parentRunId,
-                  nestingPolicy: policySnapshot.effectiveConfig.nesting,
-                  nestingPolicyRevision: policySnapshot.revision,
-                })),
-                Effect.catch((error) => {
-                  const finalize =
-                    subagentErrorCode(error) === "retry_route_exhausted"
-                      ? service.exhaustRetryClaim(id, claim.claimToken)
-                      : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
-                        ? service.blockRetryClaim(id, claim.claimToken)
-                        : Effect.void;
-                  return finalize.pipe(Effect.andThen(Effect.fail(error)));
-                }),
-                Effect.flatMap((request) =>
-                  service.startRetrySessionOwned(request, () => {
-                    handedOff = true;
+        return present(
+          yield* forEachOutcome(ids, (id) => {
+            let handedOff = false;
+            const operation = Effect.acquireUseRelease(
+              service.claimRetryContinuation(id),
+              (claim) =>
+                resolveProfileRetry(pi, claim, ctx, environment).pipe(
+                  Effect.map((request) => ({
+                    ...request,
+                    parentRunId: claim.source.parentRunId,
+                    nestingPolicy: policySnapshot.effectiveConfig.nesting,
+                    nestingPolicyRevision: policySnapshot.revision,
+                  })),
+                  Effect.catch((error) => {
+                    const finalize =
+                      subagentErrorCode(error) === "retry_route_exhausted"
+                        ? service.exhaustRetryClaim(id, claim.claimToken)
+                        : isCleanupUnconfirmed(error) || isOutcomeUncertain(error)
+                          ? service.blockRetryClaim(id, claim.claimToken)
+                          : Effect.void;
+                    return finalize.pipe(Effect.andThen(Effect.fail(error)));
                   }),
+                  Effect.flatMap((request) =>
+                    service.startRetrySessionOwned(request, () => {
+                      handedOff = true;
+                    }),
+                  ),
                 ),
-              ),
-            (claim) => (handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken)),
-          );
-          return operation;
-        });
+              (claim) =>
+                handedOff ? Effect.void : service.releaseRetryClaim(id, claim.claimToken),
+            );
+            return operation;
+          }),
+        );
       }
       case "interrupt":
       case "resume":
@@ -317,18 +327,22 @@ export const executeSubagentActionEffect = (
         // Property narrowing does not survive the forEach closure boundary, so hoist the
         // case-group-narrowed action before the callback.
         const lifecycleAction = input.action;
-        return yield* forEachOutcome(ids, (id) =>
-          lifecycleAction === "interrupt"
-            ? service.interrupt(id)
-            : lifecycleAction === "resume"
-              ? service.resume(id, input.message)
-              : service.stop(id),
+        return present(
+          yield* forEachOutcome(ids, (id) =>
+            lifecycleAction === "interrupt"
+              ? service.interrupt(id)
+              : lifecycleAction === "resume"
+                ? service.resume(id, input.message)
+                : service.stop(id),
+          ),
         );
       }
       case "rename": {
         const id = yield* requiredRunId(input.action, input.runId);
         yield* authorize([id]);
-        return yield* forEachOutcome([id], (runId) => service.rename(runId, input.name.trim()));
+        return present(
+          yield* forEachOutcome([id], (runId) => service.rename(runId, input.name.trim())),
+        );
       }
       case "claims": {
         const operation = input.operation;
@@ -344,12 +358,14 @@ export const executeSubagentActionEffect = (
           );
         const id = yield* requiredRunId(input.action, operation.runId ?? "");
         yield* authorize([id]);
-        return yield* forEachOutcome([id], (runId) =>
-          operation.action === "grant"
-            ? service.grantWriteClaims(runId, operation.paths ?? [])
-            : operation.action === "revoke"
-              ? service.revokeWriteClaims(runId, operation.paths ?? [])
-              : service.resumeWriterAdmission(runId),
+        return present(
+          yield* forEachOutcome([id], (runId) =>
+            operation.action === "grant"
+              ? service.grantWriteClaims(runId, operation.paths ?? [])
+              : operation.action === "revoke"
+                ? service.revokeWriteClaims(runId, operation.paths ?? [])
+                : service.resumeWriterAdmission(runId),
+          ),
         );
       }
     }
@@ -363,9 +379,7 @@ export const executeSubagentActionEffect = (
     readonly actionFailures?: ReadonlyArray<SubagentActionFailure>;
     readonly attentionRequired?: boolean;
     readonly text?: string;
-    readonly prebuiltResult?: AgentToolResult<unknown>;
   }): AgentToolResult<unknown> => {
-    if (executionResult.prebuiltResult) return executionResult.prebuiltResult;
     const { runs, awaitContextRuns, attentionRequired, text: formattedText } = executionResult;
     const startFailures = executionResult.startFailures ?? [];
     const actionFailures = executionResult.actionFailures ?? [];
@@ -418,7 +432,7 @@ export const executeSubagentActionEffect = (
     };
     return { content: [{ type: "text", text: boundToolOutput(resultText()) }], details };
   };
-  return effect.pipe(Effect.map(present));
+  return effect;
 };
 
 export const executeSubagentAction = (
