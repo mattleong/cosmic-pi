@@ -4,11 +4,7 @@ import { codePreviewPerformanceConfig } from "../config/env";
 import { getObjectValue } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
-import {
-  getWriteDiffSkipReason,
-  exceedsWriteDiffBytes,
-  shouldSkipWriteDiffComplexity,
-} from "../write/diff";
+import { getWriteDiffGuard, getWriteDiffSkipReason, hasWriteDiffSizeEvidence } from "../write/diff";
 import type { CompactNotice } from "./compact-summary";
 import { isTruncated, splitReadContinuationNotice } from "./data/results";
 import { getPreviewSecretWarnings } from "./renderers/shared/secret-preview";
@@ -173,17 +169,7 @@ export function writeDiffProjection<Before>(
   // Do not classify prose reasons or let large new content mask missing history.
   const skipReason = getWriteDiffSkipReason(before, "", policy.maxWriteDiffBytes);
   if (skipReason !== undefined) {
-    const byteLength = getObjectValue(before, "byteLength");
-    const maxBytes = getObjectValue(before, "maxBytes");
-    const reason = getObjectValue(before, "reason");
-    if (
-      Predicate.isString(reason) &&
-      reason.trim().length > 0 &&
-      getObjectValue(before, "sizeExceeded") === true &&
-      Predicate.isNumber(byteLength) &&
-      Predicate.isNumber(maxBytes) &&
-      byteLength > maxBytes
-    )
+    if (hasWriteDiffSizeEvidence(before))
       return {
         notices: secretNotices([skipReason], policy.secretWarnings, policy.secretScanChars),
         metadata: ["diff skipped: size"],
@@ -213,17 +199,11 @@ export function writeDiffProjection<Before>(
       ],
       metadata: [],
     };
-  // UTF-16 length is a cheap lower bound on UTF-8 bytes. Keep later scans bounded.
-  if (
-    content.length > policy.maxWriteDiffBytes ||
-    beforeContent.length > policy.maxWriteDiffBytes ||
-    exceedsWriteDiffBytes([beforeContent, content], policy.maxWriteDiffBytes)
-  )
-    return { notices: [], metadata: ["diff skipped: size"] };
-  if (
-    beforeContent !== content &&
-    shouldSkipWriteDiffComplexity(beforeContent, content, policy.maxWriteDiffChangedLineCells)
-  )
-    return { notices: [], metadata: ["diff skipped: complexity"] };
-  return { notices: [], metadata: [] };
+  const guard = getWriteDiffGuard(
+    beforeContent,
+    content,
+    policy.maxWriteDiffBytes,
+    policy.maxWriteDiffChangedLineCells,
+  );
+  return { notices: [], metadata: guard ? [`diff skipped: ${guard}`] : [] };
 }

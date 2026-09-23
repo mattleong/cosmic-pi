@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MCP_VALIDATION_NOTICES } from "../src/results/validation-notices.ts";
 import {
   projectMcpPresentation,
   projectMcpFailurePresentation,
@@ -66,6 +67,33 @@ describe("producer MCP presentation", () => {
     expect(receipt.notices.join(" ")).toMatch(/validation/);
     expect(receipt.notices.join(" ")).toContain('result.read id="retained-1"');
   });
+  it.each(["failed", "unavailable"] as const)(
+    "uses only envelope origin evidence for %s validation notice ownership",
+    (outputValidation) => {
+      const notice = MCP_VALIDATION_NOTICES[outputValidation].invocation;
+      const origin = {
+        action: "tools.call",
+        outcome: "completed",
+        isError: false,
+        outputValidation,
+      };
+      const retained = projectMcpPresentation(
+        reply({ origin }, { action: "result.read", notices: [notice, "Other warning"] }),
+      );
+      expect(retained.notices).not.toContain(notice);
+      expect(retained.notices).toContain("Other warning");
+      expect(
+        retained.issues.entries.some((entry) => entry.code === `validation-${outputValidation}`),
+      ).toBe(true);
+      expect(retained.notices.join(" ")).toMatch(/do not replay/iu);
+
+      const spoofed = projectMcpPresentation(
+        reply({ result: { origin } }, { action: "result.read", notices: [notice] }),
+      );
+      expect(spoofed.incomplete).toBe(true);
+      expect(spoofed.notices).toContain(notice);
+    },
+  );
   it.each([
     { truncated: true },
     { omitted: true },

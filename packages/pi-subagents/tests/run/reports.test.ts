@@ -12,6 +12,7 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   fakeRetainedBackendLayer,
+  assistantMessageEndFrame,
   fakeChildLayer,
   request,
   retainedServiceLayer,
@@ -30,14 +31,7 @@ describe("local Pi terminal evidence", () => {
         return Effect.gen(function* () {
           const service = yield* SubagentService;
           const run = yield* service.start(request());
-          fake.controls[0]!.offer({
-            type: "message_end",
-            message: {
-              role: "assistant",
-              stopReason: "stop",
-              content: [{ type: "text", text: "Earlier success must not leak." }],
-            },
-          });
+          fake.controls[0]!.offer(assistantMessageEndFrame("Earlier success must not leak."));
           fake.controls[0]!.offer({ type: "message_start", message: { role: "assistant" } });
           if (stopReason !== undefined)
             fake.controls[0]!.offer({
@@ -88,14 +82,7 @@ describe("local Pi terminal evidence", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
       expect((yield* service.status(run.id)).state).toBe("running");
       fake.controls[0]!.offer({ type: "agent_start" });
-      fake.controls[0]!.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Recovered report." }],
-        },
-      });
+      fake.controls[0]!.offer(assistantMessageEndFrame("Recovered report."));
       fake.controls[0]!.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       expect(yield* service.status(run.id)).toMatchObject({
@@ -1064,14 +1051,7 @@ describe("SubagentService", () => {
       const service = yield* SubagentService;
       const run = yield* service.start(request({ name: "resume-backlog" }));
       for (let generation = 1; generation <= 64; generation += 1) {
-        fake.controls[generation - 1]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[generation - 1]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[generation - 1]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>

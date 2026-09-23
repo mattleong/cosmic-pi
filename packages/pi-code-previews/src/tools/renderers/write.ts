@@ -23,10 +23,9 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import {
+  getWriteDiffGuard,
   getWriteDiffSkipReason,
   readExistingFileForPreview,
-  shouldSkipWriteDiffBytes,
-  shouldSkipWriteDiffComplexity,
 } from "../../write/diff";
 import {
   executeWriteWithPreview,
@@ -135,12 +134,9 @@ export function createWritePreviewTool(cwd: string) {
             0,
             0,
           );
-        const skippedFor = shouldSkipWriteDiffBytes(beforeContent, content)
-          ? "large content"
-          : shouldSkipWriteDiffComplexity(beforeContent, content)
-            ? "complex rewrite"
-            : undefined;
-        if (skippedFor) {
+        const guard = getWriteDiffGuard(beforeContent, content);
+        if (guard) {
+          const skippedFor = guard === "size" ? "large content" : "complex rewrite";
           return new Text(
             theme.fg("success", "✓ Write applied") +
               theme.fg("muted", ` · diff skipped for ${skippedFor}`),

@@ -3,6 +3,7 @@ import {
   presentationArrayLength as arrayLength,
   presentationOutcome as outcome,
   presentationEvidence,
+  presentationValidationIdentity,
 } from "../code-mode/presentation-evidence.ts";
 /** Display-only normalization. Descriptor reads never invoke historical getters or toJSON. */
 import * as Option from "effect/Option";
@@ -15,7 +16,7 @@ import { projectMcpPresentation, type McpPresentation } from "../code-mode/prese
 
 import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
 
-import { isOwnedValidationNotice, validationNoticeIdentity } from "./validation-notices.ts";
+import { isOwnedValidationNotice } from "./validation-notices.ts";
 
 export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
@@ -188,15 +189,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     };
     if (originOutcome) origin = { ...origin, outcome: originOutcome };
   }
-  const validationIdentity = validationNoticeIdentity({
-    action: own(details, "action").value,
-    outcome: own(details, "outcome").value,
-    isError: own(details, "isError").value,
-    originAction: own(rawOrigin, "action").value,
-    originOutcome: own(rawOrigin, "outcome").value,
-    originIsError: own(rawOrigin, "isError").value,
-    outputValidation: own(rawOrigin, "outputValidation").value,
-  });
+  const validationIdentity = presentationValidationIdentity(details, rawOrigin);
   const rawNotices = own(details, "notices").value;
   const noticeCount = arrayLength(rawNotices);
   const noticeEntries = list(rawNotices, 32);

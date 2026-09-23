@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { normalizeResult } from "../../src/results/normalize.ts";
 import { projectPrepared } from "../../src/results/projection.ts";
+import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
 import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
@@ -333,6 +334,45 @@ describe("MCP compact summaries", () => {
     expect(summary?.subject).toContain("retained-1");
     expect(summary?.metadata?.join(" ") ?? "").not.toContain("retained-1");
     expect(summary?.notices).toEqual([]);
+  });
+  it("retains UI notice completeness independently of origin validation and redaction", () => {
+    for (const outputValidation of ["failed", "unavailable"] as const) {
+      const notice = MCP_VALIDATION_NOTICES[outputValidation].invocation;
+      const details = reply(
+        {
+          origin: { action: "tools.call", outcome: "completed", isError: false, outputValidation },
+        },
+        { action: "result.read", notices: [notice] },
+      );
+      const card = decodeMcpCardDetails({ details });
+      expect(card.origin?.outputValidationFailed).toBe(outputValidation === "failed");
+      expect(card.origin?.outputValidationUnavailable).toBe(outputValidation === "unavailable");
+      expect(card.noticesComplete).toBe(true);
+      expect(card.notices).not.toContain(notice);
+
+      let invoked = false;
+      const malformedOrigin = Object.defineProperty(
+        { action: "tools.call", outcome: "completed", isError: false },
+        "outputValidation",
+        {
+          get: () => {
+            invoked = true;
+            return outputValidation;
+          },
+        },
+      );
+      const malformed = decodeMcpCardDetails({
+        details: reply({ origin: malformedOrigin }, { action: "result.read", notices: [notice] }),
+      });
+      expect(invoked).toBe(false);
+      expect(malformed.presentation.incomplete).toBe(true);
+      expect(malformed.notices).toContain(notice);
+    }
+    const raw = `token=${"private".repeat(200)}`;
+    const redacted = decodeMcpCardDetails({ details: reply({}, { notices: [raw] }) });
+    expect(redacted.noticesComplete).toBe(false);
+    expect(redacted.notices.join(" ")).not.toContain("private");
+    expect(redacted.presentation.notices.join(" ")).not.toContain("private");
   });
   it("preserves remote notices even when they appear routine", () => {
     const summary = summarize(reply({}, { resultId: "retained-1", notices: ["Remote notice"] }));

@@ -4,7 +4,6 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import type { AdaptableToolDefinition, CodePreviewToolRenderers } from "../../renderer-adapter";
 import type { BuiltinCompactTool } from "../../builtin-subject";
 import { getObjectValue } from "../../../shared/helpers";
-import { writeDiffProjection } from "../../compact-notices";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { getEditPreviewOperations, getPathArg, getReadStartLine } from "../../data/args";
 import { getEditDiff, getTextContent } from "../../data/results";
@@ -20,9 +19,9 @@ import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { getCodePreviewBeforeWrite } from "../../../write/preview-execution";
 import {
+  getWriteDiffGuard,
   getWriteDiffSkipReason,
-  shouldSkipWriteDiffBytes,
-  shouldSkipWriteDiffComplexity,
+  hasWriteDiffSizeEvidence,
 } from "../../../write/diff";
 
 /** Detailed content only. The shared shell owns headings, outcome, and attention. */
@@ -106,19 +105,14 @@ export function builtinExpandedContent<T extends AdaptableToolDefinition>(
         const skipReason = Predicate.isString(content)
           ? getWriteDiffSkipReason(before, content)
           : undefined;
-        if (
-          skipReason &&
-          Predicate.isString(content) &&
-          writeDiffProjection(before, content).metadata.length
-        )
+        if (skipReason && hasWriteDiffSizeEvidence(before))
           body.addChild(new Text(theme.fg("muted", escapeControlChars(skipReason)), 0, 0));
         if (
           Predicate.isString(previous) &&
           Predicate.isString(content) &&
           previous !== content &&
-          !getWriteDiffSkipReason(before, content) &&
-          !shouldSkipWriteDiffBytes(previous, content) &&
-          !shouldSkipWriteDiffComplexity(previous, content)
+          !skipReason &&
+          !getWriteDiffGuard(previous, content)
         )
           body.addChild(
             renderDiff(createSimpleDiff(previous, content), path, theme, context.invalidate),

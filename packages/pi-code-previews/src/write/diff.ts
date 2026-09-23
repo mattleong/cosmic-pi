@@ -25,6 +25,9 @@ const SkippedExistingFilePreview = Schema.Struct({
   maxBytes: PreviewByteLength,
   sizeExceeded: Schema.optional(Schema.Boolean),
 });
+const decodeSkippedExistingFilePreview = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
+  onExcessProperty: "error",
+});
 
 const currentMaxWriteDiffBytes = () => codePreviewPerformanceConfig.maxWriteDiffBytes;
 const currentMaxChangedLineCells = () => codePreviewPerformanceConfig.maxWriteDiffChangedLineCells;
@@ -89,9 +92,7 @@ export function getWriteDiffSkipReason<BeforeInput>(
   nextContent: string,
   maxBytes = currentMaxWriteDiffBytes(),
 ): string | undefined {
-  const decoded = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
-    onExcessProperty: "error",
-  })(before);
+  const decoded = decodeSkippedExistingFilePreview(before);
   if (Option.isNone(decoded)) return undefined;
   const nextBytes = Buffer.byteLength(nextContent, "utf8");
   if (nextBytes > maxBytes)
@@ -104,8 +105,32 @@ export function getWriteDiffSkipReason<BeforeInput>(
   );
 }
 
-export function shouldSkipWriteDiffBytes(...texts: string[]): boolean {
-  return exceedsWriteDiffBytes(texts, currentMaxWriteDiffBytes());
+// A skipped snapshot is a quiet size guard only when its validated measurements
+// establish that the previous file exceeded its recorded bound.
+export function hasWriteDiffSizeEvidence<BeforeInput>(before: BeforeInput): boolean {
+  const decoded = decodeSkippedExistingFilePreview(before);
+  if (Option.isNone(decoded)) return false;
+  const { reason, sizeExceeded, byteLength, maxBytes } = decoded.value;
+  return (
+    reason.trim().length > 0 &&
+    sizeExceeded === true &&
+    byteLength !== undefined &&
+    byteLength > maxBytes
+  );
+}
+
+export function getWriteDiffGuard(
+  before: string,
+  after: string,
+  maxBytes = currentMaxWriteDiffBytes(),
+  maxCells = currentMaxChangedLineCells(),
+): "size" | "complexity" | undefined {
+  // UTF-16 length is a cheap lower bound on UTF-8 bytes; avoid scanning huge inputs.
+  if (before.length + after.length > maxBytes || exceedsWriteDiffBytes([before, after], maxBytes))
+    return "size";
+  if (before !== after && shouldSkipWriteDiffComplexity(before, after, maxCells))
+    return "complexity";
+  return undefined;
 }
 
 export function exceedsWriteDiffBytes(texts: readonly string[], maxBytes: number): boolean {

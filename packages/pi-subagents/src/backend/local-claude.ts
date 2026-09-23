@@ -51,7 +51,7 @@ import { makeLocalClaudeReportDelivery } from "./local-claude-report-delivery.ts
 import { makeLocalClaudeUsage } from "./local-claude-usage.ts";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import { correlatedRequest, unsupported as unsupportedCapability } from "./driver-shared.ts";
-import { withLocalSupervisorInstructions } from "./local-supervisor-prompt.ts";
+import { startLocalCli } from "./local-cli-startup.ts";
 import {
   CLAUDE_INTERRUPT_MARKER,
   claudeInitializeFrame,
@@ -1073,20 +1073,7 @@ export const makeLocalClaudeBackendDriver = (
   supportsContext: (context) => context === "fresh",
   preflight: (request) => processes.preflight({ runtime: "claude", ...request }),
   spawn: (request) =>
-    Effect.gen(function* () {
-      const launch = withLocalSupervisorInstructions(request);
-      const supervisor = yield* supervisors
-        .open({ runId: request.runId })
-        .pipe(
-          Effect.mapError((error) =>
-            processError("open supervisor channel", error.code, error.message),
-          ),
-        );
-      const child = yield* processes.spawn({
-        runtime: "claude",
-        launch,
-        supervisor: supervisor.metadata,
-      });
-      return yield* makeLocalClaudeHandle(launch, child, supervisor);
-    }),
+    Effect.flatMap(startLocalCli("claude", request, processes, supervisors), (startup) =>
+      makeLocalClaudeHandle(startup.launch, startup.child, startup.supervisor),
+    ),
 });

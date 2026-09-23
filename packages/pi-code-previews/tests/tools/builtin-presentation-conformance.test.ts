@@ -159,6 +159,32 @@ describe("registered builtin presentation", () => {
     expect(text).toContain("NEW_SOURCE");
     expect(text).toContain("Verify the remote copy before retrying.");
   });
+  test("unverified write size evidence retains attention and raw result on expansion", () => {
+    const harness = createToolPresentationHarness(registered().get("write")!, {
+      theme: testTheme(),
+    });
+    const args = { path: "source.ts", content: "NEW_SOURCE" };
+    const output = result("WRITE_RECEIPT\nVerify destination before retrying.");
+    output.details = {
+      codePreviewBeforeWrite: {
+        kind: "skipped",
+        reason: "previous file too large",
+        maxBytes: 10,
+        byteLength: 20,
+        sizeExceeded: false,
+      },
+    };
+    harness.call(args);
+    harness.result(output);
+    expect(plain(harness.render(120))).toContain("cannot be previewed");
+    harness.call(args, { expanded: true });
+    harness.result(output, { expanded: true });
+    const text = plain(harness.render(120));
+    expect(text).toContain("NEW_SOURCE");
+    expect(text).toContain("WRITE_RECEIPT");
+    expect(text).toContain("Verify destination before retrying.");
+    expect(text).not.toMatch(/new file/iu);
+  });
   test("unknown write history never asserts a new file", () => {
     const harness = createToolPresentationHarness(registered().get("write")!, {
       theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),

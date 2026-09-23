@@ -11,6 +11,7 @@ import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  assistantMessageEndFrame,
   fakeChildLayer,
   request,
   serviceLayer,
@@ -284,14 +285,7 @@ describe("SubagentService", () => {
       expect(
         (yield* service.send(transportRun.id, "Continue after uncertain clearing.")).state,
       ).toBe("running");
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Assignment complete." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Assignment complete."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect((yield* service.status(transportRun.id)).state).toBe("completed");
@@ -804,14 +798,7 @@ describe("SubagentService", () => {
       expect(yield* Fiber.join(replying).pipe(Effect.flip)).toMatchObject({
         code: "reply_outcome_uncertain",
       });
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Turn resolved." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Turn resolved."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
@@ -880,14 +867,7 @@ describe("SubagentService", () => {
         status.sessionEvents.filter((event) => event.type === "notice" && event.kind === "warning"),
       ).toHaveLength(3);
 
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Final report." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Final report."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* TestClock.adjust("100 millis");

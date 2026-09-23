@@ -3,6 +3,7 @@ import {
   presentationArrayLength as lengthOf,
   presentationOutcome as outcomeOf,
   presentationEvidence,
+  presentationValidationIdentity,
   type PresentationField,
 } from "./presentation-evidence.ts";
 /** Pure, bounded recovery evidence. No arguments or general result bodies; issues may
@@ -15,11 +16,7 @@ import * as Option from "effect/Option";
 import { projectMcpIssues } from "./issues.ts";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
-import {
-  canonicalValidationWarning,
-  isOwnedValidationNotice,
-  validationNoticeIdentity,
-} from "../ui/validation-notices.ts";
+import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
 import { normalizeMcpCodeModeError } from "./protocol.ts";
 
 const BoundedIssues = createBoundedCompactIssuesSchema({
@@ -104,15 +101,7 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
     kind === "output-limit" ||
     (payloadTruncation && field(payload, "truncated").value === true);
   let recovery = truncated;
-  const validationIdentity = validationNoticeIdentity({
-    action,
-    outcome: envelopeOutcome,
-    isError: rawError,
-    originAction: field(origin, "action").value,
-    originOutcome: field(origin, "outcome").value,
-    originIsError: field(origin, "isError").value,
-    outputValidation: field(origin, "outputValidation").value,
-  });
+  const validationIdentity = presentationValidationIdentity(reply, origin, field);
   if (validationIdentity) add(canonicalValidationWarning(validationIdentity));
   if (action === "result.read" || origin !== undefined) {
     const originOutcome = outcomeOf(field(origin, "outcome").value);

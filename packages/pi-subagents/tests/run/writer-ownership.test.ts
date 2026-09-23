@@ -13,6 +13,7 @@ import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  assistantMessageEndFrame,
   fakeChildLayer,
   fakeWriterLeaseLayer,
   profileLayerFor,
@@ -244,14 +245,7 @@ describe("SubagentService", () => {
       const first = yield* service.start(
         request({ name: "writer-one", writeIntent: "writer", task: "Implement auth" }),
       );
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Assignment complete." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Assignment complete."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* service.start(
@@ -277,14 +271,7 @@ describe("SubagentService", () => {
       const run = yield* service.start(
         request({ name: "uncertain-completed-writer", writeIntent: "writer" }),
       );
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "First writer turn complete." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("First writer turn complete."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
@@ -618,14 +605,7 @@ describe("SubagentService", () => {
         request({ name: "respawn-mark-writer", writeIntent: "writer" }),
       );
       expect(order.slice(0, 3)).toEqual(["lease-acquire", "lease-spawn-started", "spawn"]);
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Assignment complete." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Assignment complete."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
         projections.some((projection) => projection.runs[0]?.state === "completed"),
@@ -807,14 +787,7 @@ describe("SubagentService", () => {
       const second = yield* service.start(
         request({ name: "claimed-peer", writeIntent: "writer", writes: ["src/peer.ts"] }),
       );
-      fake.controls[0]?.offer({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [{ type: "text", text: "Assignment complete." }],
-        },
-      });
+      fake.controls[0]?.offer(assistantMessageEndFrame("Assignment complete."));
       fake.controls[0]?.offer({ type: "agent_settled" });
       yield* yieldUntil(() =>
         projections.some((projection) =>

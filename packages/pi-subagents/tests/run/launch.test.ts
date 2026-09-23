@@ -10,6 +10,7 @@ import { SubagentService } from "../../src/run/service.ts";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  assistantMessageEndFrame,
   fakeChildLayer,
   request,
   serviceLayer,
@@ -196,14 +197,7 @@ describe("SubagentService", () => {
 
         const cleanupGate = yield* Deferred.make<void>();
         fake.controls[0]?.gateRelease(cleanupGate);
-        fake.controls[0]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[0]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[0]?.offer({ type: "agent_settled" });
         yield* yieldUntil(() =>
           Boolean(
@@ -244,14 +238,7 @@ describe("SubagentService", () => {
         const run = yield* service.start(request({ name: `cleanup-${index + 1}` }));
         runs.push(run);
         fake.controls[index]?.gateRelease(gates[index]!);
-        fake.controls[index]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[index]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[index]?.offer({ type: "agent_settled" });
         yield* yieldUntil(() =>
           Boolean(
@@ -299,14 +286,7 @@ describe("SubagentService", () => {
       for (let index = 0; index < 50; index += 1) {
         const run = yield* service.start(request({ name: `retained-${index + 1}` }));
         if (index === 0) firstId = run.id;
-        fake.controls[index]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: `Report ${index + 1}` }],
-          },
-        });
+        fake.controls[index]?.offer(assistantMessageEndFrame(`Report ${index + 1}`));
         fake.controls[index]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>
@@ -358,14 +338,7 @@ describe("SubagentService", () => {
       for (let index = 0; index < 50; index += 1) {
         const run = yield* service.start(request({ name: `evictable-${index + 1}` }));
         if (index === 0) firstId = run.id;
-        fake.controls[index]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[index]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[index]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>
@@ -442,14 +415,7 @@ describe("SubagentService", () => {
         for (let index = 0; index < 50; index += 1) {
           const run = yield* service.start(request({ name: `phase-c-history-${index + 1}` }));
           if (index === 0) oldestId = run.id;
-          fake.controls[index + 1]?.offer({
-            type: "message_end",
-            message: {
-              role: "assistant",
-              stopReason: "stop",
-              content: [{ type: "text", text: "Assignment complete." }],
-            },
-          });
+          fake.controls[index + 1]?.offer(assistantMessageEndFrame("Assignment complete."));
           fake.controls[index + 1]?.offer({ type: "agent_settled" });
           yield* yieldUntil(
             () =>
@@ -525,14 +491,7 @@ describe("SubagentService", () => {
         yield* service.start(request({ name: `active-before-eviction-${index + 1}` }));
       for (let index = 0; index < 50; index += 1) {
         const run = yield* service.start(request({ name: `candidate-${index + 1}` }));
-        fake.controls[index + 10]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[index + 10]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[index + 10]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>
@@ -576,14 +535,7 @@ describe("SubagentService", () => {
       for (let index = 0; index < 38; index += 1) {
         const run = yield* service.start(request({ name: `history-${index + 1}` }));
         if (index === 0) oldestId = run.id;
-        fake.controls[index]?.offer({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Assignment complete." }],
-          },
-        });
+        fake.controls[index]?.offer(assistantMessageEndFrame("Assignment complete."));
         fake.controls[index]?.offer({ type: "agent_settled" });
         yield* yieldUntil(
           () =>

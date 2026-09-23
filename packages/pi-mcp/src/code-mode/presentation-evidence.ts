@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import { validationNoticeIdentity } from "../ui/validation-notices.ts";
 
 export interface PresentationField {
   readonly value: unknown;
@@ -38,6 +39,22 @@ export const presentationOutcome = <Value>(
       : value === "unknown"
         ? "unknown"
         : undefined;
+
+/** Only raw envelope/origin descriptors establish validation-notice ownership. */
+export const presentationValidationIdentity = <Reply, Origin>(
+  reply: Reply,
+  origin: Origin,
+  field: PresentationReader = ownPresentationField,
+) =>
+  validationNoticeIdentity({
+    action: field(reply, "action").value,
+    outcome: field(reply, "outcome").value,
+    isError: field(reply, "isError").value,
+    originAction: field(origin, "action").value,
+    originOutcome: field(origin, "outcome").value,
+    originIsError: field(origin, "isError").value,
+    outputValidation: field(origin, "outputValidation").value,
+  });
 
 /** Only gateway discovery actions own paging and undiscovered-server guidance.
  * Retained reads use the captured operation identity, never fields in remote output.

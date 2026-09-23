@@ -748,6 +748,16 @@ export const retainedReportFrame = (
   text,
 });
 
+export const assistantMessageEndFrame = (text: string) =>
+  ({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text }],
+    },
+  }) as const;
+
 export const contactParentFrame = (
   requestId: string,
   kind: "progress" | "warning" | "question",

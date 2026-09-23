@@ -9,7 +9,9 @@ import { test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
 import { defaultCodePreviewPerformanceConfig } from "../../src/config/defaults";
 import {
+  getWriteDiffGuard,
   getWriteDiffSkipReason,
+  hasWriteDiffSizeEvidence,
   readExistingFileForPreviewEffect,
   shouldSkipWriteDiffComplexity,
 } from "../../src/write/diff";
@@ -63,6 +65,17 @@ test("write diff skip reasons reject malformed or non-current skipped details", 
     getWriteDiffSkipReason({ kind: "skipped", reason: "bounded", maxBytes: 100 }, "after"),
     "bounded",
   );
+  const measured = {
+    kind: "skipped",
+    reason: "previous file too large",
+    byteLength: 101,
+    maxBytes: 100,
+    sizeExceeded: true,
+  };
+  assert.equal(hasWriteDiffSizeEvidence(measured), true);
+  assert.equal(hasWriteDiffSizeEvidence({ ...measured, reason: " " }), false);
+  assert.equal(hasWriteDiffSizeEvidence({ ...measured, byteLength: 100 }), false);
+  assert.equal(hasWriteDiffSizeEvidence({ ...measured, unexpected: true }), false);
 });
 
 effectTest("readExistingFileForPreview returns bounded previous content", function* () {
@@ -94,6 +107,14 @@ effectTest("readExistingFileForPreview returns bounded previous content", functi
   } finally {
     yield* step(() => rm(dir, { recursive: true, force: true }));
   }
+});
+
+test("write diff guards prioritize measured UTF-8 size over rewrite complexity", () => {
+  assert.equal(getWriteDiffGuard("旧\n", "新\n", 7, 0), "size");
+  assert.equal(getWriteDiffGuard("旧\n", "新\n", 8, 0), "complexity");
+  assert.equal(getWriteDiffGuard("abc", "def", 5, 0), "size");
+  assert.equal(getWriteDiffGuard("old", "new", 6, 1), undefined);
+  assert.equal(getWriteDiffGuard("x", "x", 2, 0), undefined);
 });
 
 test("write diff complexity skips rewrites but keeps localized changes", () => {
