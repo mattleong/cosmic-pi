@@ -28,7 +28,7 @@ export function registerAskUserTool(
     name: "ask_user",
     label: "Ask User",
     description:
-      "Present one structured questionnaire containing one to four questions. Use single/multiple mode with two to four concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local and Herdr Pi child requests route to the root UI with authenticated run ownership.",
+      "Present one structured questionnaire containing one to six questions. Use single/multiple mode with two to four concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local and Herdr Pi child requests route to the root UI with authenticated run ownership.",
     promptSnippet:
       "Ask one structured batch of questions when concrete user decisions are required",
     promptGuidelines: [

@@ -1,4 +1,4 @@
-import { routeRequest as request } from "./support/questionnaire.ts";
+import { defaultQuestion, routeRequest as request } from "./support/questionnaire.ts";
 import { afterEach, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -72,6 +72,45 @@ it("decodes bounded structured transport data and rejects hostile or semanticall
       get answers() {
         throw new Error("private");
       },
+    }),
+  ).toBeUndefined();
+});
+it("round-trips six questions and answers without relaxing the four-choice bound", () => {
+  const choices = Array.from({ length: 4 }, (_, index) => ({
+    ...defaultQuestion.choices[0]!,
+    value: `choice-${index}`,
+    label: `Choice ${index}`,
+  }));
+  const questions = Array.from({ length: 6 }, (_, index) => ({
+    ...defaultQuestion,
+    key: `question-${index}`,
+    title: `Question ${index}`,
+    choices,
+  }));
+  const answers = questions.map((question) => ({
+    key: question.key,
+    kind: "choices" as const,
+    values: choices.map((choice) => choice.value),
+    labels: choices.map((choice) => choice.label),
+  }));
+  expect(decodeQuestionnaireRequest({ questions })).toEqual({ questions });
+  expect(decodeQuestionnaireOutcome({ outcome: "submitted", answers })).toEqual({
+    outcome: "submitted",
+    answers,
+  });
+  expect(decodeQuestionnaireRequest({ questions: [...questions, questions[0]] })).toBeUndefined();
+  expect(
+    decodeQuestionnaireOutcome({ outcome: "submitted", answers: [...answers, answers[0]] }),
+  ).toBeUndefined();
+  expect(
+    decodeQuestionnaireRequest({
+      questions: [{ ...defaultQuestion, choices: [...choices, choices[0]] }],
+    }),
+  ).toBeUndefined();
+  expect(
+    decodeQuestionnaireOutcome({
+      outcome: "submitted",
+      answers: [{ ...answers[0], values: [...answers[0]!.values, "choice-4"] }],
     }),
   ).toBeUndefined();
 });

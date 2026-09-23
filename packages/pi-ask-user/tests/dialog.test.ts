@@ -164,6 +164,35 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ESCAPE);
     expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
   });
+  it("navigates six questions and submits every answer in a narrow dialog", () => {
+    const questions = Array.from({ length: 6 }, (_, index) => ({
+      key: `question-${index + 1}`,
+      title: `Question ${index + 1}`,
+      prompt: `Answer question ${index + 1}?`,
+      mode: "text" as const,
+    }));
+    const { dialog, done } = makeDialog({ questions }, undefined, () => 8);
+    dialog.focused = true;
+    for (let index = 0; index < questions.length; index++) {
+      const lines = dialog.render(24);
+      expect(lines.length).toBeLessThanOrEqual(8);
+      expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
+      dialog.handleInput(ENTER);
+      typeText(dialog, `answer-${index + 1}`);
+      dialog.handleInput(ENTER);
+    }
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledWith({
+      outcome: "submitted",
+      answers: questions.map((question, index) => ({
+        key: question.key,
+        kind: "text",
+        text: `answer-${index + 1}`,
+      })),
+    });
+  });
+
   it("keeps validation feedback visible beside a clipped custom editor", () => {
     const base = request();
     let height = 9;

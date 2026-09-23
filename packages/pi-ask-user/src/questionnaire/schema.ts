@@ -1,7 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 
-export const MAX_QUESTIONS = 4;
+export const MAX_QUESTIONS = 6;
 export const MAX_CHOICES = 4;
 export const MAX_CUSTOM_ANSWER_LENGTH = 4_000;
 export const MAX_NOTE_LENGTH = 2_000;
@@ -78,7 +78,7 @@ export const AskUserParameters = Type.Object({
   questions: Type.Array(AskUserQuestionSchema, {
     minItems: 1,
     maxItems: MAX_QUESTIONS,
-    description: "One to four questions presented as one questionnaire.",
+    description: "One to six questions presented as one questionnaire.",
   }),
 });
 

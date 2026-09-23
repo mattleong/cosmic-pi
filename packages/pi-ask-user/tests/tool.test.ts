@@ -210,18 +210,32 @@ describe("ask_user tool", () => {
     expect(rendered).not.toContain("\u001b");
   });
 
+  it("renders all six questions and submitted answers", () => {
+    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
+    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
+    const answers = Array.from({ length: 6 }, (_, index) => ({
+      key: `answer-${index + 1}`,
+      kind: "custom",
+      text: `value-${index + 1}`,
+    }));
+    expect(
+      output(tool.renderCall(opaqueHostFixture({ questions }), theme, renderContext())),
+    ).toContain("Question 6");
+    expect(resultOutput(tool, { outcome: "submitted", answers }, [])).toContain("value-6");
+  });
+
   it("uses neutral or text fallbacks for malformed and oversized arrays", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
     const call = (questions: ReadonlyArray<{ readonly title: string }>) =>
       output(tool.renderCall(opaqueHostFixture({ questions }), theme, renderContext()));
-    const answers = Array.from({ length: 5 }, (_, index) => ({
+    const answers = Array.from({ length: 7 }, (_, index) => ({
       key: `key-${index}`,
       kind: "custom",
       text: "value",
     }));
     const labels = ["one", "two", "three", "four", "five"];
     const oversized = call(
-      Array.from({ length: 5 }, (_, index) => ({ title: `private-${index}` })),
+      Array.from({ length: 7 }, (_, index) => ({ title: `private-${index}` })),
     );
 
     expect(() =>

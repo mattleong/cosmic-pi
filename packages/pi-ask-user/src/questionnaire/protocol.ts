@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import type { AskUserOutcome } from "./model.ts";
-import type { AskUserRequest } from "./schema.ts";
+import { MAX_CHOICES, MAX_QUESTIONS, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,
   validateAskUserRequest,
@@ -59,7 +59,7 @@ export const QuestionnaireRequestSchema = Schema.Struct({
             description: text(400),
             preview: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4000))),
           }),
-        ).check(Schema.isMinLength(2), Schema.isMaxLength(4)),
+        ).check(Schema.isMinLength(2), Schema.isMaxLength(MAX_CHOICES)),
       }),
       Schema.Struct({
         key: text(32),
@@ -69,7 +69,7 @@ export const QuestionnaireRequestSchema = Schema.Struct({
         choices: Schema.optionalKey(Schema.Never),
       }),
     ]),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_QUESTIONS)),
 });
 const answerFields = {
   key: text(32),
@@ -90,11 +90,17 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
         Schema.Struct({
           ...answerFields,
           kind: Schema.Literal("choices"),
-          values: Schema.Array(text(64)).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
-          labels: Schema.Array(text(60)).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+          values: Schema.Array(text(64)).check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(MAX_CHOICES),
+          ),
+          labels: Schema.Array(text(60)).check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(MAX_CHOICES),
+          ),
         }),
       ]),
-    ).check(Schema.isMinLength(1), Schema.isMaxLength(4)),
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_QUESTIONS)),
   }),
 ]);
 // Decode each bounded record once before inspecting nested arrays. Later schema
@@ -124,12 +130,12 @@ const RawAnswer = Schema.Struct({
 });
 const SmallLength = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
-  Schema.isLessThanOrEqualTo(4),
+  Schema.isLessThanOrEqualTo(MAX_QUESTIONS),
 );
-const captureArray = <Input>(input: Input): unknown[] | undefined => {
+const captureArray = <Input>(input: Input, maximum = MAX_QUESTIONS): unknown[] | undefined => {
   if (!Array.isArray(input)) return undefined;
   const length: unknown = input.length;
-  if (!Schema.is(SmallLength)(length)) return undefined;
+  if (!Schema.is(SmallLength)(length) || length > maximum) return undefined;
   const result: unknown[] = [];
   for (let i = 0; i < length; i++) result.push(input[i]);
   return result;
@@ -142,7 +148,7 @@ export const decodeQuestionnaireRequest = <Input>(input: Input): AskUserRequest 
     const captured = questions.map((input) => {
       const question = Schema.decodeUnknownSync(RawQuestion)(input);
       if (question.mode === "text") return question;
-      const choices = captureArray(question.choices);
+      const choices = captureArray(question.choices, MAX_CHOICES);
       return {
         ...question,
         choices: choices?.map((choice) => Schema.decodeUnknownSync(RawChoice)(choice)),
@@ -178,7 +184,11 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
         return checked.error === undefined ? { ...answer, text: checked.value } : undefined;
       }
       return answer?.kind === "choices"
-        ? { ...answer, values: captureArray(answer.values), labels: captureArray(answer.labels) }
+        ? {
+            ...answer,
+            values: captureArray(answer.values, MAX_CHOICES),
+            labels: captureArray(answer.labels, MAX_CHOICES),
+          }
         : answer;
     });
     return Schema.decodeUnknownSync(QuestionnaireOutcomeSchema)({

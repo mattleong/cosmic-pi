@@ -1,6 +1,6 @@
 # pi-ask-user
 
-Structured, responsive questionnaires for [pi](https://github.com/earendil-works/pi-mono). The `ask_user` agent tool batches one to four decisions into one blocking dialog. In the TUI, `ask_user_async` opens the same dialog while the agent continues independent work.
+Structured, responsive questionnaires for [pi](https://github.com/earendil-works/pi-mono). The `ask_user` agent tool batches one to six decisions into one blocking dialog. In the TUI, `ask_user_async` opens the same dialog while the agent continues independent work.
 
 ## Install
 
@@ -53,7 +53,7 @@ The tool is named `ask_user`:
 }
 ````
 
-Limits are intentionally bounded: 1-4 questions and 2-4 choices per single/multiple question. Question keys and choice values must be unique in their scope.
+Limits are intentionally bounded: 1-6 questions and 2-4 choices per single/multiple question. Question keys and choice values must be unique in their scope.
 
 For a required free-text answer, use `mode: "text"` and omit `choices`:
 

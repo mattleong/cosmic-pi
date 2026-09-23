@@ -157,6 +157,19 @@ describe("async questionnaire replay rendering", () => {
     ).toBe("raw fallback");
   });
 
+  it("renders six-question calls and all six submitted answers", () => {
+    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
+    const answers = Array.from({ length: 6 }, (_, index) => ({
+      key: `answer-${index + 1}`,
+      kind: "custom",
+      text: `value-${index + 1}`,
+    }));
+    expect(output(renderAsyncCall({ questions }, theme, false))).toContain("Question 6");
+    expect(result({ ...snapshot, outcome: { outcome: "submitted", answers } })).toContain(
+      "value-6",
+    );
+  });
+
   it("prefers a valid single snapshot over an invalid list", () => {
     const details = { ...snapshot, requests: [{ ...snapshot, delivery: 123 }] };
     expect(result(details)).toContain("Avoid tolls");
@@ -207,7 +220,7 @@ describe("async questionnaire replay rendering", () => {
         ...snapshot,
         outcome: {
           outcome: "submitted",
-          answers: Array.from({ length: 5 }, () => outcome.answers[0]),
+          answers: Array.from({ length: 7 }, () => outcome.answers[0]),
         },
       },
     ];

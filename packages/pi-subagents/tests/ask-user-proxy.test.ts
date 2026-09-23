@@ -115,11 +115,18 @@ describe("structured questionnaire proxy boundary", () => {
     const wire = { tool: "ask_user", argumentsJson: JSON.stringify(request) };
     expect(decodeQuestionnaireProxyRequest(wire)).toEqual(request);
     expect(decodeSubagentProxyRequest(wire)).toBeInstanceOf(InvalidSubagentRequestError);
+    const questions = Array.from({ length: 6 }, (_, index) => ({
+      ...request.questions[0],
+      key: `question-${index}`,
+    }));
+    expect(
+      decodeQuestionnaireProxyRequest({ ...wire, argumentsJson: JSON.stringify({ questions }) }),
+    ).toEqual({ questions });
     for (const argumentsJson of [
       JSON.stringify({ ...request, owner: { runId: "forged" } }),
       "{",
       " ".repeat(131073),
-      JSON.stringify({ questions: Array(5).fill(request.questions[0]) }),
+      JSON.stringify({ questions: [...questions, questions[0]] }),
     ])
       expect(decodeQuestionnaireProxyRequest({ ...wire, argumentsJson })).toBeInstanceOf(
         InvalidSubagentRequestError,
