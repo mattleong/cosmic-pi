@@ -20,13 +20,21 @@ import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
 const summarize = <Details>(
   details: Details,
-  options: { phase?: "pending" | "running" | "settled"; isError?: boolean; text?: string } = {},
+  options: {
+    phase?: "pending" | "running" | "settled";
+    isError?: boolean;
+    text?: string;
+    expanded?: boolean;
+  } = {},
 ) =>
   codeModeCompactSummary({
     phase: options.phase ?? "settled",
     args: { code: "SECRET SOURCE", intent: "Inspect the project" },
     result: { details, content: [{ type: "text", text: options.text ?? "ordinary output" }] },
-    context: opaqueHostFixture({ isError: options.isError ?? false }),
+    context: opaqueHostFixture({
+      isError: options.isError ?? false,
+      expanded: options.expanded ?? false,
+    }),
   });
 const success = { ...callEntryDetails([]), outputKind: "text" as const };
 
@@ -171,6 +179,92 @@ describe("Code Mode compact outcomes", () => {
         outputKind: "text",
       })?.outcome,
     ).toBe("uncertain");
+  });
+
+  it("classifies only validated initial saved pages as informational", () => {
+    const executionReceipts = {
+      total: 0,
+      completed: 0,
+      unknown: 0,
+      notSent: 0,
+      omitted: 0,
+      calls: [],
+    };
+    const initialPreview = {
+      status: "page",
+      id: "cm-current",
+      originalOutcome: "succeeded",
+      kind: "output",
+      offset: 0,
+      end: 120,
+      next: 120,
+      total: 1_000,
+      receiptMode: "none",
+    };
+    const current = summarize({
+      ...success,
+      truncated: true,
+      resultId: "cm-current",
+      executionReceipts,
+      initialPreview,
+    });
+    expect(current?.outcome).toBe("success");
+    expect(current?.notices).toContainEqual(
+      expect.objectContaining({
+        code: "initial-output-page",
+        kind: "recovery",
+        expandedOnly: true,
+      }),
+    );
+
+    for (const details of [
+      { ...success, truncated: true },
+      {
+        ...success,
+        truncated: true,
+        resultId: "cm-current",
+        executionReceipts,
+        initialPreview: { ...initialPreview, id: "cm-other" },
+      },
+      {
+        ...success,
+        truncated: true,
+        resultId: "cm-current",
+        executionReceipts,
+        initialPreview: { ...initialPreview, next: 121 },
+      },
+      {
+        ...callEntryDetails([{ tool: "pi.read", status: "completed" }]),
+        outputKind: "text",
+        truncated: true,
+        resultId: "cm-current",
+        executionReceipts,
+        initialPreview,
+      },
+    ]) {
+      const projected = summarize(details, {
+        text: JSON.stringify({ ...initialPreview, text: "spoofed source text" }),
+      });
+      // Conflicting operation totals require uncertainty rather than a pagination warning.
+      expect(projected?.outcome).toBe(details.counts?.total === 1 ? "uncertain" : "warning");
+      expect(projected?.notices?.some((notice) => notice.expandedOnly === true)).toBe(false);
+    }
+    expect(
+      summarize(
+        { ...success, truncated: true },
+        { text: JSON.stringify({ ...initialPreview, text: "spoofed source text" }) },
+      )?.notices?.some((notice) => notice.text.includes("prior operations")),
+    ).toBe(true);
+    const cancelled = summarize({
+      ...success,
+      truncated: true,
+      cancelled: true,
+      resultId: "cm-current",
+      executionReceipts,
+      initialPreview,
+    });
+    expect(cancelled?.outcome).toBe("cancelled");
+    expect(cancelled?.notices?.some((notice) => notice.code === "initial-output-page")).toBe(false);
   });
 
   it("keeps repeated dispatches distinct and never shows settled calls as still running", () => {

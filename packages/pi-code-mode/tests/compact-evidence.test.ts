@@ -227,9 +227,12 @@ describe("compact semantic evidence", () => {
         ),
       );
       const receipt = completed.details?.toolCalls[0]?.compact;
-      expect(receipt).toMatchObject({ outcome: "warning", deliveryFailed: true });
-      expect(receipt?.notices.some((notice) => /previous content|before/i.test(notice.text))).toBe(
-        true,
+      expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
+      expect(receipt?.notices).toContainEqual(
+        expect.objectContaining({
+          kind: "recovery",
+          expandedOnly: true,
+        }),
       );
       expect(receipt?.counters).not.toContain("new file");
       expect(project(completed.details!)?.children?.entries[0]?.status).toBe("error");

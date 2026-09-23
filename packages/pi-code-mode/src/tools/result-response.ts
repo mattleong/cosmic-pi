@@ -3,8 +3,14 @@ import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { CodeModeResult } from "../boundary/codemode-runtime.ts";
 import type { ResultCapture, ExecutionOutcome } from "../results/model.ts";
+import { projectResultPage } from "../results/projection.ts";
 import type { ResultsContract } from "../results/service.ts";
-import { formatExecutionReceipts, type ExecutionReceipts } from "./execution-receipts.ts";
+import {
+  formatExecutionReceipts,
+  hasCompleteReadOnlyReceipts,
+  projectInitialReceipts,
+  type ExecutionReceipts,
+} from "./execution-receipts.ts";
 import {
   formatCodeModeFailure,
   formatCodeModeSuccess,
@@ -75,17 +81,58 @@ export function makeResultResponse(input: {
       const cancelled = initiallyCancelled || input.aborted() || !current;
       const publishReceipt = needsReceipt || cancelled;
       const resultId = !cancelled ? id : undefined;
+      const readOnly = hasCompleteReadOnlyReceipts(receipts);
+      const replayCaution = readOnly
+        ? "Do not rerun the program to recover output."
+        : "Do not rerun mutations to recover output.";
       const recovery = !publishReceipt
         ? ""
         : resultId
           ? `Read retained ${outcome === "succeeded" ? "output" : "failure receipt"} without rerunning: code_mode({action:"result.read",id:"${resultId}"}). Original execution: ${outcome}.${capture.status === "unavailable" ? ` Full output unavailable (${capture.reason}).` : ""}\n`
-          : `Full output unavailable (${!current ? "revoked" : cancelled ? "cancelled" : capture.status === "unavailable" ? capture.reason : "retention-limit"}). Do not rerun mutations to recover output. Original execution: ${outcome}.\n`;
+          : `Full output unavailable (${!current ? "revoked" : cancelled ? "cancelled" : capture.status === "unavailable" ? capture.reason : "retention-limit"}). ${replayCaution} Original execution: ${outcome}.\n`;
       const composed = `${recovery}${publishReceipt && receiptText ? `${receiptText}\n\n` : ""}${cancelled ? "Execution cancelled." : raw}`;
-      const text = clampModelVisibleText(composed, input.maxBytes);
+      let text = clampModelVisibleText(composed, input.maxBytes);
+      let initialPreview: CodeModeToolDetails["initialPreview"];
+      if (
+        !cancelled &&
+        outcome === "succeeded" &&
+        truncated &&
+        resultId !== undefined &&
+        capture.status === "captured"
+      ) {
+        const receiptProjection = projectInitialReceipts(receipts);
+        const page = projectResultPage(
+          {
+            id: resultId,
+            text: capture.text,
+            outcome: "succeeded",
+            kind: "output",
+            cost: 0,
+          },
+          0,
+          Math.min(capture.text.length, input.maxBytes),
+          input.maxBytes,
+          {
+            includeRecovery: true,
+            ...(receiptProjection.receiptMode !== "none" && {
+              receipts: receiptProjection.evidence,
+            }),
+          },
+        );
+        if (page.presentation.status === "page") {
+          text = page.text;
+          initialPreview = {
+            ...page.presentation,
+            originalOutcome: "succeeded",
+            kind: "output",
+            receiptMode: receiptProjection.receiptMode,
+          };
+        }
+      }
       const finalDetails: CodeModeToolDetails = {
         ...details,
         ...(publishReceipt && { executionReceipts: receipts }),
-        ...(resultId && { resultId }),
+        ...(resultId && { resultId, ...(initialPreview && { initialPreview }) }),
         ...((truncated || text !== composed) && { truncated: true }),
         ...(cancelled && { cancelled: true }),
         ...(!cancelled &&

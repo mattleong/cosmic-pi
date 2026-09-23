@@ -4,6 +4,7 @@
  * Pi definitions dispatch directly; companion adapters use versioned current-session protocols.
  */
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
@@ -22,6 +23,11 @@ import { CodeMode, Tool, toolError, type ToolError } from "../boundary/codemode-
 import type { BackgroundTaskDispatch } from "../boundary/host-background-task.ts";
 import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
+import {
+  ReadGuestInputSchema,
+  StructuredReadResultSchema,
+  type StructuredReadResult,
+} from "./read-result.ts";
 
 /** Input contracts validated by the runtime before any nested dispatch happens. */
 const SafeInteger = Schema.Number.check(Schema.isFinite(), Schema.isInt());
@@ -29,11 +35,6 @@ const PositiveSafeInteger = SafeInteger.check(Schema.isGreaterThan(0));
 const NonNegativeSafeInteger = SafeInteger.check(Schema.isGreaterThanOrEqualTo(0));
 const PositiveFiniteNumber = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0));
 
-const ReadInput = Schema.Struct({
-  path: Schema.String,
-  offset: Schema.optionalKey(PositiveSafeInteger),
-  limit: Schema.optionalKey(PositiveSafeInteger),
-});
 const ShellInput = Schema.Struct({
   command: Schema.String,
   timeout: Schema.optionalKey(PositiveFiniteNumber),
@@ -72,7 +73,11 @@ const LsInput = Schema.Struct({
 const GUEST_TOOL_DESCRIPTIONS = {
   read:
     "Read text files only; images are refused. Paths have the same unrestricted filesystem " +
-    "authority as top-level read.",
+    "authority as top-level read. The default text format preserves the native output exactly. " +
+    "format: 'structured' returns that text with conservative whole-file completeness metadata. " +
+    "requireComplete refuses offset > 1 or any explicit limit before native dispatch, then refuses " +
+    "settled output unless one UTF-8-decoded native read proves complete. It does not paginate, " +
+    "reread, stat, claim byte fidelity or atomicity, or strip native continuation notes.",
   bash:
     "Execute a command through Pi's default local Bash implementation with full local-user " +
     "process, filesystem, environment, and network authority. This does not inherit registered " +
@@ -98,7 +103,7 @@ const GUEST_TOOL_DESCRIPTIONS = {
 } satisfies Readonly<Record<PiGuestToolName, string>>;
 
 const GUEST_TOOL_INPUTS = {
-  read: ReadInput,
+  read: ReadGuestInputSchema,
   bash: ShellInput,
   powershell: ShellInput,
   edit: EditInput,
@@ -108,12 +113,32 @@ const GUEST_TOOL_INPUTS = {
   ls: LsInput,
 } as const;
 
-const guestTool = (name: PiGuestToolName, invoke: NestedPiToolDispatch) =>
+type StringPiGuestToolName = Exclude<PiGuestToolName, "read">;
+
+const stringPiOutput = (
+  name: StringPiGuestToolName,
+  effect: ReturnType<NestedPiToolDispatch>,
+): Effect.Effect<string, ToolError> =>
+  effect.pipe(
+    Effect.filterOrFail(Predicate.isString, () =>
+      toolError(`Nested tool '${name}' returned non-text guest data.`),
+    ),
+  );
+
+const readTool = (invoke: NestedPiToolDispatch) =>
+  Tool.make({
+    description: GUEST_TOOL_DESCRIPTIONS.read,
+    input: ReadGuestInputSchema,
+    output: Schema.Union([Schema.String, StructuredReadResultSchema]),
+    run: (input) => invoke("read", input),
+  });
+
+const guestTool = (name: StringPiGuestToolName, invoke: NestedPiToolDispatch) =>
   Tool.make({
     description: GUEST_TOOL_DESCRIPTIONS[name],
     input: GUEST_TOOL_INPUTS[name],
     output: Schema.String,
-    run: (input) => invoke(name, input),
+    run: (input) => stringPiOutput(name, invoke(name, input)),
   });
 
 const backgroundTaskTool = (invoke: BackgroundTaskDispatch) =>
@@ -183,7 +208,7 @@ const makeCodeModeGuestTools = (
   options: CodeModeCatalogOptions,
 ) => {
   const portablePi = {
-    read: guestTool("read", invokePi),
+    read: readTool(invokePi),
     bash: guestTool("bash", invokePi),
     edit: guestTool("edit", invokePi),
     write: guestTool("write", invokePi),
@@ -244,8 +269,17 @@ export const makeExecutionGuestTools = (
       );
     });
 
+  const invokePi: NestedPiToolDispatch = (name, input) => {
+    const dispatched = dispatchPi(name, input);
+    return name === "read"
+      ? admitOutput(dispatched, (value) =>
+          Predicate.isString(value) ? value : JSON.stringify(value satisfies StructuredReadResult),
+        )
+      : admitOutput(stringPiOutput(name, dispatched), (value) => value);
+  };
+
   return makeCodeModeGuestTools(
-    (name, input) => admitOutput(dispatchPi(name, input), (value) => value),
+    invokePi,
     (input) => admitOutput(dispatchBackgroundTask(input), (value) => JSON.stringify(value) ?? ""),
     (input) =>
       admitOutput(

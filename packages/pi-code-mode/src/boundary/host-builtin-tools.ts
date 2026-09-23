@@ -26,6 +26,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback } from "pi-cosmic-core";
 import { formatForeignRejection } from "../tools/format.ts";
+import {
+  decodeReadGuestInput,
+  readResultToGuestData,
+  requireCompleteInputRefusal,
+  type ReadGuestData,
+  type ReadGuestInput,
+} from "../tools/read-result.ts";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
@@ -131,7 +138,20 @@ export interface NestedDispatchOptions {
 export type NestedPiToolDispatch = (
   name: PiGuestToolName,
   input: PiGuestToolInput,
-) => Effect.Effect<string, ToolError>;
+) => Effect.Effect<ReadGuestData, ToolError>;
+
+interface NativeReadInput {
+  path: string;
+  offset?: number;
+  limit?: number;
+}
+
+const toNativeReadInput = (input: ReadGuestInput): NativeReadInput => {
+  const native: NativeReadInput = { path: input.path };
+  if (input.offset !== undefined) native.offset = input.offset;
+  if (input.limit !== undefined) native.limit = input.limit;
+  return native;
+};
 
 /**
  * Dispatches one nested call against the matching built-in definition.
@@ -143,19 +163,29 @@ export type NestedPiToolDispatch = (
  */
 export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): NestedPiToolDispatch => {
   let nestedCalls = 0;
+
   return (name, input) =>
     Effect.flatMap(Effect.fiberId, (fiber) =>
       Effect.suspend(() => {
         const invocationId = invokeHostCallback(() => options.observationId?.(fiber), undefined);
+        const readInput = name === "read" ? decodeReadGuestInput(input) : undefined;
+        if (name === "read" && readInput === undefined) {
+          return Effect.fail(toolError("Nested tool 'read' received unrecognized input."));
+        }
+        if (readInput !== undefined) {
+          const refusal = requireCompleteInputRefusal(readInput);
+          if (refusal !== undefined) return Effect.fail(toolError(refusal));
+        }
         nestedCalls += 1;
         const callId = `${options.toolCallId}/${name}/${nestedCalls}`;
         const definition = options.definitions[name];
         if (definition === undefined) {
           return Effect.fail(toolError(`Nested tool '${name}' is unavailable on this platform.`));
         }
+        const nativeInput = readInput === undefined ? input : toNativeReadInput(readInput);
         return Effect.tryPromise((interruptSignal) => {
           invokeHostCallback(() => options.onOperation?.(invocationId, "unknown"), undefined);
-          return definition.execute(callId, input, interruptSignal, undefined, options.ctx);
+          return definition.execute(callId, nativeInput, interruptSignal, undefined, options.ctx);
         }).pipe(
           Effect.mapError((error: Cause.UnknownError) => {
             invokeHostCallback(
@@ -185,7 +215,11 @@ export const makeNestedPiToolDispatch = (options: NestedDispatchOptions): Nested
               () => options.observe?.(invocationId, name, input, result, false),
               undefined,
             );
-            return nestedResultToGuestData(name, result).pipe(
+            const guestData =
+              readInput === undefined
+                ? nestedResultToGuestData(name, result)
+                : readResultToGuestData(readInput, result);
+            return guestData.pipe(
               Effect.onExit((exit) =>
                 Effect.sync(() => {
                   if (exit._tag === "Failure")

@@ -135,7 +135,16 @@ describe("presentation edge cases", () => {
       expect(completed.details?.toolCalls[0]).toMatchObject({
         tool: "pi.write",
         status: "completed",
-        compact: { outcome: "warning", deliveryFailed: false },
+        compact: {
+          outcome: "success",
+          deliveryFailed: false,
+          notices: [
+            expect.objectContaining({
+              kind: "recovery",
+              expandedOnly: true,
+            }),
+          ],
+        },
       });
       const projected = summary(
         completed.details!,
@@ -143,8 +152,8 @@ describe("presentation edge cases", () => {
         completed.content[0]!.type === "text" ? completed.content[0]!.text : "",
       );
       expect(projected?.outcome).toBe("cancelled");
-      // The pre-write snapshot is unavailable in nested calls, independently of cancellation.
-      expect(projected?.children?.entries[0]?.status).toBe("warning");
+      // Nested Code Mode intentionally skips the pre-write snapshot; cancellation remains separate.
+      expect(projected?.children?.entries[0]?.status).toBe("success");
       expect(
         projected?.notices?.some(
           (notice) => isCompactAttention(notice) && notice.text.includes("not rolled back"),

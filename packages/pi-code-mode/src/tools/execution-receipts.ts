@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+
 /** Operation facts, separate from UI severity and from guest delivery. No inputs or errors. */
 export type Certainty = "not-sent" | "completed" | "unknown";
 export interface ExecutionReceipt {
@@ -17,6 +19,77 @@ export interface ExecutionReceipts {
   readonly omitted: number;
   readonly calls: ReadonlyArray<ExecutionReceipt>;
 }
+
+const ReceiptCount = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+const ReceiptId = Schema.Int.check(
+  Schema.isBetween({ minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER }),
+);
+const ExecutionReceiptSchema = Schema.Struct({
+  id: ReceiptId,
+  tool: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  target: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  certainty: Schema.Literals(["not-sent", "completed", "unknown"]),
+  delivery: Schema.Literals(["pending", "delivered", "not-delivered"]),
+  recoveryId: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/)),
+  ),
+  isError: Schema.optionalKey(Schema.Boolean),
+});
+export const ExecutionReceiptsSchema = Schema.Struct({
+  total: ReceiptCount,
+  completed: ReceiptCount,
+  unknown: ReceiptCount,
+  notSent: ReceiptCount,
+  omitted: ReceiptCount,
+  calls: Schema.Array(ExecutionReceiptSchema).check(Schema.isMaxLength(256)),
+});
+
+/** Cross-field consistency required before replaying receipt safety classifications. */
+export const hasConsistentExecutionReceipts = (receipts: ExecutionReceipts): boolean =>
+  receipts.completed + receipts.unknown + receipts.notSent === receipts.total &&
+  receipts.total - receipts.calls.length === receipts.omitted &&
+  new Set(receipts.calls.map((call) => call.id)).size === receipts.calls.length &&
+  receipts.calls.filter((call) => call.certainty === "completed").length <= receipts.completed &&
+  receipts.calls.filter((call) => call.certainty === "unknown").length <= receipts.unknown &&
+  receipts.calls.filter((call) => call.certainty === "not-sent").length <= receipts.notSent;
+
+const REDUCIBLE_READ_TOOLS = new Set(["pi.read", "pi.grep", "pi.find", "pi.ls"]);
+
+/** Receipt reduction is allowed only for a complete, explicitly successful read-only ledger. */
+export const hasCompleteReadOnlyReceipts = (receipts: ExecutionReceipts): boolean =>
+  hasConsistentExecutionReceipts(receipts) &&
+  receipts.omitted === 0 &&
+  receipts.calls.length === receipts.total &&
+  new Set(receipts.calls.map((call) => call.id)).size === receipts.total &&
+  receipts.completed === receipts.total &&
+  receipts.unknown === 0 &&
+  receipts.notSent === 0 &&
+  receipts.calls.every(
+    (call) =>
+      REDUCIBLE_READ_TOOLS.has(call.tool) &&
+      call.certainty === "completed" &&
+      call.delivery === "delivered" &&
+      call.isError === false,
+  );
+
+export type InitialReceiptProjection =
+  | { readonly receiptMode: "none" }
+  | {
+      readonly receiptMode: "read-only";
+      readonly evidence: { readonly total: number; readonly completed: number };
+    }
+  | { readonly receiptMode: "full"; readonly evidence: ExecutionReceipts };
+
+export const projectInitialReceipts = (receipts: ExecutionReceipts): InitialReceiptProjection =>
+  receipts.total === 0 && hasConsistentExecutionReceipts(receipts)
+    ? { receiptMode: "none" }
+    : hasCompleteReadOnlyReceipts(receipts)
+      ? {
+          receiptMode: "read-only",
+          evidence: { total: receipts.total, completed: receipts.completed },
+        }
+      : { receiptMode: "full", evidence: receipts };
+
 export function makeExecutionReceipts() {
   const calls = new Map<number, ExecutionReceipt>();
   const active = new Set<number>();

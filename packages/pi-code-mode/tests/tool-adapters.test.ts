@@ -136,6 +136,110 @@ describe("nested dispatch", () => {
     }),
   );
 
+  it.effect("strips read controls before native dispatch and preserves structured text", () =>
+    Effect.gen(function* () {
+      const received: Array<{ id: string; input: unknown }> = [];
+      const dispatch = makeNestedPiToolDispatch({
+        definitions: nestedToolDefinitionsFixture({
+          read: {
+            execute: <Input>(id: string, input: Input) => {
+              received.push({ id, input });
+              return Promise.resolve(textResult("complete α"));
+            },
+          },
+        }),
+        ctx,
+        toolCallId: "outer",
+      });
+
+      expect(
+        yield* dispatch("read", {
+          path: "fixture",
+          offset: 1,
+          format: "structured",
+          requireComplete: true,
+        }),
+      ).toEqual({ text: "complete α", completeness: "complete" });
+      expect(received).toEqual([{ id: "outer/read/1", input: { path: "fixture", offset: 1 } }]);
+    }),
+  );
+
+  it.effect("rejects scoped complete reads before dispatch without consuming a native id", () =>
+    Effect.gen(function* () {
+      const received: string[] = [];
+      const dispatch = makeNestedPiToolDispatch({
+        definitions: nestedToolDefinitionsFixture({
+          read: {
+            execute: (id: string) => {
+              received.push(id);
+              return Promise.resolve(textResult("whole"));
+            },
+          },
+        }),
+        ctx,
+        toolCallId: "outer",
+      });
+
+      for (const scoped of [{ limit: 1 }, { offset: 2 }]) {
+        const error = yield* dispatch("read", {
+          path: "fixture",
+          ...scoped,
+          requireComplete: true,
+        }).pipe(Effect.flip);
+        expect(error.message).toContain("was not sent");
+      }
+      expect(received).toEqual([]);
+      expect(yield* dispatch("read", { path: "fixture" })).toBe("whole");
+      expect(received).toEqual(["outer/read/1"]);
+    }),
+  );
+
+  it.effect("records completed native work before refusing incomplete delivery", () =>
+    Effect.gen(function* () {
+      const operations: string[] = [];
+      const deliveryFailures: Array<number | undefined> = [];
+      const dispatch = makeNestedPiToolDispatch({
+        definitions: nestedToolDefinitionsFixture({
+          read: {
+            execute: () =>
+              Promise.resolve({
+                content: [{ type: "text" as const, text: "partial\n\n[native footer]" }],
+                details: {
+                  truncation: {
+                    content: "partial",
+                    truncated: true,
+                    truncatedBy: "lines",
+                    totalLines: 2,
+                    totalBytes: 15,
+                    outputLines: 1,
+                    outputBytes: 7,
+                    lastLinePartial: false,
+                    firstLineExceedsLimit: false,
+                    maxLines: 2_000,
+                    maxBytes: 51_200,
+                  },
+                },
+              }),
+          },
+        }),
+        ctx,
+        toolCallId: "outer",
+        observationId: () => 41,
+        onOperation: (_id, certainty) => operations.push(certainty),
+        onDeliveryFailure: (id) => deliveryFailures.push(id),
+      });
+
+      const error = yield* dispatch("read", {
+        path: "fixture",
+        requireComplete: true,
+      }).pipe(Effect.flip);
+      expect(error.message).toContain("completed");
+      expect(error.message).toContain("native-truncation");
+      expect(operations).toEqual(["unknown", "completed"]);
+      expect(deliveryFailures).toEqual([41]);
+    }),
+  );
+
   it.effect("contains hostile rejection coercion at the adapter boundary", () =>
     Effect.gen(function* () {
       const dispatch = makeNestedPiToolDispatch({

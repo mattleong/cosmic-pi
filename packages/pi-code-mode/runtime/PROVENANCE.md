@@ -65,7 +65,8 @@ copy or the file layout of upstream v2:
 Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviations 8-9
 add confinement and observation. Deviations 11-17 add JavaScript compatibility and correct
 mutation and async semantics; their behavior and remaining limits are documented below.
-Deviation 18 adds host-only pre-truncation result observation.
+Deviation 18 adds host-only pre-truncation result observation. Deviation 19 aligns successful
+string accounting with the runtime's verbatim host representation.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
@@ -392,6 +393,13 @@ Deviation 18 adds host-only pre-truncation result observation.
     Local `tests/result-observation.test.ts` covers full capture, normalized failures,
     opaque-output rejection and callback failure containment.
 
+19. **Verbatim string output accounting.** `boundOutput` charges a successful top-level string by
+    the UTF-8 bytes in its verbatim host representation rather than a quoted JSON string literal.
+    Non-string success values retain compact JSON accounting. Code-point-safe truncation and its
+    in-budget marker are unchanged, as are diagnostic and log confinement and pre-truncation
+    `onResult` observation. Runtime output-budget tests and the extension integration test
+    `../tests/string-output-budget.test.ts` cover exact-fit, escape-heavy and Unicode strings.
+
 ## Selective v2 upgrade and extraction map
 
 The v2 reference above informs lexical initialization, var hoisting, labels,
@@ -467,7 +475,7 @@ These are selective adaptations, not copies of an upstream layout. The byte help
 fetch, crypto, Buffer, ArrayBuffer, DataView, Promise constructor or ambient capability.
 `SUPPORT.md` records the exact supported subset. Dedicated assignment, destructuring,
 recursion, discovery and byte suites cover each addition; `feature-composition.test.ts` checks
-their interaction through tool calls. Preserve these adaptations alongside deviations 1-17
+their interaction through tool calls. Preserve these adaptations alongside deviations 1-19
 when reviewing a future resync.
 
 ## Test262 provenance
@@ -498,8 +506,9 @@ Upstream updates are pulled by pinned manual review only:
 3. Re-apply the mechanical deviations above, **the deviation-8 confinement**
    (`confinement.ts` and its call-site guards), **the deviation-9 lifecycle
    hook**, **the deviation-10 closed interpreter value domain**, and **deviations 11-17
-   for JavaScript compatibility and async execution**, plus **deviation 18 result observation**; do not adopt upstream OpenAPI or
-   host-adapter code. Preserve the selective assignment, discovery, recursion and bounded-byte
+   for JavaScript compatibility and async execution**, plus **deviation 18 result observation**
+   and **deviation 19 verbatim string accounting**; do not adopt upstream OpenAPI or host-adapter
+   code. Preserve the selective assignment, discovery, recursion and bounded-byte
    adaptations above. Re-run the confinement, lifecycle, and compatibility tests.
 4. Record a whole-base replacement or a selective reference explicitly, preserving
    the original base history and updating the extraction map. Run the mandatory

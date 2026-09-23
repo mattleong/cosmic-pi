@@ -6,7 +6,9 @@ confined JavaScript program over seven core Pi built-ins under `tools.pi`: `read
 `write`, `grep`, `find`, and `ls`. Windows sessions also supply `tools.pi.powershell`. The reviewed
 `tools.session.backgroundTask` leaf reaches the current `pi-background-task` runtime through its
 versioned session protocol. The fixed `tools.mcp.request` leaf queries `pi-mcp` through its own
-versioned session protocol. The private runtime supplies `tools.$codemode.search`.
+versioned session protocol. The private runtime supplies `tools.$codemode.search`. A mutually
+exclusive `{action:"status"}` call projects the current five execution limits without constructing
+that runtime or touching nested capabilities.
 
 The interpreter is the nested `pi-code-mode-runtime` workspace package under `runtime/`. Its TypeScript source ships in this package and loads through one computed relative import
 in `src/boundary/codemode-runtime.ts`. The nested package name is never resolved at runtime, so a
@@ -40,9 +42,16 @@ and result-access owner until reload. Late callbacks cannot advertise old artifa
 
 `results/serialize.ts` captures only bounded text from the runtime's optional pre-bound `onResult`
 hook, with at most 100,000 visits and depth 32. It uses own data descriptors, never guest getters
-or `toJSON`, and retains no guest graph. Small successful responses remain unchanged. Truncated
-success artifacts preserve exact original text/compact JSON and log framing. Failure artifacts
-are marked `failure-receipt` and contain receipt text plus the normalized diagnostic when captured.
+or `toJSON`, and retains no guest graph. Small successful responses remain unchanged. A successful
+response that needs saved paging publishes valid JSON with the original `id`, `outcome`, `kind`,
+`offset`, `next`, `total`, and `text`. A numeric `next` adds an exact `result.read` recovery object
+whose offset starts after that page. All-present, non-error, completed and delivered allowlisted
+read receipts may compact to `{total,completed}`; risky and failed operations retain full bounded
+`ExecutionReceipts`. Details use `initialPreview` only for a valid page and mark `receiptMode` as
+`none`, `read-only`, or `full`, never as `resultRead`. Tiny budgets, absent capture, and store refusal
+use bounded prose without a fake cursor. Successful retained artifacts contain output only, never
+execution receipts. Failure artifacts are marked `failure-receipt` and contain receipt text plus
+the normalized diagnostic when captured.
 Missing old-runtime hooks, capture limits, interruption and store refusal are explicit unavailable
 states, not claims that truncated output can be recovered.
 
@@ -71,8 +80,10 @@ evidence remain separate.
   the only persistence door, `CodeModeConfigStore`.
 - `src/settings/` owns command dispatch, completions, list behavior, custom integer flow, and
   notifications. `src/boundary/host-ui.ts` is the Promise and callback adapter for Pi dialogs.
-- `src/tools/` owns the reviewed guest catalog, execution admission, UTF-8 limits, progress state,
-  result formatting, failure-detail retention, tool registration, and active-list reconciliation.
+- `src/tools/` owns the reviewed guest catalog, execution admission, live status projection, UTF-8
+  limits, progress state, result formatting, failure-detail retention, tool registration, and
+  active-list reconciliation. `status.ts` copies five limits from a live state snapshot and chooses
+  either complete compact JSON or a byte-bounded plain-text refusal.
   Its Background Tasks and MCP leaves import producer-owned v1 input/output codecs instead of
   declaring second protocol shapes. MCP catalog decoding retains those constraints but replaces
   raw parser diagnostics with producer-owned, action-specific not-sent repair guidance.
@@ -81,7 +92,12 @@ evidence remain separate.
   legacy details, ignores malformed rows, and retains valid explicit totals. It delegates count
   reconciliation to `detail-counts.ts` and current/legacy ledger validation to `replay-evidence.ts`.
   `compact-summary.ts` normalizes details once and uses pure notice and outcome helpers in
-  `compact-summary-context.ts`. `tool-renderer.ts`
+  `compact-summary-context.ts`. `receipt-attention.ts` preserves uncertainty, failed delivery, and
+  inconsistent receipt evidence when older lifecycle rows lack matching attention. Receipt replay
+  checks unique invocation IDs and certainty counts before classifying saved paging.
+  `status.ts` independently schema-validates producer status details,
+  never parses model-visible output, and keeps raw status output under the shared shell without
+  execution-only Program or Calls sections. `tool-renderer.ts`
   renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
   changing model-visible text. `compact-summary.ts` opts only the outer tool into the shared
   compact shell. It requires consistent current details and explicit execution success evidence,
@@ -182,8 +198,11 @@ refuse revoked work even before the pinned runner installs its abort listener. C
 undo dispatched mutations or stop a foreign Promise that ignores its signal; late settlement has
 no guest continuation or publication authority.
 
-`tools/execution.ts` owns request admission and retained-read publication. `execution-run.ts`
-assembles one interpreter run, its guest adapters, progress and settlement. `result-response.ts`
+`tools/execution.ts` owns mutually exclusive execution, status, and retained-read admission plus
+retained-read publication. Status passes current-session, availability, and cancellation gates,
+then rereads `stateRef` synchronously. It performs no config I/O, session-runner work, retained
+artifact access, interpreter work, or budget admission. `execution-run.ts` assembles one interpreter
+run, its guest adapters, progress and settlement. `result-response.ts`
 continues to own retention and receipts; these modules add no runtime or lifecycle authority.
 
 `onDeactivated` first sets the owner false, then clears `stateRef` and deactivates `code_mode`.
@@ -239,8 +258,12 @@ complete instructions. Canonical callable paths preserve literal property segmen
 indexes every described tool and keeps round-robin catalog selection across namespaces.
 
 Pi continues to register complete `code_mode` parameters and instructions at session activation.
-Its guest catalog is fixed; it does not send catalog deltas, import arbitrary registered tools,
-or treat MCP discovery as permission to add guest leaves. The runtime API allows other host
+The description generates package numeric defaults from `DEFAULT_CODE_MODE_CONFIG`; the optional
+configuration snapshot is labeled as registration-time data rather than live state. The catalog
+uses the registration's captured `catalogBudget` until reload. Live status is authoritative only
+for its invocation and intentionally omits that registration-only catalog budget. Its guest catalog
+is fixed; it does not send catalog deltas, import arbitrary registered tools, or treat MCP discovery
+as permission to add guest leaves. The runtime API allows other host
 consumers to deliver discovery updates, but is not a provider-schema replacement or a Pi token
 savings mechanism. Snapshot data carries no execution authority. Runtime `namespace.ts` owns
 optional host-only descriptions; ancestor descriptions affect search, and bounded namespace
@@ -259,8 +282,13 @@ tools or returning them. `subarray` may share owned storage, while `slice` copie
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
 `tools.session.backgroundTask` and `tools.mcp.request` adapters, and runtime-owned search. Inputs pass Effect Schema before
 dispatch. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
-Grep context is a non-negative safe integer. Bash and PowerShell timeouts are positive finite
-numbers and may be fractional. Invalid numeric input fails before a fresh Pi definition runs.
+Native read returns at most 2,000 lines or 51,200 bytes. Its optional structured form reports
+`complete`, `partial`, or conservative `unknown` completeness with bounded reason, truncation, and
+continuation metadata. `requireComplete` rejects every explicit limit and offsets above 1; it does
+not auto-page or perform extra I/O. Decoded text is not raw-byte or atomic-read evidence, and outer
+saved paging cannot recover child data the read omitted. Grep context is a non-negative safe
+integer. Bash and PowerShell timeouts are positive finite numbers and may be fractional. Invalid
+numeric input fails before a fresh Pi definition runs.
 
 Fresh Pi definitions execute directly, so nested calls bypass Pi `tool_call` and `tool_result`
 middleware, approvals, previews, registered overrides, and session-specific operations.
@@ -294,11 +322,14 @@ just like the Background Tasks capability; only the outer Code Mode call uses th
 Interpreter confinement limits JavaScript, not supplied-tool authority. Bash has full local-user
 process, environment, network, and filesystem authority. Read, edit, and write accept relative,
 absolute, and home-relative paths. Mutations happen immediately and cancellation cannot roll them
-back. Pi built-in results carry text only; images are refused and built-in result details are
-dropped. Background Tasks returns a copied structured result with bounded text and metadata.
+back. Pi built-in results default to text; opt-in structured reads add only validated completeness
+metadata. Images are refused and arbitrary built-in details never enter the guest. Background Tasks
+returns a copied structured result with bounded text and metadata.
 
 Each execution applies source, time, call-count, result, cumulative child-output, and discovery
-budgets. Success formatting uses compact JSON for non-string values and preserves returned
+budgets. Status spends none of them, so it remains available at zero call or child-output budgets;
+its complete response still passes the final output-byte bound. Success formatting uses compact
+JSON for non-string values and preserves returned
 strings and log contents. The final `clampModelVisibleText` bounds all model-visible success,
 failure, cancellation,
 source-refusal, and unexpected-error text by exact UTF-8 bytes without splitting a code point.
@@ -325,8 +356,10 @@ and an execution-wide attention ledger independent of both row caps. Lifecycle s
 current Effect fiber ID to its invocation ID. Adapters capture that invocation ID before host
 dispatch; terminal hooks remove the binding, and outer settlement revokes all observation. No FIFO, name or
 argument-equality correlation is used. Conflicts and missing evidence become explicit incompleteness.
-Builtin results are projected before guest conversion discards details. Native writes always pass
-unknown before-state and do no extra filesystem I/O. MCP validated replies and typed failures use
+Builtin results are projected before guest conversion discards arbitrary details. Native writes
+explicitly mark their before-state as not captured and do no extra filesystem I/O. That state is
+informational by itself, not attention or a claim about whether the path was new. MCP validated
+replies and typed failures use
 producer projections; Background Tasks v1 presentation callbacks preserve pre-projection log
 truncation. Operation outcome is captured before cumulative-output admission. Delivery refusal
 adds separate recovery evidence without rewriting known completion. A received, budget-admitted

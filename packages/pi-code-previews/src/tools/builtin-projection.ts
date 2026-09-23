@@ -31,6 +31,7 @@ export interface BuiltinCompactPolicy {
 
 export type BuiltinBeforeWrite =
   | { kind: "unknown" }
+  | { kind: "not-captured" }
   | { kind: "new" }
   | { kind: "snapshot"; value: unknown; counts?: { detail: string | undefined } };
 
@@ -139,7 +140,14 @@ function projectBuiltinSummary(
     if (Predicate.isString(beforeContent)) notices.push(...scan([beforeContent]));
     const knownNewFile = beforeWrite.kind === "new";
     if (knownNewFile) counters.push("new file");
-    if (!knownNewFile) {
+    if (beforeWrite.kind === "not-captured")
+      notices.push({
+        code: "write-diff-not-captured",
+        kind: "recovery",
+        text: "Diff unavailable because previous contents were intentionally not captured.",
+        expandedOnly: true,
+      });
+    else if (!knownNewFile) {
       const projection = writeDiffProjection(before, content, input);
       notices.push(...projection.notices);
       metadata.push(...projection.metadata);

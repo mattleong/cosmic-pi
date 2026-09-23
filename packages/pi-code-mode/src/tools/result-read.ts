@@ -10,15 +10,30 @@ export interface ResultReadInput {
   readonly offset?: number | undefined;
   readonly limit?: number | undefined;
   readonly code?: never;
+  readonly intent?: never;
 }
+
+export interface CodeModeStatusInput {
+  readonly action: "status";
+  readonly code?: never;
+  readonly intent?: never;
+  readonly id?: never;
+  readonly offset?: never;
+  readonly limit?: never;
+}
+
 export type CodeModeInput =
   | { readonly code: string; readonly intent?: string | undefined; readonly action?: never }
-  | ResultReadInput;
+  | ResultReadInput
+  | CodeModeStatusInput;
 
 export const isExecutionInput = (params: CodeModeInput): boolean =>
   Object.keys(params).every((key) => key === "code" || key === "intent") &&
   Predicate.isString(params.code) &&
   (!("intent" in params) || params.intent === undefined || Predicate.isString(params.intent));
+
+export const isStatusInput = (params: CodeModeInput): params is CodeModeStatusInput =>
+  params.action === "status" && Object.keys(params).every((key) => key === "action");
 
 export const readRetainedResult = (
   params: ResultReadInput,
@@ -40,7 +55,7 @@ export const readRetainedResult = (
   ) {
     return Effect.succeed(resultReadFailure("invalid-input", maxBytes));
   }
-  return (results?.get(params.id) ?? Effect.succeed(undefined)).pipe(
+  return (results?.get(params.id) ?? Effect.void).pipe(
     Effect.map((artifact) =>
       artifact === undefined
         ? resultReadFailure("unavailable", maxBytes)

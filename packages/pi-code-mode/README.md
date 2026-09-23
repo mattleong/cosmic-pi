@@ -77,9 +77,54 @@ Do not move operations into Code Mode to bypass those boundaries.
 Return enough evidence for the next decision, including paths, relevant source, outcomes, and
 failures. Complete files can be useful when small and needed. Bound both nested tool output and
 the combined return; the default final-output limit is 51,200 bytes, including formatting. Several
-individually valid reads can exceed that limit when combined. Split oversized work rather than
-silently omitting evidence. Inspect process exit codes and per-operation outcomes, not just whether
-the outer call completed. Do not replay mutations to recover missing output.
+individually valid reads can exceed that limit when combined. Split oversized work instead of
+omitting evidence required for the next decision. Inspect process exit codes and per-operation
+outcomes, not just whether the outer call completed.
+
+`Promise.all` may reject on the first failure, after which Code Mode scope teardown can cancel
+pending siblings. Effects already dispatched may still complete, and no completed effect is rolled
+back. When every independent call must settle and report its outcome, use `Promise.allSettled` and
+keep a stable name beside each result. Preserve an
+`Error` rejection's `reason.message`; do not flatten it with `String(reason)`:
+
+```js
+const operations = [
+  { name: "config", run: () => tools.pi.read({ path: "config.json", format: "structured" }) },
+  { name: "tests", run: () => tools.pi.bash({ command: "pnpm test" }) },
+];
+const settled = await Promise.allSettled(operations.map((operation) => operation.run()));
+return settled.map((result, index) =>
+  result.status === "fulfilled"
+    ? { name: operations[index].name, status: "fulfilled", value: result.value }
+    : {
+        name: operations[index].name,
+        status: "rejected",
+        reason:
+          result.reason instanceof Error && typeof result.reason.message === "string"
+            ? result.reason.message
+            : "Unknown rejection",
+      },
+);
+```
+
+For mutations, finish every required read and validation first, and verify each required structured
+read reports `completeness: "complete"`. Then dispatch the mutations and return one named outcome
+per operation. A rejected outer Promise does not roll back siblings, and
+Code Mode must never replay a mutation automatically to recover missing output.
+
+The native read returns at most 2,000 lines or 51,200 bytes. Its default text form remains a string.
+Use `format: "structured"` when completeness matters; it returns `text`, `completeness`
+(`complete`, `partial`, or `unknown`), and optional `reason`, `truncatedBy`, and `nextOffset`.
+`requireComplete: true` accepts only the default unpaged read: it rejects an offset greater than 1
+and any explicit `limit`, performs no automatic paging or extra I/O, and refuses partial or unknown
+results. A caller-limited read stays `unknown` unless native metadata proves it complete. The text
+is UTF-8 decoded; it is not raw-byte evidence or an atomic-file-read guarantee.
+Saved outer-result paging can recover only text Code Mode captured. It cannot recover bytes a
+nested read omitted.
+
+`tools.pi.edit` uses exact replacement. Each `oldText` must match one unique, non-overlapping
+region of the original file. Combine nearby changes without overlapping edits and preserve the
+source evidence needed to validate the replacement.
 
 For literal file searches, use `tools.pi.grep({ pattern: "describe(", literal: true, path: "tests" })`
 rather than adding unnecessary regex escaping. For literal log markers, use string predicates:
@@ -96,8 +141,8 @@ return log
 The excerpt must cover the relevant log section; an empty match does not prove the check passed.
 Keyword filtering is useful for summaries, but keep source context when interpretation requires it.
 The interpreter conservatively rejects some safe regex alternations. String patterns also require
-JavaScript backslash escaping. Use the documented subset rather than assuming that all parsed
-JavaScript syntax or native methods are available.
+JavaScript backslash escaping. Use literal matching, string predicates, or a simpler supported
+pattern. Do not weaken the regex guards to force a rejected pattern through.
 
 ## TUI presentation
 
@@ -113,7 +158,10 @@ Blank lines separate the sections; collapsed calls keep their compact tree. Succ
 results use bounded pretty JSON; text, errors, and truncated output keep their original text.
 Outer execution failures keep the shared error view and recovery text. Collapsed hints use the
 configured `app.tools.expand` keys. All displayed text is sanitized against terminal control
-injection. Presentation does not change model-visible results or execution limits.
+injection. Presentation does not change model-visible results or execution limits. Status calls
+keep the same shared shell, omit Program and Calls sections, and show the unchanged raw response
+on expansion. Their UI outcome comes only from schema-validated producer details, never by parsing
+that response.
 
 When Code Previews' `toolCallCollapsedStyle` is `compact`, the outer call instead shows the
 intent, lifecycle status, and exact settled/total nested counts. A nested tree shows up to five
@@ -141,8 +189,9 @@ expanded. Incomplete discovery coverage, failed refreshes, and actual output los
 Nested MCP and Background Tasks replies can report failure even when their calls fulfill.
 Validated per-call receipts use the same semantic projections as standalone tools. Builtin
 limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay visible even
-when the program discards its replies. Native writes have no trustworthy before-state and warn
-that previous content is unavailable; they never claim a new file or inferred diff. Completion
+when the program discards its replies. Native writes have no trustworthy before-state. Their
+presentation records that previous content was not captured as informational metadata, not a
+warning by itself, and never claims a new file or inferred diff. Completion
 and guest delivery are separate: output-budget or interpreter-copy rejection does not erase a
 completed mutation. Delivery recovery appears beneath the affected call and survives hidden rows.
 Current rows retain one redacted heading; replay also redacts older activity labels.
@@ -321,6 +370,36 @@ Code Mode is trusted-project-only. Availability is `projectTrusted && enabled`:
   intent only for the same stable key. A different or missing key resets active. There is no cwd
   fallback, so a different session in the same project cannot inherit the intent.
 
+## Effective budget status
+
+Call `code_mode` with `{ "action": "status" }` and no `code`, `intent`, retained-result ID, or
+paging fields. It returns the live in-memory execution limits for that invocation:
+
+```json
+{
+  "action": "status",
+  "limits": {
+    "timeoutMs": 30000,
+    "maxToolCalls": 32,
+    "maxOutputBytes": 51200,
+    "maxSourceBytes": 32768,
+    "maxCumulativeChildOutputBytes": 2097152
+  }
+}
+```
+
+Status passes the same availability, current-session, and cancellation gates as other calls, then
+rereads the current snapshot. It performs no configuration I/O, result-store access, interpreter
+work, or nested dispatch, and spends no source, child-output, call-count, or time budget. The final
+response still obeys `maxOutputBytes`. If the complete JSON cannot fit, Code Mode returns a bounded
+plain-text refusal rather than malformed JSON; zero bytes returns empty text. A status result is a
+point-in-time value, and settings can change afterward.
+
+The tool description generates package numeric defaults from `DEFAULT_CODE_MODE_CONFIG`. When the
+application has one, it also labels the registration snapshot, which is not live state.
+`catalogBudget` is captured when the tool registers and controls that registration's catalog until
+reload; it is not a live execution limit and does not appear in status.
+
 ## Execution limits
 
 Each execution applies the resolved settings exactly: `timeoutMs`, `maxToolCalls`, and
@@ -341,7 +420,8 @@ output and catchable nested failure text entering the program. An exact success 
 admitted, the first success overrun is refused, failure text is truncated to the remaining
 budget, and accounting stays exact under the interpreter's fixed nested concurrency of 8.
 This is a post-settlement context/reliability bound: it cannot prevent or roll back a tool's
-side effects. Pi built-in results are plain text; image content is refused. Edit diff/patch
+side effects. Pi built-in results default to plain text; structured reads add completeness metadata
+and are charged as compact JSON. Image content is refused. Edit diff/patch
 details and shell result details are not passed into the guest, although shell truncation notices
 and temporary full-output paths remain visible. Background Tasks returns copied structured data.
 The provider bounds text and estimates JSON size against the current remaining allowance before
@@ -351,14 +431,27 @@ and catchable failures. Its own retention and projection limits also apply.
 
 ## Recovering output without rerunning
 
+Small successful responses remain unchanged. When a successful response needs saved paging, its
+initial model-visible response is valid JSON with `id`, original `outcome`, `kind`, `offset`, `next`,
+`total`, and `text`. A numeric `next` also adds
+`recovery: {"action":"result.read","id":id,"offset":next}`, so recovery starts after the included
+text instead of repeating offset 0. All-present, completed, delivered, non-error allowlisted reads
+may compact their receipts to `{total,completed}`. Risky or failed operations keep full bounded
+`ExecutionReceipts`. Producer details use `initialPreview` only for a valid page and label its
+`receiptMode` as `none`, `read-only`, or `full`; they never reuse `resultRead` metadata. Tiny output
+budgets, unavailable capture, or store refusal fall back to bounded prose without a fake cursor.
+Successful output artifacts contain output only, never execution receipts.
+
 When output is truncated or a program fails, Code Mode reports a retained ID when capture fits.
-Read it through the same tool, without a `code` field:
+Continue a successful initial page from its exact `recovery.offset`, without a `code` or `intent`
+field:
 
 ```json
-{ "action": "result.read", "id": "cm-…", "offset": 0, "limit": 10000 }
+{ "action": "result.read", "id": "cm-…", "offset": 842, "limit": 10000 }
 ```
 
-Follow the returned `next` offset until it is `null`. Offsets count UTF-16 code units, not bytes.
+Follow each returned `next` offset until it is `null`. Use offset 0 only when intentionally reading
+a retained artifact from its beginning. Offsets count UTF-16 code units, not bytes.
 Invalid or split-surrogate offsets are refused. The default and maximum `limit` is 30,000 units;
 the complete page, including metadata, still fits the current `maxOutputBytes` setting. Tiny or
 zero budgets may be unable to return a useful page. Reads never run a program or nested tool.

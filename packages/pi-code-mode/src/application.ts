@@ -189,6 +189,7 @@ export function registerCodeModeApplication(
         wrapped = boundaries.wrapTool(
           buildCodeModeToolDefinition({
             catalogBudget: state.config.catalogBudget,
+            configSnapshot: state.config,
             includePowerShell: definitions.powershell !== undefined,
             execute: makeCodeModeToolExecute({
               results,

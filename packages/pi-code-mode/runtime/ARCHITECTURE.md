@@ -267,9 +267,13 @@ Confinement bounds every such operation up front:
   native call that already started - which is why the two guards above bound
   every admitted native operation up front.
 
-`boundOutput` reserves its truncation markers inside `maxOutputBytes` (value and
-diagnostic message alike), so runtime model-facing content never exceeds the
-byte budget. Covered by `tests/confinement.test.ts`.
+`boundOutput` charges top-level strings by the UTF-8 bytes in their verbatim host
+representation and non-string values by compact JSON. It reserves truncation markers
+inside `maxOutputBytes` for values and diagnostic messages, so runtime model-facing
+content never exceeds the byte budget. Diagnostic and log accounting and pre-truncation
+result observation stay separate from this representation choice. Covered by the output-budget
+cases in `tests/codemode.test.ts` and the host integration test
+`../tests/string-output-budget.test.ts`.
 
 ## Vendored-code exception
 

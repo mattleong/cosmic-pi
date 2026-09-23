@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import type { DataValue, ExecuteOptions, ResolvedExecutionLimits, Result } from "../codemode.js";
 import {
   copyIn,
@@ -156,12 +157,12 @@ export const utf8Truncate = (value: string, maxBytes: number): string => {
 };
 
 /**
- * Bounds the model-facing output content (serialized result value or diagnostic message,
- * plus logs) to `maxOutputBytes`. Truncation markers are reserved *inside* the budget, so
- * value bytes + diagnostic-message bytes + log bytes (markers included) never exceed
- * `maxOutputBytes`. Oversized values are replaced by their truncated serialized text with an
- * explanatory marker, oversized diagnostic messages are truncated code-point-safely, and
- * logs are kept from the start until the remaining budget is exhausted. Truncation never
+ * Bounds the model-facing output content (a verbatim string or serialized structured value,
+ * or a diagnostic message, plus logs) to `maxOutputBytes`. Truncation markers are reserved
+ * *inside* the budget, so value bytes + diagnostic-message bytes + log bytes (markers included)
+ * never exceed `maxOutputBytes`. Oversized values are replaced by their truncated rendered text
+ * with an explanatory marker, oversized diagnostic messages are truncated code-point-safely,
+ * and logs are kept from the start until the remaining budget is exhausted. Truncation never
  * fails the execution; `truncated: true` marks affected results. Only runs when the host set
  * `maxOutputBytes` - with the limit absent, output passes through unbounded.
  */
@@ -172,16 +173,18 @@ export const boundOutput = (result: Result, maxOutputBytes: number): Result => {
   let error = result.ok ? undefined : result.error;
   let usedBytes = 0;
   if (result.ok) {
-    const serialized = JSON.stringify(result.value) ?? "null";
-    const bytes = utf8ByteLength(serialized);
+    const rendered = Predicate.isString(result.value)
+      ? result.value
+      : (JSON.stringify(result.value) ?? "null");
+    const bytes = utf8ByteLength(rendered);
     if (bytes > maxOutputBytes) {
       truncated = true;
       const marker = ` [result truncated: ${bytes} bytes exceeds the ${maxOutputBytes}-byte output limit; return a smaller value]`;
       const markerBytes = utf8ByteLength(marker);
       value =
         markerBytes >= maxOutputBytes
-          ? utf8Truncate(serialized, maxOutputBytes)
-          : `${utf8Truncate(serialized, maxOutputBytes - markerBytes)}${marker}`;
+          ? utf8Truncate(rendered, maxOutputBytes)
+          : `${utf8Truncate(rendered, maxOutputBytes - markerBytes)}${marker}`;
       usedBytes = utf8ByteLength(value);
     } else {
       value = result.value;

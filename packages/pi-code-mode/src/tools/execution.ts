@@ -13,7 +13,13 @@ import { resultReadFailure } from "../results/read-presentation.ts";
 import type { ResultsContract } from "../results/service.ts";
 import { callEntryDetails, type CodeModeToolDetails } from "./format.ts";
 import { clampModelVisibleText } from "./limits.ts";
-import { isExecutionInput, readRetainedResult, type CodeModeInput } from "./result-read.ts";
+import {
+  isExecutionInput,
+  isStatusInput,
+  readRetainedResult,
+  type CodeModeInput,
+} from "./result-read.ts";
+import { codeModeStatusResult } from "./status.ts";
 
 import { cancelledResult, runCodeModeExecution } from "./execution-run.ts";
 /**
@@ -71,6 +77,27 @@ export const makeCodeModeToolExecute =
         );
       }
       const { config } = state;
+      if (invokeHostCallback(() => signal?.aborted === true, true)) {
+        return cancelledResult(callEntryDetails([]), config.maxOutputBytes);
+      }
+      if (isStatusInput(params)) {
+        // Status is a live projection, not the registration-time description snapshot. Reread
+        // after the current, availability, and cancellation gates so settings committed during
+        // admission are reflected without entering the session runner or configuration store.
+        const currentState = environment.getState();
+        if (!environment.isCurrent() || currentState === undefined) {
+          throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
+        }
+        if (!currentState.available) {
+          throw new Error(
+            clampModelVisibleText(
+              CODE_MODE_UNAVAILABLE_MESSAGE,
+              currentState.config.maxOutputBytes,
+            ),
+          );
+        }
+        return codeModeStatusResult(currentState.config);
+      }
       if (params.action === "result.read") {
         return environment
           .runInSession(
@@ -93,7 +120,7 @@ export const makeCodeModeToolExecute =
       if (!isExecutionInput(params)) {
         throw new Error(
           clampModelVisibleText(
-            "Invalid Code Mode execution request. Use code and optional intent, or result.read without code. No execution was run.",
+            "Invalid Code Mode request. Use code with optional intent, status alone, or result.read with id and no code or intent. No execution was run.",
             config.maxOutputBytes,
           ),
         );

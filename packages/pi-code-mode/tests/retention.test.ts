@@ -1,9 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
-import { CodeModeResults } from "../src/results/service.ts";
+import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
 import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import { callEntryDetails } from "../src/tools/format.ts";
+import { makeResultResponse } from "../src/tools/result-response.ts";
 import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import {
@@ -24,6 +28,78 @@ const details = (tool: string) => ({
 });
 
 describe("failure details retention", () => {
+  it.effect(
+    "publishes retained IDs and initial preview metadata atomically after held retention",
+    () =>
+      Effect.gen(function* () {
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+        for (const mode of ["retained", "abort", "revoked", "refused"] as const) {
+          let current = true;
+          let aborted = false;
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const results: ResultsContract = {
+            put: () => Effect.succeed("cm-held"),
+            get: () => Effect.void.pipe(Effect.as(undefined)),
+            clear: Effect.void,
+          };
+          const response = makeResultResponse({
+            maxBytes: 500,
+            results,
+            run: (effect) =>
+              runPromise(
+                Effect.gen(function* () {
+                  const value = yield* effect;
+                  yield* Deferred.succeed(entered, undefined);
+                  yield* Deferred.await(release);
+                  if (mode === "refused") return yield* Effect.die("store refused");
+                  return value;
+                }),
+              ),
+            current: () => current,
+            aborted: () => aborted,
+            capture: () => ({ status: "captured", text: "x".repeat(2_000) }),
+            settle: () => callEntryDetails([]),
+            receipts: () => ({
+              total: 0,
+              completed: 0,
+              unknown: 0,
+              notSent: 0,
+              omitted: 0,
+              calls: [],
+            }),
+            retain: () => undefined,
+          });
+          const pending = yield* Effect.promise(() =>
+            response.success({
+              ok: true,
+              value: "x".repeat(2_000),
+              truncated: true,
+            }),
+          ).pipe(Effect.forkChild);
+          yield* Deferred.await(entered);
+          if (mode === "abort") aborted = true;
+          if (mode === "revoked") current = false;
+          yield* Deferred.succeed(release, undefined);
+          const result = yield* Fiber.join(pending);
+          if (mode === "retained") {
+            expect(result.details.resultId).toBe("cm-held");
+            expect(result.details.initialPreview).toMatchObject({ id: "cm-held", status: "page" });
+          } else {
+            expect(result.details.resultId, mode).toBeUndefined();
+            expect(result.details.initialPreview, mode).toBeUndefined();
+          }
+          if (mode === "abort" || mode === "revoked") {
+            expect(result.details.cancelled).toBe(true);
+            expect(result.content[0]).toMatchObject({
+              type: "text",
+              text: expect.stringContaining("Original execution: succeeded"),
+            });
+          }
+        }
+      }),
+  );
+
   it.effect(
     "suppresses a retained page when caller abort wins after the session Promise settles",
     () =>

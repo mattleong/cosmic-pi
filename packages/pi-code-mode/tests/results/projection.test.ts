@@ -62,4 +62,54 @@ describe("retained output pages", () => {
     }
     expect(projectResultPage(artifact, 0, 10, 0).text).toBe("");
   });
+
+  it("returns either a complete escaped JSON envelope or a truthful cursor-free fallback", () => {
+    const escaped = {
+      ...artifact,
+      outcome: "succeeded" as const,
+      text: '\u0000"\\😀tail',
+    };
+    for (let budget = 0; budget <= 320; budget++) {
+      const projected = projectResultPage(escaped, 0, escaped.text.length, budget, {
+        includeRecovery: true,
+        receipts: { total: 4, completed: 4 },
+      });
+      expect(utf8ByteLength(projected.text)).toBeLessThanOrEqual(budget);
+      if (projected.presentation.status === "page") {
+        const page = JSON.parse(projected.text);
+        expect(page.offset).toBe(0);
+        expect(page.text.length).toBeGreaterThan(0);
+        expect(page.receipts).toEqual({ total: 4, completed: 4 });
+        if (page.next !== null)
+          expect(page.recovery).toEqual({
+            action: "result.read",
+            id: escaped.id,
+            offset: page.next,
+          });
+      } else {
+        expect(projected.presentation).toEqual({ status: "error", code: "page-budget" });
+        expect(projected.text).not.toContain('"next"');
+      }
+    }
+  });
+
+  it("preserves the EOF endpoint check when continuation recovery makes prefixes larger", () => {
+    const escaped = { ...artifact, outcome: "succeeded" as const, text: "😀" };
+    const expected = projectResultPage(escaped, 0, escaped.text.length, 1_000, {
+      includeRecovery: true,
+      receipts: { total: 1, completed: 1 },
+    });
+    const exact = projectResultPage(
+      escaped,
+      0,
+      escaped.text.length,
+      utf8ByteLength(expected.text),
+      {
+        includeRecovery: true,
+        receipts: { total: 1, completed: 1 },
+      },
+    );
+    expect(exact).toEqual(expected);
+    expect(JSON.parse(exact.text)).toMatchObject({ next: null, text: "😀" });
+  });
 });

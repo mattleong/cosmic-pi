@@ -151,7 +151,7 @@ export function runCodeModeExecution(
               result,
               cwd: presentationCwd,
               isError,
-              beforeWrite: { kind: "unknown" },
+              beforeWrite: { kind: "not-captured" },
             });
           }),
       });

@@ -14,6 +14,14 @@ import {
 import { type McpEvidence } from "../tools/mcp-evidence.ts";
 import { MAX_NESTED_SUBJECT_LENGTH, normalizeNestedSubject } from "../tools/compact-subject.ts";
 import {
+  ExecutionReceiptsSchema,
+  hasCompleteReadOnlyReceipts,
+  hasConsistentExecutionReceipts,
+  type ExecutionReceipts,
+} from "../tools/execution-receipts.ts";
+import type { InitialPreviewPresentation } from "../results/read-presentation.ts";
+import { replayReceiptAttention, type ReceiptAttention } from "./receipt-attention.ts";
+import {
   decodeOption,
   MAX_PROGRESS_ENTRIES,
   LiveChildTimingSchema,
@@ -25,6 +33,10 @@ export interface CodeModeRenderDetails {
   readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
   readonly mcpEvidence?: McpEvidence;
+  readonly initialPreview?: InitialPreviewPresentation;
+  readonly receiptAttention?: ReceiptAttention;
+  /** True only for a complete retained receipt ledger proving read-only success. */
+  readonly receiptsReadOnly: boolean;
   /** Independently recovered notices, bounded by visible rows times the receipt notice limit. */
   readonly recoveredNotices?: CompactAttention["notices"];
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
@@ -52,6 +64,9 @@ const RenderDetailsInputSchema = Schema.Struct({
   failurePresentation: Schema.optional(Schema.Unknown),
   compactAttention: Schema.optional(Schema.Unknown),
   mcpEvidence: Schema.optional(Schema.Unknown),
+  initialPreview: Schema.optional(Schema.Unknown),
+  resultId: Schema.optional(Schema.Unknown),
+  executionReceipts: Schema.optional(Schema.Unknown),
   toolCalls: Schema.optional(Schema.Unknown),
   totalToolCalls: Schema.optional(Schema.Unknown),
   counts: Schema.optional(Schema.Unknown),
@@ -61,6 +76,59 @@ const RenderDetailsInputSchema = Schema.Struct({
 });
 const nonNegativeInteger = <Value>(value: Value): number | undefined =>
   decodeOption(Schema.Natural, value);
+const OffsetSchema = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+const ResultIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128));
+const InitialPreviewInputSchema = Schema.Struct({
+  status: Schema.Literal("page"),
+  id: ResultIdSchema,
+  originalOutcome: Schema.Literal("succeeded"),
+  kind: Schema.Literal("output"),
+  offset: OffsetSchema,
+  end: OffsetSchema,
+  next: Schema.NullOr(OffsetSchema),
+  total: OffsetSchema,
+  receiptMode: Schema.Literals(["none", "read-only", "full"]),
+});
+
+const validInitialPreview = (
+  preview: typeof InitialPreviewInputSchema.Type | undefined,
+  resultId: string | undefined,
+  receipts: ExecutionReceipts | undefined,
+  counts: CodeModeCallCounts,
+  countsAreExactAndConsistent: boolean,
+  cancellationBlocksPreview: boolean,
+  truncated: boolean,
+  outputKind: "text" | "structured" | undefined,
+): InitialPreviewPresentation | undefined => {
+  if (
+    preview === undefined ||
+    resultId === undefined ||
+    preview.id !== resultId ||
+    !truncated ||
+    outputKind === undefined ||
+    cancellationBlocksPreview ||
+    !countsAreExactAndConsistent ||
+    receipts === undefined ||
+    receipts.total !== counts.total ||
+    counts.running !== 0 ||
+    counts.queued !== 0 ||
+    preview.offset !== 0 ||
+    preview.offset > preview.end ||
+    preview.end > preview.total ||
+    (preview.next === null
+      ? preview.end !== preview.total
+      : preview.next !== preview.end || preview.end >= preview.total || preview.end === 0)
+  )
+    return undefined;
+  const readOnly = hasCompleteReadOnlyReceipts(receipts);
+  const receiptModeValid =
+    preview.receiptMode === "none"
+      ? receipts.total === 0
+      : preview.receiptMode === "read-only"
+        ? receipts.total > 0 && readOnly
+        : receipts.total > 0 && !readOnly;
+  return receiptModeValid ? preview : undefined;
+};
 
 const CallStatusSchema = Schema.Literals(["queued", "running", "completed", "error", "cancelled"]);
 interface NormalizedCallEntry {
@@ -138,10 +206,43 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     normalizedCalls.some((entry) => entry.malformed),
   );
   const failurePresentation = decodeOption(FailurePresentationSchema, record.failurePresentation);
+  const decodedReceipts = decodeOption(ExecutionReceiptsSchema, record.executionReceipts);
+  const executionReceipts =
+    decodedReceipts !== undefined &&
+    hasConsistentExecutionReceipts(decodedReceipts) &&
+    decodedReceipts.total === counts.total
+      ? decodedReceipts
+      : undefined;
+  const receiptAttention = replayReceiptAttention(
+    record.executionReceipts !== undefined,
+    executionReceipts,
+    compactAttention,
+  );
+  const receiptsReadOnly =
+    executionReceipts !== undefined &&
+    hasExactCounts &&
+    consistent &&
+    executionReceipts.total === counts.total &&
+    counts.running === 0 &&
+    counts.queued === 0 &&
+    hasCompleteReadOnlyReceipts(executionReceipts);
+  const initialPreview = validInitialPreview(
+    decodeOption(InitialPreviewInputSchema, record.initialPreview),
+    decodeOption(ResultIdSchema, record.resultId),
+    executionReceipts,
+    counts,
+    hasExactCounts && consistent,
+    record.cancelled !== undefined && decodeOption(Schema.Boolean, record.cancelled) !== false,
+    record.truncated === true,
+    outputKind,
+  );
   const normalized: CodeModeRenderDetails = {
     ...(failurePresentation !== undefined && { failurePresentation }),
     ...(compactAttention !== undefined && { compactAttention }),
     ...(mcpEvidence !== undefined && { mcpEvidence }),
+    ...(initialPreview !== undefined && { initialPreview }),
+    ...(receiptAttention !== undefined && { receiptAttention }),
+    receiptsReadOnly,
     toolCalls,
     recoveredNotices,
     totalToolCalls: total,

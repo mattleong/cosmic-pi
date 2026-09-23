@@ -10,12 +10,18 @@ const boundary = (text: string, offset: number) =>
     ? offset - 1
     : offset;
 
+export interface ResultPageProjectionOptions<ReceiptEvidence = never> {
+  readonly includeRecovery?: boolean;
+  readonly receipts?: ReceiptEvidence;
+}
+
 /** UTF-16 offsets; only publish a next cursor when at least one full code point fits. */
-export function projectResultPage(
+export function projectResultPage<ReceiptEvidence = never>(
   artifact: ResultArtifact,
   offset: number,
   limit: number,
   maxBytes: number,
+  options: ResultPageProjectionOptions<ReceiptEvidence> = {},
 ): ResultReadProjection {
   if (
     !Number.isSafeInteger(offset) ||
@@ -27,16 +33,23 @@ export function projectResultPage(
   }
   const start = offset;
   const end = boundary(artifact.text, Math.min(artifact.text.length, start + limit));
-  const render = (finish: number) =>
-    JSON.stringify({
+  const render = (finish: number) => {
+    const next = finish < artifact.text.length ? finish : null;
+    return JSON.stringify({
       id: artifact.id,
       outcome: artifact.outcome,
       kind: artifact.kind,
       offset: start,
-      next: finish < artifact.text.length ? finish : null,
+      next,
       total: artifact.text.length,
       text: artifact.text.slice(start, finish),
-    } satisfies ResultPage);
+      ...(options.includeRecovery === true &&
+        next !== null && {
+          recovery: { action: "result.read" as const, id: artifact.id, offset: next },
+        }),
+      ...(options.receipts !== undefined && { receipts: options.receipts }),
+    } satisfies ResultPage<ReceiptEvidence>);
+  };
   const project = (finish: number, text: string): ResultReadProjection => ({
     text,
     presentation: {

@@ -470,12 +470,71 @@ describe("CodeMode output budget", () => {
         expect(failure.ok).toBe(false);
         if (!failure.ok) expect(failure.error.message).toBe(expected);
       }
-      const result = yield* CodeMode.execute({
+
+      const exact = yield* CodeMode.execute({
         code: 'return "�x";',
         tools: {},
         limits: { maxOutputBytes: 4 },
       });
-      expect(result).toMatchObject({ ok: true, value: '"�', truncated: true });
+      expect(exact).toStrictEqual({ ok: true, value: "�x", toolCalls: [] });
+
+      const oversized = yield* CodeMode.execute({
+        code: 'return "🙂éx";',
+        tools: {},
+        limits: { maxOutputBytes: 5 },
+      });
+      expect(oversized).toMatchObject({ ok: true, value: "🙂", truncated: true });
+
+      const marked = yield* CodeMode.execute({
+        code: 'return "🙂".repeat(100);',
+        tools: {},
+        limits: { maxOutputBytes: 128 },
+      });
+      expect(marked.ok).toBe(true);
+      if (!marked.ok) return;
+      expect(marked.truncated).toBe(true);
+      expect(runtimeTypeName(marked.value)).toBe("string");
+      // SAFETY: The preceding runtime type assertion establishes this successful value as a string.
+      const markedText = marked.value as string;
+      expect(markedText).toMatch(
+        /^(?:🙂)+ \[result truncated: 400 bytes exceeds the 128-byte output limit; return a smaller value\]$/u,
+      );
+      expect(new TextEncoder().encode(markedText).byteLength).toBeLessThanOrEqual(128);
+      expect(markedText).not.toContain("�");
+    }),
+  );
+
+  it.live("measures top-level strings verbatim while structured values stay compact JSON", () =>
+    Effect.gen(function* () {
+      const exactCases = [
+        [`return "x".repeat(51_200);`, "x".repeat(51_200), 51_200],
+        [
+          String.raw`return ["\n", "\t", '"', "\\"].join("").repeat(128);`,
+          '\n\t"\\'.repeat(128),
+          512,
+        ],
+      ] as const;
+      for (const [code, expected, maxOutputBytes] of exactCases) {
+        const result = yield* CodeMode.execute({ code, limits: { maxOutputBytes } });
+        expect(result.ok).toBe(true);
+        if (!result.ok) continue;
+        expect(result.value).toBe(expected);
+        expect(result.truncated).toBeUndefined();
+      }
+
+      const escapeHeavy = '\n\t"\\'.repeat(128);
+      const structured = boundOutput(
+        { ok: true, value: { text: escapeHeavy }, toolCalls: [] },
+        512,
+      );
+      expect(structured.ok).toBe(true);
+      if (!structured.ok) return;
+      expect(structured.truncated).toBe(true);
+      expect(runtimeTypeName(structured.value)).toBe("string");
+      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+      expect(new TextEncoder().encode(structured.value as string).byteLength).toBeLessThanOrEqual(
+        512,
+      );
     }),
   );
 

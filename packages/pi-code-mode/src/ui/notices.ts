@@ -5,10 +5,33 @@ import { mcpAttention } from "../tools/mcp-evidence.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
 export const TRUNCATED_OUTPUT_NOTICE =
-  "Output truncated by the output limit. Narrow the returned output; prior operations may already have taken effect.";
+  "Output exceeded the output limit; prior operations may already have taken effect.";
+const READ_ONLY_TRUNCATED_OUTPUT_NOTICE = "Output exceeded the output limit.";
+
+/** Paging is routine only when current producer metadata proves the initial saved page. */
+export const codeModeOutputNotice = (details: CodeModeRenderDetails): CompactNotice | undefined => {
+  if (!details.truncated) return undefined;
+  const preview = details.initialPreview;
+  if (preview !== undefined)
+    return {
+      code: "initial-output-page",
+      kind: "recovery",
+      text:
+        preview.next === null
+          ? "Complete output returned in the initial saved-output page."
+          : `Continue saved output with result.read id="${preview.id}" offset=${preview.next}.`,
+      expandedOnly: true,
+    };
+  return {
+    code: "output-truncated",
+    kind: "recovery",
+    text: details.receiptsReadOnly ? READ_ONLY_TRUNCATED_OUTPUT_NOTICE : TRUNCATED_OUTPUT_NOTICE,
+  };
+};
 
 export const codeModeEvidenceNotices = (details: CodeModeRenderDetails): CompactNotice[] => {
   const notices: CompactNotice[] = [
+    ...(details.receiptAttention ? [details.receiptAttention.notice] : []),
     ...(details.compactAttention?.version === 2
       ? normalizeCompactIssues([
           details.compactAttention.issues,
@@ -72,7 +95,9 @@ export const codeModeVisibleNotices = (
   expanded: boolean,
 ): CompactNotice[] => [
   ...codeModeEvidenceNotices(details).filter((notice) => expanded || isCompactAttention(notice)),
-  ...(details.truncated ? [{ kind: "recovery" as const, text: TRUNCATED_OUTPUT_NOTICE }] : []),
+  ...[codeModeOutputNotice(details)].flatMap((notice) =>
+    notice !== undefined && (expanded || isCompactAttention(notice)) ? [notice] : [],
+  ),
   ...(details.cancelled
     ? [
         {

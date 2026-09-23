@@ -160,6 +160,105 @@ describe("Code Mode shared presentation conformance", () => {
       }
     },
   );
+  it.each(["on", "off", "border"] as const)(
+    "preserves initial saved-page output and shows paging only on expansion in %s mode",
+    (mode) => {
+      const { view, execute } = create(mode, "compact");
+      const pageText = JSON.stringify({
+        id: "cm-current",
+        outcome: "succeeded",
+        kind: "output",
+        offset: 0,
+        next: 12,
+        total: 100,
+        text: "PAGE_OUTPUT_MARKER",
+      });
+      const result = {
+        content: [{ type: "text" as const, text: pageText }],
+        details: {
+          ...nestedDetails([]),
+          truncated: true,
+          resultId: "cm-current",
+          executionReceipts: {
+            total: 0,
+            completed: 0,
+            unknown: 0,
+            notSent: 0,
+            omitted: 0,
+            calls: [],
+          },
+          initialPreview: {
+            status: "page",
+            id: "cm-current",
+            originalOutcome: "succeeded",
+            kind: "output",
+            offset: 0,
+            end: 12,
+            next: 12,
+            total: 100,
+            receiptMode: "none",
+          },
+        },
+      };
+      const before = JSON.stringify(result);
+      for (const expanded of [false, true, false, true]) {
+        view.call(args, { expanded });
+        view.result(result, { expanded });
+        const text = view.render().join("\n");
+        expect(text.includes("FULL_PROGRAM_SOURCE")).toBe(expanded);
+        expect(text.includes("PAGE_OUTPUT_MARKER")).toBe(expanded);
+        expect(text.includes("Continue saved output")).toBe(expanded);
+        expect(text).not.toContain("Earlier changes may remain");
+      }
+      expect(JSON.stringify(result)).toBe(before);
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps malformed initial-page history conservative without trusting raw page text", () => {
+    const { view } = create("off", "compact");
+    const result = {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            id: "cm-history",
+            outcome: "succeeded",
+            next: 10,
+            text: "UNTRUSTED_PAGE_MARKER",
+          }),
+        },
+      ],
+      details: {
+        ...nestedDetails([]),
+        truncated: true,
+        resultId: "cm-history",
+        initialPreview: {
+          status: "page",
+          id: "wrong-id",
+          originalOutcome: "succeeded",
+          kind: "output",
+          offset: 0,
+          end: 10,
+          next: 10,
+          total: 20,
+          receiptMode: "none",
+        },
+      },
+    };
+    view.call(args, { expanded: false });
+    view.result(result, { expanded: false });
+    const collapsed = view.render().join("\n");
+    expect(collapsed).toContain("Earlier changes may remain");
+    expect(collapsed).not.toContain("UNTRUSTED_PAGE_MARKER");
+    view.call(args, { expanded: true });
+    view.result(result, { expanded: true });
+    const expanded = view.render().join("\n");
+    expect(expanded).toContain("UNTRUSTED_PAGE_MARKER");
+    expect(expanded).toContain("Output exceeded the output limit");
+    expect(expanded).not.toContain("Full output is unavailable");
+  });
+
   it.each(["compact", "preview"] as const)(
     "distinguishes preserved output from formatted results in %s presentation",
     (style) => {

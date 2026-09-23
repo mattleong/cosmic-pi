@@ -42,16 +42,21 @@ export const compactSettledOutcome = (
 ): NonNullable<CompactSummary["outcome"]> => {
   const evidence = details.mcpEvidence;
   const { failed, cancelled } = details.counts;
-  return details.compactAttention?.incomplete ||
+  return details.receiptAttention?.outcome === "uncertain" ||
+    details.compactAttention?.incomplete ||
     details.compactAttention?.uncertain ||
     evidence?.unknown
     ? "uncertain"
-    : details.compactAttention?.errors || evidence?.errors || evidence?.notSent
+    : details.receiptAttention?.outcome === "error" ||
+        details.compactAttention?.errors ||
+        evidence?.errors ||
+        evidence?.notSent
       ? "error"
-      : failed + cancelled > 0 ||
+      : details.receiptAttention?.outcome === "warning" ||
+          failed + cancelled > 0 ||
           details.compactAttention?.cancelled ||
           details.compactAttention?.warnings ||
-          details.truncated ||
+          (details.truncated && details.initialPreview === undefined) ||
           hasAttention
         ? "warning"
         : "success";

@@ -15,7 +15,12 @@ export interface ResultArtifact {
 export type ResultCapture =
   | { readonly status: "captured"; readonly text: string }
   | { readonly status: "unavailable"; readonly reason: "capture-limit" | "runtime-unavailable" };
-export interface ResultPage {
+export interface ResultPageRecovery {
+  readonly action: "result.read";
+  readonly id: string;
+  readonly offset: number;
+}
+export interface ResultPage<ReceiptEvidence = never> {
   readonly id: string;
   readonly outcome: ExecutionOutcome;
   readonly kind: "output" | "failure-receipt";
@@ -23,4 +28,6 @@ export interface ResultPage {
   readonly next: number | null;
   readonly total: number;
   readonly text: string;
+  readonly recovery?: ResultPageRecovery;
+  readonly receipts?: ReceiptEvidence;
 }

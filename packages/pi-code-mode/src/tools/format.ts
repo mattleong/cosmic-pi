@@ -7,7 +7,10 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { ExecutionReceipts } from "./execution-receipts.ts";
-import type { ResultReadPresentation } from "../results/read-presentation.ts";
+import type {
+  InitialPreviewPresentation,
+  ResultReadPresentation,
+} from "../results/read-presentation.ts";
 import type { FailurePresentation } from "./failure-evidence.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
 import type { McpEvidence } from "./mcp-evidence.ts";
@@ -91,6 +94,8 @@ export interface CodeModeCallCounts {
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
   readonly resultRead?: ResultReadPresentation;
+  /** First retained page returned by an execution, never by result.read. */
+  readonly initialPreview?: InitialPreviewPresentation;
   readonly resultId?: string;
   readonly executionReceipts?: ExecutionReceipts;
   readonly failurePresentation?: FailurePresentation;

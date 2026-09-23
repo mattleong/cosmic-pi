@@ -13,7 +13,7 @@ import {
   type CompactSummaryProvider,
 } from "pi-code-previews";
 import { isCompactPiTool } from "../tools/mcp-evidence.ts";
-import { TRUNCATED_OUTPUT_NOTICE } from "./notices.ts";
+import { codeModeOutputNotice } from "./notices.ts";
 import { compactParentNotices, compactSettledOutcome } from "./compact-summary-context.ts";
 import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
 import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
@@ -128,11 +128,15 @@ const projectCodeModeCompactSummary = (
         text: `${cancelled} nested operations cancelled; prior side effects are not rolled back.`,
         description: `${cancelled} operations were cancelled. Earlier changes may remain.`,
       });
-    if (details.truncated)
+    const outputNotice = codeModeOutputNotice(details);
+    if (outputNotice !== undefined)
       notices.push({
-        kind: "recovery",
-        text: TRUNCATED_OUTPUT_NOTICE,
-        description: "Only part of the output was returned. Earlier changes may remain.",
+        ...outputNotice,
+        ...(isCompactAttention(outputNotice) && {
+          description: details.receiptsReadOnly
+            ? "Only part of the output was returned."
+            : "Only part of the output was returned. Earlier changes may remain.",
+        }),
       });
     const evidence = details.mcpEvidence;
     if (
