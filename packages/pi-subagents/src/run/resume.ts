@@ -28,7 +28,7 @@ import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { snapshotView } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import { addWriterPoolMemberLocked, type WriterPoolEntry } from "./writer-pool.ts";
 
 export interface RunResumeDependencies {
   readonly ownerScope: Scope.Scope;
@@ -334,24 +334,14 @@ export function makeRunResume(dependencies: RunResumeDependencies) {
                         record.process !== undefined
                       )
                         return false;
-                      let writerPool: WriterPoolEntry | undefined;
-                      if (record.canonicalWriterCwd) {
-                        writerPool = writerPools.get(record.canonicalWriterCwd.digest);
-                        if (!writerPool) {
-                          writerPool = {
-                            cwd: record.canonicalWriterCwd,
-                            leaseScope: yield* Scope.make(),
-                            releaseState: { authorized: false },
-                            preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
-                            members: new Map(),
-                            violationRunIds: new Set(),
-                            state: "pending",
-                            admissionPaused: false,
-                          };
-                          writerPools.set(record.canonicalWriterCwd.digest, writerPool);
-                        }
-                        writerPool.members.set(record.view.id, record.view.writeClaims);
-                      }
+                      const writerPool = record.canonicalWriterCwd
+                        ? yield* addWriterPoolMemberLocked(
+                            writerPools,
+                            record.canonicalWriterCwd,
+                            record.view.id,
+                            record.view.writeClaims,
+                          )
+                        : undefined;
                       record.scope = nextScope;
                       record.cleanupSettlement = nextCleanupSettlement;
                       record.cleanupPending = false;

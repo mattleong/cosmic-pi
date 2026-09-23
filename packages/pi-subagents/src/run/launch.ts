@@ -42,7 +42,7 @@ import {
   snapshotView,
 } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
+import { addWriterPoolMemberLocked, type WriterPoolEntry } from "./writer-pool.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
 
 const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
@@ -318,25 +318,9 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           });
 
         const writerPoolForAdmissionLocked = (id: string) =>
-          Effect.gen(function* () {
-            if (!canonicalWriterCwd) return undefined;
-            let writerPool = writerPools.get(canonicalWriterCwd.digest);
-            if (!writerPool) {
-              writerPool = {
-                cwd: canonicalWriterCwd,
-                leaseScope: yield* Scope.make(),
-                releaseState: { authorized: false },
-                preparationSettled: Deferred.makeUnsafe<void, SubagentError>(),
-                members: new Map(),
-                violationRunIds: new Set(),
-                state: "pending",
-                admissionPaused: false,
-              };
-              writerPools.set(canonicalWriterCwd.digest, writerPool);
-            }
-            writerPool.members.set(id, writeClaims);
-            return writerPool;
-          });
+          canonicalWriterCwd
+            ? addWriterPoolMemberLocked(writerPools, canonicalWriterCwd, id, writeClaims)
+            : Effect.succeed(undefined);
 
         const buildRunView = (
           parent: RunRecord | undefined,

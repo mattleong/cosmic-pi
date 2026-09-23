@@ -453,25 +453,13 @@ export function cosmicUiWithDependencies(
       );
   });
 
-  pi.on("turn_end", (_event, ctx) => {
+  const refreshUsage = (ctx: ExtensionContext, kind: "turn" | "rescan" | "idle") => {
     if (!ownsUsageContext(ctx)) return;
-    updateContext(ctx);
-    const totals = totalsFromSession(ctx);
-    footerInstallation.invalidateContextUsage();
-    requestRender();
-    return runFrom(
-      CosmicUiService.use((service) =>
-        service.setTotals(totals).pipe(Effect.andThen(service.refreshGit())),
-      ),
-      ctx,
-    ).catch(() => undefined);
-  });
-  const refreshTotals = (ctx: ExtensionContext, idle = false) => {
-    if (!ownsUsageContext(ctx)) return;
+    if (kind === "turn") updateContext(ctx);
     const previous = lastCompleteTotals;
     const totals = totalsFromSession(ctx);
     if (
-      idle &&
+      kind === "idle" &&
       totals.input === previous.input &&
       totals.output === previous.output &&
       totals.cacheRead === previous.cacheRead &&
@@ -479,17 +467,24 @@ export function cosmicUiWithDependencies(
       totals.cost === previous.cost
     )
       return;
-    updateContext(ctx);
+    if (kind !== "turn") updateContext(ctx);
     footerInstallation.invalidateContextUsage();
     requestRender();
     const generation = lifecycleGeneration;
     return runFrom(
       CosmicUiService.use((service) =>
-        generation === lifecycleGeneration ? service.setTotals(totals) : Effect.void,
+        kind === "turn"
+          ? service.setTotals(totals).pipe(Effect.andThen(service.refreshGit()))
+          : generation === lifecycleGeneration
+            ? service.setTotals(totals)
+            : Effect.void,
       ),
       ctx,
     ).catch(() => undefined);
   };
+  const refreshTotals = (ctx: ExtensionContext, idle = false) =>
+    refreshUsage(ctx, idle ? "idle" : "rescan");
+  pi.on("turn_end", (_event, ctx) => refreshUsage(ctx, "turn"));
   pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
   pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
   pi.on("agent_settled", (_event, ctx) => refreshTotals(ctx));

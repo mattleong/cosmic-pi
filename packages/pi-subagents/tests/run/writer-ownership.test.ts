@@ -776,6 +776,66 @@ describe("SubagentService", () => {
     },
   );
 
+  it.effect("resumes a claimed writer in the existing pool while a disjoint peer remains", () => {
+    const fake = fakeChildLayer();
+    const projections: SubagentProjection[] = [];
+    let acquisitions = 0;
+    let marks = 0;
+    let releases = 0;
+    const writerLeases = fakeWriterLeaseLayer({
+      onAcquire: () => {
+        acquisitions += 1;
+      },
+      onMark: () => {
+        marks += 1;
+      },
+      onRelease: () => {
+        releases += 1;
+      },
+    });
+    const { layer } = localServiceFixture(
+      { publish: (projection) => projections.push(projection) },
+      fake,
+      profileLayerFor({}),
+      writerLeases,
+    );
+    return Effect.gen(function* () {
+      const service = yield* SubagentService;
+      const first = yield* service.start(
+        request({ name: "claimed-first", writeIntent: "writer", writes: ["src/first.ts"] }),
+      );
+      const second = yield* service.start(
+        request({ name: "claimed-peer", writeIntent: "writer", writes: ["src/peer.ts"] }),
+      );
+      fake.controls[0]?.offer({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Assignment complete." }],
+        },
+      });
+      fake.controls[0]?.offer({ type: "agent_settled" });
+      yield* yieldUntil(() =>
+        projections.some((projection) =>
+          projection.runs.some((run) => run.id === first.id && run.state === "completed"),
+        ),
+      );
+      yield* yieldUntil(() => fake.controls[0]?.released() === 1);
+      expect(releases).toBe(0);
+
+      const resumed = yield* service.resume(first.id, "Continue on the first file.");
+      expect(resumed.state).toBe("running");
+      expect(fake.controls).toHaveLength(3);
+      expect(acquisitions).toBe(1);
+      expect(marks).toBe(1);
+      yield* service.stop(first.id);
+      expect(releases).toBe(0);
+      yield* service.stop(second.id);
+      expect(releases).toBe(1);
+    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+  });
+
   it.effect("rejects overlapping claimed writers while admitting another exact file", () => {
     const { layer } = localServiceFixture();
     return Effect.gen(function* () {
