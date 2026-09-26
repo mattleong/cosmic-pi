@@ -72,7 +72,7 @@ Global configuration is `<agent-dir>/pi-subagents.json`. Trusted projects may ov
           {
             "host": "herdr",
             "runtime": "claude",
-            "model": "claude-opus-5",
+            "model": "opus",
             "effort": "high",
             "context": "fresh",
             "writeIntent": "read-only",

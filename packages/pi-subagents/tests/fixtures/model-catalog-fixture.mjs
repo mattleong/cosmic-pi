@@ -37,14 +37,33 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         subtype: "success",
         request_id: request.request_id,
         response: {
-          models: [
-            {
-              value: "fixture-stable[1m]",
-              resolvedModel: "fixture-stable",
-              description: selector === "default" ? "Stable release" : "Updated stable metadata",
-            },
-            { value: selector, resolvedModel: "fixture-next", description: "Next release" },
-          ],
+          models:
+            selector === "aliases"
+              ? [
+                  {
+                    value: "default",
+                    resolvedModel: "model-next",
+                    displayName: "Default (recommended)",
+                  },
+                  { value: "opus", resolvedModel: "model-next", displayName: "Next" },
+                  { value: "sonnet", resolvedModel: "model-fast", displayName: "Fast" },
+                  { value: "model-older", resolvedModel: "model-older", displayName: "Older" },
+                  { value: "legacy", resolvedModel: "model-older" },
+                ]
+              : [
+                  {
+                    value: "fixture-stable[1m]",
+                    resolvedModel: "fixture-stable",
+                    description:
+                      selector === "default" ? "Stable release" : "Updated stable metadata",
+                  },
+                  {
+                    value: selector,
+                    resolvedModel: "fixture-next",
+                    ...(selector === "default" && { displayName: "Default (recommended)" }),
+                    description: "Next release",
+                  },
+                ],
         },
       },
     })}\n`,

@@ -371,25 +371,55 @@ const runCatalogProcess = (
     ).pipe(provideNodeProcess),
   );
 
+type ClaudeAdvertisedModel =
+  (typeof ClaudeCatalogResponse.Type)["response"]["response"]["models"][number];
+
+const claudeRuntimeModel = (model: ClaudeAdvertisedModel): NativeRuntimeModel => ({
+  selector: model.value,
+  label: model.displayName ?? model.value,
+  description: normalizeDescription(
+    model.description ??
+      (model.resolvedModel === model.value ? model.value : `Resolves to ${model.resolvedModel}`),
+  ),
+  supportedEfforts: normalizeEfforts(model.supportedEffortLevels ?? []),
+  supportedServiceTiers: [],
+  isDefault: model.value === "default",
+});
+
+/**
+ * Aliases such as `opus` move to newer models, so each alias target also gets an explicit row
+ * right after the first alias that names it. `default` names a target only when no other alias
+ * does, because its display name describes the alias rather than the model.
+ */
+const withExplicitClaudeModels = (
+  models: ReadonlyArray<ClaudeAdvertisedModel>,
+): ReadonlyArray<NativeRuntimeModel> => {
+  const advertised = new Set(models.map((model) => model.value));
+  const namers = new Map<string, ClaudeAdvertisedModel>();
+  for (const model of models)
+    if (model.value !== "default" && !namers.has(model.resolvedModel))
+      namers.set(model.resolvedModel, model);
+  const added = new Set<string>();
+  return models.flatMap((model) => {
+    const target = model.resolvedModel;
+    const namer = namers.get(target) ?? model;
+    if (advertised.has(target) || added.has(target) || namer !== model)
+      return [claudeRuntimeModel(model)];
+    added.add(target);
+    return [
+      claudeRuntimeModel(model),
+      claudeRuntimeModel({
+        ...model,
+        value: target,
+        displayName: model.value === "default" ? undefined : model.displayName,
+      }),
+    ];
+  });
+};
+
 const decodeClaudeModels = <ValueInput>(value: ValueInput) =>
   decodeClaudeCatalogResponseEffect(value).pipe(
-    Effect.map((response) =>
-      response.response.response.models.map(
-        (model): NativeRuntimeModel => ({
-          selector: model.value,
-          label: model.displayName ?? model.value,
-          description: normalizeDescription(
-            model.description ??
-              (model.resolvedModel === model.value
-                ? model.value
-                : `Resolves to ${model.resolvedModel}`),
-          ),
-          supportedEfforts: normalizeEfforts(model.supportedEffortLevels ?? []),
-          supportedServiceTiers: [],
-          isDefault: model.value === "default",
-        }),
-      ),
-    ),
+    Effect.map((response) => withExplicitClaudeModels(response.response.response.models)),
   );
 
 const decodeCodexModels = <ValueInput>(value: ValueInput) =>

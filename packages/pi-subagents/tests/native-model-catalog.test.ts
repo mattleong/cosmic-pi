@@ -68,11 +68,15 @@ describe("Claude catalog preference", () => {
       const first = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
       expect(first.map((model) => model.selector)).toEqual([
         "fixture-stable[1m]",
+        "fixture-stable",
         "default",
+        "fixture-next",
         "latest[1m]",
       ]);
       expect(first.map((model) => model.description)).toEqual([
         "Updated stable metadata",
+        "Updated stable metadata",
+        "Next release",
         "Next release",
         "Next release",
       ]);
@@ -83,11 +87,13 @@ describe("Claude catalog preference", () => {
       const updated = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
       expect(updated.map((model) => model.selector)).toEqual([
         "fixture-stable[1m]",
+        "fixture-stable",
         "default",
+        "fixture-next",
         "other-alias[1m]",
       ]);
       yield* step(() => fs.unlink(test.settings));
-      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
     },
   );
 
@@ -96,7 +102,7 @@ describe("Claude catalog preference", () => {
     function* () {
       const test = yield* step(setup);
       const catalog = yield* makeNativeModelCatalog(test.options);
-      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       for (const settings of [
         "{",
         "null",
@@ -111,14 +117,14 @@ describe("Claude catalog preference", () => {
         JSON.stringify({ model: "oversized", padding: "x".repeat(64 * 1024) }),
       ]) {
         yield* step(() => fs.writeFile(test.settings, settings));
-        expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+        expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       }
       yield* step(() => fs.unlink(test.settings));
       yield* step(() => fs.symlink(join(test.home, "missing-settings.json"), test.settings));
-      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
       yield* step(() => fs.unlink(test.settings));
       yield* step(() => fs.mkdir(test.settings));
-      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
     },
   );
 
@@ -130,13 +136,40 @@ describe("Claude catalog preference", () => {
       yield* step(() => fs.writeFile(target, '{"model":"dotfile-alias[1m]"}'));
       yield* step(() => fs.symlink(target, test.settings));
       const catalog = yield* makeNativeModelCatalog(test.options);
-      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("dotfile-alias[1m]");
+      expect(yield* selectorAt(catalog, test.cwd, 4)).toBe("dotfile-alias[1m]");
       yield* step(() => fs.writeFile(target, '{"model":"updated-dotfile[1m]"}'));
-      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("updated-dotfile[1m]");
+      expect(yield* selectorAt(catalog, test.cwd, 4)).toBe("updated-dotfile[1m]");
       yield* step(() => fs.writeFile(target, "malformed"));
-      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("default");
     },
   );
+
+  effectTest("lists each alias target as its own explicit model", function* () {
+    const test = yield* step(setup);
+    const catalog = yield* makeNativeModelCatalog(test.options);
+    const defaultsOnly = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
+    // A target reached only through `default` is named by its model ID.
+    expect(defaultsOnly.find((model) => model.selector === "fixture-next")).toMatchObject({
+      label: "fixture-next",
+      isDefault: false,
+    });
+
+    yield* step(() => fs.writeFile(test.settings, '{"model":"aliases"}'));
+    const models = yield* catalog.list("claude", test.cwd).pipe(Effect.orDie);
+    expect(
+      models
+        .filter((model) => !model.selector.startsWith("fixture-"))
+        .map((model) => [model.selector, model.label, model.isDefault]),
+    ).toEqual([
+      ["default", "Default (recommended)", true],
+      ["opus", "Next", false],
+      ["model-next", "Next", false],
+      ["sonnet", "Fast", false],
+      ["model-fast", "Fast", false],
+      ["model-older", "Older", false],
+      ["legacy", "legacy", false],
+    ]);
+  });
 
   effectTest("redacts rejected preference probes and permits recovery", function* () {
     const test = yield* step(setup);
@@ -148,6 +181,6 @@ describe("Claude catalog preference", () => {
     expect(JSON.stringify(result)).not.toContain(test.home);
     expect(JSON.stringify(result)).not.toContain("private-api-key");
     yield* step(() => fs.writeFile(test.settings, '{"model":"recovered[1m]"}'));
-    expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("recovered[1m]");
+    expect(yield* selectorAt(catalog, test.cwd, 4)).toBe("recovered[1m]");
   });
 });

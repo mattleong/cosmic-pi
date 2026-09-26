@@ -268,7 +268,7 @@ describe("profile candidate normalization and validation", () => {
         expect(candidateValidationError(current), `${host}/${runtime}`).toBeUndefined();
         if (host === "herdr" && runtime === "pi")
           expect(current.model).toBe("openai-codex/gpt-5.6-sol");
-        if (runtime === "claude") expect(current.model).toBe("claude-opus-5");
+        if (runtime === "claude") expect(current.model).toBe("opus");
         if (runtime === "codex") expect(current.model).toBe("gpt-5.6-codex");
         draft = addRouteCandidate(draft, current)!;
       }
@@ -307,7 +307,7 @@ describe("profile candidate normalization and validation", () => {
     );
     expect(claude.candidate).toMatchObject({
       runtime: "claude",
-      model: "claude-opus-5",
+      model: "opus",
       context: "fresh",
       effort: "default",
       openaiFastMode: false,
