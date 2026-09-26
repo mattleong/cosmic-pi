@@ -79,7 +79,9 @@ describe("child compact acknowledgement policy", () => {
     );
     expect(summary?.subject.length).toBeLessThanOrEqual(120);
     expect(summary?.action).toBeUndefined();
-    expect(summary?.notices?.[0]?.text).toBe(message);
+    expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
+    expect(summary?.issues?.[0]?.message).not.toContain("Verify cleanup");
+    expect(summary?.issues?.[0]?.detail).toBe(message);
     expect(
       summarize("supervisor_progress", { message: "\u001b[31mchecking\nfiles" })?.subject,
     ).not.toContain("\u001b");

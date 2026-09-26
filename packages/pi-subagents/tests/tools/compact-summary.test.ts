@@ -1,3 +1,4 @@
+import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
 import { renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
@@ -35,6 +36,11 @@ const workspace = (
     action: operation,
   });
 
+const details = (issues: readonly CompactIssue[] | undefined) =>
+  (issues ?? []).map((issue) => issue.detail ?? "").join("\n");
+const messages = (issues: readonly CompactIssue[] | undefined) =>
+  (issues ?? []).map((issue) => issue.message).join("\n");
+
 /** Launch entries before and after route selection. */
 const pending = {
   index: 0,
@@ -71,7 +77,7 @@ const awaitReceipt = (
 };
 
 describe("subagent compact semantic policy", () => {
-  it("attributes recovery to each run and keeps unknown warning evidence conservative", () => {
+  it("attributes issues to each run and keeps raw warning prose on expansion", () => {
     const summary = summarize(
       "list",
       makeCompactToolDetails({
@@ -79,10 +85,11 @@ describe("subagent compact semantic policy", () => {
         runs: [view({ id: "one", state: "stopping" }), view({ id: "two", state: "stopping" })],
       }),
     );
-    expect(summary?.issues?.coverage).toBe("complete");
-    expect(
-      summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
-    ).toEqual(["one:cleanup-pending", "two:cleanup-pending"]);
+    expect(summary?.issues?.map((issue) => [issue.severity, issue.code])).toEqual([
+      ["warning", "one:cleanup-pending"],
+      ["warning", "two:cleanup-pending"],
+    ]);
+    expect(messages(summary?.issues)).not.toMatch(/\bone\b|\btwo\b/);
     const unknown = summarize(
       "status",
       makeCompactToolDetails({
@@ -90,8 +97,9 @@ describe("subagent compact semantic policy", () => {
         runs: [view({ id: "one", warning: "Review external ownership before retrying." })],
       }),
     );
-    expect(unknown?.issues?.coverage).toBe("unknown");
-    expect(JSON.stringify(unknown?.issues)).toContain("Review external ownership before retrying.");
+    expect(unknown?.outcome).toBe("warning");
+    expect(messages(unknown?.issues)).not.toContain("Review external ownership");
+    expect(details(unknown?.issues)).toContain("Review external ownership before retrying.");
   });
   it("uses start names or profiles before launch and combines observed state counts", () => {
     const provider = createSubagentCompactSummary("subagent_start");
@@ -139,7 +147,6 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.subject).toBe(phase === "pending" ? "target-1" : "Worker");
       expect(summary?.action).toBe("interrupt");
       expect(summary?.metadata).not.toContain("target-1");
-      expect(summary?.expandedResultOwnsCall).toBeUndefined();
     }
   });
 
@@ -158,7 +165,7 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.subject).toBe("source-1");
       expect(summary?.metadata).not.toContain("successor-2");
       expect(summary?.metadata).not.toContain("source-1");
-      expect(summary?.notices).toEqual([]);
+      expect(summary?.issues).toEqual([]);
     }
   });
 
@@ -208,7 +215,7 @@ describe("subagent compact semantic policy", () => {
     }
   });
 
-  it("keeps attention visible while moving evidence to expansion", () => {
+  it("keeps attention visible while moving agent procedures and IDs to expansion", () => {
     for (const overrides of [
       {
         state: "waiting_for_parent" as const,
@@ -219,10 +226,14 @@ describe("subagent compact semantic policy", () => {
       { writeIntent: "writer" as const, writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
       { warning: "Fallback changed runtime" },
     ]) {
-      const details = makeCompactToolDetails({ action: "status", runs: [view(overrides)] });
-      expect(summarize("status", details)?.detailsOnExpand).toBe(true);
-      expect(summarize("status", details)?.notices?.length).toBeGreaterThan(0);
-      expect(summarize("status", details, "running")?.detailsOnExpand).toBe(true);
+      const card = view({ id: "PRIVATE-RUN", ...overrides });
+      const projected = makeCompactToolDetails({ action: "status", runs: [card] });
+      for (const phase of ["running", "settled"] as const) {
+        const issues = summarize("status", projected, phase)?.issues;
+        expect(compactIssueSeverity(issues)).toBeDefined();
+        expect(messages(issues)).not.toMatch(/PRIVATE-RUN|subagent_|May I edit|Fallback/);
+        expect(details(issues)).toContain("PRIVATE-RUN");
+      }
     }
   });
 
@@ -261,7 +272,6 @@ describe("subagent compact semantic policy", () => {
       expect(summary?.subject).toBe("");
       expect(summary?.counters).toEqual(["1/2 started"]);
       expect(summary?.metadata).toEqual([]);
-      expect(summary?.expandedResultOwnsCall).toBeUndefined();
     }
   });
 
@@ -315,7 +325,11 @@ describe("subagent compact semantic policy", () => {
         expect(receipt).toContain(action === "send" ? "sent" : "replied");
         expect(receipt?.match(/\d+/g) ?? []).toEqual(accepted === 1 ? [] : [String(accepted)]);
         expect(summary?.outcome).toBe("error");
-        expect(summary?.notices?.some((notice) => notice.text.includes("missing"))).toBe(true);
+        expect(
+          summary?.issues?.some(
+            (issue) => issue.severity === "error" && issue.detail?.includes("missing"),
+          ),
+        ).toBe(true);
         const live = summarize(action, details, "running");
         expect(live?.counters?.join(" ")).not.toMatch(/sent|replied/);
       }
@@ -327,20 +341,25 @@ describe("subagent compact semantic policy", () => {
       });
       expect(bounded?.counters?.join(" ")).toContain("3");
       expect(bounded?.counters?.join(" ")).toContain("1/3");
-      expect(bounded?.notices?.some((notice) => notice.text.includes("Bounded"))).toBe(true);
+      expect(
+        bounded?.issues?.some(
+          (issue) => issue.code === "runs-omitted" && issue.severity === "warning",
+        ),
+      ).toBe(true);
     },
   );
 
-  it("classifies action failures without claiming incomplete recovery details", () => {
-    const details = makeCompactToolDetails({
+  it("classifies action failures and keeps their target IDs on expansion", () => {
+    const projected = makeCompactToolDetails({
       action: "send",
       runs: [],
       actionFailures: [{ id: "agent-1", code: "run_not_found", message: "Run not found" }],
     });
-    const summary = summarize("send", details);
+    const summary = summarize("send", projected);
     expect(summary?.outcome).toBe("error");
-    expect(summary?.failure).toBeUndefined();
-    expect(summary?.notices?.map((notice) => notice.text).join(" ")).toContain("agent-1");
+    expect(compactIssueSeverity(summary?.issues)).toBe("error");
+    expect(messages(summary?.issues)).not.toContain("agent-1");
+    expect(details(summary?.issues)).toContain("agent-1");
   });
 
   it.each([
@@ -368,7 +387,6 @@ describe("subagent compact semantic policy", () => {
       );
       expect(summary?.counters).toContain("finished");
       expect(summary?.subject).toBe("auth-review");
-      expect(summary?.expandedResultOwnsCall).toBeUndefined();
       expect(summary?.metadata).not.toContain("target");
       expect(summary?.metadata).not.toContain("1 paused");
     },
@@ -394,11 +412,39 @@ describe("subagent compact semantic policy", () => {
       ],
     });
     expect(summary?.outcome).toBe("error");
-    const notices = summary?.notices?.map((notice) => notice.text).join(" ");
-    expect(notices).toContain("quarantined-run");
-    expect(notices).toContain("quarantined");
-    expect(notices).toContain("Do not retry or launch a replacement");
-    expect(notices).not.toContain("only now consider");
+    expect(
+      summary?.issues?.find((issue) => issue.code.endsWith(":cleanup-receipt"))?.severity,
+    ).toBe("warning");
+    const text = details(summary?.issues);
+    expect(text).toContain("quarantined-run");
+    expect(text).toContain("quarantined");
+    expect(text).toContain("Do not retry or launch a replacement");
+    expect(text).not.toContain("only now consider");
+    expect(messages(summary?.issues)).not.toContain("quarantined-run");
+  });
+
+  it("keeps confirmed launch cleanup as expanded-only recovery beside the start error", () => {
+    const summary = summarize("start", {
+      version: 2,
+      action: "start",
+      startEntries: [{ ...selected, status: "failed" }],
+      startFailures: [
+        {
+          index: 0,
+          message: "Start failed",
+          admittedRun: {
+            runId: "cleaned-run",
+            cleanupDisposition: "confirmed",
+            retryDisposition: "eligible",
+            hasRemainingCandidate: true,
+            remainingCandidateCount: 1,
+          },
+        },
+      ],
+    });
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["error", "info", "info"]);
+    expect(details(summary?.issues)).toContain('action: "retry"');
   });
 
   it("matches claims operations to the claims detail family", () => {
@@ -419,13 +465,13 @@ describe("subagent compact semantic policy", () => {
 
   it("branches paused recovery on capabilities", () => {
     for (const resumable of [true, false]) {
-      const details = makeCompactToolDetails({
+      const projected = makeCompactToolDetails({
         action: "interrupt",
         runs: [view({ state: "paused", capabilities: resumable ? ["resume"] : [] })],
       });
-      const text = summarize("lifecycle", details, "settled", { action: "interrupt" })
-        ?.notices?.map((notice) => notice.text)
-        .join(" ");
+      const text = details(
+        summarize("lifecycle", projected, "settled", { action: "interrupt" })?.issues,
+      );
       expect(text).toContain(resumable ? 'action: "resume"' : 'action: "stop"');
       expect(text).toContain(resumable ? "subagent_await" : "confirm cleanup");
       if (!resumable) expect(text).not.toContain('action: "resume"');
@@ -434,7 +480,7 @@ describe("subagent compact semantic policy", () => {
 
   it("does not grant from projected offender audits or change peer claims", () => {
     for (const offender of [true, false]) {
-      const details = makeCompactToolDetails({
+      const projected = makeCompactToolDetails({
         action: "status",
         runs: [
           view({
@@ -447,10 +493,7 @@ describe("subagent compact semantic policy", () => {
           }),
         ],
       });
-      const text =
-        summarize("status", details)
-          ?.notices?.map((notice) => notice.text)
-          .join(" ") ?? "";
+      const text = details(summarize("status", projected)?.issues);
       expect(text).not.toContain("paths:");
       expect(text).not.toContain("src/a.ts");
       if (offender) {
@@ -468,34 +511,34 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("summarizes only await targets and leaves report bodies on expansion", () => {
-    const details = awaitReceipt(
+    const receipt = awaitReceipt(
       [
         view({ id: "target", state: "completed", finalText: "SECRET REPORT BODY" }),
         view({ id: "descendant", state: "paused", parentRunId: "target" }),
       ],
       { awaitedRunIds: ["target"] },
     );
-    const summary = summarize("await", details);
+    const summary = summarize("await", receipt);
     expect(summary?.metadata).not.toContain("1 completed");
     expect(summary?.counters).toContain("finished");
     expect(summary?.metadata).not.toContain("1 paused");
-    const text = summary?.notices?.map((notice) => notice.text).join(" ");
+    const text = `${messages(summary?.issues)}\n${details(summary?.issues)}`;
     expect(summary?.metadata).toEqual([]);
     expect(text).not.toContain("SECRET REPORT BODY");
     expect(text).not.toContain('action: "resume"');
-    const cancelled = summarize("await", { ...details, cancelled: true });
+    const cancelled = summarize("await", { ...receipt, cancelled: true });
     expect(cancelled?.outcome).toBe("cancelled");
-    expect(cancelled?.notices?.some((notice) => notice.text.includes("NOT stopped"))).toBe(true);
+    expect(details(cancelled?.issues)).toContain("NOT stopped");
     const proxyCancelled = summarize("await", {
-      ...details,
+      ...receipt,
       cancelled: true,
       cancellationCleanup: "unconfirmed",
     });
     expect(proxyCancelled?.outcome).toBe("cancelled");
-    const proxyNotices = proxyCancelled?.notices?.map((notice) => notice.text).join(" ");
-    expect(proxyNotices).toContain("Root completion-claim cleanup is unconfirmed");
-    expect(proxyNotices).toContain("completion_claim_conflict");
-    expect(proxyNotices).not.toContain("await the requested targets again");
+    const proxyDetails = details(proxyCancelled?.issues);
+    expect(proxyDetails).toContain("Root completion-claim cleanup is unconfirmed");
+    expect(proxyDetails).toContain("completion_claim_conflict");
+    expect(proxyDetails).not.toContain("await the requested targets again");
   });
 
   it("does not turn a completed descendant into a missing target's completion", () => {
@@ -508,17 +551,18 @@ describe("subagent compact semantic policy", () => {
     expect(summary?.subject).toBe("target");
     expect(summary?.counters).toContain("0/1 finished");
     expect(summary?.outcome).toBe("uncertain");
-    expect(summary?.notices?.some((notice) => notice.text.includes("no projected state"))).toBe(
-      true,
-    );
+    expect(summary?.issues?.some((issue) => issue.code === "targets-omitted")).toBe(true);
   });
 
   it("marks omitted details as bounded rather than complete fleet counts", () => {
-    const details = makeCompactToolDetails({ action: "list", runs: [view()] });
-    const summary = summarize("list", { ...details, runCount: 20, contentOmitted: true });
+    const projected = makeCompactToolDetails({ action: "list", runs: [view()] });
+    const summary = summarize("list", { ...projected, runCount: 20, contentOmitted: true });
     expect(summary?.counters?.join(" ")).toContain("1/20 shown");
     expect(summary?.outcome).toBe("uncertain");
-    expect(summary?.notices?.some((notice) => notice.text.includes("subagent_status"))).toBe(true);
+    expect(summary?.issues?.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(["evidence-omitted", "runs-omitted"]),
+    );
+    expect(details(summary?.issues)).toContain("subagent_status");
   });
 
   it("preserves workspace pagination, orphan recovery and exact test gates", () => {
@@ -529,10 +573,15 @@ describe("subagent compact semantic policy", () => {
       totalChars: 100,
       nextOffset: 50,
     });
-    expect(
-      summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
-    ).toEqual(["read-revision", "prepare-revision", "test-preparation", "integrate-preparation"]);
-    const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
+    expect(summary?.issues?.map((issue) => issue.code)).toEqual([
+      "read-revision",
+      "prepare-revision",
+      "test-preparation",
+      "integrate-preparation",
+    ]);
+    expect(summary?.issues?.every((issue) => issue.severity === "info")).toBe(true);
+    expect(summary?.outcome).toBe("success");
+    const text = details(summary?.issues);
     for (const required of [
       "ALL pages",
       "revisionId=r",
@@ -543,22 +592,19 @@ describe("subagent compact semantic policy", () => {
     ])
       expect(text).toContain(required);
     const list = workspace("list", { workspaceCount: 10, listedCount: 8, nextOffset: 8 });
-    expect(
-      list?.notices?.some((notice) =>
-        notice.text.includes("Do not auto-adopt or delete an orphan"),
-      ),
-    ).toBe(true);
+    expect(details(list?.issues)).toContain("Do not auto-adopt or delete an orphan");
     expect(
       workspace("prepare", {
         workspaceId: "w",
         revisionId: "r",
         preparationId: "p",
         preparedCwd: "/combined",
-      })?.notices?.[0]?.text,
+      })?.issues?.[0]?.detail,
     ).toContain("/combined");
-    expect(
-      workspace("revise", { workspaceId: "w", successorRunId: "successor" })?.notices?.[0]?.text,
-    ).toContain("Await successor successor");
+    const revised = workspace("revise", { workspaceId: "w", successorRunId: "successor" });
+    expect(revised?.outcome).toBe("warning");
+    expect(revised?.issues?.[0]?.severity).toBe("warning");
+    expect(revised?.issues?.[0]?.detail).toContain("Await successor successor");
   });
 
   it("declines incomplete workspace receipts instead of inventing recovery IDs", () => {
@@ -579,45 +625,43 @@ describe("subagent compact semantic policy", () => {
       runs: [view({ finalText: "report" })],
     });
     expect(summarize("list", reports)?.metadata).toEqual([]);
-    expect(summarize("list", reports)?.notices).toEqual([]);
+    expect(summarize("list", reports)?.issues).toEqual([]);
     for (const overrides of [{ error: "failure" }, { error: "failure", finalText: "report" }]) {
-      const details = makeCompactToolDetails({ action: "list", runs: [view(overrides)] });
-      expect(summarize("list", details)?.notices?.some((notice) => notice.kind === "warning")).toBe(
-        true,
-      );
+      const projected = makeCompactToolDetails({ action: "list", runs: [view(overrides)] });
+      expect(
+        summarize("list", projected)?.issues?.some((issue) => issue.code === "evidence-omitted"),
+      ).toBe(true);
     }
     if (reports.action === "models") throw new Error("Expected run details");
     const { reportsOnlyOmitted, ...unknown } = reports;
     expect(reportsOnlyOmitted).toBe(true);
     expect(summarize("list", unknown)?.outcome).toBe("uncertain");
-    expect(summarize("list", unknown)?.notices?.some((notice) => notice.kind === "warning")).toBe(
-      true,
-    );
+    expect(compactIssueSeverity(summarize("list", unknown)?.issues)).toBe("warning");
   });
 
   it("keeps distinct run and selection warning identities even when their text matches", () => {
     const warning = "Inspect the changed route";
-    const details = makeCompactToolDetails({
+    const projected = makeCompactToolDetails({
       action: "status",
       runs: ["agent-a", "agent-b"].map((id) =>
         view({ id, name: id, warning, selection: { ...view().selection, warning } }),
       ),
     });
-    const notices = summarize("status", details)?.notices?.filter((notice) =>
-      notice.text.includes(warning),
+    const issues = summarize("status", projected)?.issues?.filter((issue) =>
+      issue.detail?.includes(warning),
     );
-    expect(notices).toHaveLength(4);
+    expect(issues).toHaveLength(4);
+    expect(new Set(issues?.map((issue) => issue.code)).size).toBe(4);
     for (const id of ["agent-a", "agent-b"]) {
-      const owned = notices?.filter((notice) => notice.text.includes(id));
+      const owned = issues?.filter((issue) => issue.code.startsWith(`${id}:`));
       expect(owned).toHaveLength(2);
-      expect(owned?.map((notice) => notice.code)).toEqual([undefined, undefined]);
-      expect(owned?.[0]?.description).not.toBe(owned?.[1]?.description);
+      expect(owned?.[0]?.message).not.toBe(owned?.[1]?.message);
     }
   });
 
   it("keeps system and child warning slots separate without matching their prose", () => {
     for (const source of ["child", "system"] as const) {
-      const details = makeCompactToolDetails({
+      const projected = makeCompactToolDetails({
         action: "status",
         runs: [
           view({
@@ -627,11 +671,10 @@ describe("subagent compact semantic policy", () => {
           }),
         ],
       });
-      const summary = summarize("status", details);
+      const summary = summarize("status", projected);
       expect(
-        summary?.notices?.filter((notice) => notice.text.includes("Same warning words")),
+        summary?.issues?.filter((issue) => issue.detail?.includes("Same warning words")),
       ).toHaveLength(source === "child" ? 2 : 1);
-      expect(summary?.issues?.coverage).toBe("unknown");
     }
     const inconsistent = summarize(
       "status",
@@ -646,10 +689,10 @@ describe("subagent compact semantic policy", () => {
         ],
       }),
     );
-    expect(inconsistent?.notices?.filter((notice) => notice.kind === "warning")).toHaveLength(2);
+    expect(inconsistent?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(2);
   });
 
-  it("retains child warnings when await output has no exact warning-coverage receipt", () => {
+  it("retains child, system and selection warnings in every run projection", () => {
     for (const phase of ["running", "settled"] as const) {
       for (const extra of [
         {},
@@ -660,7 +703,7 @@ describe("subagent compact semantic policy", () => {
       ]) {
         const run = view({ warning: "Child advisory", warningSource: "child", ...extra });
         const summary = summarize("await", awaitReceipt([run], { awaitedRunIds: [run.id] }), phase);
-        const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
+        const text = details(summary?.issues);
         expect(text).toContain("Child advisory");
         if ("systemWarning" in extra) expect(text).toContain(extra.systemWarning);
         if ("selection" in extra) expect(text).toContain("Route recovery");
@@ -668,15 +711,13 @@ describe("subagent compact semantic policy", () => {
         const projected = makeCompactToolDetails({ action: "status", runs: [run] });
         for (const action of ["status", "list"] as const) {
           const other = summarize(action, { ...projected, action }, phase);
-          expect(other?.notices?.some((notice) => notice.text.includes("Child advisory"))).toBe(
-            true,
-          );
+          expect(details(other?.issues)).toContain("Child advisory");
         }
       }
     }
   });
 
-  it("keeps running await counters stable while exposing new safety notices", () => {
+  it("keeps running await counters stable while exposing new safety issues", () => {
     const snapshot = (reverse: boolean, warning?: string) => {
       const receipt = awaitReceipt(
         [
@@ -698,9 +739,8 @@ describe("subagent compact semantic policy", () => {
     const next = summarize("await", snapshot(true, "new warning"), "running");
     expect(first?.counters).toEqual(["1/2 finished"]);
     expect(first?.metadata).toEqual([]);
-    expect(first?.expandedResultOwnsCall).toBeUndefined();
     expect(next?.counters).toEqual(first?.counters);
-    expect(next?.notices?.some((notice) => notice.text.includes("new warning"))).toBe(true);
+    expect(details(next?.issues)).toContain("new warning");
     const completed = snapshot(false);
     const finalProgress = summarize(
       "await",
@@ -724,15 +764,15 @@ describe("subagent compact semantic policy", () => {
       { writeIntent: "writer" as const, writerWorkspaceMode: "shared-checkout" as const },
       { writeIntent: "writer" as const, writerWorkspaceMode: "worktree" as const },
     ]) {
-      const details = makeCompactToolDetails({
+      const projected = makeCompactToolDetails({
         action: "status",
         runs: [view({ ...overrides, state: "reported", finalText: "report" })],
       });
-      const summary = summarize("status", details);
+      const summary = summarize("status", projected);
       expect(summary?.metadata).toEqual([]);
-      expect(
-        summary?.notices?.some((notice) => notice.text.includes("workspace integration")),
-      ).toBe(overrides.writerWorkspaceMode === "worktree");
+      expect(summary?.issues?.some((issue) => issue.code.endsWith(":workspace-approval"))).toBe(
+        overrides.writerWorkspaceMode === "worktree",
+      );
     }
     const details = makeCompactToolDetails({
       action: "status",
@@ -747,14 +787,14 @@ describe("subagent compact semantic policy", () => {
       revisionId: "r",
       preparationId: "p",
     });
-    expect(integrated?.notices).toEqual([]);
+    expect(integrated?.issues).toEqual([]);
+    expect(integrated?.outcome).toBe("success");
     expect(integrated?.counters).toEqual(["integrated"]);
     expect(integrated?.metadata).toEqual([]);
-    expect(integrated?.detailsOnExpand).toBe(true);
-    expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.notices).toEqual([]);
-    expect(workspace("list", {})?.notices).toHaveLength(1);
+    expect(workspace("list", { workspaceCount: 0, listedCount: 0 })?.issues).toEqual([]);
+    expect(workspace("list", {})?.issues).toHaveLength(1);
     const paged = workspace("list", { workspaceCount: 2, listedCount: 1, nextOffset: 1 });
-    expect(paged?.notices?.some((notice) => notice.text.includes("offset=1"))).toBe(true);
+    expect(details(paged?.issues)).toContain("offset=1");
   });
 
   it("counts static mixed profile eligibility without warning for usable alternatives", () => {
@@ -792,7 +832,7 @@ describe("subagent compact semantic policy", () => {
       });
     const clean = discovery([profile, { ...profile, id: "worker", candidates: [] }]);
     expect(clean?.outcome).toBe("success");
-    expect(clean?.notices).toEqual([]);
+    expect(clean?.issues).toEqual([]);
     expect(clean?.counters).toEqual(["1 statically eligible, 1 disabled profiles"]);
     for (const unavailable of [
       { ...profile, candidates: [{ ...candidate, status: "skipped" }] },
@@ -801,7 +841,7 @@ describe("subagent compact semantic policy", () => {
     ]) {
       const summary = discovery([unavailable]);
       expect(summary?.outcome).toBe("warning");
-      expect(summary?.notices).toHaveLength(1);
+      expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["warning"]);
       expect(summary?.counters?.join(" ")).toContain("1 unavailable profiles");
       expect(summary?.counters?.join(" ")).toContain("0 statically eligible");
       expect(summary?.counters).not.toContain("1 eligible profiles");
@@ -821,24 +861,28 @@ describe("subagent compact semantic policy", () => {
     expect(discovery([{ ...profile, source: "unknown" }])).toBeUndefined();
   });
 
-  it("quiets only clean terminal static skip history and preserves expanded evidence", () => {
+  it("keeps clean terminal static skip history expanded-only and warns otherwise", () => {
     const skipped = {
       candidate: "alternative",
       code: "pi_model_unknown",
       reason: "Historical missing model",
     };
     const selection = { ...view().selection, skippedCandidates: [skipped] };
+    const warns = (issues: readonly CompactIssue[] | undefined) =>
+      issues?.some(
+        (issue) => issue.severity === "warning" && issue.detail?.includes(skipped.reason),
+      );
     for (const state of ["completed", "reported"] as const) {
-      const details = makeCompactToolDetails({
+      const projected = makeCompactToolDetails({
         action: "status",
         runs: [view({ state, selection })],
       });
-      const summary = summarize("status", details);
-      expect(summary?.notices).toEqual([]);
+      const summary = summarize("status", projected);
+      expect(summary?.outcome).toBe("success");
+      expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["info"]);
+      expect(details(summary?.issues)).toContain(skipped.reason);
       expect(summary?.metadata).toEqual([]);
-      expect(JSON.stringify(details)).toContain(skipped.reason);
-      expect(summary?.detailsOnExpand).toBe(true);
-      expect(summarize("status", details, "running")?.metadata).toEqual([]);
+      expect(summarize("status", projected, "running")?.metadata).toEqual([]);
       for (const patch of [
         { warning: "Herdr to local fallback" },
         { selection: { ...selection, warning: "Explicit selection warning" } },
@@ -856,31 +900,23 @@ describe("subagent compact semantic policy", () => {
           action: "status",
           runs: [view({ state, selection, ...patch })],
         });
-        expect(
-          summarize("status", unsafe)?.notices?.some((notice) =>
-            notice.text.includes(skipped.reason),
-          ),
-        ).toBe(true);
+        expect(warns(summarize("status", unsafe)?.issues)).toBe(true);
       }
-      expect(
-        summarize("status", { ...details, contentOmitted: true })?.notices?.some((notice) =>
-          notice.text.includes(skipped.reason),
-        ),
-      ).toBe(true);
+      expect(warns(summarize("status", { ...projected, contentOmitted: true })?.issues)).toBe(true);
     }
   });
 
   it("keeps claim operations and failed launch recovery compact", () => {
     expect(
-      summarize("claims", makeCompactToolDetails({ action: "claims", runs: [] }))?.detailsOnExpand,
-    ).toBe(true);
-    expect(
-      summarize("start", {
-        version: 2,
-        action: "start",
-        startEntries: [{ ...pending, status: "failed", routeStatus: "unavailable" }],
-        startFailures: [{ index: 0, message: "Cleanup not confirmed" }],
-      })?.outcome,
-    ).toBe("error");
+      summarize("claims", makeCompactToolDetails({ action: "claims", runs: [] }))?.outcome,
+    ).toBe("success");
+    const failed = summarize("start", {
+      version: 2,
+      action: "start",
+      startEntries: [{ ...pending, status: "failed", routeStatus: "unavailable" }],
+      startFailures: [{ index: 0, message: "Cleanup not confirmed" }],
+    });
+    expect(failed?.outcome).toBe("error");
+    expect(failed?.issues?.map((issue) => issue.severity)).toEqual(["error", "warning"]);
   });
 });

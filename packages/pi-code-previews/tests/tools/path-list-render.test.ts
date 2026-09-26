@@ -11,7 +11,6 @@ const config: PathListResultConfig = {
   iconMode: "off",
   previewEnabled: true,
   loadingLabel: "Loading",
-  errorLabel: "Failed",
   emptyMarker: "No paths",
   emptyLabel: () => "No paths",
   collapsedLines: 8,

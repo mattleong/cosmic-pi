@@ -16,7 +16,7 @@ import { projectMcpEvidence, type McpPresentation } from "../code-mode/presentat
 import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
 
 import { isOwnedValidationNotice } from "./validation-notices.ts";
-import { credentialMutationBlocked, type McpBoundaryView } from "./boundary-failure.ts";
+import type { McpBoundaryView } from "./boundary-failure.ts";
 
 interface McpRenderField {
   readonly value: unknown;
@@ -55,12 +55,10 @@ export interface McpCardDetails {
   readonly isError: boolean;
   readonly known: boolean;
   readonly counts: readonly string[];
+  /** Sanitized envelope notices for the detailed card, without owned validation notices. */
   readonly notices: readonly string[];
-  readonly noticesComplete: boolean;
-  readonly warnings: readonly string[];
   readonly truncated: boolean;
   readonly displayCuts: readonly McpDisplayCut[];
-  readonly hasCompleteReadableText: boolean;
   readonly attachmentCount: number;
   readonly attachmentsLimited: boolean;
   readonly imageCount: number;
@@ -77,6 +75,8 @@ export interface McpCardDetails {
   readonly origin?: McpCardOrigin;
   readonly recoveryHint?: string;
   readonly diagnostic?: McpDiagnostic;
+  /** Sanitized adapter message of a failed reply. Fixed boundary issues never repeat it. */
+  readonly errorMessage?: string;
   /** The shared nested view, only for a known envelope whose raw preview is uncut. */
   readonly boundary?: McpBoundaryView;
 }
@@ -175,21 +175,11 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     if (originOutcome) origin = { ...origin, outcome: originOutcome };
   }
   const validationIdentity = presentationValidationIdentity(details, rawOrigin);
-  const rawNotices = own(details, "notices").value;
-  const noticeCount = arrayLength(rawNotices);
-  const noticeEntries = list(rawNotices, 32);
-  const noticesComplete =
-    noticeCount !== undefined &&
-    noticeCount <= 32 &&
-    noticeEntries.every((entry) => Predicate.isString(entry) && entry.length <= 512);
-  const notices = noticeEntries.flatMap((entry) => {
+  const notices = list(own(details, "notices").value, 32).flatMap((entry) => {
     if (validationIdentity && isOwnedValidationNotice(entry, validationIdentity)) return [];
     const text = safeText(entry);
     return text ? [text] : [];
   });
-  const warnings = [...presentation.notices];
-  if (failure && credentialMutationBlocked(failure.reason))
-    warnings.push(mcpDiagnostic({ ...failure, outcome: "not-sent" }).explanation);
   const counts: string[] = [];
   for (const key of counterKeys) {
     const length = arrayLength(own(payload, key).value);
@@ -244,11 +234,8 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     known,
     counts,
     notices,
-    noticesComplete,
-    warnings,
     truncated: presentation.truncated,
     displayCuts: preview.cuts,
-    hasCompleteReadableText: preview.readable !== undefined && preview.readableCuts.length === 0,
     attachmentCount,
     attachmentsLimited: descriptors.limited,
     imageCount,
@@ -262,6 +249,8 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   if (origin) projection = { ...projection, origin };
   if (page) projection = { ...projection, page };
   if (diagnostic) projection = { ...projection, diagnostic };
+  const errorMessage = currentError ? safeText(own(data, "message").value) : undefined;
+  if (errorMessage) projection = { ...projection, errorMessage };
   if (boundary && known && preview.cuts.length === 0) projection = { ...projection, boundary };
   if (action === "result.read" && currentOutcome === "completed" && !currentError) {
     const offset = natural(own(data, "offset").value);

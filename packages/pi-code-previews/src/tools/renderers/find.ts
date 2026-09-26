@@ -11,6 +11,7 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderPathListResult } from "./shared/path-list-result";
+import { withPreviewIssues } from "./shared/preview-issues";
 
 export function createFindPreviewTool(cwd: string) {
   const originalFind = createFindToolDefinition(cwd);
@@ -27,17 +28,17 @@ export function createFindPreviewTool(cwd: string) {
         0,
       );
     },
-    renderResult: (result, options, theme, renderContext) =>
+    renderResult: withPreviewIssues("find", (result, options, theme, renderContext) =>
       renderPathListResult(result, options, theme, renderContext, {
         cwd,
         iconMode: codePreviewSettings.pathIcons,
         previewEnabled: codePreviewSettings.findResultPreview,
         collapsedLines: codePreviewSettings.pathListCollapsedLines,
         loadingLabel: "Finding…",
-        errorLabel: "Find failed",
         emptyMarker: "No files found matching pattern",
         emptyLabel: (output) => output || "No files found",
         footerNoun: "paths",
       }),
+    ),
   });
 }

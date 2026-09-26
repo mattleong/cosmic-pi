@@ -19,7 +19,6 @@ export interface PathListResultConfig {
   iconMode: PathIconMode;
   previewEnabled: boolean;
   loadingLabel: string;
-  errorLabel: string;
   emptyMarker: string;
   emptyLabel: (output: string) => string;
   collapsedLines: number;
@@ -44,7 +43,8 @@ export function renderPathListResult(
     theme,
     loadingLabel: config.loadingLabel,
     isError: context.isError,
-    errorText: (expanded ? output : output.split("\n")[0]) || config.errorLabel,
+    expanded,
+    errorText: output,
   });
   if (prelude) return prelude;
   if (!expanded && !config.previewEnabled)

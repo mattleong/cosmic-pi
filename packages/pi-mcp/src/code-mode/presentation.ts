@@ -10,40 +10,44 @@ import {
  * retain bounded sanitized remote error text. Nested consumers enforce receipt limits.
  */
 import * as Predicate from "effect/Predicate";
-import { createBoundedCompactIssuesSchema, type CompactIssues } from "pi-code-previews";
+import { createBoundedCompactIssuesSchema, type CompactIssue } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import { projectMcpIssues, type McpIssueProjection } from "./issues.ts";
-import {
-  invokeHostCallback,
-  sanitizeDiagnosticContent,
-  sanitizeTerminalLine,
-} from "pi-cosmic-core";
-import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
-import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
+import { projectMcpIssues, readMcpNotices, type McpIssueProjection } from "./issues.ts";
+import { invokeHostCallback } from "pi-cosmic-core";
+import { mcpIssueMessages } from "../ui/compact-descriptions.ts";
 import { normalizeMcpCodeModeError } from "./protocol.ts";
 
-const BoundedIssues = createBoundedCompactIssuesSchema({
-  maxTextLength: 2048,
-  maxEntries: 32,
-  maxRecoveryEntries: 8,
-  maxDiagnosticEntries: 16,
-});
+const BoundedIssues = createBoundedCompactIssuesSchema({ maxTextLength: 2048, maxEntries: 32 });
 
 export interface McpPresentation {
-  readonly issues: CompactIssues;
   readonly outcome: "completed" | "unknown" | "not-sent";
   readonly isError: boolean;
   readonly incomplete: boolean;
   readonly truncated: boolean;
-  readonly notices: readonly string[];
+  readonly issues: readonly CompactIssue[];
   readonly resultId?: string;
 }
 const object = <Value>(value: Value): boolean =>
   invokeHostCallback(() => Predicate.isObjectOrArray(value) && !Array.isArray(value), false);
 
+const incompleteEvidence: CompactIssue = {
+  severity: "warning",
+  code: "evidence-incomplete",
+  message: mcpIssueMessages["evidence-incomplete"],
+  detail:
+    "MCP presentation evidence is incomplete. Some recovery information is unavailable.\nDo not replay operations to recover output.",
+};
+const overflowEvidence: CompactIssue = {
+  severity: "warning",
+  code: "evidence-overflow",
+  message: mcpIssueMessages["evidence-overflow"],
+  detail:
+    "MCP presentation evidence exceeded its bounds.\nInspect retained output; do not replay operations to recover output.",
+};
+
 /** The card decoder shares this projection's failure evidence and boundary view. */
-export interface McpEvidence extends Omit<McpIssueProjection, "issues"> {
+export interface McpEvidence extends Pick<McpIssueProjection, "failure" | "boundary"> {
   readonly presentation: McpPresentation;
 }
 
@@ -61,28 +65,6 @@ export const projectMcpEvidence = <Reply>(reply: Reply): McpEvidence => {
   let isError = rawError === true;
   incomplete ||=
     envelopeOutcome === undefined || !Predicate.isBoolean(rawError) || !Predicate.isString(action);
-  const notices: string[] = [];
-  const add = <Value>(value: Value) => {
-    if (!Predicate.isString(value)) {
-      incomplete = true;
-      return;
-    }
-    // Redact complete text before bounding it. An oversized diagnostic is not a
-    // complete recovery instruction, so retain incompleteness rather than a fragment.
-    const text = sanitizeDiagnosticContent(sanitizeTerminalLine(value), {
-      maximumLength: Number.MAX_SAFE_INTEGER,
-    });
-    if (text.length > 512) {
-      incomplete = true;
-      return;
-    }
-    if (!text || notices.includes(text)) return;
-    if (notices.length >= 32) {
-      incomplete = true;
-      return;
-    }
-    notices.push(text);
-  };
   const { data, payload, origin, undiscovered, payloadTruncation } = presentationEvidence(
     reply,
     field,
@@ -104,9 +86,6 @@ export const projectMcpEvidence = <Reply>(reply: Reply): McpEvidence => {
     field(data, "omitted").value === true ||
     kind === "output-limit" ||
     (payloadTruncation && field(payload, "truncated").value === true);
-  let recovery = truncated;
-  const validationIdentity = presentationValidationIdentity(reply, origin, field);
-  if (validationIdentity) add(canonicalValidationWarning(validationIdentity));
   if (action === "result.read" || origin !== undefined) {
     const originOutcome = outcomeOf(field(origin, "outcome").value);
     const originError = field(origin, "isError").value;
@@ -123,117 +102,43 @@ export const projectMcpEvidence = <Reply>(reply: Reply): McpEvidence => {
     if (originOutcome === "unknown" || outcome === "unknown") outcome = "unknown";
     else if (originOutcome === "not-sent") outcome = "not-sent";
     isError ||= originError === true || validation === "failed";
-    if (originError === true)
-      add(
-        "The original operation reported a failure. Reading retained output does not change that outcome; do not replay the operation to recover output.",
-      );
-    if (!validationIdentity && validation === "failed")
-      add(
-        "The original operation completed but output validation failed. Reading retained output does not change that outcome; do not replay the operation to recover output.",
-      );
-    if (validation === "unavailable") {
-      recovery = true;
-      if (!validationIdentity)
-        add(
-          "Original MCP output validation was unavailable. No mismatch was established. Do not replay the operation to recover output.",
-        );
-    }
   }
-  if (outcome === "unknown")
-    add("MCP execution is uncertain. Check its state; do not replay the operation automatically.");
-  if (outcome === "not-sent") add("The MCP operation was not sent.");
-  if (kind === "cleanup") add("MCP cleanup is unconfirmed. Reconnection is not safe recovery yet.");
-  if (truncated)
-    add("MCP output is truncated or omitted. Do not replay the operation to recover output.");
-  const undiscoveredCount = lengthOf(undiscovered);
-  if (undiscovered !== undefined && undiscoveredCount === undefined) incomplete = true;
-  if (undiscoveredCount) add(mcpUndiscoveredNotice(undiscoveredCount));
+  if (undiscovered !== undefined && lengthOf(undiscovered) === undefined) incomplete = true;
   const rawId = field(reply, "resultId").value;
   const resultId =
     Predicate.isString(rawId) && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(rawId)
       ? rawId
       : undefined;
   if (rawId !== undefined && resultId === undefined) incomplete = true;
-  if (resultId && (recovery || isError || outcome !== "completed"))
-    add(
-      `Read retained MCP output with result.read id="${resultId}". Reading output does not authorize replay.`,
-    );
-  if (
-    isError &&
-    !validationIdentity &&
-    field(origin, "isError").value !== true &&
-    field(origin, "outputValidation").value !== "failed"
-  )
-    add("MCP reported an error. Do not replay a completed operation to recover output.");
-  if (rawError === true && field(data, "message").value !== undefined)
-    add(field(data, "message").value);
-  const rawNotices = field(reply, "notices").value;
-  const count = lengthOf(rawNotices);
-  if (count === undefined || count > 32) incomplete = true;
-  for (let index = 0; index < Math.min(count ?? 0, 32); index++) {
-    const notice = field(rawNotices, String(index)).value;
-    if (!Predicate.isString(notice)) {
-      incomplete = true;
-      continue;
-    }
-    if (validationIdentity && isOwnedValidationNotice(notice, validationIdentity)) continue;
-    if (
-      classifyMcpDiscoveryNotice({
-        action: Predicate.isString(action) ? action : "",
-        outcome: envelopeOutcome ?? "unknown",
-        isError: rawError !== false,
-        notice,
-      }).visibility === "attention"
-    )
-      add(notice);
-  }
-  if (incomplete) {
-    if (notices.length >= 32) notices.pop();
-    add(
-      "MCP presentation evidence is incomplete. Some recovery information is unavailable; do not replay operations to recover output.",
-    );
-  }
+  const notices = readMcpNotices(field, reply, {
+    action,
+    outcome: envelopeOutcome ?? "unknown",
+    isError: rawError !== false,
+    validation: presentationValidationIdentity(reply, origin, field),
+  });
+  incomplete ||= notices.incomplete;
   const evidence: Omit<McpPresentation, "issues"> = {
     outcome,
     isError,
     incomplete,
     truncated,
-    notices,
+    ...(resultId && { resultId }),
   };
-  const retained = resultId ? { ...evidence, resultId } : evidence;
-  const { issues: projected, failure, boundary } = projectMcpIssues(field, reply, retained);
-  const issues = Option.getOrUndefined(Schema.decodeOption(BoundedIssues)(projected));
+  const projection = projectMcpIssues(field, reply, evidence, notices);
+  // Checked after projection: its own reads can reveal unreadable evidence too. A validated
+  // boundary view states its own certainty; fields a failed read lacks, like an origin, are expected.
+  const complete = projection.boundary !== undefined || (!incomplete && !projection.lost);
+  const issues = Option.getOrUndefined(
+    Schema.decodeOption(BoundedIssues)(
+      complete ? projection.issues : [...projection.issues, incompleteEvidence],
+    ),
+  );
   incomplete ||= issues === undefined;
   return {
-    failure,
-    // Compact consumers pair the view with presentation.issues; expose it only when they match.
-    boundary: issues && boundary,
-    presentation: {
-      ...retained,
-      incomplete,
-      issues: issues
-        ? incomplete
-          ? { ...issues, coverage: "unknown" }
-          : issues
-        : {
-            coverage: "unknown",
-            entries: [
-              {
-                operation: "mcp",
-                code: "evidence-overflow",
-                severity: "warning",
-                cause: "MCP presentation evidence exceeded its bounds.",
-                description: "Some operation details are unavailable.",
-                recovery: [
-                  {
-                    code: "no-replay",
-                    text: "Inspect retained output; do not replay operations to recover output.",
-                  },
-                ],
-              },
-            ],
-          },
-    },
+    failure: projection.failure,
+    // The view's issues lead presentation.issues; expose it only when they survived the bounds.
+    boundary: issues && projection.boundary,
+    presentation: { ...evidence, incomplete, issues: issues ?? [overflowEvidence] },
   };
 };
 

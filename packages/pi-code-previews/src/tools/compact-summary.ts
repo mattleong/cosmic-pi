@@ -1,10 +1,5 @@
-import type { CompactIssues, CompactIssueClaim } from "./compact-issues";
-import {
-  compactIssueSeverity,
-  summaryCompactIssues,
-  legacyCompactIssues,
-  claimCompactIssue,
-} from "./compact-issues";
+import type { CompactIssue } from "./compact-issues";
+import { compactIssueSeverity, firstLineMessage } from "./compact-issues";
 import { isSafeCompactSummary } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
@@ -17,97 +12,45 @@ export type CompactAnimationScheduler = (
 
 export type CompactPhase = "pending" | "running" | "settled";
 export type CompactOutcome = "success" | "warning" | "error" | "cancelled" | "uncertain";
-
-export interface CompactNotice {
-  /** Producer-owned identity within this operation. Absent on unclassified history. */
-  code?: string;
-  kind: "warning" | "error" | "recovery";
-  text: string;
-  /** Display only; original instructions remain available on expansion and to the agent. */
-  description?: string | undefined;
-  /** Informational recovery shown only on expansion. Ignored for warnings and errors. */
-  expandedOnly?: true;
-}
-
-/** Warnings and errors always require attention, even if marked expanded-only. */
-export function isCompactAttention(notice: CompactNotice): boolean {
-  return notice.kind !== "recovery" || notice.expandedOnly !== true;
-}
+export type CompactStatus = Exclude<CompactPhase, "settled"> | "returned" | CompactOutcome;
 
 /** One nested dispatch. `returned` confirms delivery, not semantic operation success. */
 export interface CompactChild {
-  issues?: CompactIssues;
-  failureEvidence?: CompactFailureEvidence;
   label: string;
   action?: string;
-  counters?: readonly string[];
-  metadata?: readonly string[];
-  showTiming?: true;
-  outcome?: CompactOutcome;
-  /** Bounded semantic notices; callers retain attention separately from row selection. */
-  notices?: readonly CompactNotice[];
   /** Argument-only target, laid out like a standalone compact call. Never output or recovery. */
   subject?: string;
   compactSubject?: string;
+  counters?: readonly string[];
+  metadata?: readonly string[];
+  /** This call's own issues. The first error or warning is shown on its collapsed row. */
+  issues?: readonly CompactIssue[];
   /** Measured dispatch duration, not an estimate or a sum of sibling timings. */
   durationMs?: number;
-  status: "pending" | "running" | "returned" | CompactOutcome;
-}
-
-/** Producer-authored semantic explanation. Never an arbitrary diagnostic body. */
-export interface CompactFailureEvidence {
-  readonly code: string;
-  readonly cause: string;
-  readonly coverage: "complete" | "unknown";
+  status: CompactStatus;
 }
 
 /** Semantic display data, never inferred from a rendered component or Pi's success flag. */
 export interface CompactSummary {
-  issues?: CompactIssues;
   subject: string;
   /** Human-facing target without internal identifiers; expansion retains subject. */
   compactSubject?: string;
   /** Operation not already identified by the tool name. Kept separate from target clipping. */
   action?: string;
-  /** The first nonblank counter owns the single routine-detail slot. Combine related counts
-   * into one label; put warnings and required recovery in notices, never later counters.
+  /** Alternatives for the single routine-detail slot, in priority order: the first that fits
+   * is shown, so later entries are shorter fallbacks for narrow rows. Put warnings in issues.
    */
   counters?: readonly string[];
   /** First nonblank label is used only when no counter is present. */
   metadata?: readonly string[];
   /** Show measured timing beside the routine detail, including short calls, when enabled. */
   showTiming?: true;
+  /** Required once settled. Children never change their parent's outcome. */
   outcome?: CompactOutcome;
-  notices?: readonly CompactNotice[];
-  /** Optional collapsed-only call tree in admission order. Total includes unretained calls.
-   * The shell bounds displayed rows; warnings and recovery must remain in notices.
-   */
+  /** This operation's own issues in display order. Children carry theirs. */
+  issues?: readonly CompactIssue[];
+  /** Optional call tree in admission order. Total includes calls that are no longer retained. */
   children?: { entries: readonly CompactChild[]; total: number };
-  /** Legacy provider marker for details available on expansion. All collapsed outcomes
-   * use compact rows regardless of this flag. Expansion prefers content-only callbacks;
-   * a covered failure owns only its diagnostic body. Unknown or malformed results must decline
-   * semantic projection and use the shell's generic compact row.
-   */
-  detailsOnExpand?: true;
-  /** The original expanded result supplies the complete call heading and call information.
-   * Only suppresses the call component when that result renderer succeeds. Sources, input
-   * diffs, targets, and other unique call content must never be hidden through this flag.
-   */
-  expandedResultOwnsCall?: true;
-  /** Exact fields rendered by the current expanded result; revoked on rendering failure. */
-  expandedResultOwnsIssues?: readonly CompactIssueClaim[];
-  /** Owns the failure diagnostic body. Unique expanded call content remains. Details must be complete.
-   * Unknown causes may retain multiple lines rather than hide unclassified recovery text.
-   * Notices contain independent safety/recovery information, not another error copy.
-   */
-  failure?: {
-    cause: string;
-    description?: string | undefined;
-    details: string;
-    /** Snapshot fields represented by this exact failure body. */
-    ownedIssues?: readonly CompactIssueClaim[];
-  };
-  failureEvidence?: CompactFailureEvidence;
 }
 
 export type CompactSummaryProvider<
@@ -121,111 +64,42 @@ export type CompactSummaryProvider<
   context: ToolRenderContext<TState, Partial<TArgs>>;
 }) => CompactSummary | undefined;
 
-/** A settled summary must explicitly classify the domain outcome. */
+/**
+ * Validate provider output. A settled summary must classify its outcome. Pi's error flag
+ * wins over a summary that claims success: the first line of the error text explains it.
+ */
 export function resolveCompactSummary(
   summary: CompactSummary | undefined,
   phase: CompactPhase,
   isError: boolean,
+  errorText = "",
 ): CompactSummary | undefined {
-  if (
-    !summary ||
-    !isSafeCompactSummary(summary) ||
-    (phase === "settled" && summary.outcome === undefined)
-  )
-    return undefined;
-  if (
-    isError &&
-    summary.outcome !== "cancelled" &&
-    !(summary.issues ?? legacyCompactIssues(summary.notices, "outer")).entries.some(
-      (issue) =>
-        issue.severity === "error" &&
-        ((issue.operation === "outer" &&
-          issue.code === "pi-error" &&
-          issue.cause === (summary.failure?.cause ?? "Tool reported a failure.")) ||
-          summary.failure?.ownedIssues?.some(
-            (claim) =>
-              claim.fields.cause === true &&
-              claim.operation === issue.operation &&
-              claim.code === issue.code &&
-              claim.severity === issue.severity &&
-              claim.cause === issue.cause &&
-              issue.cause === summary.failure?.cause,
-          )),
-    )
-  ) {
-    const issues =
-      summary.issues ??
-      legacyCompactIssues(
-        [
-          ...(summary.notices ?? []),
-          ...(summary.outcome === "uncertain"
-            ? [{ kind: "warning" as const, text: "Execution outcome is uncertain." }]
-            : []),
-        ],
-        "outer",
-      );
-    const hostFailure = {
-      operation: "outer",
-      code: "pi-error",
-      severity: "error" as const,
-      cause: summary.failure?.cause || "Tool reported a failure.",
-      description: summary.failure?.description ?? "The tool reported an error.",
-      recovery: [],
-    };
-    return {
-      ...summary,
-      ...(summary.failure && {
-        failure: {
-          ...summary.failure,
-          ownedIssues: [
-            ...(summary.failure.ownedIssues ?? []),
-            claimCompactIssue(hostFailure, { cause: true }),
-          ],
-        },
-      }),
-      issues: {
-        ...issues,
-        coverage: summary.issues?.coverage ?? "complete",
-        entries: [
-          ...issues.entries,
-          ...(summary.outcome === "uncertain" && summary.issues
-            ? [
-                {
-                  operation: "outer",
-                  code: "execution-uncertain",
-                  severity: "warning" as const,
-                  cause: "Execution outcome is uncertain.",
-                  description: "Could not confirm what happened.",
-                  recovery: [],
-                },
-              ]
-            : []),
-          hostFailure,
-        ],
+  if (!summary || !isSafeCompactSummary(summary)) return undefined;
+  if (phase === "settled" && summary.outcome === undefined) return undefined;
+  if (!isError || summary.outcome === "cancelled" || summary.outcome === "uncertain")
+    return summary;
+  if (compactIssueSeverity(summary.issues) === "error") return { ...summary, outcome: "error" };
+  return {
+    ...summary,
+    outcome: "error",
+    issues: [
+      {
+        severity: "error",
+        code: "tool-error",
+        message: firstLineMessage(errorText, "The tool reported an error"),
       },
-    };
-  }
-  return summary;
+      ...(summary.issues ?? []),
+    ],
+  };
 }
 
 /** Live lifecycle takes precedence over a premature success reported by a provider. */
-export function compactStatus(
-  phase: CompactPhase,
-  summary: CompactSummary,
-): Exclude<CompactPhase, "settled"> | CompactOutcome {
-  return phase === "settled" || compactSummaryNeedsDetails(summary)
-    ? summary.outcome === "error"
-      ? "error"
-      : (compactIssueSeverity(summaryCompactIssues(summary)) ?? summary.outcome ?? "uncertain")
-    : phase;
-}
-
-/** Semantic non-success classification, independent of collapsed presentation opt-ins. */
-export function compactSummaryNeedsDetails(summary: CompactSummary): boolean {
-  return (
-    compactIssueSeverity(summaryCompactIssues(summary)) === "error" ||
-    summary.outcome === "error" ||
-    summary.outcome === "cancelled" ||
-    summary.outcome === "uncertain"
-  );
+export function compactStatus(phase: CompactPhase, summary: CompactSummary): CompactStatus {
+  if (phase !== "settled") return phase;
+  const severity = compactIssueSeverity(summary.issues);
+  const outcome = summary.outcome ?? "uncertain";
+  if (outcome === "cancelled" || outcome === "error") return outcome;
+  if (severity === "error") return "error";
+  if (outcome === "uncertain") return outcome;
+  return severity ?? outcome;
 }

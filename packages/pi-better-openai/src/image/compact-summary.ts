@@ -1,17 +1,15 @@
 import * as Predicate from "effect/Predicate";
-import {
-  claimCompactIssue,
-  getTextContent,
-  summaryCompactIssues,
-  withCompactIssues,
-  type CompactSummaryProvider,
-} from "pi-code-previews";
+import { firstLineMessage, getTextContent, type CompactSummaryProvider } from "pi-code-previews";
 import { isCodexImageDetails, type ToolParams } from "./types.ts";
 
 const short = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 100);
 
-/** Projects display state only. Pi retains ownership of result images and execution. */
-const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
+/**
+ * Projects display state only. Pi retains ownership of result images and execution.
+ * Expanded content already shows prompts, the saved path, and the raw result, so issues
+ * carry only facts that content does not state.
+ */
+export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   phase,
   args,
   result,
@@ -23,7 +21,7 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
   const subject = short(args.prompt);
   if (phase !== "settled") return { action, subject };
 
-  // Only text-only failures can replace the complete original presentation.
+  // Only text-only failures are classified; attachment-bearing errors keep the generic row.
   if (
     context.isError &&
     !(Predicate.isObject(result?.details) && result.details.status === "cancelled")
@@ -34,13 +32,19 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
       result.content.some((part) => part.type !== "text")
     )
       return undefined;
-    const details = getTextContent(result.content);
-    if (!details.trim()) return undefined;
+    const text = getTextContent(result.content);
+    if (!text.trim()) return undefined;
     return {
       action,
       subject,
       outcome: "error",
-      failure: { cause: details, description: "Image generation reported an error.", details },
+      issues: [
+        {
+          severity: "error",
+          code: "image-error",
+          message: firstLineMessage(text, "Image generation reported an error"),
+        },
+      ],
     };
   }
 
@@ -53,87 +57,37 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
     !["png", "jpeg", "webp"].includes(details.outputFormat)
   )
     return undefined;
-  const savedPath = details.savedPath;
-  const base = { action: details.action, subject: savedPath || short(details.prompt) };
-  const notices = savedPath
-    ? [
-        {
-          code: "saved-path",
-          kind: "recovery" as const,
-          text: `Saved: ${savedPath}`,
-          expandedOnly: true as const,
-        },
-      ]
-    : [];
+  const base = { action: details.action, subject: details.savedPath || short(details.prompt) };
   switch (details.status) {
     case "completed":
       // A completed record without an image is not evidence of a delivered image.
       if (!result?.content.some((part) => part.type === "image")) return undefined;
       return { ...base, outcome: "success" };
     case "failed":
-      // Status alone cannot account for remote diagnostic text or recovery.
       return {
         ...base,
         outcome: "error",
-        notices,
-        issues: {
-          coverage: "unknown",
-          entries: [
-            {
-              operation: `image:${details.id}`,
-              code: "image-failed",
-              severity: "error",
-              cause: "Image generation failed.",
-              description: "Image generation failed.",
-              recovery: [],
-            },
-          ],
-        },
+        issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
       };
     case "cancelled":
-      return { ...base, outcome: "cancelled", notices };
+      return { ...base, outcome: "cancelled" };
     case "in_progress":
     case "incomplete":
       return {
         ...base,
         outcome: "uncertain",
-        notices: [
-          ...notices,
+        issues: [
           {
+            severity: "warning",
             code: `image-${details.status}`,
-            kind: "warning",
-            text: `Image generation is ${details.status}.`,
-            description:
+            message:
               details.status === "in_progress"
-                ? "Image generation may still be running."
-                : "Image generation did not finish.",
+                ? "Image generation may still be running"
+                : "Image generation did not finish",
           },
         ],
       };
     default:
       return undefined;
   }
-};
-
-export const imageCompactSummary: CompactSummaryProvider<ToolParams> = (input) => {
-  const summary = projectImageSummary(input);
-  if (!summary) return undefined;
-  const projected = summary.issues ? summary : withCompactIssues(summary, "openai-image");
-  // Structured savedPath is already rendered by renderImageContent. Only that exact
-  // producer-owned recovery is claimed; unrelated notices remain shell-owned.
-  const savedClaims = summaryCompactIssues(projected, true)
-    .entries.filter((issue) => issue.code === "saved-path")
-    .map((issue) => claimCompactIssue(issue, { cause: true }));
-  if (!projected.failure)
-    return savedClaims.length ? { ...projected, expandedResultOwnsIssues: savedClaims } : projected;
-  // This producer copies the complete text-only error into both the cause and raw body.
-  // Claim that root alone; independently merged recovery remains shell-owned.
-  const claims = (projected.issues?.entries ?? [])
-    .filter((issue) => issue.operation === "openai-image" && issue.code === "failure")
-    .map((issue) => claimCompactIssue(issue, { cause: true }));
-  return {
-    ...projected,
-    failure: { ...projected.failure, ownedIssues: claims },
-    expandedResultOwnsIssues: [...claims, ...savedClaims],
-  };
 };

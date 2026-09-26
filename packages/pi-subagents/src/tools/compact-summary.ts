@@ -1,7 +1,6 @@
-import { runNoticeDescription } from "./compact-descriptions.ts";
-import { withCompactIssues } from "pi-code-previews";
+import { compactIssueSeverity, firstLineMessage } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
-import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
+import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
@@ -10,9 +9,9 @@ import {
   type SubagentAwaitDetails,
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
-import { compactRunNotices } from "./compact-run-notices.ts";
+import { compactRunIssues } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
-import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
+import { progressDetail, summarizeStart } from "./compact-start-summary.ts";
 
 function compactRunState(state: SubagentRunCard["state"], count = 1): string {
   return state === "waiting_for_parent" ? `${count === 1 ? "needs" : "need"} reply` : state;
@@ -25,15 +24,6 @@ function cardCounters(cards: readonly SubagentRunCard[], singleTarget = false): 
   return [
     [...counts].map(([state, count]) => `${count} ${compactRunState(state, count)}`).join(", "),
   ].filter(Boolean);
-}
-
-function progressDetail(
-  count: number,
-  total: number,
-  state: "started" | "finished",
-  subject: string,
-): string {
-  return count === 1 && total === 1 && subject.trim() ? state : `${count}/${total} ${state}`;
 }
 
 interface SummaryArguments {
@@ -163,7 +153,7 @@ function applyArgumentLanes(
     summary.counters = lanes.counters ?? [];
 }
 
-/** Decoded domain summaries own collapsed attention; original evidence stays on expansion. */
+/** Decoded domain summaries classify attention; original evidence stays on expansion. */
 export function createSubagentCompactSummary(
   toolName: string,
 ): CompactSummaryProvider<unknown, unknown, unknown> {
@@ -191,144 +181,66 @@ export function createSubagentCompactSummary(
       projectedSubject(details, input, phase, lanes.subject, targets),
       targets,
       Predicate.isString(input.runId) ? [input.runId] : requestedTargets,
-      context.expanded,
     );
     applyArgumentLanes(summary, details, phase, lanes);
     summary.compactSubject = compactProjectedSubject(input, details, summary.subject);
-    const projected = withCompactIssues(summary, `subagent:${operation}`);
-    if (hasIncompleteAttention(details))
-      projected.issues = { ...projected.issues, coverage: "unknown" };
-    return projected;
+    return summary;
   };
 }
 
-function hasIncompleteAttention(
-  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
-): boolean {
-  if (details.action === "start") return false;
-  if (details.contentOmitted && !("reportsOnlyOmitted" in details && details.reportsOnlyOmitted))
-    return true;
-  return (
-    "cards" in details &&
-    details.cards.some((card) => card.errorTruncated || card.writeClaimsOmitted)
-  );
-}
-
-type Notices = NonNullable<CompactSummary["notices"]>[number][];
 type Phase = Parameters<CompactSummaryProvider>[0]["phase"];
-const appendNotice =
-  (notices: Notices) =>
-  (
-    code: string | undefined,
-    text: string,
-    kind: "warning" | "error" | "recovery" = "recovery",
-    description = runNoticeDescription(code, kind),
-  ) =>
-    notices.push(code ? { code, kind, text, description } : { kind, text, description });
 
-function summarizeStart(
-  details: SubagentStartDetails,
-  phase: Phase,
-  summary: CompactSummary,
-  notices: Notices,
-): CompactSummary {
-  const add = appendNotice(notices);
-  const started = details.startEntries.filter((entry) => entry.status === "started").length;
-  summary.counters = [
-    progressDetail(started, details.startEntries.length, "started", summary.subject),
-  ];
-  for (const entry of details.startEntries) {
-    if (entry.routeStatus === "selected" && entry.warning) add(undefined, entry.warning, "warning");
-    if (
-      entry.status === "failed" &&
-      !details.startFailures?.some((failure) => failure.index === entry.index)
-    )
-      add(
-        `launch:${entry.index}:failed`,
-        `${entry.name}: launch failed; inspect expanded launch evidence.`,
-        "error",
-      );
-  }
-  for (const failure of details.startFailures ?? []) {
-    add(
-      undefined,
-      `${failure.name ?? `Launch ${failure.index + 1}`}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-      "error",
-      `${(failure.name ?? "Worker").slice(0, 60)}: ${failure.code === "get_state_outcome_uncertain" ? "Could not confirm startup. Work may have started." : "Startup reported an error."}`,
-    );
-    const recovery = failure.admittedRun;
-    if (recovery) {
-      add(
-        `run:${recovery.runId}:cleanup-receipt`,
-        formatFailedStartRecovery(recovery),
-        "recovery",
-        recovery.cleanupDisposition === "confirmed"
-          ? "Worker cleanup is confirmed."
-          : "Worker cleanup is not confirmed; processes may still be running.",
-      );
-      add(
-        `run:${recovery.runId}:retry-gate`,
-        recovery.cleanupDisposition === "confirmed"
-          ? failedStartRecoveryAction(recovery)
-          : "Do not retry or launch a replacement while cleanup is pending or quarantined. Inspect full subagent_status and confirm process and writer cleanup before recovery.",
-      );
-    } else {
-      add(
-        "launch-recovery-unknown",
-        "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
-      );
-    }
-  }
-  if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
-  else if (phase === "settled" && started !== details.startEntries.length)
-    summary.outcome = "uncertain";
-  return summary;
-}
-
-function awaitNotices(
+function awaitIssues(
   details: SubagentAwaitDetails,
   summary: CompactSummary,
-  notices: Notices,
+  issues: CompactIssue[],
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
 ): void {
-  const add = appendNotice(notices);
   const finished = cards.filter((card) =>
     ["reported", "completed", "failed", "stopped"].includes(card.state),
   ).length;
   summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
   if (cards.length < targets.length) {
-    add(
-      "targets-omitted",
-      "Some requested targets have no projected state; inspect subagent_status before acting.",
-      "warning",
-    );
+    issues.push({
+      severity: "warning",
+      code: "targets-omitted",
+      message: "Some requested workers have no available status",
+      detail:
+        "Some requested targets have no projected state; inspect subagent_status before acting.",
+    });
     if (summary.outcome === "success") summary.outcome = "uncertain";
   }
   if (details.contextOmitted)
-    add(
-      "descendant-context",
-      "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
-    );
+    issues.push({
+      severity: "info",
+      code: "descendant-context",
+      message: "Descendant workers are shown for context only",
+      detail:
+        "Descendants are context only; this await summarizes requested targets. Inspect subagent_list or subagent_status for descendant state.",
+    });
   if (details.cancelled) {
     summary.outcome = "cancelled";
-    add(
-      "await-cancelled",
-      details.cancellationCleanup === "unconfirmed"
+    const unconfirmed = details.cancellationCleanup === "unconfirmed";
+    issues.push({
+      severity: "warning",
+      code: "await-cancelled",
+      message: unconfirmed
+        ? "Waiting was cancelled; workers were not stopped and wait cleanup is unconfirmed"
+        : "Waiting was cancelled; workers were not stopped",
+      detail: unconfirmed
         ? "Local await cancelled; child runs were NOT stopped. Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may fail with completion_claim_conflict."
         : "Await cancelled; child runs were NOT stopped. Wait cleanup is complete; await the requested targets again when needed.",
-      "recovery",
-      details.cancellationCleanup === "unconfirmed"
-        ? "Waiting was cancelled. Workers were not stopped, and wait cleanup is unconfirmed."
-        : "Waiting was cancelled. Workers were not stopped.",
-    );
+    });
   }
   if (details.timedOut && !details.cancelled) {
     summary.outcome = "warning";
-    add(
-      "await-timeout",
-      "Await timed out; unfinished children continue. Inspect status or await again.",
-    );
+    issues.push({
+      severity: "warning",
+      code: "await-timeout",
+      message: "Timed out waiting; unfinished workers continue running",
+      detail: "Await timed out; unfinished children continue. Inspect status or await again.",
+    });
   }
   if (
     details.attentionRequired &&
@@ -340,39 +252,55 @@ function awaitNotices(
         card.state === "waiting_for_parent",
     )
   )
-    add(
-      "parent-action",
-      "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim containment before acting.",
-    );
+    issues.push({
+      severity: "warning",
+      code: "parent-action",
+      message: "A worker needs attention before it can continue",
+      detail:
+        "Parent action required; inspect full target subagent_status for the question, pause capabilities, or claim containment before acting.",
+    });
   if (details.attentionRequired && !details.cancelled) summary.outcome = "warning";
 }
 
-function runNotices(
+function runIssues(
   details: Exclude<CompactSubagentToolDetails, { action: "models" }>,
   summary: CompactSummary,
-  notices: Notices,
+  issues: CompactIssue[],
   cards: readonly SubagentRunCard[],
 ): void {
-  const add = appendNotice(notices);
   if (details.runCount > details.cards.length) {
     summary.counters = [
       `${details.cards.length}/${details.runCount} shown, ${cardCounters(cards).join(", ")}`,
     ];
-    add(
-      "runs-omitted",
-      "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
-      "warning",
-    );
+    issues.push({
+      severity: "warning",
+      code: "runs-omitted",
+      message: "Only some workers are shown",
+      detail:
+        "Bounded projection, not complete fleet counts. Use subagent_status for omitted runs and their recovery.",
+    });
   }
   for (const failure of details.actionFailures ?? []) {
-    add(
-      undefined,
-      `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-      "error",
-    );
-    add(
-      `run:${failure.id}:action-recovery`,
-      "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
+    // Failed targets are usually absent from the visible cards; raw text keeps their identity.
+    const name = details.cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
+    const message =
+      failure.code === "SubagentNotFoundError"
+        ? "A requested worker was not found"
+        : firstLineMessage(failure.message, "The action failed");
+    issues.push(
+      {
+        severity: "error",
+        code: `run:${failure.id}:action-failed`,
+        message: name ? `${name}: ${message}` : message,
+        detail: `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+      },
+      {
+        severity: "info",
+        code: `run:${failure.id}:action-recovery`,
+        message: "Check status before retrying or replacing the worker",
+        detail:
+          "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
+      },
     );
   }
 }
@@ -380,10 +308,8 @@ function runNotices(
 function summarizeModels(
   details: Extract<CompactSubagentToolDetails, { action: "models" }>,
   summary: CompactSummary,
-  notices: Notices,
+  issues: CompactIssue[],
 ): CompactSummary {
-  const add = appendNotice(notices);
-
   let disabled = 0;
   let unavailable = 0;
   let eligibleOptions = 0;
@@ -398,14 +324,12 @@ function summarizeModels(
 
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
-      add(
-        `profile:${profile.id}:unavailable`,
-        `${profile.id}: ${invalid ? "invalid profile configuration" : "no statically eligible candidates"}; inspect expanded discovery.`,
-        "warning",
-        invalid
-          ? "A worker profile has invalid settings."
-          : "A worker profile has no eligible options.",
-      );
+      issues.push({
+        severity: "warning",
+        code: `profile:${profile.id}:unavailable`,
+        message: `${profile.id}: ${invalid ? "The worker profile has invalid settings" : "The worker profile has no eligible options"}`,
+        detail: `${invalid ? "Invalid profile configuration" : "No statically eligible candidates"}; inspect expanded discovery.`,
+      });
     } else if (profile.candidates.length === 0) disabled++;
   }
   const counters = [`${eligibleOptions} statically eligible`];
@@ -413,7 +337,7 @@ function summarizeModels(
   if (disabled) counters.push(`${disabled} disabled profiles`);
   if (unavailable) counters.push(`${unavailable} unavailable profiles`);
   summary.counters = [counters.join(", ")];
-  if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
+  if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
   return summary;
 }
@@ -435,22 +359,22 @@ function summarizeDetails(
   subject: string,
   targets?: readonly string[],
   requested?: readonly string[],
-  expanded = false,
 ): CompactSummary {
-  const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
-  const summary: CompactSummary = { subject, metadata: [], notices, detailsOnExpand: true };
+  const issues: CompactIssue[] = [];
+  const summary: CompactSummary = { subject, metadata: [], issues };
   if (phase === "settled") summary.outcome = "success";
-  const add = appendNotice(notices);
-  if (details.action === "start") return summarizeStart(details, phase, summary, notices);
+  if (details.action === "start") return summarizeStart(details, phase, summary, issues);
   if (details.contentOmitted && !("reportsOnlyOmitted" in details && details.reportsOnlyOmitted)) {
-    add(
-      "evidence-omitted",
-      "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
-      "warning",
-    );
+    issues.push({
+      severity: "warning",
+      code: "evidence-omitted",
+      message: "Some worker details are unavailable in this view",
+      detail:
+        "Bounded projection: details were omitted. Inspect expanded details and subagent_status for full target state, attention, and recovery before acting.",
+    });
     summary.outcome = "uncertain";
   }
-  if (details.action === "models") return summarizeModels(details, summary, notices);
+  if (details.action === "models") return summarizeModels(details, summary, issues);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   if (summary.outcome === "success") {
@@ -467,14 +391,12 @@ function summarizeDetails(
       summary.outcome = "warning";
     else if (cards.some((card) => card.state === "stopped")) summary.outcome = "cancelled";
   }
-  if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!);
-  else runNotices(details, summary, notices, cards);
-  const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
-  notices.push(
-    ...compactRunNotices(cards, details.reportsOnlyOmitted === true, quietHistory, expanded),
-  );
-  if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
-  else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
-    summary.outcome = "warning";
+  if (details.action === "await") awaitIssues(details, summary, issues, cards, targets!);
+  else runIssues(details, summary, issues, cards);
+  const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
+  issues.push(...compactRunIssues(cards, details.reportsOnlyOmitted === true, quietHistory));
+  const severity = compactIssueSeverity(issues);
+  if (severity === "error") summary.outcome = "error";
+  else if (summary.outcome === "success" && severity === "warning") summary.outcome = "warning";
   return summary;
 }

@@ -1,27 +1,30 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { resolveCompactSummary, type CompactSummary } from "pi-code-previews";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import { projectBackgroundTaskPresentation } from "../src/code-mode/presentation.ts";
 import { projectBackgroundTaskCodeModeOutput } from "../src/code-mode/output.ts";
 import {
+  BACKGROUND_TASK_PRESENTATION_VERSION,
   type BackgroundTaskCodeModeInput,
   type BackgroundTaskPresentation,
   normalizeBackgroundTaskCodeModeCapability,
   normalizeBackgroundTaskPresentation,
 } from "../src/protocol.ts";
 
-it("rejects inconsistent evidence and strips nonsemantic fields and terminal controls", () => {
+it("rejects inconsistent or older evidence and strips nonsemantic fields and controls", () => {
+  for (const version of [1, 3])
+    expect(
+      normalizeBackgroundTaskPresentation({ version, incomplete: true, overflow: false }),
+    ).toBeUndefined();
   expect(
-    normalizeBackgroundTaskPresentation({ version: 2, incomplete: true, overflow: false }),
+    normalizeBackgroundTaskPresentation({ version: 2, incomplete: false, overflow: false }),
   ).toBeUndefined();
   expect(
-    normalizeBackgroundTaskPresentation({ version: 1, incomplete: false, overflow: false }),
-  ).toBeUndefined();
-  expect(
-    normalizeBackgroundTaskPresentation({ version: 1, incomplete: false, overflow: true }),
+    normalizeBackgroundTaskPresentation({ version: 2, incomplete: false, overflow: true }),
   ).toBeUndefined();
   const receipt = normalizeBackgroundTaskPresentation({
-    version: 1,
+    version: 2,
     incomplete: false,
     overflow: false,
     raw: "private",
@@ -31,8 +34,7 @@ it("rejects inconsistent evidence and strips nonsemantic fields and terminal con
       outcome: "success",
       metadata: [],
       counters: [],
-      notices: [],
-      detailsOnExpand: true,
+      issues: [],
       raw: "private",
     },
   });
@@ -72,11 +74,10 @@ const result = {
 
 it("preserves original truncation independently of unchanged guest data", () => {
   const receipt = projectBackgroundTaskPresentation(args, result);
+  expect(receipt.version).toBe(BACKGROUND_TASK_PRESENTATION_VERSION);
   expect(receipt.incomplete).toBe(false);
-  expect(receipt.summary?.notices.map((notice) => notice.kind)).toEqual(["warning", "recovery"]);
+  expect(receipt.summary?.issues.map((issue) => issue.severity)).toEqual(["warning", "info"]);
   expect(receipt.summary?.outcome).toBe("warning");
-  expect(receipt.summary?.issues?.coverage).toBe("complete");
-  expect(receipt.summary?.issues?.entries.length).toBeGreaterThan(0);
   expect(JSON.stringify(receipt)).not.toContain(result.text);
   const guest = projectBackgroundTaskCodeModeOutput(result, 4096);
   expect(guest._tag).toBe("Accepted");
@@ -88,44 +89,51 @@ it("preserves original truncation independently of unchanged guest data", () => 
     isError: false,
   });
   expect(receipt.summary?.issues).toEqual(pure?.issues);
-  // Display descriptions survive without changing the legacy instructions.
-  expect(receipt.summary?.notices).toEqual(
-    pure?.notices?.map(({ kind, text, description }) => ({
-      kind,
-      text,
-      ...(description !== undefined && { description }),
-    })),
-  );
+  // The receipt summary is directly usable as a shared compact summary.
+  const summary: CompactSummary | undefined = receipt.summary;
+  expect(resolveCompactSummary(summary, "settled", false)).toEqual(summary);
 });
 
-it("marks oversized semantic evidence incomplete instead of silently clipping", () => {
-  // The error fits the snapshot contract, but its task-prefixed notice exceeds the receipt bound.
-  const task = { id: "task-1", command: "test", cwd: "/tmp", state: "failed", startedAt: 1 };
-  const failed = { ...task, logCursor: 0, droppedLogBytes: 0, error: "x".repeat(2048) };
-  const receipt = projectBackgroundTaskPresentation(
+it("keeps full task error text and marks excess evidence incomplete instead of clipping", () => {
+  const task = { id: "task-1", command: "test", cwd: "/tmp", startedAt: 1, logCursor: 0 };
+  const failed = { ...task, state: "failed", droppedLogBytes: 0, error: "x".repeat(2048) };
+  const complete = projectBackgroundTaskPresentation(
     { action: "list" },
     { details: { action: "list", tasks: [failed] } },
   );
-  expect(receipt).toEqual({ version: 1, incomplete: true, overflow: true });
+  expect(complete.incomplete).toBe(false);
+  expect(complete.summary?.issues[0]?.detail).toBe(failed.error);
+  // Each exited task contributes an issue; more than the receipt bound overflows.
+  const exited = Array.from({ length: 33 }, (_, index) => ({
+    ...task,
+    id: `task-${index}`,
+    state: "exited",
+    exitCode: 1,
+    droppedLogBytes: 0,
+  }));
+  expect(
+    projectBackgroundTaskPresentation(
+      { action: "list" },
+      { details: { action: "list", tasks: exited } },
+    ),
+  ).toEqual({ version: 2, incomplete: true, overflow: true });
   // Details outside the task contract never reach a summary, so nothing overflowed.
   const oversizedId = projectBackgroundTaskPresentation(args, {
     details: { ...result.details, logs: { ...result.details.logs, id: "x".repeat(3000) } },
   });
-  expect(oversizedId).toEqual({ version: 1, incomplete: true, overflow: false });
+  expect(oversizedId).toEqual({ version: 2, incomplete: true, overflow: false });
 });
 
-it("roundtrips diagnostic evidence without transporting standalone renderer ownership", () => {
+it("roundtrips issue detail while sanitizing messages and rejecting oversized issues", () => {
   const issue = {
-    operation: "background-task:status",
-    code: "diagnostic",
     severity: "warning",
-    cause: "Inspect task",
+    code: "task-1:diagnostic",
+    message: "\u001b[33mInspect\ntask",
+    detail: "First line\nSecond line\u001b[0m",
     recovery: [{ code: "status", text: "Read status" }],
-    diagnostics: ["Diagnostic detail"],
-    expandedInResult: true,
   };
   const input = {
-    version: 1,
+    version: 2,
     incomplete: false,
     overflow: false,
     summary: {
@@ -134,56 +142,56 @@ it("roundtrips diagnostic evidence without transporting standalone renderer owne
       outcome: "warning",
       metadata: [],
       counters: [],
-      notices: [],
-      detailsOnExpand: true,
-      issues: { coverage: "complete", entries: [issue] },
-      expandedResultOwnsIssues: [issue],
+      issues: [issue],
     },
   };
-  const normalized = normalizeBackgroundTaskPresentation(input);
-  expect(normalized?.summary?.issues?.entries[0]?.diagnostics).toEqual(issue.diagnostics);
-  expect(JSON.stringify(normalized)).not.toContain("expandedInResult");
-  expect(JSON.stringify(normalized)).not.toContain("expandedResultOwnsIssues");
-  expect(
-    normalizeBackgroundTaskPresentation({ ...input, incomplete: true })?.summary?.issues?.coverage,
-  ).toBe("unknown");
-  expect(
-    normalizeBackgroundTaskPresentation({
-      ...input,
-      summary: {
-        ...input.summary,
-        issues: { coverage: "complete", entries: [{ ...issue, diagnostics: ["x".repeat(2049)] }] },
-      },
-    }),
-  ).toBeUndefined();
+  const normalized = normalizeBackgroundTaskPresentation(input)?.summary?.issues[0];
+  expect(normalized).toEqual({
+    severity: "warning",
+    code: "task-1:diagnostic",
+    message: "Inspect task",
+    detail: "First line\nSecond line",
+  });
+  const withIssues = (issues: ReadonlyArray<unknown>) =>
+    normalizeBackgroundTaskPresentation({ ...input, summary: { ...input.summary, issues } });
+  expect(withIssues([{ ...issue, detail: "x".repeat(2049) }])).toBeUndefined();
+  expect(withIssues([{ ...issue, message: "x".repeat(241) }])).toBeUndefined();
+  expect(withIssues(Array.from({ length: 33 }, () => issue))).toBeUndefined();
+  expect(withIssues([{ ...issue, severity: "recovery" }])).toBeUndefined();
 });
 
 it.effect("keeps old providers and optional hostile acknowledgement compatible", () =>
   Effect.gen(function* () {
     const output = { action: "clear" as const, text: "clear", removed: 0 };
     let count = 0;
-    const raw = {
+    const execute = (...values: unknown[]) => {
+      count = values.length;
+      return Promise.resolve(output);
+    };
+    const hostile = {
       version: 1,
       sessionId: "s",
-      execute(...values: unknown[]) {
-        count = values.length;
-        return Promise.resolve(output);
-      },
+      execute,
       get presentationVersion() {
         throw Error("optional getter");
       },
     };
-    const provider = normalizeBackgroundTaskCodeModeCapability(raw)!;
-    let observed = false;
-    expect(
-      yield* Effect.promise(() =>
-        provider.execute("id", { action: "clear" }, new AbortController().signal, 1000, () => {
-          observed = true;
-        }),
-      ),
-    ).toBe(output);
-    expect(count).toBe(4);
-    expect(observed).toBe(false);
+    // A provider acknowledging only the older receipt never receives the observer.
+    for (const raw of [hostile, { version: 1, sessionId: "s", execute, presentationVersion: 1 }]) {
+      const provider = normalizeBackgroundTaskCodeModeCapability(raw)!;
+      expect(provider.presentationVersion).toBeUndefined();
+      let observed = false;
+      count = 0;
+      expect(
+        yield* Effect.promise(() =>
+          provider.execute("id", { action: "clear" }, new AbortController().signal, 1000, () => {
+            observed = true;
+          }),
+        ),
+      ).toBe(output);
+      expect(count).toBe(4);
+      expect(observed).toBe(false);
+    }
   }),
 );
 
@@ -195,7 +203,7 @@ it.effect("contains observer failures without changing returned values or execut
     for (const throws of [false, true]) {
       const provider = normalizeBackgroundTaskCodeModeCapability({
         version: 1,
-        presentationVersion: 1,
+        presentationVersion: BACKGROUND_TASK_PRESENTATION_VERSION,
         sessionId: "s",
         execute(
           _id: string,
@@ -209,6 +217,15 @@ it.effect("contains observer failures without changing returned values or execut
           return Promise.resolve(output);
         },
       })!;
+      expect(provider.presentationVersion).toBe(BACKGROUND_TASK_PRESENTATION_VERSION);
+      const seen: BackgroundTaskPresentation[] = [];
+      const record = () =>
+        provider.execute("id", { action: "clear" }, new AbortController().signal, 1000, (value) => {
+          seen.push(value);
+        });
+      if (throws) expect(record).toThrow(failure);
+      else yield* Effect.promise(record);
+      expect(seen).toEqual([receipt]);
       for (const observer of [
         () => {
           throw Error("observer");

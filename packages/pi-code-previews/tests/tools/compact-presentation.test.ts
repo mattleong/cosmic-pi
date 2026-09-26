@@ -1,58 +1,93 @@
 import { expect, test } from "vitest";
-import * as Schema from "effect/Schema";
-import { createBoundedCompactIssuesSchema } from "../../src/tools/compact-issues-schema";
 import { planCompactPresentation } from "../../src/tools/compact-presentation";
-import type { CompactSummary } from "../../src/tools/compact-summary";
-const plan = (summary: CompactSummary | undefined, isError = false) =>
-  planCompactPresentation({ summary, isError, phase: "settled", expanded: true });
+import { compactStatus, type CompactSummary } from "../../src/tools/compact-summary";
 
-test("bounded retained issues reject every overflow and strip local renderer ownership", () => {
-  const schema = createBoundedCompactIssuesSchema({
-    maxTextLength: 12,
-    maxEntries: 1,
-    maxRecoveryEntries: 1,
-    maxDiagnosticEntries: 1,
+const heading = { subject: "full/target.ts", compactSubject: "target.ts", action: "scan" };
+const plan = (
+  summary: CompactSummary | undefined,
+  options: {
+    isError?: boolean;
+    errorText?: string;
+    phase?: "pending" | "running" | "settled";
+  } = {},
+) =>
+  planCompactPresentation({
+    summary,
+    heading,
+    phase: options.phase ?? "settled",
+    isError: options.isError ?? false,
+    ...(options.errorText !== undefined && { errorText: options.errorText }),
   });
-  const issue = {
-    operation: "call",
-    code: "failure",
-    severity: "error",
-    cause: "cause",
-    recovery: [{ code: "retry", text: "inspect" }],
-    diagnostics: ["diagnostic"],
-  };
-  const decode = Schema.decodeUnknownSync(schema);
-  const input = {
-    coverage: "complete",
-    entries: [{ ...issue, expandedInResult: true, fields: { cause: true } }],
-  };
-  expect(decode(input)).toEqual({ coverage: "complete", entries: [issue] });
-  for (const entries of [
-    [issue, issue],
-    [{ ...issue, cause: "x".repeat(13) }],
-    [{ ...issue, recovery: [...issue.recovery, ...issue.recovery] }],
-    [{ ...issue, diagnostics: ["one", "two"] }],
-  ]) {
-    expect(() => decode({ coverage: "complete", entries })).toThrow(/length/iu);
+
+test("a usable summary is both the expanded and the collapsed summary", () => {
+  const summary: CompactSummary = { subject: "target", outcome: "success", counters: ["3 lines"] };
+  const planned = plan(summary);
+  expect(planned.summary).toEqual(summary);
+  expect(planned.collapsedSummary).toBe(planned.summary);
+  const reconciled = plan(summary, { isError: true, errorText: "Rejected\nstack" });
+  expect(reconciled.collapsedSummary).toBe(reconciled.summary);
+  expect(reconciled.summary?.outcome).toBe("error");
+});
+
+test("settled results without a usable summary never claim success", () => {
+  // Provider output crosses a runtime boundary; malformed values arrive untyped.
+  const summaries: Array<CompactSummary | undefined> = JSON.parse(
+    JSON.stringify([
+      null,
+      { subject: "missing outcome" },
+      { subject: "malformed", outcome: "success", issues: [{ severity: "fatal" }] },
+    ]),
+  );
+  for (const summary of [undefined, ...summaries.slice(1)]) {
+    const planned = plan(summary);
+    expect(planned.summary).toBeUndefined();
+    expect(planned.collapsedSummary).toMatchObject({ ...heading, outcome: "uncertain" });
+    expect(planned.collapsedSummary.issues ?? []).toEqual([]);
+    expect(planned.collapsedSummary.metadata?.length).toBe(1);
+    expect(compactStatus("settled", planned.collapsedSummary)).toBe("uncertain");
   }
 });
 
-test("planner retains uncertainty, cancellation and explicit unknown coverage without inventing success", () => {
-  expect(plan(undefined).collapsedSummary.outcome).toBe("uncertain");
-  expect(plan(undefined).useExpandedContent).toBe(false);
-  expect(plan({ subject: "unknown" }).summary).toBeUndefined();
-  const cancelled = plan(
-    { subject: "target", outcome: "cancelled", issues: { coverage: "unknown", entries: [] } },
-    true,
-  );
-  expect(cancelled.summary?.outcome).toBe("cancelled");
-  expect(cancelled.severity).toBe("warning");
-  expect(cancelled.useExpandedContent).toBe(true);
-  expect(cancelled.useFailure).toBe(false);
-  const uncertain = plan(
-    { subject: "target", outcome: "uncertain", issues: { coverage: "complete", entries: [] } },
-    true,
-  );
-  expect(uncertain.summary?.outcome).toBe("uncertain");
-  expect(uncertain.severity).toBe("error");
+test("an unsummarised Pi error explains itself with the first line of its text", () => {
+  const planned = plan(undefined, {
+    isError: true,
+    errorText: "\nENOENT: missing file\n    at internal stack",
+  });
+  expect(planned.summary).toBeUndefined();
+  expect(planned.collapsedSummary).toMatchObject({ ...heading, outcome: "error" });
+  expect(planned.collapsedSummary.issues).toEqual([
+    expect.objectContaining({ severity: "error", message: "ENOENT: missing file" }),
+  ]);
+  const blank = plan(undefined, { isError: true, errorText: " \n " }).collapsedSummary;
+  expect(blank.issues).toHaveLength(1);
+  expect(blank.issues?.[0]?.message.trim()).not.toBe("");
+  expect(plan(undefined, { isError: true }).collapsedSummary.issues).toHaveLength(1);
+});
+
+test("live calls without a summary show only the argument heading", () => {
+  for (const phase of ["pending", "running"] as const) {
+    const planned = plan(undefined, { phase, isError: true, errorText: "not settled" });
+    expect(planned.summary).toBeUndefined();
+    expect(planned.collapsedSummary).toEqual(heading);
+    expect(compactStatus(phase, planned.collapsedSummary)).toBe(phase);
+  }
+  // Only heading fields are borrowed; stale counters or issues never leak into the fallback.
+  const stale: CompactSummary = {
+    subject: "target",
+    showTiming: true,
+    counters: ["stale"],
+    issues: [{ severity: "error", code: "x", message: "stale" }],
+  };
+  const borrowed = planCompactPresentation({
+    summary: undefined,
+    phase: "settled",
+    isError: false,
+    heading: stale,
+  }).collapsedSummary;
+  expect(borrowed).toMatchObject({ subject: "target", showTiming: true, outcome: "uncertain" });
+  expect(JSON.stringify(borrowed)).not.toContain("stale");
+  expect(
+    planCompactPresentation({ summary: undefined, phase: "running", isError: false })
+      .collapsedSummary,
+  ).toEqual({ subject: "" });
 });

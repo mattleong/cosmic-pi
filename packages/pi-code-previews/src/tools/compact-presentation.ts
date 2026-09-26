@@ -1,79 +1,53 @@
-import { summaryCompactIssues, compactIssueSeverity } from "./compact-issues";
-import {
-  compactSummaryNeedsDetails,
-  resolveCompactSummary,
-  type CompactPhase,
-  type CompactSummary,
-} from "./compact-summary";
+import { firstLineMessage } from "./compact-issues";
+import { resolveCompactSummary, type CompactPhase, type CompactSummary } from "./compact-summary";
 
-/** Shared display policy only. Domain outcome classification stays with the producer. */
+/**
+ * Shared display policy only. Domain outcome classification stays with the producer.
+ * Without a usable summary, the heading comes from the arguments and the row states only
+ * what Pi reported: an error explains itself with its first line; anything else is unconfirmed.
+ */
 export function planCompactPresentation(input: {
   summary: CompactSummary | undefined;
   phase: CompactPhase;
   isError: boolean;
-  expanded: boolean;
+  errorText?: string;
+  /** Expanded views already show the details, so they get no "details on expand" hint. */
+  expanded?: boolean;
   heading?:
     | Pick<CompactSummary, "subject" | "compactSubject" | "action" | "showTiming">
     | undefined;
 }) {
-  const summary = resolveCompactSummary(input.summary, input.phase, input.isError);
-  const covered = Boolean(
-    summary &&
-    ((!summary.issues && !summary.children?.entries.some((child) => child.issues)) ||
-      summaryCompactIssues(summary).coverage === "complete"),
-  );
-  const isError = input.isError && summary?.outcome !== "cancelled";
-  const fallback: CompactSummary = summary ?? {
-    subject: input.heading?.subject ?? "",
-    ...(input.heading?.compactSubject !== undefined && {
-      compactSubject: input.heading.compactSubject,
-    }),
-    ...(input.heading?.action !== undefined && { action: input.heading.action }),
-    ...(input.heading?.showTiming && { showTiming: true }),
-    ...(input.phase === "settled" && { outcome: isError ? "error" : "uncertain" }),
-  };
-  const needsHint = input.phase === "settled" && !covered;
-  const collapsedSummary: CompactSummary = !needsHint
-    ? fallback
-    : {
-        ...fallback,
-        ...(fallback.issues && {
-          issues: {
-            ...fallback.issues,
-            entries: [
-              ...fallback.issues.entries,
-              {
-                operation: fallback.issues.entries[0]?.operation ?? "outer",
-                code: "details-on-expand",
-                severity: isError ? "error" : "warning",
-                cause: "Expand for details.",
-                description: "Additional details are not summarized.",
-                recovery: [],
-              },
-            ],
-          },
-        }),
-        notices: [
-          ...(fallback.notices ?? []),
+  const summary = resolveCompactSummary(input.summary, input.phase, input.isError, input.errorText);
+  if (summary || input.phase !== "settled")
+    return { summary, collapsedSummary: summary ?? fallbackHeading(input.heading) };
+  const heading = fallbackHeading(input.heading);
+  const collapsedSummary: CompactSummary = input.isError
+    ? {
+        ...heading,
+        outcome: "error",
+        issues: [
           {
-            kind: isError ? "error" : "warning",
-            text: "Expand for details.",
-            description: summary
-              ? "Additional details are not summarized."
-              : isError
-                ? "The tool reported an error."
-                : "The outcome is unknown.",
+            severity: "error",
+            code: "tool-error",
+            message: firstLineMessage(input.errorText ?? "", "The tool reported an error"),
           },
         ],
+      }
+    : {
+        ...heading,
+        outcome: "uncertain",
+        ...(!input.expanded && { metadata: ["details on expand"] }),
       };
-  const issues = summaryCompactIssues(collapsedSummary, input.expanded);
+  return { summary, collapsedSummary };
+}
+
+function fallbackHeading(
+  heading: Pick<CompactSummary, "subject" | "compactSubject" | "action" | "showTiming"> | undefined,
+): CompactSummary {
   return {
-    summary,
-    issues,
-    severity: compactIssueSeverity(issues),
-    collapsedSummary,
-    covered,
-    useFailure: Boolean(summary?.failure && covered && compactSummaryNeedsDetails(summary)),
-    useExpandedContent: Boolean(input.expanded && summary),
+    subject: heading?.subject ?? "",
+    ...(heading?.compactSubject !== undefined && { compactSubject: heading.compactSubject }),
+    ...(heading?.action !== undefined && { action: heading.action }),
+    ...(heading?.showTiming && { showTiming: true }),
   };
 }

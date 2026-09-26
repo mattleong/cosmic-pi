@@ -84,9 +84,14 @@ function summary(
   });
 }
 
-function noticeText(value: CompactSummary | undefined): string {
+/** Issue codes of a defined summary, in display order. */
+function codes(value: CompactSummary | undefined): string[] {
   expect(value).toBeDefined();
-  return value?.notices?.map((notice) => notice.text).join("\n") ?? "";
+  return value?.issues?.map((issue) => issue.code) ?? [];
+}
+
+function issueFor(value: CompactSummary | undefined, code: string) {
+  return value?.issues?.find((entry) => entry.code === code);
 }
 
 const tools: BuiltinCompactTool[] = ["read", "bash", "write", "edit", "grep", "find", "ls"];
@@ -152,81 +157,27 @@ describe("builtin compact lifecycle", () => {
       },
     );
     expect(value?.outcome).toBe("success");
+    expect(value?.issues).toEqual([]);
     expect(value?.subject).toContain(tool === "bash" ? "true" : "file.ts");
   });
 
-  test.each(tools)("%s preserves complete failure and recovery text", (tool) => {
-    const failure = "Operation aborted\nInspect the file before retrying.";
-    const value = summary(tool, { path: "file.ts" }, result(failure), "settled", {
+  test.each(tools)("%s reports host errors with the settings-driven projection", (tool) => {
+    const value = summary(tool, { path: "file.ts" }, result("Failed.\nRetry later."), "settled", {
       isError: true,
       argsComplete: false,
       executionStarted: false,
     });
     expect(value?.outcome).toBe("error");
-    expect(value?.failure?.details).toBe(failure);
-    expect(value?.failure?.cause).toContain("Inspect the file before retrying.");
-    expect(value?.notices).not.toContainEqual({ kind: "error", text: failure });
-    expect(noticeText(value)).not.toMatch(/applied|new file/i);
-  });
-
-  test.each(tools)("%s distinguishes explicit cancellation from failure", (tool) => {
-    const value = summary(tool, {}, result("Operation aborted"), "settled", { isError: true });
-    expect(value?.outcome).toBe("cancelled");
-    expect(value?.failure?.details).toBe("Operation aborted");
-  });
-
-  test("known filesystem errors shorten the cause without losing continuation instructions", () => {
-    const output =
-      "ENOENT: no such file or directory, access '/project/file.ts'\nInspect parent permissions before retrying.";
-    const value = summary("read", { path: "file.ts" }, result(output), "settled", {
-      isError: true,
-    });
-    expect(value?.failure?.cause).toContain("ENOENT");
-    expect(value?.failure?.cause).not.toContain("/project/file.ts");
-    expect(value?.failure?.details).toBe(output);
-    expect(noticeText(value)).toContain("Inspect parent permissions before retrying.");
-  });
-
-  test("bash hides ordinary diagnostics but keeps terminal status and text-only recovery", () => {
-    const footer = "[Showing lines 10-20 of 20. Full output: /tmp/failure-log.txt]";
-    const output = `ordinaryDiagnostic\n\n${footer}\n\nCommand exited with code 7`;
-    const value = summary("bash", { command: "false" }, result(output, {}), "settled", {
-      isError: true,
-    });
-    expect(value?.outcome).toBe("error");
-    expect(value?.failure?.cause).toContain("7");
-    expect(value?.failure?.cause).not.toContain("ordinaryDiagnostic");
-    expect(value?.failure?.details).toBe(output);
-    expect(noticeText(value)).toContain(footer);
-    expect(
-      summary("bash", {}, result("Command exited with code 7\nunknown tail"), "settled", {
-        isError: true,
-      })?.failure?.cause,
-    ).toContain("unknown tail");
-    expect(
-      summary("bash", {}, result("stdout\n\nCommand aborted"), "settled", { isError: true })
-        ?.outcome,
-    ).toBe("cancelled");
-  });
-
-  test("empty errors remain failures and attachment results retain the original renderer", () => {
-    const empty = summary("read", {}, result(""), "settled", { isError: true });
-    expect(empty?.outcome).toBe("error");
-    expect(empty?.failure?.cause).toBeTruthy();
-    expect(
-      summary(
-        "read",
-        {},
-        { content: [{ type: "image", mimeType: "image/png", data: "AAAA" }], details: undefined },
-        "settled",
-        { isError: true },
-      ),
-    ).toBeUndefined();
+    expect(value?.issues?.[0]).toMatchObject({ severity: "error", message: "Failed." });
+    expect(JSON.stringify(value)).not.toMatch(/Retry later|applied|new file/iu);
+    expect(summary(tool, {}, result("Operation aborted"), "settled", { isError: true })).toEqual(
+      expect.objectContaining({ outcome: "cancelled", issues: [] }),
+    );
   });
 });
 
-describe("notices independent of hidden preview bodies", () => {
-  test("bash command warnings survive every phase and retain full-output recovery on errors", () => {
+describe("issues independent of hidden preview bodies", () => {
+  test("bash command warnings survive every phase", () => {
     for (const phase of ["pending", "running", "settled"] as const) {
       const value = summary(
         "bash",
@@ -234,44 +185,34 @@ describe("notices independent of hidden preview bodies", () => {
         phase === "pending" ? undefined : result("ordinary output"),
         phase,
       );
-      expect(noticeText(value)).toContain("recursive delete");
+      expect(value?.issues).toEqual([
+        expect.objectContaining({ severity: "warning", message: "Deletes files recursively" }),
+      ]);
+      expect(value?.outcome).toBe(phase === "settled" ? "warning" : undefined);
     }
-    const value = summary(
-      "bash",
-      { command: "false" },
-      result("failed", {
-        truncation: { truncated: true },
-        fullOutputPath: "/tmp/bash-full.txt",
-      }),
-      "settled",
-      { isError: true },
-    );
-    expect(value?.outcome).toBe("error");
-    expect(noticeText(value)).toContain("truncated");
-    expect(noticeText(value)).toContain("/tmp/bash-full.txt");
   });
 
   test.each(tools)("%s detects secrets in hidden result output", (tool) => {
-    expect(noticeText(summary(tool, {}, result(secret), "running"))).toContain("private key");
+    const value = summary(tool, {}, result(secret), "running");
+    expect(codes(value)).toEqual(["possible-secrets"]);
+    expect(issueFor(value, "possible-secrets")?.message).toContain("private key");
   });
 
   test("pending writes and edits scan inputs without calculating diffs", () => {
-    expect(noticeText(summary("write", { path: "file", content: secret }))).toContain(
-      "private key",
-    );
-    expect(
-      noticeText(
-        summary("edit", { path: "file", edits: [{ oldText: secret, newText: "removed" }] }),
-      ),
-    ).toContain("private key");
-    expect(
-      noticeText(summary("edit", { path: "file", old_text: "before", new_text: secret })),
-    ).toContain("private key");
+    for (const [tool, args] of [
+      ["write", { path: "file", content: secret }],
+      ["edit", { path: "file", edits: [{ oldText: secret, newText: "removed" }] }],
+      ["edit", { path: "file", old_text: "before", new_text: secret }],
+    ] satisfies Array<[BuiltinCompactTool, Args]>) {
+      const value = summary(tool, args);
+      expect(codes(value)).toEqual(["possible-secrets"]);
+      expect(value?.counters ?? []).toEqual([]);
+    }
   });
 
   test("secret scanning keeps the bounded tail sample of large input", () => {
     const content = "x".repeat(codePreviewPerformanceConfig.secretScanChars * 2) + "\n" + secret;
-    expect(noticeText(summary("write", { content }))).toContain("private key");
+    expect(codes(summary("write", { content }))).toContain("possible-secrets");
   });
 
   test("the smallest secret scan budget cannot expand into a whole-input scan", () => {
@@ -279,8 +220,7 @@ describe("notices independent of hidden preview bodies", () => {
       { ...codePreviewPerformanceConfig, secretScanChars: 1 },
       originalToolsEnvironment,
     );
-    const value = summary("write", { content: "x".repeat(1000) + secret });
-    expect(noticeText(value)).not.toContain("private key");
+    expect(codes(summary("write", { content: "x".repeat(1000) + secret }))).toEqual([]);
   });
 
   test("warning toggles suppress detection, not mandatory limitations", () => {
@@ -290,24 +230,23 @@ describe("notices independent of hidden preview bodies", () => {
       { command: "rm -rf build" },
       result(secret, { truncation: { truncated: true } }),
     );
-    const notices = noticeText(value);
-    expect(notices).not.toContain("private key");
-    expect(notices).not.toContain("recursive delete");
-    expect(notices).toContain("truncated");
+    expect(codes(value)).toEqual(["output-truncated"]);
     expect(value?.outcome).toBe("warning");
   });
 
-  test("read keeps complete-line pagination expanded-only, including byte caps", () => {
+  test("read reports complete-line pagination as information, including byte caps", () => {
     for (const page of [
       {
         args: { path: "file", limit: 5 },
         output: result("slice\n\n[73 more lines in file. Use offset=6 to continue.]"),
+        next: "Use offset=6 to continue.",
       },
       {
         args: { path: "file" },
         output: result("slice\n\n[Showing lines 1-2000 of 4000. Use offset=2001 to continue.]", {
           truncation: { truncated: true, truncatedBy: "lines" },
         }),
+        next: "Use offset=2001 to continue.",
       },
       {
         args: { path: "file" },
@@ -317,26 +256,22 @@ describe("notices independent of hidden preview bodies", () => {
             truncation: { truncated: true, truncatedBy: "bytes", lastLinePartial: false },
           },
         ),
+        next: "Use offset=143 to continue.",
       },
     ]) {
       const value = summary("read", page.args, page.output);
       expect(value?.outcome).toBe("success");
-      expect(value?.notices).toEqual([
-        expect.objectContaining({ kind: "recovery", expandedOnly: true }),
+      expect(value?.issues).toEqual([
+        expect.objectContaining({ severity: "info", code: "read-continuation", detail: page.next }),
       ]);
-      expect(value?.expandedResultOwnsIssues).toEqual([
-        expect.objectContaining({
-          code: "read-continuation",
-          fields: expect.objectContaining({ cause: true }),
-        }),
-      ]);
+      // The collapsed message states the page; the agent procedure is expanded detail only.
+      expect(value?.issues?.[0]?.message).not.toContain("offset=");
       const sensitive = summary("read", page.args, {
         ...page.output,
         content: [{ type: "text", text: secret }, ...page.output.content],
       });
       expect(sensitive?.outcome).toBe("warning");
-      expect(noticeText(sensitive)).toContain("private key");
-      expect(noticeText(sensitive)).toContain("offset=");
+      expect(codes(sensitive)).toEqual(["possible-secrets", "read-continuation"]);
     }
   });
 
@@ -355,7 +290,8 @@ describe("notices independent of hidden preview bodies", () => {
             (truncatedBy === "lines" && !suffix && lastLinePartial !== true) ||
             (truncatedBy === "bytes" && suffix === " (50.0KB limit)" && lastLinePartial === false);
           expect(value?.outcome).toBe(routine ? "success" : "warning");
-          expect(value?.notices?.[0]?.expandedOnly === true).toBe(routine);
+          expect(codes(value)).toEqual([routine ? "read-continuation" : "read-truncated"]);
+          expect(value?.issues?.[0]?.detail).toContain("offset=3");
         }
       }
     }
@@ -363,16 +299,20 @@ describe("notices independent of hidden preview bodies", () => {
 
   test("read preserves truncated continuation and oversized-line bash recovery", () => {
     for (const args of [{ path: "file" }, { path: "file", limit: 5 }]) {
-      for (const truncatedBy of ["bytes", "lines", undefined]) {
+      for (const truncation of [
+        { truncated: true, truncatedBy: "bytes" },
+        { truncated: true, truncatedBy: "lines" },
+        { truncated: true },
+      ]) {
         const value = summary(
           "read",
           args,
           result("line\n\n[Showing lines 1-1 of 9 (50KB limit). Use offset=2 to continue.]", {
-            truncation: { truncated: true, truncatedBy },
+            truncation,
           }),
         );
         expect(value?.outcome).toBe("warning");
-        expect(noticeText(value)).toContain("offset=2");
+        expect(issueFor(value, "read-truncated")?.detail).toContain("offset=2");
       }
       const unknown = summary(
         "read",
@@ -382,7 +322,7 @@ describe("notices independent of hidden preview bodies", () => {
         }),
       );
       expect(unknown?.outcome).toBe("warning");
-      expect(noticeText(unknown)).toContain("offset=2");
+      expect(issueFor(unknown, "read-truncated")?.detail).toContain("offset=2");
     }
     const recovery = "[Line 1 exceeds the read limit. Use bash: head -c 51200 file]";
     const oversized = summary(
@@ -391,58 +331,65 @@ describe("notices independent of hidden preview bodies", () => {
       result(recovery, { truncation: { truncated: true, firstLineExceedsLimit: true } }),
     );
     expect(oversized?.outcome).toBe("warning");
-    expect(oversized?.notices).toContainEqual(
-      expect.objectContaining({ kind: "recovery", text: recovery }),
+    expect(oversized?.issues).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        code: "oversized-first-line",
+        detail: recovery,
+      }),
+    ]);
+    // An unrecognized continuation is still reported as truncation; its text stays expanded.
+    const unknown = summary(
+      "read",
+      {},
+      result("Unknown continuation instructions", { truncation: { truncated: true } }),
     );
-    expect(
-      summary(
-        "read",
-        {},
-        result("Unknown continuation instructions", { truncation: { truncated: true } }),
-      ),
-    ).toBeUndefined();
+    expect(unknown?.outcome).toBe("warning");
+    expect(unknown?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "read-truncated" }),
+    ]);
+    expect(JSON.stringify(unknown)).not.toContain("Unknown continuation");
   });
 
   test.each([
     ["grep", "matchLimitReached"],
     ["find", "resultLimitReached"],
     ["ls", "entryLimitReached"],
-  ] as const)("%s treats a reached cap as a counter, not a total or recovery", (tool, field) => {
+  ] as const)("%s treats a reached cap as a counter, not a total or issue", (tool, field) => {
     const output = result("one result", { [field]: 10 });
     const before = structuredClone(output);
     const value = summary(tool, {}, output);
     expect(value?.outcome).toBe("success");
-    expect(value?.notices).toEqual([]);
+    expect(value?.issues).toEqual([]);
     expect(value?.counters).toEqual(["limit reached: 10"]);
     expect(value?.metadata).toEqual([]);
     expect(output).toEqual(before);
     const sensitive = summary(tool, {}, result(secret, output.details));
     expect(sensitive?.outcome).toBe("warning");
-    expect(noticeText(sensitive)).toContain("private key");
+    expect(codes(sensitive)).toEqual(["possible-secrets"]);
     expect(sensitive?.counters).toEqual(value?.counters);
     const failed = summary(tool, {}, output, "settled", { isError: true });
-    expect(failed?.outcome).not.toBe("success");
-    expect(failed?.failure?.details).toBe("one result");
+    expect(failed?.outcome).toBe("error");
+    expect(failed?.issues?.[0]).toMatchObject({ severity: "error", message: "one result" });
   });
 
   const byteCap = { truncation: { truncated: true } };
   test.each([
-    ["grep", { matchLimitReached: 10, linesTruncated: true }, ["read tool"]],
+    ["grep", { matchLimitReached: 10, linesTruncated: true }, ["grep-partial-lines"]],
     [
       "grep",
       { matchLimitReached: 10, linesTruncated: true, ...byteCap },
-      ["read tool", "truncated"],
+      ["output-truncated", "grep-partial-lines"],
     ],
-    ["find", { resultLimitReached: 10, ...byteCap }, ["truncated"]],
-    ["ls", { entryLimitReached: 10, ...byteCap }, ["truncated"]],
-  ] as const)("%s keeps line or byte loss recovery beside caps", (tool, details, phrases) => {
+    ["find", { resultLimitReached: 10, ...byteCap }, ["output-truncated"]],
+    ["ls", { entryLimitReached: 10, ...byteCap }, ["output-truncated"]],
+  ] as const)("%s keeps line or byte loss warnings beside caps", (tool, details, expected) => {
     const value = summary(tool, { path: ".", pattern: "value" }, result("match", details));
     expect(value?.outcome).toBe("warning");
     expect(value?.counters).toEqual(["limit reached: 10"]);
     expect(value?.metadata).toEqual([]);
-    for (const phrase of phrases) expect(noticeText(value)).toContain(phrase);
-    // Line and byte loss recover through read or truncation guidance; caps stay counters.
-    expect(noticeText(value)).not.toContain("limit=");
+    expect(codes(value)).toEqual(expected);
+    expect(value?.issues?.every((entry) => entry.severity === "warning")).toBe(true);
   });
 });
 
@@ -451,15 +398,17 @@ describe("write and edit diff limitations", () => {
     const args = { path: "file", content: "next" };
     const live = summary("write", args, result("applied", { codePreviewBeforeWrite: undefined }));
     expect(live?.outcome).toBe("success");
-    expect(live?.notices).toHaveLength(0);
+    expect(live?.issues).toEqual([]);
+    expect(live?.counters).toEqual(["new file"]);
     for (const details of [
       undefined,
       {},
       { codePreviewBeforeWrite: { kind: "content", byteLength: 4 } },
     ]) {
       const replay = summary("write", args, result("applied", details));
-      expect(replay?.outcome).toBe("warning");
-      expect(noticeText(replay)).toContain("unavailable");
+      // Unavailable history limits the preview, not the write.
+      expect(replay?.outcome).toBe("success");
+      expect(codes(replay)).toEqual(["write-history-unavailable"]);
       expect(JSON.stringify(replay)).not.toMatch(/new file/i);
     }
   });
@@ -471,7 +420,7 @@ describe("write and edit diff limitations", () => {
       { content: "new" },
       result("applied", { codePreviewBeforeWrite: { kind: "content", content: huge } }),
     );
-    expect(bytes?.notices).toEqual([]);
+    expect(bytes?.issues).toEqual([]);
     expect(bytes?.metadata).toEqual(["diff skipped: size"]);
     expect(bytes?.outcome).toBe("success");
     const lineCount =
@@ -483,7 +432,7 @@ describe("write and edit diff limitations", () => {
         codePreviewBeforeWrite: { kind: "content", content: "old\n".repeat(lineCount) },
       }),
     );
-    expect(complex?.notices).toEqual([]);
+    expect(complex?.issues).toEqual([]);
     expect(complex?.metadata).toEqual(["diff skipped: complexity"]);
     expect(complex?.outcome).toBe("success");
   });
@@ -519,8 +468,9 @@ describe("write and edit diff limitations", () => {
           before === undefined ? {} : { codePreviewBeforeWrite: before },
         );
         const value = summary("write", { content }, output);
-        expect(value?.outcome).toBe("warning");
-        expect(value?.notices?.length).toBeGreaterThan(0);
+        expect(value?.outcome).toBe("success");
+        expect(value?.issues?.length).toBeGreaterThan(0);
+        expect(value?.issues?.every((entry) => entry.severity === "info")).toBe(true);
         expect(value?.metadata).toEqual([]);
       }
     }
@@ -537,22 +487,24 @@ describe("write and edit diff limitations", () => {
       },
     });
     const quiet = summary("write", { path: "file", content: "next" }, output);
-    expect(quiet?.notices).toEqual([]);
+    expect(quiet?.issues).toEqual([]);
     expect(quiet?.metadata).toEqual(["diff skipped: size"]);
     expect(quiet?.outcome).toBe("success");
     const value = summary("write", { content: secret }, output);
     expect(value?.outcome).toBe("warning");
     expect(value?.metadata).toEqual(["diff skipped: size"]);
-    expect(noticeText(value)).toContain("private key");
+    expect(codes(value)).toEqual(["possible-secrets"]);
     const failed = summary("write", {}, output, "settled", { isError: true });
-    expect(failed?.outcome).not.toBe("success");
+    expect(failed?.outcome).toBe("error");
     expect(failed?.metadata ?? []).toEqual([]);
   });
 
   test("edit reports unavailable diffs without claiming failure", () => {
     const value = summary("edit", { path: "file" }, result("applied"));
-    expect(value?.outcome).toBe("warning");
-    expect(noticeText(value)).toContain("diff unavailable");
+    expect(value?.outcome).toBe("success");
+    expect(value?.issues).toEqual([
+      expect.objectContaining({ severity: "info", code: "edit-diff-unavailable" }),
+    ]);
   });
 });
 
@@ -641,7 +593,8 @@ describe("builtin factory compact integration", () => {
       for (const expanded of [false, true, false, true]) {
         const text = renderText(tool, output, { ...ctx, expanded }, 200);
         expect(/new file/iu.test(text)).toBe(knownNew);
-        expect(/previous content(?:s)? (?:is |are )?unavailable/iu.test(text)).toBe(!knownNew);
+        // Informational: explained on expansion only.
+        expect(/previous contents unknown/u.test(text)).toBe(!knownNew && expanded);
       }
     }
   });
@@ -701,9 +654,12 @@ describe("builtin factory compact integration", () => {
               "selectedContent\n\n[73 more lines in file. Use offset=6 to continue.]",
             );
         const before = structuredClone(output);
+        const page = summary("read", readArgs, output)?.issues?.[0]?.message;
+        expect(page).toBeTruthy();
         for (const expanded of [false, true, false, true]) {
           const text = renderText(tool, output, { ...ctx, expanded });
-          expect(text.match(/offset=/gu)?.length ?? 0).toBe(expanded ? 1 : 0);
+          expect(text.includes(page!)).toBe(expanded);
+          expect(text.includes("offset=")).toBe(expanded);
           expect(text.includes("selectedContent")).toBe(expanded);
         }
         expect(output).toEqual(before);
@@ -712,19 +668,25 @@ describe("builtin factory compact integration", () => {
   );
 
   test.each(["on", "off", "border"] as const)(
-    "recognized edit failure and nonroutine read recovery render once in %s mode",
+    "recognized edit failure and nonroutine read recovery render their issue once in %s mode",
     (mode) => {
       setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
       const edit = createEditPreviewTool("/project");
       const editOutput = result<undefined>(
         "No changes made to /project/file.ts. The replacements produced identical content.",
       );
+      const refusal = summary("edit", args, editOutput, "settled", { isError: true })?.issues?.[0];
+      expect(refusal?.code).toBe("edit-unchanged");
       for (const expanded of [false, true, false, true]) {
         const ctx = { ...context({ isError: true, expanded }), state: {} };
         const text = renderText(edit, editOutput, ctx);
+        expect(text.split(refusal!.message)).toHaveLength(2);
+        // The raw host error is kept once, in the expanded result.
         expect(text.split("The replacements produced identical content.")).toHaveLength(
           expanded ? 2 : 1,
         );
+        // Unique call source survives a failed edit.
+        expect(text.includes("proposedContent")).toBe(expanded);
       }
       const read = createReadPreviewTool("/project");
       const truncation = {
@@ -756,9 +718,12 @@ describe("builtin factory compact integration", () => {
         },
       ]) {
         const before = structuredClone(sample.output);
+        const warning = summary("read", args, sample.output)?.issues?.[0];
+        expect(warning?.severity).toBe("warning");
         for (const expanded of [false, true, false, true]) {
           const text = renderText(read, sample.output, context({ expanded }));
-          expect(text.split(sample.phrase)).toHaveLength(expanded ? 2 : 1);
+          expect(text.split(warning!.message)).toHaveLength(2);
+          expect(text.includes(sample.phrase)).toBe(expanded);
         }
         expect(sample.output).toEqual(before);
       }
@@ -781,9 +746,11 @@ describe("builtin factory compact integration", () => {
           details: undefined,
         };
         const before = structuredClone(output);
+        expect(summary(name, args, output, "settled", { isError: true })).toBeUndefined();
         for (const expanded of [false, true, false]) {
           const text = renderText(tool, output, { ...ctx, expanded }, 200);
-          expect(text.includes("Diagnostic starts")).toBe(expanded);
+          // Without a projection the collapsed row explains the error by its first line.
+          expect(text.includes("Diagnostic starts")).toBe(true);
           expect(text.includes("Inspect destination before retrying.")).toBe(expanded);
           expect(text.includes("x".repeat(100))).toBe(expanded);
         }
@@ -802,10 +769,14 @@ describe("builtin factory compact integration", () => {
   });
 });
 
-test("over-budget parsing declines compaction rather than clipping error or recovery text", () => {
+test("over-budget parsing declines compaction rather than clipping error text", () => {
   const output = "x".repeat(128 * 1024 + 1);
   expect(summary("bash", {}, result(output), "settled", { isError: true })).toBeUndefined();
-  expect(summary("bash", { command: "x".repeat(16 * 1024 + 1) })).toBeUndefined();
+  expect(summary("read", {}, result(output))).toBeUndefined();
+  // An unscanned long command is flagged rather than implied safe.
+  expect(summary("bash", { command: "x".repeat(16 * 1024 + 1) })?.issues).toEqual([
+    expect.objectContaining({ severity: "warning", code: "command-unchecked" }),
+  ]);
   expect(
     summary("edit", { edits: Array.from({ length: 65 }, () => ({ oldText: "a", newText: "b" })) }),
   ).toBeUndefined();

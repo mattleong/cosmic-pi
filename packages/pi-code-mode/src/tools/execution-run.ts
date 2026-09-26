@@ -187,7 +187,6 @@ export function runCodeModeExecution(
           receipts.observe(id, observation.outcome, observation.resultId, observation.isError);
           compact.observe(id, () => {
             if (observation.incomplete) compact.missing();
-            const notices = observation.notices.map((text) => ({ kind: "warning" as const, text }));
             const projected =
               reply === undefined
                 ? undefined
@@ -197,13 +196,8 @@ export function runCodeModeExecution(
                     result: { details: reply },
                     isError: observation.isError,
                   });
-            // Nested calls have no original MCP card to restore on expansion.
-            // Incomplete summaries must keep the observation's full recovery evidence.
-            if (projected !== undefined && !observation.incomplete) {
-              return projected.issues?.coverage !== "unknown"
-                ? projected
-                : { ...projected, issues: observation.issues, notices };
-            }
+            // Incomplete summaries keep the observation's own evidence.
+            if (projected !== undefined && !observation.incomplete) return projected;
             // Heading-only projection does not claim operation success.
             const heading = projectMcpCompactSummary({
               phase: "running",
@@ -221,7 +215,6 @@ export function runCodeModeExecution(
                     ? "error"
                     : "warning",
               issues: observation.issues,
-              notices,
             };
           });
         },
@@ -257,7 +250,6 @@ export function runCodeModeExecution(
               if (event.status !== "queued" && event.status !== "running")
                 endDelivery(fiber, event.status !== "succeeded");
               if (event.status === "queued") {
-                compact.admit(event.name);
                 receipts.admit(event.id, event.name);
                 counts.total += 1;
                 counts.queued += 1;

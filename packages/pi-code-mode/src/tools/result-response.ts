@@ -16,7 +16,6 @@ import {
   formatCodeModeSuccess,
   type CodeModeToolDetails,
 } from "./format.ts";
-import { projectFailurePresentation } from "./failure-evidence.ts";
 import { clampModelVisibleText, utf8ByteLength } from "./limits.ts";
 import { composeRecoveryResponse } from "./recovery-response.ts";
 
@@ -166,11 +165,7 @@ export function makeResultResponse(input: {
           result?.ok && { outputKind: Predicate.isString(result.value) ? "text" : "structured" }),
       };
       if (!cancelled && outcome === "failed") {
-        const presentation = result && !result.ok ? projectFailurePresentation(result) : undefined;
-        input.retain({
-          ...finalDetails,
-          ...(presentation && { failurePresentation: presentation }),
-        });
+        input.retain(finalDetails);
         throw new Error(text);
       }
       return { content: [{ type: "text", text }], details: finalDetails };

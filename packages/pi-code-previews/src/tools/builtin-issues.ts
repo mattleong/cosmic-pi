@@ -4,57 +4,65 @@ import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
 import { getWriteDiffGuard, getWriteDiffSkipReason, hasWriteDiffSizeEvidence } from "../write/diff";
 import type { BuiltinCompactPolicy } from "./builtin-projection";
-import type { CompactNotice } from "./compact-summary";
+import type { CompactIssue } from "./compact-issues";
 import { isTruncated, splitReadContinuationNotice } from "./data/results";
 import { getPreviewSecretWarnings } from "./renderers/shared/secret-preview";
 
-export function secretNotices(
+const VOWEL_SOUND = new Set(["AWS secret key", "API key"]);
+const withArticle = (label: string) => `${VOWEL_SOUND.has(label) ? "an" : "a"} ${label}`;
+
+export function secretIssues(
   sources: readonly string[],
   enabled: boolean,
   limit: number,
-): CompactNotice[] {
+): CompactIssue[] {
   const warnings = new Set(
     sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
   );
   return warnings.size > 0
     ? [
         {
+          severity: "warning",
           code: "possible-secrets",
-          kind: "warning",
-          description: "This may contain sensitive information.",
-          text: `Possible ${[...warnings].join(", ")}`,
+          message: `May contain ${[...warnings].map(withArticle).join(", ")}`,
         },
       ]
     : [];
 }
 
-export function bashCommandNotices(command: string, enabled: boolean): CompactNotice[] | undefined {
+export function bashCommandIssues(command: string, enabled: boolean): CompactIssue[] {
   if (!enabled) return [];
-  // Do not partially scan a command and hide warnings in its unscanned middle.
-  if (command.length > 16 * 1024) return undefined;
-  return getBashWarnings(command).map((text, index) => ({
+  // Do not partially scan a command and imply its unscanned middle is safe.
+  if (command.length > 16 * 1024)
+    return [
+      {
+        severity: "warning",
+        code: "command-unchecked",
+        message: "Too long to check for risky operations",
+      },
+    ];
+  return getBashWarnings(command).map((label, index) => ({
+    severity: "warning",
     code: `command-risk-${index}`,
-    description: text,
-    kind: "warning",
-    text,
+    message: label,
   }));
 }
 
-export function readNotices<Details>(
+export function readIssues<Details>(
   details: Details,
   output: string,
   hasLimit: boolean,
-): CompactNotice[] | undefined {
+): CompactIssue[] | undefined {
   const truncation = getObjectValue(details, "truncation");
   if (getObjectValue(truncation, "firstLineExceedsLimit") === true) {
     // This successful read contains only the host's bash recovery instruction.
     return output
       ? [
           {
+            severity: "warning",
             code: "oversized-first-line",
-            kind: "recovery",
-            description: "The first line is too large to display.",
-            text: escapeControlChars(output),
+            message: "The first line is too large to display",
+            detail: escapeControlChars(output),
           },
         ]
       : undefined;
@@ -79,55 +87,61 @@ export function readNotices<Details>(
       /^Showing lines \d+-\d+ of \d+ \(\d+(?:\.\d+)?(?:B|KB|MB) limit\)\. Use offset=\d+ to continue\.$/u.test(
         notice,
       );
-    if (lastLinePartial !== true && (requestedRange || linePage || bytePage))
+    if (lastLinePartial !== true && (requestedRange || linePage || bytePage)) {
+      const [, page = notice, next] =
+        /^(.*?)\.? (Use offset=\d+ to continue\.)$/u.exec(notice) ?? [];
       return [
         {
+          severity: "info",
           code: "read-continuation",
-          kind: "recovery",
-          text: escapeControlChars(notice),
-          expandedOnly: true,
+          message: escapeControlChars(page),
+          ...(next && { detail: next }),
         },
       ];
+    }
     return [
       {
+        severity: "warning",
         code: "read-truncated",
-        kind: "recovery",
-        description: "Only part of the file was returned.",
-        text: escapeControlChars(notice),
+        message: "Only part of the file was returned",
+        detail: escapeControlChars(notice),
       },
     ];
   }
-  // An unrecognized host continuation may contain recovery detail we cannot summarize.
-  return truncated ? undefined : [];
-}
-
-interface CompactResultProjection {
-  notices: CompactNotice[];
-  metadata: string[];
+  // An unrecognized continuation stays in the expanded output; the truncation itself is a warning.
+  return truncated
+    ? [
+        {
+          severity: "warning",
+          code: "read-truncated",
+          message: "Only part of the file was returned",
+        },
+      ]
+    : [];
 }
 
 export function outputLimitProjection<Details>(
   tool: "bash" | "grep" | "find" | "ls",
   details: Details,
 ) {
-  const notices: CompactNotice[] = [];
+  const issues: CompactIssue[] = [];
   const counters: string[] = [];
   if (isTruncated(details))
-    notices.push({
+    issues.push({
+      severity: "warning",
       code: "output-truncated",
-      description: "Only part of the output was returned.",
-      kind: "warning",
-      text: `Output truncated by ${tool}`,
+      message: "Output was cut off",
+      detail: `Output truncated by ${tool}`,
     });
   if (tool === "bash") {
     const path = getObjectValue(details, "fullOutputPath");
     if (Predicate.isString(path) && path)
-      notices.push({
+      issues.push({
+        severity: "info",
         code: "retained-output",
-        kind: "recovery",
-        text: `Full output: ${escapeControlChars(path)}`,
+        message: `Full output: ${escapeControlChars(path)}`,
       });
-    return { notices, counters };
+    return { issues, counters };
   }
   const field =
     tool === "grep"
@@ -140,59 +154,55 @@ export function outputLimitProjection<Details>(
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
     counters.push(`limit reached: ${limit}`);
   if (tool === "grep" && getObjectValue(details, "linesTruncated") === true)
-    notices.push({
+    issues.push({
+      severity: "warning",
       code: "grep-partial-lines",
-      description: "Some matching lines were cut short.",
-      kind: "recovery",
-      text: "Some lines truncated. Use read tool to see full lines.",
+      message: "Some matching lines were cut off",
+      detail: "Some lines truncated. Use read tool to see full lines.",
     });
-  return { notices, counters };
+  return { issues, counters };
 }
 
 export function writeDiffProjection<Before>(
   before: Before,
   content: string,
   policy: Omit<BuiltinCompactPolicy, "bashWarnings">,
-): CompactResultProjection {
+) {
+  const metadata: string[] = [];
   // Validate the owned skipped-snapshot shape before using its size evidence.
   // Do not classify prose reasons or let large new content mask missing history.
   const skipReason = getWriteDiffSkipReason(before, "", policy.maxWriteDiffBytes);
   if (skipReason !== undefined) {
     if (hasWriteDiffSizeEvidence(before))
       return {
-        notices: secretNotices([skipReason], policy.secretWarnings, policy.secretScanChars),
+        issues: secretIssues([skipReason], policy.secretWarnings, policy.secretScanChars),
         metadata: ["diff skipped: size"],
       };
-    return {
-      notices: [
-        {
-          code: "write-diff-skipped",
-          description: "The file was saved, but its changes cannot be previewed.",
-          kind: "warning",
-          text: `Write applied; diff skipped: ${escapeControlChars(skipReason)}`,
-        },
-      ],
-      metadata: [],
+    // Diff availability concerns the preview, not the write, so it is informational.
+    const skipped: CompactIssue = {
+      severity: "info",
+      code: "write-diff-skipped",
+      message: "Diff unavailable",
+      detail: `Diff skipped: ${escapeControlChars(skipReason)}`,
     };
+    return { issues: [skipped], metadata };
   }
   const beforeContent = getObjectValue(before, "content");
-  if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent))
-    return {
-      notices: [
-        {
-          code: "write-history-unavailable",
-          description: "The file was saved, but its previous contents are unavailable.",
-          kind: "warning",
-          text: "Write applied; diff unavailable: previous content unavailable",
-        },
-      ],
-      metadata: [],
+  if (getObjectValue(before, "kind") !== "content" || !Predicate.isString(beforeContent)) {
+    const unavailable: CompactIssue = {
+      severity: "info",
+      code: "write-history-unavailable",
+      message: "Diff unavailable: previous contents unknown",
     };
+    return { issues: [unavailable], metadata };
+  }
   const guard = getWriteDiffGuard(
     beforeContent,
     content,
     policy.maxWriteDiffBytes,
     policy.maxWriteDiffChangedLineCells,
   );
-  return { notices: [], metadata: guard ? [`diff skipped: ${guard}`] : [] };
+  if (guard) metadata.push(`diff skipped: ${guard}`);
+  const none: CompactIssue[] = [];
+  return { issues: none, metadata };
 }

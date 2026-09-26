@@ -67,9 +67,14 @@ describe("questionnaire compact outcome projection", () => {
         expect(summary?.counters?.join(" ")).toContain(
           presentation === "queued" ? "queued" : "awaiting answers",
         );
-        expect(
-          summary?.notices?.some((notice) => notice.text.includes("ask_user_async_control await")),
-        ).toBe(true);
+        expect(summary?.issues).toEqual([
+          expect.objectContaining({
+            severity: "warning",
+            code: "answers-pending",
+            detail: expect.stringContaining("ask_user_async_control await"),
+          }),
+        ]);
+        expect(summary?.issues?.[0]?.message).not.toMatch(/ask_user_async_control|request-1/);
       }
     },
   );
@@ -86,7 +91,10 @@ describe("questionnaire compact outcome projection", () => {
     expect(summary?.counters).toHaveLength(1);
     expect(summary?.counters?.join(" ")).toContain("2 queued");
     expect(summary?.counters?.join(" ")).toContain("1 awaiting answers");
-    expect(summary?.notices?.length).toBeGreaterThan(0);
+    // Every pending request shares one wait fact.
+    expect(summary?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "answers-pending" }),
+    ]);
   });
 
   it.each(["custom", "text"])(
@@ -102,7 +110,7 @@ describe("questionnaire compact outcome projection", () => {
         summarize(asyncAskUserCompactSummary, { requests: [row({ outcome })] }),
       ]) {
         expect(summary?.outcome).toBe("success");
-        expect(summary?.failure).toBeUndefined();
+        expect(summary?.issues ?? []).toEqual([]);
         expect(JSON.stringify(summary)).not.toContain("Keep the current library");
         expect(JSON.stringify(summary)).not.toContain("No upgrade");
       }
@@ -176,33 +184,35 @@ describe("questionnaire compact outcome projection", () => {
         }),
       ]) {
         expect(summary?.outcome).toBe("cancelled");
-        expect(summary?.issues?.entries).toEqual([]);
-        expect(summary?.failure).toBeUndefined();
+        expect(summary?.issues ?? []).toEqual([]);
       }
     },
   );
 
   it("keeps automatic delivery recovery visible even when answers were submitted", () => {
+    const failedDelivery = expect.objectContaining({
+      severity: "warning",
+      code: "delivery-failed",
+      detail: expect.stringContaining("status or await"),
+    });
     const summary = summarize(asyncAskUserCompactSummary, row({ delivery: "failed" }));
     expect(summary?.outcome).toBe("warning");
-    expect(summary?.issues).toMatchObject({
-      coverage: "complete",
-      entries: [
-        { code: "delivery-failed", severity: "warning", recovery: [{ code: "retrieve-delivery" }] },
+    expect(summary?.issues).toEqual([failedDelivery]);
+    expect(summary?.issues?.[0]?.message).not.toMatch(/ask_user_async_control|delivery-1/);
+    const cancelledDelivery = summarize(
+      asyncAskUserCompactSummary,
+      row({ status: "cancelled", outcome: cancelled, delivery: "failed" }),
+    );
+    expect(cancelledDelivery?.outcome).toBe("cancelled");
+    expect(cancelledDelivery?.issues).toEqual([failedDelivery]);
+    // Several failed deliveries are one fact with one retrieval procedure.
+    const several = summarize(asyncAskUserCompactSummary, {
+      requests: [
+        row({ delivery: "failed" }),
+        row({ requestId: "request-2", deliveryId: "delivery-2", delivery: "failed" }),
       ],
     });
-    expect(summary?.notices).toEqual([
-      expect.objectContaining({
-        kind: "recovery",
-        text: expect.stringContaining("status or await"),
-      }),
-    ]);
-    expect(
-      summarize(
-        asyncAskUserCompactSummary,
-        row({ status: "cancelled", outcome: cancelled, delivery: "failed" }),
-      )?.outcome,
-    ).toBe("cancelled");
+    expect(several?.issues).toEqual([failedDelivery]);
   });
 
   it("preserves inconsistent pending replies, failed openings, and metadata-only terminal lists", () => {

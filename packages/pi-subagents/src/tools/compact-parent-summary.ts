@@ -1,4 +1,4 @@
-import { getTextContent, withCompactIssues, type CodePreviewShellOptions } from "pi-code-previews";
+import { getTextContent, type CodePreviewShellOptions } from "pi-code-previews";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -41,7 +41,7 @@ const decodeReceipt = Schema.decodeUnknownOption(
   { onExcessProperty: "error" },
 );
 
-/** Input evidence and replies only; the shared shell owns acknowledgement and warning rows. */
+/** Input evidence and replies only; the shared shell renders acknowledgement and warning issues. */
 export function createParentExpandedContent(
   toolName: string,
 ): NonNullable<CodePreviewShellOptions["expandedContent"]> {
@@ -116,16 +116,16 @@ export function createParentCompactSummary(
     if (toolName === "contact_parent") summary.action = action;
     if (action === "warning") {
       summary.outcome = "warning";
-      summary.notices = [
+      summary.issues = [
         {
+          severity: "warning",
           code: "parent-warning",
-          kind: "warning",
-          text: stripTerminalControls(message),
-          description: "The worker reported a warning.",
+          message: "The worker reported a warning",
+          detail: stripTerminalControls(message),
         },
       ];
     }
-    if (!result) return phase === "settled" ? undefined : withCompactIssues(summary, toolName);
+    if (!result) return phase === "settled" ? undefined : summary;
     if (action === "question") return undefined;
     const receipt = decodeReceipt(result);
     if (receipt._tag === "None") return undefined;
@@ -134,14 +134,10 @@ export function createParentCompactSummary(
       Predicate.isString(acknowledgement) ? text !== acknowledgement : !acknowledgement.test(text)
     )
       return undefined;
-    return withCompactIssues(
-      {
-        ...summary,
-        counters: ["acknowledged"],
-        outcome: action === "warning" ? "warning" : "success",
-        detailsOnExpand: true,
-      },
-      toolName,
-    );
+    return {
+      ...summary,
+      counters: ["acknowledged"],
+      outcome: action === "warning" ? "warning" : "success",
+    };
   };
 }

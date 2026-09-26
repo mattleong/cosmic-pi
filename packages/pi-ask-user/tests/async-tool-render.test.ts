@@ -41,6 +41,8 @@ describe("async questionnaire replay rendering", () => {
           expect(text.includes("Avoid tolls")).toBe(expanded);
         } else {
           expect(text.includes("Full fallback diagnostic")).toBe(expanded);
+          // The expansion hint belongs only to the collapsed row.
+          expect(text.includes("details on expand")).toBe(!expanded);
         }
       }
     }

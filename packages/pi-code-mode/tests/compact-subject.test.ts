@@ -5,6 +5,7 @@ import { callEntryDetails } from "../src/tools/format.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
 import { opaqueFixture } from "pi-cosmic-core/testing";
+import { withLedger } from "./support/compact.ts";
 
 describe("nested compact targets", () => {
   it.each([
@@ -81,19 +82,18 @@ describe("nested compact targets", () => {
       expect(decoded.compactEligible).toBe(true);
       expect(decoded.toolCalls[0]?.subject).toBeUndefined();
     }
-    const details = {
+    const details = withLedger({
       ...callEntryDetails([{ tool: "pi.read", status: "completed", subject: "src/a.ts:12-15" }]),
       outputKind: "text",
-    };
+    });
     const summary = codeModeCompactSummary({
       phase: "settled",
       args: { intent: "Inspect" },
       result: { content: [], details },
       context: opaqueFixture({ isError: false, cwd: "/different-project" }),
     });
-    expect(summary?.children?.entries[0]).toEqual({
+    expect(summary?.children?.entries[0]).toMatchObject({
       label: "read",
-      status: "success",
       subject: "src/a.ts:12-15",
     });
     const redacted = decodeCodeModeRenderDetails({

@@ -10,9 +10,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { MCP_DISPLAY_LIMITS } from "../../src/ui/content-preview.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "../../src/ui/tool-render-details.ts";
 import { renderMcpCall, renderMcpResult } from "../../src/ui/tool-renderer.ts";
+import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { projectReply } from "../fixtures/results.ts";
 
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 const reply = (data = {}) => ({
   details: { action: "tools.call", outcome: "completed", isError: false, notices: [], data },
   content: [],
@@ -53,6 +53,14 @@ const display = <Result>(result: Result, expanded = false, isPartial = false) =>
   renderMcpResult(result, { expanded, isPartial }, theme, "configured-key to expand")
     .render(80)
     .join("\n");
+const codes = <Result>(result: Result) =>
+  decodeMcpCardDetails(result).presentation.issues.map((issue) => issue.code);
+/** Collapsed cards show every attention issue's message; details wait for expansion. */
+const expectCollapsedMessages = <Result>(result: Result) => {
+  const collapsed = display(result).replace(/\s+/g, " ");
+  for (const issue of decodeMcpCardDetails(result).presentation.issues)
+    if (issue.severity !== "info") expect(collapsed).toContain(issue.message);
+};
 
 describe("MCP card projections", () => {
   it("keeps remote error text visible in the collapsed fallback without changing the reply", () => {
@@ -97,7 +105,9 @@ describe("MCP card projections", () => {
     expect(card.isError).toBe(true);
     expect(card.diagnostic).toEqual(mcpDiagnostic(error, { action: "tools.search" }));
     expect(card.diagnostic?.recovery).toEqual(["inspect-operation"]);
-    expect(card.warnings.join(" ")).toMatch(/Do not replay/);
+    expect(card.presentation.issues.map((issue) => issue.detail).join(" ")).toMatch(
+      /Do not replay/,
+    );
     expect(JSON.stringify(card)).not.toContain("private-token");
     const legacy = decodeMcpCardDetails({
       details: { ...details, data: { kind: "auth-required" } },
@@ -173,7 +183,7 @@ describe("MCP card projections", () => {
     expect(projection.truncated).toBe(false);
     expect(projection.isError).toBe(false);
     expect(projection.outcome).toBe("completed");
-    expect(projection.warnings).toEqual([]);
+    expect(projection.presentation.issues).toEqual([]);
     expect(display(retained, false)).not.toContain("retained-text");
     expect(display(retained, true)).toContain("retained-text");
     expect(projection.recoveryHint).toContain("retained-text");
@@ -214,11 +224,13 @@ describe("MCP card projections", () => {
     const projection = decodeMcpCardDetails(result);
     expect(projection.outcome).toBe("unknown");
     expect(projection.truncated).toBe(true);
-    expect(projection.warnings.join(" ")).toMatch(/cleanup is unconfirmed/i);
-    expect(projection.warnings.join(" ")).toMatch(/not recoverable/);
-    const collapsed = display(result).replace(/\s+/g, " ");
-    for (const warning of projection.warnings) expect(collapsed).toContain(warning);
-    expect(collapsed).not.toMatch(/retry/i);
+    expect(codes(result)).toEqual(
+      expect.arrayContaining(["cleanup-unconfirmed", "output-truncated", "unclassified-notices"]),
+    );
+    expectCollapsedMessages(result);
+    expect(display(result)).not.toMatch(/retry/i);
+    expect(display(result)).not.toContain("not recoverable");
+    expect(display(result, true)).toContain("not recoverable");
   });
 
   it.each(["completed", "unknown"] as const)(
@@ -236,11 +248,10 @@ describe("MCP card projections", () => {
         isError: true,
         outputValidationFailed: true,
       });
-      for (const warning of projection.warnings)
-        expect(display(result).replace(/\s+/g, " ")).toContain(warning);
+      expect(codes(result)).toEqual(expect.arrayContaining(["origin-failed", "output-invalid"]));
+      expectCollapsedMessages(result);
       expect(projection.resultId).toBe("retained-1");
       expect(projection.recoveryHint).toContain("/mcp result retained-1");
-      expect(display(result)).toMatch(/original.*validation failed/i);
       expect(display(result, true)).toContain("existing output");
       expect(JSON.stringify(result)).toBe(before);
     },
@@ -256,10 +267,9 @@ describe("MCP card projections", () => {
       outputValidationFailed: false,
       outputValidationUnavailable: true,
     });
-    expect(projection.warnings.length).toBeGreaterThan(0);
-    for (const warning of projection.warnings)
-      expect(display(result).replace(/\s+/g, " ")).toContain(warning);
-    expect(display(result)).not.toMatch(/validation failed/i);
+    expect(codes(result)).toContain("validation-unavailable");
+    expect(codes(result)).not.toContain("output-invalid");
+    expectCollapsedMessages(result);
     expect(projection.recoveryHint).toContain("/mcp result retained-1");
     expect(display(result, true)).toContain("existing output");
   });
@@ -272,15 +282,20 @@ describe("MCP card projections", () => {
       const result = retainedRead({ outputValidation }, { text: "retained output" }, { notices });
       const before = JSON.stringify(result);
       const card = decodeMcpCardDetails(result);
+      const issues = card.presentation.issues;
       expect(card.notices).toEqual([]);
-      expect(card.warnings.filter((warning) => warning.includes("validation"))).toHaveLength(1);
-      expect(card.warnings.join(" ")).toContain('result.read id="retained-1"');
-      expect(card.warnings[0]).toContain("Do not replay the operation to recover its output.");
-      expect(card.warnings[0]).toContain(
+      expect(issues.map((issue) => issue.code)).not.toContain("unclassified-notices");
+      const validation = issues.filter((issue) => issue.code.startsWith("validation-"));
+      expect(validation).toHaveLength(1);
+      expect(validation[0]?.detail).toContain("Do not replay the operation to recover its output.");
+      expect(validation[0]?.detail).toContain(
         outputValidation === "failed" ? "captured schema" : "No mismatch was established",
       );
+      expect(issues.find((issue) => issue.code === "retained-output")?.detail).toContain(
+        'result.read id="retained-1"',
+      );
       const expanded = display(result, true).replace(/\s+/g, " ");
-      expect(expanded.split(card.warnings[0]!).length - 1).toBe(1);
+      expect(expanded.split(validation[0]!.detail!).length - 1).toBe(1);
       expect(expanded.split("/mcp result retained-1").length - 1).toBe(1);
       expect(JSON.stringify(result)).toBe(before);
     },
@@ -307,7 +322,9 @@ describe("MCP card projections", () => {
     // Existing terminal sanitization trims whitespace, but must not suppress this near-match.
     expect(card.notices).toEqual(notices.map((notice) => notice.trim()));
     expect(card.preview).toContain(original);
-    expect(card.warnings.some((warning) => warning.includes("captured schema"))).toBe(true);
+    expect(
+      card.presentation.issues.find((issue) => issue.code === "validation-failed")?.detail,
+    ).toContain("captured schema");
     expect(JSON.stringify(result)).toBe(before);
   });
 
@@ -329,9 +346,7 @@ describe("MCP card projections", () => {
     });
     expect(card.notices).toEqual(notices);
     if ("isError" in override && override.isError === true)
-      expect(
-        card.warnings.some((warning) => warning.includes("original operation reported a failure")),
-      ).toBe(true);
+      expect(card.presentation.issues.map((issue) => issue.code)).toContain("origin-failed");
   });
 
   it("reports counts and images without copying or touching image bytes", () => {

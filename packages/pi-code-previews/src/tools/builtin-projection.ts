@@ -6,16 +6,16 @@ import {
 } from "./builtin-result-detail";
 import { getObjectValue } from "../shared/helpers";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { isCompactAttention, type CompactSummary, type CompactPhase } from "./compact-summary";
+import type { CompactSummary, CompactPhase } from "./compact-summary";
 import { builtinFailure } from "./builtin-failure";
-import { claimCompactIssue, summaryCompactIssues, withCompactIssues } from "./compact-issues";
+import { compactIssueSeverity, mergeCompactIssues } from "./compact-issues";
 import {
-  bashCommandNotices,
+  bashCommandIssues,
   outputLimitProjection,
-  readNotices,
-  secretNotices,
+  readIssues,
+  secretIssues,
   writeDiffProjection,
-} from "./compact-notices";
+} from "./builtin-issues";
 import { getPathArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
@@ -43,86 +43,41 @@ export interface BuiltinCompactProjectionInput extends BuiltinCompactPolicy {
   beforeWrite: BuiltinBeforeWrite;
 }
 
-/** Pure transient projection. Retaining consumers must drop failure.details, redact
- * sensitive text, and bound every retained string/collection. Never retain raw output.
+/** Pure transient projection. Retaining consumers must redact sensitive text and bound
+ * every retained string and collection. Never retain raw output.
  */
 export function projectBuiltinCompactSummary(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
 ): CompactSummary | undefined {
-  const summary = projectBuiltinSummary(tool, input);
-  // Unclassified diagnostic bodies retain the pre-existing full-text failure renderer.
-  if (summary?.failure && summary.failureEvidence?.coverage !== "complete") return summary;
-  if (!summary) return undefined;
-  const projected = withCompactIssues(summary, tool);
-  // These parser-owned envelopes are fully retained by the detailed content callback.
-  // Claims snapshot the current evidence so later merged recovery stays shell-owned.
-  const owned =
-    summaryCompactIssues(projected, true).entries.filter(
-      (issue) =>
-        (tool === "read" &&
-          ["read-continuation", "read-truncated", "oversized-first-line"].includes(issue.code)) ||
-        (summary.failureEvidence?.coverage === "complete" &&
-          (issue.code === summary.failureEvidence.code ||
-            [
-              "shell-retained-output",
-              "edit-add-context",
-              "edit-match-original",
-              "edit-disjoint-regions",
-            ].includes(issue.code))),
-    ) ?? [];
-  const claims = owned.map((issue) =>
-    claimCompactIssue(issue, {
-      cause: true,
-      recovery: issue.recovery.map((entry) => entry.code),
-      ...(issue.diagnostics && { diagnostics: issue.diagnostics.map((_, index) => index) }),
-    }),
-  );
-  return projected.failure
-    ? {
-        ...projected,
-        failure: {
-          ...projected.failure,
-          ownedIssues: [...(projected.failure.ownedIssues ?? []), ...claims],
-        },
-      }
-    : { ...projected, expandedResultOwnsIssues: claims };
-}
-
-function projectBuiltinSummary(
-  tool: BuiltinCompactTool,
-  input: BuiltinCompactProjectionInput,
-): CompactSummary | undefined {
   const { phase, args, result, cwd, isError, beforeWrite } = input;
   const scan = (sources: readonly string[]) =>
-    secretNotices(sources, input.secretWarnings, input.secretScanChars);
+    secretIssues(sources, input.secretWarnings, input.secretScanChars);
   const output = getBoundedTextContent(result?.content);
   if (output === undefined) return undefined;
   const command = stringArg(args, "command");
   const inputSources = secretInputSources(tool, args, input.secretWarnings);
   if (!inputSources) return undefined;
-  const notices = scan([...inputSources, output]);
+  const issues = scan([...inputSources, output]);
   const metadata: string[] = [];
   const counters: string[] = [];
   if (tool === "bash") {
-    const commandNotices = bashCommandNotices(command, input.bashWarnings);
-    if (!commandNotices) return undefined;
-    notices.push(...commandNotices);
+    issues.push(...bashCommandIssues(command, input.bashWarnings));
   }
   const subject = describeBuiltinCompactSubject(tool, args, cwd);
   if (result) {
     if (tool === "read" && !isError) {
-      const recovery = readNotices(
+      const read = readIssues(
         result.details,
         output,
         Predicate.isNumber(getObjectValue(args, "limit")),
       );
-      if (!recovery) return undefined;
-      notices.push(...recovery);
+      if (!read) return undefined;
+      issues.push(...read);
     } else if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls") {
       const projection = outputLimitProjection(tool, result.details);
       counters.push(...projection.counters);
-      notices.push(...projection.notices);
+      issues.push(...projection.issues);
     }
   }
   if (isError) {
@@ -131,32 +86,31 @@ function projectBuiltinSummary(
     const failure = builtinFailure(tool, output);
     return {
       subject,
-      ...failure,
-      notices: [...notices, ...failure.notices],
+      outcome: failure.outcome,
+      issues: mergeCompactIssues(failure.issues, issues),
     };
   }
-  if (phase !== "settled") return { subject, notices };
+  if (phase !== "settled") return { subject, issues };
   if (!result) return undefined;
   if (tool === "write") {
     const content = getObjectValue(args, "content");
     if (!Predicate.isString(content)) return undefined;
     const before = beforeWrite.kind === "snapshot" ? beforeWrite.value : undefined;
     const beforeContent = getObjectValue(before, "content");
-    if (Predicate.isString(beforeContent)) notices.push(...scan([beforeContent]));
+    if (Predicate.isString(beforeContent)) issues.push(...scan([beforeContent]));
     const knownNewFile = beforeWrite.kind === "new";
     if (knownNewFile) counters.push("new file");
     if (beforeWrite.kind === "not-captured")
-      notices.push({
+      issues.push({
+        severity: "info",
         code: "write-diff-not-captured",
-        kind: "recovery",
-        text: "Diff unavailable because previous contents were intentionally not captured.",
-        expandedOnly: true,
+        message: "Diff unavailable: previous contents not captured",
       });
     else if (!knownNewFile) {
       const projection = writeDiffProjection(before, content, input);
-      notices.push(...projection.notices);
+      issues.push(...projection.issues);
       metadata.push(...projection.metadata);
-      if (!projection.notices.length && !projection.metadata.length) {
+      if (!projection.issues.length && !projection.metadata.length) {
         const detail =
           beforeWrite.kind === "snapshot" && beforeWrite.counts
             ? beforeWrite.counts.detail
@@ -168,25 +122,25 @@ function projectBuiltinSummary(
     const detail = editResultDetail(args);
     if (detail) counters.push(detail);
     const diff = getEditDiff(result.details);
-    if (diff) notices.push(...scan([diff]));
+    if (diff) issues.push(...scan([diff]));
     else
-      notices.push({
+      issues.push({
+        severity: "info",
         code: "edit-diff-unavailable",
-        description: "The edit was applied, but its changes cannot be previewed.",
-        kind: "warning",
-        text: "Edit applied; diff unavailable",
+        message: "Diff unavailable",
       });
   }
   if (tool === "grep" && counters.length === 0) {
     const detail = grepResultDetail(output, result.details);
     if (detail) counters.push(detail);
   }
+  const merged = mergeCompactIssues(issues);
   return {
     subject,
     counters,
     metadata,
-    outcome: notices.some(isCompactAttention) ? "warning" : "success",
-    notices,
+    outcome: compactIssueSeverity(merged) === "warning" ? "warning" : "success",
+    issues: merged,
   };
 }
 

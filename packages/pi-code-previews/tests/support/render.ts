@@ -46,22 +46,18 @@ export function compactChildren(
   entries: readonly CompactChild[],
   width = 80,
   options: {
-    readonly expanded?: boolean;
+    readonly all?: boolean;
     readonly layout?: "tree" | "flat";
     readonly timing?: boolean;
     readonly total?: number;
     readonly frame?: number;
   } = {},
 ): string[] {
-  const { expanded = false, layout = "tree", timing = true, total = entries.length } = options;
-  const children = { entries, total };
-  return renderCompactChildren(
-    children,
-    plainTheme,
-    width,
-    options.frame,
-    timing,
-    expanded,
+  const { layout = "tree", timing = true, total = entries.length } = options;
+  return renderCompactChildren({ entries, total }, plainTheme, width, {
     layout,
-  );
+    timingEnabled: timing,
+    ...(options.all !== undefined && { all: options.all }),
+    ...(options.frame !== undefined && { animationFrame: options.frame }),
+  });
 }

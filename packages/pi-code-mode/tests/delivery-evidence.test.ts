@@ -1,10 +1,10 @@
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import type { McpCodeModeOutput } from "pi-mcp/code-mode";
-import { makeCompactEvidence, type CompactReceipt } from "../src/tools/compact-evidence.ts";
-import { ledgerDetails, noReplayNotices, summarize } from "./support/compact.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { renderCompactChildren } from "pi-code-previews";
+import { COMPLETE_LEDGER, deliveryIssues, ledgerDetails, summarize } from "./support/compact.ts";
 import { executeHarness } from "./support/execute.ts";
-import { renderResultText } from "./support/presentation.ts";
 import { mcpProvider } from "./support/providers.ts";
 
 describe("interpreter delivery evidence", () => {
@@ -36,57 +36,55 @@ describe("interpreter delivery evidence", () => {
         });
         const receipt = completed.details!.toolCalls[0]!.compact!;
         expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
-        expect(noReplayNotices(receipt.notices)).toHaveLength(1);
-        expect(completed.details!.compactAttention).toMatchObject({
-          observed: 1,
-          errors: 0,
-          incomplete: false,
+        expect(deliveryIssues(receipt.issues)).toHaveLength(1);
+        expect(completed.details!.compactAttention).toEqual(COMPLETE_LEDGER);
+        expect(summarize(completed.details!)?.children?.entries[0]).toMatchObject({
+          label: "mcp",
+          status: "error",
         });
-        expect(completed.details!.compactAttention!.notices).toContainEqual(
-          noReplayNotices(receipt.notices)[0],
-        );
       }),
   );
 
-  it("keeps individual loss explanations on visible children and hidden or evicted calls in the parent", () => {
+  it("keeps one delivery explanation on each retained call", () => {
     const { calls, details } = ledgerDetails(
       Array.from({ length: 36 }, () => ({
         tool: "pi.read",
-        summary: { subject: "same file", outcome: "success" },
+        summary: { subject: "same file", outcome: "success" as const },
       })),
       { status: "error", deliveryFailures: 2 },
     );
-    const receipts = calls.map((call) => call.compact!);
-    expect(details.compactAttention.notices).toHaveLength(32);
-    expect(details.compactAttention.incomplete).toBe(true);
-    for (const receipt of receipts) expect(noReplayNotices(receipt.notices)).toHaveLength(1);
-    const result = { content: [{ type: "text" as const, text: "discarded" }], details };
-    const first = noReplayNotices(receipts[0]!.notices)[0]!.text;
-    expect(summarize(details)?.issues?.entries.some((issue) => issue.cause === first)).toBe(true);
-    const expanded = renderResultText(result, { expanded: true });
-    for (const receipt of receipts) {
-      expect(expanded.split(noReplayNotices(receipt.notices)[0]!.text)).toHaveLength(2);
+    for (const call of calls) expect(deliveryIssues(call.compact?.issues)).toHaveLength(1);
+    // Delivery loss never changes the operation outcome the ledger counts.
+    expect(details.compactAttention).toEqual(COMPLETE_LEDGER);
+    const summary = summarize(details)!;
+    expect(summary.outcome).toBe("warning");
+    expect(summary.issues).toEqual([]);
+    expect(summary.children?.total).toBe(36);
+    expect(summary.children?.entries).toHaveLength(details.toolCalls.length);
+    expect(summary.children?.entries.every((child) => child.status === "error")).toBe(true);
+    const expanded = renderCompactChildren(summary.children, plainTheme, 200, {
+      layout: "flat",
+      all: true,
+    }).join("\n");
+    for (const child of summary.children!.entries) {
+      const detail = deliveryIssues(child.issues)[0]!.detail!;
+      expect(expanded.split(detail)).toHaveLength(2);
     }
   });
 
-  it("preserves existing recovery at receipt and aggregate capacity and marks overflow incomplete", () => {
-    let receipt: CompactReceipt | undefined;
-    const collector = makeCompactEvidence((_id, value) => {
-      receipt = value;
-    });
-    collector.admit("pi.read");
-    collector.start(1, 1);
-    const notices = Array.from({ length: 32 }, (_, id) => ({
-      kind: "recovery" as const,
-      text: `Existing recovery ${id}`,
+  it("keeps the delivery issue when the receipt is already at its issue bound", () => {
+    const issues = Array.from({ length: 16 }, (_, id) => ({
+      severity: "info" as const,
+      code: "page",
+      message: `Existing page ${id}`,
     }));
-    collector.observe(1, () => ({ subject: "file", outcome: "success", notices }));
-    collector.deliveryFailure(1);
-    collector.deliveryFailure(1);
-    expect(receipt).toMatchObject({ deliveryFailed: true, notices });
-    expect(collector.snapshot()).toMatchObject({ incomplete: true, notices });
-    expect(receipt!.notices).toHaveLength(32);
-    collector.end(1);
-    collector.close();
+    const { calls } = ledgerDetails(
+      [{ tool: "pi.read", summary: { subject: "file", outcome: "success", issues } }],
+      { status: "error", deliveryFailures: 1 },
+    );
+    const receipt = calls[0]!.compact!;
+    expect(receipt.deliveryFailed).toBe(true);
+    expect(receipt.issues).toHaveLength(16);
+    expect(deliveryIssues(receipt.issues)).toHaveLength(1);
   });
 });

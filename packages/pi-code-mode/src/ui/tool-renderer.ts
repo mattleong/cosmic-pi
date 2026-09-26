@@ -7,33 +7,29 @@ import type {
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import * as codePreviews from "pi-code-previews";
+import {
+  planCompactPresentation,
+  renderCompactChildren,
+  renderCompactIssues,
+  type CompactSummary,
+} from "pi-code-previews";
 import { invokeHostCallback, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
-import {
-  managerActivityColor,
-  managerActivityGlyph,
-  type ManagerActivityKind,
-} from "pi-cosmic-ui/manager";
 import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
-import { codeModeVisibleNotices } from "./notices.ts";
 import {
   decodeOption,
   MAX_INTENT_LENGTH,
   truncateDisplay,
   type CodeModeCallEntry,
 } from "../tools/format.ts";
-import { renderExpandedCodeModeResult, type ExpandedPresentation } from "./expanded-result.ts";
-import { formatCodeModeProgram } from "./program-source.ts";
+import { codeModeCallRows } from "./call-rows.ts";
+import { renderExpandedCodeModeResult, renderProgramSection } from "./expanded-result.ts";
 import { codeModeOutputText } from "./result-output.ts";
-import { addCodeModeSection } from "./sections.ts";
 import { codeModeReadRequest, renderCodeModeResultRead } from "./result-read-renderer.ts";
 import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-render-details.ts";
 
 /** Neutral headline when the model provided no usable intent. */
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
-const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] =>
-  codeModeVisibleNotices(details, expanded).map((notice) => notice.text);
 
 export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
   if (!Predicate.isString(intent)) return CODE_MODE_FALLBACK_INTENT;
@@ -62,215 +58,127 @@ const textContentOf = (result: AgentToolResult<unknown>): string => {
     .join("\n");
 };
 
-const intentHeadline = <Args>(args: Args, theme: Theme): string => {
-  const intent = describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent);
-  return renderToolHeader({ title: "Code Mode", subtitle: `· ${intent}` }, theme);
-};
-
-const codeModeSource = <Args>(args: Args): string | undefined => {
+export const codeModeSource = <Args>(args: Args): string | undefined => {
   const code = decodeOption(CodeModeArgumentsInputSchema, args)?.code;
   return Predicate.isString(code) ? code : undefined;
 };
 
-/** Content-only call slot survives shared failure-body rendering. */
-export const renderCodeModeProgramContent = <Args>(args: Args): Component => {
-  if (codeModeReadRequest(args)) return new Container();
-  const source = formatCodeModeProgram(codeModeSource(args) ?? "(program not available)");
-  return new Text(`Program\n${source}`, 0, 0);
-};
+/** Content-only call slot: the shell supplies the heading and issues above it. */
+export const renderCodeModeProgramContent = <Args>(args: Args, theme: Theme): Component =>
+  codeModeReadRequest(args) ? new Container() : renderProgramSection(codeModeSource(args), theme);
 
 export interface CodeModeRenderContext {
   readonly expanded: boolean;
   readonly isError?: boolean;
 }
 
+/**
+ * The original call slot is the heading. Once execution starts, the result slot owns the issues
+ * and program; before that, an expanded call shows its program here so it is always reachable.
+ */
 export const renderCodeModeToolCall = <Args>(
   args: Args,
   theme: Theme,
-  context: CodeModeRenderContext | undefined,
+  context?: { readonly expanded?: boolean; readonly executionStarted?: boolean },
 ): Component => {
   const read = codeModeReadRequest(args);
-  if (read)
-    return new Text(
-      renderToolHeader(
-        {
-          title: "Code Mode result.read",
-          subtitle: truncateDisplay(sanitizeTerminalLine(read.id), 128),
-        },
-        theme,
-      ),
-      0,
-      0,
-    );
-  const header = new Text(intentHeadline(args, theme), 0, 0);
-  if (!invokeHostCallback(() => context?.expanded === true, false)) return header;
+  const header = read
+    ? {
+        title: "Code Mode result.read",
+        subtitle: truncateDisplay(sanitizeTerminalLine(read.id), 128),
+      }
+    : {
+        title: "Code Mode",
+        subtitle: `· ${describeCodeModeIntent(decodeOption(CodeModeArgumentsInputSchema, args)?.intent)}`,
+      };
+  const heading = new Text(renderToolHeader(header, theme), 0, 0);
+  const awaitingResult = invokeHostCallback(
+    () => context?.expanded === true && context.executionStarted !== true,
+    false,
+  );
+  if (read || !awaitingResult) return heading;
   const container = new Container();
-  container.addChild(header);
-  const program = addCodeModeSection(container, "Program", theme);
-  const source = codeModeSource(args);
-  if (source === undefined) {
-    program.addChild(new Text(theme.fg("dim", "(program not available)"), 0, 0));
-    return container;
-  }
-  const body = formatCodeModeProgram(source)
-    .split("\n")
-    .map((line) => theme.fg("toolOutput", line))
-    .join("\n");
-  program.addChild(new Text(body, 0, 0));
+  container.addChild(heading);
+  container.addChild(renderProgramSection(codeModeSource(args), theme));
   return container;
 };
 
-const ACTIVITY_KINDS = {
-  queued: "pending",
-  completed: "done",
-  error: "failed",
-  cancelled: "stopped",
-} as const satisfies Readonly<
-  Record<Exclude<CodeModeCallEntry["status"], "running">, ManagerActivityKind>
->;
+export interface CodeModePresentation {
+  /** The shell already renders the heading, the run's issues and the program. */
+  readonly contentOnly?: boolean;
+  readonly readRequest?: { readonly id: string };
+  readonly summary?: CompactSummary | undefined;
+  readonly program?: string | undefined;
+  readonly timingEnabled?: boolean;
+  readonly liveElapsed?: ((call: CodeModeCallEntry) => number | undefined) | undefined;
+}
 
-const formatCallDuration = (durationMs: number): string =>
-  durationMs < 1_000
-    ? `${durationMs}ms`
-    : durationMs < 10_000
-      ? `${(durationMs / 1_000).toFixed(1)}s`
-      : `${Math.round(durationMs / 1_000)}s`;
-
-const nestedToolIcon = (tool: string): string | undefined => {
-  if (!tool.startsWith("pi.")) return undefined;
-  try {
-    const icon = codePreviews.getCodePreviewToolIcon(tool.slice("pi.".length));
-    if (!Predicate.isString(icon)) return undefined;
-    const sanitized = truncateDisplay(sanitizeTerminalLine(icon), 8);
-    return sanitized.length === 0 ? undefined : sanitized;
-  } catch {
-    return undefined;
-  }
-};
-
-const activityRow = (entry: CodeModeCallEntry, theme: Theme, animationFrame: number): string => {
-  const kind: ManagerActivityKind =
-    entry.status === "running" ? "running" : ACTIVITY_KINDS[entry.status];
-  const symbol = managerActivityGlyph(kind, animationFrame);
-  const color = managerActivityColor(kind);
-  const icon = nestedToolIcon(entry.tool);
-  const toolPrefix = icon === undefined ? "" : `${theme.fg("toolTitle", icon)} `;
-  // Current calls retain one redacted producer heading. Activity is replay-only.
-  const subject = entry.compact?.subject ?? entry.subject;
-  const label =
-    subject === undefined
-      ? (entry.activity ?? entry.tool)
-      : [entry.tool, entry.compact?.action, subject].filter(Boolean).join(" ");
-  const sanitized = truncateDisplay(sanitizeTerminalLine(label), MAX_INTENT_LENGTH);
-  const duration =
-    entry.durationMs === undefined
-      ? ""
-      : theme.fg("muted", ` · ${formatCallDuration(entry.durationMs)}`);
-  return `${theme.fg(color, symbol)} ${toolPrefix}${theme.fg("toolOutput", sanitized)}${duration}`;
-};
-
-const footerLine = (
-  details: CodeModeRenderDetails,
-  isPartial: boolean,
-  isError: boolean,
-  theme: Theme,
-): string => {
-  const { total, queued, running, succeeded, failed, cancelled } = details.counts;
-  const settled = succeeded + failed + cancelled;
-  const summary = [
-    succeeded > 0 ? `${succeeded} succeeded` : undefined,
-    failed > 0 ? `${failed} failed` : undefined,
-    running > 0 ? `${running} running` : undefined,
-    queued > 0 ? `${queued} queued` : undefined,
-    cancelled > 0 ? `${cancelled} cancelled` : undefined,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join(" · ");
-  const status = details.cancelled
-    ? `Cancelled${summary.length === 0 ? "" : ` · ${summary}`}`
-    : isPartial
-      ? total === 0
-        ? "Starting…"
-        : `${settled} of ${total} settled${summary.length === 0 ? "" : ` · ${summary}`}`
-      : isError
-        ? `Failed${summary.length === 0 ? "" : ` · ${summary}`}`
-        : total === 0
-          ? "Completed"
-          : failed === 0 && cancelled === 0
-            ? `${succeeded} operation${succeeded === 1 ? "" : "s"} completed`
-            : summary;
-  const truncatedNote = details.truncated ? " · output truncated" : "";
-  return theme.fg("muted", `${status}${truncatedNote}`);
-};
-
-/** Collapsed hint using bounded key labels captured by the host controller. */
-const expandHintLine = (
-  isError: boolean,
-  theme: Theme,
-  expandKeys: ReadonlyArray<string>,
-): string => {
-  return renderExpansionAffordance(
-    isError ? "error" : "output",
-    false,
-    theme,
-    expandKeyHint(expandKeys, "expand"),
-  );
-};
+const lines = (render: (width: number) => string[]): Component => ({ render, invalidate() {} });
 
 const renderCodeModeToolResultUnsafe = (
   result: AgentToolResult<unknown>,
   details: CodeModeRenderDetails,
-  isPartial: boolean,
+  view: { readonly isPartial: boolean; readonly isError: boolean; readonly expanded: boolean },
   theme: Theme,
-  context: CodeModeRenderContext,
   animationFrame: number,
   expandKeys: ReadonlyArray<string>,
-  presentation: ExpandedPresentation,
+  presentation: CodeModePresentation,
 ): Component => {
-  const isError = context?.isError === true;
-  const expanded = context?.expanded === true;
+  const { isPartial, isError, expanded } = view;
+  const raw = textContentOf(result);
+  const phase = isPartial ? "running" : "settled";
+  const rows =
+    presentation.summary?.children?.entries ??
+    codeModeCallRows(details, phase, presentation.liveElapsed);
+  // Without a current summary, an error still explains itself with its first line.
+  const issues =
+    planCompactPresentation({
+      summary: presentation.summary,
+      phase,
+      isError,
+      errorText: raw,
+    }).collapsedSummary.issues ?? [];
   if (expanded)
-    return renderExpandedCodeModeResult(
+    return renderExpandedCodeModeResult({
       details,
-      textContentOf(result),
+      rows: [...rows],
+      issues,
+      raw,
       isPartial,
       isError,
       theme,
       animationFrame,
-      {
-        ...presentation,
-        fallbackStatus: presentation.contentOnly
-          ? ""
-          : footerLine(details, isPartial, isError, theme),
-        summary: presentation.summary ?? {
-          subject: "Tool orchestration",
-          counters: [`${details.counts.total} tools`],
-          outcome: isError
-            ? "error"
-            : details.cancelled
-              ? "cancelled"
-              : details.compactAttention?.incomplete
-                ? "uncertain"
-                : details.counts.failed || details.truncated
-                  ? "warning"
-                  : "success",
-          notices: codeModeVisibleNotices(details, true),
-        },
-      },
-    );
+      timingEnabled: presentation.timingEnabled ?? true,
+      contentOnly: presentation.contentOnly === true,
+      program: presentation.program,
+    });
   const container = new Container();
-  const hidden = details.counts.total - details.toolCalls.length;
-  if (hidden > 0) container.addChild(new Text(theme.fg("dim", `+${hidden} earlier`), 0, 0));
-  for (const entry of details.toolCalls) {
-    container.addChild(new Text(activityRow(entry, theme, animationFrame), 0, 0));
-  }
-  container.addChild(new Text(footerLine(details, isPartial, isError, theme), 0, 0));
-  for (const notice of visibleNotices(details, expanded))
-    container.addChild(new Text(sanitizeTerminalLine(notice), 0, 0));
-  if (isPartial) return container;
-  if (stripTerminalControls(textContentOf(result)).length > 0) {
-    container.addChild(new Text(expandHintLine(isError, theme, expandKeys), 0, 0));
-  }
+  container.addChild(lines((width) => renderCompactIssues(issues, theme, width, false, "")));
+  if (isPartial && details.counts.total === 0)
+    container.addChild(new Text(theme.fg("muted", "Starting…"), 0, 0));
+  // Preview style lists every retained call; compact style keeps the five most relevant.
+  container.addChild(
+    lines((width) =>
+      renderCompactChildren({ total: details.counts.total, entries: rows }, theme, width, {
+        animationFrame,
+        timingEnabled: presentation.timingEnabled ?? true,
+        all: true,
+      }),
+    ),
+  );
+  if (!isPartial && stripTerminalControls(raw).length > 0)
+    container.addChild(
+      new Text(
+        renderExpansionAffordance(
+          isError ? "error" : "output",
+          false,
+          theme,
+          expandKeyHint(expandKeys, "expand"),
+        ),
+        0,
+        0,
+      ),
+    );
   return container;
 };
 
@@ -290,21 +198,23 @@ export const renderCodeModeToolResult = (
   context: CodeModeRenderContext | undefined,
   animationFrame = 0,
   expandKeys: ReadonlyArray<string> = [],
-  presentation: ExpandedPresentation = {},
+  presentation: CodeModePresentation = {},
 ): CodeModeResultRender => {
   const guarded = <Value>(read: () => Value): boolean =>
     invokeHostCallback(() => read() === true, false);
-  const isPartial = guarded(() => options.isPartial);
-  const isError = guarded(() => context?.isError);
-  const expanded = guarded(() => context?.expanded);
+  const view = {
+    isPartial: guarded(() => options.isPartial),
+    isError: guarded(() => context?.isError),
+    expanded: guarded(() => context?.expanded),
+  };
   if (presentation.readRequest)
     return {
       component: renderCodeModeResultRead(
         emergencyResultText(result),
         presentation.summary,
-        isPartial,
-        isError,
-        expanded,
+        view.isPartial,
+        view.isError,
+        view.expanded,
         theme,
         presentation.contentOnly,
       ),
@@ -312,48 +222,25 @@ export const renderCodeModeToolResult = (
     };
   let details: CodeModeRenderDetails;
   try {
-    const rawDetails = result.details;
-    details = decodeCodeModeRenderDetails(rawDetails);
+    details = decodeCodeModeRenderDetails(result.details);
   } catch {
     details = decodeCodeModeRenderDetails(undefined);
   }
-  const shouldAnimate = isPartial && details.toolCalls.some((call) => call.status === "running");
+  const shouldAnimate =
+    view.isPartial && details.toolCalls.some((call) => call.status === "running");
+  // A drawing failure falls back to plain text rather than Pi's unframed JSON.
   const emergency = (): Component => {
     const output = emergencyResultText(result);
-    const component = new Container();
-    if (!presentation.contentOnly)
-      component.addChild(
-        new Text(
-          isPartial ? "Code Mode running" : isError ? "Code Mode failed" : "Code Mode result",
-          0,
-          0,
-        ),
-      );
-    if (!isPartial && output.length > 0) {
-      if (!expanded)
-        component.addChild(new Text(`▸ ${isError ? "error" : "output"} · expand`, 0, 0));
-      else {
-        component.addChild(new Text(isError ? "Raw error" : "Raw output", 0, 0));
-        component.addChild(new Text(output, 0, 0));
-      }
-    }
-    if (presentation.contentOnly) return component;
-    for (const notice of new Set([
-      ...visibleNotices(details, expanded),
-      ...(presentation.summary?.notices
-        ?.filter((notice) => expanded || codePreviews.isCompactAttention(notice))
-        .map((notice) => notice.text) ?? []),
-    ]))
-      component.addChild(new Text(stripTerminalControls(notice), 0, 0));
-    return component;
+    const label = view.isPartial ? "Code Mode running" : view.isError ? "Code Mode failed" : "";
+    const body = view.isPartial || output.length === 0 ? "" : view.expanded ? output : "";
+    return new Text([label, body].filter(Boolean).join("\n"), 0, 0);
   };
   try {
     const component = renderCodeModeToolResultUnsafe(
       result,
       details,
-      isPartial,
+      view,
       theme,
-      { isError, expanded },
       animationFrame,
       expandKeys,
       presentation,

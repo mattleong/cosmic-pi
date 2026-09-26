@@ -45,12 +45,12 @@ describe("MCP result projection", () => {
         expect(execution.reply.data).toMatchObject({ result: remote });
         const card = decodeMcpCardDetails({ details: execution.reply });
         expect(card.notices).toEqual([]);
-        expect(card.warnings.filter((warning) => warning.includes("validation"))).toHaveLength(1);
-        expect(
-          card.warnings.some((warning) =>
-            warning.includes(`result.read id="${execution.reply.resultId}"`),
-          ),
-        ).toBe(true);
+        const issues = card.presentation.issues;
+        expect(issues.filter((issue) => issue.code.startsWith("validation-"))).toHaveLength(1);
+        expect(issues.map((issue) => issue.code)).not.toContain("unclassified-notices");
+        expect(issues.find((issue) => issue.code === "retained-output")?.detail).toContain(
+          `result.read id="${execution.reply.resultId}"`,
+        );
         expect(encodeExecution(execution)).toBe(before);
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );

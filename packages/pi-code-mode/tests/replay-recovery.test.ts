@@ -1,107 +1,87 @@
-import { describe, expect, it } from "vitest";
-import { INCOMPLETE_ATTENTION } from "../src/tools/compact-evidence.ts";
-import { callEntryDetails, MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
-import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
-import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
+import { afterEach, describe, expect, it } from "vitest";
 import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
-import { renderResultText } from "./support/presentation.ts";
+import { callEntryDetails, MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
+import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
+import { summarize, withLedger } from "./support/compact.ts";
+import {
+  presentationView,
+  renderResultText,
+  restorePresentationSettings,
+} from "./support/presentation.ts";
 
-const notices = Array.from({ length: 32 }, (_, index) => ({
-  kind: "recovery" as const,
-  text: `Check retained operation ${index} before retrying.`,
-}));
-const recovery = "Check separately retained operation before retrying.";
-const issues = { coverage: "complete", entries: [] };
-const receipt = {
+afterEach(restorePresentationSettings);
+
+const v2Receipt = {
   version: 2,
-  issues,
-  subject: "safe",
+  issues: { coverage: "complete", entries: [] },
+  subject: "OLD_RECEIPT_SUBJECT",
   outcome: "success",
   deliveryFailed: false,
-  notices: [{ kind: "recovery", text: recovery }],
+  notices: [{ kind: "recovery", text: "OLD_RECOVERY_NOTICE" }],
 };
-const replay = <Compact>(compact?: Compact) => ({
+const v2Ledger = {
+  version: 2,
+  issues: { coverage: "complete", entries: [] },
+  admitted: 1,
+  started: 1,
+  observed: 1,
+  unsupported: 0,
+  errors: 0,
+  warnings: 0,
+  cancelled: 0,
+  uncertain: 0,
+  incomplete: false,
+  notices: [{ kind: "recovery", text: "OLD_LEDGER_NOTICE" }],
+};
+const history = <Compact>(compact: Compact) => ({
   ...callEntryDetails([{ tool: "pi.read", status: "completed" }]),
-  toolCalls: [
-    { tool: "pi.read", status: "completed", compact: compact ?? { ...receipt, subject: 42 } },
-  ],
+  toolCalls: [{ tool: "pi.read", status: "completed", compact }],
   outputKind: "text",
-  compactAttention: {
-    version: 2,
-    issues,
-    admitted: 1,
-    started: 1,
-    observed: 1,
-    unsupported: 0,
-    errors: 0,
-    warnings: 0,
-    cancelled: 0,
-    uncertain: 0,
-    incomplete: true,
-    notices,
-  },
+  compactAttention: v2Ledger,
 });
-const summarize = <Details>(details: Details, expanded = false) =>
-  codeModeCompactSummary({
-    phase: "settled",
-    args: {},
-    result: { details, content: [{ type: "text", text: "output" }] },
-    context: opaqueFixture({ expanded, isError: false }),
-  });
+const args = { code: "return 1", intent: "Replayed history" };
 
-describe("replayed receipt recovery", () => {
-  it("preserves independent recovery beyond the aggregate cap without trusting malformed outcomes", () => {
-    const details = decodeCodeModeRenderDetails(replay());
-    expect(details.toolCalls[0]?.compact).toBeUndefined();
-    expect(details.compactAttention?.notices).toHaveLength(32);
-    expect(details.recoveredNotices).toEqual([{ kind: "recovery", text: recovery }]);
-    for (const expanded of [false, true]) {
-      const summary = summarize(replay(), expanded);
-      expect(summary?.outcome).toBe("uncertain");
-      expect(summary?.notices?.map((notice) => notice.text)).toEqual(
-        expect.arrayContaining([recovery, INCOMPLETE_ATTENTION]),
-      );
+describe("replayed history", () => {
+  it("falls back to the generic row for old ledgers without decoding their evidence", () => {
+    const details = history(v2Receipt);
+    const decoded = decodeCodeModeRenderDetails(details);
+    expect(decoded.compactAttention).toBeUndefined();
+    expect(decoded.toolCalls[0]?.compact).toBeUndefined();
+    expect(summarize(details)).toBeUndefined();
+    const { view, execute } = presentationView("off", "compact");
+    for (const isError of [false, true]) {
+      const result = {
+        content: [{ type: "text" as const, text: "FIRST_LINE\nSECOND_LINE" }],
+        details,
+      };
+      for (const expanded of [false, true]) {
+        view.call(args, { expanded, isError });
+        view.result(result, { expanded, isError });
+        const text = view.render().join("\n");
+        expect(text).toContain("Replayed history");
+        expect(text).not.toMatch(/OLD_RECOVERY_NOTICE|OLD_LEDGER_NOTICE|OLD_RECEIPT_SUBJECT/u);
+        expect(text.includes("FIRST_LINE")).toBe(expanded || isError);
+        expect(text.includes("SECOND_LINE")).toBe(expanded);
+      }
     }
+    expect(execute).not.toHaveBeenCalled();
   });
 
-  it("recovers per-call notices when replayed aggregate notices also overflow", () => {
-    const raw = replay();
-    const details = {
-      ...raw,
-      compactAttention: {
-        ...raw.compactAttention,
-        notices: [...notices, { kind: "recovery", text: recovery }],
-      },
-    };
-    const normalized = decodeCodeModeRenderDetails(details);
-    expect(normalized.recoveredNotices).toEqual([...notices, { kind: "recovery", text: recovery }]);
-    expect(normalized.compactAttention?.incomplete).toBe(true);
-    expect(summarize(details)?.notices?.some((notice) => notice.text === recovery)).toBe(true);
-  });
-
-  it("salvages v1 receipt and ledger notices as incomplete, uncertain history", () => {
-    const ledgerRecovery = "Check the recorded operation before retrying.";
-    const { issues: _receiptIssues, ...v1Receipt } = { ...receipt, version: 1 };
-    const { issues: _ledgerIssues, ...v1Ledger } = {
-      ...replay().compactAttention,
-      version: 1,
-      incomplete: false,
-      notices: [{ kind: "recovery", text: ledgerRecovery }],
-    };
-    const details = { ...replay(v1Receipt), compactAttention: v1Ledger };
-    const normalized = decodeCodeModeRenderDetails(details);
-    expect(normalized.toolCalls[0]?.compact).toBeUndefined();
-    expect(normalized.compactAttention?.incomplete).toBe(true);
-    expect(normalized.recoveredNotices?.map((notice) => notice.text)).toEqual([
-      ledgerRecovery,
-      recovery,
-    ]);
-    const summary = summarize(details);
-    expect(summary?.outcome).toBe("uncertain");
-    expect(summary?.children?.entries[0]?.status).toBe("returned");
-    expect(summary?.notices?.map((notice) => notice.text)).toEqual(
-      expect.arrayContaining([ledgerRecovery, recovery, INCOMPLETE_ATTENTION]),
-    );
+  it("drops a malformed receipt from its row and marks the current ledger incomplete", () => {
+    for (const compact of [v2Receipt, { ...v2Receipt, version: 3, subject: 42 }, null]) {
+      const details = withLedger({
+        ...callEntryDetails([{ tool: "pi.read", status: "completed" }]),
+        toolCalls: [{ tool: "pi.read", status: "completed", compact }],
+        outputKind: "text",
+      });
+      const decoded = decodeCodeModeRenderDetails(details);
+      expect(decoded.toolCalls[0]?.compact).toBeUndefined();
+      expect(decoded.compactAttention?.incomplete).toBe(true);
+      const summary = summarize(details);
+      expect(summary?.children?.entries[0]?.status).toBe("returned");
+      expect(summary?.outcome).toBe("warning");
+      expect(summary?.issues?.map((issue) => issue.code)).toEqual(["incomplete"]);
+    }
   });
 
   it("redacts legacy activity before bounding its display", () => {
@@ -117,58 +97,35 @@ describe("replayed receipt recovery", () => {
     expect(details.toolCalls[0]?.activity).not.toContain("private");
   });
 
-  it("retains recovery in unknown history and renderer failure fallbacks", () => {
-    const details = { ...replay(), outputKind: "unknown" };
+  it("renders unknown history and hostile themes without throwing or losing raw output", () => {
+    const details = withLedger({ ...history(undefined), outputKind: "unknown" });
     expect(summarize(details)).toBeUndefined();
+    const hostile = opaqueFixture({
+      fg: () => {
+        throw new Error("theme unavailable");
+      },
+    });
     for (const expanded of [false, true]) {
-      for (const fail of [false, true]) {
-        const theme = fail
-          ? opaqueFixture({
-              fg: () => {
-                throw new Error("theme unavailable");
-              },
-            })
-          : plainTheme;
+      for (const theme of [plainTheme, hostile]) {
         const rendered = renderResultText(
-          { details, content: [{ type: "text", text: "output" }] },
+          { details, content: [{ type: "text", text: "RAW_OUTPUT" }] },
           { expanded, theme },
         );
-        expect(rendered).toContain(recovery);
-        expect(rendered).toContain(INCOMPLETE_ATTENTION);
+        expect(rendered.includes("RAW_OUTPUT")).toBe(expanded);
       }
     }
   });
 
-  it("recovers valid notices from invalid rows, sanitizes them, and respects both existing bounds", () => {
+  it("bounds rows and ignores hostile row entries", () => {
     const details = decodeCodeModeRenderDetails({
       toolCalls: Array.from({ length: MAX_PROGRESS_ENTRIES + 1 }, () => ({
         status: "unknown",
-        compact: {
-          ...receipt,
-          notices: [
-            { kind: "recovery", text: "Check token=secret-value before retrying.\u001b[31m" },
-            ...notices,
-          ],
-        },
+        compact: { ...v2Receipt, version: 3 },
       })),
+      compactAttention: { ...v2Ledger, version: 3 },
     });
     expect(details.toolCalls).toEqual([]);
+    expect(details.compactEligible).toBe(false);
     expect(details.compactAttention?.incomplete).toBe(true);
-    expect(details.recoveredNotices).toHaveLength(MAX_PROGRESS_ENTRIES * 32);
-    expect(JSON.stringify(details.recoveredNotices)).not.toMatch(/secret-value|\\u001b/);
-  });
-
-  it("keeps routine recovery expanded-only after malformed sibling recovery", () => {
-    const details = replay({
-      ...receipt,
-      subject: null,
-      notices: [{ kind: "recovery", text: recovery, expandedOnly: true }],
-    });
-    const summary = summarize(details);
-    expect(summary?.notices?.find((notice) => notice.text === recovery)?.expandedOnly).toBe(true);
-    for (const expanded of [false, true]) {
-      const rendered = renderResultText({ details, content: [] }, { expanded });
-      expect(rendered.includes(recovery)).toBe(expanded);
-    }
   });
 });

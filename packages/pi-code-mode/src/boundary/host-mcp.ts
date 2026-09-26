@@ -145,9 +145,19 @@ export const makeMcpDispatch = (options: {
                               outcome: reply.outcome,
                               isError: reply.isError,
                               incomplete: true,
-                              issues: { coverage: "unknown", entries: [] },
+                              // Unclassified, but the server's own notices must not be lost.
+                              issues:
+                                reply.notices.length > 0
+                                  ? [
+                                      {
+                                        severity: "warning",
+                                        code: "unclassified-notices",
+                                        message: "The server reported additional warnings",
+                                        detail: reply.notices.join("\n"),
+                                      },
+                                    ]
+                                  : [],
                               truncated: false,
-                              notices: [...reply.notices],
                             });
                             validatedReply = reply;
                             return reply;

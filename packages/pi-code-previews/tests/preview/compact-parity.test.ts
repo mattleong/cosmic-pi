@@ -2,36 +2,34 @@ import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { formatToolCallDuration } from "../../src/preview/format";
-import type { CompactSummary } from "../../src/tools/compact-summary";
+import type { CompactChild, CompactSummary } from "../../src/tools/compact-summary";
 import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
 
 describe("shared semantic row", () => {
   it("uses identical clipping and detail priorities after branch indentation", () => {
     for (const width of [24, 48, 100])
       for (const timingEnabled of [false, true]) {
-        for (const showTiming of [false, true]) {
-          const summary: CompactSummary = {
+        for (const counters of [["", "3 matches"], []]) {
+          const fields = {
             subject: "src/" + "long/".repeat(15) + "日本語.ts\n\u001b[2J",
             action: "inspect\tfile",
-            counters: ["", "3 matches"],
+            counters,
             metadata: ["fallback"],
-            outcome: "warning",
           };
-          if (showTiming) summary.showTiming = true;
           const standalone = renderCompactToolCall(
             {
               name: "read",
               phase: "settled",
-              summary,
-              duration: formatToolCallDuration(123),
-              elapsedMs: 123,
+              summary: { ...fields, outcome: "warning" },
+              duration: formatToolCallDuration(12_300),
+              elapsedMs: 12_300,
               timingEnabled,
             },
             theme,
             width,
           )[0]!;
           const child = compactChildren(
-            [{ ...summary, label: "read", status: "warning", durationMs: 123 }],
+            [{ ...fields, label: "read", status: "warning", durationMs: 12_300 }],
             width + 5,
             { timing: timingEnabled },
           )[0]!;
@@ -78,29 +76,28 @@ describe("shared semantic row", () => {
           }
   });
 
-  it("keeps selected child recovery independent of the child row budget", () => {
-    const entries = Array.from({ length: 8 }, (_, index) => ({
+  it("shows selected children's own issues and counts hidden failures", () => {
+    const entries: CompactChild[] = Array.from({ length: 8 }, (_, index) => ({
       label: `read-${index}`,
-      status: "error" as const,
-      outcome: "success" as const,
-      notices: [
+      status: "error",
+      issues: [
         {
-          kind: "recovery" as const,
-          text: `delivery-${index}: do not replay`,
-          description: `delivery-${index} failed`,
+          severity: "error",
+          code: "delivery",
+          message: `delivery-${index} failed`,
+          detail: "Do not replay the request.",
         },
       ],
     }));
-    const rows = compactChildren(entries, 100);
+    const rows = compactChildren(entries, 100).map(stripAnsi);
     expect(rows.filter((row) => row.includes("delivery-"))).toHaveLength(5);
-    expect(rows.join("\n")).not.toContain("do not replay");
-    expect(rows.join("\n")).toContain("3 more");
-    // Delivery failure remains authoritative even when the operation succeeded.
-    const success = compactChildren(
-      [{ label: "read", status: "success", outcome: "success" }],
-      100,
-    );
-    const failure = compactChildren([{ label: "read", status: "error", outcome: "success" }], 100);
+    const text = rows.join("\n");
+    expect(text).not.toContain("Do not replay");
+    expect(rows.at(-1)).toContain("3 more");
+    expect(rows.at(-1)).toContain("3 failed");
+    // Delivery status belongs to the child, whatever its routine detail says.
+    const success = compactChildren([{ label: "read", status: "success" }], 100);
+    const failure = compactChildren([{ label: "read", status: "error" }], 100);
     expect(stripAnsi(failure.join(""))).not.toBe(stripAnsi(success.join("")));
   });
 });

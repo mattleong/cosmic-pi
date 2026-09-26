@@ -3,7 +3,7 @@ import * as Predicate from "effect/Predicate";
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createWriteToolDefinition, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { FullWidthDiffText } from "../../diff/full-width-text";
 import { createSimpleDiff } from "../../diff/structured";
 import { describeDiffContract, diffSummarySeparator, summarizeDiff } from "../../diff/summary";
@@ -14,7 +14,6 @@ import { hiddenPreviewExpandHintForShell } from "../../preview/bordered-tool-cal
 import { codePreviewSettings } from "../../config/state";
 import { countLabel, formatBytes } from "../../shared/helpers";
 import { getObjectValue } from "../../shared/helpers";
-import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg } from "../data/args";
@@ -37,6 +36,8 @@ import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { diffPreviewCacheKey, writeCallPreviewCacheKey } from "./shared/preview-cache-key";
 import { renderContentPreview } from "./shared/content-preview";
 import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
+import { argumentIssues, previewCallIssues, withPreviewIssues } from "./shared/preview-issues";
+import { renderPreviewError } from "./shared/result-prelude";
 
 export function createWritePreviewTool(cwd: string) {
   const originalWrite = createWriteToolDefinition(cwd);
@@ -68,23 +69,25 @@ export function createWritePreviewTool(cwd: string) {
         content,
         piLanguage: getLanguageFromPath(path),
       });
-      if (!renderContext.expanded && !codePreviewSettings.writeContentPreview)
-        return new Text(
-          `${formatWriteCallHeader(
-            content,
-            path,
-            cwd,
-            theme,
-            lang,
-            countContentLines(content),
-          )}${formatOptionalHiddenHint(
-            hiddenPreviewExpandHintForShell(renderContext.state, theme),
-          )}`,
-          0,
-          0,
+      const issues = previewCallIssues(renderContext.state, theme, () =>
+        argumentIssues("write", renderContext),
+      );
+      if (!renderContext.expanded && !codePreviewSettings.writeContentPreview) {
+        const hidden = new Container();
+        hidden.addChild(
+          new Text(
+            formatWriteCallHeader(content, path, cwd, theme, lang, countContentLines(content)),
+            0,
+            0,
+          ),
         );
+        hidden.addChild(issues);
+        const hint = hiddenPreviewExpandHintForShell(renderContext.state, theme);
+        if (hint) hidden.addChild(new Text(hint, 0, 0));
+        return hidden;
+      }
       const previewKey = writeCallPreviewCacheKey(content, path, renderContext.expanded, theme);
-      return cachedPreview(
+      const preview = cachedPreview(
         renderContext.state,
         "writeCallPreviewKey",
         "writeCallPreviewComponent",
@@ -97,80 +100,85 @@ export function createWritePreviewTool(cwd: string) {
             renderContext.expanded,
             theme,
             lang,
+            issues,
             renderContext.invalidate,
           ),
       );
+      return preview;
     },
 
-    renderResult(result, { expanded }, theme, renderContext) {
-      const firstText = getTextContent(result.content);
-      if (renderContext.isError)
-        return new Text(theme.fg("error", escapeControlChars(firstText || "Write failed")), 0, 0);
+    renderResult: withPreviewIssues(
+      "write",
+      (result, { expanded }, theme, renderContext) => {
+        const firstText = getTextContent(result.content);
+        if (renderContext.isError) return renderPreviewError(theme, expanded, firstText);
 
-      const path = getPathArg(renderContext.args);
-      const content = Predicate.isString(renderContext.args?.content)
-        ? renderContext.args.content
-        : "";
-      const stateKey = "codePreviewWriteBeforeSnapshot";
-      const before = Object.hasOwn(renderContext.state, stateKey)
-        ? renderContext.state[stateKey]
-        : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
-      renderContext.state[stateKey] = before;
-      const beforeContent = getObjectValue(before, "content");
-      const applied = (note: string) =>
-        new Text(theme.fg("success", "✓ Write applied") + note, 0, 0);
-      const skipReason = getWriteDiffSkipReason(before, content);
-      if (skipReason) return applied(theme.fg("muted", ` · diff skipped: ${skipReason}`));
-      if (Predicate.isString(beforeContent) && beforeContent !== content) {
-        if (!expanded && !codePreviewSettings.writeContentPreview)
-          return applied(
-            formatOptionalHiddenHint(hiddenPreviewExpandHintForShell(renderContext.state, theme)),
-          );
-        const guard = getWriteDiffGuard(beforeContent, content);
-        if (guard) {
-          const skippedFor = guard === "size" ? "large content" : "complex rewrite";
-          return applied(theme.fg("muted", ` · diff skipped for ${skippedFor}`));
-        }
-        const render = () =>
-          renderWriteDiffPreview(
-            beforeContent,
-            content,
+        const path = getPathArg(renderContext.args);
+        const content = Predicate.isString(renderContext.args?.content)
+          ? renderContext.args.content
+          : "";
+        const stateKey = "codePreviewWriteBeforeSnapshot";
+        const before = Object.hasOwn(renderContext.state, stateKey)
+          ? renderContext.state[stateKey]
+          : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
+        renderContext.state[stateKey] = before;
+        const beforeContent = getObjectValue(before, "content");
+        const applied = (note: string) =>
+          new Text(theme.fg("success", "✓ Write applied") + note, 0, 0);
+        const skipReason = getWriteDiffSkipReason(before, content);
+        if (skipReason) return applied(theme.fg("muted", ` · diff skipped: ${skipReason}`));
+        if (Predicate.isString(beforeContent) && beforeContent !== content) {
+          if (!expanded && !codePreviewSettings.writeContentPreview)
+            return applied(
+              formatOptionalHiddenHint(hiddenPreviewExpandHintForShell(renderContext.state, theme)),
+            );
+          const guard = getWriteDiffGuard(beforeContent, content);
+          if (guard) {
+            const skippedFor = guard === "size" ? "large content" : "complex rewrite";
+            return applied(theme.fg("muted", ` · diff skipped for ${skippedFor}`));
+          }
+          const render = () =>
+            renderWriteDiffPreview(
+              beforeContent,
+              content,
+              path,
+              expanded,
+              theme,
+              renderContext.invalidate,
+            );
+          const source = `${beforeContent}\0${content}`;
+          const previewKey = diffPreviewCacheKey(
+            "write-result",
+            source,
             path,
             expanded,
             theme,
+            codePreviewSettings.writeCollapsedLines,
+          );
+          return cachedDeferredPreview(
+            renderContext.state,
+            "writeResultPreviewKey",
+            "writeResultPreviewComponent",
+            previewKey,
+            source,
+            "Rendering write diff…",
+            theme,
+            render,
             renderContext.invalidate,
           );
-        const source = `${beforeContent}\0${content}`;
-        const previewKey = diffPreviewCacheKey(
-          "write-result",
-          source,
-          path,
-          expanded,
-          theme,
-          codePreviewSettings.writeCollapsedLines,
+        }
+        if (Predicate.isString(beforeContent))
+          return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
+        // Missing history is an issue above the body.
+        if (!isKnownNewWrite(before, result.details)) return applied("");
+        return new Text(
+          theme.fg("success", `✓ New file (${countLabel(countContentLines(content), "line")})`),
+          0,
+          0,
         );
-        return cachedDeferredPreview(
-          renderContext.state,
-          "writeResultPreviewKey",
-          "writeResultPreviewComponent",
-          previewKey,
-          source,
-          "Rendering write diff…",
-          theme,
-          render,
-          renderContext.invalidate,
-        );
-      }
-      if (Predicate.isString(beforeContent))
-        return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
-      if (!isKnownNewWrite(before, result.details))
-        return applied(theme.fg("muted", " · previous content unavailable"));
-      return new Text(
-        theme.fg("success", `✓ New file (${countLabel(countContentLines(content), "line")})`),
-        0,
-        0,
-      );
-    },
+      },
+      "call",
+    ),
   });
 }
 
@@ -185,8 +193,9 @@ function renderWriteCallPreview(
   expanded: boolean,
   theme: Theme,
   lang: string | undefined,
+  issues: Component,
   invalidate?: () => void,
-): Text {
+): Container {
   const preview = renderContentPreview({
     content,
     limit: expanded ? 0 : codePreviewSettings.writeCollapsedLines,
@@ -196,11 +205,14 @@ function renderWriteCallPreview(
     emptyLabel: "Empty content",
     skipHighlightLabel: "Syntax highlighting skipped for large content",
   });
-  return new Text(
-    `${formatWriteCallHeader(content, path, cwd, theme, lang, preview.total)}\n${preview.text}`,
-    0,
-    0,
+  // Issues sit directly under the heading, above the content they may describe.
+  const container = new Container();
+  container.addChild(
+    new Text(formatWriteCallHeader(content, path, cwd, theme, lang, preview.total), 0, 0),
   );
+  container.addChild(issues);
+  container.addChild(new Text(preview.text, 0, 0));
+  return container;
 }
 
 function formatWriteCallHeader(

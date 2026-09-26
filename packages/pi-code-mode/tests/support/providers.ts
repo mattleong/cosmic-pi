@@ -2,6 +2,7 @@ import { createEventBus, type ExtensionAPI } from "@earendil-works/pi-coding-age
 import {
   BACKGROUND_TASK_CODE_MODE_QUERY,
   BACKGROUND_TASK_CODE_MODE_VERSION,
+  BACKGROUND_TASK_PRESENTATION_VERSION,
   normalizeBackgroundTaskCodeModeQuery,
   type BackgroundTaskCodeModeCapability,
 } from "pi-background-task/code-mode";
@@ -48,7 +49,9 @@ export const mcpProvider = (execute: McpExecute, options: ProviderOptions = {}):
  */
 export const backgroundTaskProvider = (
   execute: BackgroundTaskExecute,
-  options: ProviderOptions & { readonly presentationVersion?: 1 } = {},
+  options: ProviderOptions & {
+    readonly presentationVersion?: typeof BACKGROUND_TASK_PRESENTATION_VERSION;
+  } = {},
 ): Events => {
   const events = options.events ?? createEventBus();
   events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) =>

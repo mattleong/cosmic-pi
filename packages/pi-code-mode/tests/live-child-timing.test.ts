@@ -8,6 +8,7 @@ import { makeChildTimings, liveChildElapsed } from "../src/boundary/host-child-t
 import { codeModeCompactSummaryAtHost } from "../src/boundary/host-render-ticker.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { callEntryDetails, type CodeModeToolDetails } from "../src/tools/format.ts";
+import { withLedger } from "./support/compact.ts";
 import { executeHarness } from "./support/execute.ts";
 import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
@@ -50,7 +51,7 @@ describe("live nested timing", () => {
       status: "running" as const,
       liveTiming,
     }));
-    const details = callEntryDetails(calls);
+    const details = withLedger(callEntryDetails(calls));
     now = 3000;
     expect(live(details, now)).toEqual([2000, 1500]);
     now = 4000;
@@ -66,13 +67,16 @@ describe("live nested timing", () => {
   it("never times queued or replayed running calls and preserves authoritative settlement", () => {
     const timing = makeChildTimings(() => 5000);
     const liveTiming = timing.start()!;
-    const details = callEntryDetails([
-      { tool: "pi.bash", status: "queued", liveTiming, durationMs: 123 },
-      { tool: "pi.bash", status: "running", durationMs: 123 },
-      { tool: "pi.bash", status: "running", liveTiming },
-      { tool: "pi.bash", status: "completed", durationMs: 9000 },
-      { tool: "pi.bash", status: "cancelled" },
-    ]);
+    const details = withLedger({
+      ...callEntryDetails([
+        { tool: "pi.bash", status: "queued", liveTiming, durationMs: 123 },
+        { tool: "pi.bash", status: "running", durationMs: 123 },
+        { tool: "pi.bash", status: "running", liveTiming },
+        { tool: "pi.bash", status: "completed", durationMs: 9000 },
+        { tool: "pi.bash", status: "cancelled" },
+      ]),
+      outputKind: "text",
+    });
     try {
       // The settled measurement can include queue wait. Never replace it with a live estimate.
       expect(live(details, 6000)).toEqual([undefined, undefined, 1000, 9000, undefined]);
@@ -83,11 +87,14 @@ describe("live nested timing", () => {
         9000,
         undefined,
       ]);
-      expect(
-        codeModeCompactSummary(input(details))?.children?.entries.every(
-          (child) => child.showTiming === undefined,
-        ),
-      ).toBe(true);
+      // Without the host's live clock, no running duration is estimated.
+      expect(durations(codeModeCompactSummary(input(details)))).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        9000,
+        undefined,
+      ]);
     } finally {
       timing.close();
     }

@@ -19,7 +19,7 @@ Pi/Jiti loads the shipped TypeScript source and fixed validator helper. No build
 
 ## Tool display
 
-MCP honors pi-code-previews' `toolCallCollapsedStyle: "compact"` setting. Pending calls show their action and target; completed replies show semantic counts with warnings and recovery guidance kept visible. Expansion retains the existing detailed renderer. Failed, unknown, not-sent, and incomplete historical results keep their existing presentation rather than hide execution uncertainty. The default `"preview"` style, native images, and machine replies are unchanged.
+MCP honors pi-code-previews' `toolCallCollapsedStyle: "compact"` setting. Pending calls show their action and target; completed replies show semantic counts and one line per warning or error. Expansion adds each issue's recovery detail above the arguments and the labeled readable and raw result. Unknown, malformed, and incomplete historical results keep the detailed renderer rather than hide execution uncertainty. The default `"preview"` style, native images, and machine replies are unchanged.
 
 ## Configuration and trust
 

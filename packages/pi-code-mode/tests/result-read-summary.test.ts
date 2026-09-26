@@ -26,14 +26,17 @@ describe("retained-read summaries", () => {
       const projected = summary({ ...page, originalOutcome });
       expect(projected?.outcome).toBe(originalOutcome === "succeeded" ? "success" : "warning");
       expect(projected?.counters?.join(" ")).toContain("10..20/30");
-      expect(projected?.notices).toContainEqual(
-        expect.objectContaining({ expandedOnly: true, text: expect.stringContaining("offset=20") }),
+      // Paging is informational: its continuation is expanded-only detail.
+      expect(projected?.issues).toContainEqual(
+        expect.objectContaining({ severity: "info", detail: expect.stringContaining("offset=20") }),
       );
-      expect(projected?.issues?.entries.length).toBe(originalOutcome === "succeeded" ? 0 : 1);
+      expect(projected?.issues?.filter((issue) => issue.severity === "warning")).toHaveLength(
+        originalOutcome === "succeeded" ? 0 : 1,
+      );
     }
     const eof = summary({ ...page, end: 30, next: null });
     expect(eof?.outcome).toBe("success");
-    expect(eof?.notices).toEqual([]);
+    expect(eof?.issues).toEqual([]);
     expect(summary({ ...page, offset: 0, end: 0, total: 0, next: null })?.outcome).toBe("success");
   });
 
@@ -49,9 +52,10 @@ describe("retained-read summaries", () => {
       expect(failure.text).toBe("");
       const projected = summary(failure.presentation);
       expect(projected?.outcome).toBe("error");
-      expect(projected?.issues?.entries[0]?.code).toBe(code);
-      expect(projected?.issues?.entries[0]?.recovery).toEqual([]);
-      expect(projected?.issues?.entries[0]?.diagnostics?.length).toBeGreaterThan(0);
+      expect(projected?.issues).toHaveLength(1);
+      expect(projected?.issues?.[0]).toMatchObject({ severity: "error", code });
+      expect(projected?.issues?.[0]?.message.length).toBeGreaterThan(0);
+      expect(projected?.issues?.[0]?.detail?.length).toBeGreaterThan(0);
     }
   });
 
@@ -68,7 +72,6 @@ describe("retained-read summaries", () => {
         },
       };
       const projected = resultReadCompactSummary(details, id)!;
-      const issue = projected.issues!.entries[0]!;
       const { view } = presentationView("off", "compact");
       const render = (expanded: boolean, width: number) => {
         view.call({ action: "result.read", id }, { expanded });
@@ -78,13 +81,16 @@ describe("retained-read summaries", () => {
       for (const width of [60, 80]) {
         const collapsed = render(false, width);
         expect(collapsed).toContain(projected.counters![0]);
-        expect(collapsed).toContain(issue.description);
-        expect(collapsed).not.toContain(issue.cause);
-        for (const diagnostic of issue.diagnostics ?? [])
-          expect(collapsed).not.toContain(diagnostic);
+        for (const issue of projected.issues!) {
+          expect(collapsed.includes(issue.message)).toBe(issue.severity !== "info");
+          expect(collapsed).not.toContain(issue.detail);
+        }
       }
       const expanded = render(true, 300);
-      for (const diagnostic of issue.diagnostics ?? []) expect(expanded).toContain(diagnostic);
+      for (const issue of projected.issues!) {
+        expect(expanded.split(issue.message)).toHaveLength(2);
+        expect(expanded.split(issue.detail!)).toHaveLength(2);
+      }
     }
   });
 

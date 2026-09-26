@@ -1,112 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { selectCompactChildren, renderCompactChildren } from "../../src/preview/compact-children";
-import { renderCompactFailure } from "../../src/preview/compact-tool-call";
-import {
-  isCompactAttention,
-  type CompactChild,
-  type CompactNotice,
-} from "../../src/tools/compact-summary";
-import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
+import { selectCompactChildren } from "../../src/preview/compact-children";
+import type { CompactIssue } from "../../src/tools/compact-issues";
+import type { CompactChild } from "../../src/tools/compact-summary";
+import { compactChildren, stripAnsi } from "../support/render";
+
+const failure: CompactIssue = { severity: "error", code: "remote", message: "Element detached" };
+const caution: CompactIssue = { severity: "warning", code: "cleanup", message: "Cleanup pending" };
+const hint: CompactIssue = {
+  severity: "info",
+  code: "page",
+  message: "More results available",
+  detail: "Use offset=143 to continue.",
+};
+const plain = (rows: readonly string[]) => rows.map(stripAnsi);
+const omissionRows = (rows: string[]) => rows.filter((row) => !/retained-\d/u.test(row));
 
 describe("compact child selection", () => {
   it.each(["tree", "flat"] as const)(
-    "expands every retained child in %s view while collapsed selection stays capped at five",
+    "caps collapsed %s rows at five and lists every retained child on request",
     (layout) => {
       const entries: CompactChild[] = Array.from({ length: 8 }, (_, index) => ({
         label: `retained-${index}`,
         status: "success",
       }));
-      const children = { entries, total: 12 };
-      const expanded = compactChildren(entries, 80, { total: 12, expanded: true, layout }).map(
-        stripAnsi,
-      );
-      expect(expanded.slice(0, -1).map((row) => row.match(/retained-\d/u)?.[0])).toEqual(
-        entries.map((entry) => entry.label),
-      );
-      expect(expanded.at(-1)).toContain("4 more");
-      const collapsed = renderCompactChildren(children, theme, 80);
-      expect(collapsed).toEqual(renderCompactChildren(children, theme, 80, 0, true, false));
-      expect(selectCompactChildren(children).entries).toEqual(entries.slice(3));
-      expect(collapsed).toHaveLength(6);
-      expect(stripAnsi(collapsed.at(-1)!)).toContain("7 more");
+      const all = plain(compactChildren(entries, 80, { total: 12, all: true, layout }));
+      const labels = all.map((row) => row.match(/retained-\d/u)?.[0]).filter(Boolean);
+      expect(labels).toEqual(entries.map((entry) => entry.label));
+      expect(omissionRows(all)).toEqual([expect.stringContaining("4")]);
+      expect(selectCompactChildren({ entries, total: 12 }).entries).toEqual(entries.slice(3));
+      const collapsed = plain(compactChildren(entries, 80, { total: 12, layout }));
+      expect(collapsed.filter((row) => /retained-\d/u.test(row))).toHaveLength(5);
+      expect(omissionRows(collapsed)).toEqual([expect.stringContaining("7")]);
     },
   );
-
-  it.each(["tree", "flat"] as const)(
-    "keeps %s informational hints beneath their child and wraps complete warnings",
-    (layout) => {
-      const warning = "Sensitive content requires review before sharing with another recipient.";
-      const entries: CompactChild[] = [
-        {
-          label: "first",
-          status: "success",
-          notices: [
-            { kind: "recovery", text: "Continue at offset=143", expandedOnly: true },
-            { kind: "warning", text: warning, description: warning, expandedOnly: true },
-          ],
-        },
-        { label: "second", status: "success" },
-      ];
-      for (const expanded of [false, true]) {
-        const rows = compactChildren(entries, 35, { expanded, layout }).map(stripAnsi);
-        expect(rows.every((row) => visibleWidth(row) <= 35)).toBe(true);
-        const text = rows.join("\n");
-        expect(text.includes("offset=143")).toBe(expanded);
-        const warningRows = rows.slice(1, -1).filter((row) => !row.includes("offset=143"));
-        expect(warningRows.length).toBeGreaterThan(1);
-        expect(warningRows.map((row) => row.replace(/[│╰─]/gu, "").trim()).join(" ")).toBe(warning);
-        expect(rows[0]).toContain("first");
-        expect(rows.at(-1)).toContain("second");
-      }
-    },
-  );
-
-  it("hides only informational recovery in collapsed children and preserves expanded failure notices", () => {
-    const notices: CompactNotice[] = [
-      {
-        kind: "recovery",
-        text: "Continue at offset=143",
-        code: "read-pagination",
-        expandedOnly: true,
-      },
-      {
-        kind: "warning",
-        text: "Sensitive content",
-        description: "Sensitive content",
-        expandedOnly: true,
-      },
-      {
-        kind: "error",
-        text: "Independent error",
-        description: "Independent error",
-        expandedOnly: true,
-      },
-    ];
-    expect(notices.map(isCompactAttention)).toEqual([false, true, true]);
-    const children = compactChildren([{ label: "read", status: "success", notices }], 100).join(
-      "\n",
-    );
-    expect(children).not.toContain("offset=143");
-    expect(children).toContain("Sensitive content");
-    expect(children).toContain("Independent error");
-    for (const expanded of [false, true]) {
-      const text = renderCompactFailure(
-        {
-          name: "read",
-          phase: "settled",
-          expanded,
-          summary: { subject: "file", outcome: "error", notices },
-          failure: { cause: "Failed", details: "Complete failure" },
-        },
-        theme,
-        100,
-      ).join("\n");
-      expect(text.includes("offset=143")).toBe(expanded);
-      expect(text).toContain("Sensitive content");
-      expect(text).toContain("Independent error");
-    }
-  });
 
   it("preserves repeated calls and input order without mutating provider data", () => {
     const entries: readonly CompactChild[] = Object.freeze([
@@ -114,7 +41,11 @@ describe("compact child selection", () => {
       Object.freeze({ label: "read", status: "success" as const }),
       Object.freeze({ label: "grep", status: "running" as const }),
     ]);
-    expect(selectCompactChildren({ entries, total: 3 })).toEqual({ entries, omitted: 0 });
+    expect(selectCompactChildren({ entries, total: 3 })).toEqual({
+      entries,
+      omitted: 0,
+      hiddenFailed: 0,
+    });
   });
 
   it("keeps active and problem calls ahead of recent completions, with exact hidden totals", () => {
@@ -123,40 +54,183 @@ describe("compact child selection", () => {
       { label: "active", status: "running" },
       ...Array.from(
         { length: 30 },
-        (_, index): CompactChild => ({
-          label: `done-${index}`,
-          status: "success",
-        }),
+        (_, index): CompactChild => ({ label: `done-${index}`, status: "success" }),
       ),
     ];
     for (const total of [40, 270]) {
       const selected = selectCompactChildren({ entries, total });
-      expect(selected.entries.length).toBeLessThan(entries.length);
+      expect(selected.entries).toHaveLength(5);
       expect(selected.entries).toContain(entries[0]);
       expect(selected.entries).toContain(entries[1]);
       expect(selected.entries.at(-1)).toBe(entries.at(-1));
-      expect(selected.omitted).toBe(total - selected.entries.length);
-      expect(selected.entries.map((entry) => entries.indexOf(entry))).toEqual(
-        selected.entries.map((entry) => entries.indexOf(entry)).toSorted((a, b) => a - b),
-      );
+      expect(selected.omitted).toBe(total - 5);
+      expect(selected.hiddenFailed).toBe(0);
+      const order = selected.entries.map((entry) => entries.indexOf(entry));
+      expect(order).toEqual(order.toSorted((a, b) => a - b));
     }
+  });
+
+  it("counts only hidden failures, not hidden warnings, cancellations or successes", () => {
+    const entries: CompactChild[] = [
+      ...Array.from(
+        { length: 4 },
+        (_, index): CompactChild => ({
+          label: `old-failure-${index}`,
+          status: "error",
+        }),
+      ),
+      { label: "old-warning", status: "warning" },
+      { label: "old-cancelled", status: "cancelled" },
+      ...Array.from(
+        { length: 5 },
+        (_, index): CompactChild => ({
+          label: `recent-failure-${index}`,
+          status: "error",
+        }),
+      ),
+      { label: "recent-success", status: "success" },
+    ];
+    const selected = selectCompactChildren({ entries, total: 20 });
+    expect(selected.entries.map((entry) => entry.label)).toEqual(
+      Array.from({ length: 5 }, (_, index) => `recent-failure-${index}`),
+    );
+    expect(selected.hiddenFailed).toBe(4);
+    expect(selected.omitted).toBe(15);
+    const omission = plain(compactChildren(entries, 100, { total: 20 })).at(-1)!;
+    expect(omission).toContain("15");
+    expect(omission).toContain("4 failed");
+    const quiet = plain(compactChildren(entries.slice(4), 100, { total: 8 })).at(-1)!;
+    expect(quiet).not.toContain("failed");
   });
 
   it("bounds even all-active batches without manufacturing omitted entries", () => {
     const entries = Array.from(
       { length: 32 },
-      (_, index): CompactChild => ({
-        label: `call-${index}`,
-        status: "running",
-      }),
+      (_, index): CompactChild => ({ label: `call-${index}`, status: "running" }),
     );
     const selected = selectCompactChildren({ entries, total: 40 });
     expect(selected.entries.length).toBeLessThan(entries.length);
     expect(selected.entries.every((entry) => entries.includes(entry))).toBe(true);
     expect(selected.omitted + selected.entries.length).toBe(40);
-    expect(selectCompactChildren({ entries: [], total: 40 })).toEqual({ entries: [], omitted: 40 });
+    expect(selectCompactChildren({ entries: [], total: 40 })).toEqual({
+      entries: [],
+      omitted: 40,
+      hiddenFailed: 0,
+    });
+  });
+});
+
+describe("compact child issues", () => {
+  it("shows each collapsed row's primary issue in place of its counter", () => {
+    const rows = plain(
+      compactChildren(
+        [
+          {
+            label: "first",
+            status: "error",
+            counters: ["3 lines"],
+            issues: [hint, caution, failure],
+          },
+          { label: "second", status: "warning", counters: ["2 lines"], issues: [hint, caution] },
+          { label: "third", status: "success", counters: ["1 line"], issues: [hint] },
+        ],
+        100,
+      ),
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain("Element detached");
+    expect(rows[0]).toContain("+1");
+    expect(rows[0]).not.toMatch(/3 lines|Cleanup pending/u);
+    expect(rows[1]).toContain("Cleanup pending");
+    expect(rows[1]).not.toMatch(/2 lines|\+\d/u);
+    expect(rows[2]).toContain("1 line");
+    const text = rows.join("\n");
+    expect(text).not.toContain("More results available");
+    expect(text).not.toContain("offset=143");
   });
 
+  it("lists every flat-layout issue with its detail beneath the call", () => {
+    const rows = plain(
+      compactChildren(
+        [
+          { label: "first", status: "error", issues: [failure, hint] },
+          { label: "second", status: "success" },
+        ],
+        100,
+        { layout: "flat" },
+      ),
+    );
+    const at = (text: string) => rows.findIndex((row) => row.includes(text));
+    expect(at("first")).toBe(0);
+    expect(at("Element detached")).toBeGreaterThan(at("first"));
+    expect(at("More results available")).toBeGreaterThan(at("Element detached"));
+    expect(at("offset=143")).toBeGreaterThan(at("More results available"));
+    expect(at("second")).toBeGreaterThan(at("offset=143"));
+    expect(rows.filter((row) => row.includes("Element detached"))).toHaveLength(1);
+  });
+
+  it("moves a tree row's reason beneath the row rather than dropping it on narrow widths", () => {
+    const issue: CompactIssue = {
+      severity: "error",
+      code: "exit",
+      message: "Exited with code 1 after the lint step",
+    };
+    for (const width of [24, 40, 56, 100]) {
+      const rows = plain(
+        compactChildren(
+          [
+            {
+              label: "bash",
+              subject: "pnpm lint --max-warnings 0",
+              status: "error",
+              issues: [issue],
+            },
+            { label: "read", subject: "package.json", status: "success" },
+          ],
+          width,
+        ),
+      );
+      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+      expect(rows.join("").replace(/[\s│]/gu, "")).toContain(issue.message.replace(/\s/gu, ""));
+      expect(rows.filter((row) => row.includes("read"))).toHaveLength(1);
+    }
+    // With room, the reason stays on the row itself.
+    expect(
+      plain(compactChildren([{ label: "bash", status: "error", issues: [issue] }], 100)),
+    ).toHaveLength(1);
+  });
+
+  it("wraps flat-layout issues at narrow widths without clipping text", () => {
+    const issue: CompactIssue = {
+      severity: "warning",
+      code: "retained",
+      message: "Output was truncated before completion",
+      detail: "Read /tmp/retained-output-1234567890.txt before retrying.",
+    };
+    for (const width of [2, 4, 6, 8, 12, 20, 40, 80]) {
+      const rows = plain(
+        compactChildren(
+          [
+            {
+              label: "server.tool",
+              subject: "directory/".repeat(40),
+              status: "warning",
+              issues: [issue],
+            },
+          ],
+          width,
+          { layout: "flat" },
+        ),
+      );
+      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+      const text = rows.slice(1).join("").replace(/\s/gu, "");
+      expect(text).toContain(issue.message.replace(/\s/gu, ""));
+      expect(text).toContain(issue.detail!.replace(/\s/gu, ""));
+    }
+  });
+});
+
+describe("compact child rows", () => {
   it.each(["tree", "flat"] as const)(
     "renders untrusted %s child names as inert width-bounded text",
     (layout) => {
@@ -167,49 +241,16 @@ describe("compact child selection", () => {
               label: "read\n日本語\t\u001b[2J\r".repeat(30),
               subject: "path\n日本語\t\u001b[2J\r".repeat(30),
               status: "returned",
+              issues: [{ severity: "error", code: "x", message: "bad\n\u001b[2Jtext" }],
             },
           ],
           width,
-          { expanded: true, layout },
+          { layout },
         );
         expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
         expect(rows.join("")).not.toContain("\u001b[2J");
         expect(stripAnsi(rows.join(""))).not.toMatch(/[\n\r\t]/u);
       }
-    },
-  );
-
-  it.each(["tree", "flat"] as const)(
-    "keeps complete multiline recovery at narrow widths in %s calls",
-    (layout) => {
-      const recovery =
-        "Output was truncated.\nRead /tmp/retained-output-1234567890.txt before deciding whether to retry.";
-      // Collapsed rows show only a described recovery; expanded rows show its full text.
-      for (const width of [1, 2, 4, 5, 6, 7, 8, 12, 20, 40, 80])
-        for (const expanded of [false, true])
-          for (const description of [undefined, "abcdefghijklmnopqrstuvwxyz"]) {
-            const rows = compactChildren(
-              [
-                {
-                  label: "server.with.a.long.tool.name",
-                  subject: "directory/".repeat(40),
-                  status: "warning",
-                  notices: [
-                    { kind: "recovery", text: recovery, ...(description && { description }) },
-                  ],
-                },
-              ],
-              width,
-              { expanded, layout },
-            ).map(stripAnsi);
-            expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-            expect(
-              rows
-                .slice(1)
-                .join("")
-                .replace(/[\s│╰─]/gu, ""),
-            ).toBe(expanded ? recovery.replace(/\s/gu, "") : (description ?? ""));
-          }
     },
   );
 
@@ -227,68 +268,27 @@ describe("compact child selection", () => {
   it.each(["tree", "flat"] as const)(
     "shows measured %s durations only when timing is enabled",
     (layout) => {
-      for (const status of [
-        "pending",
-        "running",
-        "success",
-        "error",
-        "cancelled",
-        "returned",
-      ] as const) {
-        for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, 123]) {
-          for (const timingEnabled of [false, true]) {
-            const rows = compactChildren(
-              [
-                {
-                  label: "read",
-                  status,
-                  showTiming: true,
-                  ...(durationMs !== undefined && { durationMs }),
-                },
-              ],
-              80,
-              { timing: timingEnabled, expanded: true, layout },
-            );
-            expect(rows.join("").includes("123ms")).toBe(
-              timingEnabled && status !== "pending" && durationMs === 123,
-            );
-            expect(rows.join("")).not.toMatch(/NaN|Infinity|-1ms/u);
-          }
-        }
-      }
+      const statuses = ["pending", "running", "success", "error", "cancelled"] as const;
+      // Bash always shows its duration; other calls show only long ones.
+      for (const [label, measured, shown] of [
+        ["bash", 123, "123ms"],
+        ["read", 12_300, "12.3s"],
+        ["read", 123, undefined],
+      ] as const)
+        for (const status of statuses)
+          for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, measured])
+            for (const timing of [false, true]) {
+              const child: CompactChild = {
+                label,
+                status,
+                ...(durationMs !== undefined && { durationMs }),
+              };
+              const text = compactChildren([child], 80, { timing, layout }).join("");
+              expect(text.includes(shown ?? "123ms"), `${label} ${status} ${durationMs}`).toBe(
+                shown !== undefined && timing && status !== "pending" && durationMs === measured,
+              );
+              expect(text).not.toMatch(/NaN|Infinity|-1ms/u);
+            }
     },
   );
-
-  it("does not let child limits consume owned failure or recovery text", () => {
-    const rows = renderCompactFailure(
-      {
-        name: "code_mode",
-        phase: "settled",
-        summary: {
-          subject: "inspect",
-          outcome: "error",
-          children: {
-            entries: Array.from(
-              { length: 32 },
-              (): CompactChild => ({
-                label: "read",
-                status: "success",
-              }),
-            ),
-            total: 270,
-          },
-          notices: [{ kind: "recovery", text: "Check remote state before retrying." }],
-        },
-        failure: {
-          cause: "Delivery failed",
-          description: "Delivery failed",
-          details: "Delivery failed after dispatch",
-        },
-      },
-      theme,
-      80,
-    );
-    expect(rows.join("\n")).toContain("Delivery failed");
-    expect(rows.join("\n")).not.toContain("Check remote state before retrying.");
-  });
 });

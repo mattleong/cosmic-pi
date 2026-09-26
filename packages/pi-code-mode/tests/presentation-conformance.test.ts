@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyPresentationSettings } from "pi-code-previews/testing";
+import { TRUNCATED_OUTPUT_NOTICE } from "../src/ui/program-issues.ts";
+import { resultReadCompactSummary } from "../src/ui/result-read-summary.ts";
 import { ledgerDetails } from "./support/compact.ts";
 import { presentationView, restorePresentationSettings } from "./support/presentation.ts";
 import { EMPTY_RECEIPTS } from "./support/results.ts";
@@ -70,17 +72,15 @@ describe("Code Mode shared presentation conformance", () => {
             },
           },
         };
+        const summary = resultReadCompactSummary(result.details, "read-1")!;
+        expect(summary.outcome).toBe(originalOutcome === "succeeded" ? "success" : "warning");
         view.call({ action: "result.read", id: "read-1" }, { expanded: true });
         view.result(result, { expanded: true });
         const text = view.render().join("\n");
-        expect(text).not.toMatch(/Program|Calls|original-execution:|outer-information:/u);
+        expect(text).not.toMatch(/Program|Calls/u);
         expect(text.split("RETAINED_PAGE")).toHaveLength(2);
-        expect(text).toMatch(/\braw\b/i);
         expect(text.split('Continue with result.read id="read-1" offset=4.')).toHaveLength(2);
-        if (originalOutcome !== "succeeded")
-          expect(
-            text.split(`Original execution ${originalOutcome}; page read succeeded.`),
-          ).toHaveLength(2);
+        for (const issue of summary.issues!) expect(text.split(issue.message)).toHaveLength(2);
       }
       for (const resultRead of [
         undefined,
@@ -96,7 +96,6 @@ describe("Code Mode shared presentation conformance", () => {
         const text = view.render().join("\n");
         expect(text).not.toMatch(/Program|Calls|Page read succeeded/u);
         expect(text).toContain("UNVERIFIED_PAGE");
-        expect(text).toMatch(/\braw\b/i);
       }
     },
   );
@@ -182,14 +181,15 @@ describe("Code Mode shared presentation conformance", () => {
     view.call(args, { expanded: false });
     view.result(result, { expanded: false });
     const collapsed = view.render().join("\n");
-    expect(collapsed).toContain("Earlier changes may remain");
+    expect(collapsed).toContain("Output was cut off");
     expect(collapsed).not.toContain("UNTRUSTED_PAGE_MARKER");
+    expect(collapsed).not.toContain(TRUNCATED_OUTPUT_NOTICE);
     view.call(args, { expanded: true });
     view.result(result, { expanded: true });
     const expanded = view.render().join("\n");
     expect(expanded).toContain("UNTRUSTED_PAGE_MARKER");
-    expect(expanded).toContain("Output exceeded the output limit");
-    expect(expanded).not.toContain("Full output is unavailable");
+    expect(expanded.split(TRUNCATED_OUTPUT_NOTICE)).toHaveLength(2);
+    expect(expanded).not.toContain("result.read");
   });
 
   it.each(["compact", "preview"] as const)(
@@ -216,16 +216,13 @@ describe("Code Mode shared presentation conformance", () => {
           view.call(args, { expanded });
           view.result(result, { expanded });
           const text = view.render().join("\n");
-          // Test raw attribution, not the precise heading or card layout.
-          expect(/\braw\b/i.test(text), JSON.stringify(sample)).toBe(expanded && sample.raw);
-          if (expanded) {
-            expect(text).toContain("FULL_PROGRAM_SOURCE");
+          // Only complete, successful, well-formed structured results are reformatted.
+          expect(text.includes(sample.text), JSON.stringify(sample)).toBe(expanded && sample.raw);
+          expect(text.includes("FULL_PROGRAM_SOURCE")).toBe(expanded);
+          if (expanded && !sample.raw)
             expect(text).toContain(
-              sample.raw
-                ? sample.text
-                : JSON.stringify(JSON.parse(sample.text), null, 2).split("\n")[1]!,
+              JSON.stringify(JSON.parse(sample.text), null, 2).split("\n")[1]!,
             );
-          }
         }
         expect(JSON.stringify(result)).toBe(before);
         expect(execute).not.toHaveBeenCalled();
@@ -278,7 +275,8 @@ describe("Code Mode shared presentation conformance", () => {
         view.invalidate();
         const text = view.render().join("\n");
         expect(text.includes("FULL_PROGRAM_SOURCE")).toBe(expanded);
-        expect(text.split("ROOT_CAUSE")).toHaveLength(expanded ? 2 : 1);
+        // The first line explains the failure collapsed; the full error is expanded-only.
+        expect(text).toContain("ROOT_CAUSE");
         expect(text.split("INDEPENDENT_DIAGNOSTIC")).toHaveLength(expanded ? 2 : 1);
       }
       expect(JSON.stringify(result)).toBe(before);
@@ -287,27 +285,21 @@ describe("Code Mode shared presentation conformance", () => {
   );
 
   it.each(["compact", "preview"] as const)(
-    "keeps nested recovery and diagnostics in %s presentation",
+    "keeps each nested issue on its own call in %s presentation",
     (style) => {
       const entries = ["pi.read", "mcp.request", "session.backgroundTask"].map((tool, index) => ({
         tool,
         summary: {
           subject: tool,
           outcome: "warning" as const,
-          issues: {
-            coverage: "complete" as const,
-            entries: [
-              {
-                operation: "operation",
-                code: "retained",
-                severity: "warning" as const,
-                cause: `CAUSE_${index}`,
-                description: `HUMAN_DESCRIPTION_${index}`,
-                recovery: [{ code: "inspect", text: `RECOVERY_${index}` }],
-                diagnostics: [`DIAGNOSTIC_${index}`],
-              },
-            ],
-          },
+          issues: [
+            {
+              severity: "warning" as const,
+              code: "retained",
+              message: `HUMAN_MESSAGE_${index}`,
+              detail: `AGENT_DETAIL_${index}`,
+            },
+          ],
         },
       }));
       const result = {
@@ -321,18 +313,8 @@ describe("Code Mode shared presentation conformance", () => {
         view.result(result, { expanded });
         const text = view.render().join("\n");
         for (const index of [0, 1, 2]) {
-          if (style === "compact" && !expanded) {
-            expect(text).toContain(`HUMAN_DESCRIPTION_${index}`);
-            expect(text).not.toContain(`CAUSE_${index}`);
-            expect(text).not.toContain(`RECOVERY_${index}`);
-          } else {
-            expect(text).toContain(`CAUSE_${index}`);
-            expect(text).toContain(`RECOVERY_${index}`);
-          }
-          if (expanded) {
-            expect(text.split(`DIAGNOSTIC_${index}`)).toHaveLength(2);
-            expect(text.split(`RECOVERY_${index}`)).toHaveLength(2);
-          } else expect(text).not.toContain(`DIAGNOSTIC_${index}`);
+          expect(text.split(`HUMAN_MESSAGE_${index}`)).toHaveLength(2);
+          expect(text.split(`AGENT_DETAIL_${index}`)).toHaveLength(expanded ? 2 : 1);
         }
         expect(text.includes("RAW_RESULT")).toBe(expanded);
       }

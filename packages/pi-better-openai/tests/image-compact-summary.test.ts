@@ -1,3 +1,4 @@
+import { compactIssueSeverity } from "pi-code-previews";
 import { describe, expect, it } from "vitest";
 import { imageCompactSummary } from "../src/image/compact-summary.ts";
 
@@ -37,30 +38,22 @@ describe("image compact summary", () => {
   });
 
   it.each([
-    ["completed", "success"],
-    ["failed", "error"],
-    ["cancelled", "cancelled"],
-    ["incomplete", "uncertain"],
-    ["in_progress", "uncertain"],
-  ])("classifies %s from domain details", (status, outcome) => {
+    ["completed", "success", undefined],
+    ["failed", "error", "error"],
+    ["cancelled", "cancelled", undefined],
+    ["incomplete", "uncertain", "warning"],
+    ["in_progress", "uncertain", "warning"],
+  ])("classifies %s from domain details", (status, outcome, severity) => {
     const call = input(status);
     const before = structuredClone(call.result);
     const summary = imageCompactSummary(call);
     expect(summary?.outcome).toBe(outcome);
-    if (status === "completed") {
-      expect(summary?.notices).toBeUndefined();
-      expect(summary?.subject).toContain("/project/output.png");
-    } else {
-      expect(summary?.notices).toContainEqual(
-        expect.objectContaining({
-          kind: "recovery",
-          text: expect.stringContaining("/project/output.png"),
-        }),
-      );
-    }
+    expect(compactIssueSeverity(summary?.issues)).toBe(severity);
+    expect(summary?.subject).toContain("/project/output.png");
+    // Expanded content states the saved path; issues do not repeat it.
+    expect(JSON.stringify(summary?.issues ?? [])).not.toContain("/project/output.png");
     expect(call.result).toEqual(before);
     expect(call.result?.content[1]).toBe(image);
-    expect(summary?.failure).toBeUndefined();
   });
 
   it("preserves literal saved paths rather than shortening or normalizing them", () => {
@@ -87,16 +80,16 @@ describe("image compact summary", () => {
     expect(imageCompactSummary(call)).toBeUndefined();
   });
 
-  it("owns complete text errors without hiding recovery text", () => {
+  it("classifies text-only errors by their first line and declines attachment-bearing errors", () => {
     const call = input();
     call.context.isError = true;
     const text = "Save failed.\nOutput may exist; inspect the destination before retrying.";
     call.result = { content: [{ type: "text", text }], details: undefined };
-    expect(imageCompactSummary(call)?.failure).toMatchObject({ cause: text, details: text });
-    expect(imageCompactSummary(call)?.issues).toMatchObject({
-      coverage: "unknown",
-      entries: [{ cause: text }],
-    });
+    const summary = imageCompactSummary(call);
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.issues).toEqual([
+      expect.objectContaining({ severity: "error", message: "Save failed." }),
+    ]);
     call.result.content.push(image);
     expect(imageCompactSummary(call)).toBeUndefined();
     expect(call.result.content[1]).toBe(image);

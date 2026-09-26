@@ -18,7 +18,7 @@ import {
   decodeCodeModeStatus,
   renderCodeModeStatusResult,
 } from "../src/ui/status.ts";
-import { opaqueFixture } from "pi-cosmic-core/testing";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { codeModeStateFixture } from "./support/host.ts";
 import { executeHarness, textOf } from "./support/execute.ts";
 import { presentationView, restorePresentationSettings } from "./support/presentation.ts";
@@ -258,29 +258,42 @@ describe("registered status presentation and discovery", () => {
   it("keeps status issue evidence visible when the host theme fails", () => {
     const status = codeModeStatusResult(codeModeStateFixture({ maxOutputBytes: 512 }).config);
     const result = { ...status, details: { ...status.details, truncated: true } };
-    const context = opaqueFixture({ isError: false, expanded: true });
     const summary = codeModeStatusCompactSummary({
       phase: "settled",
       args: { action: "status" },
       result,
-      context,
+      context: opaqueFixture({ isError: false, expanded: false }),
     });
+    expect(summary?.issues?.length).toBeGreaterThan(0);
     const hostile = opaqueFixture({
       fg: () => {
         throw new Error("theme unavailable");
       },
     });
-    const view = renderCodeModeStatusResult(
+    const collapsed = renderCodeModeStatusResult(
       result,
       { isPartial: false },
       hostile,
-      context,
+      opaqueFixture({ isError: false, expanded: false }),
       summary,
-    );
-    const text = view.render(160).join("\n");
-    expect(summary?.issues?.entries.length).toBeGreaterThan(0);
-    for (const issue of summary?.issues?.entries ?? []) expect(text).toContain(issue.cause);
-    expect(text).toContain(textOf(result));
+    )
+      .render(160)
+      .join("\n");
+    for (const issue of summary?.issues ?? []) expect(collapsed).toContain(issue.message);
+    for (const theme of [plainTheme, hostile]) {
+      const expanded = renderCodeModeStatusResult(
+        result,
+        { isPartial: false },
+        theme,
+        opaqueFixture({ isError: false, expanded: true }),
+        summary,
+      )
+        .render(160)
+        .join("\n");
+      for (const issue of summary?.issues ?? [])
+        expect(expanded.split(issue.message)).toHaveLength(2);
+      expect(expanded).toContain(textOf(result));
+    }
   });
 
   it("keeps status replay bounds and tolerant historical fields", () => {

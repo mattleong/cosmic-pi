@@ -1,8 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
-import { renderCompactRow, renderCompactNotices } from "./compact-row";
-import { renderCompactIssues } from "./compact-issues";
+import { layoutCompactRow } from "./compact-row";
+import { compactIssueLabel, renderCompactIssues } from "./compact-issues";
 import { formatToolCallDuration } from "./format";
 
 const MAX_CHILDREN = 5;
@@ -21,30 +21,52 @@ export function selectCompactChildren(children: NonNullable<CompactSummary["chil
     .slice(0, MAX_CHILDREN)
     .toSorted((a, b) => a.index - b.index)
     .map(({ entry }) => entry);
-  return { entries, omitted: Math.max(0, children.total - entries.length) };
+  const shown = new Set(entries);
+  const hiddenFailed = children.entries.filter(
+    (entry) => !shown.has(entry) && entry.status === "error",
+  ).length;
+  return { entries, omitted: Math.max(0, children.total - entries.length), hiddenFailed };
 }
 
+/**
+ * Collapsed trees show each call's primary issue on its own row. The flat expanded layout
+ * lists every retained call with all of its issues and details beneath it.
+ */
 export function renderCompactChildren(
   children: CompactSummary["children"],
   theme: Theme,
   width: number,
-  animationFrame = 0,
-  timingEnabled = true,
-  expanded = false,
-  layout: "tree" | "flat" = "tree",
+  options: {
+    animationFrame?: number;
+    timingEnabled?: boolean;
+    layout?: "tree" | "flat";
+    /** Show every retained call instead of the five most relevant. */
+    all?: boolean;
+  } = {},
 ): string[] {
   if (!children || width <= 0) return [];
-  const { entries, omitted } = expanded
-    ? { entries: children.entries, omitted: Math.max(0, children.total - children.entries.length) }
+  const flat = options.layout === "flat";
+  const { entries, omitted, hiddenFailed } = options.all
+    ? {
+        entries: children.entries,
+        omitted: Math.max(0, children.total - children.entries.length),
+        hiddenFailed: 0,
+      }
     : selectCompactChildren(children);
-  const rows = entries.flatMap((entry, index) => {
-    const branch = index === entries.length - 1 && omitted === 0 ? "╰─" : "├─";
-    const prefix = layout === "flat" ? "" : theme.fg("dim", `  ${branch} `);
+  const rows: string[] = [];
+  if (flat && omitted > 0)
+    rows.push(
+      truncateToWidth(theme.fg("dim", `… ${omitted} earlier ${calls(omitted)}`), width, ""),
+    );
+  entries.forEach((entry, index) => {
+    const branch = index === entries.length - 1 && (flat || omitted === 0) ? "╰─" : "├─";
+    const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
     const duration =
       entry.durationMs !== undefined && Number.isFinite(entry.durationMs) && entry.durationMs >= 0
         ? formatToolCallDuration(entry.durationMs)
         : undefined;
-    const row = renderCompactRow(
+    const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
+    const { row, issueShown } = layoutCompactRow(
       {
         name: entry.label,
         phase: entry.status === "pending" || entry.status === "running" ? entry.status : "settled",
@@ -54,61 +76,36 @@ export function renderCompactChildren(
           subject: entry.subject ?? "",
           metadata: entry.metadata ?? (entry.status === "returned" ? ["returned"] : []),
         },
+        issueLabel: issueLabel || undefined,
         duration,
         elapsedMs: entry.durationMs,
-        timingEnabled,
-        animationFrame,
-        expanded,
+        timingEnabled: options.timingEnabled ?? true,
+        animationFrame: options.animationFrame ?? 0,
+        expanded: flat,
       },
       theme,
       Math.max(0, width - visibleWidth(prefix)),
     );
-    // Nest recovery beneath its call, but surrender decoration before losing text.
-    const noticeIndent = width - visibleWidth(prefix) >= 2 ? visibleWidth(prefix) : 0;
-    const continuation = noticeIndent ? theme.fg("dim", branch === "├─" ? "  │  " : "     ") : "";
-    return [truncateToWidth(`${prefix}${row}`, width, "")].concat(
-      (entry.issues
-        ? [
-            ...renderCompactIssues(
-              entry.issues,
-              theme,
-              width - noticeIndent,
-              expanded,
-              false,
-              entry.status === "error",
-            ),
-            ...(expanded
-              ? renderCompactNotices(
-                  entry.notices?.filter(
-                    (notice) => notice.kind === "recovery" && notice.expandedOnly,
-                  ),
-                  theme,
-                  width - noticeIndent,
-                  true,
-                  layout === "flat" ? "plain" : "branch",
-                )
-              : []),
-          ]
-        : renderCompactNotices(
-            entry.notices,
-            theme,
-            width - noticeIndent,
-            expanded,
-            layout === "flat" ? "plain" : "branch",
-          )
-      ).map((notice) => `${continuation}${notice}`),
-    );
+    rows.push(truncateToWidth(`${prefix}${row}`, width, ""));
+    if (flat) rows.push(...renderCompactIssues(entry.issues, theme, width, true));
+    // A reason that does not fit on its row moves beneath it rather than disappearing.
+    else if (issueLabel && !issueShown) {
+      const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
+      const indent = width - visibleWidth(rail) >= 8 ? visibleWidth(rail) : 0;
+      for (const line of wrapTextWithAnsi(issueLabel, width - indent))
+        rows.push(truncateToWidth(`${indent ? rail : ""}${line}`, width, ""));
+    }
   });
-  if (omitted > 0)
+  if (!flat && omitted > 0)
     rows.push(
       truncateToWidth(
-        theme.fg(
-          "dim",
-          `${layout === "flat" ? "" : "  ╰─ "}… ${omitted} more ${omitted === 1 ? "call" : "calls"}`,
-        ),
+        theme.fg("dim", `  ╰─ … ${omitted} more ${calls(omitted)}`) +
+          (hiddenFailed > 0 ? theme.fg("error", ` (${hiddenFailed} failed)`) : ""),
         width,
         "",
       ),
     );
   return rows;
 }
+
+const calls = (count: number) => (count === 1 ? "call" : "calls");

@@ -45,25 +45,36 @@ export function allocateCompactHeader(
   separator = " · ",
   timing?: string,
 ): string {
+  return layoutCompactHeader(identity, subject, counters, optional, width, separator, timing).row;
+}
+
+/**
+ * Counters are alternatives in priority order: the first that fits owns the routine-detail
+ * slot, so a producer can offer a shorter fallback for narrow rows. `counter` reports which
+ * one was shown.
+ */
+export function layoutCompactHeader(
+  identity: string,
+  subject: string,
+  counters: readonly string[],
+  optional: readonly (string | undefined)[],
+  width: number,
+  separator = " · ",
+  timing?: string,
+) {
   // Select semantically before measuring: narrow rows must not substitute lower-priority detail.
-  counters = counters.filter((value) => value.trim()).slice(0, 1);
+  counters = counters.filter((value) => value.trim());
   optional = counters.length ? [] : optional.filter((value) => value?.trim()).slice(0, 1);
   const remaining = width - visibleWidth(identity);
-  if (remaining <= 0) return truncateToWidth(identity, width, "");
+  if (remaining <= 0) return { row: truncateToWidth(identity, width, ""), counter: undefined };
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   // Counters carry progress/outcome facts. Spend available subject space on them
   // before eliding the target, rather than dropping a counter at half the row.
   const counterBudget = remaining - subjectMinimum;
-  let counterText = "";
-  let counterWidth = 0;
-  for (const counter of counters) {
-    const token = `${separator}${counter}`;
-    const tokenWidth = visibleWidth(token);
-    if (counterWidth + tokenWidth > counterBudget) continue;
-    counterText += token;
-    counterWidth += tokenWidth;
-  }
+  const counter = counters.find((value) => visibleWidth(`${separator}${value}`) <= counterBudget);
+  const counterText = counter === undefined ? "" : `${separator}${counter}`;
+  const counterWidth = visibleWidth(counterText);
   // Explicit timing is secondary to counts and must not replace a counter that cannot fit.
   const timingToken = timing?.trim() ? `${separator}${timing}` : "";
   const timingText =
@@ -73,7 +84,7 @@ export function allocateCompactHeader(
       : "";
   const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
   let row = identity + (target ? ` ${target}` : "") + counterText;
-  if (target !== subject) return row + timingText;
+  if (target !== subject) return { row: row + timingText, counter };
   let used = visibleWidth(row) + visibleWidth(timingText);
   for (const value of optional) {
     if (!value) continue;
@@ -83,5 +94,5 @@ export function allocateCompactHeader(
     row += token;
     used += tokenWidth;
   }
-  return row + timingText;
+  return { row: row + timingText, counter };
 }

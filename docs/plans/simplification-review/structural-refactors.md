@@ -939,6 +939,8 @@ Four near-identical fake-Pi test harnesses re-prove the same rules. ask-user's d
 
 ### 9. code-mode-R1: keep only the current (v2) details format and drop the legacy runtime hooks
 
+> Superseded by the compact-presentation redesign (2026-09-25); see the README note.
+
 - **Ids:** code-mode-R1
 - **Packages:** pi-code-mode
 - **Vetted LOC:** source −200, tests −120. Architect estimate −240/−150. About −180 source if the v1 retirement is declined.
@@ -1503,6 +1505,8 @@ Some text is built and never shown. Cosmic ignores `description` when there is n
 ---
 
 ### 17. code-mode-R2: one result slot for code_mode, and delete the dead `expandedResultOwnsCall` path
+
+> Superseded by the compact-presentation redesign (2026-09-25); see the README note.
 
 - **Ids:** code-mode-R2
 - **Packages:** pi-code-mode
@@ -2735,7 +2739,7 @@ Some of these were later re-proposed in another area and accepted; those are mar
 **mcp-ui**
 
 - A shared session-capability primitive in core: about 40 lines across 5 packages, with differing policies. It was re-proposed as background-task-R2, which is disputed.
-- Derive notices from issues: wording and conditions change, and notices are persisted in receipts.
+- Derive notices from issues: wording and conditions change, and notices are persisted in receipts. (Later implemented by the compact-presentation redesign.)
 - Table-driven fusion of the 9 shared facts: the display orders differ.
 - ListDetailScreen base class: about 40 lines per screen, and the quirks differ.
 - Split out the retained-result screen: net zero or more lines.
@@ -2772,7 +2776,7 @@ Some of these were later re-proposed in another area and accepted; those are mar
 - Merge `renderer-adapter.ts` into `cooperative-tools.ts`: relocation only.
 - Shared write-result classifier: about 30–40 lines.
 - Derive the Compact\* interfaces from their schemas: type changes ripple into 53 producer files.
-- Retire legacy notices: a workspace-wide API change with no line gain.
+- Retire legacy notices: a workspace-wide API change with no line gain. (Later implemented by the compact-presentation redesign.)
 - Shared cooperative bootstrap: about 30 lines, and the seams are per package.
 - Collapse the grep and bash renderers: about 40–50 lines, local.
 
@@ -2795,7 +2799,7 @@ Some of these were later re-proposed in another area and accepted; those are mar
 - Unify the three per-execution ledgers: their retention rules differ on purpose, and the code is delivery-sensitive.
 - The producer persists the CompactSummary: rendering needs inputs that only exist at render time.
 - Strict decode without salvage: salvage is documented safety behavior.
-- Issues only, no notices: the default preview style renders notices, so the change is visible.
+- Issues only, no notices: the default preview style renders notices, so the change is visible. (Later implemented by the compact-presentation redesign.)
 - Reuse `renderCompactChildren`: a visible restyle.
 - Drop the deactivation handoff: depends on unverified Pi activation persistence.
 - Flip `isError` as pi-mcp does: no net reduction.

@@ -146,65 +146,45 @@ pattern. Do not weaken the regex guards to force a rejected pattern through.
 
 ## TUI presentation
 
-In the TUI a `code_mode` call renders compactly as `Code Mode · <intent>`. The optional
-`intent` parameter is a short human-readable purpose, with a neutral fallback. Execution starts
-with `Starting…`, then shows bounded activity rows derived from nested inputs. Rows reuse built-in
-tool icons and show queued, running, succeeded, failed, or cancelled status plus settled duration.
+In the TUI a `code_mode` call shows its `intent`, a short human-readable purpose with a neutral
+fallback, then one row per nested call derived from its inputs: tool, target (file path, read
+range, command or search pattern), and status. When a call fails or warns, its reason appears on
+its own row ("✗ bash pnpm lint · Exited with code 1"). Problems with the run itself appear right
+under the heading: "Program stopped: bash pnpm lint failed" when an uncaught nested failure
+stopped it, "Syntax error (line 4): …" or "Program error (line 4): …" for the program's own
+errors, "Cancelled; earlier changes may remain", or "Output was cut off". A program that handles
+its own failed calls finishes with a warning, not an error. Calls still running or queued when a
+run ends are marked `?` with "May still be running" or "Did not start".
 
-Beyond 32 rows, visible slots prioritize active, failed, cancelled, and recent calls. Exact
-counts and an omitted-call marker still include hidden calls. Expansion shows the formatted
-Program first, a Calls section of flat compact rows with hints beneath them, then Result.
-Blank lines separate the sections; collapsed calls keep their compact tree. Successful structured
-results use bounded pretty JSON; text, errors, and truncated output keep their original text.
-Outer execution failures keep the shared error view and recovery text. Collapsed hints use the
-configured `app.tools.expand` keys. All displayed text is sanitized against terminal control
-injection. Presentation does not change model-visible results or execution limits. Status calls
-keep the same shared shell, omit Program and Calls sections, and show the unchanged raw response
-on expansion. Their UI outcome comes only from schema-validated producer details, never by parsing
-that response.
+With Code Previews' compact style, the heading also shows `done/total calls` while running and
+`total calls · N failed` afterwards, and the tree shows up to five calls, preferring running and
+failed ones; the omitted-call row counts hidden failures. With tool timing enabled, the parent
+shows measured elapsed time beside its count, and running children update on the same refresh
+cadence as standalone calls. Settlement preserves the runtime's recorded duration, which includes
+queue wait; parallel child timings are not summed. The default `preview` style shows every
+retained call. Beyond 32 rows, retained slots prioritize active, failed, cancelled, and recent
+calls; exact counts still include hidden calls. Reload after changing the Code Previews setting.
 
-When Code Previews' `toolCallCollapsedStyle` is `compact`, the outer call instead shows the
-intent, lifecycle status, and exact settled/total nested counts. A nested tree shows up to five
-calls with their statuses and builtin targets, such as file paths, read ranges, commands and
-search patterns. Targets use the standalone compact format, with bounded credential-redacted
-text; older saved calls without target metadata show names only. Larger batches show an omitted
-call count. With tool timing enabled, the parent shows measured elapsed time beside its count.
-Running children update their elapsed time on the same refresh cadence as standalone calls.
-Child timing follows standalone visibility rules: bash, or calls lasting at least ten seconds,
-when no counter or metadata takes priority. Queued and replayed running calls never acquire a
-live timer. Settlement preserves the runtime's recorded duration, which includes queue wait.
-Parallel child timings overlap; they are not summed to estimate the parent's duration. Source and ordinary output stay hidden until expansion. Caught nested failures produce a warning;
-cancellation, truncation, and retained failure recovery text stay visible. Missing or malformed
-details retain the existing renderer. Expanded compact calls use one semantic header and keep the
-selected frame. The default `preview` style keeps separate call/source ownership; reload after
-changing the Code Previews setting.
-
-Known native failures use the same concise explanation as standalone tools. Received errors do
-not imply lost results. Source excerpts and stacks stay expanded when the producer can account
-for recovery information; unknown and historical errors remain conservative. Visible child
-explanations are not repeated at the parent, while hidden failures and independent recovery stay
-visible. Routine MCP cache freshness and unrelated resource/template capability notices stay
-expanded. Incomplete discovery coverage, failed refreshes, and actual output loss still need attention.
+Expansion always follows the same order: the run's issues, the formatted Program, Calls with
+each call's issues and details beneath it, then Output, Result, or Error. The Calls section stays
+visible when the program fails. Details are the agent-facing text, such as recovery advice, shown
+dimmed only when expanded. Successful structured results use bounded pretty JSON; text, errors,
+and truncated output keep their original text. All displayed text is sanitized against terminal
+control injection. Presentation does not change model-visible results or execution limits.
+Status calls omit Program and Calls and show the unchanged raw response on expansion; their UI
+outcome comes only from schema-validated producer details, never by parsing that response.
 
 Nested MCP and Background Tasks replies can report failure even when their calls fulfill.
-Validated per-call receipts use the same semantic projections as standalone tools. Builtin
+Validated per-call receipts use the same semantic projections as standalone tools, so builtin
 limits, edit counts, MCP outcomes and Background Tasks process/log warnings stay visible even
-when the program discards its replies. Native writes have no trustworthy before-state. Their
-presentation records that previous content was not captured as informational metadata, not a
-warning by itself, and never claims a new file or inferred diff. Completion
-and guest delivery are separate: output-budget or interpreter-copy rejection does not erase a
-completed mutation. Delivery recovery appears beneath the affected call and survives hidden rows.
-Current rows retain one redacted heading; replay also redacts older activity labels.
-Complete-line read continuation hints, including the 50KB cap, appear only on expansion.
-Retained call rows keep these hints even when the program discards the read result or later throws.
-They do not count as warnings or consume the attention budget.
-An execution-wide attention ledger preserves hidden-call warnings. Incomplete or overflowing
-evidence produces an explicit warning in both compact and detailed views. Valid recovery notices
-survive malformed sibling fields in saved receipts. MCP supplies its own outcome and recovery
-policy; Code Mode aggregates it without maintaining a second live MCP-specific ledger. Historical calls
-without correlated receipts remain conservative. Saved calls in the first receipt format replay as
-incomplete and uncertain, keeping their valid recovery notices. Programs must still inspect and
-return protocol outcome evidence. No nested built-in is wrapped or dispatched differently.
+when the program discards its replies. Native writes have no trustworthy before-state; that is an
+informational note, never a new-file claim or inferred diff. Completion and guest delivery are
+separate: output-budget or interpreter-copy rejection does not erase a completed mutation, and
+"The result did not reach the program" appears on the affected call. Complete-line read
+continuation hints appear only on expansion. When some call details could not be recorded, the
+run says so. Runs saved by older versions show a generic row until expanded. Programs must still
+inspect and return protocol outcome evidence. No nested built-in is wrapped or dispatched
+differently.
 
 ## Catalog updates
 

@@ -4,7 +4,7 @@ import {
   managerNoticeGlyph,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
-import type { CompactChild } from "../tools/compact-summary";
+import type { CompactStatus } from "../tools/compact-summary";
 
 const ACTIVITY_KINDS = {
   pending: "pending",
@@ -14,14 +14,12 @@ const ACTIVITY_KINDS = {
   cancelled: "stopped",
 } as const satisfies Record<string, ManagerActivityKind>;
 
-export function compactStatusIcon(
-  status: CompactChild["status"],
-  theme: Theme,
-  animationFrame = 0,
-): string {
+/** ✓ ⚠ ✗ ⊘ for settled outcomes; ? when the outcome cannot be confirmed. */
+export function compactStatusIcon(status: CompactStatus, theme: Theme, animationFrame = 0): string {
   if (status === "returned") return theme.fg("muted", "•");
+  if (status === "uncertain") return theme.fg("warning", "?");
   const glyph =
-    status === "warning" || status === "uncertain"
+    status === "warning"
       ? managerNoticeGlyph("warning")
       : managerActivityGlyph(ACTIVITY_KINDS[status], animationFrame);
   const color =

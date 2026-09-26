@@ -1,11 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import {
-  renderCompactIssues,
-  renderExpandedAttention,
-  summaryCompactIssues,
-  type CompactSummary,
-} from "pi-code-previews";
+import { renderCompactIssues, type CompactSummary } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { invokeHostCallback } from "pi-cosmic-core";
@@ -61,40 +56,46 @@ export function renderPlainResultView(
   theme: Theme,
 ): Component {
   const { isPartial, expanded, contentOnly } = view;
-  const lines: Array<{ text: string; color: "muted" | "error" | "toolOutput" }> =
-    contentOnly && summary ? [] : [{ text: status, color: view.failed ? "error" : "muted" }];
-  if (expanded && !isPartial && raw.length > 0) {
-    lines.push(
-      { text: "Raw output", color: "muted" },
-      { text: codeModeOutputText(raw), color: "toolOutput" },
-    );
-  }
-  const issues = summary && !contentOnly ? summaryCompactIssues(summary, expanded) : undefined;
-  // A hostile host theme cannot hide retained recovery evidence.
+  const paint = (color: "muted" | "error" | "toolOutput", text: string) => {
+    const safe = codeModeOutputText(text);
+    return invokeHostCallback(() => theme.fg(color, safe), safe);
+  };
+  // Content-only slots sit under the shell's heading and issues.
+  const heading = contentOnly && summary ? [] : [paint(view.failed ? "error" : "muted", status)];
+  // Painted up front so a hostile theme cannot fail while drawing.
+  const output =
+    expanded && !isPartial && raw.length > 0
+      ? ([
+          [2, new Text(paint("muted", "Output"), 0, 0)],
+          [4, new Text(paint("toolOutput", raw), 0, 0)],
+        ] as const)
+      : [];
+  const issues = summary && !contentOnly ? summary.issues : undefined;
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
-      const text = lines
-        .map(({ text, color }) => {
-          const safe = codeModeOutputText(text);
-          return invokeHostCallback(() => theme.fg(color, safe), safe);
-        })
-        .join("\n");
-      const body = new Text(text, 0, 0).render(Math.floor(width));
-      if (!issues) return body;
+      const safeWidth = Math.floor(width);
+      const body = [
+        ...new Text(heading.join("\n"), 0, 0).render(safeWidth),
+        // Same nesting as shared expanded sections: label at two columns, body at four.
+        ...output.flatMap(([indent, part]) =>
+          part
+            .render(Math.max(1, safeWidth - indent))
+            .map((line) => `${" ".repeat(indent)}${line}`),
+        ),
+      ];
+      if (!issues?.length) return body;
       try {
-        const attention = expanded
-          ? renderExpandedAttention(issues, [], theme, width)
-          : renderCompactIssues(issues, theme, width);
-        return [...attention, ...body];
+        return [...renderCompactIssues(issues, theme, safeWidth, expanded, ""), ...body];
       } catch {
-        const evidence = issues.entries.flatMap((issue) => [
-          issue.cause,
-          ...issue.recovery.map((item) => item.text),
-          ...(expanded ? (issue.diagnostics ?? []) : []),
-        ]);
+        // A hostile host theme cannot hide retained recovery evidence.
+        const evidence = issues.flatMap((issue) =>
+          issue.severity === "info" && !expanded
+            ? []
+            : [issue.message, ...(expanded && issue.detail ? [issue.detail] : [])],
+        );
         return [
-          ...new Text(evidence.map(codeModeOutputText).join("\n"), 0, 0).render(Math.floor(width)),
+          ...new Text(evidence.map(codeModeOutputText).join("\n"), 0, 0).render(safeWidth),
           ...body,
         ];
       }

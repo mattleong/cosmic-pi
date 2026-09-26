@@ -1,23 +1,23 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
-import { escapeControlChars } from "../shared/terminal-text";
-import { summaryCompactIssues } from "../tools/compact-issues";
-import { planCompactPresentation } from "../tools/compact-presentation";
+import { Container, type Component } from "@earendil-works/pi-tui";
 import type { CompactPhase, CompactSummary } from "../tools/compact-summary";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
-import { renderExpandedAttention } from "./compact-issues";
+import { renderCompactIssues } from "./compact-issues";
 import { renderCompactRow } from "./compact-row";
 import { CompactSlots, type CompactRenderBody, type CompactSlot } from "./compact-slots";
 
+/**
+ * Expanded order is fixed: heading, the call's issues with their details, unique call content,
+ * then unique result content. Tools without content callbacks keep their original slots, and
+ * their issues sit between the original call and result.
+ */
 export function composeCompactDetails(input: {
   name: string;
   context: ToolRenderContext<any, any>;
   theme: Theme;
   summary: CompactSummary | undefined;
   phase: CompactPhase;
-  plan: ReturnType<typeof planCompactPresentation>;
   hasResult: boolean;
-  isError: boolean;
   slots: CompactSlots;
   call: CompactRenderBody | undefined;
   result: CompactRenderBody | undefined;
@@ -30,11 +30,10 @@ export function composeCompactDetails(input: {
   elapsedMs: number | undefined;
   timingEnabled: boolean;
 }) {
-  const { summary, context, theme, plan, slots } = input;
-  const content = plan.useExpandedContent && Boolean(input.contentCall || input.contentResult);
+  const { summary, context, theme, slots } = input;
+  const content = Boolean(summary && (input.contentCall || input.contentResult));
   const contentCall = content && Boolean(input.contentCall);
   const contentResult = content && Boolean(input.contentResult);
-  const ownedFailure = content && plan.useFailure ? summary?.failure : undefined;
   const slot = (name: CompactSlot, render: CompactRenderBody | undefined, contentOnly: boolean) =>
     render
       ? slots.construct(name, contentOnly, render, context, () => input.fallback(name), input.reuse)
@@ -43,43 +42,17 @@ export function composeCompactDetails(input: {
   const callBody = input.construct("call", () =>
     slot("call", contentCall ? input.contentCall : input.call, contentCall),
   );
-  const resultBody = input.construct("result", () => {
-    if (ownedFailure)
-      return new Text(
-        theme.fg(input.isError ? "error" : "warning", escapeControlChars(ownedFailure.details)),
-        0,
-        0,
-      );
-    return input.hasResult
+  const resultBody = input.construct("result", () =>
+    input.hasResult
       ? slot("result", contentResult ? input.contentResult : input.result, contentResult)
-      : undefined;
-  });
-  const resultRendered =
-    context.expanded &&
-    resultBody !== undefined &&
-    (Boolean(ownedFailure) || slots.successful("result", contentResult));
-  const issues = summary
-    ? summaryCompactIssues(summary, context.expanded)
-    : { coverage: "unknown" as const, entries: [] };
-  const noticeBody: Component = {
-    render: (width) =>
-      renderExpandedAttention(
-        issues,
-        resultRendered
-          ? ownedFailure
-            ? ownedFailure.ownedIssues
-            : summary?.expandedResultOwnsIssues
-          : undefined,
-        theme,
-        width,
-      ),
+      : undefined,
+  );
+  const issues: Component = {
+    render: (width) => renderCompactIssues(summary?.issues, theme, width, true),
     invalidate: () => undefined,
   };
-  const details = new Container();
-  if (resultBody) details.addChild(resultBody);
-  details.addChild(noticeBody);
   const callSection = new Container();
-  if (content && summary)
+  if (content && summary) {
     callSection.addChild({
       render: (width) => [
         renderCompactRow(
@@ -98,7 +71,11 @@ export function composeCompactDetails(input: {
       ],
       invalidate: () => undefined,
     });
-  const ownsCall = !content && resultRendered && plan.covered && summary?.expandedResultOwnsCall;
-  if (callBody && !ownsCall) callSection.addChild(callBody);
+    callSection.addChild(issues);
+  }
+  if (callBody) callSection.addChild(callBody);
+  const details = new Container();
+  if (!content) details.addChild(issues);
+  if (resultBody) details.addChild(resultBody);
   return { callSection, details, content };
 }

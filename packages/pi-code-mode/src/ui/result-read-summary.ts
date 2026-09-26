@@ -1,9 +1,17 @@
 import * as Schema from "effect/Schema";
-import type { CompactSummary } from "pi-code-previews";
+import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import { decodeOption } from "../tools/format.ts";
 import { ResultReadPresentationSchema, resultReadFailures } from "../results/read-presentation.ts";
 
 const ReadDetails = Schema.Struct({ resultRead: ResultReadPresentationSchema });
+
+const READ_FAILURES = {
+  "invalid-input": "The saved-output request is invalid",
+  unavailable: "Saved output is not available",
+  "invalid-offset": "The requested position is outside the saved output or splits a character",
+  "page-budget": "The output limit is too small to load this page",
+  revoked: "Saved output is no longer available in this session",
+} as const;
 
 /** Read delivery is separate from the retained execution. Never inspect page text. */
 export function resultReadCompactSummary<Details>(
@@ -22,27 +30,14 @@ export function resultReadCompactSummary<Details>(
     return {
       ...heading,
       outcome: "error",
-      issues: {
-        coverage: "complete",
-        entries: [
-          {
-            operation: "result.read",
-            code: read.code,
-            severity: "error",
-            cause: resultReadFailures[read.code].cause,
-            description: {
-              "invalid-input": "The saved-output request is invalid.",
-              unavailable: "Saved output is not available.",
-              "invalid-offset":
-                "The requested position is outside the saved output or splits a character.",
-              "page-budget": "The output limit is too small to load this page.",
-              revoked: "Saved output is no longer available in this session.",
-            }[read.code],
-            recovery: [],
-            diagnostics: ["No execution was run. Do not replay mutations to recover output."],
-          },
-        ],
-      },
+      issues: [
+        {
+          severity: "error",
+          code: read.code,
+          message: READ_FAILURES[read.code],
+          detail: `${resultReadFailures[read.code].cause}\nNo execution was run. Do not replay mutations to recover output.`,
+        },
+      ],
     };
   if (
     read.id !== id ||
@@ -53,44 +48,30 @@ export function resultReadCompactSummary<Details>(
       : read.next !== read.end || read.end >= read.total || read.end <= read.offset)
   )
     return undefined;
-  const originalProblem = read.originalOutcome !== "succeeded";
+  const issues: CompactIssue[] = [];
+  if (read.originalOutcome !== "succeeded")
+    issues.push({
+      severity: "warning",
+      code: `original-${read.originalOutcome}`,
+      message:
+        read.originalOutcome === "failed"
+          ? "Saved output from a run that failed"
+          : "Saved output from a cancelled run",
+      detail: "Reading retained output does not rerun the program or undo side effects.",
+    });
+  if (read.next !== null)
+    issues.push({
+      severity: "info",
+      code: "read-pagination",
+      message: `More output from offset ${read.next}`,
+      detail: `Continue with result.read id="${id}" offset=${read.next}.`,
+    });
   return {
     ...heading,
     counters: [
       `page ${read.offset}..${read.end}/${read.total}${read.next === null ? " · EOF" : ""}`,
     ],
-    outcome: originalProblem ? "warning" : "success",
-    issues: {
-      coverage: "complete",
-      entries: originalProblem
-        ? [
-            {
-              operation: "original-execution",
-              code: `original-${read.originalOutcome}`,
-              severity: "warning",
-              cause: `Original execution ${read.originalOutcome}; page read succeeded.`,
-              description:
-                read.originalOutcome === "failed"
-                  ? "Output loaded. The earlier run failed."
-                  : "Output loaded. The earlier run was cancelled.",
-              recovery: [],
-              diagnostics: [
-                "Reading retained output does not rerun the program or undo side effects.",
-              ],
-            },
-          ]
-        : [],
-    },
-    notices:
-      read.next === null
-        ? []
-        : [
-            {
-              code: "read-pagination",
-              kind: "recovery",
-              text: `Continue with result.read id="${id}" offset=${read.next}.`,
-              expandedOnly: true,
-            },
-          ],
+    outcome: issues.some((issue) => issue.severity === "warning") ? "warning" : "success",
+    issues,
   };
 }

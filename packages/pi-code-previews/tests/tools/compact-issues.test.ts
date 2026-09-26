@@ -1,400 +1,213 @@
 import { describe, expect, test } from "vitest";
+import * as Schema from "effect/Schema";
 import {
+  COMPACT_ISSUE_MESSAGE_LIMIT,
   compactIssueSeverity,
-  claimCompactIssue,
-  subtractCompactIssueClaims,
-  normalizeCompactIssues,
-  summaryCompactIssues,
-  withCompactIssues,
+  firstLineMessage,
+  mergeCompactIssues,
   type CompactIssue,
-  type CompactIssues,
 } from "../../src/tools/compact-issues";
+import { createBoundedCompactIssuesSchema } from "../../src/tools/compact-issues-schema";
 import {
   compactStatus,
   resolveCompactSummary,
   type CompactSummary,
 } from "../../src/tools/compact-summary";
-import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import { renderCompactFailure } from "../../src/preview/compact-tool-call";
-import { plainTheme } from "../support/render";
 
 const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
-  operation: "call-1",
-  code: "remote-failure",
   severity: "error",
-  cause: "Element detached.",
-  description: overrides.cause ?? "Element detached.",
-  recovery: [{ code: "inspect", text: "Inspect state before retrying." }],
+  code: "remote-failure",
+  message: "Element detached",
   ...overrides,
 });
-const collection = (...entries: CompactIssue[]): CompactIssues => ({
-  coverage: "complete",
-  entries,
-});
+const info = issue({ severity: "info", code: "hint", message: "Page 1 of 2" });
+const warning = issue({ severity: "warning", code: "cleanup", message: "Cleanup is unconfirmed" });
 
-test("legacy projection cannot classify or hide unknown recovery", () => {
-  const summary = withCompactIssues(
-    {
-      subject: "legacy",
-      notices: [
-        { kind: "recovery", text: "Confirm cleanup before proceeding.", expandedOnly: true },
-      ],
-    },
-    "operation",
-  );
-  expect(summary.issues.coverage).toBe("unknown");
-  expect(
-    summary.issues.entries.flatMap((entry) => entry.recovery).map((entry) => entry.text),
-  ).toEqual(["Confirm cleanup before proceeding."]);
-});
-
-describe("semantic compact issues", () => {
-  test("matching identities coalesce, independent invocations and conflicts survive", () => {
-    const original = issue();
-    const differentCall = issue({ operation: "call-2" });
-    const conflict = issue({ cause: "Session closed." });
-    const sources = [collection(original), collection(original, differentCall, conflict)];
+describe("issue merging", () => {
+  test("coalesces equal evidence in first-seen order and keeps every distinct detail line", () => {
+    const first = issue({ detail: "Inspect state.\nKeep the log." });
+    const repeat = issue({ detail: "Keep the log.\nDo not replay." });
+    const sources = [[first, warning], undefined, [repeat, info]] as const;
     const before = JSON.stringify(sources);
-    const normalized = normalizeCompactIssues(sources);
-    expect(normalized.entries.map(({ operation, cause }) => ({ operation, cause }))).toEqual([
-      { operation: "call-1", cause: "Element detached." },
-      { operation: "call-2", cause: "Element detached." },
-      { operation: "call-1", cause: "Session closed." },
+    expect(mergeCompactIssues(...sources)).toEqual([
+      { ...first, detail: "Inspect state.\nKeep the log.\nDo not replay." },
+      warning,
+      info,
     ]);
-    expect(normalized.coverage).toBe("unknown");
     expect(JSON.stringify(sources)).toBe(before);
+    expect(mergeCompactIssues([issue()], [issue()])).toEqual([issue()]);
   });
 
-  test("recovery has its own identities, order, and conflict handling", () => {
-    const normalized = normalizeCompactIssues([
-      collection(issue()),
-      collection(
-        issue({
-          recovery: [
-            { code: "inspect", text: "Inspect state before retrying." },
-            { code: "inspect", text: "Inspect the destination instead." },
-            { code: "retain", text: "Keep the original output." },
-          ],
-        }),
-      ),
-    ]);
-    expect(normalized.entries).toHaveLength(1);
-    expect(normalized.entries[0]?.recovery.map(({ text }) => text)).toEqual([
-      "Inspect state before retrying.",
-      "Inspect the destination instead.",
-      "Keep the original output.",
-    ]);
-    expect(normalized.coverage).toBe("unknown");
+  test("keeps evidence that differs in code, severity, or message", () => {
+    const variants = [
+      issue(),
+      issue({ code: "other-producer" }),
+      issue({ severity: "warning" }),
+      issue({ message: "Session closed" }),
+    ];
+    expect(mergeCompactIssues(variants, variants)).toEqual(variants);
   });
+});
 
-  test("error precedence preserves uncertainty, cleanup and their recovery", () => {
-    const issues = normalizeCompactIssues([
-      collection(
-        issue(),
-        issue({
-          code: "uncertain",
-          severity: "warning",
-          cause: "Execution is uncertain.",
-          recovery: [{ code: "no-replay", text: "Do not replay." }],
-        }),
-        issue({
-          code: "cleanup",
-          severity: "warning",
-          cause: "Cleanup is unconfirmed.",
-          recovery: [],
-        }),
-      ),
-    ]);
-    expect(compactIssueSeverity(issues)).toBe("error");
-    const summary: CompactSummary = { subject: "operation", outcome: "uncertain", issues };
-    expect(compactStatus("settled", summary)).toBe("error");
-    expect(summary.outcome).toBe("uncertain");
-    const output = renderCompactToolCall(
-      { name: "mcp", phase: "settled", summary },
-      plainTheme,
-      120,
-    ).join("\n");
-    for (const text of ["Element detached.", "Execution is uncertain.", "Cleanup is unconfirmed."])
-      expect(output).toContain(text);
-  });
+test("severity ignores informational issues and prefers errors", () => {
+  expect(compactIssueSeverity(undefined)).toBeUndefined();
+  expect(compactIssueSeverity([info])).toBeUndefined();
+  expect(compactIssueSeverity([info, warning])).toBe("warning");
+  expect(compactIssueSeverity([warning, issue(), info])).toBe("error");
+});
 
-  test("all retained children contribute before display selection", () => {
-    const summary: CompactSummary = {
-      subject: "batch",
-      outcome: "error",
-      issues: collection(),
-      children: {
-        total: 8,
-        entries: Array.from({ length: 8 }, (_, index) => ({
-          label: `child-${index}`,
-          status: "error",
-          issues: collection(issue({ operation: `call-${index}` })),
-        })),
-      },
-    };
-    expect(summaryCompactIssues(summary).entries).toHaveLength(8);
-    const text = renderCompactToolCall(
-      { name: "code_mode", phase: "settled", summary },
-      plainTheme,
-      120,
-    ).join("\n");
-    for (let index = 0; index < 8; index++) expect(text).not.toContain(`call-${index}:`);
-    expect(text.match(/Element detached\./gu)).toHaveLength(8);
-  });
+test("first-line messages are one bounded, inert, nonblank line", () => {
+  expect(firstLineMessage("\n  \r\n  first\t\tline  \nsecond", "fallback")).toBe("first line");
+  expect(firstLineMessage(" \n\t\n", "fallback")).toBe("fallback");
+  expect(firstLineMessage("", "fallback")).toBe("fallback");
+  const hostile = firstLineMessage("bad\u001b[2J escape", "fallback");
+  expect(hostile).not.toContain("\u001b");
+  expect(hostile).toMatch(/^bad.*escape$/u);
+  expect(firstLineMessage("x".repeat(1000), "fallback")).toHaveLength(COMPACT_ISSUE_MESSAGE_LIMIT);
+});
 
-  test("matching identified parent propagation is shown once", () => {
-    const evidence = collection(issue());
-    const summary: CompactSummary = {
-      subject: "batch",
-      outcome: "error",
-      issues: evidence,
-      children: { total: 1, entries: [{ label: "mcp", status: "error", issues: evidence }] },
-    };
-    expect(summaryCompactIssues(summary).entries).toHaveLength(1);
-    const text = renderCompactToolCall(
-      { name: "code_mode", phase: "settled", summary },
-      plainTheme,
-      120,
-    ).join("\n");
-    expect(text.match(/Element detached\./gu)).toHaveLength(1);
-  });
+test("bounded retained issues accept valid evidence and reject every overflow", () => {
+  const schema = createBoundedCompactIssuesSchema({ maxTextLength: 12, maxEntries: 1 });
+  const accepts = Schema.is(schema);
+  const valid = { severity: "warning", code: "cleanup", message: "Unconfirmed", detail: "Inspect" };
+  expect(Schema.decodeUnknownSync(schema)([valid])).toEqual([valid]);
+  expect(accepts([])).toBe(true);
+  for (const rejected of [
+    [valid, valid],
+    [{ ...valid, code: "x".repeat(13) }],
+    [{ ...valid, message: "x".repeat(13) }],
+    [{ ...valid, detail: "x".repeat(13) }],
+    [{ ...valid, severity: "fatal" }],
+    [{ ...valid, code: "" }],
+    [{ severity: "error", code: "missing-message" }],
+  ])
+    expect(accepts(rejected)).toBe(false);
+  const wide = Schema.is(
+    createBoundedCompactIssuesSchema({ maxTextLength: 10_000, maxEntries: 1 }),
+  );
+  // Collapsed messages stay one bounded line even when retained details may be longer.
+  expect(wide([{ ...valid, message: "x".repeat(COMPACT_ISSUE_MESSAGE_LIMIT + 1) }])).toBe(false);
+  expect(wide([{ ...valid, detail: "x".repeat(5_000) }])).toBe(true);
+});
 
-  test("legacy notices never coalesce across invocations or matching prose", () => {
-    const notice = { kind: "warning" as const, text: "Inspect state." };
-    const summary: CompactSummary = {
-      subject: "batch",
-      outcome: "warning",
-      notices: [notice],
-      children: {
-        total: 2,
-        entries: [0, 1].map(() => ({ label: "mcp", status: "warning", notices: [notice] })),
-      },
-    };
-    expect(summaryCompactIssues(summary).entries).toHaveLength(3);
-    expect(summaryCompactIssues(summary).coverage).toBe("unknown");
-  });
+describe("summary resolution", () => {
+  const base: CompactSummary = { subject: "work", outcome: "success" };
 
-  test("cancellation is not an issue without independent evidence", () => {
-    const summary = withCompactIssues(
-      {
-        subject: "operation",
-        outcome: "cancelled" as const,
-        failure: { cause: "Cancelled", details: "Operation aborted" },
-        failureEvidence: { code: "cancelled", cause: "Cancelled", coverage: "complete" as const },
-      },
-      "call-1",
-    );
-    expect(summary.issues.entries).toEqual([]);
-    expect(compactStatus("settled", summary)).toBe("cancelled");
-    expect(resolveCompactSummary(summary, "settled", true)?.outcome).toBe("cancelled");
-    const warning = withCompactIssues(
-      { ...summary, notices: [{ kind: "warning" as const, text: "Cleanup unconfirmed." }] },
-      "call-1",
-    );
-    expect(compactIssueSeverity(warning.issues)).toBe("warning");
-  });
-
-  test("explicit expanded ownership, not body substring matching, removes duplicate recovery", () => {
-    const summary = withCompactIssues(
-      {
-        subject: "operation",
-        outcome: "error" as const,
-        failure: {
-          cause: "Refused.",
-          description: "Refused.",
-          details: "Full diagnostics.\nInspect state.",
-        },
-        failureEvidence: { code: "refused", cause: "Refused.", coverage: "complete" as const },
-        notices: [
-          {
-            code: "inspect",
-            kind: "recovery" as const,
-            text: "Inspect state.",
-          },
-        ],
-      },
-      "call-1",
-    );
-    Object.assign(summary.failure, {
-      ownedIssues: summary.issues.entries.map((entry) =>
-        claimCompactIssue(entry, { cause: true, recovery: entry.recovery.map(({ code }) => code) }),
-      ),
+  test("rejects malformed summaries and settled summaries without an outcome", () => {
+    expect(resolveCompactSummary(undefined, "settled", false)).toBeUndefined();
+    expect(resolveCompactSummary({ subject: "work" }, "settled", false)).toBeUndefined();
+    expect(resolveCompactSummary({ subject: "work" }, "running", false)).toEqual({
+      subject: "work",
     });
-    for (const expanded of [false, true]) {
-      const text = renderCompactFailure(
-        { name: "edit", phase: "settled", summary, failure: summary.failure, expanded },
-        plainTheme,
-        120,
-      ).join("\n");
-      expect(text.match(/Inspect state\./gu) ?? []).toHaveLength(expanded ? 1 : 0);
-      expect(text).toContain(expanded ? "Full diagnostics." : "Refused.");
+    // Provider output crosses a runtime boundary; malformed values arrive untyped.
+    const malformed: CompactSummary[] = JSON.parse(
+      JSON.stringify([
+        { subject: 42 },
+        { subject: "work", outcome: "done" },
+        {
+          subject: "work",
+          outcome: "success",
+          issues: [{ severity: "fatal", code: "x", message: "" }],
+        },
+        {
+          subject: "work",
+          outcome: "success",
+          issues: [{ severity: "error", code: "", message: "" }],
+        },
+        { subject: "work", outcome: "success", children: { total: -1, entries: [] } },
+        {
+          subject: "work",
+          outcome: "success",
+          children: { total: 1, entries: [{ label: "child", status: "done" }] },
+        },
+      ]),
+    );
+    for (const summary of malformed)
+      expect(resolveCompactSummary(summary, "settled", false)).toBeUndefined();
+  });
+
+  test("passes summaries through unchanged without a Pi error", () => {
+    const summary: CompactSummary = { ...base, issues: [warning] };
+    expect(resolveCompactSummary(summary, "settled", false)).toBe(summary);
+  });
+
+  test("a Pi error overrides claimed success and explains itself with its first line", () => {
+    for (const outcome of ["success", "warning", "error"] as const) {
+      const resolved = resolveCompactSummary(
+        { ...base, outcome, issues: [warning, info] },
+        "settled",
+        true,
+        "\nRejected by host\nInternal stack",
+      )!;
+      expect(resolved.outcome).toBe("error");
+      expect(resolved.issues?.[0]).toMatchObject({
+        severity: "error",
+        message: "Rejected by host",
+      });
+      expect(resolved.issues?.slice(1)).toEqual([warning, info]);
+      expect(JSON.stringify(resolved)).not.toContain("Internal stack");
+      expect(compactStatus("settled", resolved)).toBe("error");
+    }
+    const unexplained = resolveCompactSummary(base, "settled", true, "")!;
+    expect(unexplained.issues).toHaveLength(1);
+    expect(unexplained.issues?.[0]?.severity).toBe("error");
+    expect(unexplained.issues?.[0]?.message.trim()).not.toBe("");
+  });
+
+  test("a producer's own error issue already explains a Pi error", () => {
+    const resolved = resolveCompactSummary(
+      { ...base, outcome: "warning", issues: [issue()] },
+      "settled",
+      true,
+      "Host error text",
+    )!;
+    expect(resolved.outcome).toBe("error");
+    expect(resolved.issues).toEqual([issue()]);
+  });
+
+  test("cancellation and uncertainty survive a Pi error flag", () => {
+    for (const outcome of ["cancelled", "uncertain"] as const) {
+      const summary: CompactSummary = { ...base, outcome };
+      expect(resolveCompactSummary(summary, "settled", true, "Aborted")).toBe(summary);
     }
   });
 });
 
-test("outer failure ownership cannot consume nested evidence, even with identical wording", () => {
-  const root = issue({
-    operation: "outer",
-    code: "copied",
-    cause: "Same diagnostic",
-    recovery: [],
-  });
-  const nested = issue({ operation: "child-1", cause: "Same diagnostic" });
-  const summary: CompactSummary = {
-    subject: "execute",
-    outcome: "error",
-    issues: collection(root, nested),
-    failure: {
-      cause: root.cause,
-      details: root.cause,
-      ownedIssues: [claimCompactIssue(root, { cause: true })],
-    },
-  };
-  const text = renderCompactFailure(
-    { name: "code_mode", phase: "settled", summary, failure: summary.failure!, expanded: true },
-    plainTheme,
-    200,
-  ).join("\n");
-  expect(text.split(root.cause).length - 1).toBe(2);
-  expect(text).toContain(nested.recovery[0]!.text);
-});
+const status = (outcome: CompactSummary["outcome"], issues: CompactIssue[] = []) =>
+  compactStatus("settled", { subject: "work", ...(outcome && { outcome }), issues });
 
-test("claims select detached fields without absorbing merged or conflicting evidence", () => {
-  const original = issue({ diagnostics: ["first diagnostic"] });
-  const claim = claimCompactIssue(original, {
-    cause: true,
-    recovery: ["inspect"],
-    diagnostics: [0],
+describe("status precedence", () => {
+  test("live phases win over premature provider outcomes and issues", () => {
+    for (const phase of ["pending", "running"] as const)
+      for (const outcome of ["success", "error", "cancelled"] as const)
+        expect(compactStatus(phase, { subject: "work", outcome, issues: [issue()] })).toBe(phase);
   });
-  const added = issue({
-    recovery: [{ code: "other", text: "New recovery" }],
-    diagnostics: ["second diagnostic"],
-  });
-  const merged = normalizeCompactIssues([collection(original), collection(added)]);
-  expect(subtractCompactIssueClaims(merged, [claim]).entries).toEqual([
-    { ...merged.entries[0], cause: "", recovery: added.recovery, diagnostics: added.diagnostics },
-  ]);
-  const secondClaim = claimCompactIssue(added, { diagnostics: [0] });
-  expect(subtractCompactIssueClaims(merged, [secondClaim]).entries[0]?.diagnostics).toEqual([
-    "first diagnostic",
-  ]);
-  const sibling = issue({ code: "sibling" });
-  const across = normalizeCompactIssues([collection(original, sibling)]);
-  expect(
-    subtractCompactIssueClaims(across, [
-      claimCompactIssue(sibling, { recovery: ["inspect"] }),
-    ]).entries.flatMap((entry) => entry.recovery),
-  ).toEqual([]);
-  for (const conflicting of [
-    issue({ cause: "changed cause" }),
-    issue({ recovery: [{ code: "inspect", text: "changed instruction" }] }),
-  ]) {
-    const aggregate = normalizeCompactIssues([collection(original, conflicting)]);
-    expect(subtractCompactIssueClaims(aggregate, [claim])).toEqual(aggregate);
-  }
-  const stale = collection(issue({ diagnostics: ["changed diagnostic"] }));
-  expect(subtractCompactIssueClaims(stale, [claim])).toEqual(stale);
-});
 
-test("Pi failure fallback uses a matching owned issue, not identical sibling prose", () => {
-  const root = issue({
-    operation: "outer",
-    code: "provider-failed",
-    severity: "error",
-    cause: "same error",
+  test("settled outcomes and issues combine by severity", () => {
+    expect(status("cancelled", [issue()])).toBe("cancelled");
+    expect(status("error", [warning])).toBe("error");
+    expect(status("uncertain", [issue()])).toBe("error");
+    expect(status("success", [issue()])).toBe("error");
+    expect(status("uncertain", [warning])).toBe("uncertain");
+    expect(status("success", [warning])).toBe("warning");
+    expect(status("success", [info])).toBe("success");
+    expect(status("warning", [info])).toBe("warning");
+    expect(status(undefined)).toBe("uncertain");
   });
-  const sibling = issue({
-    operation: "child-1",
-    code: "provider-failed",
-    severity: "error",
-    cause: "same error",
-  });
-  const failure = {
-    cause: "same error",
-    details: "same error",
-    ownedIssues: [claimCompactIssue(root, { cause: true })],
-  };
-  const covered = resolveCompactSummary(
-    { subject: "work", outcome: "error", failure, issues: collection(root) },
-    "settled",
-    true,
-  );
-  expect(covered?.issues?.entries.filter((entry) => entry.code === "pi-error")).toHaveLength(0);
-  const unrelated = resolveCompactSummary(
-    { subject: "work", outcome: "error", failure, issues: collection(sibling) },
-    "settled",
-    true,
-  );
-  expect(unrelated?.issues?.entries.filter((entry) => entry.code === "pi-error")).toHaveLength(1);
-  expect(unrelated?.issues?.entries.some((entry) => entry.operation === "child-1")).toBe(true);
-  const distinctHost = resolveCompactSummary(
-    {
-      subject: "work",
-      outcome: "error",
-      failure: { ...failure, cause: "HOST_FAILURE", details: "same error\nHOST_FAILURE" },
-      issues: collection(root),
-    },
-    "settled",
-    true,
-  );
-  expect(
-    distinctHost?.issues?.entries.some(
-      (entry) => entry.code === "pi-error" && entry.cause === "HOST_FAILURE",
-    ),
-  ).toBe(true);
-  const stale = resolveCompactSummary(
-    {
-      subject: "work",
-      outcome: "error",
-      failure,
-      issues: collection(issue({ operation: "outer", code: "pi-error", cause: "OLD_FAILURE" })),
-    },
-    "settled",
-    true,
-  );
-  expect(
-    stale?.issues?.entries.some(
-      (entry) => entry.code === "pi-error" && entry.cause === "same error",
-    ),
-  ).toBe(true);
-  const wrongSeverity = resolveCompactSummary(
-    {
-      subject: "work",
-      outcome: "error",
-      failure: {
-        ...failure,
-        ownedIssues: [claimCompactIssue({ ...root, severity: "warning" }, { cause: true })],
+
+  test("children never change their parent's status", () => {
+    const summary: CompactSummary = {
+      subject: "program",
+      outcome: "warning",
+      children: {
+        total: 2,
+        entries: [
+          { label: "read", status: "error", issues: [issue()] },
+          { label: "mcp", status: "cancelled" },
+        ],
       },
-      issues: collection(root),
-    },
-    "settled",
-    true,
-  );
-  expect(wrongSeverity?.issues?.entries.some((entry) => entry.code === "pi-error")).toBe(true);
-});
-
-test("Pi failure cannot be hidden by a success summary with an owned failure body", () => {
-  const resolved = resolveCompactSummary(
-    {
-      subject: "operation",
-      outcome: "success",
-      failure: { cause: "Rejected by Pi", details: "Rejected by Pi" },
-      issues: collection(),
-    },
-    "settled",
-    true,
-  )!;
-  expect(compactStatus("settled", resolved)).toBe("error");
-  expect(resolved.issues?.entries.some((entry) => entry.cause === "Rejected by Pi")).toBe(true);
-});
-
-test("Pi failure adds severity without erasing structured execution uncertainty", () => {
-  const resolved = resolveCompactSummary(
-    { subject: "operation", outcome: "uncertain", issues: collection() },
-    "settled",
-    true,
-  )!;
-  expect(resolved.outcome).toBe("uncertain");
-  expect(compactStatus("settled", resolved)).toBe("error");
-  expect(resolved.issues?.entries.some((entry) => entry.code === "execution-uncertain")).toBe(true);
+    };
+    expect(compactStatus("settled", summary)).toBe("warning");
+    expect(compactStatus("settled", { ...summary, outcome: "success" })).toBe("success");
+  });
 });

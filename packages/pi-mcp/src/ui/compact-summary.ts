@@ -1,10 +1,8 @@
 import {
-  claimCompactIssue,
-  isCompactAttention,
-  type CompactNotice,
+  compactIssueSeverity,
+  type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
@@ -18,7 +16,7 @@ const searchQuery = <Args>(args: Args): string | undefined => {
     : undefined;
 };
 
-/** Typed causes may be concise without claiming complete diagnostic or recovery coverage. */
+/** Issues come from the shared presentation projection; expansion shows the labeled raw result. */
 export const projectMcpCompactSummary = ({
   phase,
   args,
@@ -29,48 +27,46 @@ export const projectMcpCompactSummary = ({
   args: unknown;
   result: { details?: unknown } | undefined;
   isError: boolean;
-}): import("pi-code-previews").CompactSummary | undefined => {
+}): CompactSummary | undefined => {
   const call = mcpCallSummary(args);
   const action = call.action;
-  const subject =
-    action === "tools.search"
-      ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
-      : call.target;
-  if (phase !== "settled")
-    return isError
-      ? undefined
-      : { action, subject, ...(action === "result.read" && { compactSubject: "Saved output" }) };
+  const heading = {
+    action,
+    subject:
+      action === "tools.search"
+        ? [call.target, searchQuery(args)].filter(Boolean).join(" / ")
+        : call.target,
+    ...(action === "result.read" && { compactSubject: "Saved output" }),
+  };
+  if (phase !== "settled") return isError ? undefined : heading;
 
   const card = decodeMcpCardDetails(result);
-  // The raw card retains notices beyond the semantic issue budget.
+  // Notices beyond the issue budget are listed only by the detailed card.
   if (card.notices.join("\n").length > 2048) return undefined;
+  const issues = card.presentation.issues;
   const boundary = card.action === action ? card.boundary : undefined;
   if (boundary)
     return {
-      action,
-      subject,
-      ...(action === "result.read" && { compactSubject: "Saved output" }),
+      ...heading,
       outcome: boundary.outcome,
       counters: [boundary.status.toLowerCase()],
-      issues: card.presentation.issues,
-      detailsOnExpand: true,
+      issues,
     };
+  // Unknown envelopes, incomplete evidence, and unviewed adapter failures keep the detailed card.
+  if (
+    !card.known ||
+    card.presentation.incomplete ||
+    card.diagnostic ||
+    (isError && !card.presentation.isError)
+  )
+    return undefined;
+
   const retainedRead =
     card.action === "result.read" &&
     action === "result.read" &&
     card.retainedPage !== undefined &&
     !card.isError &&
     !isError;
-  // The original card retains unknown diagnostics and its sanitized remote error body.
-  if (
-    !card.known ||
-    card.presentation.incomplete ||
-    card.diagnostic ||
-    (isError && !card.presentation.isError) ||
-    (card.presentation.isError && card.presentation.issues.coverage !== "complete" && !retainedRead)
-  )
-    return undefined;
-
   const count =
     retainedRead && card.retainedPage
       ? `page ${card.retainedPage.offset}..${card.retainedPage.end}/${card.retainedPage.total}${card.retainedPage.next === null ? " · EOF" : ""}`
@@ -82,57 +78,18 @@ export const projectMcpCompactSummary = ({
             : card.imageCount
               ? `${card.imageCount} native images`
               : undefined));
-  const counters = count ? [count] : [];
-  const notices: CompactNotice[] = [...new Set([...card.warnings, ...card.notices])].map((text) => {
-    const policy = classifyMcpDiscoveryNotice({
-      action: card.action ?? "",
-      outcome: card.outcome ?? "unknown",
-      isError: card.isError,
-      notice: text,
-    });
-    return policy.visibility === "expanded-only"
-      ? {
-          code: "discovery-information",
-          kind: "recovery",
-          text,
-          expandedOnly: true,
-        }
-      : { kind: "warning", text };
-  });
-  // A complete tools.call error already appears in the readable result. Raw JSON
-  // metadata may be cut independently; it cannot revoke readable cause ownership.
-  const remoteClaims =
-    action === "tools.call" &&
-    card.presentation.issues.coverage === "complete" &&
-    card.hasCompleteReadableText
-      ? card.presentation.issues.entries
-          .filter((issue) => issue.code === "remote-failure")
-          .map((issue) => claimCompactIssue(issue, { cause: true }))
-      : [];
   return {
-    action,
-    subject,
-    counters,
-    ...(remoteClaims.length > 0 && {
-      expandedResultOwnsIssues: remoteClaims,
-      failure: {
-        cause: remoteClaims[0]!.cause,
-        details: card.preview,
-        ownedIssues: remoteClaims,
-      },
-    }),
-    ...(action === "result.read" && { compactSubject: "Saved output" }),
+    ...heading,
+    counters: count ? [count] : [],
     outcome:
       (retainedRead ? card.outcome : card.presentation.outcome) === "unknown"
         ? "uncertain"
         : isError || (card.presentation.isError && !retainedRead)
           ? "error"
-          : notices.some(isCompactAttention) || card.presentation.issues.entries.length
+          : compactIssueSeverity(issues)
             ? "warning"
             : "success",
-    notices,
-    issues: card.presentation.issues,
-    detailsOnExpand: true,
+    issues,
   };
 };
 

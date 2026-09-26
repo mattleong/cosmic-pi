@@ -2,10 +2,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import {
   planCompactPresentation,
-  renderCompactRow,
   renderCompactIssues,
-  renderExpandedAttention,
-  summaryCompactIssues,
+  renderCompactRow,
   type CompactSummary,
 } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
@@ -52,28 +50,24 @@ export function imageMessagePresentation(
   expanded: boolean,
   theme: Theme,
 ): Component {
-  const plan = planCompactPresentation({ summary, phase: "settled", isError: false, expanded });
+  const { collapsedSummary } = planCompactPresentation({
+    summary,
+    phase: "settled",
+    isError: false,
+    expanded,
+  });
   return {
     invalidate() {},
     render(width) {
       const lines = [
         renderCompactRow(
-          { name: "openai_image", phase: "settled", summary: plan.collapsedSummary },
+          { name: "openai_image", phase: "settled", summary: collapsedSummary, expanded },
           theme,
           width,
         ),
+        ...renderCompactIssues(collapsedSummary.issues, theme, width, expanded),
       ];
-      if (!expanded) lines.push(...renderCompactIssues(plan.issues, theme, width));
-      if (expanded)
-        lines.push(
-          ...renderExpandedAttention(
-            summary ? summaryCompactIssues(summary, true) : { coverage: "unknown", entries: [] },
-            summary?.expandedResultOwnsIssues,
-            theme,
-            width,
-          ),
-          ...new Text(stripTerminalControls(text), 0, 0).render(width),
-        );
+      if (expanded) lines.push(...new Text(stripTerminalControls(text), 0, 0).render(width));
       return lines;
     },
   };

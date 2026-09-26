@@ -1,200 +1,119 @@
 import * as Effect from "effect/Effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { resolveCompactSummary, withCodePreviewShell } from "pi-code-previews";
+import { createToolPresentationHarness, withPresentationSettings } from "pi-code-previews/testing";
+import { opaqueFixture } from "pi-cosmic-core/testing";
+import { INCOMPLETE_ATTENTION } from "../src/tools/compact-evidence.ts";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import {
   codeModeCompactSummaryAtHost,
   syncProgressTicker,
 } from "../src/boundary/host-render-ticker.ts";
-import { callEntryDetails } from "../src/tools/format.ts";
-import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
-import { summaryCompactIssues, withCodePreviewShell } from "pi-code-previews";
-import { createToolPresentationHarness, withPresentationSettings } from "pi-code-previews/testing";
-import { opaqueFixture } from "pi-cosmic-core/testing";
+import { callEntryDetails, type CodeModeCallEntry } from "../src/tools/format.ts";
 import { executeHarness } from "./support/execute.ts";
-import { ledgerDetails, summarize } from "./support/compact.ts";
+import { ledgerDetails, summarize, withLedger } from "./support/compact.ts";
 import { EMPTY_RECEIPTS } from "./support/results.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
-const success = { ...callEntryDetails([]), outputKind: "text" as const };
+const success = withLedger({ ...callEntryDetails([]), outputKind: "text" as const });
+const calls = (entries: readonly CodeModeCallEntry[], ledger = {}) =>
+  withLedger({ ...callEntryDetails(entries), outputKind: "text" as const }, ledger);
+const receipt = (outcome: "success" | "warning" | "error" | "uncertain", patch = {}) => ({
+  version: 3 as const,
+  subject: "target",
+  outcome,
+  issues: [],
+  deliveryFailed: false,
+  ...patch,
+});
 
-describe("Code Mode compact outcomes", () => {
-  it("does not add a generic host failure to a body-owned v2 program failure", () => {
-    const ledger = makeCompactEvidence(() => undefined);
-    ledger.close();
-    const summary = summarize(
-      { ...callEntryDetails([]), compactAttention: ledger.snapshot() },
-      { isError: true, text: "PROGRAM_FAILURE" },
-    );
-    const issues = summary && summaryCompactIssues(summary, true).entries;
-    expect(issues?.filter((issue) => issue.cause === "PROGRAM_FAILURE")).toHaveLength(1);
-    expect(issues?.some((issue) => issue.code === "pi-error")).toBe(false);
-  });
-
-  it("does not repeat hidden v2 failures already represented by exact child issues", () => {
-    for (const unclassified of [false, true]) {
-      const { details } = ledgerDetails(
-        [1, 2, 3, 4, 5, 6].map((id) => ({
-          tool: "pi.read",
-          summary: {
-            subject: `file-${id}`,
-            outcome: "error",
-            issues: {
-              coverage: "complete",
-              entries: [
-                {
-                  operation: "read",
-                  code: "failure",
-                  severity: "error",
-                  cause: `read failure ${id}`,
-                  recovery: [],
-                },
-              ],
-            },
-          },
-        })),
-        {
-          status: "error",
-          ...(unclassified && {
-            unstarted: ["pi.read"],
-            counts: { total: 7, queued: 0, running: 0, succeeded: 0, failed: 7, cancelled: 0 },
-          }),
+describe("Code Mode program issues", () => {
+  it.effect("classifies each runtime failure kind from the real runtime envelope", () =>
+    Effect.gen(function* () {
+      const definitions = nestedToolDefinitionsFixture({
+        bash: { execute: () => Promise.reject(new Error("Command exited with code 1")) },
+        read: {
+          execute: () => Promise.resolve({ content: [{ type: "text", text: "x" }], details: {} }),
         },
-      );
-      const summary = summarize(details);
-      expect(summary).toBeDefined();
-      expect(summary?.children?.entries).toHaveLength(6);
-      expect(
-        summary &&
-          summaryCompactIssues(summary).entries.filter((issue) => issue.code === "failure"),
-      ).toHaveLength(6);
-      expect(
-        summary?.notices?.filter((notice) =>
-          notice.text.includes("additional nested operations failed"),
-        ),
-      ).toHaveLength(unclassified ? 1 : 0);
-      if (unclassified)
-        expect(
-          summary?.notices?.find((notice) =>
-            notice.text.includes("additional nested operations failed"),
-          )?.text,
-        ).toContain("1 additional");
-    }
-  });
-  it("retained reads stay compact for both returned pages and host failures", () => {
-    const definition = buildCodeModeToolDefinition({
-      catalogBudget: 0,
-      includePowerShell: false,
-      execute: () => Promise.reject(new Error("not executed")),
-      startUiTicker: () => () => undefined,
-    });
-    const args = { action: "result.read" as const, id: "retained-page" };
-    const result = {
-      content: [{ type: "text" as const, text: "Full retained result diagnostic" }],
-      details: { toolCalls: [] },
-    };
-    withPresentationSettings({ toolCallCollapsedStyle: "compact" }, () => {
-      for (const isError of [false, true]) {
-        // The compact border shell over the pure summary and the full result slot alone.
-        const tool = withCodePreviewShell(definition, {
-          mode: "border",
-          compactSummary: codeModeCompactSummary,
+      });
+      for (const [code, config, expected] of [
+        ["return (", {}, /^Syntax error: /u],
+        ["class A {}", {}, /^Unsupported syntax \(line 1\): /u],
+        ["const x = 1;\nnull.foo;", {}, /^Program error \(line 2\): /u],
+        ['throw new Error("boom");', {}, /^Program error: boom$/u],
+        ["await tools.pi.nope({});", {}, /^Unknown tool: /u],
+        ["await tools.pi.read({});", {}, /^Invalid tool input: /u],
+        ["return () => 1;", {}, /^Invalid value: /u],
+        [
+          "await tools.pi.read({path:'a'}); await tools.pi.read({path:'b'});",
+          { maxToolCalls: 1 },
+          /^Tool call limit reached: /u,
+        ],
+        ["while (true) {}", { timeoutMs: 100 }, /^Timed out \(line 1\): /u],
+        [
+          "await tools.pi.bash({command:'npm test'});",
+          {},
+          /^Program stopped: bash npm test failed$/u,
+        ],
+        [
+          "await Promise.allSettled([tools.pi.bash({command:'a'}), tools.pi.bash({command:'b'})]); await tools.pi.bash({command:'c'});",
+          {},
+          /^Program stopped: a bash call failed$/u,
+        ],
+      ] as const) {
+        const h = executeHarness({
+          definitions,
+          cwd: "/project",
+          retainFailureDetails: true,
+          config,
         });
-        const view = createToolPresentationHarness(tool, { width: 200 });
-        for (const { expanded, text } of view.cycle(args, result, {
-          states: [false, true, false],
-          overrides: () => ({ isError, isPartial: false, executionStarted: false }),
-        })) {
-          expect(text.includes("Full retained result diagnostic")).toBe(expanded);
-          expect(text.includes(args.id)).toBe(expanded);
-          if (!expanded) expect(text).toContain("result.read");
-        }
-      }
-    });
-  });
-
-  it("includes call names and lifecycle without source, output or individual activity", () => {
-    const calls: Array<Parameters<typeof callEntryDetails>[0][number]> = [];
-    for (const tool of ["pi.read", "pi.grep", "pi.find"]) {
-      for (const status of ["queued", "running", "completed"] as const) {
-        const summary = summarize(
-          callEntryDetails([...calls, { tool, status, activity: "SECRET ACTIVITY" }]),
-          { phase: "running" },
+        const text = yield* Effect.promise(() =>
+          h.run(code).then(
+            () => expect.unreachable(code),
+            (error: Error) => error.message,
+          ),
         );
-        expect(summary?.subject).toBe("Inspect the project");
-        expect(summary?.counters).toHaveLength(1);
-        expect(summary?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual([
-          `${calls.length + Number(status === "completed")}/${calls.length + 1}`,
-        ]);
-        expect(summary?.outcome).toBeUndefined();
-        expect(summary?.children?.total).toBe(calls.length + 1);
-        expect(summary?.children?.entries.at(-1)).toEqual({
-          label: tool.slice(3),
-          status: status === "completed" ? "success" : status === "queued" ? "pending" : "running",
-        });
-        expect(JSON.stringify(summary)).not.toMatch(/SECRET|ordinary output/u);
+        const summary = summarize(h.retention.consume("call"), { isError: true, text });
+        expect(summary?.outcome, code).toBe("error");
+        expect(summary?.issues, code).toHaveLength(1);
+        expect(summary?.issues?.[0]?.severity, code).toBe("error");
+        expect(summary?.issues?.[0]?.message, code).toMatch(expected);
+        // Pi's error flag adds nothing once the producer has explained the failure.
+        expect(resolveCompactSummary(summary, "settled", true, text)?.issues).toEqual(
+          summary?.issues,
+        );
       }
-      calls.push({ tool, status: "completed" });
+    }),
+  );
+
+  it("falls back to the first line of unrecognized failure text", () => {
+    for (const [text, expected] of [
+      ["Execution failed\nDo not retry before checking side effects.", "Execution failed"],
+      ["\n  \n[Unknown] odd\u001b[2J failure\nmore", "[Unknown] odd"],
+      ["[ToolFailure] Nested tool 'bash' failed: gone", "Program stopped: a bash call failed"],
+      ["", "The program failed"],
+    ] as const) {
+      const issues = summarize(success, { isError: true, text })?.issues;
+      expect(issues).toHaveLength(1);
+      expect(issues?.[0]?.message.startsWith(expected), text).toBe(true);
+      expect(issues?.[0]?.message).not.toContain("\n");
+      expect(issues?.[0]?.message).not.toContain("\u001b");
     }
-    const final = summarize({ ...callEntryDetails(calls), outputKind: "text" });
-    expect(final?.subject).toBe("Inspect the project");
-    expect(final?.counters).toHaveLength(1);
-    expect(final?.counters?.join(" ").match(/\d+/g)).toEqual(["3"]);
-    expect(final?.outcome).toBe("success");
   });
 
-  it("requests overall timing and includes only measured settled child durations", () => {
-    const summary = summarize(
-      {
-        ...callEntryDetails([
-          { tool: "pi.read", status: "completed", durationMs: 0 },
-          { tool: "pi.grep", status: "error", durationMs: 321 },
-          { tool: "pi.bash", status: "running", durationMs: 999 },
-        ]),
-        outputKind: "text",
-      },
-      { phase: "running" },
-    );
-    expect(summary?.showTiming).toBe(true);
-    expect(summary?.children?.entries.map((entry) => entry.durationMs)).toEqual([
-      0,
-      321,
-      undefined,
+  it("marks cancellation, saved output and truncation as program issues", () => {
+    const cancelled = summarize({ ...success, cancelled: true }, { isError: true, text: "x" });
+    expect(cancelled?.outcome).toBe("cancelled");
+    expect(cancelled?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "cancelled" }),
     ]);
-  });
-
-  it("warns when the program handled nested failures or cancellation", () => {
-    for (const status of ["error", "cancelled"] as const) {
-      const details = {
-        ...callEntryDetails([{ tool: "pi.bash", status }]),
-        outputKind: "text",
-      };
-      const live = summarize(details, { phase: "running" });
-      expect(live?.outcome).toBeUndefined();
-      expect(live?.notices?.some((notice) => notice.kind === "warning")).toBe(
-        status === "cancelled",
-      );
-      expect(live?.counters?.join(" ").match(/\d+\/\d+/gu)).toEqual(["1/1"]);
-      const final = summarize(details);
-      expect(final?.outcome).toBe("warning");
-      expect(final?.notices).toEqual(live?.notices);
-      expect(final?.children?.entries).toEqual([{ label: "bash", status }]);
-    }
-  });
-
-  it("preserves truncation, cancellation and unsettled operation evidence", () => {
-    expect(summarize({ ...success, truncated: true })?.outcome).toBe("warning");
-    expect(
-      summarize({ ...success, truncated: true })?.notices?.some(
-        (notice) => notice.kind === "recovery",
-      ),
-    ).toBe(true);
-    expect(summarize({ ...callEntryDetails([]), cancelled: true })?.outcome).toBe("cancelled");
-    expect(
-      summarize({
-        ...callEntryDetails([{ tool: "pi.bash", status: "running" }]),
-        outputKind: "text",
-      })?.outcome,
-    ).toBe("uncertain");
+    const truncated = summarize({ ...success, truncated: true });
+    expect(truncated?.outcome).toBe("warning");
+    expect(truncated?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "output-truncated" }),
+    ]);
+    expect(truncated?.issues?.[0]?.detail).toContain("prior operations");
   });
 
   it("classifies only validated initial saved pages as informational", () => {
@@ -209,228 +128,343 @@ describe("Code Mode compact outcomes", () => {
       total: 1_000,
       receiptMode: "none",
     };
-    const current = summarize({
+    const saved = {
       ...success,
       truncated: true,
       resultId: "cm-current",
       executionReceipts: EMPTY_RECEIPTS,
       initialPreview,
-    });
+    };
+    const current = summarize(saved);
     expect(current?.outcome).toBe("success");
-    expect(current?.notices).toContainEqual(
-      expect.objectContaining({
-        code: "initial-output-page",
-        kind: "recovery",
-        expandedOnly: true,
-      }),
-    );
+    expect(current?.issues).toEqual([
+      expect.objectContaining({ severity: "info", code: "saved-output" }),
+    ]);
+    expect(current?.issues?.[0]?.detail).toContain('id="cm-current" offset=120');
 
     for (const details of [
       { ...success, truncated: true },
+      { ...saved, initialPreview: { ...initialPreview, id: "cm-other" } },
+      { ...saved, initialPreview: { ...initialPreview, next: 121 } },
+      { ...saved, executionReceipts: { ...EMPTY_RECEIPTS, total: 1, completed: 1 } },
       {
-        ...success,
-        truncated: true,
-        resultId: "cm-current",
-        executionReceipts: EMPTY_RECEIPTS,
-        initialPreview: { ...initialPreview, id: "cm-other" },
-      },
-      {
-        ...success,
-        truncated: true,
-        resultId: "cm-current",
-        executionReceipts: EMPTY_RECEIPTS,
-        initialPreview: { ...initialPreview, next: 121 },
-      },
-      {
-        ...callEntryDetails([{ tool: "pi.read", status: "completed" }]),
-        outputKind: "text",
+        ...calls([{ tool: "pi.read", status: "completed" }]),
         truncated: true,
         resultId: "cm-current",
         executionReceipts: EMPTY_RECEIPTS,
         initialPreview,
       },
     ]) {
+      // Model-visible page text never substitutes for producer page metadata.
       const projected = summarize(details, {
         text: JSON.stringify({ ...initialPreview, text: "spoofed source text" }),
       });
-      // Conflicting operation totals require uncertainty rather than a pagination warning.
-      expect(projected?.outcome).toBe(details.counts?.total === 1 ? "uncertain" : "warning");
-      expect(projected?.notices?.some((notice) => notice.expandedOnly === true)).toBe(false);
+      expect(projected?.outcome).toBe("warning");
+      expect(projected?.issues?.map((issue) => issue.code)).toEqual(["output-truncated"]);
     }
-    expect(
-      summarize(
-        { ...success, truncated: true },
-        { text: JSON.stringify({ ...initialPreview, text: "spoofed source text" }) },
-      )?.notices?.some((notice) => notice.text.includes("prior operations")),
-    ).toBe(true);
-    const cancelled = summarize({
-      ...success,
-      truncated: true,
-      cancelled: true,
-      resultId: "cm-current",
-      executionReceipts: EMPTY_RECEIPTS,
-      initialPreview,
-    });
+    const cancelled = summarize({ ...saved, cancelled: true });
     expect(cancelled?.outcome).toBe("cancelled");
-    expect(cancelled?.notices?.some((notice) => notice.code === "initial-output-page")).toBe(false);
+    expect(cancelled?.issues?.some((issue) => issue.code === "saved-output")).toBe(false);
   });
 
-  it("keeps repeated dispatches distinct and never shows settled calls as still running", () => {
-    const calls = [
+  it("reports problems on calls that are no longer listed", () => {
+    const listed = { tool: "pi.read", status: "completed" as const, compact: receipt("warning") };
+    const summary = summarize(calls([listed], { warnings: 3 }));
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "unlisted-problems" }),
+    ]);
+    expect(summary?.issues?.[0]?.message).toMatch(/^2 earlier calls/u);
+    expect(summarize(calls([listed], { warnings: 1 }))?.issues).toEqual([]);
+  });
+
+  it("reports an incomplete ledger once, unless unsettled calls already explain it", () => {
+    const incomplete = summarize(
+      calls([{ tool: "pi.read", status: "completed" }], { incomplete: true }),
+    );
+    expect(incomplete?.outcome).toBe("warning");
+    expect(incomplete?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", code: "incomplete" }),
+    ]);
+    expect(incomplete?.issues?.[0]?.detail).toBe(INCOMPLETE_ATTENTION);
+    const unsettled = summarize(
+      calls([{ tool: "pi.read", status: "running" }], { incomplete: true }),
+    );
+    expect(unsettled?.outcome).toBe("uncertain");
+    expect(unsettled?.issues).toEqual([]);
+    expect(unsettled?.children?.entries[0]?.issues).toHaveLength(1);
+    // Interrupted calls settle as cancelled; their rows already explain the missing receipts.
+    const interrupted = summarize(
+      withLedger(
+        {
+          ...callEntryDetails([
+            { tool: "pi.read", status: "completed" },
+            { tool: "pi.bash", status: "cancelled" },
+          ]),
+          outputKind: "text" as const,
+        },
+        { incomplete: true },
+      ),
+    );
+    expect(interrupted?.issues?.some((issue) => issue.code === "incomplete")).toBe(false);
+  });
+});
+
+describe("Code Mode compact outcomes", () => {
+  it("derives the run outcome without letting nested calls make it an error", () => {
+    for (const [name, details, outcome] of [
+      ["clean run", calls([{ tool: "pi.read", status: "completed" }]), "success"],
+      ["handled failure", calls([{ tool: "pi.bash", status: "error" }]), "warning"],
+      ["cancelled call", calls([{ tool: "pi.bash", status: "cancelled" }]), "warning"],
+      [
+        "failed receipt",
+        calls([{ tool: "pi.bash", status: "completed", compact: receipt("error") }], { errors: 1 }),
+        "warning",
+      ],
+      [
+        "warning receipt",
+        calls([{ tool: "pi.read", status: "completed", compact: receipt("warning") }], {
+          warnings: 1,
+        }),
+        "warning",
+      ],
+      [
+        "row warning without ledger attention",
+        calls([
+          {
+            tool: "pi.read",
+            status: "completed",
+            compact: receipt("success", {
+              issues: [{ severity: "warning", code: "partial", message: "Partial" }],
+            }),
+          },
+        ]),
+        "warning",
+      ],
+      [
+        "informational issue",
+        calls([
+          {
+            tool: "pi.read",
+            status: "completed",
+            compact: receipt("success", {
+              issues: [{ severity: "info", code: "page", message: "Showing lines 1-2" }],
+            }),
+          },
+        ]),
+        "success",
+      ],
+      ["settled uncertain receipt", calls([], { uncertain: 1 }), "warning"],
+      ["evicted cancellation", calls([], { cancelled: 1 }), "warning"],
+      ["still running at settlement", calls([{ tool: "pi.bash", status: "running" }]), "uncertain"],
+      ["never started", calls([{ tool: "pi.bash", status: "queued" }]), "uncertain"],
+    ] as const) {
+      const summary = summarize(details);
+      expect(summary?.outcome, name).toBe(outcome);
+      expect(
+        summary?.issues?.some((issue) => issue.severity === "error"),
+        name,
+      ).toBe(false);
+    }
+    const failed = summarize(calls([{ tool: "pi.bash", status: "error" }]), {
+      isError: true,
+      text: "[ExecutionFailure] Uncaught: boom",
+    });
+    expect(failed?.outcome).toBe("error");
+  });
+
+  it("keeps a warning whose call is no longer retained", () => {
+    const { details } = ledgerDetails(
+      Array.from({ length: 40 }, (_, id) => ({
+        tool: "pi.read",
+        summary: {
+          subject: `file-${id}`,
+          outcome: id === 0 ? ("warning" as const) : ("success" as const),
+          ...(id === 0 && {
+            issues: [{ severity: "warning" as const, code: "partial", message: "Partial read" }],
+          }),
+        },
+      })),
+    );
+    const summary = summarize(details);
+    expect(summary?.children?.total).toBe(40);
+    expect(summary?.children?.entries.some((child) => child.subject === "file-0")).toBe(false);
+    expect(summary?.outcome).toBe("warning");
+  });
+
+  it("maps call rows to receipts, delivery and lifecycle", () => {
+    const entries: CodeModeCallEntry[] = [
       { tool: "pi.read", status: "completed" },
-      { tool: "pi.read", status: "completed" },
+      { tool: "pi.read", status: "completed", compact: receipt("warning") },
+      { tool: "mcp.request", status: "error", compact: receipt("uncertain") },
+      {
+        tool: "pi.write",
+        status: "error",
+        compact: receipt("success", { deliveryFailed: true }),
+      },
+      {
+        tool: "mcp.request",
+        status: "completed",
+        compact: receipt("uncertain", { deliveryFailed: true }),
+      },
+      { tool: "session.backgroundTask", status: "completed", compact: receipt("success") },
+      { tool: "session.backgroundTask", status: "completed" },
+      { tool: "pi.bash", status: "cancelled" },
       { tool: "pi.grep", status: "running" },
       { tool: "pi.find", status: "queued" },
-    ] as const;
-    const summary = summarize({ ...callEntryDetails(calls), outputKind: "text" });
-    expect(summary?.children?.entries).toEqual([
-      { label: "read", status: "success" },
-      { label: "read", status: "success" },
-      { label: "grep", status: "uncertain" },
-      { label: "find", status: "uncertain" },
+    ];
+    const settled = summarize(calls(entries))!.children!.entries;
+    expect(settled.map((child) => [child.label, child.status])).toEqual([
+      ["read", "returned"],
+      ["read", "warning"],
+      ["mcp", "uncertain"],
+      ["write", "error"],
+      ["mcp", "uncertain"],
+      ["background_task", "success"],
+      ["session.backgroundTask", "returned"],
+      ["bash", "cancelled"],
+      ["grep", "uncertain"],
+      ["find", "uncertain"],
+    ]);
+    expect(settled.slice(0, 8).every((child) => child.issues === undefined)).toBe(true);
+    expect(settled[8]?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", message: "May still be running" }),
+    ]);
+    expect(settled[9]?.issues).toEqual([
+      expect.objectContaining({ severity: "warning", message: "Did not start" }),
+    ]);
+    const live = summarize(calls(entries), { phase: "running" })!.children!.entries;
+    expect(live.slice(8).map((child) => [child.status, child.issues])).toEqual([
+      ["running", undefined],
+      ["pending", undefined],
     ]);
   });
 
-  it("owns full retained failure text once and keeps continuation recovery visible", () => {
-    const text = "Execution failed\nDo not retry before checking side effects.";
-    const summary = summarize(callEntryDetails([]), { isError: true, text });
-    expect(summary?.outcome).toBe("error");
-    expect(summary?.failure?.details).toBe(text);
-    expect(summary?.failure?.cause).toBe(text.split("\n")[0]);
-    expect(summary?.notices?.some((notice) => notice.text.includes("Do not retry"))).toBe(true);
+  it("includes call names and lifecycle without source, output or individual activity", () => {
+    const history: CodeModeCallEntry[] = [];
+    for (const tool of ["pi.read", "pi.grep", "pi.find"]) {
+      for (const status of ["queued", "running", "completed"] as const) {
+        const summary = summarize(
+          calls([...history, { tool, status, activity: "SECRET ACTIVITY" }]),
+          { phase: "running" },
+        );
+        expect(summary?.subject).toBe("Inspect the project");
+        // The first counter is preferred; the second is its shorter narrow-row fallback.
+        const progress = `${history.length + Number(status === "completed")}/${history.length + 1}`;
+        expect(summary?.counters?.[0]?.startsWith(`${progress} call`)).toBe(true);
+        expect(summary?.counters?.at(-1)).toBe(progress);
+        expect(summary?.outcome).toBeUndefined();
+        expect(summary?.children?.total).toBe(history.length + 1);
+        expect(summary?.children?.entries.at(-1)).toEqual({
+          label: tool.slice(3),
+          status: status === "completed" ? "returned" : status === "queued" ? "pending" : "running",
+        });
+        expect(JSON.stringify(summary)).not.toMatch(/SECRET|ordinary output/u);
+      }
+      history.push({ tool, status: "completed" });
+    }
+    const final = summarize(calls(history));
+    expect(final?.subject).toBe("Inspect the project");
+    expect(final?.counters?.join(" ").match(/\d+/gu)).toEqual(["3"]);
+    expect(final?.outcome).toBe("success");
+    const mixed = summarize(
+      calls([
+        { tool: "pi.read", status: "completed" },
+        { tool: "pi.bash", status: "error" },
+        { tool: "pi.bash", status: "cancelled" },
+      ]),
+    );
+    expect(mixed?.counters?.[0]).toMatch(/3 calls.*1 failed.*1 cancelled/u);
+    // Narrow rows fall back to the problem counts alone.
+    expect(mixed?.counters?.[1]).toMatch(/^1 failed.*1 cancelled$/u);
+    expect(summarize(success)?.counters).toEqual([]);
   });
 
-  it("retains hidden failures and independent program errors rather than deduplicating by failure count", () => {
-    const details = {
-      ...callEntryDetails([{ tool: "pi.bash", status: "error" }]),
-      counts: { total: 8, succeeded: 0, failed: 8, cancelled: 0, running: 0, queued: 0 },
-      totalToolCalls: 8,
-    };
-    expect(
-      summarize(details, { isError: true, text: "Program failed" })?.notices?.some((notice) =>
-        notice.text.includes("7 additional"),
-      ),
-    ).toBe(true);
-    const calls = callEntryDetails([
-      {
-        tool: "pi.bash",
-        status: "completed",
-        compact: {
-          version: 2,
-          issues: { coverage: "complete", entries: [] },
-          subject: "run",
-          outcome: "warning",
-          deliveryFailed: false,
-          notices: [{ kind: "recovery", text: "Output truncated. Read retained output." }],
-        },
-      },
-    ]);
-    const projected = summarize(calls, {
-      isError: true,
-      text: "[ExecutionFailure] JSON.parse received invalid JSON",
-    });
-    expect(projected?.failure?.cause).toContain("JSON.parse");
-    expect(
-      projected?.children?.entries[0]?.notices?.some((notice) =>
-        notice.text.includes("Output truncated"),
-      ),
-    ).toBe(true);
-  });
-  it("counts hidden lifecycle failures independently of visible semantic outcomes", () => {
-    const uncertain = summarize(
-      callEntryDetails([
-        {
-          tool: "mcp.request",
-          status: "error",
-          compact: {
-            version: 2,
-            issues: { coverage: "complete", entries: [] },
-            subject: "remote",
-            outcome: "uncertain",
-            deliveryFailed: false,
-            notices: [{ kind: "warning", text: "Check remote state before retrying." }],
-          },
-        },
+  it("requests overall timing and includes only measured settled child durations", () => {
+    const summary = summarize(
+      calls([
+        { tool: "pi.read", status: "completed", durationMs: 0 },
+        { tool: "pi.grep", status: "error", durationMs: 321 },
+        { tool: "pi.bash", status: "running", durationMs: 999 },
+        { tool: "pi.bash", status: "queued", durationMs: 999 },
       ]),
       { phase: "running" },
     );
-    expect(uncertain?.children?.entries[0]?.status).toBe("uncertain");
-    expect(uncertain?.notices?.some((notice) => notice.text.includes("additional"))).toBe(false);
-
-    const hidden = summarize(
-      {
-        ...callEntryDetails([
-          {
-            tool: "mcp.request",
-            status: "completed",
-            compact: {
-              version: 2,
-              issues: { coverage: "complete", entries: [] },
-              subject: "remote",
-              outcome: "error",
-              deliveryFailed: false,
-              notices: [{ kind: "error", text: "Remote operation failed." }],
-            },
-          },
-        ]),
-        counts: { total: 2, succeeded: 1, failed: 1, cancelled: 0, running: 0, queued: 0 },
-        totalToolCalls: 2,
-      },
-      { phase: "running" },
-    );
-    expect(hidden?.children?.entries[0]?.status).toBe("error");
-    expect(hidden?.notices?.some((notice) => notice.text.includes("1 additional"))).toBe(true);
+    expect(summary?.showTiming).toBe(true);
+    expect(summary?.children?.entries.map((entry) => entry.durationMs)).toEqual([
+      0,
+      321,
+      undefined,
+      undefined,
+    ]);
   });
 
-  it("does not trust mismatched saved provenance to hide unknown diagnostic recovery", () => {
-    const details = {
-      ...callEntryDetails([]),
-      failurePresentation: {
-        version: 1,
-        tool: "bash",
-        evidence: { code: "shell-exit", cause: "Exited with code 1", coverage: "complete" },
-        notices: [],
-      },
+  it("retained reads stay compact for both returned pages and host failures", () => {
+    const definition = buildCodeModeToolDefinition({
+      catalogBudget: 0,
+      includePowerShell: false,
+      execute: () => Promise.reject(new Error("not executed")),
+      startUiTicker: () => () => undefined,
+    });
+    const args = { action: "result.read" as const, id: "retained-page" };
+    const result = {
+      content: [{ type: "text" as const, text: "Full retained result diagnostic\nSECOND_LINE" }],
+      details: { toolCalls: [] },
     };
-    const text = "[ToolFailure] Unfamiliar failure\nCheck partial changes before retrying.";
-    const projected = summarize(details, { isError: true, text });
-    expect(
-      projected?.notices?.some((notice) => notice.text.includes("Check partial changes")),
-    ).toBe(true);
-    expect(projected?.failure?.details).toBe(text);
+    withPresentationSettings({ toolCallCollapsedStyle: "compact" }, () => {
+      for (const isError of [false, true]) {
+        const tool = withCodePreviewShell(definition, {
+          mode: "border",
+          compactSummary: codeModeCompactSummary,
+        });
+        const view = createToolPresentationHarness(tool, { width: 200 });
+        for (const { expanded, text } of view.cycle(args, result, {
+          states: [false, true, false],
+          overrides: () => ({ isError, isPartial: false, executionStarted: false }),
+        })) {
+          // A failure explains itself with its first line; the rest waits for expansion.
+          expect(text.includes("Full retained result diagnostic")).toBe(expanded || isError);
+          expect(text.includes("SECOND_LINE")).toBe(expanded);
+          if (!expanded) expect(text).toContain("result.read");
+        }
+      }
+    });
   });
+
   it("declines missing, legacy, contradictory and malformed settled details", () => {
+    const legacyLedger = {
+      version: 2,
+      admitted: 0,
+      started: 0,
+      unsupported: 0,
+      observed: 0,
+      errors: 0,
+      warnings: 0,
+      cancelled: 0,
+      uncertain: 0,
+      incomplete: false,
+      notices: [],
+      issues: { coverage: "complete", entries: [] },
+    };
+    expect(summarize(success)?.outcome).toBe("success");
     for (const details of [
       undefined,
       {},
       { toolCalls: [] },
-      callEntryDetails([]),
+      { ...callEntryDetails([]), outputKind: "text" },
+      { ...success, compactAttention: legacyLedger },
+      { ...success, compactAttention: { ...success.compactAttention, version: 4 } },
       { ...success, truncated: "yes" },
       { ...success, toolCalls: [{ tool: "pi.read", status: "unknown" }] },
       { ...success, counts: { ...success.counts, total: 1 } },
+      { ...success, outputKind: undefined },
     ])
       expect(summarize(details)).toBeUndefined();
-    expect(summarize({}, { isError: true })).toBeUndefined();
-  });
-
-  it("does not hide fulfilled adapter failures or uninspected call history behind success", () => {
-    for (const tool of ["mcp.request", "session.backgroundTask"]) {
-      expect(
-        summarize(
-          {
-            ...callEntryDetails([{ tool, status: "completed" }]),
-            outputKind: "structured",
-          },
-          { text: "unknown outcome; do not replay" },
-        ),
-      ).toBeUndefined();
-    }
+    for (const details of [{}, { ...success, compactAttention: legacyLedger }])
+      expect(summarize(details, { isError: true, text: "boom" })).toBeUndefined();
+    // Running rows need the same current ledger as settled ones.
     expect(
-      summarize({
-        ...success,
-        totalToolCalls: 1,
-        counts: { ...success.counts, total: 1, succeeded: 1 },
-      }),
+      summarize(callEntryDetails([{ tool: "pi.read", status: "running" }]), { phase: "running" }),
     ).toBeUndefined();
   });
 
@@ -484,7 +518,9 @@ describe("Code Mode compact outcomes", () => {
     });
     return run("return 1").then((result) => {
       expect(result.details?.truncated).toBe(true);
-      expect(summarize(result.details)?.outcome).toBe("warning");
+      const summary = summarize(result.details);
+      expect(summary?.outcome).toBe("warning");
+      expect(summary?.issues?.map((issue) => issue.code)).toContain("output-truncated");
     });
   });
 });

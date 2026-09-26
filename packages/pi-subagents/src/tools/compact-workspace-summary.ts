@@ -1,6 +1,6 @@
-import { withCompactIssues } from "pi-code-previews";
+import { compactIssueSeverity } from "pi-code-previews";
 import * as Schema from "effect/Schema";
-import type { CompactSummary } from "pi-code-previews";
+import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
 const decode = Schema.decodeUnknownOption(WorkspaceToolDetailsSchema);
@@ -45,20 +45,72 @@ function hasOperationReceipt(details: WorkspaceToolDetails): boolean {
   );
 }
 
-function unavailableNotices(details: WorkspaceToolDetails): NonNullable<CompactSummary["notices"]> {
-  return (details.unavailableCount ?? 0) > 0
-    ? [
-        {
-          code: "workspace-records-unavailable",
-          kind: "warning",
-          text: "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
-          description:
-            "Some workspace artifacts lack readable recovery metadata; ownership and cleanup remain unknown.",
-        },
-      ]
-    : [];
+const step = (code: string, message: string, detail: string): CompactIssue => ({
+  severity: "info",
+  code,
+  message,
+  detail,
+});
+
+function listIssues(details: WorkspaceToolDetails): CompactIssue[] {
+  const issues: CompactIssue[] = [];
+  if ((details.unavailableCount ?? 0) > 0)
+    issues.push({
+      severity: "warning",
+      code: "workspace-records-unavailable",
+      message: "Some workspace records are unreadable; ownership and cleanup are unknown",
+      detail:
+        "Incomplete workspace metadata: some recovery records are missing, invalid, or unreadable. Their ownership, source identity, and cleanup are unknown; manual recovery is required.",
+    });
+  if (!isEmptyList(details))
+    issues.push(
+      step(
+        "orphan-recovery",
+        "Listing a workspace does not authorize its recovery",
+        "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
+      ),
+    );
+  if (details.nextOffset !== undefined)
+    issues.push(
+      step(
+        "list-pagination",
+        "More workspace entries are available",
+        `More workspace metadata: list offset=${details.nextOffset}.`,
+      ),
+    );
+  return issues;
 }
 
+function reviewIssues(details: WorkspaceToolDetails): CompactIssue[] {
+  const next =
+    details.nextOffset === undefined
+      ? " End of diff does not prove earlier pages were read."
+      : ` Next: review workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, offset=${details.nextOffset}.`;
+  return [
+    step(
+      "read-revision",
+      "Read every diff page before preparing",
+      `Diff page available in expanded details. Read ALL pages of exact revisionId=${details.revisionId} before prepare or integrate.${next}`,
+    ),
+    step(
+      "prepare-revision",
+      "Prepare this exact revision after review",
+      "After complete review, prepare this exact revision.",
+    ),
+    step(
+      "test-preparation",
+      "Test the prepared tree without editing it",
+      "Run relevant tests in the returned combined cwd; do not edit the prepared tree.",
+    ),
+    step(
+      "integrate-preparation",
+      "Integrate only after tests pass",
+      "Only after passing tests, integrate the exact revisionId and preparationId.",
+    ),
+  ];
+}
+
+/** Review, test, and integration gates are procedure, not problems: shown only on expansion. */
 export function compactWorkspaceSummary<ValueInput>(
   value: ValueInput,
   operation: string,
@@ -70,64 +122,42 @@ export function compactWorkspaceSummary<ValueInput>(
   if (!hasOperationReceipt(details) || !validPagination(details)) return undefined;
   const metadata: string[] = [];
   const counters: string[] = [];
-  const notices: NonNullable<CompactSummary["notices"]>[number][] = [];
-  const add = (code: string, text: string) =>
-    notices.push({
-      code,
-      kind: "recovery",
-      text,
-      description:
-        code === "revision-invalidated"
-          ? "Earlier review and test preparation no longer apply."
-          : "",
-    });
+  let issues: CompactIssue[] = [];
   switch (details.operation) {
     case "list":
       if (details.workspaceCount !== undefined && details.listedCount !== undefined)
         counters.push(`${details.listedCount}/${details.workspaceCount} workspace entries shown`);
       else metadata.push("workspace metadata");
-      notices.push(...unavailableNotices(details));
-      if (!isEmptyList(details))
-        add(
-          "orphan-recovery",
-          "Metadata visibility does not authorize recovery. If ownership or cleanup evidence is unavailable, independently verify writer descendants are dead and preserve the private workspace/journal before manual repair. Do not auto-adopt or delete an orphan.",
-        );
-
-      if (details.nextOffset !== undefined)
-        add("list-pagination", `More workspace metadata: list offset=${details.nextOffset}.`);
+      issues = listIssues(details);
       break;
     case "review":
       counters.push(`diff offset ${details.offset} of ${details.totalChars}`);
-      add(
-        "read-revision",
-        `Diff page available in expanded details. Read ALL pages of exact revisionId=${details.revisionId} before prepare or integrate.${details.nextOffset === undefined ? " End of diff does not prove earlier pages were read." : ` Next: review workspaceId=${details.workspaceId}, revisionId=${details.revisionId}, offset=${details.nextOffset}.`}`,
-      );
-      add("prepare-revision", "After complete review, prepare this exact revision.");
-      add(
-        "test-preparation",
-        "Run relevant tests in the returned combined cwd; do not edit the prepared tree.",
-      );
-      add(
-        "integrate-preparation",
-        "Only after passing tests, integrate the exact revisionId and preparationId.",
-      );
+      issues = reviewIssues(details);
       break;
     case "prepare":
       counters.push("prepared");
-      add(
-        "test-preparation",
-        `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there; do not edit this prepared tree.`,
-      );
-      add(
-        "integrate-preparation",
-        "After passing tests and complete diff review, integrate this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
-      );
+      issues = [
+        step(
+          "test-preparation",
+          "Test the prepared tree without editing it",
+          `Combined test cwd: ${details.preparedCwd ?? "see expanded details"}. Run relevant tests there; do not edit this prepared tree.`,
+        ),
+        step(
+          "integrate-preparation",
+          "Integrate only after tests pass",
+          "After passing tests and complete diff review, integrate this exact revisionId and preparationId. Parent drift requires fresh preparation and tests.",
+        ),
+      ];
       break;
     case "revise":
-      add(
-        "revision-invalidated",
-        `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
-      );
+      issues = [
+        {
+          severity: "warning",
+          code: "revision-invalidated",
+          message: "Earlier review and test preparation no longer apply",
+          detail: `Prior review and preparation are invalid. Await successor ${details.successorRunId ?? "shown in expanded details"}, then review its new immutable revision from the beginning before preparing and testing again.`,
+        },
+      ];
       break;
     case "integrate":
       counters.push("integrated");
@@ -135,21 +165,13 @@ export function compactWorkspaceSummary<ValueInput>(
     case "discard":
       break;
   }
-  return withCompactIssues(
-    {
-      action: operation,
-      subject: details.workspaceId ?? "",
-      compactSubject: "Proposed changes",
-      counters,
-      metadata,
-      notices,
-      outcome: notices.some((notice) => notice.kind === "warning") ? "warning" : "success",
-      detailsOnExpand: true,
-    },
-    workspaceIdentity(details),
-  );
-}
-
-function workspaceIdentity(details: WorkspaceToolDetails): string {
-  return `workspace:${details.workspaceId ?? "list"}:${details.revisionId ?? details.operation}`;
+  return {
+    action: operation,
+    subject: details.workspaceId ?? "",
+    compactSubject: "Proposed changes",
+    counters,
+    metadata,
+    issues,
+    outcome: compactIssueSeverity(issues) ?? "success",
+  };
 }

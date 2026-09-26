@@ -134,7 +134,7 @@ export class BorderedToolCall implements Component {
   }
 
   handleMouse(event: TuiMouseEvent) {
-    const framed = event.width >= 4;
+    const framed = event.width >= MIN_FRAMED_WIDTH;
     const width = Math.max(1, event.width - (framed ? 4 : 0));
     const x = event.x - (framed ? 2 : 0);
     const y = event.y - (framed ? 1 : 0);
@@ -155,8 +155,9 @@ export class BorderedToolCall implements Component {
   }
 
   private renderUncached(width: number): string[] {
-    if (width < 4) return this.renderBody(Math.max(1, width));
-    const innerWidth = Math.max(1, width - 4);
+    // A frame needs two border cells, two padding cells, and at least one content cell.
+    if (width < MIN_FRAMED_WIDTH) return this.renderBody(Math.max(1, width));
+    const innerWidth = width - 4;
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);
     const timing = this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
     const expand = this.expandLabel ? ` ${this.expandLabel} ` : "";
@@ -187,6 +188,8 @@ export class BorderedToolCall implements Component {
     return `${border("│")} ${truncated}${RESET_ANSI}${padding} ${border("│")}`;
   }
 }
+
+const MIN_FRAMED_WIDTH = 5;
 
 function renderBorder(
   width: number,

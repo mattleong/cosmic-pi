@@ -10,9 +10,9 @@ import * as Predicate from "effect/Predicate";
 import {
   captureCodePreviewPresentationPolicy,
   getTextContent,
-  withCompactIssues,
   withCodePreviewShell,
   type CompactAnimationScheduler,
+  type CompactSummary,
 } from "pi-code-previews";
 import { imageMessagePresentation, renderImageContent } from "./presentation.ts";
 import { stripTerminalControls } from "pi-cosmic-core";
@@ -57,6 +57,35 @@ const isImageContent = <Value>(
   Predicate.isString(value.data) &&
   Predicate.isString(value.mimeType);
 
+/** Command messages carry validated details; only an attached image confirms completion. */
+const messageSummary = (details: CodexImageDetails, hasImage: boolean): CompactSummary => {
+  const base = { subject: details.savedPath || details.prompt, action: details.action };
+  if (details.status === "cancelled") return { ...base, outcome: "cancelled" };
+  if (details.status === "failed")
+    return {
+      ...base,
+      outcome: "error",
+      issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
+    };
+  if (details.status === "completed" && hasImage) return { ...base, outcome: "success" };
+  return {
+    ...base,
+    outcome: "uncertain",
+    issues: [
+      {
+        severity: "warning",
+        code: "image-status",
+        message:
+          details.status === "completed"
+            ? "Image generation was reported complete, but no image is attached"
+            : details.status === "in_progress"
+              ? "Image generation may still be running"
+              : "Image generation has no confirmed completion",
+      },
+    ],
+  };
+};
+
 export function registerOpenAIImage(
   pi: ExtensionAPI,
   run: <A, E>(effect: Effect.Effect<A, E, OpenAIImageService>, signal?: AbortSignal) => Promise<A>,
@@ -83,52 +112,10 @@ export function registerOpenAIImage(
       (isLegacyCodexImageResult(message.details) ? message.details : undefined);
     const container = new Container();
     const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
-    const outcome =
-      details?.status === "cancelled"
-        ? "cancelled"
-        : details?.status === "failed"
-          ? "error"
-          : details?.status === "completed" && image
-            ? "success"
-            : "uncertain";
     box.addChild(
       compact
         ? imageMessagePresentation(
-            details
-              ? withCompactIssues(
-                  {
-                    subject: details.savedPath || details.prompt,
-                    action: details.action,
-                    outcome,
-                    notices:
-                      outcome === "error"
-                        ? [
-                            {
-                              code: "image-failed",
-                              kind: "error" as const,
-                              text: "Image generation failed.",
-                              description: "Image generation failed.",
-                            },
-                          ]
-                        : outcome === "uncertain"
-                          ? [
-                              {
-                                code: "image-status",
-                                kind: "warning" as const,
-                                text: `Image generation is ${details.status}.`,
-                                description:
-                                  details.status === "completed"
-                                    ? "Image generation was reported complete, but no image is attached."
-                                    : details.status === "in_progress"
-                                      ? "Image generation may still be running."
-                                      : "Image generation has no confirmed completion.",
-                              },
-                            ]
-                          : [],
-                  },
-                  `image:${details.id}`,
-                )
-              : undefined,
+            details && messageSummary(details, image !== undefined),
             text,
             options.expanded,
             theme,

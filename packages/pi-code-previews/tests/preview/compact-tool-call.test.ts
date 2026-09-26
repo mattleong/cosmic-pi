@@ -2,12 +2,8 @@ import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { allocateCompactHeader, middleElide } from "../../src/preview/compact-header";
-import { renderCompactFailure, renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import {
-  compactStatus,
-  compactSummaryNeedsDetails,
-  resolveCompactSummary,
-} from "../../src/tools/compact-summary";
+import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
+import { compactStatus } from "../../src/tools/compact-summary";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 
 test("explicit measured timing accompanies counts without overriding disabled timing or inventing replay time", () => {
@@ -152,16 +148,19 @@ test("middle elision keeps combining, ZWJ and wide graphemes intact", () => {
   assert.ok(visibleWidth(row) < 200);
 });
 
-test("notice indentation preserves every character at narrow widths", () => {
-  const notice = "日本語recover\r\n文字retry";
-  for (const kind of ["warning", "error", "recovery"] as const) {
+test("card issues keep every character at narrow widths", () => {
+  const message = "日本語recover\r\n文字retry";
+  for (const severity of ["warning", "error"] as const) {
     for (const width of [2, 3, 6, 7, 12, 40]) {
       const rows = renderCompactToolCall(
         {
           name: "read",
           phase: "settled",
-          expanded: true,
-          summary: { subject: "file", outcome: "warning", notices: [{ kind, text: notice }] },
+          summary: {
+            subject: "file",
+            outcome: "warning",
+            issues: [{ severity, code: "wide", message }],
+          },
         },
         theme,
         width,
@@ -169,81 +168,80 @@ test("notice indentation preserves every character at narrow widths", () => {
         .slice(1)
         .map(stripAnsi);
       assert.ok(rows.every((row) => visibleWidth(row) <= width));
-      assert.equal(rows.join("").replace(/[ ╰─]/gu, ""), notice.replaceAll("\r\n", ""));
+      const text = rows.join("");
+      for (const character of "日本語recover文字retry") assert.ok(text.includes(character));
     }
   }
 });
 
-test("failure text is inert and width bounded without clipping recovery continuations", () => {
-  for (const width of [1, 4, 16, 40, 100]) {
-    for (const expanded of [false, true]) {
-      const rows = renderCompactFailure(
-        {
-          name: "read",
-          phase: "settled",
-          summary: {
-            subject: "file.ts",
-            outcome: "error",
-            notices: [{ kind: "recovery", text: "Inspect before retrying." }],
-          },
-          failure: {
-            cause: "日本語/👩‍💻 failed\u001b[2J",
-            details: "detail\u001b[2J\nInspect before retrying.",
-          },
-          expanded,
-        },
-        theme,
-        width,
-      );
-      assert.ok(rows.every((row) => visibleWidth(row) <= width));
-      assert.equal(rows.join("").includes("\u001b[2J"), false);
-      if (width >= 40)
-        assert.equal(
-          rows.join("\n").match(/Inspect before retrying\./gu)?.length ?? 0,
-          expanded ? 2 : 0,
-        );
-    }
-  }
-});
-
-test("unidentified legacy recovery is not suppressed by matching diagnostic prose", () => {
-  const details = "failure\r\nInspect before retrying.\r\nKeep the original file.";
-  const rows = renderCompactFailure(
+test("collapsed cards show the heading, then attention issues, then the call tree", () => {
+  const rows = renderCompactToolCall(
     {
-      name: "read",
+      name: "code_mode",
       phase: "settled",
-      expanded: true,
       summary: {
-        subject: "file.ts",
-        outcome: "error",
-        notices: [{ kind: "recovery", text: "Inspect before retrying.\nKeep the original file." }],
+        subject: "inspect",
+        outcome: "warning",
+        issues: [
+          { severity: "info", code: "hint", message: "HIDDEN_HINT" },
+          { severity: "warning", code: "partial", message: "OWN_WARNING", detail: "HIDDEN_DETAIL" },
+        ],
+        children: {
+          total: 2,
+          entries: [
+            {
+              label: "CHILD_READ",
+              status: "error",
+              issues: [{ severity: "error", code: "missing", message: "CHILD_ERROR" }],
+            },
+            { label: "CHILD_GREP", status: "success" },
+          ],
+        },
       },
-      failure: { cause: "cause", details },
     },
     theme,
-    100,
-  );
-  assert.equal(rows.join("\n").match(/Inspect before retrying\./gu)?.length, 2);
-  assert.equal(rows.join("\n").match(/Keep the original file\./gu)?.length, 2);
-  for (const width of [2, 3, 6]) {
-    const narrow = renderCompactFailure(
+    120,
+  ).map(stripAnsi);
+  const at = (text: string) => rows.findIndex((row) => row.includes(text));
+  assert.equal(at("inspect"), 0);
+  assert.equal(at("OWN_WARNING"), 1);
+  assert.ok(at("CHILD_READ") > at("OWN_WARNING"));
+  assert.equal(at("CHILD_ERROR"), at("CHILD_READ"));
+  assert.ok(at("CHILD_GREP") > at("CHILD_READ"));
+  assert.equal(rows.length, 4);
+  assert.doesNotMatch(rows.join("\n"), /HIDDEN_/u);
+  // A failed child does not change its parent's heading status.
+  const parent = rows[0]!;
+  const alone = renderCompactToolCall(
+    {
+      name: "code_mode",
+      phase: "settled",
+      summary: { subject: "inspect", outcome: "warning", issues: [] },
+    },
+    theme,
+    120,
+  )[0]!;
+  assert.equal(parent, stripAnsi(alone));
+});
+
+test("issue text is inert and width bounded", () => {
+  for (const width of [1, 4, 16, 40, 100]) {
+    const rows = renderCompactToolCall(
       {
         name: "read",
         phase: "settled",
         summary: {
           subject: "file.ts",
           outcome: "error",
-          notices: [{ kind: "recovery", text: "文字" }],
+          issues: [{ severity: "error", code: "x", message: "日本語/👩‍💻 failed\u001b[2J" }],
         },
-        expanded: true,
-        failure: { cause: "日本語", details: "日本語" },
       },
       theme,
       width,
     );
-    const text = narrow.join("");
-    for (const character of "日本語文字") assert.ok(text.includes(character));
-    assert.ok(narrow.every((line) => visibleWidth(line) <= width));
+    assert.ok(rows.every((row) => visibleWidth(row) <= width));
+    assert.equal(rows.join("").includes("\u001b[2J"), false);
+    if (width >= 40) assert.match(stripAnsi(rows.join("\n")), /failed/u);
   }
 });
 
@@ -259,34 +257,26 @@ test("pending rows do not display an execution duration or outcome from a premat
     100,
   );
   assert.equal(compactStatus("pending", { subject: "file.ts", outcome: "success" }), "pending");
+  assert.equal(compactStatus("pending", { subject: "file.ts", outcome: "error" }), "pending");
   assert.doesNotMatch(rows[0]!, /3s/u);
+  assert.equal(
+    stripAnsi(rows[0]!),
+    stripAnsi(
+      renderCompactToolCall(
+        { name: "write", phase: "pending", summary: { subject: "file.ts", outcome: "error" } },
+        theme,
+        100,
+      )[0]!,
+    ),
+  );
 });
 
-test("settlement requires a semantic outcome and Pi errors cannot become success", () => {
-  assert.equal(resolveCompactSummary({ subject: "work" }, "settled", false), undefined);
-  assert.ok(resolveCompactSummary({ subject: "work" }, "pending", false));
-  const overridden = resolveCompactSummary(
-    { subject: "work", outcome: "success" },
-    "settled",
-    true,
-  );
-  assert.equal(overridden?.outcome, "success");
-  assert.equal(compactStatus("settled", overridden!), "error");
-  assert.equal(compactStatus("running", { subject: "work", outcome: "success" }), "running");
-  assert.equal(compactStatus("settled", { subject: "work", outcome: "success" }), "success");
-  assert.equal(compactStatus("pending", { subject: "work", outcome: "error" }), "error");
-  assert.ok(overridden && compactSummaryNeedsDetails(overridden));
-  for (const outcome of ["cancelled", "uncertain", "error"] as const) {
-    assert.ok(compactSummaryNeedsDetails({ subject: "work", outcome }));
-    assert.ok(compactSummaryNeedsDetails({ subject: "work", outcome, detailsOnExpand: true }));
-    assert.equal(
-      compactStatus("running", { subject: "work", outcome, detailsOnExpand: true }),
-      outcome,
-    );
-    assert.equal(
-      resolveCompactSummary({ subject: "work", outcome }, "settled", true)?.outcome,
-      outcome,
-    );
-  }
-  assert.equal(compactSummaryNeedsDetails({ subject: "work", outcome: "warning" }), false);
+test("shows the first counter alternative that fits, falling back to shorter ones", () => {
+  const counters = ["5 calls · 3 failed", "3 failed"];
+  const wide = allocateCompactHeader("code_mode", "Run lint and tests", counters, [], 60);
+  assert.match(wide, /5 calls · 3 failed/u);
+  const narrow = allocateCompactHeader("code_mode", "Run lint and tests", counters, [], 38);
+  assert.match(narrow, /3 failed/u);
+  assert.doesNotMatch(narrow, /5 calls/u);
+  assert.ok(visibleWidth(narrow) <= 38);
 });

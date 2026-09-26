@@ -37,35 +37,29 @@ export {
   type BuiltinCompactTool,
 } from "./src/tools/builtin-subject";
 
-export { builtinFailure as projectBuiltinFailure } from "./src/tools/builtin-failure";
-export { isCompactAttention } from "./src/tools/compact-summary";
+/** One issue shape for every compact card: a human message plus expanded-only detail. */
 export {
-  CompactIssuesSchema,
-  claimCompactIssue,
-  subtractCompactIssueClaims,
-  type CompactIssueClaim,
-  normalizeCompactIssues,
   compactIssueSeverity,
-  legacyCompactIssues,
-  summaryCompactIssues,
-  withCompactIssues,
+  firstLineMessage,
+  mergeCompactIssues,
   type CompactIssue,
-  type CompactIssues,
+  type CompactIssueSeverity,
 } from "./src/tools/compact-issues";
-export { renderCompactIssues, renderExpandedAttention } from "./src/preview/compact-issues";
+export { renderCompactIssues } from "./src/preview/compact-issues";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";
 
 /** Semantic compact summaries for cooperating tools. */
-export type {
-  CompactAnimationScheduler,
-  CompactPhase,
-  CompactOutcome,
-  CompactNotice,
-  CompactChild,
-  CompactSummary,
-  CompactFailureEvidence,
-  CompactSummaryProvider,
+export {
+  compactStatus,
+  resolveCompactSummary,
+  type CompactAnimationScheduler,
+  type CompactPhase,
+  type CompactOutcome,
+  type CompactStatus,
+  type CompactChild,
+  type CompactSummary,
+  type CompactSummaryProvider,
 } from "./src/tools/compact-summary";
 
 export {
@@ -77,5 +71,6 @@ export {
 export { captureBuiltinCompactPolicy } from "./src/tools/builtin-compact-summary";
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
-export { renderCompactRow, renderCompactNotices } from "./src/preview/compact-row";
+export { renderCompactRow } from "./src/preview/compact-row";
+export { expandedSection } from "./src/preview/expanded-section";
 export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";

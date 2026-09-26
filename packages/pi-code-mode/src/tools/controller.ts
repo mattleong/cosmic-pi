@@ -21,6 +21,7 @@ import { codeModeCompactSummaryAtHost } from "../boundary/host-render-ticker.ts"
 import { Type } from "typebox";
 import { animationFrame, syncProgressTicker } from "../boundary/host-render-ticker.ts";
 import {
+  codeModeSource,
   renderCodeModeProgramContent,
   renderCodeModeToolCall,
   renderCodeModeToolResult,
@@ -203,6 +204,7 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
           contentOnly,
           ...(readRequest && { readRequest }),
           summary: codeModeCompactSummary(summaryInput, liveElapsed),
+          program: codeModeSource(context.args),
           timingEnabled: timingEnabled(),
           liveElapsed,
         },
@@ -266,10 +268,10 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
     renderResult: resultSlot(false),
   });
   const expandedContent: ExpandedContent = {
-    renderCall: (args) =>
+    renderCall: (args, theme) =>
       codeModeStatusRequest(args)
         ? renderCodeModeStatusCallContent()
-        : renderCodeModeProgramContent(args),
+        : renderCodeModeProgramContent(args, theme),
     renderResult: resultSlot(true),
   };
   return Object.assign(definition, { compactSummary, expandedContent });

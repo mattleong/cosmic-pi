@@ -167,9 +167,9 @@ describe("workspace tool", () => {
           if (offset === 0) expect(rows.join("\n")).not.toContain(artifact.workspaceId);
           const summary = compactWorkspaceSummary(response.details, "list");
           expect(summary?.outcome).toBe("warning");
-          const warning = summary?.notices?.find((notice) => notice.kind === "warning");
+          const warning = summary?.issues?.find((issue) => issue.severity === "warning");
           expect(warning?.code).toBe("workspace-records-unavailable");
-          expect(text.text).toContain(warning!.text);
+          expect(text.text).toContain(warning!.detail);
         }
       }
       expect(all).toHaveLength(10);

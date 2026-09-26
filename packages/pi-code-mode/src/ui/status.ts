@@ -55,60 +55,38 @@ export const codeModeStatusCompactSummary = ({
   } catch {
     return undefined;
   }
-  if (isError)
-    return {
-      ...heading,
-      outcome: "error",
-      detailsOnExpand: true,
-    };
+  if (isError) return { ...heading, outcome: "error" };
   if (details?.cancelled || details?.truncated)
     return {
       ...heading,
       outcome: details.cancelled ? "cancelled" : "warning",
-      detailsOnExpand: true,
-      issues: {
-        coverage: "complete",
-        entries: [
-          {
-            operation: "status",
-            code: details.cancelled ? "status-cancelled" : "status-truncated",
-            severity: "warning",
-            cause: details.cancelled
-              ? "The status response was cancelled."
-              : "The status response was truncated.",
-            description: details.cancelled
-              ? "The status response was cancelled."
-              : "Only part of the status response was returned.",
-            recovery: [],
-          },
-        ],
-      },
+      issues: [
+        details.cancelled
+          ? {
+              severity: "warning",
+              code: "status-cancelled",
+              message: "The status response was cancelled",
+            }
+          : {
+              severity: "warning",
+              code: "status-truncated",
+              message: "Only part of the status response was returned",
+            },
+      ],
     };
-  if (codeModeStatusFits(status))
-    return {
-      ...heading,
-      counters: ["5 limits"],
-      outcome: "success",
-      detailsOnExpand: true,
-    };
+  if (codeModeStatusFits(status)) return { ...heading, counters: ["5 limits"], outcome: "success" };
   return {
     ...heading,
     outcome: "warning",
-    detailsOnExpand: true,
-    issues: {
-      coverage: "complete",
-      entries: [
-        {
-          operation: "status",
-          code: "output-budget",
-          severity: "warning",
-          cause: "The output limit cannot fit the complete status JSON.",
-          description: "The configured output limit is too small to return status.",
-          recovery: [],
-          diagnostics: ["No program or nested tool was run."],
-        },
-      ],
-    },
+    issues: [
+      {
+        severity: "warning",
+        code: "output-budget",
+        message: "The configured output limit is too small to return status",
+        detail:
+          "The output limit cannot fit the complete status JSON. No program or nested tool was run.",
+      },
+    ],
   };
 };
 

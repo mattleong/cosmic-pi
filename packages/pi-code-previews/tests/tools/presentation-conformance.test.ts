@@ -1,209 +1,226 @@
 import { beforeEach, expect, test } from "vitest";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
   applyPresentationSettings,
   createToolPresentationHarness,
   withPresentationSettings,
 } from "../../testing";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import { claimCompactIssue, type CompactIssue } from "../../src/tools/compact-issues";
+import type { CompactIssue } from "../../src/tools/compact-issues";
 import type { CompactSummary } from "../../src/tools/compact-summary";
-import { failingRenderer, textResult } from "../support/render";
+import { failingRenderer, stripAnsi, textResult } from "../support/render";
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
 );
+const modes = ["on", "off", "border"] as const;
 const result = textResult("RAW diagnostics");
 const issue: CompactIssue = {
-  operation: "original-execution",
-  code: "failure",
   severity: "error",
-  cause: "Failure cause",
-  description: "Failure cause",
-  recovery: [{ code: "inspect", text: "Independent recovery" }],
+  code: "failure",
+  message: "Failure cause",
+  detail: "Independent recovery",
 };
+const count = (text: string, phrase: string) => text.split(phrase).length - 1;
+const inOrder = (text: string, phrases: readonly string[]) => {
+  const positions = phrases.map((phrase) => text.indexOf(phrase));
+  return positions.every((position, index) => position >= (positions[index - 1] ?? 0));
+};
+/** The collapsed heading row of the first rendered state. */
+const heading = (texts: string[]) => texts[0]!.split("\n")[0];
 
-test.each(["on", "off", "border"] as const)(
-  "compact descriptions do not expose or erase agent evidence in %s mode",
+test.each(modes)(
+  "content callbacks follow the heading and issues, with every issue once, in %s mode",
   (mode) => {
-    const human = "The operation may still be running.";
-    const cause = "CANONICAL_CAUSE with provider internals";
-    const recovery = "AGENT_COMMAND inspect status before retry";
-    const diagnostic = "ORIGINAL_DIAGNOSTIC";
     const original = {
-      content: [{ type: "text" as const, text: `${cause}\n${recovery}\n${diagnostic}` }],
+      content: [{ type: "text" as const, text: "RAW diagnostics\nAGENT_COMMAND retry" }],
       details: undefined,
     };
     const before = JSON.stringify(original);
     const source = createReadToolDefinition("/project");
+    let executions = 0;
     const tool = withCodePreviewShell(
       {
         ...source,
-        renderCall: () => new Text("complete input", 0, 0),
-        renderResult: () => new Text(original.content[0]!.text, 0, 0),
+        execute: (...args: Parameters<typeof source.execute>) => {
+          executions++;
+          return source.execute(...args);
+        },
+        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
+        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
       },
       {
         mode,
         compactSummary: () => ({
-          subject: "OPAQUE_INTERNAL_ID",
+          subject: "FULL_INTERNAL_SUBJECT",
           compactSubject: "Operation",
-          outcome: "uncertain",
-          issues: {
-            coverage: "unknown",
-            entries: [
-              {
-                operation: "INTERNAL_OPERATION_ID",
-                code: "unknown",
-                severity: "warning",
-                cause,
-                description: human,
-                recovery: [{ code: "inspect", text: recovery }],
-                diagnostics: [diagnostic],
-              },
-            ],
-          },
+          outcome: "warning",
+          issues: [
+            {
+              severity: "warning",
+              code: "unconfirmed",
+              message: "The operation may still be running",
+              detail: "AGENT_DETAIL inspect status before retry",
+            },
+            { severity: "info", code: "page", message: "INFO_NOTE more pages" },
+          ],
         }),
+        expandedContent: {
+          renderCall: () => new Text("CONTENT CALL", 0, 0),
+          renderResult: () => new Text("CONTENT RESULT", 0, 0),
+        },
       },
     );
     const h = createToolPresentationHarness(tool, { width: 120 });
     for (const { expanded, text } of h.cycle({ path: "file" }, original)) {
-      expect(text.includes(human)).toBe(!expanded);
-      for (const evidence of [cause, recovery, diagnostic])
-        expect(text.includes(evidence)).toBe(expanded);
-      expect(!expanded && /OPAQUE_INTERNAL_ID|INTERNAL_OPERATION_ID/.test(text)).toBe(false);
+      expect(count(text, "The operation may still be running")).toBe(1);
+      for (const phrase of ["AGENT_DETAIL", "INFO_NOTE", "CONTENT CALL", "CONTENT RESULT"])
+        expect(count(text, phrase)).toBe(expanded ? 1 : 0);
+      expect(text).not.toMatch(/ORIGINAL CALL|ORIGINAL RESULT|RAW diagnostics|AGENT_COMMAND/u);
+      expect(text.includes("FULL_INTERNAL_SUBJECT")).toBe(expanded);
+      expect(text.includes("Operation")).toBe(!expanded);
+      const expandedOrder = [
+        "FULL_INTERNAL_SUBJECT",
+        "The operation may still be running",
+        "AGENT_DETAIL",
+        "INFO_NOTE",
+        "CONTENT CALL",
+        "CONTENT RESULT",
+      ];
+      expect(inOrder(text, expandedOrder)).toBe(expanded);
       expect(JSON.stringify(original)).toBe(before);
     }
-    expect(tool.execute).toBe(source.execute);
+    expect(executions).toBe(0);
   },
 );
 
-test.each(["on", "off", "border"] as const)(
-  "parent timing has one owner across expansion and fallback in %s mode",
-  (mode) => {
-    for (const path of [
-      "content",
-      "failure",
-      "legacy",
-      "legacy-failure",
-      "factory",
-      "draw",
-    ] as const) {
-      const failure = path === "failure" || path === "legacy-failure";
-      const summary: CompactSummary = {
-        subject: "target",
-        outcome: failure ? "error" : "success",
-        showTiming: true,
-        ...(failure && { failure: { cause: "cause", details: "full diagnostic" } }),
-      };
-      const tool = withCodePreviewShell(
-        {
-          ...createReadToolDefinition("/project"),
-          renderCall: () => new Text("arguments", 0, 0),
-          renderResult: () => new Text("output", 0, 0),
-        },
-        {
-          mode,
-          compactSummary: () => summary,
-          ...(!path.startsWith("legacy") && {
-            expandedContent: {
-              renderCall: () => new Text("complete arguments", 0, 0),
-              renderResult: failingRenderer(path, ["complete output"]),
-            },
-          }),
-        },
-      );
-      for (const timing of [true, false]) {
-        withPresentationSettings({ toolCallTiming: timing }, () => {
-          const h = createToolPresentationHarness(tool, {
-            state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
-          });
-          for (const expanded of [false, true, false, true]) {
-            h.call({ path: "file" }, { expanded, isPartial: false });
-            h.result(result, { expanded, isError: failure });
-            const occurrences = (width: number) =>
-              h.render(width).join("\n").match(/379ms/g)?.length ?? 0;
-            expect(occurrences(120), `${path}, timing=${timing}, expanded=${expanded}`).toBe(
-              timing ? 1 : 0,
-            );
-            expect(occurrences(12)).toBeLessThanOrEqual(timing ? 1 : 0);
-          }
-        });
-      }
-    }
-  },
-);
-
-test("expanded failure retains unique multiline call content and one claimed diagnostic body", () => {
-  for (const mode of ["on", "off", "border"] as const) {
-    const source = createReadToolDefinition("/project");
+test.each(modes)("Pi errors reconcile with the provider's classification in %s mode", (mode) => {
+  const row = (summary: CompactSummary, isError: boolean) => {
     const tool = withCodePreviewShell(
       {
-        ...source,
-        renderCall: () => new Text("OLD CALL", 0, 0),
-        renderResult: () => new Text("OLD RESULT", 0, 0),
+        ...createReadToolDefinition("/project"),
+        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
+        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
+      },
+      { mode, compactSummary: () => summary },
+    );
+    const h = createToolPresentationHarness(tool, { width: 120 });
+    const failure = textResult("FIRST ERROR LINE\nsecond error line");
+    return h
+      .cycle({ path: "file" }, failure, { overrides: () => ({ isError }) })
+      .map(({ text }) => text);
+  };
+  const success: CompactSummary = { subject: "target", outcome: "success" };
+  const reconciled = row(success, true);
+  for (const [index, text] of reconciled.entries()) {
+    // The first line explains the error once; the rest stays with the raw error.
+    expect(count(text, "FIRST ERROR LINE")).toBe(1);
+    expect(text).not.toContain("second error line");
+    expect(text.includes("ORIGINAL RESULT")).toBe(index % 2 === 1);
+  }
+  // Pi's error flag gives a claimed success the same heading as a classified error.
+  expect(heading(reconciled)).toBe(heading(row({ ...success, outcome: "error" }, false)));
+  expect(heading(reconciled)).not.toBe(heading(row(success, false)));
+
+  const explained = row({ ...success, outcome: "error", issues: [issue] }, true);
+  for (const text of explained) {
+    expect(count(text, "Failure cause")).toBe(1);
+    expect(text).not.toContain("FIRST ERROR LINE");
+  }
+  for (const outcome of ["cancelled", "uncertain"] as const) {
+    const kept = row({ ...success, outcome }, true);
+    expect(heading(kept)).toBe(heading(row({ ...success, outcome }, false)));
+    for (const text of kept) expect(text).not.toContain("FIRST ERROR LINE");
+  }
+});
+
+test("issue text wraps without clipping at narrow widths in every frame", () => {
+  const message = "日本語 cleanup-is-unconfirmed for the remote operation";
+  const detail = "Inspect 文字 state before retrying the operation";
+  for (const mode of modes) {
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: () => new Text("call", 0, 0),
+        renderResult: () => new Text("result", 0, 0),
       },
       {
         mode,
         compactSummary: () => ({
-          subject: "short target",
-          outcome: "error",
-          issues: { coverage: "complete", entries: [issue] },
-          failure: {
-            cause: issue.cause,
-            details: "Failure cause\nFull diagnostic",
-            ownedIssues: [claimCompactIssue(issue, { cause: true })],
-          },
+          subject: "src/" + "nested/".repeat(10) + "file.ts",
+          outcome: "warning",
+          issues: [{ severity: "warning", code: "cleanup", message, detail }],
         }),
-        expandedContent: {
-          renderCall: () => new Text("Full source line one\nUnique source line two", 0, 0),
-          renderResult: () => new Text("UNUSED RESULT", 0, 0),
-        },
       },
     );
-    expect(tool.execute).toBe(source.execute);
     const h = createToolPresentationHarness(tool);
-    for (const expanded of [false, true, false, true]) {
+    for (const expanded of [false, true]) {
       h.call({ path: "file" }, { expanded });
-      h.result(result, { expanded, isError: true });
-      for (const width of [35, 100]) {
-        const text = h.render(width).join("\n");
-        expect(text.includes("Unique source line two")).toBe(expanded);
-        expect(text.match(/Failure cause/g)).toHaveLength(1);
-        expect(text.includes("Independent recovery")).toBe(expanded);
-        expect(text).not.toMatch(/OLD CALL|OLD RESULT|UNUSED RESULT/);
+      h.result(result, { expanded });
+      // Includes the narrowest widths, where the border frame must yield entirely.
+      for (const width of [2, 4, 5, 8, 12, 20, 40]) {
+        const rows = h.render(width);
+        expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+        if (mode !== "off") continue;
+        const text = stripAnsi(rows.join("")).replace(/\s/gu, "");
+        expect(text).toContain(message.replace(/\s/gu, ""));
+        expect(text.includes(detail.replace(/\s/gu, ""))).toBe(expanded);
       }
     }
   }
 });
 
-test("failure body cannot borrow claims from an unrendered original result", () => {
-  const tool = withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Original unique arguments", 0, 0),
-    },
-    {
-      mode: "off",
-      compactSummary: () => ({
-        subject: "target",
-        outcome: "error",
-        issues: { coverage: "complete", entries: [issue] },
-        failure: { cause: "Other failure", details: "Other full diagnostic" },
-        expandedResultOwnsIssues: [
-          claimCompactIssue(issue, { cause: true, recovery: ["inspect"] }),
-        ],
-      }),
-      expandedContent: { renderResult: () => new Text("Must not render", 0, 0) },
-    },
-  );
-  const h = createToolPresentationHarness(tool);
-  h.call({ path: "file" }, { expanded: true });
-  h.result(result, { expanded: true });
-  const text = h.render().join("\n");
-  expect(text).toContain("Original unique arguments");
-  expect(text).toContain("Failure cause");
-  expect(text).toContain("Independent recovery");
-  expect(text).not.toContain("Must not render");
+test.each(modes)("parent timing has one owner across expansion and fallback in %s mode", (mode) => {
+  for (const path of [
+    "content",
+    "error",
+    "original",
+    "original-error",
+    "factory",
+    "draw",
+  ] as const) {
+    const failure = path === "error" || path === "original-error";
+    const summary: CompactSummary = {
+      subject: "target",
+      outcome: failure ? "error" : "success",
+      showTiming: true,
+      ...(failure && { issues: [issue] }),
+    };
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: () => new Text("arguments", 0, 0),
+        renderResult: () => new Text("output", 0, 0),
+      },
+      {
+        mode,
+        compactSummary: () => summary,
+        ...(!path.startsWith("original") && {
+          expandedContent: {
+            renderCall: () => new Text("complete arguments", 0, 0),
+            renderResult: failingRenderer(path, ["complete output"]),
+          },
+        }),
+      },
+    );
+    for (const timing of [true, false]) {
+      withPresentationSettings({ toolCallTiming: timing }, () => {
+        const h = createToolPresentationHarness(tool, {
+          state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+        });
+        for (const expanded of [false, true, false, true]) {
+          h.call({ path: "file" }, { expanded, isPartial: false });
+          h.result(result, { expanded, isError: failure });
+          const occurrences = (width: number) =>
+            h.render(width).join("\n").match(/379ms/g)?.length ?? 0;
+          expect(occurrences(120), `${path}, timing=${timing}, expanded=${expanded}`).toBe(
+            timing ? 1 : 0,
+          );
+          expect(occurrences(12)).toBeLessThanOrEqual(timing ? 1 : 0);
+        }
+      });
+    }
+  }
 });
 
 test("partial content hooks retain the other slot and malformed-to-valid switches keep slot caches separate", () => {
@@ -250,128 +267,91 @@ test("partial content hooks retain the other slot and malformed-to-valid switche
   }
 });
 
-test("unknown coverage uses content rendering and revokes claims on construction or drawing failure", () => {
+test("content construction or drawing failure falls back in that slot and keeps issues once", () => {
   for (const failure of ["none", "factory", "draw"] as const) {
-    const summary: CompactSummary = {
-      subject: "read result",
-      outcome: "error",
-      issues: {
-        coverage: "unknown",
-        entries: [
-          issue,
-          {
-            operation: "outer-information",
-            code: "page",
-            severity: "warning",
-            cause: "Continue with next page",
-            recovery: [],
-          },
-        ],
-      },
-      expandedResultOwnsIssues: [claimCompactIssue(issue, { cause: true })],
-    };
     const tool = withCodePreviewShell(
       {
         ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("LEGACY CALL", 0, 0),
-        renderResult: () => new Text("LEGACY RESULT", 0, 0),
+        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
+        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
       },
       {
         mode: "off",
-        compactSummary: () => summary,
+        compactSummary: () => ({
+          subject: "read result",
+          outcome: "error",
+          issues: [issue, { severity: "info", code: "page", message: "Continue with next page" }],
+        }),
         expandedContent: {
           renderCall: () => new Text("unique call", 0, 0),
-          renderResult: failingRenderer(failure, ["Failure cause"]),
+          renderResult: failingRenderer(failure, ["content output"]),
         },
       },
     );
     const h = createToolPresentationHarness(tool);
     h.call({ path: "file" }, { expanded: true });
     h.result(result, { expanded: true });
-    const text = h.render().join("\n");
-    expect(text).toContain("unique call");
-    expect(text.match(/Failure cause/g)).toHaveLength(1);
-    expect(text.match(/Continue with next page/g)).toHaveLength(1);
-    expect(text).toContain("Independent recovery");
-    expect(text).not.toMatch(/original-execution:|outer-information:|LEGACY/);
-    expect(text.includes("RAW diagnostics")).toBe(failure !== "none");
+    for (let redraw = 0; redraw < 2; redraw++) {
+      const text = h.render().join("\n");
+      expect(text).toContain("unique call");
+      for (const phrase of ["Failure cause", "Independent recovery", "Continue with next page"])
+        expect(count(text, phrase)).toBe(1);
+      expect(text).not.toMatch(/ORIGINAL/u);
+      expect(text.includes("content output")).toBe(failure === "none");
+      expect(text.includes("RAW diagnostics")).toBe(failure !== "none");
+    }
   }
 });
 
-test.each(["on", "off", "border"] as const)(
-  "drawing failures revoke only the failed slot's ownership in %s mode",
-  (mode) => {
-    for (const failedSlot of ["call", "result"] as const) {
-      let hostileDraws = 0;
-      let callConstructions = 0;
-      let resultConstructions = 0;
-      const tool = withCodePreviewShell(
-        {
-          ...createReadToolDefinition("/project"),
-          renderCall: () => {
-            callConstructions++;
-            return {
-              render: () => {
-                if (failedSlot === "call") {
-                  hostileDraws++;
-                  throw new Error("call draw failed");
-                }
-                return ["unique original call"];
-              },
-              invalidate() {},
-            };
-          },
-          renderResult: () => {
-            resultConstructions++;
-            return {
-              render: () => {
-                if (failedSlot === "result") {
-                  hostileDraws++;
-                  throw new Error("result draw failed");
-                }
-                return ["unique original result", "Failure cause"];
-              },
-              invalidate() {},
-            };
-          },
+test.each(modes)("drawing failures fall back only in the failed slot in %s mode", (mode) => {
+  for (const failedSlot of ["call", "result"] as const) {
+    let hostileDraws = 0;
+    let callConstructions = 0;
+    let resultConstructions = 0;
+    const slot = (name: "call" | "result", line: string) => (): Component => {
+      if (name === "call") callConstructions++;
+      else resultConstructions++;
+      return {
+        render: () => {
+          if (failedSlot !== name) return [line];
+          hostileDraws++;
+          throw new Error(`${name} draw failed`);
         },
-        {
-          mode,
-          compactSummary: () => ({
-            subject: "file",
-            outcome: "error",
-            issues: { coverage: "complete", entries: [issue] },
-            // Failed results must release the healthy call they initially suppressed.
-            ...(failedSlot === "result" && { expandedResultOwnsCall: true as const }),
-            expandedResultOwnsIssues: [claimCompactIssue(issue, { cause: true })],
-          }),
-        },
-      );
-      const h = createToolPresentationHarness(tool);
-      h.call({ path: "file" }, { expanded: true });
-      h.result(result, { expanded: true });
-      for (let redraw = 0; redraw < 2; redraw++) {
-        const text = h.render().join("\n");
-        expect(text).toContain(
-          failedSlot === "result" ? "unique original call" : "unique original result",
-        );
-        expect(text.match(/Failure cause/g)).toHaveLength(1);
-        expect(text).toContain("Independent recovery");
-        expect(text.includes("RAW diagnostics")).toBe(failedSlot === "result");
-      }
-      expect(hostileDraws).toBe(1);
-      expect(callConstructions).toBe(1);
-      expect(resultConstructions).toBe(1);
-      h.invalidate();
-      const refreshed = h.render(100).join("\n");
-      expect(refreshed).toContain(
-        failedSlot === "result" ? "unique original call" : "unique original result",
-      );
-      expect(refreshed.match(/Failure cause/g)).toHaveLength(1);
-      expect(hostileDraws).toBe(1);
+        invalidate() {},
+      };
+    };
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: slot("call", "unique original call"),
+        renderResult: slot("result", "unique original result"),
+      },
+      {
+        mode,
+        compactSummary: () => ({ subject: "file", outcome: "error", issues: [issue] }),
+      },
+    );
+    const h = createToolPresentationHarness(tool);
+    h.call({ path: "file" }, { expanded: true });
+    h.result(result, { expanded: true });
+    const healthy = failedSlot === "result" ? "unique original call" : "unique original result";
+    for (let redraw = 0; redraw < 2; redraw++) {
+      const text = h.render().join("\n");
+      expect(text).toContain(healthy);
+      expect(count(text, "Failure cause")).toBe(1);
+      expect(count(text, "Independent recovery")).toBe(1);
+      expect(text.includes("RAW diagnostics")).toBe(failedSlot === "result");
     }
-  },
-);
+    expect(hostileDraws).toBe(1);
+    expect(callConstructions).toBe(1);
+    expect(resultConstructions).toBe(1);
+    h.invalidate();
+    const refreshed = h.render(100).join("\n");
+    expect(refreshed).toContain(healthy);
+    expect(count(refreshed, "Failure cause")).toBe(1);
+    expect(hostileDraws).toBe(1);
+  }
+});
 
 test.each(["factory", "draw"] as const)(
   "%s failures survive host invalidation and recover only on changed inputs",
@@ -391,7 +371,7 @@ test.each(["factory", "draw"] as const)(
                 attempts++;
                 if (broken) throw new Error("draw failed");
               }
-              return ["Recovered output", "Failure cause"];
+              return ["Recovered output"];
             },
             invalidate() {},
           };
@@ -404,12 +384,7 @@ test.each(["factory", "draw"] as const)(
           },
           {
             mode: "off",
-            compactSummary: () => ({
-              subject: "file",
-              outcome: "error",
-              issues: { coverage: "complete", entries: [issue] },
-              expandedResultOwnsIssues: [claimCompactIssue(issue, { cause: true })],
-            }),
+            compactSummary: () => ({ subject: "file", outcome: "error", issues: [issue] }),
             ...(contentOnly && { expandedContent: { renderResult } }),
           },
         );
@@ -429,7 +404,7 @@ test.each(["factory", "draw"] as const)(
           expect(text).not.toContain("Recovered output");
           expect(text.includes("Unique arguments")).toBe(expanded);
           expect(text.includes("RAW diagnostics")).toBe(expanded);
-          expect(text.match(/Failure cause/g)).toHaveLength(1);
+          expect(count(text, "Failure cause")).toBe(1);
           expect(text.includes("Independent recovery")).toBe(expanded);
           expect(attempts).toBe(1);
         }
@@ -441,7 +416,7 @@ test.each(["factory", "draw"] as const)(
         expect(text).toContain("Recovered output");
         expect(text).toContain("Unique arguments");
         expect(text).not.toContain("RAW diagnostics");
-        expect(text.match(/Failure cause/g)).toHaveLength(1);
+        expect(count(text, "Failure cause")).toBe(1);
         expect(attempts).toBe(2);
       }
     }

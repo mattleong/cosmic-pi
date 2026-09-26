@@ -1,8 +1,4 @@
-import {
-  withCompactIssues,
-  type CompactSummary,
-  type CompactSummaryProvider,
-} from "pi-code-previews";
+import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
   asyncOutcome,
@@ -25,7 +21,6 @@ function summarize(outcomes: readonly (typeof asyncOutcome.Type)[]): CompactSumm
     subject: cancelled ? "Questionnaire cancelled" : "Answers submitted",
     outcome: cancelled ? "cancelled" : "success",
     counters: cancelled ? [] : [`${answers} ${answers === 1 ? "answer" : "answers"}`],
-    issues: { coverage: "complete", entries: [] },
   };
 }
 
@@ -90,7 +85,43 @@ export const askUserCompactSummary: CompactSummaryProvider = ({ phase, args, res
   };
 };
 
-const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, context }) => {
+const AWAIT_ANSWERS =
+  "Continue only independent work; use ask_user_async_control await when it is exhausted.";
+const RETRIEVE_DELIVERY =
+  "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.";
+
+/** One fact, one issue: every pending request shares the same wait and await guidance. */
+function answersPending(count: number): CompactIssue {
+  return {
+    severity: "warning",
+    code: "answers-pending",
+    message:
+      count === 1 ? "Waiting for answers" : `${count} questionnaires are waiting for answers`,
+    detail: AWAIT_ANSWERS,
+  };
+}
+
+/** Saved results stay retrievable after automatic delivery fails. */
+function deliveryFailed(failed: readonly (typeof asyncOutcome.Type | undefined)[]): CompactIssue {
+  return {
+    severity: "warning",
+    code: "delivery-failed",
+    message:
+      failed.length > 1
+        ? `Automatic delivery failed for ${failed.length} saved questionnaire results`
+        : failed[0]?.outcome === "submitted"
+          ? "Answers were saved, but automatic delivery failed"
+          : "The cancellation was saved, but automatic delivery failed",
+    detail: RETRIEVE_DELIVERY,
+  };
+}
+
+export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
+  phase,
+  args,
+  result,
+  context,
+}) => {
   if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
   const rows = decodeCompactAsyncRows(result?.details);
   if (!rows?.length) return undefined;
@@ -129,46 +160,7 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
       ...identity,
       outcome: "warning",
       counters: [statuses.join(", ")],
-      issues: {
-        coverage: "complete",
-        entries: rows.map((row, index) => {
-          const request = stripTerminalControls(row.requestId);
-          return {
-            operation: `questionnaire:${row.requestId}`,
-            code: "answers-pending",
-            severity: "warning" as const,
-            cause: rows.length === 1 ? "No answers yet." : `Request ${request}: no answers yet.`,
-            description:
-              index === 0
-                ? rows.length === 1
-                  ? "Waiting for answers."
-                  : `${rows.length} questionnaires are waiting for answers.`
-                : "",
-            recovery: [
-              {
-                code: "await-answers",
-                text:
-                  rows.length === 1
-                    ? "Continue only independent work; use ask_user_async_control await when it is exhausted."
-                    : `Request ${request}: continue only independent work; use ask_user_async_control await when it is exhausted.`,
-              },
-            ],
-          };
-        }),
-      },
-      notices: [
-        {
-          code: "answers-pending",
-          kind: "warning",
-          text: "No answers yet.",
-          description: "Waiting for answers.",
-        },
-        {
-          code: "await-answers",
-          kind: "recovery",
-          text: "Continue only independent work; use ask_user_async_control await when it is exhausted.",
-        },
-      ],
+      issues: [answersPending(rows.length)],
     };
   }
   // Opening failures, metadata-only terminal lists, and inconsistent replay need full context.
@@ -186,63 +178,11 @@ const projectAsyncSummary: CompactSummaryProvider = ({ phase, args, result, cont
   if (rows.length === 1) Object.assign(summary, selectedChoice(args, rows[0]!.outcome));
   if (rows.length > 1)
     summary.counters = [[`${rows.length} requests`, ...(summary.counters ?? [])].join(", ")];
-  if (rows.some((row) => row.delivery === "failed")) {
-    return {
-      ...summary,
-      outcome: summary.outcome === "cancelled" ? "cancelled" : "warning",
-      issues: {
-        coverage: "complete",
-        entries: rows
-          .filter((row) => row.delivery === "failed")
-          .map((row, index, failed) => {
-            const request = stripTerminalControls(row.requestId);
-            const delivery = stripTerminalControls(row.deliveryId);
-            return {
-              operation: `questionnaire:${row.requestId}:${row.deliveryId}`,
-              code: "delivery-failed",
-              severity: "warning" as const,
-              cause:
-                failed.length === 1
-                  ? "Automatic delivery failed."
-                  : `Request ${request} (delivery ${delivery}): automatic delivery failed.`,
-              description:
-                index === 0
-                  ? failed.length > 1
-                    ? `Automatic delivery failed for ${failed.length} saved questionnaire results.`
-                    : row.outcome?.outcome === "submitted"
-                      ? "Answers were saved, but automatic delivery failed."
-                      : "The cancellation was saved, but automatic delivery failed."
-                  : "",
-              recovery: [
-                {
-                  code: "retrieve-delivery",
-                  text:
-                    failed.length === 1
-                      ? "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result."
-                      : `Request ${request} (delivery ${delivery}): retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.`,
-                },
-              ],
-            };
-          }),
-      },
-      notices: [
-        {
-          code: "retrieve-delivery",
-          description: "The response was saved, but automatic delivery failed.",
-          kind: "recovery",
-          text: "Automatic delivery failed. Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.",
-        },
-      ],
-    };
-  }
-  return summary;
-};
-
-export const asyncAskUserCompactSummary: CompactSummaryProvider = (input) => {
-  const summary = projectAsyncSummary(input);
-  return summary?.issues
-    ? summary
-    : summary
-      ? withCompactIssues(summary, "ask-user-async")
-      : undefined;
+  const failed = rows.filter((row) => row.delivery === "failed");
+  if (failed.length === 0) return summary;
+  return {
+    ...summary,
+    outcome: summary.outcome === "cancelled" ? "cancelled" : "warning",
+    issues: [deliveryFailed(failed.map((row) => row.outcome))],
+  };
 };

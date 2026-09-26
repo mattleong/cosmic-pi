@@ -45,6 +45,12 @@ const timed = <A, E>(work: () => Effect.Effect<A, E>, maxMs = 1_500): Effect.Eff
     return value;
   });
 
+/**
+ * Admission exactly at a collection cap does real work proportional to the cap, so its bound
+ * guards against hangs rather than measuring refusal latency, and tolerates a loaded machine.
+ */
+const ADMITTED_AT_CAP_MS = 10_000;
+
 describe("regex confinement: hostile patterns are refused fast", () => {
   it.live("the audit repro /(a+)+$/ is rejected at construction, not executed for seconds", () =>
     Effect.gen(function* () {
@@ -760,17 +766,21 @@ describe("URI and URL expansion preflight", () => {
   it.live("URL query admission is exact at the cap, and fragment ampersands are ignored", () =>
     Effect.gen(function* () {
       // Exactly the cap: (cap - 1) separators + 1 = cap projected pairs - admitted.
-      const exact = yield* timed(() =>
-        run(
-          `return new URL("http://host/?" + "a&".repeat(${MAX_GUEST_COLLECTION_ENTRIES - 1}) + "a").search.length`,
-        ),
+      const exact = yield* timed(
+        () =>
+          run(
+            `return new URL("http://host/?" + "a&".repeat(${MAX_GUEST_COLLECTION_ENTRIES - 1}) + "a").search.length`,
+          ),
+        ADMITTED_AT_CAP_MS,
       );
       expect(exact).toMatchObject({ ok: true });
       // Ampersands after the fragment start are not query pairs and must not be charged.
-      const fragment = yield* timed(() =>
-        run(
-          `return new URL("http://host/?a=1#" + "&".repeat(${MAX_GUEST_COLLECTION_ENTRIES})).searchParams.size`,
-        ),
+      const fragment = yield* timed(
+        () =>
+          run(
+            `return new URL("http://host/?a=1#" + "&".repeat(${MAX_GUEST_COLLECTION_ENTRIES})).searchParams.size`,
+          ),
+        ADMITTED_AT_CAP_MS,
       );
       expect(fragment).toMatchObject({ ok: true, value: 1 });
     }),

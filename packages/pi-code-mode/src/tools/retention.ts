@@ -30,8 +30,6 @@ export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetent
         ),
       ),
     };
-    if (copied.failurePresentation !== undefined)
-      copied.failurePresentation = freezeSnapshot(copied.failurePresentation);
     if (copied.compactAttention !== undefined)
       copied.compactAttention = freezeSnapshot(copied.compactAttention);
     if (copied.counts !== undefined) copied.counts = Object.freeze({ ...copied.counts });

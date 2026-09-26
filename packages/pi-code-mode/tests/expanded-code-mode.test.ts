@@ -12,6 +12,7 @@ import {
 } from "../src/tools/format.ts";
 import { resultReadCompactSummary } from "../src/ui/result-read-summary.ts";
 import { executeHarness } from "./support/execute.ts";
+import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import { applyCollapsedStyle, restorePresentationSettings } from "./support/presentation.ts";
 
 /** Fresh registered call and result components per render over one shared renderer state. */
@@ -73,62 +74,60 @@ describe("registered expanded Code Mode views", () => {
             expect(text).not.toMatch(
               /Program|Tool orchestration|Calls|program not available|original-execution:|outer-information:/u,
             );
-            if (!expanded && style === "preview") continue;
-            for (const issue of summary.issues!.entries) {
-              expect(text.split((expanded ? issue.cause : issue.description)!).length - 1).toBe(1);
-              for (const diagnostic of issue.diagnostics ?? [])
-                expect(text.split(diagnostic).length - 1).toBe(expanded ? 1 : 0);
+            for (const issue of summary.issues!) {
+              const shown = expanded || issue.severity !== "info";
+              expect(text.split(issue.message).length - 1).toBe(shown ? 1 : 0);
+              expect(text.split(issue.detail!).length - 1).toBe(expanded ? 1 : 0);
             }
-            for (const notice of summary.notices ?? [])
-              expect(text.split(notice.text).length - 1).toBe(expanded ? 1 : 0);
           }
         }
       }
     }
   });
 
-  it("keeps recovery merged onto a body-owned root identity", () => {
-    applyCollapsedStyle("compact");
-    const repair = "Inspect prior side effects before retrying.";
-    const result = {
-      content: [{ type: "text", text: "boom" }],
-      details: {
-        ...callEntryDetails([]),
-        compactAttention: {
-          version: 2,
-          admitted: 0,
-          started: 0,
-          unsupported: 0,
-          observed: 0,
-          errors: 0,
-          warnings: 0,
-          cancelled: 0,
-          uncertain: 0,
-          incomplete: false,
-          notices: [],
-          issues: {
-            coverage: "unknown",
-            entries: [
-              {
-                operation: "code-mode",
-                code: "program-failure",
-                severity: "error",
-                cause: "boom",
-                expandedInResult: true,
-                recovery: [{ code: "inspect", text: repair }],
-              },
-            ],
+  it.effect("orders issues, program, calls and error, keeping calls after the program fails", () =>
+    Effect.gen(function* () {
+      const { run, retention } = executeHarness({
+        definitions: nestedToolDefinitionsFixture({
+          read: {
+            execute: () =>
+              Promise.resolve({ content: [{ type: "text", text: "contents" }], details: {} }),
           },
-        },
-      },
-    };
-    const render = renderer({ code: "throw 1", intent: "Root recovery" }, result, true);
-    for (const expanded of [false, true, false, true]) {
-      const text = render(expanded);
-      expect(text.split("boom").length - 1).toBe(expanded ? 1 : 0);
-      expect(text.split(repair).length - 1).toBe(expanded ? 1 : 0);
-    }
-  });
+          bash: { execute: () => Promise.reject(new Error("Command exited with code 1")) },
+        }),
+        cwd: "/project",
+        retainFailureDetails: true,
+      });
+      const code =
+        'await tools.pi.read({path:"notes.md"});\nawait tools.pi.bash({command:"npm test"});';
+      const failure = yield* Effect.tryPromise(() => run(code)).pipe(Effect.flip);
+      const raw = formatForeignRejection(failure.cause);
+      const details = retention.consume("call")!;
+      const args = { code, intent: "Run the suite" };
+      for (const style of ["compact", "preview"] as const) {
+        applyCollapsedStyle(style);
+        const render = renderer(args, { content: [{ type: "text", text: raw }], details }, true);
+        for (const expanded of [false, true]) {
+          const text = render(expanded);
+          const at = (marker: string) => text.indexOf(marker);
+          const order = [
+            at("Program stopped: bash npm test failed"),
+            ...(expanded ? [at('tools.pi.read({path:"notes.md"})')] : []),
+            at("read notes.md"),
+            at("Exited with code 1"),
+            ...(expanded ? [at("[ToolFailure]")] : []),
+          ];
+          expect(
+            order.every((index) => index >= 0),
+            `${style} ${expanded}`,
+          ).toBe(true);
+          expect(order, `${style} ${expanded}`).toEqual(order.toSorted((a, b) => a - b));
+          expect(text.split("Program stopped: bash npm test failed")).toHaveLength(2);
+          expect(text.split("Exited with code 1")).toHaveLength(2);
+        }
+      }
+    }),
+  );
 
   it.effect(
     "renders the actual prefixed failure body once in legacy and current expanded paths",
@@ -157,9 +156,11 @@ describe("registered expanded Code Mode views", () => {
           const render = renderer(args, { content: [{ type: "text", text: raw }], details }, true);
           for (const expanded of [false, true, false, true]) {
             const text = render(expanded);
-            expect(text.includes(diagnostic)).toBe(expanded);
+            // The first line may explain the failure collapsed; the full body is expanded-only.
+            expect(text).toContain("UNCLASSIFIED_FAILURE");
             expect(text.split(diagnostic).length - 1).toBe(expanded ? 1 : 0);
-            expect(text.split(instruction).length - 1, text).toBe(expanded ? 1 : 0);
+            for (const line of raw.split("\n").filter((value) => value.trim()))
+              if (expanded || line !== instruction) expect(text.includes(line)).toBe(expanded);
           }
         }
       }).pipe(Effect.provide(CodeModeResults.layer)),

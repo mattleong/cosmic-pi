@@ -34,11 +34,6 @@ export class CompactSlots {
     return entry;
   }
 
-  successful(slot: CompactSlot, content: boolean): boolean {
-    const entry = this.entry(slot, content);
-    return entry.component !== undefined && !entry.failed;
-  }
-
   update(context: ToolRenderContext<any, any>, result: AgentToolResult<unknown> | undefined): void {
     // Pi recreates callbacks, contexts and result envelopes on invalidation, but retains
     // these input references. Expansion and theme changes are not new execution evidence.

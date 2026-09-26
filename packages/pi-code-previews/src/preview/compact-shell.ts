@@ -3,8 +3,9 @@ import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earen
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
-import { getFallbackResultText } from "../tools/data/results";
+import { getFallbackResultText, getTextContent } from "../tools/data/results";
 import {
+  compactStatus,
   resolveCompactSummary,
   type CompactAnimationScheduler,
   type CompactPhase,
@@ -18,8 +19,7 @@ import {
   renderWithBorderSlot,
   syncBorderShellChrome,
 } from "./bordered-tool-call";
-import { renderCompactFailure, renderCompactToolCall } from "./compact-tool-call";
-import { compactIssueSeverity, summaryCompactIssues } from "../tools/compact-issues";
+import { renderCompactToolCall } from "./compact-tool-call";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { timingState, updateToolCallTiming } from "./tool-timing";
 import type { CodePreviewToolShell } from "./tool-shell";
@@ -127,99 +127,51 @@ class CompactShell implements Component {
     return this.context.executionStarted ? "running" : "pending";
   }
 
-  private summary(
+  /** Raw provider output. A broken projector loses semantic ownership, not compact mode. */
+  private provide(
     phase: CompactPhase,
     result: AgentToolResult<unknown> | undefined,
     argumentOnly = false,
   ): CompactSummary | undefined {
     try {
-      const provider = this.options.compactSummary;
-      return resolveCompactSummary(
-        provider({
-          phase,
-          args: this.context.args,
-          result,
-          context: argumentOnly
-            ? { ...this.context, isError: false, isPartial: true }
-            : this.context,
-        }),
+      return this.options.compactSummary({
         phase,
-        argumentOnly ? false : this.context.isError,
-      );
+        args: this.context.args,
+        result,
+        context: argumentOnly ? { ...this.context, isError: false, isPartial: true } : this.context,
+      });
     } catch {
-      // A broken projector loses semantic ownership, not the user's compact preference.
       return undefined;
     }
   }
 
+  private plan(result: AgentToolResult<unknown> | undefined) {
+    const phase = this.phase(result);
+    const summary = this.provide(phase, result);
+    return {
+      phase,
+      ...planCompactPresentation({
+        summary,
+        phase,
+        isError: this.context.isError,
+        errorText: this.context.isError ? getTextContent(result?.content ?? []) : "",
+        heading:
+          resolveCompactSummary(summary, phase, false) ??
+          resolveCompactSummary(this.provide("pending", undefined, true), "pending", false),
+      }),
+    };
+  }
+
   render(width: number): string[] {
     const result = this.currentResult();
-    const phase = this.phase(result);
-    const summary = this.summary(phase, result);
-    const plan = planCompactPresentation({
-      summary,
-      phase,
-      isError: this.context.isError,
-      expanded: this.context.expanded,
-      heading: summary ?? this.summary("pending", undefined, true),
-    });
-    if (
-      plan.useFailure &&
-      summary?.failure &&
-      !(this.context.expanded && (this.contentCallRender || this.contentResultRender))
-    ) {
-      this.detailBounds = undefined;
-      const input = {
-        name: this.options.name,
-        phase,
-        summary,
-        failure: summary.failure,
-        duration: this.duration,
-        elapsedMs: this.elapsedMs,
-        timingEnabled: codePreviewSettings.toolCallTiming,
-        expanded: this.context.expanded,
-      };
-      if (!this.context.expanded || this.mode === "off")
-        return renderCompactFailure(input, this.theme, width);
-      // Expansion retains the selected background/frame, enclosing just one owned view.
-      if (!this.display) {
-        const body: Component = {
-          render: (bodyWidth) => renderCompactFailure(input, this.theme, bodyWidth),
-          invalidate: () => undefined,
-        };
-        if (this.mode === "border") {
-          const shell = new BorderedToolCall(this.theme);
-          shell.setBorderColor(
-            compactIssueSeverity(summaryCompactIssues(summary)) === "error"
-              ? "error"
-              : summary.outcome === "cancelled"
-                ? "borderMuted"
-                : summary.outcome === "uncertain"
-                  ? "warning"
-                  : "error",
-          );
-          shell.setResult(body);
-          this.display = shell;
-        } else {
-          const background =
-            compactIssueSeverity(summaryCompactIssues(summary)) === "error" ||
-            summary.outcome === "error"
-              ? "toolErrorBg"
-              : "toolPendingBg";
-          const shell = new Box(1, 1, (text) => this.theme.bg(background, text));
-          shell.addChild(body);
-          this.display = shell;
-        }
-      }
-      return this.display.render(width);
-    }
+    const { phase, summary, collapsedSummary } = this.plan(result);
     if (!this.context.expanded) {
       this.detailBounds = undefined;
       return renderCompactToolCall(
         {
           name: this.options.name,
           phase,
-          summary: plan.collapsedSummary,
+          summary: collapsedSummary,
           duration: this.duration,
           elapsedMs: this.elapsedMs,
           timingEnabled: codePreviewSettings.toolCallTiming,
@@ -230,7 +182,7 @@ class CompactShell implements Component {
       );
     }
     // Build bodies only when visible. In particular, pending write/edit diffs stay uncomputed.
-    this.display ??= this.renderDetails(result !== undefined, summary);
+    this.display ??= this.renderDetails(result !== undefined, phase, summary, collapsedSummary);
     let rows: string[];
     for (;;) {
       try {
@@ -239,7 +191,13 @@ class CompactShell implements Component {
       } catch (error) {
         if (!(error instanceof CompactSlotDrawFailure)) throw error;
         // Failed slots now render safe fallback. Recompose ownership without replaying factories.
-        this.display = this.renderDetails(result !== undefined, summary, true);
+        this.display = this.renderDetails(
+          result !== undefined,
+          phase,
+          summary,
+          collapsedSummary,
+          true,
+        );
       }
     }
     this.detailBounds = { offset: 0, height: rows.length, width };
@@ -248,32 +206,22 @@ class CompactShell implements Component {
 
   private renderDetails(
     hasResult: boolean,
+    phase: CompactPhase,
     summary: CompactSummary | undefined,
+    collapsed: CompactSummary,
     reuse = false,
   ): Component {
-    const outcome = summary?.outcome;
     const context = this.context;
-    const isError =
-      (summary !== undefined && compactIssueSeverity(summaryCompactIssues(summary)) === "error") ||
-      (outcome !== "cancelled" &&
-        outcome !== "uncertain" &&
-        (context.isError || outcome === "error"));
+    const status = compactStatus(phase, collapsed);
+    const isError = status === "error";
     const state = borderState(context);
-    const plan = planCompactPresentation({
-      summary,
-      phase: this.phase(this.currentResult()),
-      isError: context.isError,
-      expanded: context.expanded,
-    });
     const { callSection, details, content } = composeCompactDetails({
       name: this.options.name,
       context,
       theme: this.theme,
       summary,
-      phase: this.phase(this.currentResult()),
-      plan,
+      phase,
       hasResult,
-      isError,
       slots: this.slots,
       call: this.callRender,
       result: this.resultRender,
@@ -291,15 +239,15 @@ class CompactShell implements Component {
     if (this.mode === "border") {
       const shell = new BorderedToolCall(this.theme);
       syncBorderShellChrome(shell, state, { ...context, isError }, this.timingLabel);
-      if (!isError && outcome === "cancelled") shell.setBorderColor("borderMuted");
-      else if (!isError && outcome === "uncertain") shell.setBorderColor("warning");
+      if (status === "cancelled") shell.setBorderColor("borderMuted");
+      else if (status === "warning" || status === "uncertain") shell.setBorderColor("warning");
       shell.setCall(callSection);
       shell.setResult(details);
       return shell;
     }
     const background = isError
       ? "toolErrorBg"
-      : context.isPartial || outcome === "cancelled" || outcome === "uncertain"
+      : context.isPartial || status === "cancelled" || status === "uncertain"
         ? "toolPendingBg"
         : "toolSuccessBg";
     const shell =

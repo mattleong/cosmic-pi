@@ -1,4 +1,5 @@
 import {
+  BACKGROUND_TASK_PRESENTATION_VERSION,
   normalizeBackgroundTaskPresentation,
   observeBackgroundTaskPresentation,
   type BackgroundTaskPresentationObserver,
@@ -113,7 +114,8 @@ export type BackgroundTaskCodeModeOutput = typeof BackgroundTaskCodeModeOutputSc
 export interface BackgroundTaskCodeModeCapability {
   readonly version: typeof BACKGROUND_TASK_CODE_MODE_VERSION;
   readonly sessionId: string;
-  readonly presentationVersion?: 1;
+  /** Acknowledges the current presentation receipt; older receipt versions are not observed. */
+  readonly presentationVersion?: typeof BACKGROUND_TASK_PRESENTATION_VERSION;
   readonly execute: (
     callId: string,
     input: BackgroundTaskCodeModeInput,
@@ -142,17 +144,20 @@ export const normalizeBackgroundTaskCodeModeCapability = <Value>(
   const decoded = codeModeProtocol.decodeCapability(value);
   if (!decoded) return undefined;
   const execute = decoded.execute;
-  let presentationVersion: 1 | undefined;
+  let observes = false;
   try {
     const field = Object.getOwnPropertyDescriptor(value, "presentationVersion");
-    if (field && "value" in field && field.value === 1) presentationVersion = 1;
+    observes =
+      field !== undefined &&
+      "value" in field &&
+      field.value === BACKGROUND_TASK_PRESENTATION_VERSION;
   } catch {
     /* Optional observation is unavailable. */
   }
   return Object.freeze({
     version: decoded.version,
     sessionId: decoded.sessionId,
-    ...(presentationVersion === 1 && { presentationVersion }),
+    ...(observes && { presentationVersion: BACKGROUND_TASK_PRESENTATION_VERSION }),
     execute: (
       callId: string,
       input: BackgroundTaskCodeModeInput,
@@ -160,7 +165,7 @@ export const normalizeBackgroundTaskCodeModeCapability = <Value>(
       maxOutputBytes: number,
       observePresentation?: BackgroundTaskPresentationObserver,
     ) =>
-      presentationVersion === 1 && observePresentation
+      observes && observePresentation
         ? execute(callId, input, signal, maxOutputBytes, <Value>(value: Value) => {
             const receipt = normalizeBackgroundTaskPresentation(value);
             if (receipt) observeBackgroundTaskPresentation(observePresentation, receipt);

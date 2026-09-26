@@ -1,4 +1,4 @@
-import { isCompactAttention } from "pi-code-previews";
+import { compactIssueSeverity, compactStatus } from "pi-code-previews";
 import { renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -32,7 +32,7 @@ it.effect("classifies normalized discovery by operation, not remote lookalike fi
         const discovery = action === "tools.list" || action === "tools.search";
         expect(card.page !== undefined).toBe(discovery);
         expect(
-          card.presentation.issues.entries.some((issue) => issue.code === "discovery-incomplete"),
+          card.presentation.issues.some((issue) => issue.code === "discovery-incomplete"),
         ).toBe(discovery);
         expect(card.presentation.truncated).toBe(false);
         if (!discovery)
@@ -71,6 +71,10 @@ function summarize<Details>(
     }),
   });
 }
+const codes = (summary: ReturnType<typeof summarize>) =>
+  summary?.issues?.map((issue) => issue.code) ?? [];
+const issueDetails = (summary: ReturnType<typeof summarize>) =>
+  summary?.issues?.map((issue) => issue.detail ?? "").join("\n") ?? "";
 
 describe("MCP compact summaries", () => {
   it.each(["status", "connect", "disconnect"])(
@@ -90,7 +94,7 @@ describe("MCP compact summaries", () => {
       }
     },
   );
-  it("projects complete remote causes without generic replacement and retains unknown fallback", () => {
+  it("projects a remote cause as one error issue with the rest of its text in detail", () => {
     const details = reply(
       {
         result: {
@@ -107,37 +111,40 @@ describe("MCP compact summaries", () => {
       server: "browser",
       tool: "click",
     });
-    expect(summary?.issues).toMatchObject({
-      coverage: "complete",
-      entries: [{ code: "remote-failure", severity: "error" }],
+    expect(summary?.outcome).toBe("error");
+    expect(summary?.issues).toHaveLength(1);
+    expect(summary?.issues?.[0]).toMatchObject({
+      code: "remote-failure",
+      severity: "error",
+      message: "Element detached.",
     });
-    expect(summary?.issues?.entries[0]?.cause).toContain("Element detached.");
-    expect(summary?.issues?.entries[0]?.cause).toContain("Inspect the document before retrying.");
-    expect(summary?.issues?.entries).toHaveLength(1);
+    expect(summary?.issues?.[0]?.detail).toContain("Inspect the document before retrying.");
     expect(details).toEqual(before);
-    for (const result of [
-      { content: [{ type: "text", text: "x".repeat(513) }] },
-      {
-        content: [{ type: "text", text: "Failure" }],
-        structuredContent: { recovery: "Review state" },
-      },
-    ])
-      expect(
-        summarize(reply({ result }, { action: "tools.call", isError: true }), "settled", true),
-      ).toBeUndefined();
-    expect(
-      summarize({ ...details, notices: ["Additional recovery is required."] }, "settled", true),
-    ).toBeUndefined();
-    expect(
-      summarize(reply({}, { notices: ["Additional recovery is required."] }))?.issues?.coverage,
-    ).toBe("unknown");
+    // Oversized parts keep the error and disclose the missing evidence.
+    const oversized = summarize(
+      reply(
+        { result: { content: [{ type: "text", text: "x".repeat(513) }] } },
+        { action: "tools.call", isError: true },
+      ),
+      "settled",
+      true,
+    );
+    expect(oversized?.outcome).toBe("error");
+    expect(codes(oversized)).toEqual(expect.arrayContaining(["failure", "evidence-incomplete"]));
+    const noticed = summarize(
+      { ...details, notices: ["Additional recovery is required."] },
+      "settled",
+      true,
+    );
+    expect(codes(noticed)).toEqual(["remote-failure", "unclassified-notices"]);
+    expect(details).toEqual(before);
   });
   it("keeps pending and remote progress observational, without premature outcomes", () => {
     for (const phase of ["pending", "running"] as const) {
       const summary = summarize(reply({}, { outcome: "unknown" }), phase);
       expect(summary?.subject).toContain("catalog");
       expect(summary?.outcome).toBeUndefined();
-      expect(summary?.notices).toBeUndefined();
+      expect(summary?.issues).toBeUndefined();
     }
   });
   it("identifies tool searches by their bounded query without invoking getters", () => {
@@ -178,18 +185,15 @@ describe("MCP compact summaries", () => {
     expect(summary?.subject).toBe("catalog");
     expect(summary?.counters).toHaveLength(1);
     expect(summary?.counters?.join(" ")).toContain("more available");
-    expect(summary?.issues?.entries.some((issue) => issue.code === "discovery-incomplete")).toBe(
-      true,
-    );
-    expect(summary?.expandedResultOwnsIssues).toBeUndefined();
-    expect(summary?.notices?.some(isCompactAttention)).toBe(true);
+    expect(codes(summary)).toContain("discovery-incomplete");
+    expect(compactIssueSeverity(summary?.issues)).toBe("warning");
   });
   it("omits routine retained IDs without changing result access", () => {
     const details = reply({ result: { tools: [] } }, { resultId: "retained-1" });
     const before = structuredClone(details);
     const summary = summarize(details);
     expect(JSON.stringify(summary)).not.toContain("retained-1");
-    expect(summary?.notices).toEqual([]);
+    expect(summary?.issues).toEqual([]);
     expect(summary?.outcome).toBe("success");
     expect(details).toEqual(before);
     expect(decodeMcpCardDetails({ details }).recoveryHint).toBe("/mcp result retained-1");
@@ -202,7 +206,7 @@ describe("MCP compact summaries", () => {
     const before = structuredClone(details);
     expect(decodeMcpCardDetails({ details }).displayCuts.length).toBeGreaterThan(0);
     expect(summarize(details)?.outcome).toBe("success");
-    expect(summarize(details)?.notices).toEqual([]);
+    expect(summarize(details)?.issues).toEqual([]);
     expect(details).toEqual(before);
   });
   it.each([{ truncated: true }, { omitted: true }])(
@@ -211,23 +215,24 @@ describe("MCP compact summaries", () => {
       const details = reply(data, { resultId: "retained-1" });
       const summary = summarize(details);
       expect(summary?.outcome).toBe("warning");
-      expect(summary?.notices?.some((notice) => notice.kind === "warning")).toBe(true);
-      expect(JSON.stringify(summary)).toContain("retained-1");
+      expect(summary?.issues?.find((issue) => issue.code === "output-truncated")?.severity).toBe(
+        "warning",
+      );
+      // The retained ID is agent recovery: expanded detail only, never a message.
+      expect(issueDetails(summary)).toContain("retained-1");
+      expect(summary?.issues?.some((issue) => issue.message.includes("retained-1"))).toBe(false);
       expect(decodeMcpCardDetails({ details }).resultId).toBe("retained-1");
     },
   );
-  it("keeps routine stale-cache notices in details, not collapsed attention", () => {
+  it("keeps routine stale-cache notices as expanded information, not collapsed attention", () => {
     const stale = "MCP catalog cached metadata is not fresh; invocation requires current metadata.";
     for (const action of ["tools.list", "tools.search"]) {
       const details = reply({}, { action, notices: [stale] });
-      expect(summarize(details)?.outcome).toBe("success");
-      expect(summarize(details)?.notices?.some(isCompactAttention)).toBe(false);
-      expect(summarize(details)?.notices).toContainEqual(
-        expect.objectContaining({
-          kind: "recovery",
-          text: stale,
-          expandedOnly: true,
-        }),
+      const summary = summarize(details);
+      expect(summary?.outcome).toBe("success");
+      expect(compactIssueSeverity(summary?.issues)).toBeUndefined();
+      expect(summary?.issues).toContainEqual(
+        expect.objectContaining({ severity: "info", detail: stale }),
       );
       expect(decodeMcpCardDetails({ details }).notices).toContain(stale);
     }
@@ -244,7 +249,7 @@ describe("MCP compact summaries", () => {
       reply({}, { notices: [`${stale} Approval required.`] }),
     ]) {
       expect(summarize(details)?.outcome).toBe("warning");
-      expect(summarize(details)?.notices?.length).toBeGreaterThan(0);
+      expect(compactIssueSeverity(summarize(details)?.issues)).toBe("warning");
     }
   });
   it("preserves optional catalog diagnostics expanded without marking tool inspection as failed", () => {
@@ -257,8 +262,8 @@ describe("MCP compact summaries", () => {
       const before = structuredClone(details);
       const compact = summarize(details);
       expect(compact?.outcome).toBe("success");
-      expect(compact?.notices?.filter(isCompactAttention)).toEqual([]);
-      expect(compact?.notices?.map((notice) => notice.text)).toEqual(notices);
+      expect(compact?.issues?.every((issue) => issue.severity === "info")).toBe(true);
+      expect(compact?.issues?.map((issue) => issue.detail)).toEqual(notices);
       expect(details).toEqual(before);
       expect(
         summarize(reply({}, { action, notices: [...notices, "Access must be reviewed."] }))
@@ -275,7 +280,7 @@ describe("MCP compact summaries", () => {
     );
     const before = structuredClone(details);
     const summary = summarize(details);
-    expect(summary?.notices).toEqual([]);
+    expect(summary?.issues).toEqual([]);
     expect(summary?.counters).toHaveLength(1);
     expect(summary?.counters?.join(" ")).toMatch(/0 of 1.*more available/);
     expect(JSON.stringify(summary)).not.toContain("retained-1");
@@ -291,7 +296,7 @@ describe("MCP compact summaries", () => {
       { action: "tools.list", server: "catalog", cursor: "last-page" },
     );
     expect(summary?.outcome).toBe("success");
-    expect(summary?.notices).toEqual([]);
+    expect(summary?.issues).toEqual([]);
   });
   it("does not repeat the retained ID when it already identifies the requested read", () => {
     const summary = summarize(
@@ -305,75 +310,71 @@ describe("MCP compact summaries", () => {
     );
     expect(summary?.subject).toContain("retained-1");
     expect(summary?.metadata?.join(" ") ?? "").not.toContain("retained-1");
-    expect(summary?.notices).toEqual([]);
+    expect(summary?.issues).toEqual([]);
   });
-  it("marks redacted notices incomplete without exposing them", () => {
+  it("redacts notices without exposing them", () => {
     const raw = `token=${"private".repeat(200)}`;
-    const redacted = decodeMcpCardDetails({ details: reply({}, { notices: [raw] }) });
-    expect(redacted.noticesComplete).toBe(false);
-    expect(redacted.notices.join(" ")).not.toContain("private");
-    expect(redacted.presentation.notices.join(" ")).not.toContain("private");
+    const details = reply({}, { notices: [raw] });
+    expect(decodeMcpCardDetails({ details }).notices.join(" ")).not.toContain("private");
+    expect(JSON.stringify(summarize(details))).not.toContain("private");
   });
   it("preserves remote notices even when they appear routine", () => {
     const summary = summarize(reply({}, { resultId: "retained-1", notices: ["Remote notice"] }));
-    expect(summary?.notices).toContainEqual({
-      kind: "warning",
-      text: "Remote notice",
-    });
+    expect(summary?.outcome).toBe("warning");
+    expect(summary?.issues).toContainEqual(
+      expect.objectContaining({
+        code: "unclassified-notices",
+        severity: "warning",
+        detail: "Remote notice",
+      }),
+    );
     expect(JSON.stringify(summary)).not.toContain("retained-1");
   });
-  it("requires explicit success and never clears a Pi error", () => {
+  it("requires explicit success and never clears an error", () => {
     expect(summarize(reply())?.outcome).toBe("success");
     const hostile = Object.defineProperty({}, "outcome", {
       get() {
         throw new Error("getter");
       },
     });
-    for (const details of [
-      undefined,
-      {},
-      { outcome: "completed" },
-      hostile,
-      reply({}, { isError: true }),
-      reply({}, { outcome: "unknown", isError: true }),
-      reply({}, { outcome: "not-sent", isError: true }),
-    ]) {
+    for (const details of [undefined, {}, { outcome: "completed" }, hostile])
       expect(summarize(details)).toBeUndefined();
-    }
+    // A Pi error never pairs with an envelope that claims success.
     expect(summarize(reply(), "settled", true)).toBeUndefined();
-    for (const [outcome, expected] of [
-      ["unknown", "uncertain"],
-      ["not-sent", "warning"],
+    for (const outcome of ["completed", "unknown", "not-sent"] as const) {
+      const summary = summarize(reply({}, { outcome, isError: true }));
+      expect(summary?.outcome).not.toBe("success");
+      expect(compactStatus("settled", summary!)).toBe("error");
+    }
+    for (const [outcome, expected, code] of [
+      ["unknown", "uncertain", "execution-unknown"],
+      ["not-sent", "warning", "not-sent"],
     ] as const) {
       const summary = summarize(reply({}, { outcome }));
       expect(summary?.outcome).toBe(expected);
-      expect(summary?.issues?.coverage).toBe("unknown");
+      expect(codes(summary)).toContain(code);
     }
   });
-  it("projects fixed boundary causes without claiming complete recovery coverage", () => {
+  it("projects fixed boundary causes with their recovery in detail", () => {
+    const notice = "Do not replay; inspect current state before recovery.";
     for (const data of [
       { kind: "cleanup" },
       { kind: "auth-required" },
       { kind: "output-limit" },
       { kind: "cancelled", message: "Approval required before retry" },
     ]) {
-      const details = reply(data, {
-        outcome: "unknown",
-        isError: true,
-        notices: ["Do not replay; inspect current state before recovery."],
-      });
+      const details = reply(data, { outcome: "unknown", isError: true, notices: [notice] });
       const projected = summarize(details);
       expect(projected?.outcome).toBe("uncertain");
-      expect(projected?.issues?.coverage).toBe("unknown");
-      expect(projected?.issues?.entries[0]?.cause).toBe("");
-      expect(projected?.issues?.entries[0]?.recovery).toContainEqual(
-        expect.objectContaining({
-          text: decodeMcpCardDetails({ details }).diagnostic?.explanation,
-        }),
+      expect(projected?.issues?.[0]).toMatchObject({ code: "boundary-failure", severity: "error" });
+      expect(projected?.issues?.[0]?.detail).toContain(
+        decodeMcpCardDetails({ details }).diagnostic?.explanation,
       );
-      expect(projected?.failure).toBeUndefined();
-      expect(projected?.expandedResultOwnsCall).toBeUndefined();
-      expect(decodeMcpCardDetails({ details }).warnings.length).toBeGreaterThan(0);
+      expect(
+        projected?.issues?.find((issue) => issue.code === "unclassified-notices")?.detail,
+      ).toBe(notice);
+      expect(JSON.stringify(projected)).not.toContain("Approval required before retry");
+      expect(projected?.issues?.some((issue) => issue.message.includes(notice))).toBe(false);
     }
   });
   it("shows successful retained-page reads separately from original outcomes", () => {
@@ -422,7 +423,7 @@ describe("MCP compact summaries", () => {
       expect(projected?.counters ?? []).toEqual([]);
     }
   });
-  it("does not derive fallback causes from raw remote messages", () => {
+  it("keeps fixed boundary causes free of raw remote messages", () => {
     const projected = summarize(
       reply(
         { kind: "invalid-input", reason: "gateway-request-invalid", message: "PRIVATE RAW BODY" },
@@ -432,15 +433,18 @@ describe("MCP compact summaries", () => {
       true,
       { action: "result.read", id: "missing" },
     );
-    expect(projected?.issues?.coverage).toBe("unknown");
-    expect(projected?.issues?.entries[0]?.cause).toBe("MCP arguments rejected");
+    expect(projected?.issues?.[0]?.code).toBe("boundary-failure");
     expect(JSON.stringify(projected)).not.toContain("PRIVATE RAW BODY");
     expect(projected?.outcome).toBe("error");
-    expect(
-      summarize(
-        reply({ kind: "not-a-known-kind", message: "PRIVATE RAW BODY" }, { isError: true }),
-      ),
-    ).toBeUndefined();
+    // Without a typed boundary, the unrecognised text is the error's own first line.
+    const unknown = summarize(
+      reply({ kind: "not-a-known-kind", message: "Unrecognised failure" }, { isError: true }),
+    );
+    expect(unknown?.outcome).toBe("error");
+    expect(unknown?.issues?.[0]).toMatchObject({
+      severity: "error",
+      message: "Unrecognised failure",
+    });
     const cancelled = summarize(
       reply({ kind: "cancelled" }, { outcome: "not-sent", isError: true }),
       "settled",
@@ -449,7 +453,7 @@ describe("MCP compact summaries", () => {
     expect(cancelled?.outcome).toBe("cancelled");
   });
   it.each([
-    [{ outcome: "completed", isError: true }, undefined],
+    [{ outcome: "completed", isError: true }, "error"],
     [{ outcome: "completed", outputValidation: "failed" }, undefined],
     [{ outcome: "completed", isError: false, outputValidation: "invalid" }, undefined],
     [{ outcome: "completed" }, undefined],
@@ -477,10 +481,14 @@ describe("MCP compact summaries", () => {
     const summary = summarize(details);
     const card = decodeMcpCardDetails({ details });
     expect(summary?.outcome).toBe("warning");
-    const notices = summary?.notices?.map((notice) => notice.text);
-    for (const text of [...card.warnings, ...card.notices]) expect(notices).toContain(text);
+    expect(codes(summary)).toEqual(
+      expect.arrayContaining(["output-truncated", "validation-unavailable", "retained-output"]),
+    );
+    for (const notice of card.notices) expect(issueDetails(summary)).toContain(notice);
     expect(card.resultId).toBe("retained-1");
-    expect(notices).not.toContain(card.recoveryHint);
-    expect(summary?.failure).toBeUndefined();
+    expect(JSON.stringify(summary)).not.toContain(card.recoveryHint);
+    expect(summary?.issues?.find((issue) => issue.code === "retained-output")?.severity).toBe(
+      "info",
+    );
   });
 });

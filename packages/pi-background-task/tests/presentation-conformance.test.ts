@@ -90,7 +90,9 @@ it("renders the registered management actions and task states without parsing fe
                 expect(text).toContain(String(snapshot.pid));
               }
             } else if (style === "compact") {
-              expect(text).not.toContain("fetched-body-marker");
+              // A Pi error explains itself with its first line; the body stays collapsed.
+              if (!isError) expect(text).not.toContain("fetched-body-marker");
+              expect(text).not.toContain("just log content");
               expect(text).not.toMatch(
                 /afterCursor|inspect status before retrying|Request a smaller log slice/,
               );
@@ -108,47 +110,40 @@ it("renders the registered management actions and task states without parsing fe
     }
 });
 
+const occurrences = (text: string, part: string) => text.split(part).length - 1;
+
 it.each([
   [
-    "renders each classified task warning once beside labeled raw output",
+    "renders each classified task issue once beside labeled raw output",
     {
-      args: { action: "status", id: snapshot.id },
-      details: {
-        action: "status",
-        snapshot: { ...snapshot, state: "failed", exitCode: 9, droppedLogBytes: 50 },
-      },
-      once: (expanded: boolean) =>
-        expanded
-          ? [
-              "50 log bytes discarded; discarded output cannot be recovered.",
-              "Process exited with code 9.",
-            ]
-          : [
-              "Some task output was discarded and cannot be recovered.",
-              "The task exited with code 9.",
-            ],
+      action: "status",
+      snapshot: { ...snapshot, state: "failed", exitCode: 9, droppedLogBytes: 50 },
     },
   ],
   [
-    "attributes same-named tasks' independent warnings by task ID",
+    "keeps same-named tasks' independent warnings attributable",
     {
-      args: { action: "list" },
-      details: {
-        action: "list",
-        tasks: [
-          { ...snapshot, id: "task-a", name: "worker", state: "stopping" },
-          { ...snapshot, id: "task-b", name: "worker", state: "stopping" },
-        ],
-      },
-      once: (expanded: boolean) =>
-        ["task-a", "task-b"].map((id) =>
-          expanded
-            ? `${id}: Process-tree cleanup is not confirmed; inspect status before retrying work.`
-            : `${id}: Some task processes may still be running.`,
-        ),
+      action: "list",
+      tasks: [
+        { ...snapshot, id: "task-a", name: "worker", state: "stopping" },
+        { ...snapshot, id: "task-b", name: "worker", state: "stopping" },
+      ],
     },
   ],
-] as const)("%s", (_name, { args, details, once }) => {
+  [
+    "shows retained-output recovery only when expanded",
+    { action: "logs", logs: { id: "task-1", state: "running", ...cursors, droppedBytes: 50 } },
+  ],
+] as const)("%s", (_name, details) => {
+  const args = { action: details.action, ...(details.action !== "list" && { id: snapshot.id }) };
+  const summary = projectBackgroundTaskCompactSummary({
+    phase: "settled",
+    args,
+    result: { details },
+    isError: false,
+  });
+  const issues = summary?.issues ?? [];
+  expect(issues.some((issue) => issue.severity !== "info")).toBe(true);
   const marker = "Original task result marker";
   for (const mode of ["on", "off", "border"] as const) {
     const result = { content: [{ type: "text" as const, text: marker }], details };
@@ -158,13 +153,35 @@ it.each([
       harness.call(args, { expanded });
       harness.result(result, { expanded });
       const text = harness.render(240).join("\n");
-      for (const warning of once(expanded)) expect(text.split(warning)).toHaveLength(2);
+      for (const issue of issues) {
+        const visible = expanded || issue.severity !== "info";
+        const same = issues.filter((other) => other.message === issue.message).length;
+        expect(occurrences(text, issue.message)).toBe(visible ? same : 0);
+        if (!issue.detail) continue;
+        // Multi-line details wrap under their message; check each line.
+        for (const line of issue.detail.split("\n")) expect(text.includes(line)).toBe(expanded);
+      }
       if (expanded) {
         expect(text).toContain("Raw task result");
         expect(text).toContain(marker);
       } else expect(text).not.toContain(marker);
     }
     expect(result).toEqual(before);
+  }
+});
+
+it("shows a task's full reported error only when expanded", () => {
+  const error = "Spawn failed\nENOENT: missing-binary-marker";
+  const details = { action: "status", snapshot: { ...snapshot, state: "failed", error } };
+  const result = { content: [{ type: "text" as const, text: "task-1 failed" }], details };
+  const harness = createToolPresentationHarness(registeredTool("on"));
+  for (const expanded of [false, true]) {
+    harness.call({ action: "status", id: "task-1" }, { expanded });
+    harness.result(result, { expanded });
+    const text = harness.render(200).join("\n");
+    expect(text).toContain("Spawn failed");
+    if (expanded) expect(text).toContain("ENOENT: missing-binary-marker");
+    else expect(text).not.toContain("missing-binary-marker");
   }
 });
 
@@ -181,10 +198,9 @@ it("keeps successful command delivery distinct from failed task state and discar
     },
   });
   expect(summary?.outcome).toBe("error");
-  expect(summary?.issues?.entries.map((issue) => issue.code)).toEqual(
+  expect(summary?.issues?.map((issue) => issue.code)).toEqual(
     expect.arrayContaining(["task-1:exit-code", "task-1:log-loss"]),
   );
-  expect(summary?.expandedResultOwnsIssues).toBeUndefined();
 });
 
 it("keeps the owned log metadata header and all expanded logs without another cursor footer", () => {

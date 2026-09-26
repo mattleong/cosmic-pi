@@ -5,6 +5,7 @@ import {
   projectMcpFailurePresentation,
   mcpCodeModeError,
   projectMcpCompactSummary,
+  type McpPresentation,
 } from "../src/protocol.ts";
 
 const reply = <Data>(data: Data, extra = {}) => ({
@@ -15,6 +16,11 @@ const reply = <Data>(data: Data, extra = {}) => ({
   notices: [],
   ...extra,
 });
+const codes = (presentation: McpPresentation) => presentation.issues.map((issue) => issue.code);
+const issue = (presentation: McpPresentation, code: string) =>
+  presentation.issues.find((entry) => entry.code === code);
+const details = (presentation: McpPresentation) =>
+  presentation.issues.map((entry) => entry.detail ?? "").join("\n");
 describe("producer MCP presentation", () => {
   it("keeps retained origin failure, read failure, uncertainty and cleanup independently", () => {
     const presentation = projectMcpPresentation(
@@ -27,8 +33,7 @@ describe("producer MCP presentation", () => {
         { action: "result.read", outcome: "unknown", isError: true, resultId: "saved" },
       ),
     );
-    expect(presentation.issues.coverage).toBe("unknown");
-    expect(presentation.issues.entries.map((entry) => entry.code)).toEqual(
+    expect(codes(presentation)).toEqual(
       expect.arrayContaining([
         "origin-failed",
         "retained-read-failed",
@@ -36,9 +41,13 @@ describe("producer MCP presentation", () => {
         "cleanup-unconfirmed",
       ]),
     );
-    expect(
-      presentation.issues.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
-    ).toEqual(expect.arrayContaining(["inspect-before-replay", "cleanup-gate", "read-retained"]));
+    expect(issue(presentation, "origin-failed")?.severity).toBe("error");
+    expect(issue(presentation, "execution-unknown")?.detail).toMatch(/do not replay/iu);
+    expect(issue(presentation, "retained-output")).toMatchObject({ severity: "info" });
+    expect(issue(presentation, "retained-output")?.detail).toContain('result.read id="saved"');
+    // Messages are human lines; recovery procedures and identifiers stay in details.
+    for (const entry of presentation.issues)
+      expect(entry.message).not.toMatch(/replay|result\.read|saved"/iu);
   });
   it.each(["unknown", "not-sent", "completed"] as const)(
     "preserves retained %s certainty",
@@ -50,8 +59,8 @@ describe("producer MCP presentation", () => {
         ),
       );
       expect(receipt).toMatchObject({ outcome, isError: true, incomplete: false });
-      expect(receipt.notices.join(" ")).toContain('result.read id="retained-1"');
-      expect(receipt.notices.join(" ")).toMatch(/does not change that outcome/);
+      expect(issue(receipt, "retained-output")?.detail).toContain('result.read id="retained-1"');
+      expect(issue(receipt, "origin-failed")?.detail).toMatch(/does not change that outcome/);
     },
   );
   it.each(["failed", "unavailable"] as const)(
@@ -67,24 +76,22 @@ describe("producer MCP presentation", () => {
       const retained = projectMcpPresentation(
         reply({ origin }, { action: "result.read", notices: [notice, "Other warning"] }),
       );
-      expect(retained.notices).not.toContain(notice);
-      expect(retained.notices).toContain("Other warning");
-      expect(
-        retained.issues.entries.some((entry) => entry.code === `validation-${outputValidation}`),
-      ).toBe(true);
-      expect(retained.notices.join(" ")).toMatch(/do not replay/iu);
+      const validation = issue(retained, `validation-${outputValidation}`);
+      expect(validation?.severity).toBe(outputValidation === "failed" ? "error" : "warning");
+      expect(validation?.detail).toMatch(/do not replay/iu);
+      expect(issue(retained, "unclassified-notices")?.detail).toBe("Other warning");
       const receipt = projectMcpPresentation(
         reply({ origin }, { action: "result.read", resultId: "retained-1" }),
       );
       expect(receipt.isError).toBe(outputValidation === "failed");
-      expect(receipt.notices.join(" ")).toMatch(/validation/);
-      expect(receipt.notices.join(" ")).toContain('result.read id="retained-1"');
+      expect(issue(receipt, "retained-output")?.detail).toContain('result.read id="retained-1"');
 
       const spoofed = projectMcpPresentation(
         reply({ result: { origin } }, { action: "result.read", notices: [notice] }),
       );
       expect(spoofed.incomplete).toBe(true);
-      expect(spoofed.notices).toContain(notice);
+      expect(codes(spoofed)).not.toContain(`validation-${outputValidation}`);
+      expect(issue(spoofed, "unclassified-notices")?.detail).toBe(notice);
     },
   );
   it.each([
@@ -97,27 +104,26 @@ describe("producer MCP presentation", () => {
       reply(data, { action: "server.instructions", resultId: "saved" }),
     );
     expect(receipt.truncated).toBe(true);
-    expect(
-      receipt.notices.filter((notice) => notice.includes("truncated or omitted")),
-    ).toHaveLength(1);
-    expect(receipt.notices.join(" ")).toContain('result.read id="saved"');
-    expect(receipt.notices.join(" ")).toMatch(/not replay/);
+    expect(codes(receipt).filter((code) => code === "output-truncated")).toHaveLength(1);
+    expect(issue(receipt, "output-truncated")?.detail).toMatch(/not replay/);
+    expect(issue(receipt, "retained-output")?.detail).toContain('result.read id="saved"');
   });
   it("keeps cleanup, partial discovery, and error detail without retaining bodies", () => {
-    const receipt = projectMcpPresentation(
+    const failed = projectMcpPresentation(
       reply(
-        {
-          kind: "cleanup",
-          message: "safe failure detail",
-          result: { undiscovered: ["server"], secretBody: "do not retain this" },
-        },
+        { message: "safe failure detail", result: { secretBody: "do not retain this" } },
         { action: "tools.list", isError: true },
       ),
     );
-    expect(receipt.notices.join(" ")).toMatch(/cleanup is unconfirmed/);
-    expect(receipt.notices.join(" ")).toMatch(/Discovery is incomplete/);
-    expect(receipt.notices).toContain("safe failure detail");
-    expect(JSON.stringify(receipt)).not.toContain("do not retain this");
+    expect(issue(failed, "remote-failure")?.message).toBe("safe failure detail");
+    const cleanup = projectMcpPresentation(
+      reply({ kind: "cleanup", result: { undiscovered: ["server"] } }, { action: "tools.list" }),
+    );
+    expect(codes(cleanup)).toEqual(
+      expect.arrayContaining(["cleanup-unconfirmed", "discovery-incomplete"]),
+    );
+    for (const receipt of [failed, cleanup])
+      expect(JSON.stringify(receipt)).not.toContain("do not retain this");
   });
   it("rejects incomplete retained metadata and unsafe recovery identifiers", () => {
     for (const data of [
@@ -125,7 +131,9 @@ describe("producer MCP presentation", () => {
       { origin: { outcome: "completed" } },
       { origin: { outcome: "completed", isError: false, outputValidation: {} } },
     ]) {
-      expect(projectMcpPresentation(reply(data, { action: "result.read" })).incomplete).toBe(true);
+      const receipt = projectMcpPresentation(reply(data, { action: "result.read" }));
+      expect(receipt.incomplete).toBe(true);
+      expect(codes(receipt)).toContain("evidence-incomplete");
     }
     const receipt = projectMcpPresentation(reply({ truncated: true }, { resultId: "bad\nsecret" }));
     expect(receipt.incomplete).toBe(true);
@@ -139,7 +147,9 @@ describe("producer MCP presentation", () => {
     ]) {
       const receipt = projectMcpPresentation(reply({ origin }, { action: "result.read" }));
       expect(receipt).toMatchObject({ outcome: "completed", isError: true, incomplete: false });
-      expect(receipt.notices.join(" ")).toMatch(/do not replay/iu);
+      expect(receipt.issues.some((entry) => entry.severity === "error")).toBe(true);
+      expect(details(receipt)).toMatch(/do not replay/iu);
+      expect(codes(receipt)).not.toContain("retained-output");
     }
   });
   it("marks unreadable metadata incomplete without invoking getters or stringifying values", () => {
@@ -198,26 +208,35 @@ describe("producer MCP presentation", () => {
     const receipt = projectMcpPresentation(
       reply({}, { notices: [`token=${"private".repeat(200)}`] }),
     );
-    expect(receipt.notices.join(" ")).not.toContain("private");
-    expect(receipt.notices.join(" ")).toContain("[REDACTED]");
+    expect(receipt.incomplete).toBe(false);
+    expect(details(receipt)).not.toContain("private");
+    expect(details(receipt)).toContain("[REDACTED]");
   });
-  it("bounds warnings and marks incomplete evidence", () => {
+  it("bounds notices, marks incomplete evidence, and never silently succeeds on overflow", () => {
     const receipt = projectMcpPresentation(
       reply({}, { notices: Array.from({ length: 40 }, (_, i) => `${i}: ${"x".repeat(600)}`) }),
     );
     expect(receipt.incomplete).toBe(true);
-    expect(receipt.notices.length).toBeLessThanOrEqual(32);
-    expect(receipt.notices.every((notice) => notice.length <= 512)).toBe(true);
+    expect(codes(receipt)).toContain("evidence-incomplete");
+    expect(receipt.issues.every((entry) => (entry.detail?.length ?? 0) <= 2048)).toBe(true);
+    const crowded = projectMcpPresentation(
+      reply({}, { notices: Array.from({ length: 32 }, (_, i) => `${i}: ${"n".repeat(500)}`) }),
+    );
+    expect(crowded.issues.find((entry) => entry.code === "unclassified-notices")?.detail).toMatch(
+      /^0: /u,
+    );
+    expect(codes(crowded)).toContain("evidence-incomplete");
   });
   it.each(["completed", "unknown", "not-sent"] as const)(
     "projects typed failures with %s certainty",
     (outcome) => {
       const receipt = projectMcpFailurePresentation(mcpCodeModeError("cleanup", outcome));
       expect(receipt).toMatchObject({ outcome, isError: true, incomplete: false });
-      expect(receipt.notices.join(" ")).toMatch(/cleanup is unconfirmed/);
+      expect(codes(receipt)).toEqual(["boundary-failure", "cleanup-unconfirmed"]);
+      expect(issue(receipt, "boundary-failure")?.severity).toBe("error");
     },
   );
-  it("shares boundary diagnostics between standalone and nested projections without renderer ownership", () => {
+  it("shares boundary diagnostics between standalone and nested projections", () => {
     const output = reply(
       {
         kind: "invalid-input",
@@ -234,21 +253,23 @@ describe("producer MCP presentation", () => {
       isError: true,
     });
     expect(summary?.issues).toEqual(receipt.issues);
-    expect(receipt.issues.entries[0]?.diagnostics?.length).toBeGreaterThan(0);
-    expect(receipt.notices.join(" ")).toContain("Unclassified producer detail");
-    expect(JSON.stringify(receipt.issues)).not.toContain("expandedInResult");
-    expect(JSON.stringify(receipt.issues)).not.toContain("ownedIssues");
+    expect(issue(receipt, "boundary-failure")?.detail).toBeTruthy();
+    // Fixed diagnostics only: remote messages stay in the raw result.
+    expect(JSON.stringify(receipt.issues)).not.toContain("Unclassified producer detail");
   });
-  it("does not authorize complete coverage when combined remote evidence exceeds bounds", () => {
+  it("keeps bounded remote error text and marks oversized parts as incomplete", () => {
     const receipt = projectMcpPresentation(
       reply(
         { content: Array.from({ length: 10 }, () => ({ type: "text", text: "x".repeat(400) })) },
         { isError: true },
       ),
     );
-    expect(receipt.issues.coverage).toBe("unknown");
-    expect(receipt.issues.entries.every((issue) => issue.cause.length <= 2048)).toBe(true);
-    expect(receipt.issues.entries.some((issue) => issue.code === "evidence-incomplete")).toBe(true);
+    expect(receipt.issues.every((entry) => (entry.detail?.length ?? 0) <= 2048)).toBe(true);
+    expect(codes(receipt)).toEqual(["remote-failure", "evidence-incomplete"]);
+    const oversized = projectMcpPresentation(
+      reply({ content: [{ type: "text", text: "y".repeat(513) }] }, { isError: true }),
+    );
+    expect(codes(oversized)).toEqual(expect.arrayContaining(["failure", "evidence-incomplete"]));
   });
   it("does not expose unknown rejection messages", () => {
     const receipt = projectMcpFailurePresentation(new Error("secret-body"));

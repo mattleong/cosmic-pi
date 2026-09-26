@@ -3,7 +3,10 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
-import type { BackgroundTaskCodeModeCapability } from "pi-background-task/code-mode";
+import {
+  BACKGROUND_TASK_PRESENTATION_VERSION,
+  type BackgroundTaskCodeModeCapability,
+} from "pi-background-task/code-mode";
 import * as previews from "pi-code-previews";
 import {
   deferredPromise,
@@ -11,14 +14,14 @@ import {
   opaqueFixture,
   plainTheme,
 } from "pi-cosmic-core/testing";
-import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
+import { makeCompactEvidence, type CompactReceipt } from "../src/tools/compact-evidence.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
 import {
   makeNestedPiToolDispatch,
   type NestedPiToolDefinitions,
 } from "../src/boundary/host-builtin-tools.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import { ledgerDetails, noReplayNotices, summarize } from "./support/compact.ts";
+import { COMPLETE_LEDGER, deliveryIssues, summarize } from "./support/compact.ts";
 import { executeHarness } from "./support/execute.ts";
 import { renderResultText } from "./support/presentation.ts";
 import { backgroundTaskProvider } from "./support/providers.ts";
@@ -39,22 +42,230 @@ const harness = (
     config: { maxToolCalls: 400, maxCumulativeChildOutputBytes: options.budget ?? 1000000 },
     ...(options.events && { events: options.events }),
   });
+/** The model-visible failure text of a rejected execution. */
+const failureText = (pending: Promise<unknown>) =>
+  pending.then(
+    () => expect.unreachable("execution should fail"),
+    (error: Error) => error.message,
+  );
+type Ledger = ReturnType<typeof makeCompactEvidence>;
+const settle = (ledger: Ledger, id: number, summary: previews.CompactSummary) => {
+  ledger.start(id, id);
+  ledger.observe(id, () => summary);
+  ledger.end(id);
+};
 
-describe("compact semantic evidence", () => {
+describe("compact receipt ledger", () => {
+  it("counts receipt outcomes and publishes frozen, bounded receipts", () => {
+    const published = new Map<number, CompactReceipt>();
+    const ledger = makeCompactEvidence((id, receipt) => published.set(id, receipt));
+    const outcomes = ["success", "warning", "error", "cancelled", "uncertain", "error"] as const;
+    outcomes.forEach((outcome, id) => settle(ledger, id, { subject: `call ${id}`, outcome }));
+    settle(ledger, 9, {
+      subject: "curl -H 'Authorization: Bearer secret-token' host",
+      compactSubject: "host",
+      action: "fetch",
+      counters: ["2 matches"],
+      metadata: ["token=secret-token"],
+      showTiming: true,
+      outcome: "success",
+      children: { total: 1, entries: [{ label: "nested", status: "success" }] },
+    });
+    ledger.close();
+    expect(ledger.snapshot()).toEqual({
+      ...COMPLETE_LEDGER,
+      errors: 2,
+      warnings: 1,
+      cancelled: 1,
+      uncertain: 1,
+    });
+    expect(Object.isFrozen(ledger.snapshot())).toBe(true);
+    expect(published.get(0)).toEqual({
+      version: 3,
+      subject: "call 0",
+      outcome: "success",
+      issues: [],
+      deliveryFailed: false,
+    });
+    const rich = published.get(9)!;
+    expect(Object.isFrozen(rich)).toBe(true);
+    expect(rich).toMatchObject({
+      compactSubject: "host",
+      action: "fetch",
+      counters: ["2 matches"],
+    });
+    expect(rich).not.toHaveProperty("children");
+    expect(rich).not.toHaveProperty("showTiming");
+    expect(JSON.stringify(rich)).not.toContain("secret-token");
+  });
+
+  it("marks missing, duplicate, unstarted, overflowing and malformed observations incomplete", () => {
+    const summary = { subject: "file", outcome: "success" } as const;
+    const cases: ReadonlyArray<readonly [string, (ledger: Ledger) => void]> = [
+      ["started but never observed", (ledger) => (ledger.start(1, 1), ledger.end(1))],
+      ["still running at close", (ledger) => ledger.start(1, 1)],
+      ["observed without a started call", (ledger) => ledger.observe(7, () => summary)],
+      ["observed without correlation", (ledger) => ledger.observe(undefined, () => summary)],
+      ["delivery failure without correlation", (ledger) => ledger.deliveryFailure(undefined)],
+      ["producer reported missing presentation", (ledger) => ledger.missing()],
+      [
+        "duplicate observation",
+        (ledger) => {
+          ledger.start(1, 1);
+          ledger.observe(1, () => summary);
+          ledger.observe(1, () => summary);
+          ledger.end(1);
+        },
+      ],
+      ["declined projection", (ledger) => settle(ledger, 1, opaqueFixture(undefined))],
+      [
+        "throwing projection",
+        (ledger) => {
+          ledger.start(1, 1);
+          ledger.observe(1, () => {
+            throw new Error("projector failed");
+          });
+          ledger.end(1);
+        },
+      ],
+      ["summary without an outcome", (ledger) => settle(ledger, 1, { subject: "file" })],
+      [
+        "issues beyond the receipt bound",
+        (ledger) =>
+          settle(ledger, 1, {
+            ...summary,
+            issues: Array.from({ length: 17 }, (_, id) => ({
+              severity: "warning" as const,
+              code: "partial",
+              message: `Warning ${id}`,
+            })),
+          }),
+      ],
+    ];
+    for (const [name, record] of cases) {
+      const ledger = makeCompactEvidence(() => undefined);
+      record(ledger);
+      ledger.close();
+      expect(ledger.snapshot().incomplete, name).toBe(true);
+    }
+    const complete = makeCompactEvidence(() => undefined);
+    settle(complete, 1, summary);
+    complete.close();
+    expect(complete.snapshot().incomplete).toBe(false);
+    // Long display fields are clipped so the call keeps its receipt and issues.
+    const published: CompactReceipt[] = [];
+    const long = makeCompactEvidence((_id, receipt) => published.push(receipt));
+    settle(long, 1, { ...summary, subject: "x".repeat(2000), counters: ["y".repeat(2000)] });
+    long.close();
+    expect(long.snapshot().incomplete).toBe(false);
+    expect(published[0]?.subject.length).toBeLessThanOrEqual(1024);
+    expect(published[0]?.counters?.[0]?.length).toBeLessThanOrEqual(1024);
+  });
+
+  it("retains a summary without an outcome as uncertain rather than dropping the call", () => {
+    let receipt: CompactReceipt | undefined;
+    const ledger = makeCompactEvidence((_id, value) => {
+      receipt = value;
+    });
+    settle(ledger, 1, { subject: "file" });
+    expect(receipt).toMatchObject({ subject: "file", outcome: "uncertain" });
+    expect(ledger.snapshot()).toMatchObject({ uncertain: 1, incomplete: true });
+  });
+
+  it("records one delivery failure without changing the operation outcome", () => {
+    const published: CompactReceipt[] = [];
+    const ledger = makeCompactEvidence((_id, receipt) => published.push(receipt));
+    ledger.start(1, 4);
+    ledger.observe(4, () => ({ subject: "file", outcome: "success" }));
+    ledger.deliveryFailure(4);
+    ledger.deliveryFailure(4);
+    ledger.deliveryFailure(99);
+    ledger.end(1);
+    ledger.close();
+    expect(published).toHaveLength(2);
+    const receipt = published.at(-1)!;
+    expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(deliveryIssues(receipt.issues)).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message: "The result did not reach the program",
+      }),
+    ]);
+    expect(deliveryIssues(receipt.issues)[0]?.detail).toContain("do not replay");
+    expect(ledger.snapshot()).toEqual(COMPLETE_LEDGER);
+  });
+
+  it("keeps producer issues and marks the ledger incomplete when delivery loss meets the bound", () => {
+    const published: CompactReceipt[] = [];
+    const ledger = makeCompactEvidence((_id, receipt) => published.push(receipt));
+    ledger.start(1, 1);
+    ledger.observe(1, () => ({
+      subject: "file",
+      outcome: "warning",
+      issues: Array.from({ length: 16 }, (_, index) => ({
+        severity: "warning" as const,
+        code: `w${index}`,
+        message: `W${index}`,
+      })),
+    }));
+    ledger.deliveryFailure(1);
+    ledger.end(1);
+    ledger.close();
+    const issues = published.at(-1)!.issues;
+    expect(issues).toHaveLength(16);
+    expect(issues[0]?.message).toBe("W0");
+    expect(deliveryIssues(issues)).toHaveLength(1);
+    expect(ledger.snapshot().incomplete).toBe(true);
+  });
+
+  it("ignores late observations after close", () => {
+    const published = vi.fn();
+    const ledger = makeCompactEvidence(published);
+    settle(ledger, 1, { subject: "file", outcome: "success" });
+    ledger.start(2, 2);
+    ledger.close();
+    const before = ledger.snapshot();
+    expect(ledger.identity(2)).toBeUndefined();
+    ledger.observe(2, () => ({ subject: "late", outcome: "error" }));
+    ledger.deliveryFailure(1);
+    ledger.missing();
+    expect(published).toHaveBeenCalledTimes(1);
+    expect(ledger.snapshot()).toEqual(before);
+  });
+
+  it("contains conflicting correlation and duplicate receipts", () => {
+    const published = vi.fn();
+    const collector = makeCompactEvidence(published);
+    collector.start(1, 1);
+    collector.start(1, 2);
+    expect(collector.identity(1)).toBeUndefined();
+    collector.observe(2, () => ({ subject: "wrong target", outcome: "success" }));
+    expect(published).not.toHaveBeenCalled();
+    collector.start(2, 3);
+    collector.observe(3, () => ({ subject: "correct", outcome: "success" }));
+    collector.observe(3, () => ({ subject: "duplicate", outcome: "error" }));
+    expect(published).toHaveBeenCalledTimes(1);
+    expect(collector.snapshot()).toMatchObject({ incomplete: true, errors: 0 });
+  });
+});
+
+describe("compact semantic evidence through the real runtime", () => {
   it.effect(
-    "keeps received native failures distinct from delivery loss and puts known diagnostics only in expanded details",
+    "keeps received native failures distinct from delivery loss and names the failed call",
     () =>
       Effect.gen(function* () {
         const diagnostic =
           "SOURCE_MARKER\nError: missing import\n  at stack-marker\nCommand exited with code 1";
         const editError =
           "Found 4 occurrences of edits[3] in file. Each oldText must be unique. Please provide more context to make it unique.";
-        for (const [name, error, code] of [
-          ["bash", diagnostic, 'await tools.pi.bash({command:"run"})'],
+        for (const [name, error, code, subject] of [
+          ["bash", diagnostic, 'await tools.pi.bash({command:"run"})', "run"],
           [
             "edit",
             editError,
             'await tools.pi.edit({path:"file",edits:[{oldText:"a",newText:"b"}]})',
+            "file",
           ],
         ] as const) {
           const h = harness(
@@ -62,75 +273,77 @@ describe("compact semantic evidence", () => {
               [name]: { execute: () => Promise.reject(new Error(error)) },
             }),
           );
-          yield* Effect.promise(() => expect(h.run(code)).rejects.toThrow(error));
+          const text = yield* Effect.promise(() => failureText(h.run(code)));
           const details = h.retention.consume("call")!;
-          expect(details.compactAttention).toMatchObject({
-            observed: 1,
-            errors: 1,
-            incomplete: false,
-          });
-          expect(details.toolCalls[0]?.compact).toMatchObject({
-            outcome: "error",
-            deliveryFailed: false,
-          });
-          expect(details.failurePresentation?.evidence.coverage).toBe("complete");
-          const serialized = yield* encode(details);
-          expect(serialized).not.toMatch(/SOURCE_MARKER|stack-marker|may already have completed/u);
-          const text = `[ToolFailure] Nested tool '${name}' failed: ${error}`;
+          expect(details.compactAttention).toEqual({ ...COMPLETE_LEDGER, errors: 1 });
+          const receipt = details.toolCalls[0]?.compact;
+          expect(receipt).toMatchObject({ outcome: "error", deliveryFailed: false });
+          expect(receipt?.issues.filter((issue) => issue.severity === "error")).toHaveLength(1);
+          expect(deliveryIssues(receipt?.issues)).toEqual([]);
+          expect(yield* encode(details)).not.toMatch(/SOURCE_MARKER|stack-marker/u);
           const compact = summarize(details, { isError: true, text });
-          expect(compact?.failure?.details).toBe(text);
-          expect(compact?.failure?.cause).toBe(details.failurePresentation?.evidence.cause);
-          expect(
-            compact?.children?.entries[0]?.notices?.filter((notice) => notice.kind === "error"),
-          ).toHaveLength(1);
-          expect(
-            compact?.notices?.some((notice) =>
-              /SOURCE_MARKER|stack-marker|nested operations failed|delivery|incomplete/u.test(
-                notice.text,
-              ),
-            ),
-          ).toBe(false);
+          expect(compact?.outcome).toBe("error");
+          expect(compact?.issues).toEqual([
+            expect.objectContaining({
+              severity: "error",
+              message: `Program stopped: ${name} ${subject} failed`,
+            }),
+          ]);
+          expect(compact?.children?.entries[0]).toMatchObject({ label: name, status: "error" });
+          // A failure the program handled leaves the call failed and the run a warning.
           const caught = yield* Effect.promise(() => h.run(`try { ${code}; } catch {} return 1;`));
           expect(caught.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(false);
-          expect(summarize(caught.details!)?.outcome).toBe("error");
+          const handled = summarize(caught.details!);
+          expect(handled?.outcome).toBe("warning");
+          expect(handled?.issues).toEqual([]);
+          expect(handled?.children?.entries[0]?.status).toBe("error");
         }
       }),
   );
 
-  it.effect("preserves actual diagnostic clipping and native result-conversion loss", () =>
-    Effect.gen(function* () {
-      const failure = harness(
-        nestedToolDefinitionsFixture({
-          bash: {
-            execute: () =>
-              Promise.reject(new Error(`${"diagnostic ".repeat(60)}\nCommand exited with code 1`)),
-          },
-        }),
-        { budget: 20 },
-      );
-      const clipped = yield* Effect.promise(() =>
-        failure.run('try { await tools.pi.bash({command:"run"}); } catch {} return 1;'),
-      );
-      expect(clipped.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
-      expect(noReplayNotices(clipped.details?.compactAttention?.notices)).not.toHaveLength(0);
-      const h = harness(
-        nestedToolDefinitionsFixture({
-          write: {
-            execute: () =>
-              Promise.resolve({
-                content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
-                details: {},
-              }),
-          },
-        }),
-      );
-      const conversion = yield* Effect.promise(() =>
-        h.run('try { await tools.pi.write({path:"file",content:"private"}); } catch {} return 1;'),
-      );
-      expect(conversion.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
-      expect(noReplayNotices(conversion.details?.compactAttention?.notices)).not.toHaveLength(0);
-    }),
+  it.effect(
+    "records diagnostic clipping and native result-conversion loss as delivery failures",
+    () =>
+      Effect.gen(function* () {
+        const failure = harness(
+          nestedToolDefinitionsFixture({
+            bash: {
+              execute: () =>
+                Promise.reject(
+                  new Error(`${"diagnostic ".repeat(60)}\nCommand exited with code 1`),
+                ),
+            },
+          }),
+          { budget: 20 },
+        );
+        const clipped = yield* Effect.promise(() =>
+          failure.run('try { await tools.pi.bash({command:"run"}); } catch {} return 1;'),
+        );
+        expect(clipped.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
+        expect(deliveryIssues(clipped.details?.toolCalls[0]?.compact?.issues)).toHaveLength(1);
+        const h = harness(
+          nestedToolDefinitionsFixture({
+            write: {
+              execute: () =>
+                Promise.resolve({
+                  content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+                  details: {},
+                }),
+            },
+          }),
+        );
+        const conversion = yield* Effect.promise(() =>
+          h.run(
+            'try { await tools.pi.write({path:"file",content:"private"}); } catch {} return 1;',
+          ),
+        );
+        const receipt = conversion.details?.toolCalls[0]?.compact;
+        expect(receipt?.deliveryFailed).toBe(true);
+        expect(deliveryIssues(receipt?.issues)).toHaveLength(1);
+        expect(summarize(conversion.details!)?.children?.entries[0]?.status).toBe("error");
+      }),
   );
+
   it.effect(
     "correlates identical concurrent calls in reverse completion order through the real runtime",
     () =>
@@ -155,18 +368,13 @@ describe("compact semantic evidence", () => {
         );
         pending[0]!.resolve(result("same: first", {}));
         const completed = yield* Effect.promise(() => execution);
-        expect(completed.details?.compactAttention).toMatchObject({
-          admitted: 2,
-          started: 2,
-          observed: 2,
-          incomplete: false,
-        });
-        expect(completed.details?.toolCalls[0]?.compact?.notices).toEqual([]);
-        expect(completed.details?.toolCalls[1]?.compact?.notices.length).toBeGreaterThan(0);
-        expect(completed.details?.toolCalls.map((call) => call.compact?.subject)).toEqual([
-          "same in same",
-          "same in same",
-        ]);
+        expect(completed.details?.compactAttention).toEqual({ ...COMPLETE_LEDGER, warnings: 1 });
+        const [first, second] = completed.details!.toolCalls.map((call) => call.compact);
+        expect(first?.issues).toEqual([]);
+        expect(second?.outcome).toBe("warning");
+        expect(second?.issues.length).toBeGreaterThan(0);
+        expect(second?.counters).toContain("limit reached: 17");
+        expect([first?.subject, second?.subject]).toEqual(["same in same", "same in same"]);
         expect(yield* encode(completed.details)).not.toContain("same: second");
       }),
   );
@@ -183,15 +391,11 @@ describe("compact semantic evidence", () => {
       );
       const receipt = completed.details?.toolCalls[0]?.compact;
       expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
-      expect(receipt?.notices).toContainEqual(
-        expect.objectContaining({
-          kind: "recovery",
-          expandedOnly: true,
-        }),
-      );
+      expect(deliveryIssues(receipt?.issues)).toHaveLength(1);
       expect(receipt?.counters).not.toContain("new file");
-      expect(summarize(completed.details!)?.children?.entries[0]?.status).toBe("error");
-      expect(noReplayNotices(completed.details?.compactAttention?.notices)).not.toHaveLength(0);
+      const projected = summarize(completed.details!);
+      expect(projected?.children?.entries[0]?.status).toBe("error");
+      expect(projected?.outcome).toBe("warning");
       expect(yield* encode(completed.details)).not.toContain("private body");
     }),
   );
@@ -201,13 +405,12 @@ describe("compact semantic evidence", () => {
       const native = vi.fn(() => Promise.resolve(result()));
       const h = harness(nestedToolDefinitionsFixture({ read: { execute: native } }));
       yield* Effect.promise(() =>
-        expect(h.run('await tools.pi.read({path:"file",offset:0})')).rejects.toThrow(),
+        failureText(h.run('await tools.pi.read({path:"file",offset:0})')),
       );
       expect(native).not.toHaveBeenCalled();
-      expect(h.retention.consume("call")?.compactAttention).toMatchObject({
-        observed: 0,
-        started: 0,
-      });
+      const retained = h.retention.consume("call");
+      expect(retained?.compactAttention).toEqual(COMPLETE_LEDGER);
+      expect(retained?.toolCalls[0]?.compact).toBeUndefined();
     }),
   );
 
@@ -227,46 +430,12 @@ describe("compact semantic evidence", () => {
     }),
   );
 
-  it("retains valid sibling notices when another field exceeds bounds and excludes failure bodies", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    collector.admit("pi.read");
-    collector.start(1, 1);
-    collector.observe(1, () => ({
-      subject: "x".repeat(3000),
-      outcome: "error",
-      failure: { cause: "secret output", details: "secret output" },
-      notices: [{ kind: "recovery", text: "Keep this instruction" }],
-    }));
-    expect(collector.snapshot()).toMatchObject({
-      incomplete: true,
-      notices: [{ text: "Keep this instruction" }],
-    });
-    expect(JSON.stringify(collector.snapshot())).not.toContain("secret output");
-    const before = collector.snapshot();
-    collector.close();
-    collector.observe(1, () => ({ subject: "late" }));
-    expect(before.notices).toEqual(collector.snapshot().notices);
-    expect(Object.isFrozen(before.notices)).toBe(true);
-  });
-
-  it("rejects incomplete replay coverage instead of using legacy success", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    const details = {
-      toolCalls: [{ tool: "pi.read", status: "completed" as const }],
-      counts: { total: 1, succeeded: 1, running: 0, queued: 0, failed: 0, cancelled: 0 },
-      outputKind: "text" as const,
-      compactAttention: collector.snapshot(),
-    };
-    expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
-    expect(summarize(details)?.outcome).toBe("uncertain");
-  });
-
   it.effect("retains lost companion replies after observed completion", () =>
     Effect.gen(function* () {
       const events = backgroundTaskProvider(
         (_id, _input, _signal, _budget, observe) => {
           observe?.({
-            version: 1,
+            version: BACKGROUND_TASK_PRESENTATION_VERSION,
             incomplete: false,
             overflow: false,
             summary: {
@@ -275,24 +444,25 @@ describe("compact semantic evidence", () => {
               outcome: "success",
               metadata: [],
               counters: [],
-              notices: [],
-              detailsOnExpand: true,
+              issues: [],
             },
           });
           return Promise.reject(new Error("Reply projection failed"));
         },
-        { presentationVersion: 1 },
+        { presentationVersion: BACKGROUND_TASK_PRESENTATION_VERSION },
       );
       const completed = yield* Effect.promise(() =>
         harness(nestedToolDefinitionsFixture({}), { events }).run(
           'try { await tools.session.backgroundTask({action:"start",command:"work"}); } catch {} return 1;',
         ),
       );
-      expect(completed.details?.toolCalls[0]?.compact).toMatchObject({
-        outcome: "success",
-        deliveryFailed: true,
+      const receipt = completed.details?.toolCalls[0]?.compact;
+      expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
+      expect(deliveryIssues(receipt?.issues)).toHaveLength(1);
+      expect(summarize(completed.details!)?.children?.entries[0]).toMatchObject({
+        label: "background_task",
+        status: "error",
       });
-      expect(noReplayNotices(completed.details?.compactAttention?.notices)).not.toHaveLength(0);
     }),
   );
 
@@ -303,7 +473,7 @@ describe("compact semantic evidence", () => {
         (_id, _input, _signal, _budget, observe) => {
           late = observe;
           observe?.({
-            version: 1,
+            version: BACKGROUND_TASK_PRESENTATION_VERSION,
             incomplete: false,
             overflow: false,
             summary: {
@@ -312,8 +482,13 @@ describe("compact semantic evidence", () => {
               outcome: "warning",
               metadata: [],
               counters: [],
-              notices: [{ kind: "recovery", text: "Earlier log output is unavailable" }],
-              detailsOnExpand: true,
+              issues: [
+                {
+                  severity: "warning",
+                  code: "log-dropped",
+                  message: "Earlier log output is unavailable",
+                },
+              ],
             },
           });
           return Promise.resolve({
@@ -328,7 +503,7 @@ describe("compact semantic evidence", () => {
             },
           });
         },
-        { presentationVersion: 1 },
+        { presentationVersion: BACKGROUND_TASK_PRESENTATION_VERSION },
       );
       const completed = yield* Effect.promise(() =>
         harness(nestedToolDefinitionsFixture({}), { events }).run(
@@ -338,10 +513,12 @@ describe("compact semantic evidence", () => {
       expect(completed.details?.toolCalls[0]?.compact).toMatchObject({
         action: "logs",
         outcome: "warning",
+        issues: [expect.objectContaining({ message: "Earlier log output is unavailable" })],
       });
-      expect(summarize(completed.details!)?.children?.entries[0]?.label).toBe("background_task");
+      const row = summarize(completed.details!)?.children?.entries[0];
+      expect(row).toMatchObject({ label: "background_task", status: "warning" });
       const snapshot = yield* encode(completed.details);
-      late?.({ version: 1, incomplete: true, overflow: true });
+      late?.({ version: BACKGROUND_TASK_PRESENTATION_VERSION, incomplete: true, overflow: true });
       expect(yield* encode(completed.details)).toBe(snapshot);
       expect(snapshot).not.toContain("private logs");
     }),
@@ -401,8 +578,13 @@ describe("compact semantic evidence", () => {
         ),
       );
       const receipts = completed.details!.toolCalls.map((call) => call.compact);
-      expect(receipts[0]?.notices.length).toBeGreaterThan(0);
-      expect(receipts[1]?.notices.some((notice) => notice.text.includes("/tmp/full-output"))).toBe(
+      // A complete page is informational; its continuation stays in the expanded detail.
+      expect(receipts[0]).toMatchObject({ outcome: "success" });
+      expect(receipts[0]?.issues).toEqual([
+        expect.objectContaining({ severity: "info", detail: expect.stringContaining("offset=3") }),
+      ]);
+      expect(receipts[1]?.outcome).toBe("warning");
+      expect(receipts[1]?.issues.some((issue) => issue.message.includes("/tmp/full-output"))).toBe(
         true,
       );
       expect(receipts[2]?.counters).toContain("limit reached: 12");
@@ -434,6 +616,9 @@ describe("compact semantic evidence", () => {
           text: expect.stringContaining("native value"),
         });
         expect(completed.details?.compactAttention?.incomplete).toBe(true);
+        expect(summarize(completed.details!)?.issues).toContainEqual(
+          expect.objectContaining({ severity: "warning", code: "incomplete" }),
+        );
         expect(yield* encode(completed.details)).not.toContain("private projector failure");
       } finally {
         spy.mockRestore();
@@ -441,209 +626,82 @@ describe("compact semantic evidence", () => {
     }),
   );
 
-  it("keeps warning evidence beyond row eviction and overflow visible in compact and detailed views", () => {
-    const ledger = ledgerDetails(
-      Array.from({ length: 300 }, (_, id) => ({
-        tool: "pi.read",
-        summary: {
-          subject: "file",
-          outcome: "warning",
-          notices: [{ kind: "recovery", text: `Recovery ${id}` }],
-        },
-      })),
-    );
-    const details = { ...ledger.details, toolCalls: [] };
-    expect(details.compactAttention).toMatchObject({
-      admitted: 300,
-      started: 300,
-      observed: 300,
-      incomplete: true,
-    });
-    expect(details.compactAttention.notices).toHaveLength(32);
-    expect(details.compactAttention.notices[0]?.text).toBe("Recovery 0");
-    expect(summarize(details)?.issues?.entries.some((issue) => issue.cause === "Recovery 0")).toBe(
-      true,
-    );
-    expect(
-      summarize(details)?.notices?.some((notice) => notice.text.includes("warning limit")),
-    ).toBe(true);
-    for (const expanded of [false, true]) {
-      const rendered = renderResultText(result("discarded", details), { expanded, width: 180 });
-      expect(rendered).toContain("Recovery 0");
-      expect(rendered).toContain("warning limit");
-    }
-  });
-
-  it("preserves retained receipt recovery on expansion after aggregate overflow", () => {
-    const { details } = ledgerDetails(
-      Array.from({ length: 33 }, (_, id) => ({
-        tool: "pi.read",
-        summary: {
-          subject: "file",
-          outcome: "warning",
-          notices: [{ kind: "recovery", text: `Recovery instruction ${id}.` }],
-        },
-      })),
-    );
-    expect(summarize(details)?.outcome).toBe("uncertain");
-    const rendered = renderResultText(result("discarded", details), { expanded: true });
-    for (let id = 0; id < 33; id++) {
-      expect(rendered.split(`Recovery instruction ${id}.`)).toHaveLength(2);
-    }
-    expect(rendered).toContain("warning limit");
-  });
-
-  it("rejects aggregate outcome counts contradicted by retained receipts", () => {
-    for (const outcome of ["error", "warning", "cancelled", "uncertain"] as const) {
-      const ledger = ledgerDetails([
-        { tool: "session.backgroundTask", summary: { subject: "task", outcome } },
-      ]);
-      const details = {
-        ...ledger.details,
-        compactAttention: {
-          ...ledger.details.compactAttention,
-          errors: 0,
-          warnings: 0,
-          cancelled: 0,
-          uncertain: 0,
-        },
-      };
-      expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
-      expect(summarize(details)?.outcome).toBe("uncertain");
-    }
-  });
-
-  it.effect(
-    "retains discarded complete-line read hints only on expansion and after outer failure",
-    () =>
-      Effect.gen(function* () {
-        const hint = "[Showing lines 1-2 of 20 (50.0KB limit). Use offset=3 to continue.]";
-        const h = harness(
-          nestedToolDefinitionsFixture({
-            bash: {
-              execute: () =>
-                Promise.resolve(
-                  result("output", {
-                    truncation: { truncated: true },
-                    fullOutputPath: "/tmp/recovery-output",
-                  }),
-                ),
-            },
-            read: {
-              execute: () =>
-                Promise.resolve(
-                  result(`private output\n\n${hint}`, {
-                    truncation: {
-                      truncated: true,
-                      truncatedBy: "bytes",
-                      lastLinePartial: false,
-                      firstLineExceedsLimit: false,
-                    },
-                  }),
-                ),
-            },
-          }),
-        );
-        const completed = yield* Effect.promise(() =>
-          h.run('await tools.pi.read({path:"file"}); return 1'),
-        );
-        expect(completed.content[0]).toMatchObject({ text: "1" });
-        expect(summarize(completed.details!)?.outcome).toBe("success");
-        expect(completed.details?.compactAttention).toMatchObject({
-          warnings: 0,
-          incomplete: false,
-          notices: [],
-        });
-        const serialized = yield* encode(completed.details);
-        const replay = decodeCodeModeRenderDetails(
-          yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(serialized),
-        );
-        expect(replay.toolCalls[0]?.compact?.notices[0]).toMatchObject({ expandedOnly: true });
-        expect(summarize(completed.details!)?.children?.entries[0]?.notices).toContainEqual(
-          expect.objectContaining({ expandedOnly: true }),
-        );
-        const brokenTheme = opaqueFixture({
-          fg: () => {
-            throw new Error("theme");
+  it.effect("keeps read continuations expanded-only, through replay and after outer failure", () =>
+    Effect.gen(function* () {
+      const hint = "[Showing lines 1-2 of 20 (50.0KB limit). Use offset=3 to continue.]";
+      const h = harness(
+        nestedToolDefinitionsFixture({
+          bash: {
+            execute: () =>
+              Promise.resolve(
+                result("output", {
+                  truncation: { truncated: true },
+                  fullOutputPath: "/tmp/recovery-output",
+                }),
+              ),
           },
-          bold: (text: string) => text,
-        });
-        for (const theme of [plainTheme, brokenTheme]) {
-          for (const expanded of [false, true]) {
-            const text = renderResultText(completed, { expanded, theme });
-            expect(text.includes("offset=3")).toBe(expanded);
-          }
-        }
-        yield* Effect.promise(() =>
-          expect(
-            h.run(
-              'await tools.pi.read({path:"file"}); await tools.pi.read({path:"file"}); await tools.pi.bash({command:"example"}); throw new Error("outer failure")',
-            ),
-          ).rejects.toThrow(),
-        );
-        const retained = h.retention.consume("call")!;
-        const summary = summarize(retained, {
-          isError: true,
-          text: "outer failure",
-          expanded: true,
-        });
-        expect(summary?.outcome).toBe("error");
-        expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(0);
-        expect(
-          summary?.children?.entries
-            .flatMap((child) => child.notices ?? [])
-            .filter((notice) => notice.expandedOnly),
-        ).toHaveLength(2);
-        expect(
-          summary?.issues?.entries.some((issue) =>
-            issue.recovery.some((instruction) => instruction.text.includes("/tmp/recovery-output")),
-          ),
-        ).toBe(true);
-      }),
-  );
-
-  it("does not spend attention capacity on routine hints or hide flagged warnings", () => {
-    const ledger = ledgerDetails(
-      Array.from({ length: 72 }, (_, id) => ({
-        tool: "pi.read",
-        summary: {
-          subject: "file",
-          outcome: id < 40 ? "success" : "warning",
-          notices: [
-            { kind: id < 40 ? "recovery" : "warning", text: `Notice ${id}`, expandedOnly: true },
-          ],
+          read: {
+            execute: () =>
+              Promise.resolve(
+                result(`private output\n\n${hint}`, {
+                  truncation: {
+                    truncated: true,
+                    truncatedBy: "bytes",
+                    lastLinePartial: false,
+                    firstLineExceedsLimit: false,
+                  },
+                }),
+              ),
+          },
+        }),
+      );
+      const completed = yield* Effect.promise(() =>
+        h.run('await tools.pi.read({path:"file"}); return 1'),
+      );
+      expect(completed.content[0]).toMatchObject({ text: "1" });
+      expect(summarize(completed.details!)?.outcome).toBe("success");
+      expect(completed.details?.compactAttention).toEqual(COMPLETE_LEDGER);
+      const serialized = yield* encode(completed.details);
+      const replay = decodeCodeModeRenderDetails(
+        yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(serialized),
+      );
+      expect(replay.toolCalls[0]?.compact?.issues[0]).toMatchObject({ severity: "info" });
+      for (const expanded of [false, true]) {
+        const text = renderResultText(completed, { expanded });
+        expect(text.includes("offset=3")).toBe(expanded);
+      }
+      // A failing host theme falls back to plain output rather than throwing.
+      const brokenTheme = opaqueFixture({
+        fg: () => {
+          throw new Error("theme");
         },
-      })),
-    );
-    const details = { ...ledger.details, toolCalls: [] };
-    expect(details.compactAttention).toMatchObject({
-      observed: 72,
-      warnings: 32,
-      incomplete: false,
-    });
-    expect(details.compactAttention.notices).toHaveLength(32);
-    expect(details.compactAttention.notices[0]?.text).toBe("Notice 40");
-    expect(summarize(details)?.outcome).toBe("warning");
-    for (const expanded of [false, true]) {
-      const text = renderResultText(result("1", details), { expanded });
-      expect(text).toContain("Notice 40");
-      expect(text).not.toContain("Notice 0");
-    }
-  });
+        bold: (text: string) => text,
+      });
+      for (const expanded of [false, true])
+        expect(() => renderResultText(completed, { expanded, theme: brokenTheme })).not.toThrow();
+      expect(renderResultText(completed, { expanded: true, theme: plainTheme })).toContain("1");
 
-  it("contains conflicting correlation and duplicate receipts", () => {
-    const published = vi.fn();
-    const collector = makeCompactEvidence(published);
-    collector.admit("pi.read");
-    collector.start(1, 1);
-    collector.start(1, 2);
-    expect(collector.identity(1)).toBeUndefined();
-    collector.observe(2, () => ({ subject: "wrong target", outcome: "success" }));
-    expect(published).not.toHaveBeenCalled();
-    collector.start(2, 3);
-    collector.observe(3, () => ({ subject: "correct", outcome: "success" }));
-    collector.observe(3, () => ({ subject: "duplicate", outcome: "error" }));
-    expect(published).toHaveBeenCalledTimes(1);
-    expect(collector.snapshot()).toMatchObject({ incomplete: true, observed: 1, errors: 0 });
-  });
+      const text = yield* Effect.promise(() =>
+        failureText(
+          h.run(
+            'await tools.pi.read({path:"file"}); await tools.pi.read({path:"file"}); await tools.pi.bash({command:"example"}); throw new Error("outer failure")',
+          ),
+        ),
+      );
+      const summary = summarize(h.retention.consume("call")!, { isError: true, text });
+      expect(summary?.outcome).toBe("error");
+      expect(summary?.issues).toEqual([
+        expect.objectContaining({ severity: "error", message: "Program error: outer failure" }),
+      ]);
+      const childIssues = summary?.children?.entries.flatMap((child) => child.issues ?? []) ?? [];
+      expect(
+        childIssues.filter(
+          (issue) => issue.severity === "info" && issue.detail?.includes("offset=3"),
+        ),
+      ).toHaveLength(2);
+      expect(childIssues.some((issue) => issue.message.includes("/tmp/recovery-output"))).toBe(
+        true,
+      );
+    }),
+  );
 });

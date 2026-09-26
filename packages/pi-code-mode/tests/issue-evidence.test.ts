@@ -1,170 +1,98 @@
 import { describe, expect, it } from "vitest";
-import { compactIssueSeverity, summaryCompactIssues, type CompactIssues } from "pi-code-previews";
-import {
-  CompactAttentionSchema,
-  CompactReceiptSchema,
-  makeCompactEvidence,
-  recoverCompactNotices,
-  type CompactReceipt,
-} from "../src/tools/compact-evidence.ts";
+import type { CompactIssue } from "pi-code-previews";
+import { CompactAttentionSchema, CompactReceiptSchema } from "../src/tools/compact-evidence.ts";
 import { decodeOption } from "../src/tools/format.ts";
-import { BoundedIssuesSchema, invocationIssues } from "../src/tools/issue-evidence.ts";
-import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { summarize } from "./support/compact.ts";
+import { BoundedIssuesSchema, retainIssues } from "../src/tools/issue-evidence.ts";
+import { COMPLETE_LEDGER } from "./support/compact.ts";
 
-const issues: CompactIssues = {
-  coverage: "complete",
-  entries: [
-    {
-      operation: "mcp:tools.call",
-      code: "remote-failure",
-      severity: "error",
-      cause: "Element detached.",
-      recovery: [{ code: "no-replay", text: "Do not replay to recover output." }],
-    },
-  ],
-};
+const issue = (patch: Partial<CompactIssue> = {}): CompactIssue => ({
+  severity: "error",
+  code: "remote-failure",
+  message: "Element detached",
+  detail: "Do not replay to recover output.",
+  ...patch,
+});
 
-describe("bounded v2 issue evidence", () => {
-  it("detaches and retains diagnostic evidence through nested correlation, replay and aggregation", () => {
-    const diagnostics = [
-      "Inspect the original execution; reading output does not undo side effects.",
+describe("bounded issue evidence", () => {
+  it("redacts and clips retained text instead of rejecting the receipt, reporting cut details", () => {
+    const source = [
+      issue({
+        code: "",
+        message: `token=secret-value \u001b[31m${"m".repeat(400)}`,
+        detail: `password=hunter2\n${"d".repeat(3000)}`,
+      }),
+      issue({ severity: "info", detail: "" }),
     ];
-    const original = {
-      ...issues,
-      entries: [{ ...issues.entries[0]!, diagnostics, expandedInResult: true }],
-    };
-    const before = JSON.stringify(original);
-    const receipts: CompactReceipt[] = [];
-    const collector = makeCompactEvidence((_id, receipt) => receipts.push(receipt));
-    collector.admit("mcp.request");
-    collector.start(1, 1);
-    collector.observe(1, () => ({ subject: "MCP", outcome: "error", issues: original }));
-    collector.end(1);
-    collector.close();
-    const retained = receipts[0]!;
-    const replay = decodeCodeModeRenderDetails({
-      toolCalls: [{ id: 1, tool: "mcp.request", status: "error", compact: retained }],
-      counts: { total: 1, running: 0, queued: 0, failed: 1, cancelled: 0, succeeded: 0 },
-      compactAttention: collector.snapshot(),
-    });
-    expect(retained.issues.entries[0]?.diagnostics).toEqual(diagnostics);
-    expect(Object.isFrozen(retained.issues.entries[0]?.diagnostics)).toBe(true);
-    expect(JSON.stringify(retained)).not.toContain("expandedInResult");
-    expect(replay.compactAttention?.issues.entries[0]?.diagnostics).toEqual(diagnostics);
-    expect(JSON.stringify(original)).toBe(before);
-    diagnostics.push("late mutation");
-    expect(retained.issues.entries[0]?.diagnostics).toHaveLength(1);
+    const before = JSON.stringify(source);
+    const { issues, dropped } = retainIssues(source);
+    // A detail cut short loses recovery text, so the evidence is reported incomplete.
+    expect(dropped).toBe(true);
+    expect(decodeOption(BoundedIssuesSchema, issues)).toBeDefined();
+    expect(issues[0]!.code.length).toBeGreaterThan(0);
+    expect(issues[0]!.message.length).toBeLessThanOrEqual(240);
+    expect(issues[0]!.detail!.length).toBeLessThanOrEqual(2048);
+    expect(JSON.stringify(issues)).not.toMatch(/secret-value|hunter2|\\u001b/u);
+    expect(issues[1]).not.toHaveProperty("detail");
+    expect(JSON.stringify(source)).toBe(before);
+    // Producer details up to 2048 characters survive whole.
+    const whole = retainIssues([issue({ detail: "d".repeat(2000) })]);
+    expect(whole.dropped).toBe(false);
+    expect(whole.issues[0]?.detail).toHaveLength(2000);
   });
 
-  it("bounds diagnostics by UTF-16 units and count before retaining them", () => {
-    const candidate = (diagnostics: string[]) => ({
-      ...issues,
-      entries: [{ ...issues.entries[0]!, diagnostics }],
-    });
-    expect(invocationIssues(candidate(["😀".repeat(512)]), 1)).toBeDefined();
-    expect(invocationIssues(candidate(["😀".repeat(512) + "x"]), 1)).toBeUndefined();
-    expect(decodeOption(BoundedIssuesSchema, candidate(Array(9).fill("detail")))).toBeUndefined();
-    const sanitized = invocationIssues(candidate(["hello\u001b[31mworld"]), 1);
-    expect(sanitized?.entries[0]?.diagnostics?.[0]).not.toContain("\u001b");
-    expect(
-      recoverCompactNotices({ issues: candidate(["Retained diagnostic"]), outcome: "bad" }).map(
-        (notice) => notice.text,
-      ),
-    ).toContain("Retained diagnostic");
-  });
-  it("does not convert cancellation diagnostics into an independent error", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    collector.close();
-    const summary = summarize(
-      {
-        toolCalls: [],
-        cancelled: true,
-        counts: { total: 0, running: 0, queued: 0, failed: 0, cancelled: 0, succeeded: 0 },
-        compactAttention: collector.snapshot(),
-      },
-      { isError: true, text: "Execution cancelled" },
+  it("keeps the first entries within the bound and reports dropped issues", () => {
+    const many = Array.from({ length: 17 }, (_, index) => issue({ message: `Issue ${index}` }));
+    const retained = retainIssues(many);
+    expect(retained.dropped).toBe(true);
+    expect(retained.issues.map((entry) => entry.message)).toEqual(
+      many.slice(0, 16).map((entry) => entry.message),
     );
-    expect(summary?.outcome).toBe("cancelled");
-    expect(summary && compactIssueSeverity(summaryCompactIssues(summary))).toBe("warning");
-    expect(summary?.issues?.entries.some((issue) => issue.severity === "error")).toBe(false);
-  });
-  it("attributes identical concurrent failures and independent delivery loss without changing outcomes", () => {
-    const receipts = new Map<number, CompactReceipt>();
-    const collector = makeCompactEvidence((id, value) => receipts.set(id, value));
-    for (const id of [1, 2]) {
-      collector.admit("mcp.request");
-      collector.start(id, id);
-    }
-    for (const id of [2, 1])
-      collector.observe(id, () => ({ subject: "MCP", outcome: "error", issues }));
-    collector.deliveryFailure(1);
-    const aggregate = collector.snapshot();
-    expect(aggregate.version).toBe(2);
-    expect(aggregate.issues.entries.map((issue) => issue.operation)).toEqual([
-      "call-2/mcp:tools.call",
-      "call-1/mcp:tools.call",
-      "call-1/delivery",
-    ]);
-    expect(receipts.get(1)?.outcome).toBe("error");
-    expect(receipts.get(1)?.deliveryFailed).toBe(true);
-    const combined = summaryCompactIssues({
-      subject: "batch",
-      issues: aggregate.issues,
-      children: {
-        total: 2,
-        entries: [...receipts.values()].map((receipt) => ({
-          label: "mcp",
-          status: "error",
-          issues: receipt.issues,
-        })),
-      },
-    });
-    expect(combined.entries).toHaveLength(3);
-    expect(compactIssueSeverity(combined)).toBe("error");
-    expect(JSON.stringify(issues)).not.toContain("call-");
-    expect(Object.isFrozen(aggregate.issues.entries[0]?.recovery)).toBe(true);
+    expect(retainIssues(many.slice(0, 16)).dropped).toBe(false);
+    expect(retainIssues(undefined)).toEqual({ issues: [], dropped: false });
   });
 
-  it("keeps omitted attention bounded and refuses oversized causes without persisting raw output", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    for (let id = 0; id < 40; id++) {
-      collector.admit("mcp.request");
-      collector.start(id, id);
-      collector.observe(id, () => ({ subject: "MCP", outcome: "error", issues }));
-      collector.end(id);
-    }
-    const aggregate = collector.snapshot();
-    expect(aggregate).toMatchObject({ version: 2, observed: 40, errors: 40, incomplete: true });
-    expect(aggregate.issues.entries).toHaveLength(32);
-    expect(aggregate.issues.coverage).toBe("unknown");
-    expect(decodeOption(CompactAttentionSchema, aggregate)).toBeDefined();
-    collector.admit("mcp.request");
-    collector.start(41, 41);
-    collector.observe(41, () => ({
-      subject: "MCP",
-      outcome: "error",
-      issues: { ...issues, entries: [{ ...issues.entries[0]!, cause: "PRIVATE".repeat(200) }] },
-    }));
-    expect(JSON.stringify(collector.snapshot())).not.toContain("PRIVATE");
-  });
-
-  it("rejects v1 history and malformed v2 receipts but salvages bounded recovery", () => {
-    const legacy = {
-      version: 1,
-      subject: "old",
+  it("decodes only current, bounded receipts and ledgers", () => {
+    const receipt = {
+      version: 3,
+      subject: "file",
       outcome: "success",
-      notices: [],
+      issues: [issue()],
       deliveryFailed: false,
     };
-    expect(decodeOption(CompactReceiptSchema, legacy)).toBeUndefined();
-    expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 2, issues })).toBeDefined();
-    expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 2 })).toBeUndefined();
-    expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 3, issues })).toBeUndefined();
-    const broken = { ...legacy, version: 2, outcome: "hostile", issues };
-    expect(decodeOption(CompactReceiptSchema, broken)).toBeUndefined();
-    expect(recoverCompactNotices(broken).map((notice) => notice.text)).toContain(
-      "Do not replay to recover output.",
-    );
+    expect(decodeOption(CompactReceiptSchema, receipt)).toBeDefined();
+    for (const invalid of [
+      { ...receipt, version: 2 },
+      {
+        ...receipt,
+        version: 2,
+        issues: { coverage: "complete", entries: [] },
+        notices: [{ kind: "recovery", text: "Old recovery" }],
+      },
+      { ...receipt, outcome: "hostile" },
+      { ...receipt, subject: "x".repeat(1025) },
+      { ...receipt, issues: Array.from({ length: 17 }, () => issue()) },
+      { ...receipt, issues: [issue({ message: "m".repeat(241) })] },
+      { ...receipt, issues: [issue({ code: "" })] },
+      { ...receipt, deliveryFailed: "no" },
+    ])
+      expect(decodeOption(CompactReceiptSchema, invalid)).toBeUndefined();
+
+    expect(decodeOption(CompactAttentionSchema, COMPLETE_LEDGER)).toEqual(COMPLETE_LEDGER);
+    for (const invalid of [
+      {
+        ...COMPLETE_LEDGER,
+        version: 2,
+        admitted: 0,
+        started: 0,
+        observed: 0,
+        unsupported: 0,
+        notices: [],
+        issues: { coverage: "complete", entries: [] },
+      },
+      { ...COMPLETE_LEDGER, errors: -1 },
+      { ...COMPLETE_LEDGER, warnings: 1.5 },
+      { ...COMPLETE_LEDGER, incomplete: "no" },
+    ])
+      expect(decodeOption(CompactAttentionSchema, invalid)).toBeUndefined();
   });
 });

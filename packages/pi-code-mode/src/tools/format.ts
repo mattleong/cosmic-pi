@@ -11,7 +11,6 @@ import type {
   InitialPreviewPresentation,
   ResultReadPresentation,
 } from "../results/read-presentation.ts";
-import type { FailurePresentation } from "./failure-evidence.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 
@@ -88,7 +87,6 @@ export interface CodeModeToolDetails {
   readonly initialPreview?: InitialPreviewPresentation;
   readonly resultId?: string;
   readonly executionReceipts?: ExecutionReceipts;
-  readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */

@@ -108,15 +108,16 @@ effectTest(
     });
     const summary = compactWorkspaceSummary(response.details, "list")!;
     expect(summary.outcome).toBe("warning");
-    const warning = summary.notices!.find((notice) => notice.kind === "warning")!;
-    expect(warning.description).toBeTruthy();
+    const warning = summary.issues!.find((issue) => issue.severity === "warning")!;
+    expect(warning.detail).toBeTruthy();
     const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
     const harness = createToolPresentationHarness(tool);
     for (const expanded of [false, true, false, true]) {
       harness.call({ action: "list" }, { expanded });
       harness.result(response, { expanded });
       const text = harness.render(200).join("\n");
-      expect(text).toContain(expanded ? warning.text : warning.description!);
+      expect(text).toContain(warning.message);
+      expect(text.includes(warning.detail!)).toBe(expanded);
       if (expanded) {
         expect(text).toContain(artifact.workspaceId);
         expect(text).toContain(artifact.reason);
@@ -223,7 +224,8 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
       if (expanded) expect(text).toContain(scenario.evidence);
       else {
         expect(text).not.toContain("subagent_status");
-        if (scenario.error) expect(text).not.toContain(scenario.error);
+        // An unrecognised worker error explains itself with its first line.
+        if (scenario.error) expect(text).toContain(scenario.error);
         if (scenario.cancelled) expect(text).toMatch(/workers were not stopped/i);
         if (scenario.state === "stopping") expect(text).toMatch(/cleanup is not yet confirmed/i);
       }

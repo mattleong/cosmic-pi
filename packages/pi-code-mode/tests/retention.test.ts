@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
 import { executeHarness } from "./support/execute.ts";
+import { COMPLETE_LEDGER } from "./support/compact.ts";
 import { resultResponseFixture } from "./support/results.ts";
 import {
   applyRetainedCodeModeFailureDetails,
@@ -149,22 +150,33 @@ describe("failure details retention", () => {
     expect(retention.consume("owned")).toBeUndefined();
   });
 
-  it("detaches semantic failure provenance and its recovery notices", () => {
+  it("detaches retained receipts, their issues and the ledger", () => {
     const retention = makeFailureDetailsRetention();
-    const failurePresentation = {
-      version: 1 as const,
-      tool: "bash" as const,
-      evidence: { code: "shell-exit", cause: "Exited with code 1", coverage: "complete" as const },
-      notices: [{ kind: "recovery" as const, text: "Read retained output." }],
+    const issue = { severity: "error" as const, code: "shell-exit", message: "Exited with code 1" };
+    const compact = {
+      version: 3 as const,
+      subject: "npm test",
+      outcome: "error" as const,
+      issues: [issue],
+      deliveryFailed: false,
     };
-    retention.retain("owned", { ...details("pi.bash"), failurePresentation });
-    failurePresentation.evidence.cause = "mutated";
-    failurePresentation.notices[0]!.text = "mutated";
-    const value = retention.consume("owned")?.failurePresentation;
-    expect(value?.evidence.cause).toBe("Exited with code 1");
-    expect(value?.notices[0]?.text).toBe("Read retained output.");
-    Reflect.set(value?.evidence ?? {}, "cause", "replaced");
-    expect(value?.evidence.cause).toBe("Exited with code 1");
+    const compactAttention = { ...COMPLETE_LEDGER, errors: 1 };
+    const original = details("pi.bash");
+    retention.retain("owned", {
+      ...original,
+      toolCalls: [{ ...original.toolCalls[0]!, compact }],
+      compactAttention,
+    });
+    issue.message = "mutated";
+    compact.issues.push({ ...issue });
+    compactAttention.errors = 7;
+    const value = retention.consume("owned");
+    expect(value?.toolCalls[0]?.compact?.issues).toEqual([
+      { severity: "error", code: "shell-exit", message: "Exited with code 1" },
+    ]);
+    expect(value?.compactAttention?.errors).toBe(1);
+    Reflect.set(value?.compactAttention ?? {}, "errors", 9);
+    expect(value?.compactAttention?.errors).toBe(1);
   });
 
   it("evicts the oldest entry at capacity", () => {

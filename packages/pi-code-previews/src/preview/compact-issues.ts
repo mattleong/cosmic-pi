@@ -1,64 +1,69 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  compactIssueSeverity,
-  subtractCompactIssueClaims,
-  type CompactIssueClaim,
-  type CompactIssues,
-} from "../tools/compact-issues";
-import { indentedCompactText } from "./compact-row";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
+import type { CompactIssue } from "../tools/compact-issues";
+import { compactPlainText, compactSingleLine } from "./compact-row";
 
-/** Shared expanded attention after exact evidence subtraction. */
-export function renderExpandedAttention(
-  issues: CompactIssues,
-  claims: readonly CompactIssueClaim[] | undefined,
-  theme: Theme,
-  width: number,
-  attribute = false,
-): string[] {
-  return renderCompactIssues(
-    subtractCompactIssueClaims(issues, claims),
-    theme,
-    width,
-    true,
-    attribute,
+const COLORS = { error: "error", warning: "warning", info: "muted" } as const;
+const glyph = (severity: CompactIssue["severity"]) =>
+  severity === "info" ? "·" : managerNoticeGlyph(severity);
+
+/** The issue shown on a collapsed one-line row: the first error, else the first warning. */
+export function primaryCompactIssue(
+  issues: readonly CompactIssue[] | undefined,
+): CompactIssue | undefined {
+  return (
+    issues?.find((issue) => issue.severity === "error") ??
+    issues?.find((issue) => issue.severity === "warning")
   );
 }
 
-/** One container owns all causes and essential recovery. Wrapping never clips instructions. */
+/** Issue text for a one-line row, with a count of the row's other attention issues. */
+export function compactIssueLabel(issues: readonly CompactIssue[], theme: Theme): string {
+  const primary = primaryCompactIssue(issues);
+  if (!primary) return "";
+  const others = issues.filter((issue) => issue.severity !== "info").length - 1;
+  return theme.fg(
+    COLORS[primary.severity],
+    `${compactSingleLine(primary.message)}${others > 0 ? ` (+${others})` : ""}`,
+  );
+}
+
+/**
+ * One line per issue, each with its own glyph and color. Collapsed rows show messages only;
+ * expansion adds informational issues and each issue's dimmed detail beneath its message.
+ */
 export function renderCompactIssues(
-  issues: CompactIssues,
+  issues: readonly CompactIssue[] | undefined,
   theme: Theme,
   width: number,
   expanded = false,
-  attribute = false,
-  knownFailure = false,
+  indent = "  ",
 ): string[] {
-  const severity = compactIssueSeverity(issues);
-  if (!severity || width <= 0) return [];
-  const text = issues.entries
-    .flatMap((issue) => {
-      const description =
-        issue.description ??
-        (issue.cause
-          ? issue.severity === "error"
-            ? "The tool reported an error."
-            : "The tool reported a warning."
-          : "");
-      const lines = expanded
-        ? [
-            ...(issue.cause ? [issue.cause] : []),
-            ...issue.recovery.map((instruction) => instruction.text),
-            ...(issue.diagnostics ?? []),
-          ]
-        : description
-          ? [description]
-          : [];
-      return expanded && attribute
-        ? lines.map((line, index) => (index === 0 ? `${issue.operation}: ${line}` : line))
-        : lines;
-    })
-    .join("\n");
-  return text
-    ? indentedCompactText(text, "  ╰─ ", knownFailure ? "error" : severity, theme, width)
-    : [];
+  if (!issues?.length || width <= 0) return [];
+  const rows: string[] = [];
+  for (const issue of issues) {
+    if (issue.severity === "info" && !expanded) continue;
+    const message = compactSingleLine(issue.message);
+    if (!message) continue;
+    const color = COLORS[issue.severity];
+    const prefix = `${indent}${glyph(issue.severity)} `;
+    // Surrender decoration before losing text on very narrow rows.
+    const hang = width - visibleWidth(prefix) >= 2 ? visibleWidth(prefix) : 0;
+    const pad = " ".repeat(hang);
+    wrapTextWithAnsi(theme.fg(color, message), width - hang).forEach((line, index) =>
+      rows.push(
+        truncateToWidth(
+          `${hang ? (index === 0 ? theme.fg(color, prefix) : pad) : ""}${line}`,
+          width,
+          "",
+        ),
+      ),
+    );
+    if (!expanded || !issue.detail) continue;
+    for (const line of compactPlainText(issue.detail).split("\n"))
+      for (const part of wrapTextWithAnsi(theme.fg("dim", line), width - hang))
+        rows.push(truncateToWidth(`${pad}${part}`, width, ""));
+  }
+  return rows;
 }

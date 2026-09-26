@@ -177,9 +177,13 @@ describe("registered questionnaire presentation", () => {
       const tool = register("compact", mode).tools.find(
         (entry) => entry.name === "ask_user_async_control",
       )!;
-      for (const [rows, description] of [
-        [pending, "3 questionnaires are waiting for answers."],
-        [failures, "Automatic delivery failed for 2 saved questionnaire results."],
+      for (const [rows, message, procedure] of [
+        [pending, "3 questionnaires are waiting for answers", "Continue only independent work"],
+        [
+          failures,
+          "Automatic delivery failed for 2 saved questionnaire results",
+          "Retrieve the retained result",
+        ],
       ] as const) {
         const result = {
           details: { requests: rows },
@@ -191,19 +195,11 @@ describe("registered questionnaire presentation", () => {
           harness.call({ action: "status" }, { expanded });
           harness.result(result, { expanded });
           const text = harness.render().join("\n");
-          if (expanded) {
-            for (const row of rows) {
-              const cause =
-                rows === pending
-                  ? `Request ${row.requestId}: no answers yet.`
-                  : `Request ${row.requestId} (delivery ${row.deliveryId}): automatic delivery failed.`;
-              expect(text.split(cause)).toHaveLength(2);
-            }
-            expect(text).toContain("Independent raw result marker");
-          } else {
-            expect(text.split(description)).toHaveLength(2);
-            expect(text).not.toContain("Independent raw result marker");
-          }
+          // One grouped fact in both views; its procedure only on expansion.
+          expect(text.split(message)).toHaveLength(2);
+          expect(text.split(procedure)).toHaveLength(expanded ? 2 : 1);
+          expect(text.includes("Independent raw result marker")).toBe(expanded);
+          for (const row of rows) expect(text.includes(row.requestId)).toBe(expanded);
         }
         expect(result).toEqual(before);
       }
@@ -228,7 +224,8 @@ describe("registered questionnaire presentation", () => {
       expect(
         !expanded && /request-identity|delivery-identity|Retrieve the retained/.test(text),
       ).toBe(false);
-      expect(!expanded && !/saved.*delivery failed/i.test(text)).toBe(false);
+      expect(/saved.*delivery failed/i.test(text)).toBe(true);
+      expect(text.includes("Retrieve the retained")).toBe(expanded);
       expect(result).toEqual(before);
     }
   });

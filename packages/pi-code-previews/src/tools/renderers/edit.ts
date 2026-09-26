@@ -12,7 +12,6 @@ import { showingFooter } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import { countLabel } from "../../shared/helpers";
-import { escapeControlChars } from "../../shared/terminal-text";
 import { resolvePreviewLanguage } from "../../syntax/language";
 import { getEditPreviewOperations, getPathArg } from "../data/args";
 import { getEditDiff, getTextContent } from "../data/results";
@@ -23,6 +22,8 @@ import { cachedDeferredPreview } from "./shared/cache";
 import type { RendererArguments, RendererState } from "./shared/types";
 import { diffPreviewCacheKey } from "./shared/preview-cache-key";
 import { diffPreviewLineLimit, formatDiffPreview } from "./shared/diff-preview";
+import { argumentIssues, previewCallIssues, withPreviewIssues } from "./shared/preview-issues";
+import { renderPreviewError } from "./shared/result-prelude";
 
 export function createEditPreviewTool(cwd: string) {
   const originalEdit = createEditToolDefinition(cwd);
@@ -52,12 +53,24 @@ export function createEditPreviewTool(cwd: string) {
       renderContext.state.editHeaderText = text;
       text.setText(formatEditHeader(path, cwd, theme, renderContext.state.editSummaryText));
 
-      if (!renderContext.argsComplete || operations.length === 0 || renderContext.executionStarted)
-        return text;
+      const issues = previewCallIssues(renderContext.state, theme, () =>
+        argumentIssues("edit", renderContext),
+      );
+      if (
+        !renderContext.argsComplete ||
+        operations.length === 0 ||
+        renderContext.executionStarted
+      ) {
+        const heading = new Container();
+        heading.addChild(text);
+        heading.addChild(issues);
+        return heading;
+      }
 
       if (!renderContext.expanded && !codePreviewSettings.editDiffPreview) {
         const preview = new Container();
         preview.addChild(text);
+        preview.addChild(issues);
         preview.addChild(renderHiddenPreviewExpandHint(renderContext.state, theme));
         return preview;
       }
@@ -80,6 +93,7 @@ export function createEditPreviewTool(cwd: string) {
         );
       const preview = new Container();
       preview.addChild(text);
+      preview.addChild(issues);
       preview.addChild(
         cachedDeferredPreview(
           renderContext.state,
@@ -96,77 +110,74 @@ export function createEditPreviewTool(cwd: string) {
       return preview;
     },
 
-    renderResult(result, { expanded, isPartial }, theme, renderContext) {
-      if (isPartial) return new Text(theme.fg("warning", "Editing…"), 0, 0);
+    renderResult: withPreviewIssues(
+      "edit",
+      (result, { expanded, isPartial }, theme, renderContext) => {
+        if (isPartial) return new Text(theme.fg("warning", "Editing…"), 0, 0);
 
-      const firstText = getTextContent(result.content);
-      if (renderContext.isError) {
-        renderContext.state.editSummaryText = undefined;
+        const firstText = getTextContent(result.content);
+        if (renderContext.isError) {
+          renderContext.state.editSummaryText = undefined;
+          updateEditHeader(renderContext, cwd, theme);
+          return renderPreviewError(theme, expanded, firstText);
+        }
+
+        const diff = getEditDiff(result.details);
+        if (!diff) {
+          renderContext.state.editSummaryText = `${theme.fg("success", "✓ Edit applied")}${theme.fg("muted", " · no diff")}`;
+          updateEditHeader(renderContext, cwd, theme);
+          return new Container();
+        }
+
+        const filePath = getPathArg(renderContext.args);
+        const lang = resolvePreviewLanguage({
+          path: filePath,
+          piLanguage: getLanguageFromPath(filePath),
+        });
+        const summary = summarizeDiff(diff);
+        const hidePreview = !expanded && !codePreviewSettings.editDiffPreview;
+        const limit = hidePreview
+          ? summary.totalLines
+          : diffPreviewLineLimit(
+              summary.totalLines,
+              expanded,
+              codePreviewSettings.editCollapsedLines,
+            );
+        renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
         updateEditHeader(renderContext, cwd, theme);
-        return new Text(
-          theme.fg(
-            "error",
-            escapeControlChars((expanded ? firstText : firstText.split("\n")[0]) || "Edit failed"),
-          ),
-          0,
-          0,
-        );
-      }
-
-      const diff = getEditDiff(result.details);
-      if (!diff) {
-        renderContext.state.editSummaryText = `${theme.fg("success", "✓ Edit applied")}${theme.fg("muted", " · no diff")}`;
-        updateEditHeader(renderContext, cwd, theme);
-        return new Container();
-      }
-
-      const filePath = getPathArg(renderContext.args);
-      const lang = resolvePreviewLanguage({
-        path: filePath,
-        piLanguage: getLanguageFromPath(filePath),
-      });
-      const summary = summarizeDiff(diff);
-      const hidePreview = !expanded && !codePreviewSettings.editDiffPreview;
-      const limit = hidePreview
-        ? summary.totalLines
-        : diffPreviewLineLimit(
-            summary.totalLines,
-            expanded,
-            codePreviewSettings.editCollapsedLines,
+        if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
+        const render = () =>
+          new FullWidthDiffText(
+            formatDiffPreview(diff, lang, theme, limit, {
+              totalLines: summary.totalLines,
+              hiddenLineNoun: "diff lines",
+              skipHighlightLabel: "Syntax highlighting skipped for large diff",
+              invalidate: renderContext.invalidate,
+            }),
+            theme,
           );
-      renderContext.state.editSummaryText = formatEditSummary(summary, limit, theme);
-      updateEditHeader(renderContext, cwd, theme);
-      if (hidePreview) return renderHiddenPreviewExpandHint(renderContext.state, theme);
-      const render = () =>
-        new FullWidthDiffText(
-          formatDiffPreview(diff, lang, theme, limit, {
-            totalLines: summary.totalLines,
-            hiddenLineNoun: "diff lines",
-            skipHighlightLabel: "Syntax highlighting skipped for large diff",
-            invalidate: renderContext.invalidate,
-          }),
+        const previewKey = diffPreviewCacheKey(
+          "edit-result",
+          diff,
+          filePath,
+          expanded,
           theme,
+          codePreviewSettings.editCollapsedLines,
         );
-      const previewKey = diffPreviewCacheKey(
-        "edit-result",
-        diff,
-        filePath,
-        expanded,
-        theme,
-        codePreviewSettings.editCollapsedLines,
-      );
-      return cachedDeferredPreview(
-        renderContext.state,
-        "editResultPreviewKey",
-        "editResultPreviewComponent",
-        previewKey,
-        diff,
-        "Rendering edit diff…",
-        theme,
-        render,
-        renderContext.invalidate,
-      );
-    },
+        return cachedDeferredPreview(
+          renderContext.state,
+          "editResultPreviewKey",
+          "editResultPreviewComponent",
+          previewKey,
+          diff,
+          "Rendering edit diff…",
+          theme,
+          render,
+          renderContext.invalidate,
+        );
+      },
+      "call",
+    ),
   });
 }
 

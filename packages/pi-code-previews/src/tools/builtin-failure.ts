@@ -1,33 +1,14 @@
 import type { BuiltinCompactTool } from "./builtin-subject";
-import type { CompactNotice, CompactFailureEvidence } from "./compact-summary";
+import type { CompactIssue } from "./compact-issues";
 import { shellFailure } from "./builtin-failure-shell";
 import { fileFailure } from "./builtin-failure-file";
 
-/** Only recognized builtin error envelopes are shortened. Unknown text stays intact. */
+/** Recognized builtin error envelopes get a human message; anything else shows its first line. */
 export function builtinFailure(tool: BuiltinCompactTool, output: string) {
   const details = output || `${tool} failed`;
+  const aborted: CompactIssue[] = [];
+  if (details.trim() === "Operation aborted")
+    return { outcome: "cancelled" as const, issues: aborted };
   const lines = details.trimEnd().split(/\r?\n/u);
-  const emptyNotices: CompactNotice[] = [];
-  const classified =
-    details.trim() === "Operation aborted"
-      ? {
-          cause: "Cancelled",
-          description: "Cancelled.",
-          outcome: "cancelled" as const,
-          code: "cancelled",
-          notices: emptyNotices,
-          complete: true,
-        }
-      : tool === "bash"
-        ? shellFailure(details, lines)
-        : fileFailure(tool, details, lines);
-  const { cause, description, outcome, code, notices, complete } = classified;
-  const failureEvidence: CompactFailureEvidence | undefined =
-    code === undefined ? undefined : { code, cause, coverage: complete ? "complete" : "unknown" };
-  return {
-    outcome,
-    failure: { cause, description, details },
-    notices,
-    ...(failureEvidence && { failureEvidence }),
-  };
+  return tool === "bash" ? shellFailure(details, lines) : fileFailure(tool, details, lines);
 }

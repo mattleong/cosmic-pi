@@ -1,12 +1,12 @@
-import { mcpBoundaryDescriptions } from "./compact-descriptions.ts";
-import type { CompactIssue, CompactIssues, CompactSummary } from "pi-code-previews";
+import { mcpBoundaryDescriptions, mcpIssueMessages } from "./compact-descriptions.ts";
+import type { CompactIssue, CompactSummary } from "pi-code-previews";
 import type { McpDiagnostic } from "../client/diagnostics.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 
 export interface McpBoundaryView {
   readonly outcome: NonNullable<CompactSummary["outcome"]>;
   readonly status: string;
-  readonly issues: CompactIssues;
+  readonly issues: readonly CompactIssue[];
 }
 
 export const credentialMutationBlocked = (reason: McpBoundaryError["reason"]): boolean =>
@@ -15,8 +15,8 @@ export const credentialMutationBlocked = (reason: McpBoundaryError["reason"]): b
   reason === "oauth-deletion-failed";
 
 /** Only fixed, validated boundary diagnostics enter this view. Remote messages stay
- * in the original raw details; unclassified notices keep their own attention.
- * Callers own the gates that decide whether it replaces the legacy layout. */
+ * in the original raw details; unclassified notices keep their own issue.
+ * Callers own the gates that decide whether it replaces the detailed layout. */
 export function mcpBoundaryView(input: {
   readonly diagnostic: McpDiagnostic;
   readonly failure: Pick<McpBoundaryError, "kind" | "reason">;
@@ -28,65 +28,54 @@ export function mcpBoundaryView(input: {
 }): McpBoundaryView {
   const { kind, reason } = input.failure;
   const uncertain = input.outcome === "unknown";
-  const blocked = kind === "cleanup" || credentialMutationBlocked(reason);
   const retainedMissing =
     input.action === "result.read" && (kind === "stale" || kind === "not-found");
-  const recovery: Array<{ code: string; text: string }> = [];
-  const diagnostics: string[] = [];
-  // Uncertainty and resource/credential blockers must remain visible collapsed.
-  // Routine explanations and navigation are available on expansion.
-  if (uncertain || blocked)
-    recovery.push({ code: "boundary-recovery", text: input.diagnostic.explanation });
-  else diagnostics.push(input.diagnostic.explanation);
-  if (uncertain && kind === "cleanup")
-    recovery.push({
-      code: "cleanup-gate",
-      text: "Cleanup is unconfirmed. Reconnection is not safe recovery yet.",
-    });
-  if (input.truncated)
-    recovery.push({
-      code: "output-loss",
-      text: "Output is unavailable or truncated. Do not replay to recover output.",
-    });
-  if (input.recoveryHint) diagnostics.push(input.recoveryHint);
-  const entries: CompactIssue[] = [
+  const issues: CompactIssue[] = [
     {
-      operation: "mcp",
-      code: "boundary-failure",
       // A validated boundary failure is separate from dispatch certainty.
       severity: !uncertain && kind === "cancelled" ? "warning" : "error",
-      cause: uncertain
-        ? ""
+      code: "boundary-failure",
+      message: uncertain
+        ? mcpIssueMessages["execution-unknown"]
         : retainedMissing
-          ? "Retained result unavailable."
-          : input.diagnostic.title,
-      description: [
-        uncertain
-          ? "Could not confirm the operation's outcome."
-          : retainedMissing
-            ? "Saved output is not available."
-            : mcpBoundaryDescriptions[kind],
-        kind === "cleanup"
-          ? "The connection may still be active."
-          : blocked
-            ? "Credential changes are not confirmed."
-            : "",
-        input.truncated ? "Some output is unavailable." : "",
+          ? "Saved output is not available"
+          : mcpBoundaryDescriptions[kind],
+      detail: [
+        uncertain ? "" : retainedMissing ? "Retained result unavailable." : input.diagnostic.title,
+        input.diagnostic.explanation,
+        input.recoveryHint ?? "",
       ]
         .filter(Boolean)
-        .join(" "),
-      recovery,
-      diagnostics,
+        .join("\n"),
     },
   ];
-  if (input.notices.length)
-    entries.push({
-      operation: "mcp",
-      code: "unclassified-notices",
+  // Resource and credential blockers stay visible alongside the failure itself.
+  if (kind === "cleanup")
+    issues.push({
       severity: "warning",
-      cause: input.notices.join("\n"),
-      description: "The server reported additional warnings.",
-      recovery: [],
+      code: "cleanup-unconfirmed",
+      message: "The connection may still be active",
+      detail: "Cleanup is unconfirmed. Reconnection is not safe recovery yet.",
+    });
+  else if (credentialMutationBlocked(reason))
+    issues.push({
+      severity: "warning",
+      code: "credential-unconfirmed",
+      message: mcpIssueMessages["credential-unconfirmed"],
+    });
+  if (input.truncated)
+    issues.push({
+      severity: "warning",
+      code: "output-truncated",
+      message: "Some output is unavailable",
+      detail: "Output is unavailable or truncated. Do not replay to recover output.",
+    });
+  if (input.notices.length)
+    issues.push({
+      severity: "warning",
+      code: "unclassified-notices",
+      message: mcpIssueMessages["unclassified-notices"],
+      detail: input.notices.join("\n"),
     });
   return {
     outcome: uncertain ? "uncertain" : kind === "cancelled" ? "cancelled" : "error",
@@ -95,6 +84,6 @@ export function mcpBoundaryView(input: {
       : input.outcome === "not-sent"
         ? "Not sent"
         : "Completed with a problem",
-    issues: { coverage: "unknown", entries },
+    issues,
   };
 }

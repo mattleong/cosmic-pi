@@ -1,13 +1,10 @@
 /** Pure defensive normalization of `code_mode` render details. */
 import { reconcileDetailCounts } from "./detail-counts.ts";
-import { reconcileReplayEvidence } from "./replay-evidence.ts";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { cleanDiagnosticText, invocationIssues } from "../tools/issue-evidence.ts";
-import { FailurePresentationSchema, type FailurePresentation } from "../tools/failure-evidence.ts";
 import {
+  CompactAttentionSchema,
   CompactReceiptSchema,
-  recoverCompactNotices,
   type CompactAttention,
 } from "../tools/compact-evidence.ts";
 import { MAX_NESTED_SUBJECT_LENGTH, normalizeNestedSubject } from "../tools/compact-subject.ts";
@@ -22,7 +19,6 @@ import {
   ResultIdSchema,
   type InitialPreviewPresentation,
 } from "../results/read-presentation.ts";
-import { replayReceiptAttention, type ReceiptAttention } from "./receipt-attention.ts";
 import {
   decodeOption,
   MAX_PROGRESS_ENTRIES,
@@ -32,17 +28,11 @@ import {
 } from "../tools/format.ts";
 
 export interface CodeModeRenderDetails {
-  readonly failurePresentation?: FailurePresentation;
+  /** Current (v3) ledger. Older or malformed ledgers are absent, so summaries decline. */
   readonly compactAttention?: CompactAttention;
   readonly initialPreview?: InitialPreviewPresentation;
-  readonly receiptAttention?: ReceiptAttention;
   /** True only for a complete retained receipt ledger proving read-only success. */
   readonly receiptsReadOnly: boolean;
-  /**
-   * Independently recovered notices, bounded by the ledger notice limit plus visible rows times
-   * the receipt notice limit.
-   */
-  readonly recoveredNotices?: CompactAttention["notices"];
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   readonly counts: CodeModeCallCounts;
   /** Current, internally consistent details eligible for lossless compact projection. */
@@ -63,7 +53,6 @@ const CallEntryInputSchema = Schema.Struct({
   liveTiming: Schema.optional(Schema.Unknown),
 });
 const RenderDetailsInputSchema = Schema.Struct({
-  failurePresentation: Schema.optional(Schema.Unknown),
   compactAttention: Schema.optional(Schema.Unknown),
   initialPreview: Schema.optional(Schema.Unknown),
   resultId: Schema.optional(Schema.Unknown),
@@ -118,18 +107,13 @@ const CallStatusSchema = Schema.Literals(["queued", "running", "completed", "err
 interface NormalizedCallEntry {
   readonly call?: CodeModeCallEntry;
   readonly malformed: boolean;
-  readonly notices: CompactAttention["notices"];
 }
 const decodeCallEntry = <Value>(value: Value): NormalizedCallEntry => {
   const entry = decodeOption(CallEntryInputSchema, value);
-  if (entry === undefined) return { malformed: true, notices: [] };
+  if (entry === undefined) return { malformed: true };
   const compact = decodeOption(CompactReceiptSchema, entry.compact);
-  const notices =
-    compact === undefined
-      ? recoverCompactNotices(entry.compact)
-      : compact.notices.map((notice) => ({ ...notice, text: cleanDiagnosticText(notice.text) }));
   const status = decodeOption(CallStatusSchema, entry.status);
-  if (status === undefined) return { malformed: true, notices };
+  if (status === undefined) return { malformed: true };
   const activity = Predicate.isString(entry.activity)
     ? normalizeNestedSubject(entry.activity)
     : undefined;
@@ -137,19 +121,12 @@ const decodeCallEntry = <Value>(value: Value): NormalizedCallEntry => {
   const liveTiming = decodeOption(LiveChildTimingSchema, entry.liveTiming);
   const subject = decodeOption(SubjectSchema, entry.subject);
   const base: CodeModeCallEntry = {
-    ...(compact !== undefined && {
-      compact: {
-        ...compact,
-        notices,
-        issues: invocationIssues(compact.issues) ?? { coverage: "unknown", entries: [] },
-      },
-    }),
+    ...(compact !== undefined && { compact }),
     tool: Predicate.isString(entry.tool) ? entry.tool : "",
     status,
   };
   return {
     malformed: entry.compact !== undefined && compact === undefined,
-    notices: compact === undefined ? notices : [],
     call: {
       ...base,
       ...(activity !== undefined && { activity }),
@@ -172,13 +149,12 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     record.outputKind === "text" || record.outputKind === "structured"
       ? record.outputKind
       : undefined;
-  const { compactAttention, salvaged } = reconcileReplayEvidence(
-    record,
-    toolCalls,
-    counts,
-    normalizedCalls.some((entry) => entry.malformed),
-  );
-  const failurePresentation = decodeOption(FailurePresentationSchema, record.failurePresentation);
+  const ledger = decodeOption(CompactAttentionSchema, record.compactAttention);
+  // A malformed call receipt means some call details are missing.
+  const compactAttention =
+    ledger && normalizedCalls.some((entry) => entry.malformed)
+      ? { ...ledger, incomplete: true }
+      : ledger;
   const decodedReceipts = decodeOption(ExecutionReceiptsSchema, record.executionReceipts);
   const executionReceipts =
     decodedReceipts !== undefined &&
@@ -186,12 +162,6 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     decodedReceipts.total === counts.total
       ? decodedReceipts
       : undefined;
-  const receiptAttention = replayReceiptAttention(
-    record.executionReceipts !== undefined,
-    executionReceipts,
-    compactAttention,
-    toolCalls,
-  );
   const receiptsReadOnly =
     executionReceipts !== undefined &&
     consistent &&
@@ -210,13 +180,10 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     outputKind,
   );
   const normalized: CodeModeRenderDetails = {
-    ...(failurePresentation !== undefined && { failurePresentation }),
     ...(compactAttention !== undefined && { compactAttention }),
     ...(initialPreview !== undefined && { initialPreview }),
-    ...(receiptAttention !== undefined && { receiptAttention }),
     receiptsReadOnly,
     toolCalls,
-    recoveredNotices: [...salvaged, ...normalizedCalls.flatMap(({ notices }) => notices)],
     counts,
     compactEligible:
       Array.isArray(record.toolCalls) &&

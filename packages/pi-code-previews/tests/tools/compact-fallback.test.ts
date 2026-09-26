@@ -5,18 +5,15 @@ import { beforeEach, test } from "vitest";
 import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
+import type { CompactIssue } from "../../src/tools/compact-issues";
 import { plainTheme } from "../support/render";
-import { claimCompactIssue } from "../../src/tools/compact-issues";
-const claimNotice = (text: string, code = "legacy-0") =>
-  claimCompactIssue(
-    { operation: "outer", code, severity: "warning", cause: text, recovery: [] },
-    { cause: true },
-  );
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Context = Parameters<NonNullable<Definition["renderCall"]>>[2];
 type Result = Awaited<ReturnType<Definition["execute"]>>;
 const result: Result = { content: [{ type: "text", text: "raw result" }], details: undefined };
+const modes = ["on", "off", "border"] as const;
+const count = (text: string, phrase: string) => text.split(phrase).length - 1;
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -91,9 +88,48 @@ test("transient renderer failures clear original slot caches so changed inputs r
   }
 });
 
+test("without content callbacks, issues sit once between the original call and result", () => {
+  const issues: CompactIssue[] = [
+    { severity: "error", code: "failed", message: "Remote write failed", detail: "Run status" },
+    { severity: "warning", code: "partial", message: "Partial changes may remain" },
+    { severity: "info", code: "page", message: "Continue at offset=143" },
+  ];
+  for (const mode of modes) {
+    const tool = withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: () => new Text("ORIGINAL CALL", 0, 0),
+        renderResult: () => new Text("ORIGINAL RESULT", 0, 0),
+      },
+      { mode, compactSummary: () => ({ subject: "file.ts", outcome: "error", issues }) },
+    );
+    const state = {};
+    for (const expanded of [false, true, false, true]) {
+      const text = paint(tool, context({ state, expanded })).rows.join("\n");
+      assert.equal(count(text, "Remote write failed"), 1);
+      assert.equal(count(text, "Partial changes may remain"), 1);
+      for (const phrase of ["Run status", "Continue at offset=143", "ORIGINAL"])
+        assert.equal(text.includes(phrase), expanded, `${mode} ${phrase}`);
+      if (!expanded) continue;
+      const positions = [
+        "ORIGINAL CALL",
+        "Remote write failed",
+        "Run status",
+        "Partial changes may remain",
+        "Continue at offset=143",
+        "ORIGINAL RESULT",
+      ].map((phrase) => text.indexOf(phrase));
+      assert.deepEqual(
+        positions,
+        positions.toSorted((a, b) => a - b),
+      );
+    }
+  }
+});
+
 test("only expanded details expose nested mouse actions through every frame", () => {
-  for (const mode of ["on", "off", "border"] as const) {
-    for (const failure of [false, true]) {
+  for (const mode of modes) {
+    for (const issues of [false, true]) {
       let clicks = 0;
       const action: Component = {
         render: () => ["ACTION"],
@@ -113,23 +149,30 @@ test("only expanded details expose nested mouse actions through every frame", ()
       const tool = withCodePreviewShell(definition, {
         mode,
         compactSummary: () =>
-          failure
+          issues
             ? {
                 subject: "file.ts",
                 outcome: "uncertain",
-                notices: [{ kind: "recovery", text: "retained guidance" }],
+                issues: [
+                  {
+                    severity: "warning",
+                    code: "unconfirmed",
+                    message: "Could not confirm the result",
+                    detail: "retained guidance",
+                  },
+                ],
               }
             : undefined,
       });
       for (const expanded of [false, true]) {
         const ctx = context({ expanded });
         const { call, rows } = paint(tool, ctx);
-        if (failure) {
-          const noticeRow = rows.findIndex((line) => line.includes("retained guidance"));
-          assert.equal(noticeRow >= 0, expanded);
-          if (expanded && mode !== "off") assert.ok(noticeRow < rows.length - 1);
-        }
         const y = rows.findIndex((line) => line.includes("ACTION"));
+        if (issues) {
+          const detailRow = rows.findIndex((line) => line.includes("retained guidance"));
+          assert.equal(detailRow >= 0, expanded);
+          if (expanded) assert.ok(detailRow < y);
+        }
         if (!expanded) {
           assert.equal(y, -1);
           continue;
@@ -156,8 +199,8 @@ test("only expanded details expose nested mouse actions through every frame", ()
   }
 });
 
-test("expanded ownership requires a current successful result and survives toggles", () => {
-  for (const mode of ["on", "off", "border"] as const) {
+test("expanded bodies are built in Pi's call-then-result order across toggles and failures", () => {
+  for (const mode of modes) {
     let fails = false;
     let preparedHeading: string | undefined;
     const tool: Definition = withCodePreviewShell(
@@ -169,7 +212,7 @@ test("expanded ownership requires a current successful result and survives toggl
         },
         renderResult: () => {
           if (fails) throw new Error("factory failure");
-          return new Text(`${preparedHeading ?? "missing preparation"}\ncomplete recovery`, 0, 0);
+          return new Text(`${preparedHeading ?? "missing preparation"}\nresult body`, 0, 0);
         },
       },
       {
@@ -177,12 +220,7 @@ test("expanded ownership requires a current successful result and survives toggl
         compactSummary: () => ({
           subject: "compact subject",
           outcome: "warning",
-          expandedResultOwnsCall: true,
-          expandedResultOwnsIssues: [claimNotice("complete recovery")],
-          notices: [
-            { kind: "recovery", text: "complete recovery" },
-            { kind: "warning", text: "independent guidance", description: "independent guidance" },
-          ],
+          issues: [{ severity: "warning", code: "cleanup", message: "independent guidance" }],
         }),
       },
     );
@@ -192,13 +230,12 @@ test("expanded ownership requires a current successful result and survives toggl
         for (fails of [false, true, false]) {
           preparedHeading = undefined;
           const text = paint(tool, context({ state, isPartial, expanded })).rows.join("\n");
-          assert.equal(text.match(/complete recovery/gu)?.length ?? 0, expanded ? 1 : 0);
-          assert.match(text, /independent guidance/u);
-          if (expanded) {
-            if (!fails) assert.match(text, /prepared result heading/u);
-            assert.equal(text.includes("sole call heading"), fails);
-            assert.equal(text.includes("raw result"), fails);
-          }
+          assert.equal(count(text, "independent guidance"), 1);
+          assert.equal(text.includes("sole call heading"), expanded);
+          if (!expanded) continue;
+          assert.doesNotMatch(text, /missing preparation/u);
+          assert.equal(text.includes("prepared result heading"), !fails);
+          assert.equal(text.includes("raw result"), fails);
         }
       }
     }
@@ -206,46 +243,12 @@ test("expanded ownership requires a current successful result and survives toggl
     paint(tool, context({ state, isPartial: true }));
     const finalContext = context({ state, isPartial: false });
     const call = tool.renderCall!(finalContext.args, plainTheme, finalContext);
-    const pendingFinal = call.render(100).join("\n");
-    assert.match(pendingFinal, /sole call heading/u);
-    assert.match(pendingFinal, /complete recovery/u);
+    assert.match(call.render(100).join("\n"), /sole call heading/u);
   }
 });
 
-test("owned failure keeps independent notices even when marked for original result ownership", () => {
-  for (const mode of ["on", "off", "border"] as const) {
-    const tool: Definition = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("original call", 0, 0),
-        renderResult: () => new Text("original result", 0, 0),
-      },
-      {
-        mode,
-        compactSummary: () => ({
-          subject: "failed operation",
-          outcome: "error",
-          expandedResultOwnsCall: true,
-          failure: {
-            cause: "owned cause",
-            description: "owned cause",
-            details: "complete owned failure",
-          },
-          notices: [{ kind: "recovery", text: "independent recovery" }],
-        }),
-      },
-    );
-    for (const expanded of [false, true]) {
-      const text = paint(tool, context({ expanded })).rows.join("\n");
-      assert.match(text, expanded ? /complete owned failure/u : /owned cause/u);
-      assert.equal(text.match(/independent recovery/gu)?.length ?? 0, expanded ? 1 : 0);
-      assert.doesNotMatch(text, /original call|original result/u);
-    }
-  }
-});
-
-test("expanded-only hints render once on expansion, including renderer fallback", () => {
-  for (const mode of ["on", "off", "border"] as const) {
+test("informational issues render once on expansion, including renderer fallback", () => {
+  for (const mode of modes) {
     for (const fails of [false, true]) {
       const tool: Definition = withCodePreviewShell(
         {
@@ -253,7 +256,7 @@ test("expanded-only hints render once on expansion, including renderer fallback"
           renderCall: () => new Text("call", 0, 0),
           renderResult: () => {
             if (fails) throw new Error("failed renderer");
-            return new Text("Continue at offset=143", 0, 0);
+            return new Text("page body", 0, 0);
           },
         },
         {
@@ -261,13 +264,12 @@ test("expanded-only hints render once on expansion, including renderer fallback"
           compactSummary: () => ({
             subject: "file",
             outcome: "success",
-            expandedResultOwnsIssues: [claimNotice("Continue at offset=143", "read-pagination")],
-            notices: [
+            issues: [
               {
-                kind: "recovery",
-                text: "Continue at offset=143",
-                code: "read-pagination",
-                expandedOnly: true,
+                severity: "info",
+                code: "read-continuation",
+                message: "Showing lines 1-142 of 180",
+                detail: "Use offset=143 to continue.",
               },
             ],
           }),
@@ -276,37 +278,51 @@ test("expanded-only hints render once on expansion, including renderer fallback"
       const state = {};
       for (const expanded of [false, true, false, true]) {
         const text = paint(tool, context({ state, expanded })).rows.join("\n");
-        assert.equal(text.match(/offset=143/gu)?.length ?? 0, expanded ? 1 : 0);
+        assert.equal(count(text, "Showing lines 1-142 of 180"), expanded ? 1 : 0);
+        assert.equal(count(text, "offset=143"), expanded ? 1 : 0);
+        if (expanded) assert.equal(text.includes("raw result"), fails);
       }
     }
   }
 });
 
-test("result-only rows share notices only after their original result succeeds", () => {
-  for (const fails of [false, true]) {
-    const tool: Definition = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderResult: () => {
-          if (fails) throw new Error("factory failure");
-          return new Text("complete recovery", 0, 0);
+test("result-only rows show issues and fall back when their original result fails", () => {
+  for (const mode of modes) {
+    for (const fails of [false, true]) {
+      const tool: Definition = withCodePreviewShell(
+        {
+          ...createReadToolDefinition("/project"),
+          renderResult: () => {
+            if (fails) throw new Error("factory failure");
+            return new Text("original result", 0, 0);
+          },
         },
-      },
-      {
-        mode: "border",
-        compactSummary: () => ({
-          subject: "result only",
-          outcome: "warning",
-          expandedResultOwnsIssues: [claimNotice("complete recovery")],
-          notices: [{ kind: "recovery", text: "complete recovery" }],
-        }),
-      },
-    );
-    const ctx = context();
-    const body = tool.renderResult!(result, { expanded: true, isPartial: false }, plainTheme, ctx);
-    const text = body.render(100).join("\n");
-    assert.equal(text.match(/complete recovery/gu)?.length, 1);
-    assert.equal(text.includes("raw result"), fails);
+        {
+          mode,
+          compactSummary: () => ({
+            subject: "result only",
+            outcome: "warning",
+            issues: [
+              {
+                severity: "warning",
+                code: "cleanup",
+                message: "Cleanup is unconfirmed",
+                detail: "complete recovery",
+              },
+            ],
+          }),
+        },
+      );
+      for (const expanded of [false, true]) {
+        const ctx = context({ expanded });
+        const body = tool.renderResult!(result, { expanded, isPartial: false }, plainTheme, ctx);
+        const text = body.render(100).join("\n");
+        assert.equal(count(text, "Cleanup is unconfirmed"), 1);
+        assert.equal(count(text, "complete recovery"), expanded ? 1 : 0);
+        assert.equal(text.includes("raw result"), expanded && fails);
+        assert.equal(text.includes("original result"), expanded && !fails);
+      }
+    }
   }
 });
 
@@ -332,33 +348,6 @@ test("throwing result fallback retains hidden image indicators alongside text", 
   assert.match(text, /image\/png/u);
 });
 
-test("unknown child coverage keeps the original batch result on expansion", () => {
-  const definition: Definition = {
-    ...createReadToolDefinition("/project"),
-    renderResult: () => new Text("Original recovery must remain visible", 0, 0),
-  };
-  const tool = withCodePreviewShell(definition, {
-    mode: "off",
-    compactSummary: () => ({
-      subject: "batch",
-      outcome: "success",
-      detailsOnExpand: true,
-      issues: { coverage: "complete", entries: [] },
-      children: {
-        total: 1,
-        entries: [
-          { label: "child", status: "success", issues: { coverage: "unknown", entries: [] } },
-        ],
-      },
-    }),
-  });
-  assert.doesNotMatch(
-    paint(tool, context({ expanded: false })).rows.join("\n"),
-    /Original recovery/u,
-  );
-  assert.match(paint(tool, context({ expanded: true })).rows.join("\n"), /Original recovery/u);
-});
-
 test("render-time failures revoke component ownership before invalidation and reuse", () => {
   let fails = true;
   let inherited: Component | undefined;
@@ -382,24 +371,12 @@ test("render-time failures revoke component ownership before invalidation and re
     compactSummary: () => ({
       subject: "operation",
       outcome: "warning",
-      issues: {
-        coverage: "complete",
-        entries: [
-          {
-            operation: "operation",
-            code: "cleanup",
-            severity: "warning",
-            cause: "Check cleanup",
-            recovery: [],
-            expandedInResult: true,
-          },
-        ],
-      },
+      issues: [{ severity: "warning", code: "cleanup", message: "Check cleanup" }],
     }),
   });
   const ctx = context();
   const failed = paint(tool, ctx);
-  assert.match(failed.rows.join("\n"), /Check cleanup/u);
+  assert.equal(count(failed.rows.join("\n"), "Check cleanup"), 1);
   assert.doesNotThrow(() => {
     failed.call.invalidate();
     failed.output.invalidate();

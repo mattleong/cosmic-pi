@@ -6,6 +6,7 @@ import { codeModeStatusResult } from "../src/tools/status.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { codeModeStatusCompactSummary } from "../src/ui/status.ts";
 import { opaqueFixture } from "pi-cosmic-core/testing";
+import { withLedger } from "./support/compact.ts";
 
 const receipts: ExecutionReceipts = {
   total: 1,
@@ -18,13 +19,13 @@ const receipts: ExecutionReceipts = {
   ],
 };
 
-const summarize = (evidence: ExecutionReceipts) =>
+const summarize = (evidence: ExecutionReceipts, receiptMode = "full") =>
   codeModeCompactSummary({
     phase: "settled",
     args: { code: "return payload", intent: "Saved mutation result" },
     result: {
       content: [{ type: "text", text: "saved page" }],
-      details: {
+      details: withLedger({
         ...callEntryDetails(
           Array.from({ length: evidence.total }, () => ({
             tool: "pi.write",
@@ -44,46 +45,33 @@ const summarize = (evidence: ExecutionReceipts) =>
           end: 1,
           next: 1,
           total: 2,
-          receiptMode: "full",
+          receiptMode,
         },
-      },
+      }),
     },
     context: opaqueFixture({ isError: false, expanded: false }),
   });
 
-describe("retained output safety evidence", () => {
-  it("does not let a saved page hide uncertain operations or missing delivery", () => {
-    expect(summarize(receipts)?.outcome).toBe("success");
-    expect(
-      summarize({
-        ...receipts,
-        completed: 0,
-        unknown: 1,
-        calls: [{ id: 0, tool: "pi.write", certainty: "unknown", delivery: "not-delivered" }],
-      })?.outcome,
-    ).toBe("uncertain");
-    expect(
-      summarize({
-        ...receipts,
-        calls: [{ ...receipts.calls[0]!, delivery: "not-delivered" }],
-      })?.outcome,
-    ).toBe("warning");
-    expect(
-      summarize({
-        ...receipts,
-        calls: [{ ...receipts.calls[0]!, isError: true }],
-      })?.outcome,
-    ).toBe("error");
-  });
+const codes = (summary: ReturnType<typeof summarize>) =>
+  summary?.issues?.map((issue) => issue.code);
 
-  it("rejects contradictory certainty counts and duplicate invocation identities", () => {
-    for (const malformed of [
-      { ...receipts, completed: 0, unknown: 1 },
-      { ...receipts, total: 2, completed: 2, calls: [receipts.calls[0]!, receipts.calls[0]!] },
-    ]) {
-      const summary = summarize(malformed);
-      expect(summary?.outcome).toBe("uncertain");
-      expect(summary?.notices?.some((notice) => notice.code === "receipt-incomplete")).toBe(true);
+describe("retained output safety evidence", () => {
+  it("trusts a saved first page only with consistent operation receipts", () => {
+    expect(summarize(receipts)?.outcome).toBe("success");
+    expect(codes(summarize(receipts))).toEqual(["saved-output"]);
+    for (const [evidence, receiptMode] of [
+      [{ ...receipts, completed: 0, unknown: 1 }, "full"],
+      [
+        { ...receipts, total: 2, completed: 2, calls: [receipts.calls[0]!, receipts.calls[0]!] },
+        "full",
+      ],
+      [receipts, "read-only"],
+      [receipts, "none"],
+    ] as const) {
+      const summary = summarize(evidence, receiptMode);
+      // Without a trusted page, truncated output is only known to be incomplete.
+      expect(summary?.outcome).toBe("warning");
+      expect(codes(summary)).toEqual(["output-truncated"]);
     }
   });
 

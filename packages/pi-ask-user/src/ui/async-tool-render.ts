@@ -1,13 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import {
-  planCompactPresentation,
-  renderCompactRow,
-  renderCompactIssues,
-  renderExpandedAttention,
-  summaryCompactIssues,
-  type CompactSummary,
-} from "pi-code-previews";
+import { planCompactPresentation, renderCompactIssues, renderCompactRow } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { renderToolHeader, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -181,21 +174,23 @@ export function renderAsyncMessage<Input>(
   const details = notification(message?.details);
   if (compact) {
     const outcome = details?.outcome;
-    const projected: CompactSummary = {
-      subject: !outcome
-        ? "Questionnaire update"
-        : outcome.outcome === "cancelled"
-          ? "Questionnaire cancelled"
-          : "Answers submitted",
-      counters: outcome?.outcome === "submitted" ? [`${outcome.answers.length} answers`] : [],
-      issues: { coverage: outcome ? "complete" : "unknown", entries: [] },
-    };
-    if (outcome) projected.outcome = outcome.outcome === "cancelled" ? "cancelled" : "success";
-    const plan = planCompactPresentation({
-      summary: projected,
+    const answers = outcome?.outcome === "submitted" ? outcome.answers.length : 0;
+    const subject = !outcome
+      ? "Questionnaire update"
+      : outcome.outcome === "cancelled"
+        ? "Questionnaire cancelled"
+        : "Answers submitted";
+    // Malformed notifications have no outcome; the planner marks them unconfirmed.
+    const { collapsedSummary } = planCompactPresentation({
+      summary: outcome && {
+        subject,
+        outcome: outcome.outcome === "cancelled" ? "cancelled" : "success",
+        counters: answers ? [`${answers} ${answers === 1 ? "answer" : "answers"}`] : [],
+      },
       phase: "settled",
       isError: false,
       expanded: options.expanded,
+      heading: { subject },
     });
     return {
       invalidate() {},
@@ -203,21 +198,20 @@ export function renderAsyncMessage<Input>(
         const inner = Math.max(1, width - options.outputPad * 2);
         const lines = [
           renderCompactRow(
-            { name: "ask_user_async", phase: "settled", summary: plan.collapsedSummary },
+            {
+              name: "ask_user_async",
+              phase: "settled",
+              summary: collapsedSummary,
+              expanded: options.expanded,
+            },
             theme,
             inner,
           ),
+          ...renderCompactIssues(collapsedSummary.issues, theme, inner, options.expanded),
         ];
-        if (!options.expanded) lines.push(...renderCompactIssues(plan.issues, theme, inner));
         if (options.expanded && !details) lines.push(fallback(message?.content));
         if (options.expanded && details)
           lines.push(
-            ...renderExpandedAttention(
-              summaryCompactIssues(projected),
-              projected.expandedResultOwnsIssues,
-              theme,
-              inner,
-            ),
             ...outcomeLines(outcome, theme),
             notificationLine(details),
             ...(outcome?.outcome === "cancelled" ? [repeatWarning] : []),

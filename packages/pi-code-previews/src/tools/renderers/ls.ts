@@ -10,6 +10,7 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderPathListResult } from "./shared/path-list-result";
+import { withPreviewIssues } from "./shared/preview-issues";
 
 export function createLsPreviewTool(cwd: string) {
   const originalLs = createLsToolDefinition(cwd);
@@ -25,17 +26,17 @@ export function createLsPreviewTool(cwd: string) {
         0,
       );
     },
-    renderResult: (result, options, theme, renderContext) =>
+    renderResult: withPreviewIssues("ls", (result, options, theme, renderContext) =>
       renderPathListResult(result, options, theme, renderContext, {
         cwd,
         iconMode: codePreviewSettings.pathIcons,
         previewEnabled: codePreviewSettings.lsResultPreview,
         collapsedLines: codePreviewSettings.pathListCollapsedLines,
         loadingLabel: "Listing…",
-        errorLabel: "List failed",
         emptyMarker: "(empty directory)",
         emptyLabel: () => "Empty directory",
         footerNoun: "entries",
       }),
+    ),
   });
 }

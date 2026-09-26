@@ -4,6 +4,8 @@ This review looked for code in the cosmic-pi workspace (12 Pi extension packages
 
 No repository file was changed. Nothing here has been published, tagged or pushed.
 
+> **Superseded in part (2026-09-25).** The compact-presentation redesign replaced notices, issue coverage, claims and failure takeover with one `CompactIssue { severity, code, message, detail? }` model (see `docs/architecture/tool-presentation.md`). It moved Code Mode to v3 receipts and Background Tasks presentation receipts to v2. Entries that assume the old model are obsolete: `code-mode-R1` (v2 details), `code-mode-R2` (`expandedResultOwnsCall`), and the rejected ideas "Derive notices from issues", "Retire legacy notices" and "Issues only, no notices", which that redesign implemented. Line-level findings that touch notices, claims or coverage in those packages no longer apply.
+
 ## Combined totals
 
 All figures are net lines in diff convention: − removes lines, + adds them. **They are review estimates, not a measured diff.** Every figure is the verifiers' conservative minimum, meaning the lowest saving any reviewer accepted. Structural figures are the vetted numbers from the structural report.

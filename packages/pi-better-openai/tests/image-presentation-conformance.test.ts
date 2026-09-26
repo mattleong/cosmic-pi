@@ -69,30 +69,35 @@ describe("registered image presentation", () => {
     },
   );
 
-  it("preserves failed edit inputs and renders the copied error once", () => {
+  it("preserves failed edit inputs and shows the error line collapsed and raw text expanded", () => {
     const harness = createToolPresentationHarness(register("compact").tool, { theme, width: 240 });
-    const error = "Image request failed; inspect local output before retrying";
-    harness.call(
-      {
-        action: "edit",
-        prompt: "Full original request " + "context ".repeat(30) + "PROMPT_EVIDENCE",
-        images: ["/project/original-input.png"],
-        save: "custom",
-        saveDir: "/project/image-target",
-        outputFormat: "webp",
-      },
-      { expanded: true },
-    );
-    harness.result(
-      { details: undefined, content: [{ type: "text", text: error }] },
-      { expanded: true, isError: true },
-    );
-    const text = harness.render().join("\n");
-    expect(text).toContain("PROMPT_EVIDENCE");
-    expect(text).toContain("/project/original-input.png");
-    expect(text).toContain("/project/image-target");
-    expect(text).toContain("webp");
-    expect(text.split(error)).toHaveLength(2);
+    const cause = "Image request failed";
+    const recovery = "Inspect local output before retrying";
+    const input = {
+      action: "edit",
+      prompt: "Full original request " + "context ".repeat(30) + "PROMPT_EVIDENCE",
+      images: ["/project/original-input.png"],
+      save: "custom",
+      saveDir: "/project/image-target",
+      outputFormat: "webp",
+    };
+    const result = {
+      details: undefined,
+      content: [{ type: "text" as const, text: `${cause}\n${recovery}` }],
+    };
+    for (const expanded of [false, true]) {
+      harness.call(input, { expanded });
+      harness.result(result, { expanded, isError: true });
+      const text = harness.render().join("\n");
+      expect(text).toContain(cause);
+      // The raw text appears once, under its own label, never copied into issue detail.
+      expect(text.split(recovery)).toHaveLength(expanded ? 2 : 1);
+      if (!expanded) continue;
+      expect(text).toContain("PROMPT_EVIDENCE");
+      expect(text).toContain("/project/original-input.png");
+      expect(text).toContain("/project/image-target");
+      expect(text).toContain("webp");
+    }
   });
 
   it.each(["failed", "cancelled", "in_progress", "incomplete"] as const)(

@@ -2,12 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import {
-  isCompactAttention,
-  renderCompactChildren,
-  renderCompactNotices,
-  selectCompactChildren,
-} from "pi-code-previews";
+import { renderCompactChildren, selectCompactChildren } from "pi-code-previews";
 import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
@@ -106,18 +101,14 @@ describe("presentation edge cases", () => {
       expect(pendingSignal?.aborted).toBe(true);
       expect(completed.details?.cancelled).toBe(true);
       expect(completed.details?.counts).toMatchObject({ succeeded: 1, cancelled: 1 });
+      // Nested Code Mode intentionally skips the pre-write snapshot; that is informational.
       expect(completed.details?.toolCalls[0]).toMatchObject({
         tool: "pi.write",
         status: "completed",
         compact: {
           outcome: "success",
           deliveryFailed: false,
-          notices: [
-            expect.objectContaining({
-              kind: "recovery",
-              expandedOnly: true,
-            }),
-          ],
+          issues: [expect.objectContaining({ severity: "info" })],
         },
       });
       const projected = summary(
@@ -126,13 +117,12 @@ describe("presentation edge cases", () => {
         completed.content[0]!.type === "text" ? completed.content[0]!.text : "",
       );
       expect(projected?.outcome).toBe("cancelled");
-      // Nested Code Mode intentionally skips the pre-write snapshot; cancellation remains separate.
-      expect(projected?.children?.entries[0]?.status).toBe("success");
-      expect(
-        projected?.notices?.some(
-          (notice) => isCompactAttention(notice) && notice.text.includes("not rolled back"),
-        ),
-      ).toBe(true);
+      expect(projected?.children?.entries.map((child) => child.status)).toEqual([
+        "success",
+        "cancelled",
+      ]);
+      expect(projected?.issues?.[0]).toMatchObject({ severity: "warning", code: "cancelled" });
+      expect(projected?.issues?.every((issue) => issue.severity === "warning")).toBe(true);
     }),
   );
 
@@ -184,18 +174,16 @@ describe("presentation edge cases", () => {
           const failure = selected.entries.find((child) => child.status === "error")!;
           expect(failure).toBeDefined();
           expect(selected.omitted).toBe(3);
-          const explanation = failure.notices!.find((notice) => notice.kind === "error")!;
-          expect(projected?.notices?.some((notice) => notice.text === explanation.text)).toBe(
-            false,
-          );
-          const rendered = [
-            ...renderCompactChildren(children, plainTheme, 100),
-            ...renderCompactNotices(projected?.notices, plainTheme, 100),
-          ].join("\n");
-          expect(rendered.split(explanation.text)).toHaveLength(2);
+          const explanation = failure.issues!.find((issue) => issue.severity === "error")!;
+          expect(projected?.issues).toBeUndefined();
+          const rendered = renderCompactChildren(children, plainTheme, 100).join("\n");
+          expect(rendered.split(explanation.message)).toHaveLength(2);
           yield* Deferred.succeed(finish, undefined);
           const completed = yield* Effect.promise(() => pending);
-          expect(summary(completed.details!)?.outcome).toBe("error");
+          // The program handled the failure, so the run warns rather than fails.
+          const settled = summary(completed.details!);
+          expect(settled?.outcome).toBe("warning");
+          expect(settled?.issues).toEqual([]);
           expect(completed.details?.counts).toMatchObject({ failed: 1, succeeded: 7, running: 0 });
         } finally {
           controller.abort();
@@ -245,21 +233,24 @@ describe("presentation edge cases", () => {
       expect(projected?.outcome).toBe("warning");
       const children = projected!.children!;
       expect(children.entries.map((child) => child.status)).toEqual(["success", "warning"]);
-      const recovery = children.entries[1]!.notices!.filter(isCompactAttention);
-      expect(recovery.some((notice) => notice.text.includes("/tmp/retained-output.txt"))).toBe(
-        true,
-      );
+      expect(
+        children.entries[1]!.issues!.some((issue) =>
+          issue.message.includes("/tmp/retained-output.txt"),
+        ),
+      ).toBe(true);
       const compact = renderCompactChildren(children, plainTheme, 100).join("\n");
-      const expanded = renderCompactChildren(children, plainTheme, 100, 0, true, true, "flat").join(
-        "\n",
-      );
+      const expanded = renderCompactChildren(children, plainTheme, 100, {
+        layout: "flat",
+        all: true,
+      }).join("\n");
+      const warning = children.entries[1]!.issues!.find((issue) => issue.severity === "warning")!;
+      expect(compact.split(warning.message)).toHaveLength(2);
       expect(compact).not.toContain("/tmp/retained-output.txt");
-      expect(expanded).toContain("/tmp/retained-output.txt");
       expect(compact).not.toContain("offset=3");
+      expect(expanded.split("/tmp/retained-output.txt")).toHaveLength(2);
       expect(expanded).toContain("offset=3");
-      expect(expanded).toContain("/tmp/retained-output.txt");
-      for (const notice of recovery)
-        expect(projected?.notices?.some((parent) => parent.text === notice.text)).toBe(false);
+      // Each call owns its issues; the run does not repeat them.
+      expect(projected?.issues).toEqual([]);
     }),
   );
 });

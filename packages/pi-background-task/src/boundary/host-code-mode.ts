@@ -1,4 +1,5 @@
 import {
+  BACKGROUND_TASK_PRESENTATION_VERSION,
   projectBackgroundTaskPresentation,
   observeBackgroundTaskPresentation,
   type BackgroundTaskPresentationObserver,
@@ -86,7 +87,7 @@ export const makeBackgroundTaskCodeModeHost = (
       if (sessionId === undefined) return;
       const capability: BackgroundTaskCodeModeCapability = Object.freeze({
         version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        presentationVersion: 1,
+        presentationVersion: BACKGROUND_TASK_PRESENTATION_VERSION,
         sessionId,
         execute: (
           _callId: string,
