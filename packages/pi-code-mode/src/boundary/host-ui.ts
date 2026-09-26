@@ -7,6 +7,7 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 
 export type HostDialogResult =
   | { readonly _tag: "Answered"; readonly value: string }
@@ -59,16 +60,9 @@ export type SettingsSurfaceFactory = (
 const CLOSED: SettingsSurfaceResult = { _tag: "Closed" };
 const FAILED: HostSurfaceOutcome = { _tag: "Failed" };
 
-const neutralSurfaceComponent = (): ReturnType<SettingsSurfaceFactory> => ({
-  render: () => [],
-  invalidate: () => undefined,
-  handleInput: () => undefined,
-  dispose: () => undefined,
-});
-
 /**
- * Pi's custom editor has no signal option. This boundary aborts callback authority and closes
- * the editor exactly once when the owning Effect settles or is interrupted.
+ * Pi's custom editor has no signal option. The shared owned surface aborts callback authority
+ * and closes the editor exactly once when the owning Effect settles or is interrupted.
  */
 export const openSettingsSurfaceAtHostBoundary = (
   ctx: ExtensionCommandContext,
@@ -76,50 +70,11 @@ export const openSettingsSurfaceAtHostBoundary = (
 ): Effect.Effect<HostSurfaceOutcome> =>
   Effect.suspend(() => {
     const surface = new AbortController();
-    let closing = false;
-    let factoryInvoked = false;
-    let doneInvoked = false;
-    let hostDone: ((result: SettingsSurfaceResult) => void) | undefined;
-
-    const finish = (result: SettingsSurfaceResult): void => {
-      if (doneInvoked || hostDone === undefined) return;
-      doneInvoked = true;
-      try {
-        hostDone(result);
-      } catch {
-        // A hostile host callback cannot escape the finalizer.
-      }
-    };
-    const close = (): void => {
-      closing = true;
-      try {
-        surface.abort();
-      } catch {
-        // Best effort at the foreign UI boundary.
-      }
-      finish(CLOSED);
-    };
-    const guardedFactory = (
-      tui: TUI,
-      theme: Theme,
-      keybindings: KeybindingsManager,
-      done: (result: SettingsSurfaceResult) => void,
-    ): ReturnType<SettingsSurfaceFactory> => {
-      if (factoryInvoked) {
-        close();
-        return neutralSurfaceComponent();
-      }
-      factoryInvoked = true;
-      hostDone = done;
-      if (closing) {
-        close();
-        return neutralSurfaceComponent();
-      }
-      return factory(tui, theme, keybindings, finish, surface.signal);
-    };
-
-    return Effect.tryPromise(() => ctx.ui.custom<SettingsSurfaceResult>(guardedFactory)).pipe(
-      Effect.ensuring(Effect.sync(close)),
-      Effect.orElseSucceed(() => FAILED),
-    );
+    return openOwnedSurface<SettingsSurfaceResult>(ctx, {
+      placement: "inline",
+      closedValue: CLOSED,
+      onClose: () => surface.abort(),
+      create: ({ tui, theme, keybindings, finish }) =>
+        factory(tui, theme, keybindings, finish, surface.signal),
+    }).pipe(Effect.orElseSucceed(() => FAILED));
   });

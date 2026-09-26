@@ -1,20 +1,17 @@
 import * as Effect from "effect/Effect";
-import type * as Path from "effect/Path";
+import * as Path from "effect/Path";
 import {
   type JsonDocumentModification,
   type JsonObject,
   JsonDocumentStore,
 } from "../platform/json-document.ts";
-import {
-  readConfigOrWarn,
-  readOptionalJsonObject,
-  type ConfigDocumentErrorFactory,
-} from "./document-ops.ts";
-import {
-  scopedDocumentPaths,
-  selectScopedDocument,
-  type ScopedDocumentPaths,
-} from "./scoped-store.ts";
+import type { ConfigDocumentErrorFactory } from "./document-ops.ts";
+
+/** Project and global locations of one extension configuration document. */
+export interface ScopedDocumentPaths {
+  readonly project: string;
+  readonly global: string;
+}
 
 /** Scope metadata shared by every resolved scoped configuration. */
 export interface ScopedConfigMetadata {
@@ -36,8 +33,6 @@ export interface ScopedConfigStoreOptions<File, Resolved extends ScopedConfigMet
   readonly projectConfigDirectory: string;
   /** Document basename shared by the project and global scopes. */
   readonly basename: string;
-  /** Overrides the "extensions" segment of the scoped document paths. */
-  readonly extensionsDirectory?: string;
   /** Tolerant wire decode of a raw document into the package's config file shape. */
   readonly decode: (value: JsonObject) => File;
   /**
@@ -80,14 +75,13 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
    * document for a project commit, the project document for a global commit). It affects only
    * the decoded overlay, never existence metadata. The committed scope becomes present, the
    * other existence flag is preserved, and project existence selects the preferred path.
-   * When `committedScope` is omitted it is derived from `current.configPath`, which matches
-   * callers that always commit to the preferred scope.
+   * The committed scope is the one `current.configPath` names: callers always commit to the
+   * preferred scope.
    */
   readonly resolveCommittedConfig: (
     current: Resolved,
     committed: JsonObject,
     fallback: JsonObject | undefined,
-    committedScope?: "project" | "global",
   ) => Resolved;
 }
 
@@ -100,29 +94,28 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
 export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadata, E>(
   options: ScopedConfigStoreOptions<File, Resolved, E>,
 ): ScopedConfigStore<File, Resolved, E> => {
-  const { basename, decode, defaultDocument, errorFactory, resolve, spanPrefix } = options;
+  const { decode, defaultDocument, errorFactory, resolve, spanPrefix } = options;
 
   const configPaths = Effect.fn(`${spanPrefix}.configPaths`)((cwd: string, agentDir: string) =>
-    scopedDocumentPaths(cwd, agentDir, {
-      basename,
-      projectConfigDirectory: options.projectConfigDirectory,
-      ...(options.extensionsDirectory !== undefined && {
-        extensionsDirectory: options.extensionsDirectory,
+    Path.Path.useSync(
+      (path): ScopedDocumentPaths => ({
+        project: path.join(cwd, options.projectConfigDirectory, "extensions", options.basename),
+        global: path.join(agentDir, "extensions", options.basename),
       }),
-    }),
-  );
-
-  const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)((path: string) =>
-    JsonDocumentStore.use((documents) =>
-      documents.readObject(path).pipe(
-        Effect.mapError(errorFactory("read", path)),
-        Effect.map((value) => value ?? {}),
-      ),
     ),
   );
 
+  const readObject = (path: string) =>
+    JsonDocumentStore.use((documents) =>
+      documents.readObject(path).pipe(Effect.mapError(errorFactory("read", path))),
+    );
+
+  const readRawConfig = Effect.fn(`${spanPrefix}.readRawConfig`)((path: string) =>
+    readObject(path).pipe(Effect.map((value) => value ?? {})),
+  );
+
   const readConfig = Effect.fn(`${spanPrefix}.readConfig`)((path: string) =>
-    readOptionalJsonObject(path, decode, errorFactory),
+    readObject(path).pipe(Effect.map((raw) => (raw === undefined ? undefined : decode(raw)))),
   );
 
   const writeConfig = Effect.fn(`${spanPrefix}.writeConfig`)((path: string, config: JsonObject) =>
@@ -136,21 +129,28 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
       path: string,
       modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
     ) =>
-      JsonDocumentStore.use((documents) => {
-        const modifyObject = documents.modifyObject;
-        if (modifyObject === undefined) {
-          return Effect.fail(errorFactory("write", path)());
-        }
-        return modifyObject(path, (document) =>
-          Effect.try({
-            try: () => modify(document),
-            catch: errorFactory("write", path),
-          }),
-        ).pipe(Effect.mapError(errorFactory("write", path)));
-      }),
+      JsonDocumentStore.use((documents) =>
+        documents
+          .modifyObject(path, (document) =>
+            Effect.try({ try: () => modify(document), catch: errorFactory("write", path) }),
+          )
+          .pipe(Effect.mapError(errorFactory("write", path))),
+      ),
   );
 
+  const exists = (path: string) =>
+    JsonDocumentStore.use((documents) =>
+      documents.exists(path).pipe(Effect.mapError(errorFactory("inspect", path))),
+    );
+
   const warning = `Unable to read a ${options.label} configuration document.`;
+  // An existing but unreadable document keeps its scope selection and contributes no values.
+  const readIfPresent = (path: string, present: boolean) =>
+    present
+      ? readConfig(path).pipe(
+          Effect.catch(() => Effect.logWarning(warning).pipe(Effect.as(undefined))),
+        )
+      : Effect.undefined;
 
   const resolveConfig = Effect.fn(`${spanPrefix}.resolveConfig`)(function* (
     cwd: string,
@@ -158,22 +158,22 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     projectTrusted = false,
   ) {
     const paths = yield* configPaths(cwd, agentDir);
-    const trusted = projectTrusted === true;
-    // Untrusted projects perform no project-document I/O at all: the path stays inert metadata.
-    const selected = yield* selectScopedDocument(paths, { probeProject: trusted }).pipe(
-      Effect.mapError((error) => errorFactory("inspect", error.path)()),
+    // Untrusted projects get no project exists or read call: the path stays inert metadata.
+    // Existence alone decides precedence, so a malformed project document still wins configPath.
+    const [projectExists, globalFound] = yield* Effect.all(
+      [
+        projectTrusted === true ? exists(paths.project) : Effect.succeed(false),
+        exists(paths.global),
+      ],
+      { concurrency: 2 },
     );
-    const projectExists = trusted && selected.projectExists;
-    let globalExists = selected.globalExists;
+    let globalExists = globalFound;
     if (!projectExists && !globalExists && defaultDocument !== undefined) {
       yield* writeConfig(paths.global, defaultDocument());
       globalExists = true;
     }
     const [project, global] = yield* Effect.all(
-      [
-        readConfigOrWarn(paths.project, projectExists, readConfig, warning),
-        readConfigOrWarn(paths.global, globalExists, readConfig, warning),
-      ] as const,
+      [readIfPresent(paths.project, projectExists), readIfPresent(paths.global, globalExists)],
       { concurrency: 2 },
     );
     return resolve(
@@ -193,31 +193,21 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     current: Resolved,
     committed: JsonObject,
     fallback: JsonObject | undefined,
-    committedScope?: "project" | "global",
   ): Resolved => {
-    const scope =
-      committedScope ?? (current.configPath === current.projectConfigPath ? "project" : "global");
-    const projectConfigExists = scope === "project" ? true : current.projectConfigExists;
-    const globalConfigExists = scope === "global" ? true : current.globalConfigExists;
+    const project = current.configPath === current.projectConfigPath;
+    const projectConfigExists = project || current.projectConfigExists;
     const metadata: ScopedConfigMetadata = {
       configPath: projectConfigExists ? current.projectConfigPath : current.globalConfigPath,
       projectConfigPath: current.projectConfigPath,
       globalConfigPath: current.globalConfigPath,
       projectConfigExists,
-      globalConfigExists,
+      globalConfigExists: !project || current.globalConfigExists,
     };
-    if (scope === "project") {
-      return resolve(
-        metadata,
-        decode(committed),
-        fallback === undefined ? undefined : decode(fallback),
-      );
-    }
-    return resolve(
-      metadata,
-      fallback === undefined ? undefined : decode(fallback),
-      decode(committed),
-    );
+    const committedFile = decode(committed);
+    const fallbackFile = fallback === undefined ? undefined : decode(fallback);
+    return project
+      ? resolve(metadata, committedFile, fallbackFile)
+      : resolve(metadata, fallbackFile, committedFile);
   };
 
   return {

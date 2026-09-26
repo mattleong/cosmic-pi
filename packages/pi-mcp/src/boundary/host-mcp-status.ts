@@ -33,7 +33,6 @@ export interface McpStatusHostOptions {
 export interface McpStatusHost {
   readonly publish: () => void;
   readonly dispose: () => void;
-  readonly isActivityAvailable: () => boolean;
 }
 interface StatusLease {
   readonly generation: number;
@@ -88,7 +87,6 @@ export const makeMcpStatusHost = (options: McpStatusHostOptions): McpStatusHost 
       provider?.publish();
       updateStatus();
     },
-    isActivityAvailable: () => current() && activityAvailable,
     dispose: () => {
       if (disposed) return;
       disposed = true;

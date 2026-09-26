@@ -24,32 +24,24 @@ export function renderSyntaxHighlightedDiff(
   limit: number,
   invalidate?: () => void,
 ): string {
-  const options: DiffRenderOptions = {
-    theme,
-    limit,
-    syntaxHighlight: true,
-    wordEmphasis: codePreviewSettings.wordEmphasis,
-  };
-  if (lang !== undefined) options.lang = lang;
-  if (invalidate !== undefined) options.invalidate = invalidate;
-  return renderDiff(diff, options);
-}
-
-export function renderPlainDiff(diff: string, theme: Theme, limit: number): string {
   return renderDiff(diff, {
     theme,
     limit,
-    syntaxHighlight: false,
-    wordEmphasis: "off",
+    lang,
+    invalidate,
+    wordEmphasis: codePreviewSettings.wordEmphasis,
   });
 }
 
+export function renderPlainDiff(diff: string, theme: Theme, limit: number): string {
+  return renderDiff(diff, { theme, limit, wordEmphasis: "off" });
+}
+
 type DiffRenderOptions = {
-  lang?: string;
+  lang?: string | undefined;
   theme: Theme;
   limit: number;
-  invalidate?: () => void;
-  syntaxHighlight: boolean;
+  invalidate?: (() => void) | undefined;
   wordEmphasis: DiffWordEmphasis;
 };
 
@@ -58,9 +50,8 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
   const parsedLines = lines.map(parseDiffLine);
   const lineNumberWidth = diffLineNumberWidth(parsedLines);
   const out: string[] = [];
-  const lang = options.syntaxHighlight ? options.lang : undefined;
-  const highlightedLines = lang
-    ? highlightDiffLineRuns(parsedLines, lang, options.invalidate)
+  const highlightedLines = options.lang
+    ? highlightDiffLineRuns(parsedLines, options.lang, options.invalidate)
     : parsedLines.map(() => undefined);
 
   for (let i = 0; i < lines.length; i++) {

@@ -1,3 +1,4 @@
+import { invokeHostCallback } from "pi-cosmic-core";
 import type { SubagentUiRefreshCadence } from "../ui/refresh.ts";
 
 export interface AdaptiveHostRefreshTicker {
@@ -21,34 +22,20 @@ export const makeAdaptiveHostRefreshTicker = (
   let disposed = false;
 
   const stopCurrent = () => {
-    try {
-      stopTicker?.();
-    } catch {
-      // Host ticker cleanup is best effort during TUI teardown.
-    }
+    invokeHostCallback(() => stopTicker?.(), undefined);
     stopTicker = undefined;
   };
 
   const sync = () => {
     if (disposed) return;
-    let next: SubagentUiRefreshCadence | undefined;
-    try {
-      next = options.getCadence();
-    } catch {
-      next = undefined;
-    }
+    const next = invokeHostCallback(() => options.getCadence(), undefined);
     if (next === cadence) return;
     stopCurrent();
     cadence = undefined;
     if (next === undefined) return;
     try {
       stopTicker = options.startTicker(next, () => {
-        if (disposed) return;
-        try {
-          options.requestRender();
-        } catch {
-          // The TUI may already be tearing down.
-        }
+        if (!disposed) invokeHostCallback(() => options.requestRender(), undefined);
       });
       cadence = next;
     } catch {

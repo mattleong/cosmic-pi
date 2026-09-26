@@ -1,27 +1,14 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
 import { expect } from "vitest";
 import { boundaryError } from "../../src/client/errors.ts";
 import type { McpRequest } from "../../src/client/model.ts";
-import type { McpOperation } from "../../src/connection/model.ts";
 import { readResource } from "../../src/resources/operations.ts";
+import { fakeOperation } from "../fixtures/services.ts";
 
-const operationFor = (sent: Array<McpRequest>, resources = true): McpOperation => {
-  const operation: McpOperation = {
-    binding: { server: "selected", identity: "identity", configRevision: 1 },
-    owner: "connection",
-    server: {
-      id: "selected",
-      scope: "global",
-      directory: "/unused",
-      identity: "identity",
-      enabled: true,
-    },
+const operationFor = (sent: Array<McpRequest>, resources = true) =>
+  fakeOperation({
     capabilities: { tools: false, resources, prompts: false },
-    changes: Stream.never,
-    checkCurrent: Effect.void,
-    commit: (effect) => effect,
     request: (input) =>
       Effect.sync(() => {
         sent.push(input);
@@ -31,11 +18,7 @@ const operationFor = (sent: Array<McpRequest>, resources = true): McpOperation =
           result: { contents: [{ uri: "returned://data", text: "untrusted resource" }] },
         };
       }),
-    shared: (_key, use) => use(operation),
-    forkOwned: (effect) => Effect.forkChild(effect),
-  };
-  return operation;
-};
+  });
 
 it.effect("passes file and HTTP resource URIs only to the selected server capability", () =>
   Effect.gen(function* () {

@@ -30,8 +30,11 @@
   "exports": {
     ".": "./index.ts",
     "./activity": "./src/activity/protocol.ts",
+    "./activity/testing": "./src/activity/testing.ts",
     "./boundary/host-input-dock": "./src/boundary/host-input-dock.ts",
+    "./boundary/host-settings-command": "./src/boundary/host-settings-command.ts",
     "./boundary/host-status": "./src/boundary/host-status.ts",
+    "./boundary/host-surface": "./src/boundary/host-surface.ts",
     "./boundary/host-viewport": "./src/boundary/host-viewport.ts",
     "./client": "./src/footer/client.ts",
     "./manager": "./src/manager/chrome.ts",
@@ -49,6 +52,7 @@
     "./manager/table": "./src/manager/table.ts",
     "./manager/viewport": "./src/manager/viewport.ts",
     "./protocol": "./src/protocol/protocol.ts",
+    "./testing": "./src/testing/custom-surface.ts",
     "./tool": "./src/tool/presentation.ts"
   },
   "publishConfig": {

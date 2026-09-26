@@ -3,30 +3,30 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { makeOwnedFormDialogsHost } from "../src/boundary/host-form-dialogs.ts";
 import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
-import { controlled, opaqueHostFixture } from "./support/host.ts";
+import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
+import { formOwner as owner } from "./support/questionnaire.ts";
 import type { OwnedFormRequest } from "../src/protocol.ts";
-import { makeOwnedForms } from "../src/questionnaire/form-service.ts";
-import { makeQuestionnaireQueue } from "../src/questionnaire/queue.ts";
-
-const owner = { extensionId: "pi-mcp", operationId: "o", requestId: "r", label: "MCP" };
+import { AskUserService } from "../src/questionnaire/service.ts";
 
 it.effect("rejects malformed formatted defaults before opening native UI", () =>
   Effect.gen(function* () {
     const select = vi.fn(() => Promise.resolve(undefined));
     const input = vi.fn(() => Promise.resolve(undefined));
-    const ctx = opaqueHostFixture({ ui: { select, input } });
-    const ask = yield* makeOwnedForms(
-      yield* makeQuestionnaireQueue,
-      makeOwnedFormDialogsHost(ctx),
+    const ctx = opaqueFixture({ ui: { select, input } });
+    const layer = AskUserService.layer(
+      () => Effect.never,
+      undefined,
       "test",
+      undefined,
+      makeOwnedFormDialogsHost(ctx),
     );
     for (const [format, value] of [
       ["email", "a@."],
       ["email", "a..b@example.test"],
       ["uri", "\u0000https://example.test"],
     ] as const) {
-      const error = yield* Effect.flip(
-        ask(
+      const error = yield* AskUserService.use((service) =>
+        service.askForm(
           {
             kind: "form",
             message: "",
@@ -34,7 +34,7 @@ it.effect("rejects malformed formatted defaults before opening native UI", () =>
           },
           owner,
         ),
-      );
+      ).pipe(Effect.flip, Effect.provide(layer));
       expect(error._tag).toBe("AskUserValidationError");
     }
     expect(select).not.toHaveBeenCalled();
@@ -46,7 +46,7 @@ it.effect("supports native typed editing, private review and explicit optional o
   Effect.gen(function* () {
     const selections = [0, 1, 1, 1, 1, 2, 1, 3, 2, 4];
     const inputs = ["0", ""];
-    const ctx = opaqueHostFixture({
+    const ctx = opaqueFixture({
       ui: {
         select: (_title: string, choices: string[]) =>
           Promise.resolve(choices[selections.shift() ?? -1]),
@@ -73,7 +73,7 @@ it.effect("supports native typed editing, private review and explicit optional o
 it.effect("allows native 64-option multi-enums and returns consent without navigation", () =>
   Effect.gen(function* () {
     const selections = [0, 1, 63, 64, 1];
-    const ctx = opaqueHostFixture({
+    const ctx = opaqueFixture({
       ui: {
         select: (_title: string, choices: string[]) =>
           Promise.resolve(choices[selections.shift() ?? -1]),
@@ -96,7 +96,7 @@ it.effect("allows native 64-option multi-enums and returns consent without navig
       ),
     ).toEqual({ action: "accept", content: { x: ["63"] } });
     for (const [index, action] of ["accept", "decline", "cancel"].entries()) {
-      const urlCtx = opaqueHostFixture({
+      const urlCtx = opaqueFixture({
         ui: { select: (_title: string, choices: string[]) => Promise.resolve(choices[index]) },
       });
       expect(
@@ -115,8 +115,8 @@ it.effect(
     Effect.gen(function* () {
       const selections = [0, 1];
       let signal: AbortSignal | undefined;
-      const completion = controlled<string | undefined>();
-      const ctx = opaqueHostFixture({
+      const completion = deferredPromise<string | undefined>();
+      const ctx = opaqueFixture({
         ui: {
           select: (_title: string, choices: string[]) =>
             Promise.resolve(choices[selections.shift() ?? -1]),

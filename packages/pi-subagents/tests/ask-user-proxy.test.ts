@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import * as Effect from "effect/Effect";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
   QUESTIONNAIRE_CAPABILITY_QUERY,
@@ -18,42 +18,21 @@ import {
   decodeSubagentProxyRequest,
 } from "../src/tools/proxy-protocol.ts";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
-const promiseGate = <A>() =>
-  // SAFETY: Supported Node versions implement withResolvers; ES2023 libs omit it.
-  (
-    Promise as PromiseConstructor & {
-      withResolvers<Value>(): { promise: Promise<Value>; resolve: (value: Value) => void };
-    }
-  ).withResolvers<A>();
+import { eventBus as bus, pickQuestionnaire as request } from "./support/questionnaire.ts";
 
-const request: AskUserRequest = {
-  questions: [
-    {
-      key: "pick",
-      title: "Pick",
-      prompt: "Which?",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
-    },
-  ],
-};
-const bus = () => {
-  const emitter = new EventEmitter();
-  return {
-    on: (name: string, handler: (event: any) => void) => {
-      emitter.on(name, handler);
-      return () => {
-        emitter.off(name, handler);
-      };
-    },
-    emit: (name: string, event: any) => {
-      emitter.emit(name, event);
-    },
-  };
-};
+const owner = (requestId: string): QuestionnaireOwner => ({
+  runId: "run",
+  assignmentEpoch: 1,
+  requestId,
+});
+const capability = (overrides: Partial<QuestionnaireCapability> = {}): QuestionnaireCapability => ({
+  version: 1,
+  sessionId: "root",
+  generation: "g1",
+  ask: () => Promise.resolve({ outcome: "cancelled", answers: [] }),
+  cancel: () => Promise.resolve(),
+  ...overrides,
+});
 
 describe("structured questionnaire proxy boundary", () => {
   it("round-trips text questions and notes through the authenticated root and rejects text with choices", () => {
@@ -66,26 +45,19 @@ describe("structured questionnaire proxy boundary", () => {
     };
     const root = bus();
     const child = bus();
-    const owner = {
-      runId: "authenticated-run",
-      assignmentEpoch: 3,
-      requestId: "authenticated-text",
-    };
-    const capability: QuestionnaireCapability = {
-      version: 1,
-      sessionId: "root",
-      generation: "g1",
+    const authenticated = owner("authenticated-text");
+    const textCapability = capability({
       cancel: (received) => {
-        expect(received).toEqual(owner);
+        expect(received).toEqual(authenticated);
         return Promise.resolve();
       },
       ask: (received, receivedOwner) => {
         expect(received).toEqual(textRequest);
-        expect(receivedOwner).toEqual(owner);
+        expect(receivedOwner).toEqual(authenticated);
         return Promise.resolve(outcome);
       },
-    };
-    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
+    });
+    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(textCapability));
     const detach = publishChildQuestionnaireRelay(
       child,
       "child",
@@ -93,7 +65,9 @@ describe("structured questionnaire proxy boundary", () => {
       (wire, signal) => {
         const decoded = decodeQuestionnaireProxyRequest(wire);
         if (decoded instanceof InvalidSubagentRequestError) return Promise.reject(decoded);
-        return Effect.runPromise(askParentQuestionnaire(root, "root", decoded, owner), { signal });
+        return Effect.runPromise(askParentQuestionnaire(root, "root", decoded, authenticated), {
+          signal,
+        });
       },
     );
     for (const choices of [[], [{ value: "a", label: "A", description: "A" }]]) {
@@ -136,34 +110,28 @@ describe("structured questionnaire proxy boundary", () => {
   it("preserves deliberate cancellation through root capability and child relay", () => {
     const root = bus();
     const child = bus();
-    const owner = {
-      runId: "authenticated-run",
-      assignmentEpoch: 3,
-      requestId: "authenticated-request",
-    };
+    const authenticated = owner("authenticated-request");
     let receivedOwner: QuestionnaireOwner | undefined;
-    const capability: QuestionnaireCapability = {
-      version: 1,
-      sessionId: "root",
-      generation: "g1",
-      cancel: () => Promise.resolve(),
+    const cancelling = capability({
       ask: (_request, authenticatedOwner) => {
         receivedOwner = authenticatedOwner;
         return Promise.resolve({ outcome: "cancelled", answers: [] });
       },
-    };
-    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
+    });
+    root.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(cancelling));
     const detach = publishChildQuestionnaireRelay(
       child,
       "child",
       () => true,
       (_wire, signal) =>
-        Effect.runPromise(askParentQuestionnaire(root, "root", request, owner), { signal }),
+        Effect.runPromise(askParentQuestionnaire(root, "root", request, authenticated), {
+          signal,
+        }),
     );
     const relay = queryQuestionnaireRelay(child, "child")!;
     return relay.ask(request, new AbortController().signal).then((outcome) => {
       expect(outcome).toEqual({ outcome: "cancelled", answers: [] });
-      expect(receivedOwner).toEqual(owner);
+      expect(receivedOwner).toEqual(authenticated);
       detach();
       expect(queryQuestionnaireRelay(child, "child")).toBeUndefined();
     });
@@ -178,9 +146,9 @@ describe("structured questionnaire proxy boundary", () => {
   ] as const) {
     it(`joins exact root cleanup after ${ending}`, () => {
       const events = bus();
-      const owner = { runId: "run", assignmentEpoch: 1, requestId: "q" };
-      const cleanup = promiseGate<void>();
-      const cancelled = promiseGate<void>();
+      const questionOwner = owner("q");
+      const cleanup = deferredPromise();
+      const cancelled = deferredPromise();
       let finished = false;
       let generation = "g1";
       events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
@@ -193,8 +161,8 @@ describe("structured questionnaire proxy boundary", () => {
               ? Promise.reject(new Error("private root error"))
               : Promise.resolve(ending === "invalid" ? {} : { outcome: "cancelled", answers: [] }),
           cancel: (received: QuestionnaireOwner) => {
-            expect(received).toBe(owner);
-            cancelled.resolve(undefined);
+            expect(received).toBe(questionOwner);
+            cancelled.resolve();
             return cleanup.promise.then(() => {
               if (ending === "replacement") generation = "g2";
               if (ending === "cleanup-rejection") throw new Error("private cleanup error");
@@ -203,7 +171,7 @@ describe("structured questionnaire proxy boundary", () => {
         }),
       );
       const result = Effect.runPromise(
-        Effect.result(askParentQuestionnaire(events, "root", request, owner)),
+        Effect.result(askParentQuestionnaire(events, "root", request, questionOwner)),
       ).then((value) => {
         finished = true;
         return value;
@@ -211,7 +179,7 @@ describe("structured questionnaire proxy boundary", () => {
       return cancelled.promise
         .then(() => {
           expect(finished).toBe(false);
-          cleanup.resolve(undefined);
+          cleanup.resolve();
           return result;
         })
         .then((outcome) => {
@@ -227,28 +195,21 @@ describe("structured questionnaire proxy boundary", () => {
     let entered = false;
     let cancelled = false;
     events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
-      query.respond({
-        version: 1,
-        sessionId: "root",
-        generation: "g1",
-        ask: () => {
-          entered = true;
-          return Promise.resolve({ outcome: "cancelled", answers: [] });
-        },
-        cancel: () => {
-          cancelled = true;
-          return Promise.resolve();
-        },
-      }),
-    );
-    return expect(
-      Effect.runPromise(
-        askParentQuestionnaire(events, "different-session", request, {
-          runId: "run",
-          assignmentEpoch: 1,
-          requestId: "q",
+      query.respond(
+        capability({
+          ask: () => {
+            entered = true;
+            return Promise.resolve({ outcome: "cancelled", answers: [] });
+          },
+          cancel: () => {
+            cancelled = true;
+            return Promise.resolve();
+          },
         }),
       ),
+    );
+    return expect(
+      Effect.runPromise(askParentQuestionnaire(events, "different-session", request, owner("q"))),
     )
       .rejects.toBeInstanceOf(InvalidSubagentRequestError)
       .then(() => {
@@ -261,24 +222,17 @@ describe("structured questionnaire proxy boundary", () => {
     const events = bus();
     let generation = "g1";
     events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) =>
-      query.respond({
-        version: 1,
-        sessionId: "root",
-        generation,
-        cancel: () => Promise.resolve(),
-        ask: () => {
-          generation = "g2";
-          return Promise.resolve({ outcome: "cancelled", answers: [] });
-        },
-      }),
+      query.respond(
+        capability({
+          generation,
+          ask: () => {
+            generation = "g2";
+            return Promise.resolve({ outcome: "cancelled", answers: [] });
+          },
+        }),
+      ),
     );
-    const result = Effect.runPromise(
-      askParentQuestionnaire(events, "root", request, {
-        runId: "run",
-        assignmentEpoch: 1,
-        requestId: "q",
-      }),
-    );
+    const result = Effect.runPromise(askParentQuestionnaire(events, "root", request, owner("q")));
     return expect(result).rejects.toBeInstanceOf(InvalidSubagentRequestError);
   });
 });

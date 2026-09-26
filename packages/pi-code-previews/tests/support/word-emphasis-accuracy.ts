@@ -3,13 +3,11 @@ import { renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { collectChangedDiffBlock, isChangedDiffLine, parseDiffLine } from "../../src/diff/parse";
 import { analyzeChangedLineBlock } from "../../src/diff/word/change-block";
 import { shouldEmphasizeChangedPair } from "../../src/diff/word/emphasis";
-import {
-  wordEmphasisAccuracyCases,
-  type WordEmphasisAccuracyCase,
-} from "./word-fixtures/emphasis-accuracy";
+import { wordEmphasisAccuracyCases } from "./word-fixtures/emphasis-accuracy";
+import type { WordEmphasisGoldenCase } from "./word-fixtures/emphasis-golden";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { initializeShiki } from "../../src/syntax/shiki";
-import { testTheme } from "./render";
+import { plainTheme } from "./render";
 import { parseRenderedWordEmphasis } from "./rendered-word-emphasis";
 
 type AccuracyCounts = {
@@ -48,7 +46,7 @@ type Range = [start: number, end: number];
 type LinePair = [removedLine: number, addedLine: number];
 
 export function evaluateWordEmphasisAccuracy(
-  cases: readonly WordEmphasisAccuracyCase[] = wordEmphasisAccuracyCases,
+  cases: readonly WordEmphasisGoldenCase[] = wordEmphasisAccuracyCases,
 ): Promise<WordEmphasisAccuracyReport> {
   const previousSettings = { ...codePreviewSettings };
   let prepared: Promise<void> = Promise.resolve();
@@ -96,11 +94,11 @@ function buildWordEmphasisAccuracyReport(
   };
 }
 
-function evaluateCase(accuracyCase: WordEmphasisAccuracyCase): WordEmphasisAccuracyCaseResult {
+function evaluateCase(accuracyCase: WordEmphasisGoldenCase): WordEmphasisAccuracyCaseResult {
   const rendered = renderSyntaxHighlightedDiff(
     accuracyCase.diff.join("\n"),
     accuracyCase.lang,
-    testTheme(),
+    plainTheme,
     accuracyCase.diff.length,
   ).split("\n");
   if (rendered.length !== accuracyCase.expectedSpans.length)
@@ -178,7 +176,7 @@ function rangesForExpectedSpans(
   return ranges;
 }
 
-function emphasizedLinePairs(accuracyCase: WordEmphasisAccuracyCase): LinePair[] {
+function emphasizedLinePairs(accuracyCase: WordEmphasisGoldenCase): LinePair[] {
   const parsedLines = accuracyCase.diff.map(parseDiffLine);
   const pairs: LinePair[] = [];
 
@@ -198,7 +196,7 @@ function emphasizedLinePairs(accuracyCase: WordEmphasisAccuracyCase): LinePair[]
 }
 
 function pairAccuracyCounts(
-  accuracyCase: WordEmphasisAccuracyCase,
+  accuracyCase: WordEmphasisGoldenCase,
   actualPairs: readonly LinePair[],
 ): AccuracyCounts {
   const expected = new Set((accuracyCase.expectedPairs ?? []).map(pairKey));

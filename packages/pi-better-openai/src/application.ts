@@ -4,7 +4,6 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -18,22 +17,26 @@ import {
   bestEffortHostBootstrap,
   captureSessionHost,
   hasTerminalUI,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
-  sanitizeDiagnosticError,
 } from "pi-cosmic-core";
-import { createCosmicFooterClient } from "pi-cosmic-ui/client";
+import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import {
   applyFastRoutingHeaders,
   resetOpenAICodexTransport,
 } from "./boundary/host-provider-routing.ts";
-import { ignoreHostUi, safeHostSignal, safeHostUi } from "./boundary/host-ui.ts";
+import {
+  containCommandFailure,
+  ignoreHostUi,
+  safeHostSignal,
+  safeHostUi,
+} from "./boundary/host-ui.ts";
 import { latestOwnedCompaction } from "./compaction/context.ts";
 import { decodeOpenAICompactionDetails } from "./compaction/protocol.ts";
 import { OpenAICompactionService } from "./compaction/service.ts";
-import type { ResolvedConfig } from "./config/schema.ts";
 import type { OpenAIConfigError } from "./config/store.ts";
 import {
   fastDebugLines,
@@ -46,7 +49,6 @@ import {
   unsupportedRequestMessage,
 } from "./fast/controller.ts";
 import { FastModeService, type FastInjectionIngress } from "./fast/service.ts";
-import { FAST_SERVICE_TIER } from "./fast/models.ts";
 import {
   makeOpenAIApplicationLayer,
   type OpenAIApplication,
@@ -62,7 +64,6 @@ import {
   makeProjection,
   resetProjection,
   synchronizeProjectionContext,
-  type OpenAIProjection,
 } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
@@ -76,23 +77,10 @@ export interface BetterOpenAIExtensionDependencies {
   readonly resetOpenAICodexTransport?: (ctx: ExtensionContext) => void;
 }
 
-const requiredConfig = (projection: MutableRef.MutableRef<OpenAIProjection>): ResolvedConfig => {
-  const cfg = MutableRef.get(projection).config;
-  if (cfg) return cfg;
-  throw new OpenAIBoundaryError({
-    operation: "config",
-    message: "Better OpenAI session has not started.",
-  });
-};
-
-export function registerBetterOpenAIApplication(pi: ExtensionAPI): void {
-  betterOpenAIWithDependencies(pi, {});
-}
-
-/** Internal seam for deterministic lifecycle/finalizer tests. */
+/** Pi registration; `dependencies` is the seam for deterministic lifecycle/finalizer tests. */
 export function betterOpenAIWithDependencies(
   pi: ExtensionAPI,
-  dependencies: BetterOpenAIExtensionDependencies,
+  dependencies: BetterOpenAIExtensionDependencies = {},
 ): void {
   const projection = makeProjection();
   const fastProjection = MutableRef.make(initialFastSnapshot());
@@ -105,7 +93,14 @@ export function betterOpenAIWithDependencies(
     if (currentContext) MutableRef.set(currentContext, ctx);
   };
   const cosmicUi = createCosmicFooterClient(pi.events, "pi-better-openai");
-  const config = (_ctx: ExtensionContext) => requiredConfig(projection);
+  const config = () => {
+    const cfg = MutableRef.get(projection).config;
+    if (cfg) return cfg;
+    throw new OpenAIBoundaryError({
+      operation: "config",
+      message: "Better OpenAI session has not started.",
+    });
+  };
   const setStatus = makeSetStatusSafely("better-openai");
   let usageVisible = true;
   const isUsageVisible = () => {
@@ -116,8 +111,7 @@ export function betterOpenAIWithDependencies(
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
     const cfg = MutableRef.get(projection).config;
     if (!cfg) return;
-    cosmicUi.query();
-    const nextUsageVisible = cosmicUi.isVisible("openai.usage");
+    const nextUsageVisible = isUsageVisible();
     const fast = cosmicUi.isVisible("openai.fast")
       ? fastModeFooterPrimitive(ctx, MutableRef.get(fastProjection))
       : undefined;
@@ -145,17 +139,13 @@ export function betterOpenAIWithDependencies(
       );
     }
   };
-  let stopCosmicUiChanges: (() => void) | undefined;
-  const watchCosmicUi = () => {
-    if (stopCosmicUiChanges) return;
-    stopCosmicUiChanges = cosmicUi.onHostStateChange(() => {
-      if (currentContext) updateFooter(MutableRef.get(currentContext));
-    });
+  const refreshFooter = (ctx: ExtensionContext) => {
+    updateContext(ctx);
+    updateFooter(ctx);
   };
-  const stopWatchingCosmicUi = () => {
-    stopCosmicUiChanges?.();
-    stopCosmicUiChanges = undefined;
-  };
+  const cosmicUiWatch = makeHostStateWatch(cosmicUi, () => {
+    if (currentContext) updateFooter(MutableRef.get(currentContext));
+  });
 
   const slot = makePiSessionRuntimeSlot<
     OpenAISessionInput,
@@ -190,7 +180,7 @@ export function betterOpenAIWithDependencies(
         Effect.andThen(
           FastModeService.use((service) =>
             service
-              .initialize(ctx, config(ctx), pi.getFlag(FAST_ID) === true)
+              .initialize(ctx, config(), pi.getFlag(FAST_ID) === true)
               .pipe(Effect.as(service.recordInjection)),
           ),
         ),
@@ -208,7 +198,7 @@ export function betterOpenAIWithDependencies(
           ? scheduler.schedule(intervalMs, tick)
           : undefined,
       );
-      watchCosmicUi();
+      cosmicUiWatch.start();
       updateFooter(ctx);
       const fast = MutableRef.get(fastProjection);
       if (fast.desiredActive && !isFastActive(ctx, fast))
@@ -221,7 +211,7 @@ export function betterOpenAIWithDependencies(
         setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
       }
-      stopWatchingCosmicUi();
+      cosmicUiWatch.stop();
       recordFastInjection = () => undefined;
       cosmicUi.shutdown();
       resetProjection(projection);
@@ -240,26 +230,6 @@ export function betterOpenAIWithDependencies(
             message: "Better OpenAI session has not started.",
           }),
         );
-  const containCommandFailure = <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-    operation: string,
-    ctx: ExtensionContext,
-    typedMessage: (error: E) => string,
-  ): Effect.Effect<A | void, never, R> =>
-    effect.pipe(
-      Effect.catch((error) => ignoreHostUi(() => ctx.ui.notify(typedMessage(error), "warning"))),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.void
-          : Effect.logError(`Better OpenAI ${operation} raised an unexpected defect.`).pipe(
-              Effect.andThen(
-                ignoreHostUi(() =>
-                  ctx.ui.notify(`OpenAI ${operation} failed unexpectedly.`, "warning"),
-                ),
-              ),
-            ),
-      ),
-    );
 
   pi.registerFlag(FAST_ID, {
     description: "Start with OpenAI fast mode enabled (service_tier=priority)",
@@ -273,12 +243,11 @@ export function betterOpenAIWithDependencies(
     signal: AbortSignal | undefined,
   ) =>
     run(
-      containCommandFailure(
-        effect,
-        operation,
-        ctx,
-        (error) => `OpenAI ${operation} is unavailable: ${sanitizeDiagnosticError(error.message)}.`,
-      ),
+      containCommandFailure(effect, ctx, {
+        failed: (message) => `OpenAI ${operation} is unavailable: ${message}.`,
+        unexpected: `OpenAI ${operation} failed unexpectedly.`,
+        defect: `Better OpenAI ${operation} raised an unexpected defect.`,
+      }).pipe(Effect.asVoid),
       signal,
     ).catch(() => {
       if (!signal?.aborted)
@@ -328,9 +297,9 @@ export function betterOpenAIWithDependencies(
     },
   });
   const formatDebugStatus = (ctx: ExtensionContext) => {
-    const cfg = config(ctx);
+    const cfg = config();
     return [
-      ...fastDebugLines(ctx, MutableRef.get(fastProjection), FAST_SERVICE_TIER),
+      ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
       `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "automatic" : "hidden"} (Cosmic UI)`,
       `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}`,
       "",
@@ -342,10 +311,9 @@ export function betterOpenAIWithDependencies(
     ].join("\n");
   };
   registerSettingsController(pi, {
-    config,
+    config: () => MutableRef.get(projection).config,
     updateContext,
     updateFooter,
-    hasTerminalUI,
     formatDebugStatus,
     fastProjection,
     resetFastRoutingTransport: resetProviderTransport,
@@ -377,29 +345,16 @@ export function betterOpenAIWithDependencies(
       )
       .then(() => undefined);
   });
-  pi.on("agent_start", (_event, ctx) => {
-    updateContext(ctx);
-    updateFooter(ctx);
-  });
+  pi.on("agent_start", (_event, ctx) => refreshFooter(ctx));
   pi.on("turn_end", (_event, ctx) => {
-    updateContext(ctx);
-    updateFooter(ctx);
+    refreshFooter(ctx);
     slot.fork(
       OpenAIUsageService.use((service) => service.refresh()),
       safeHostSignal(ctx),
     );
   });
-  const refreshFooter = (ctx: ExtensionContext) => {
-    updateContext(ctx);
-    updateFooter(ctx);
-  };
-  const needsContextRepair = (ctx: ExtensionContext) => {
-    try {
-      return Boolean(latestOwnedCompaction(ctx.sessionManager.getBranch()));
-    } catch {
-      return true;
-    }
-  };
+  const needsContextRepair = (ctx: ExtensionContext) =>
+    invokeHostCallback(() => Boolean(latestOwnedCompaction(ctx.sessionManager.getBranch())), true);
   const abortIncompleteContext = (ctx: ExtensionContext) => {
     // Pi contains extension exceptions. Aborting the run is required to fail closed.
     safeHostUi(() => ctx.abort());
@@ -417,10 +372,7 @@ export function betterOpenAIWithDependencies(
           event.signal,
         ),
       )
-      .then((compaction) => {
-        if (!compaction) return undefined;
-        return { compaction };
-      })
+      .then((compaction) => (compaction ? { compaction } : undefined))
       .catch(() => {
         const cancel = event.signal.aborted || needsContextRepair(ctx);
         if (!event.signal.aborted)
@@ -457,7 +409,7 @@ export function betterOpenAIWithDependencies(
     resetProviderTransport(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
-    synchronizeProjectionContext(projection, ctx, { clearUsage: true });
+    synchronizeProjectionContext(projection, ctx);
     updateFooter(ctx);
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
@@ -504,7 +456,7 @@ export function betterOpenAIWithDependencies(
   });
   pi.on("before_provider_headers", (event, ctx) => {
     updateContext(ctx);
-    applyFastRoutingHeaders(event.headers, ctx, MutableRef.get(fastProjection), FAST_SERVICE_TIER);
+    applyFastRoutingHeaders(event.headers, ctx, MutableRef.get(fastProjection));
   });
   pi.on("before_provider_request", (event, ctx) => {
     updateContext(ctx);
@@ -512,7 +464,6 @@ export function betterOpenAIWithDependencies(
       event,
       ctx,
       MutableRef.get(fastProjection),
-      FAST_SERVICE_TIER,
       recordFastInjection,
     );
     if (!currentContext) return fastPayload;

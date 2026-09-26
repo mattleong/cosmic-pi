@@ -6,14 +6,16 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   type ExtensionHandler,
-  type ExtensionUIContext,
-  type KeybindingsManager,
-  type Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+} from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { vi } from "vitest";
 import {
   BACKGROUND_TASK_CODE_MODE_BOUNDS,
@@ -31,7 +33,6 @@ import type { BackgroundTaskProjectionBridge } from "../src/boundary/host-ui.ts"
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import {
   registerTaskManagerCommand,
-  type TaskManagerActions,
   type TaskManagerCommandActions,
 } from "../src/settings/controller.ts";
 import type { BackgroundTaskState, BackgroundTaskView } from "../src/task/model.ts";
@@ -39,17 +40,6 @@ import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
-type TestCustomFactory<Value> = (
-  tui: TUI,
-  theme: Theme,
-  keybindings: KeybindingsManager,
-  done: (result: Value) => void,
-) => Component | Promise<Component>;
-type ManagerSurface = Component & {
-  readonly render: (width: number) => string[];
-  readonly handleInput: (data: string) => void;
-  readonly dispose: () => void;
-};
 
 const nodeFs = process.getBuiltinModule("node:fs");
 const nodePath = process.getBuiltinModule("node:path");
@@ -69,27 +59,7 @@ interface CapturedBackgroundTool {
   ) => Promise<object>;
 }
 
-const deferred = <A>() => {
-  const gate = Deferred.makeUnsafe<A>();
-  return {
-    promise: Effect.runPromise(Deferred.await(gate)),
-    resolve: (value: A) => void Deferred.doneUnsafe(gate, Effect.succeed(value)),
-  };
-};
-
-const extensionContextFixture = <Fixture extends object>(
-  fixture: Fixture,
-): Fixture & ExtensionContext => {
-  // SAFETY: Each test invokes only the ExtensionContext members explicitly implemented here.
-  return fixture as Fixture & ExtensionContext;
-};
-
-function hostFixture<Value>(fixture: Partial<Value>): Value {
-  // SAFETY: Each call constructs an owned test double for only the named host surface in use.
-  return fixture as Value;
-}
-
-const context = (cwd: string): ExtensionContext =>
+const context = (cwd: string) =>
   extensionContextFixture({
     cwd,
     signal: undefined,
@@ -117,10 +87,7 @@ const harness = (loadSettings: BackgroundTaskApplicationBoundaries["loadSettings
     getActiveTools: () => [...activeTools],
     on: (name: string, handler: Handler) => handlers.set(name, handler),
   };
-  // SAFETY: Each test invokes only the ExtensionAPI members explicitly implemented above.
-  registerBackgroundTaskApplication(fixture as typeof fixture & ExtensionAPI, {
-    loadSettings,
-  });
+  registerBackgroundTaskApplication(extensionApiFixture(fixture), { loadSettings });
   return {
     tools,
     registerTool,
@@ -150,109 +117,69 @@ const managerTask = (state: BackgroundTaskState): BackgroundTaskView => {
   return state === "running" ? activeOrSettled : { ...activeOrSettled, endedAt: 1 };
 };
 
-function taskManagerHarness(state: BackgroundTaskState, actions: TaskManagerActions, args = "") {
+function tasksCommandHarness(
+  state: BackgroundTaskState = "exited",
+  actions: Partial<TaskManagerCommandActions> = {},
+) {
   let command: RegisteredCommand | undefined;
-  let surface: ManagerSurface | undefined;
-  let closed = false;
+  const host = fakeCustomSurfaceHost({
+    rows: 8,
+    keybindings: opaqueFixture({ matches: () => false }),
+  });
   const notify = vi.fn();
-  const custom: ExtensionUIContext["custom"] = <Value>(
-    factory: TestCustomFactory<Value>,
-  ): Promise<Value> => {
-    const completion = Deferred.makeUnsafe<Value>();
-    const created = factory(
-      hostFixture<TUI>({
-        terminal: hostFixture<TUI["terminal"]>({ rows: 8 }),
-        requestRender: vi.fn(),
-      }),
-      hostFixture<Theme>({
-        fg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      }),
-      hostFixture<KeybindingsManager>({ matches: () => false }),
-      (value) => {
-        closed = true;
-        void Deferred.doneUnsafe(completion, Effect.succeed(value));
-      },
-    );
-    if (created instanceof Promise)
-      throw new Error("task manager factory unexpectedly became async");
-    // SAFETY: registerTaskManagerCommand synchronously returns its complete manager surface.
-    surface = created as ManagerSurface;
-    return Effect.runPromise(Deferred.await(completion));
-  };
-  const ctx = hostFixture<ExtensionCommandContext>({
+  const ui = { notify, custom: host.ctx.ui.custom };
+  const custom = vi.spyOn(ui, "custom");
+  const ctx = extensionContextFixture({
     cwd: "/tmp",
     mode: "tui",
     hasUI: true,
     signal: undefined,
-    ui: hostFixture<ExtensionUIContext>({ custom, notify }),
+    ui,
   });
-  const pi = hostFixture<ExtensionAPI>({
+  const pi = extensionApiFixture({
     registerCommand: (_name: string, definition: RegisteredCommand) => {
       command = definition;
     },
   });
-  const bridge = hostFixture<BackgroundTaskProjectionBridge>({
+  const bridge: BackgroundTaskProjectionBridge = opaqueFixture({
     get: () => ({ tasks: [managerTask(state)] }),
-    subscribe: () => () => {},
-  });
-  registerTaskManagerCommand(pi, bridge, {
-    ...actions,
-    status: () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
-  });
-  if (!command) throw new Error("task manager command was not registered");
-  const opened = Promise.resolve(command.handler(args, ctx));
-  if (!surface) throw new Error("task manager surface did not open synchronously");
-  const openedSurface = surface;
-  return {
-    notify,
-    surface: openedSurface,
-    isOpen: () => !closed,
-    close: Effect.gen(function* () {
-      openedSurface.handleInput("\x1b");
-      yield* Effect.promise(() => opened);
-      openedSurface.dispose();
-    }),
-  };
-}
-
-function taskCommandHarness(status: TaskManagerCommandActions["status"], notify = vi.fn()) {
-  let command: RegisteredCommand | undefined;
-  const custom = vi.fn();
-  const ctx = hostFixture<ExtensionCommandContext>({
-    cwd: "/tmp",
-    mode: "rpc",
-    hasUI: true,
-    signal: undefined,
-    ui: hostFixture<ExtensionUIContext>({ custom, notify }),
-  });
-  const pi = hostFixture<ExtensionAPI>({
-    registerCommand: (_name: string, definition: RegisteredCommand) => {
-      command = definition;
-    },
-  });
-  const bridge = hostFixture<BackgroundTaskProjectionBridge>({
-    get: () => ({ tasks: [] }),
     subscribe: () => () => {},
   });
   registerTaskManagerCommand(pi, bridge, {
     stop: () => Promise.resolve(),
     clear: () => Promise.resolve(),
-    status,
+    status: () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
+    ...actions,
   });
   if (!command) throw new Error("task command was not registered");
   const registered = command;
+  const run = (args: string) => Promise.resolve(registered.handler(args, ctx));
   return {
     custom,
     notify,
-    run: (args: string) => Promise.resolve(registered.handler(args, ctx)),
+    run,
+    host,
+    open: (args = "") => {
+      const opened = run(args);
+      host.mount();
+      const openedSurface = host.overlays.at(-1);
+      if (!openedSurface) throw new Error("task manager surface did not mount");
+      return {
+        surface: openedSurface,
+        isOpen: () => host.doneCalls === 0,
+        close: Effect.gen(function* () {
+          openedSurface.handleInput?.("\x1b");
+          yield* Effect.promise(() => opened);
+        }),
+      };
+    },
   };
 }
 
 describe("background-task Pi lifecycle", () => {
   it.effect("skips superseded settings loads so only the latest generation activates", () =>
     Effect.gen(function* () {
-      const settings = deferred<void>();
+      const settings = deferredPromise();
       const loads: Array<readonly [string, boolean]> = [];
       const app = harness((cwd, trusted) => {
         loads.push([cwd, trusted]);
@@ -276,7 +203,7 @@ describe("background-task Pi lifecycle", () => {
     Effect.gen(function* () {
       const firstCwd = `${process.cwd()}/first-pending`;
       const secondCwd = `${process.cwd()}/second-ready`;
-      const entered = deferred<void>();
+      const entered = deferredPromise();
       let firstSignal: AbortSignal | undefined;
       const app = harness((cwd, _trusted, signal) => {
         if (cwd !== firstCwd) return Promise.resolve();
@@ -321,13 +248,13 @@ describe("background-task Pi lifecycle", () => {
       );
       const app = harness(() => Promise.resolve());
       const notify = vi.fn();
-      const ctx = hostFixture<ExtensionContext & ExtensionCommandContext>({
+      const ctx = extensionContextFixture({
         cwd: fixture.cwd,
         signal: undefined,
         isProjectTrusted: () => true,
         hasUI: true,
         mode: "rpc",
-        ui: hostFixture<ExtensionUIContext>({ notify }),
+        ui: { notify },
       });
 
       yield* Effect.gen(function* () {
@@ -351,15 +278,15 @@ describe("background-task Pi lifecycle", () => {
 
   it.effect("ignores turn_end while the runtime slot is inactive", () =>
     Effect.gen(function* () {
-      const settings = deferred<void>();
+      const settings = deferredPromise();
       const setStatus = vi.fn();
       const app = harness(() => settings.promise);
-      const ctx = extensionContextFixture({
+      const ctx: ExtensionContext = {
         ...context(process.cwd()),
         hasUI: true,
         mode: "tui",
-        ui: { setStatus },
-      });
+        ui: opaqueFixture({ setStatus }),
+      };
 
       const starting = app.emit("session_start", ctx);
       yield* Effect.promise(() => app.emit("turn_end", ctx));
@@ -373,8 +300,8 @@ describe("background-task Pi lifecycle", () => {
 
   it.effect("rejects a stale tool call typed while replacement settings are still loading", () =>
     Effect.gen(function* () {
-      const entered = deferred<void>();
-      const replacement = deferred<void>();
+      const entered = deferredPromise();
+      const replacement = deferredPromise();
       let loadCount = 0;
       const app = harness(() => {
         if (++loadCount === 1) return Promise.resolve();
@@ -413,13 +340,10 @@ describe("background-task Pi lifecycle", () => {
 
   it.effect("invalidates pending settings preparation when the captured session aborts", () =>
     Effect.gen(function* () {
-      const settings = deferred<void>();
+      const settings = deferredPromise();
       const app = harness(() => settings.promise);
       const controller = new AbortController();
-      const ctx = extensionContextFixture({
-        ...context(process.cwd()),
-        signal: controller.signal,
-      });
+      const ctx = { ...context(process.cwd()), signal: controller.signal };
 
       const starting = app.emit("session_start", ctx);
       controller.abort();
@@ -434,13 +358,13 @@ describe("background-task Pi lifecycle", () => {
   it.effect("publishes one current-session Code Mode capability and revokes it on shutdown", () =>
     Effect.gen(function* () {
       const app = harness(() => Promise.resolve());
-      const ctx = extensionContextFixture({
+      const ctx: ExtensionContext = {
         ...context(process.cwd()),
-        sessionManager: {
+        sessionManager: opaqueFixture({
           getSessionId: () => "session-1",
           getSessionFile: () => undefined,
-        },
-      });
+        }),
+      };
       yield* Effect.promise(() => app.emit("session_start", ctx));
 
       expect(() =>
@@ -451,174 +375,65 @@ describe("background-task Pi lifecycle", () => {
         }),
       ).not.toThrow();
 
-      const wrongSession: BackgroundTaskCodeModeCapability[] = [];
-      app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId: "other-session",
-        respond: <Candidate>(candidate: Candidate) => {
-          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
-          if (capability) wrongSession.push(capability);
-        },
-      });
-      expect(wrongSession).toEqual([]);
-
-      const discovered: BackgroundTaskCodeModeCapability[] = [];
-      app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId: "session-1",
-        respond: <Candidate>(candidate: Candidate) => {
-          const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
-          if (capability) discovered.push(capability);
-        },
-      });
+      const discover = (sessionId: string) => {
+        const found: BackgroundTaskCodeModeCapability[] = [];
+        app.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
+          version: BACKGROUND_TASK_CODE_MODE_VERSION,
+          sessionId,
+          respond: <Candidate>(candidate: Candidate) => {
+            const capability = normalizeBackgroundTaskCodeModeCapability(candidate);
+            if (capability) found.push(capability);
+          },
+        });
+        return found;
+      };
+      expect(discover("other-session")).toEqual([]);
+      const discovered = discover("session-1");
       expect(discovered).toHaveLength(1);
-      const capability = discovered[0];
-      if (!capability) throw new Error("background capability was not discovered");
-      const rejectedStarts: ReadonlyArray<{
-        readonly callId: string;
-        readonly input: BackgroundTaskCodeModeInput;
-        readonly maxOutputBytes: number;
-      }> = [
-        {
-          callId: "nested-start-zero",
-          input: { action: "start", command: 'node -e "setTimeout(() => {}, 10000)"' },
-          maxOutputBytes: 0,
-        },
-        {
-          callId: "nested-start-command-too-large",
-          input: {
-            action: "start",
-            command: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxCommandChars + 1),
-          },
-          maxOutputBytes: 1_000_000,
-        },
-        {
-          callId: "nested-start-name-too-large",
-          input: {
-            action: "start",
-            command: 'node -e "setTimeout(() => {}, 10000)"',
-            name: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxNameChars + 1),
-          },
-          maxOutputBytes: 1_000_000,
-        },
-        {
-          callId: "nested-start-cwd-too-large-after-resolution",
-          input: {
-            action: "start",
-            command: 'node -e "setTimeout(() => {}, 10000)"',
-            cwd: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxPathChars),
-          },
-          maxOutputBytes: 1_000_000,
-        },
-        {
-          callId: "nested-start-id-too-large",
-          input: {
-            action: "start",
-            command: 'node -e "setTimeout(() => {}, 10000)"',
-            id: "x".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxIdChars + 1),
-          },
-          maxOutputBytes: 1_000_000,
-        },
+      const capability = discovered[0]!;
+      const nested = (input: BackgroundTaskCodeModeInput, maxOutputBytes = 4_096) =>
+        capability.execute("nested", input, new AbortController().signal, maxOutputBytes);
+      const topLevel = (input: BackgroundTaskToolInput) =>
+        app.tools[0]!.execute("top-level", input, new AbortController().signal, undefined, ctx);
+
+      const command = 'node -e "setTimeout(() => {}, 10000)"';
+      const { maxIdChars, maxPathChars } = BACKGROUND_TASK_CODE_MODE_BOUNDS;
+      const rejectedStarts: ReadonlyArray<readonly [BackgroundTaskCodeModeInput, number]> = [
+        [{ action: "start", command }, 0],
+        [{ action: "start", command, cwd: "x".repeat(maxPathChars) }, 1_000_000],
+        [{ action: "start", command, id: "x".repeat(maxIdChars + 1) }, 1_000_000],
       ];
-      for (const rejected of rejectedStarts) {
-        yield* Effect.promise(() =>
-          expect(
-            capability.execute(
-              rejected.callId,
-              rejected.input,
-              new AbortController().signal,
-              rejected.maxOutputBytes,
-            ),
-          ).rejects.toBeDefined(),
-        );
-      }
+      for (const [input, maxOutputBytes] of rejectedStarts)
+        yield* Effect.promise(() => expect(nested(input, maxOutputBytes)).rejects.toBeDefined());
 
-      const emptyNestedList = yield* Effect.promise(() =>
-        capability.execute(
-          "nested-list-empty",
-          { action: "list", state: "all" },
-          new AbortController().signal,
-          4_096,
-        ),
-      );
-      expect(emptyNestedList).toEqual({
-        action: "list",
-        text: "No background tasks.",
-        tasks: [],
-      });
-      const topLevelTool = app.tools[0];
-      if (!topLevelTool) throw new Error("top-level background tool was not registered");
-      const emptyTopLevelList = yield* Effect.promise(() =>
-        topLevelTool.execute(
-          "top-level-list-empty",
-          { action: "list", state: "all" },
-          new AbortController().signal,
-          undefined,
-          ctx,
-        ),
-      );
-      expect(emptyTopLevelList).toMatchObject({ details: { action: "list", tasks: [] } });
-
-      const started = yield* Effect.promise(() =>
-        capability.execute(
-          "nested-start-valid-4k",
-          {
-            action: "start",
-            command: `node -e "setTimeout(() => {}, 10000)"`,
-          },
-          new AbortController().signal,
-          4_096,
-        ),
-      );
+      const started = yield* Effect.promise(() => nested({ action: "start", command }));
       if (started.action !== "start") throw new Error("nested start returned the wrong action");
       const taskId = started.snapshot.id;
       expect(taskId).toBe("task-1");
-      const visibleNestedList = yield* Effect.promise(() =>
-        capability.execute(
-          "nested-list-visible",
-          { action: "list", state: "all" },
-          new AbortController().signal,
-          4_096,
-        ),
-      );
-      expect(visibleNestedList).toMatchObject({ tasks: [{ id: taskId }] });
-      const visibleTopLevelList = yield* Effect.promise(() =>
-        topLevelTool.execute(
-          "top-level-list-visible",
-          { action: "list", state: "all" },
-          new AbortController().signal,
-          undefined,
-          ctx,
-        ),
-      );
-      expect(visibleTopLevelList).toMatchObject({
-        details: { action: "list", tasks: [{ id: taskId }] },
+      expect(yield* Effect.promise(() => nested({ action: "list", state: "all" }))).toMatchObject({
+        tasks: [{ id: taskId }],
       });
+      expect(yield* Effect.promise(() => topLevel({ action: "list", state: "all" }))).toMatchObject(
+        { details: { action: "list", tasks: [{ id: taskId }] } },
+      );
 
       app.activeTools.splice(0, app.activeTools.length);
       yield* Effect.promise(() =>
-        expect(
-          capability.execute(
-            "deactivated-list",
-            { action: "list" },
-            new AbortController().signal,
-            4_096,
-          ),
-        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+        expect(nested({ action: "list" })).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
       );
 
       yield* Effect.promise(() => app.emit("session_shutdown", ctx));
       yield* Effect.promise(() =>
-        expect(
-          capability.execute("stale-list", { action: "list" }, new AbortController().signal, 1_024),
-        ).rejects.toMatchObject({ _tag: "PiSessionRuntimeError" }),
+        expect(nested({ action: "list" }, 1_024)).rejects.toMatchObject({
+          _tag: "PiSessionRuntimeError",
+        }),
       );
     }),
   );
 
   it.effect("interrupts a never-settling settings load on shutdown", () =>
     Effect.gen(function* () {
-      const entered = deferred<void>();
+      const entered = deferredPromise();
       let loaderSignal: AbortSignal | undefined;
       const app = harness((_cwd, _trusted, signal) => {
         loaderSignal = signal;
@@ -648,7 +463,7 @@ describe("/tasks command", () => {
         shellPath: "/bin/\u001b[31mzsh\nspoof",
       }),
     );
-    const command = taskCommandHarness(status);
+    const command = tasksCommandHarness("exited", { status });
     return Effect.gen(function* () {
       yield* Effect.promise(() => command.run("  StAtUs  "));
 
@@ -665,78 +480,61 @@ describe("/tasks command", () => {
   });
 
   it.effect("preserves the manager fallback for non-status arguments", () => {
-    const manager = taskManagerHarness(
-      "exited",
-      {
-        stop: () => Promise.resolve(),
-        clear: () => Promise.resolve(),
-      },
-      "anything",
-    );
+    const manager = tasksCommandHarness().open("anything");
     return Effect.sync(() => expect(manager.isOpen()).toBe(true)).pipe(
       Effect.ensuring(manager.close),
     );
   });
 
-  it.effect("contains a rejecting host notification callback", () => {
-    const notify = vi.fn(() => Promise.reject(new Error("host notification rejected")));
-    const command = taskCommandHarness(
-      () => Promise.resolve(DEFAULT_BACKGROUND_TASK_CONFIG),
-      notify,
-    );
+  it.effect("closing keeps a hidden questionnaire dock stacked above the manager", () => {
+    const command = tasksCommandHarness();
+    const manager = command.open();
+    const dock = { render: () => ["questionnaire"], invalidate() {} };
+    const hidden = command.host.showUnrelated(dock);
+    hidden.setHidden(true);
     return Effect.gen(function* () {
-      yield* Effect.promise(() => command.run("status"));
-      yield* Effect.promise(() => Promise.resolve());
-      expect(notify).toHaveBeenCalledOnce();
+      yield* manager.close;
+      hidden.setHidden(false);
+      expect(command.host.overlays).toEqual([dock]);
     });
   });
 
   it.effect("reports a status lookup failure without rejecting the command", () => {
     const failure = "session settings unavailable";
-    const command = taskCommandHarness(() => Promise.reject(new Error(failure)));
+    const command = tasksCommandHarness("exited", {
+      status: () => Promise.reject(new Error(failure)),
+    });
     return Effect.gen(function* () {
       yield* Effect.promise(() => command.run("status"));
 
+      expect(command.custom).not.toHaveBeenCalled();
       expect(command.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error");
     });
   });
 });
 
 describe("/tasks action feedback", () => {
-  it.effect("shows a stop failure while leaving the manager available to close normally", () => {
-    const failure = "termination failure surfaced";
-    const manager = taskManagerHarness("running", {
-      stop: () => Promise.reject(new Error(failure)),
-      clear: () => Promise.resolve(),
-    });
-    return Effect.gen(function* () {
-      manager.surface.render(120);
-      manager.surface.handleInput("x");
-      manager.surface.handleInput("x");
-      yield* Effect.promise(() =>
-        vi.waitFor(() =>
-          expect(manager.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error"),
-        ),
-      );
-      expect(manager.isOpen()).toBe(true);
-    }).pipe(Effect.ensuring(manager.close));
-  });
-
-  it.effect("shows a clear failure while leaving the manager available to close normally", () => {
-    const failure = "clear failure surfaced";
-    const manager = taskManagerHarness("exited", {
-      stop: () => Promise.resolve(),
-      clear: () => Promise.reject(new Error(failure)),
-    });
-    return Effect.gen(function* () {
-      manager.surface.render(120);
-      manager.surface.handleInput("c");
-      yield* Effect.promise(() =>
-        vi.waitFor(() =>
-          expect(manager.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error"),
-        ),
-      );
-      expect(manager.isOpen()).toBe(true);
-    }).pipe(Effect.ensuring(manager.close));
-  });
+  it.effect.each([
+    { action: "stop", state: "running", keys: ["x", "x"] },
+    { action: "clear", state: "exited", keys: ["c"] },
+  ] as const)(
+    "shows a $action failure while leaving the manager available to close normally",
+    ({ action, state, keys }) => {
+      const failure = `${action} failure surfaced`;
+      const command = tasksCommandHarness(state, {
+        [action]: () => Promise.reject(new Error(failure)),
+      });
+      const manager = command.open();
+      return Effect.gen(function* () {
+        manager.surface.render(120);
+        for (const key of keys) manager.surface.handleInput?.(key);
+        yield* Effect.promise(() =>
+          vi.waitFor(() =>
+            expect(command.notify).toHaveBeenCalledWith(expect.stringContaining(failure), "error"),
+          ),
+        );
+        expect(manager.isOpen()).toBe(true);
+      }).pipe(Effect.ensuring(manager.close));
+    },
+  );
 });

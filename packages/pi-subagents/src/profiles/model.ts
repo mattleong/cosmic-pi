@@ -22,6 +22,11 @@ export const PROFILE_IDS = [
 
 export type ProfileId = (typeof PROFILE_IDS)[number];
 
+/** Builds one complete record over every fixed profile ID in canonical order. */
+export const mapProfileIds = <A>(f: (id: ProfileId) => A): Record<ProfileId, A> =>
+  // SAFETY: The entries cover exactly PROFILE_IDS, so every fixed key receives one value.
+  Object.fromEntries(PROFILE_IDS.map((id) => [id, f(id)])) as Record<ProfileId, A>;
+
 export const isProfileId = (value: string): value is ProfileId =>
   PROFILE_IDS.some((profileId) => profileId === value);
 
@@ -185,20 +190,20 @@ export const profileCandidateValidationIssues = (
 export const profileCandidateLabel = (candidate: ProfileCandidate): string =>
   `${candidate.host}/${candidate.runtime}/${candidate.model}:${candidate.effort}:${candidate.context}:${candidate.writeIntent}:openaiFastMode=${candidate.openaiFastMode ?? false}:closeOnReport=${candidate.closeOnReport}`;
 
-const candidateEquivalences = {
-  host: Equivalence.strictEqual<SubagentHost>(),
-  runtime: Equivalence.strictEqual<SubagentRuntime>(),
-  model: Equivalence.strictEqual<string>(),
-  effort: Equivalence.strictEqual<ProfileCandidateEffort>(),
-  context: Equivalence.strictEqual<SubagentContextMode>(),
-  writeIntent: Equivalence.strictEqual<SubagentWriteIntent>(),
-  closeOnReport: Equivalence.strictEqual<boolean>(),
-};
-const sameRequiredProfileCandidate = Equivalence.Struct(candidateEquivalences);
+/** Candidate fields shared by every config version; only the fast-mode key differs by version. */
+export const PROFILE_CANDIDATE_BASE_KEYS = [
+  "host",
+  "runtime",
+  "model",
+  "effort",
+  "context",
+  "writeIntent",
+  "closeOnReport",
+] as const;
 
 export const sameProfileCandidate = Equivalence.make<ProfileCandidate>(
   (left, right) =>
-    sameRequiredProfileCandidate(left, right) &&
+    PROFILE_CANDIDATE_BASE_KEYS.every((key) => left[key] === right[key]) &&
     (left.openaiFastMode ?? false) === (right.openaiFastMode ?? false),
 );
 export const sameProfileCandidates = Equivalence.Array(sameProfileCandidate);
@@ -206,13 +211,15 @@ export const sameProfileRoute = Equivalence.mapInput(
   sameProfileCandidates,
   (route: ProfileRoute) => route.candidates,
 );
-export type ProfileRouteSource =
-  | "session"
-  | "project"
-  | "global"
-  | "builtin"
-  | "project-invalid"
-  | "global-invalid";
+export const PROFILE_ROUTE_SOURCES = [
+  "session",
+  "project",
+  "global",
+  "builtin",
+  "project-invalid",
+  "global-invalid",
+] as const;
+export type ProfileRouteSource = (typeof PROFILE_ROUTE_SOURCES)[number];
 
 export interface ProfileDefinition {
   readonly id: ProfileId;

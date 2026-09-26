@@ -26,8 +26,8 @@ export interface McpOperationBinding {
   readonly server: string;
   readonly identity: string;
   readonly configRevision: number;
-  /** Private credential identity counter, never a token. Omitted fixtures mean zero. */
-  readonly authorizationRevision?: number;
+  /** Private credential identity counter, never a token. */
+  readonly authorizationRevision: number;
 }
 
 /** Internal capability. The ticket and connection owner are checked at every publication. */
@@ -35,21 +35,21 @@ export interface McpOperation {
   readonly binding: McpOperationBinding;
   readonly server: McpEffectiveServer;
   readonly owner: string;
-  readonly operationId?: string;
+  readonly operationId: string;
   readonly capabilities: McpCapabilities;
   readonly instructions?: McpInstructions | undefined;
   readonly changes: Stream.Stream<McpMetadataFamily>;
   readonly checkCurrent: Effect.Effect<void, McpBoundaryError>;
   /** New remote/UI work additionally requires an accepting, credential-current owner. */
-  readonly checkContinuation?: Effect.Effect<void, McpBoundaryError>;
+  readonly checkContinuation: Effect.Effect<void, McpBoundaryError>;
   /** Only bounded local publication belongs here, never remote I/O or another owner wait. */
   readonly commit: <A>(publication: Effect.Effect<A>) => Effect.Effect<A, McpBoundaryError>;
   readonly request: (
     request: McpRequest,
     options?: McpDispatchOptions,
   ) => Effect.Effect<McpReply, McpBoundaryError>;
-  readonly subscribeResource?: (uri: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
-  readonly exchange?: (
+  readonly subscribeResource: (uri: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
+  readonly exchange: (
     request: McpRequest,
     options?: McpDispatchOptions,
   ) => Effect.Effect<McpExchange, McpBoundaryError>;
@@ -109,12 +109,12 @@ export interface McpConnectionsContract {
   readonly isAvailable: () => boolean;
   readonly config: Effect.Effect<McpResolvedConfig>;
   readonly status: Effect.Effect<McpConnectionStatus>;
-  readonly resourceSubscriptions?: (server: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
-  readonly unsubscribeResource?: (
+  readonly resourceSubscriptions: (server: string) => Effect.Effect<Schema.Json, McpBoundaryError>;
+  readonly unsubscribeResource: (
     server: string,
     uri: string,
   ) => Effect.Effect<Schema.Json, McpBoundaryError>;
-  readonly readEvents?: (
+  readonly readEvents: (
     server: string,
     cursor?: string,
     limit?: number,

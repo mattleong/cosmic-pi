@@ -4,12 +4,11 @@ import type * as Types from "effect/Types";
 import { managerLayoutTier, type ManagerLayoutTier } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
 import {
+  clampListIndex,
   computeDetailWindow,
   listDetailMotion,
   listWindowStart,
   padListDetailRow,
-  reconcileListSelection,
-  selectListIndex,
   type ListDetailMotion,
   type ListDetailPane,
   type ListDetailMotionState,
@@ -41,19 +40,22 @@ export class ListDetailShell {
     return this.current;
   }
 
-  private applySelection(change: ListSelectionChange): ListSelectionChange {
-    this.current.selected = change.selected;
-    this.current.selectedId = change.selectedId;
-    if (change.changed) this.current.detailScroll = 0;
-    return change;
-  }
-
+  /** Moves the selection to a clamped index over the current row identities. */
   select(index: number, ids: ReadonlyArray<string>): ListSelectionChange {
-    return this.applySelection(selectListIndex(this.current, index, ids));
+    const selected = clampListIndex(index, ids.length);
+    const selectedId = ids[selected];
+    const changed = this.current.selectedId !== selectedId;
+    this.current.selected = selected;
+    this.current.selectedId = selectedId;
+    if (changed) this.current.detailScroll = 0;
+    return { selected, selectedId, changed };
   }
 
+  /** Re-finds the selected row after a projection update, keeping the index when it vanished. */
   reconcile(ids: ReadonlyArray<string>): ListSelectionChange {
-    return this.applySelection(reconcileListSelection(this.current, ids));
+    const { selected, selectedId } = this.current;
+    const existing = selectedId === undefined ? -1 : ids.indexOf(selectedId);
+    return this.select(existing >= 0 ? existing : selected, ids);
   }
 
   syncLayout(width: number): ManagerLayoutTier {

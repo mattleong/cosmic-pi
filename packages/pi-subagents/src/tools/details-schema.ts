@@ -567,16 +567,11 @@ const validStartRelationships = (details: SubagentStartDetails): boolean => {
   if (!relationships) return false;
   const failures = details.startFailures ?? [];
   if (failures.length !== relationships.failedIndexes.size) return false;
-  const seenFailures = new Set<number>();
   let previousFailureIndex = -1;
   for (const failure of failures) {
-    if (
-      !relationships.failedIndexes.has(failure.index) ||
-      seenFailures.has(failure.index) ||
-      failure.index <= previousFailureIndex
-    )
+    // Strictly increasing indexes also reject duplicates.
+    if (!relationships.failedIndexes.has(failure.index) || failure.index <= previousFailureIndex)
       return false;
-    seenFailures.add(failure.index);
     previousFailureIndex = failure.index;
     if (
       failure.admittedRun &&

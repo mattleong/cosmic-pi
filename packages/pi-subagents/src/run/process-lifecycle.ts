@@ -3,13 +3,15 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { BackendEvent, BackendHandle, BackendStartupState } from "../backend/model.ts";
-import type { RunRecord } from "./internal.ts";
+import type { BackendHandle } from "../backend/model.ts";
+import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "./errors.ts";
+import type { RunEventHandler } from "./events.ts";
 import { isTerminalRunState } from "./model.ts";
-
-type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+import type { RunRecordCleanup } from "./record-cleanup.ts";
+import type { RunSettlement } from "./settlement.ts";
+import type { WriterPreparation } from "./writer-preparation.ts";
 
 export function makeRunProcessControls(withLock: WithRunLock) {
   const runControl = <A>(
@@ -49,25 +51,16 @@ export function makeRunProcessControls(withLock: WithRunLock) {
   };
 }
 
-export interface RunProcessInitializerDependencies {
-  readonly ownerScope: Scope.Scope;
-  readonly withLock: WithRunLock;
-  readonly publish: Effect.Effect<void>;
-  readonly initialize: (record: RunRecord) => Effect.Effect<BackendStartupState, SubagentError>;
-  readonly handleBackendEvent: (
-    record: RunRecord,
-    event: BackendEvent,
-    source: BackendHandle,
-  ) => Effect.Effect<void, SubagentError>;
+export type RunProcessControls = ReturnType<typeof makeRunProcessControls>;
+
+export interface RunProcessInitializerDependencies extends RunContext {
+  readonly initialize: RunProcessControls["initialize"];
+  readonly handleBackendEvent: RunEventHandler;
   /** Must durably confirm writer spawn-started evidence before a driver spawn is invoked. */
-  readonly prepareBackendSpawn: (record: RunRecord) => Effect.Effect<void, SubagentError>;
-  readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
-  readonly closeExitedScope: (record: RunRecord, scope: Scope.Closeable) => Effect.Effect<void>;
-  readonly failRun: (
-    record: RunRecord,
-    message: string,
-    pendingError?: SubagentError,
-  ) => Effect.Effect<unknown>;
+  readonly prepareBackendSpawn: WriterPreparation;
+  readonly markCleanupPending: RunRecordCleanup["markCleanupPending"];
+  readonly closeExitedScope: RunRecordCleanup["closeExitedScope"];
+  readonly failRun: RunSettlement["failRun"];
 }
 
 export function makeRunProcessInitializer(dependencies: RunProcessInitializerDependencies) {
@@ -195,3 +188,5 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
 
   return (record: RunRecord) => installProcess(record).pipe(Effect.andThen(initialize(record)));
 }
+
+export type RunProcessInitializer = ReturnType<typeof makeRunProcessInitializer>;

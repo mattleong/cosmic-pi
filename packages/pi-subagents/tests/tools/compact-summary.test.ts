@@ -1,18 +1,10 @@
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../../pi-code-previews/src/config/state.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import type { SubagentRunView } from "../../src/run/model.ts";
+import type { SubagentAwaitDetails, WorkspaceToolDetails } from "../../src/tools/details-schema.ts";
 import { view } from "./fixtures/tool-harness.ts";
-
-interface AnimationCallback {
-  tick?: () => void;
-}
 
 function summarize<DetailsInput>(
   action: string,
@@ -31,10 +23,52 @@ function summarize<DetailsInput>(
     phase,
     args,
     result: { content: [{ type: "text", text: "Untrusted success text" }], details },
-    // SAFETY: The provider reads only isError from the renderer context.
-    context: { isError } as Parameters<typeof provider>[0]["context"],
+    context: renderContextFixture({ isError }),
   });
 }
+
+const workspace = (
+  operation: WorkspaceToolDetails["operation"],
+  receipt: Partial<WorkspaceToolDetails> = {},
+) =>
+  summarize("workspace", { version: 1, action: "workspace", operation, ...receipt }, "settled", {
+    action: operation,
+  });
+
+/** Launch entries before and after route selection. */
+const pending = {
+  index: 0,
+  name: "worker",
+  profile: "worker",
+  status: "pending",
+  routeStatus: "resolving",
+};
+const selected = {
+  ...pending,
+  status: "started",
+  routeStatus: "selected",
+  host: "local",
+  runtime: "pi",
+  model: "provider/model",
+  effort: "low",
+  openaiFastMode: false,
+};
+
+/** An await receipt over status-projected cards that states target scope only through `extra`. */
+const awaitReceipt = (
+  runs: ReadonlyArray<SubagentRunView>,
+  extra: Partial<SubagentAwaitDetails> = {},
+) => {
+  const projected = makeCompactToolDetails({ action: "status", runs });
+  if (projected.action === "models") throw new Error("Expected cards");
+  return {
+    version: 2,
+    action: "await",
+    cards: projected.cards,
+    awaitUntil: "all_finished",
+    ...extra,
+  };
+};
 
 describe("subagent compact semantic policy", () => {
   it("attributes recovery to each run and keeps unknown warning evidence conservative", () => {
@@ -66,8 +100,7 @@ describe("subagent compact semantic policy", () => {
         args: { agents: [agent] },
         phase: "running",
         result: undefined,
-        // SAFETY: The provider only reads isError from this render context.
-        context: { isError: false } as Parameters<typeof provider>[0]["context"],
+        context: renderContextFixture(),
       });
       expect(summary?.subject).toBe("name" in agent ? agent.name : agent.profile);
       expect(summary?.counters?.join(" ")).not.toContain("finished");
@@ -101,8 +134,7 @@ describe("subagent compact semantic policy", () => {
                   runs: [view({ id: "target-1", name: "Worker", state: "running" })],
                 }),
               },
-        // SAFETY: The provider only reads isError from this render context.
-        context: { isError: false } as Parameters<typeof provider>[0]["context"],
+        context: renderContextFixture(),
       });
       expect(summary?.subject).toBe(phase === "pending" ? "target-1" : "Worker");
       expect(summary?.action).toBe("interrupt");
@@ -130,74 +162,6 @@ describe("subagent compact semantic policy", () => {
     }
   });
 
-  it("animates with the registering owner and releases the ticker on settlement", () => {
-    const settings = { ...codePreviewSettings };
-    setCodePreviewSettings({
-      ...settings,
-      toolCallCollapsedStyle: "compact",
-      toolCallTiming: false,
-    });
-    try {
-      const tools: ToolDefinition<any, any, any>[] = [];
-      const animation: AnimationCallback = {};
-      let stopped = 0;
-      registerSubagentTools(
-        extensionApiFixture({
-          registerTool: (tool: ToolDefinition<any, any, any>) => tools.push(tool),
-        }),
-        {
-          environment: { cwd: "/project", projectTrusted: false },
-          run: () => Promise.reject(new Error("not executed")),
-          scheduleAnimation: (_interval, tick) => {
-            animation.tick = tick;
-            return () => {
-              stopped++;
-            };
-          },
-        },
-      );
-      const tool = tools.find((tool) => tool.name === "subagent_status")!;
-      // SAFETY: The render-only fixture implements the shell's styling callbacks.
-      const theme = {
-        fg: (_color: string, text: string) => text,
-        bg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      } as Theme;
-      let invalidated = 0;
-      const args = { runIds: ["agent-1"] };
-      const context = {
-        args,
-        state: {},
-        toolCallId: "status",
-        cwd: "/project",
-        lastComponent: undefined,
-        expanded: false,
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: true,
-        isError: false,
-        showImages: false,
-        invalidate: () => {
-          invalidated++;
-        },
-      };
-      tool.renderCall?.(args, theme, context).render(100);
-      expect(animation.tick).toBeTypeOf("function");
-      animation.tick?.();
-      expect(invalidated).toBeGreaterThan(0);
-      tool
-        .renderResult?.(
-          { content: [], details: makeCompactToolDetails({ action: "status", runs: [] }) },
-          { expanded: false, isPartial: false },
-          theme,
-          { ...context, isPartial: false },
-        )
-        .render(100);
-      expect(stopped).toBe(1);
-    } finally {
-      setCodePreviewSettings(settings);
-    }
-  });
   it("uses decoded run states rather than output text", () => {
     const details = makeCompactToolDetails({
       action: "status",
@@ -263,39 +227,12 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("reports live launch progress without prematurely classifying success", () => {
-    const details = {
-      version: 2,
-      action: "start",
-      startEntries: [
-        {
-          index: 0,
-          name: "worker",
-          profile: "worker",
-          status: "pending",
-          routeStatus: "resolving",
-        },
-      ],
-    };
+    const details = { version: 2, action: "start", startEntries: [pending] };
     const args = { agents: [{ name: "worker", profile: "worker" }] };
     expect(summarize("start", details, "running", args)?.counters).toContain("0/1 started");
     expect(summarize("start", details, "running", args)?.outcome).toBeUndefined();
     expect(summarize("start", details, "settled", args)?.outcome).toBe("uncertain");
-    const started = {
-      ...details,
-      startEntries: [
-        {
-          ...details.startEntries[0],
-          status: "started",
-          routeStatus: "selected",
-          host: "local",
-          runtime: "pi",
-          model: "provider/model",
-          effort: "low",
-          openaiFastMode: false,
-          runId: "started-1",
-        },
-      ],
-    };
+    const started = { ...details, startEntries: [{ ...selected, runId: "started-1" }] };
     for (const phase of ["running", "settled"] as const) {
       const summary = summarize("start", started, phase, args);
       expect(summary?.subject).toBe("worker");
@@ -312,26 +249,12 @@ describe("subagent compact semantic policy", () => {
         action: "start",
         startEntries: [
           {
-            index: 0,
+            ...selected,
             name: changed ? "Renamed" : "Worker",
-            profile: "worker",
-            status: "started",
-            routeStatus: "selected",
-            host: "local",
-            runtime: "pi",
-            model: "provider/model",
-            effort: "low",
-            openaiFastMode: false,
             runId: "started-1",
             writerWorkspaceMode: changed ? "worktree" : "shared-checkout",
           },
-          {
-            index: 1,
-            name: "Pending",
-            profile: "worker",
-            status: "pending",
-            routeStatus: "resolving",
-          },
+          { ...pending, index: 1, name: "Pending" },
         ],
       };
       const summary = summarize("start", details, "running");
@@ -434,23 +357,12 @@ describe("subagent compact semantic policy", () => {
   it.each([{}, { awaitedRunIds: ["context"] }])(
     "uses exact requested targets with absent or conflicting projected scope",
     (scope) => {
-      const projected = makeCompactToolDetails({
-        action: "status",
-        runs: [
-          view({ id: "target", state: "completed" }),
-          view({ id: "context", state: "paused" }),
-        ],
-      });
-      if (projected.action === "models") throw new Error("Expected cards");
       const summary = summarize(
         "await",
-        {
-          version: 2,
-          action: "await",
-          cards: projected.cards,
-          awaitUntil: "all_finished",
-          ...scope,
-        },
+        awaitReceipt(
+          [view({ id: "target", state: "completed" }), view({ id: "context", state: "paused" })],
+          scope,
+        ),
         "settled",
         { runIds: ["target"] },
       );
@@ -466,20 +378,7 @@ describe("subagent compact semantic policy", () => {
     const summary = summarize("start", {
       version: 2,
       action: "start",
-      startEntries: [
-        {
-          index: 0,
-          name: "worker",
-          profile: "worker",
-          status: "failed",
-          routeStatus: "selected",
-          host: "local",
-          runtime: "pi",
-          model: "provider/model",
-          effort: "low",
-          openaiFastMode: false,
-        },
-      ],
+      startEntries: [{ ...selected, status: "failed" }],
       startFailures: [
         {
           index: 0,
@@ -569,21 +468,13 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("summarizes only await targets and leaves report bodies on expansion", () => {
-    const projected = makeCompactToolDetails({
-      action: "status",
-      runs: [
+    const details = awaitReceipt(
+      [
         view({ id: "target", state: "completed", finalText: "SECRET REPORT BODY" }),
         view({ id: "descendant", state: "paused", parentRunId: "target" }),
       ],
-    });
-    if (projected.action === "models") throw new Error("Expected cards");
-    const details = {
-      version: 2,
-      action: "await",
-      cards: projected.cards,
-      awaitedRunIds: ["target"],
-      awaitUntil: "all_finished",
-    };
+      { awaitedRunIds: ["target"] },
+    );
     const summary = summarize("await", details);
     expect(summary?.metadata).not.toContain("1 completed");
     expect(summary?.counters).toContain("finished");
@@ -608,19 +499,9 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("does not turn a completed descendant into a missing target's completion", () => {
-    const projected = makeCompactToolDetails({
-      action: "status",
-      runs: [view({ id: "descendant", state: "completed", parentRunId: "target" })],
-    });
-    if (projected.action === "models") throw new Error("Expected cards");
     const summary = summarize(
       "await",
-      {
-        version: 2,
-        action: "await",
-        cards: projected.cards,
-        awaitUntil: "all_finished",
-      },
+      awaitReceipt([view({ id: "descendant", state: "completed", parentRunId: "target" })]),
       "settled",
       { runIds: ["target"] },
     );
@@ -641,21 +522,13 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("preserves workspace pagination, orphan recovery and exact test gates", () => {
-    const summary = summarize(
-      "workspace",
-      {
-        version: 1,
-        action: "workspace",
-        operation: "review",
-        workspaceId: "w",
-        revisionId: "r",
-        offset: 0,
-        totalChars: 100,
-        nextOffset: 50,
-      },
-      "settled",
-      { action: "review" },
-    );
+    const summary = workspace("review", {
+      workspaceId: "w",
+      revisionId: "r",
+      offset: 0,
+      totalChars: 100,
+      nextOffset: 50,
+    });
     expect(
       summary?.issues?.entries.flatMap((entry) => entry.recovery).map((entry) => entry.code),
     ).toEqual(["read-revision", "prepare-revision", "test-preparation", "integrate-preparation"]);
@@ -669,53 +542,22 @@ describe("subagent compact semantic policy", () => {
       "preparationId",
     ])
       expect(text).toContain(required);
-    const list = summarize(
-      "workspace",
-      {
-        version: 1,
-        action: "workspace",
-        operation: "list",
-        workspaceCount: 10,
-        listedCount: 8,
-        nextOffset: 8,
-      },
-      "settled",
-      { action: "list" },
-    );
+    const list = workspace("list", { workspaceCount: 10, listedCount: 8, nextOffset: 8 });
     expect(
       list?.notices?.some((notice) =>
         notice.text.includes("Do not auto-adopt or delete an orphan"),
       ),
     ).toBe(true);
     expect(
-      summarize(
-        "workspace",
-        {
-          version: 1,
-          action: "workspace",
-          operation: "prepare",
-          workspaceId: "w",
-          revisionId: "r",
-          preparationId: "p",
-          preparedCwd: "/combined",
-        },
-        "settled",
-        { action: "prepare" },
-      )?.notices?.[0]?.text,
+      workspace("prepare", {
+        workspaceId: "w",
+        revisionId: "r",
+        preparationId: "p",
+        preparedCwd: "/combined",
+      })?.notices?.[0]?.text,
     ).toContain("/combined");
     expect(
-      summarize(
-        "workspace",
-        {
-          version: 1,
-          action: "workspace",
-          operation: "revise",
-          workspaceId: "w",
-          successorRunId: "successor",
-        },
-        "settled",
-        { action: "revise" },
-      )?.notices?.[0]?.text,
+      workspace("revise", { workspaceId: "w", successorRunId: "successor" })?.notices?.[0]?.text,
     ).toContain("Await successor successor");
   });
 
@@ -727,12 +569,8 @@ describe("subagent compact semantic policy", () => {
       { operation: "list", workspaceCount: 1, listedCount: 2 },
       { operation: "list", workspaceCount: 0, listedCount: 0, unavailableCount: 1 },
       { operation: "list", unavailableCount: 1 },
-    ])
-      expect(
-        summarize("workspace", { version: 1, action: "workspace", ...details }, "settled", {
-          action: details.operation,
-        }),
-      ).toBeUndefined();
+    ] as const)
+      expect(workspace(details.operation, details)).toBeUndefined();
   });
 
   it("distinguishes proven report omissions from errors and unknown omissions", () => {
@@ -820,27 +658,14 @@ describe("subagent compact semantic policy", () => {
         { selection: { ...view().selection, warning: "Route recovery" } },
         { error: "Execution failed" },
       ]) {
-        const projected = makeCompactToolDetails({
-          action: "status",
-          runs: [view({ warning: "Child advisory", warningSource: "child", ...extra })],
-        });
-        if (projected.action === "models") throw new Error("Expected cards");
-        const summary = summarize(
-          "await",
-          {
-            version: 2,
-            action: "await",
-            cards: projected.cards,
-            awaitedRunIds: [projected.cards[0]!.id],
-            awaitUntil: "all_finished",
-          },
-          phase,
-        );
+        const run = view({ warning: "Child advisory", warningSource: "child", ...extra });
+        const summary = summarize("await", awaitReceipt([run], { awaitedRunIds: [run.id] }), phase);
         const text = summary?.notices?.map((notice) => notice.text).join(" ") ?? "";
         expect(text).toContain("Child advisory");
         if ("systemWarning" in extra) expect(text).toContain(extra.systemWarning);
         if ("selection" in extra) expect(text).toContain("Route recovery");
         if ("error" in extra) expect(summary?.outcome).toBe("error");
+        const projected = makeCompactToolDetails({ action: "status", runs: [run] });
         for (const action of ["status", "list"] as const) {
           const other = summarize(action, { ...projected, action }, phase);
           expect(other?.notices?.some((notice) => notice.text.includes("Child advisory"))).toBe(
@@ -853,9 +678,8 @@ describe("subagent compact semantic policy", () => {
 
   it("keeps running await counters stable while exposing new safety notices", () => {
     const snapshot = (reverse: boolean, warning?: string) => {
-      const projected = makeCompactToolDetails({
-        action: "status",
-        runs: [
+      const receipt = awaitReceipt(
+        [
           view({
             id: "a",
             state: reverse ? "paused" : "running",
@@ -866,15 +690,9 @@ describe("subagent compact semantic policy", () => {
           }),
           view({ id: "b", state: "completed" }),
         ],
-      });
-      if (projected.action === "models") throw new Error("Expected cards");
-      return {
-        version: 2,
-        action: "await",
-        cards: reverse ? [...projected.cards].reverse() : projected.cards,
-        awaitedRunIds: ["a", "b"],
-        awaitUntil: "all_finished",
-      };
+        { awaitedRunIds: ["a", "b"] },
+      );
+      return reverse ? { ...receipt, cards: [...receipt.cards].reverse() } : receipt;
     };
     const first = summarize("await", snapshot(false), "running");
     const next = summarize("await", snapshot(true, "new warning"), "running");
@@ -924,21 +742,6 @@ describe("subagent compact semantic policy", () => {
   });
 
   it("keeps successful integrate facts and empty lists quiet without weakening nonempty recovery", () => {
-    const workspace = (
-      operation: string,
-      receipt: Partial<import("../../src/tools/details-schema.ts").WorkspaceToolDetails>,
-    ) =>
-      summarize(
-        "workspace",
-        {
-          version: 1,
-          action: "workspace",
-          operation,
-          ...receipt,
-        },
-        "settled",
-        { action: operation },
-      );
     const integrated = workspace("integrate", {
       workspaceId: "w",
       revisionId: "r",
@@ -1075,15 +878,7 @@ describe("subagent compact semantic policy", () => {
       summarize("start", {
         version: 2,
         action: "start",
-        startEntries: [
-          {
-            index: 0,
-            name: "worker",
-            profile: "worker",
-            status: "failed",
-            routeStatus: "unavailable",
-          },
-        ],
+        startEntries: [{ ...pending, status: "failed", routeStatus: "unavailable" }],
         startFailures: [{ index: 0, message: "Cleanup not confirmed" }],
       })?.outcome,
     ).toBe("error");

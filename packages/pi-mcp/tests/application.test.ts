@@ -19,53 +19,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { describe, expect, vi } from "vitest";
 import { registerMcpApplication } from "../src/application/register.ts";
-import { McpActivity } from "../src/activity/service.ts";
-import { McpAuthFlow } from "../src/auth/flow.ts";
-import { McpManager } from "../src/manager/service.ts";
-import type { McpManagerSnapshot } from "../src/manager/model.ts";
-const emptyManager: McpManagerSnapshot = {
-  revision: 1,
-  trusted: true,
-  enabled: true,
-  active: 0,
-  queued: 0,
-  servers: [],
-};
-const presentationLayer = Layer.mergeAll(
-  McpActivity.layer(),
-  Layer.succeed(McpAuthFlow, {
-    snapshot: () => undefined,
-    subscribe: () => Effect.void,
-    run: () => Effect.succeed({ state: "ready" }),
-  }),
-  Layer.succeed(McpManager, {
-    refresh: Effect.succeed(emptyManager),
-    snapshot: () => emptyManager,
-    subscribe: () => Effect.void,
-    withView: (effect) => effect,
-    capture: () => Effect.fail(boundaryError("unsupported", "not-sent", "fixture")),
-    check: () => Effect.void,
-    dispatch: () => Effect.succeed(undefined),
-    cached: (request) =>
-      Effect.succeed({
-        family: request.family,
-        entries: [],
-        catalogs: [],
-        total: 0,
-        next: undefined,
-      }),
-    cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
-  }),
-);
 import { McpAuth } from "../src/auth/service.ts";
-import { McpConfigStore } from "../src/config/store.ts";
-import { DEFAULT_MCP_SETTINGS } from "../src/config/schema.ts";
 import { McpGatewayReplySchema, type McpGatewayReply } from "../src/tools/model.ts";
 import * as Schema from "effect/Schema";
 import { boundaryError } from "../src/client/errors.ts";
-const host = <A>(run: () => PromiseLike<A>) => Effect.tryPromise(run);
 import { McpExecution } from "../src/tools/service.ts";
 import { makeMcpLayer } from "../src/layer.ts";
+import { host, presentationLayer } from "./fixtures/application.ts";
+import { fakeAuth, fakeConfigStore, testConfig } from "./fixtures/services.ts";
 
 // This test runs the PUBLIC pinned Pi SDK agent loop. The provider and MCP execution
 // service are in-memory fakes; Pi registration, middleware, agent finalization and
@@ -140,13 +101,6 @@ describe("pinned Pi MCP application", () => {
         resultId: "recoverable",
         notices: [],
       };
-      const config = {
-        revision: 1,
-        trusted: true,
-        settings: DEFAULT_MCP_SETTINGS,
-        servers: {},
-        diagnostics: [],
-      };
       const fake = fauxProvider({ provider: "mcp-test-faux", tokensPerSecond: 0 });
       fake.setResponses([
         fauxAssistantMessage(
@@ -185,7 +139,6 @@ describe("pinned Pi MCP application", () => {
                 execute: () => Effect.succeed({ reply: failure, images: [] }),
                 login: () => Effect.succeed({ state: "ready" as const }),
                 logout: () => Effect.void,
-                available: Effect.succeed(true),
                 isAvailable: () => true,
               };
             }),
@@ -195,24 +148,8 @@ describe("pinned Pi MCP application", () => {
               }),
           ),
         ),
-        Layer.succeed(McpConfigStore, {
-          snapshot: Effect.succeed(config),
-          subscribe: () => Effect.void,
-          reload: Effect.succeed(config),
-          setServer: () => Effect.succeed(config),
-          removeServer: () => Effect.succeed(config),
-          setSettings: () => Effect.succeed(config),
-        }),
-        Layer.succeed(McpAuth, {
-          access: () => Effect.succeed(undefined),
-          status: () => Effect.succeed({ state: "none" }),
-          login: () => Effect.succeed({ state: "ready" }),
-          logout: () => Effect.void,
-          reject: () => Effect.void,
-          completeLogin: () => Effect.void,
-          finalizationFailed: () => Effect.void,
-          revoke: Effect.void,
-        }),
+        fakeConfigStore(testConfig()).layer,
+        Layer.succeed(McpAuth, fakeAuth()),
       );
       const settings = SettingsManager.inMemory({
         compaction: { enabled: false },

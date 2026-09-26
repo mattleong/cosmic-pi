@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AsyncDelivery } from "../questionnaire/async-service.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
@@ -13,17 +14,10 @@ const Metadata = Schema.Struct({
   generation: Schema.String.check(Schema.isMaxLength(100)),
   deliveryId: Schema.String.check(Schema.isMaxLength(120)),
 });
-const decode = Schema.decodeUnknownOption(Metadata);
 const decodeReceipt = Schema.decodeUnknownOption(
   Schema.Struct({ version: Schema.Literal(1), ...Metadata.fields }),
 );
-const metadata = <Input>(value: Input) => {
-  try {
-    return Option.getOrUndefined(decode(value));
-  } catch {
-    return undefined;
-  }
-};
+const metadata = <Input>(value: Input) => decodeUnknownOrUndefined(Metadata, value);
 
 export const createQuestionnaireGeneration = (): string => randomUUID();
 

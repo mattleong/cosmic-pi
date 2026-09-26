@@ -10,7 +10,7 @@ import {
   type CodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { previewScheduleEffect } from "../../src/application/scheduler";
-import { testTheme } from "../support/render";
+import { plainTheme } from "../support/render";
 import { cachedDeferredPreview } from "../../src/tools/renderers/shared/cache";
 import { eventLoopTurn } from "../support/effect-test";
 
@@ -33,20 +33,24 @@ function installTestCapability(): void {
   installCodePreviewSessionCapability(capability);
 }
 
-const component = (text: string, theme: Theme = testTheme()) =>
+const component = (text: string, theme: Theme = plainTheme) =>
   new Text(theme.fg("toolOutput", text), 0, 0);
+
+type PreviewArgs = Parameters<typeof cachedDeferredPreview>;
+const preview = (
+  state: PreviewArgs[0],
+  key: string,
+  source: string,
+  ...rest: [PreviewArgs[7], PreviewArgs[8]]
+) => cachedDeferredPreview(state, "key", "component", key, source, "loading", plainTheme, ...rest);
 
 test("large previews remain synchronous before session acquisition", () => {
   const state = {};
   let computes = 0;
-  const rendered = cachedDeferredPreview(
+  const rendered = preview(
     state,
-    "key",
-    "component",
     "hash",
     "a".repeat(20_000),
-    "loading",
-    testTheme(),
     () => {
       computes++;
       return component("ready");
@@ -63,28 +67,20 @@ test("cache replacement cancels obsolete deferred publication and compares exact
   let firstComputes = 0;
   let secondComputes = 0;
   let invalidations = 0;
-  cachedDeferredPreview(
+  preview(
     state,
-    "key",
-    "component",
     "colliding-hash-key",
     "a".repeat(20_000),
-    "loading",
-    testTheme(),
     () => {
       firstComputes++;
       return component("obsolete");
     },
     () => invalidations++,
   );
-  const current = cachedDeferredPreview(
+  const current = preview(
     state,
-    "key",
-    "component",
     "colliding-hash-key",
     "b".repeat(20_000),
-    "loading",
-    testTheme(),
     () => {
       secondComputes++;
       return component("current");
@@ -102,14 +98,10 @@ test("cache replacement cancels obsolete deferred publication and compares exact
 test("deferred publication isolates a throwing host invalidation callback", () => {
   installTestCapability();
   const state = {};
-  const current = cachedDeferredPreview(
+  const current = preview(
     state,
-    "key",
-    "component",
     "deferred-key",
     "x".repeat(20_000),
-    "loading",
-    testTheme(),
     () => component("ready"),
     () => {
       throw new Error("host invalidation failed");

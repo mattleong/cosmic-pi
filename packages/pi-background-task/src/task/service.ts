@@ -101,6 +101,7 @@ export interface BackgroundTaskServiceOptions {
 
 const notFound = (id: string) =>
   new BackgroundTaskNotFoundError({ id, message: `Background task not found: ${id}` });
+const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ message });
 
 const waitResult = (
   snapshot: BackgroundTaskSnapshot,
@@ -458,30 +459,23 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const command = request.command.trim();
-        if (!command) {
-          return yield* new InvalidBackgroundCommandError({
-            message: "Background command must not be empty.",
-          });
-        }
-        if (command.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars) {
-          return yield* new InvalidBackgroundCommandError({
-            message: `Background command must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars} characters.`,
-          });
-        }
+        if (!command) return yield* invalidCommand("Background command must not be empty.");
+        if (command.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars)
+          return yield* invalidCommand(
+            `Background command must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCommandChars} characters.`,
+          );
         const name = request.name?.trim();
-        if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars) {
-          return yield* new InvalidBackgroundCommandError({
-            message: `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
-          });
-        }
+        if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)
+          return yield* invalidCommand(
+            `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
+          );
         if (
           request.timeoutSeconds !== undefined &&
           (!Number.isFinite(request.timeoutSeconds) || request.timeoutSeconds <= 0)
-        ) {
-          return yield* new InvalidBackgroundCommandError({
-            message: "Background timeout must be a positive finite number of seconds.",
-          });
-        }
+        )
+          return yield* invalidCommand(
+            "Background timeout must be a positive finite number of seconds.",
+          );
         const cwd = path.resolve(request.cwd);
         if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {
           return yield* new InvalidBackgroundCwdError({
@@ -535,7 +529,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 droppedLogBytes: 0,
                 ...(name && { name }),
               },
-              logs: LogBuffer.empty(),
+              logs: new LogBuffer(),
               wake: Deferred.makeUnsafe<void>(),
               completion: Deferred.makeUnsafe<BackgroundTaskSnapshot>(),
               handleReady: Deferred.makeUnsafe<LocalProcessHandle, LocalProcessError>(),
@@ -567,12 +561,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         sortTasksByActivity(
           [...tasks.values()]
             .map((record) => record.snapshot)
-            .filter((snapshot) =>
-              filter === "all"
-                ? true
-                : filter === "active"
-                  ? isActiveTaskState(snapshot.state)
-                  : !isActiveTaskState(snapshot.state),
+            .filter(
+              (snapshot) =>
+                filter === "all" || isActiveTaskState(snapshot.state) === (filter === "active"),
             ),
         ),
       ),
@@ -616,38 +607,29 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const wait: BackgroundTaskServiceContract["wait"] = (request) =>
     Effect.gen(function* () {
       const waitSeconds = request.waitSeconds ?? config.maxWaitSeconds;
-      if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
-        return yield* new InvalidBackgroundCommandError({
-          message: "Background task wait must be a non-negative finite number of seconds.",
-        });
-      }
+      if (!Number.isFinite(waitSeconds) || waitSeconds < 0)
+        return yield* invalidCommand(
+          "Background task wait must be a non-negative finite number of seconds.",
+        );
       if (
         request.afterCursor !== undefined &&
         (!Number.isInteger(request.afterCursor) || request.afterCursor < 0)
-      ) {
-        return yield* new InvalidBackgroundCommandError({
-          message: "Background task wait cursor must be a non-negative integer.",
-        });
-      }
+      )
+        return yield* invalidCommand("Background task wait cursor must be a non-negative integer.");
       const contains = request.contains;
-      if (
-        request.until === "exit" &&
-        (contains !== undefined || request.afterCursor !== undefined)
-      ) {
-        return yield* new InvalidBackgroundCommandError({
-          message: "contains and afterCursor are valid only when waiting for output.",
-        });
-      }
+      if (request.until === "exit" && (contains !== undefined || request.afterCursor !== undefined))
+        return yield* invalidCommand(
+          "contains and afterCursor are valid only when waiting for output.",
+        );
       if (
         request.until === "output" &&
         (!contains ||
           contains.length > BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars ||
           contains.includes("\0"))
-      ) {
-        return yield* new InvalidBackgroundCommandError({
-          message: `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
-        });
-      }
+      )
+        return yield* invalidCommand(
+          `Output waits require a non-empty contains value of at most ${BACKGROUND_TASK_FIELD_BOUNDS.maxContainsChars} characters with no NUL byte.`,
+        );
 
       const record = yield* admitRecord(request.id);
       yield* Effect.acquireRelease(
@@ -743,7 +725,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       }
     }).pipe(Effect.scoped);
 
-  const stop: BackgroundTaskServiceContract["stop"] = (id, force) => requestStop(id, force);
   const stopAll: BackgroundTaskServiceContract["stopAll"] = (force = false) =>
     Effect.gen(function* () {
       const ids = yield* withLock(
@@ -790,7 +771,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     status,
     logs,
     wait,
-    stop,
+    stop: requestStop,
     stopAll,
     clear,
   };

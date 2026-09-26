@@ -2,16 +2,11 @@ import { describe, expect, it } from "vitest";
 import { withAuthFailureReason } from "../../src/auth/diagnostics.ts";
 import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
 import { boundaryError } from "../../src/client/errors.ts";
-import type { McpEffectiveServer, McpServerDefinition } from "../../src/config/model.ts";
+import type { McpServerDefinition } from "../../src/config/model.ts";
+import { testServer } from "../fixtures/services.ts";
 
-const server = (definition: McpServerDefinition): McpEffectiveServer => ({
-  id: "owned",
-  identity: "owned",
-  enabled: true,
-  scope: "global",
-  directory: "/fixture",
-  definition,
-});
+const server = (definition: McpServerDefinition) =>
+  testServer("owned", { identity: "owned", definition });
 const http = {
   transport: "http" as const,
   url: "https://private.example/mcp",

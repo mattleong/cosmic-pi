@@ -56,6 +56,10 @@ export const replayReceiptAttention = (
         description: "Some operations failed or did not run.",
       },
     };
+  const deliveryIssues = [
+    ...(attention?.issues.entries ?? []),
+    ...toolCalls.flatMap((row) => row.compact?.issues.entries ?? []),
+  ];
   if (
     receipts.calls.some(
       (call) =>
@@ -63,20 +67,9 @@ export const replayReceiptAttention = (
         call.isError !== true &&
         // Delivery loss does not rewrite the operation-outcome counters. A producer's
         // invocation-scoped issue already reports this loss; unrelated issues do not.
-        !(
-          attention?.version === 2 &&
-          attention.issues.entries.some(
-            (issue) =>
-              issue.operation === `call-${call.id}/delivery` && issue.code === "delivery-failed",
-          )
-        ) &&
-        !toolCalls.some(
-          (row) =>
-            row.compact?.version === 2 &&
-            row.compact.issues.entries.some(
-              (issue) =>
-                issue.operation === `call-${call.id}/delivery` && issue.code === "delivery-failed",
-            ),
+        !deliveryIssues.some(
+          (issue) =>
+            issue.operation === `call-${call.id}/delivery` && issue.code === "delivery-failed",
         ),
     ) &&
     !attention?.warnings &&

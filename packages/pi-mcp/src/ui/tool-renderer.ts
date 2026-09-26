@@ -9,7 +9,6 @@ import {
 import { renderMcpCallContent } from "./call-content.ts";
 import { progressLabel } from "./remote-events.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
-import { mcpBoundaryFailure } from "./boundary-failure.ts";
 
 type CardTheme = Pick<Theme, "fg" | "bold">;
 
@@ -20,12 +19,10 @@ export const renderMcpExpandedContent = <Result>(
   theme: CardTheme,
 ): Component => {
   const details = decodeMcpCardDetails(result);
-  const boundary = mcpBoundaryFailure(details);
-  const issues = boundary?.issues ?? details.presentation.issues;
   const navigation =
     details.recoveryHint &&
-    !boundary &&
-    !issues.entries.some((issue) => issue.code === "retained-output")
+    !details.boundary &&
+    !details.presentation.issues.entries.some((issue) => issue.code === "retained-output")
       ? `${theme.fg("accent", details.recoveryHint)}\n`
       : "";
   return new Text(navigation + theme.fg("toolOutput", details.preview), 0, 0);
@@ -53,7 +50,7 @@ export const renderMcpResult = <Result>(
   expandHint = "",
 ): Component => {
   const details = decodeMcpCardDetails(result);
-  const boundary = options.expanded && !options.isPartial ? mcpBoundaryFailure(details) : undefined;
+  const boundary = options.expanded && !options.isPartial ? details.boundary : undefined;
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const lines: string[] = [];

@@ -17,7 +17,7 @@ export function renderContentPreview(options: {
   emptyLabel: string;
   skipHighlightLabel: string;
   invalidate?: (() => void) | undefined;
-  lineNumbers?: { firstLine: number; lineNumberWidth?: number } | undefined;
+  firstLine?: number | undefined;
 }): ContentPreview {
   const syntaxHighlightSkipped = shouldSkipHighlight(options.content);
   const preview = renderHighlightedPreviewText(
@@ -26,7 +26,7 @@ export function renderContentPreview(options: {
     syntaxHighlightSkipped ? undefined : options.lang,
     options.theme,
     options.invalidate,
-    options.lineNumbers,
+    options.firstLine,
   );
   let text = preview.lines.length
     ? withSecretWarning(options.content, options.theme, preview.lines.join("\n"))

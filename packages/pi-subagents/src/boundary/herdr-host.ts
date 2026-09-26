@@ -7,8 +7,8 @@ import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
 import {
   agentOwnershipEvidence,
+  exactPaneContext,
   matchingAgentIdentity,
-  matchingPaneIdentity,
   sameAgentOwnership,
   sameAgentSession,
   sameStartedAgent,
@@ -16,21 +16,16 @@ import {
 } from "../backend/herdr-ownership.ts";
 import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest as readinessError,
   isCleanupUnconfirmed,
   isOutcomeUncertain,
   processError,
-  SubagentProcessError,
+  type InvalidSubagentRequestError,
+  type SubagentProcessError,
 } from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
-import {
-  HerdrCli,
-  type HerdrAgent,
-  type HerdrAgentSession,
-  type HerdrPane,
-  type HerdrSnapshot,
-} from "./herdr-cli.ts";
-import { HerdrHarness, type HerdrPreparedHarness } from "./herdr-harness.ts";
+import { HerdrCli, type HerdrAgent, type HerdrPane, type HerdrSnapshot } from "./herdr-cli.ts";
+import { defectCause, HerdrHarness, type HerdrPreparedHarness } from "./herdr-harness.ts";
 import { makeHerdrLaunchSafety } from "./herdr-launch-safety.ts";
 import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
 
@@ -39,16 +34,10 @@ const MAX_AGENT_NAME_CHARS = 32;
 const AGENT_NAME_DIGEST_CHARS = 8;
 
 export interface HerdrHostedAgent {
-  readonly runId: string;
-  readonly runtime: SubagentRuntime;
   readonly agentName: string;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;
-  readonly terminalId: string;
-  readonly nativeSession: string;
-  readonly agentSession: HerdrAgentSession;
-  readonly sessionIdentity: string;
   readonly inspect: Effect.Effect<HerdrAgent, SubagentProcessError>;
   readonly prompt: (text: string) => Effect.Effect<HerdrAgent, SubagentProcessError>;
   readonly close: Effect.Effect<void, SubagentProcessError>;
@@ -83,26 +72,17 @@ interface ProvisionalLaunchEvidence {
 
 interface OwnedRun {
   readonly runId: string;
-  readonly runtime: SubagentRuntime;
   readonly agentName: string;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;
   readonly terminalId: string;
-  readonly nativeSession: string;
   readonly identity: AgentOwnershipEvidence;
   readonly launchCleanup: LaunchCleanupGuard;
   readonly harness: HerdrPreparedHarness;
   closed: boolean;
   quarantined: boolean;
 }
-
-const readinessError = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
-const defectReason = <Error>(reason: Cause.Reason<Error>): Cause.Reason<never> =>
-  Cause.isFailReason(reason) ? Cause.makeDieReason(reason.error) : reason;
-const defectCause = <Error>(cause: Cause.Cause<Error>): Cause.Cause<never> =>
-  Cause.fromReasons(cause.reasons.map(defectReason));
 
 const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime): string => {
   const prefix = `psa-${runtime}-`;
@@ -124,10 +104,19 @@ const ownedAgentName = (request: BackendLaunchRequest, runtime: SubagentRuntime)
 const paneLabel = (request: BackendLaunchRequest, runtime: SubagentRuntime): string =>
   `Subagent ${runtime} · ${request.name}`.slice(0, MAX_LABEL_CHARS);
 
-const matchingPane = (run: OwnedRun, snapshot: HerdrSnapshot): HerdrPane | undefined =>
-  matchingPaneIdentity(run, snapshot);
 const matchingAgent = (run: OwnedRun, snapshot: HerdrSnapshot): HerdrAgent | undefined =>
   matchingAgentIdentity(run.identity, run.agentName, snapshot);
+/** Agents that occupy a provisional pane's selectors, including the name once start may apply. */
+const provisionalOccupant = (evidence: ProvisionalLaunchEvidence) => {
+  const agentMayHaveApplied =
+    evidence.startedIdentity !== undefined || evidence.agentStartUncertain === true;
+  return (agent: HerdrAgent): boolean =>
+    agent.paneId === evidence.pane.paneId ||
+    agent.terminalId === evidence.pane.terminalId ||
+    (agentMayHaveApplied && agent.name === evidence.agentName) ||
+    (evidence.startedIdentity !== undefined &&
+      sameAgentSession(evidence.startedIdentity.agentSession, agent.agentSession));
+};
 
 const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   const cli = yield* HerdrCli;
@@ -136,20 +125,6 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   const records = new Map<string, OwnedRun>();
   let closed = false;
   const withLock = lock.withPermits(1);
-
-  const exactPaneContext = (
-    pane: Pick<HerdrPane, "paneId" | "terminalId" | "workspaceId" | "tabId">,
-    snapshot: HerdrSnapshot,
-  ): boolean => {
-    if (!matchingPaneIdentity(pane, snapshot)) return false;
-    const workspaces = snapshot.workspaces.filter(
-      (candidate) => candidate.workspaceId === pane.workspaceId,
-    );
-    const tabs = snapshot.tabs.filter((candidate) => candidate.tabId === pane.tabId);
-    return (
-      workspaces.length === 1 && tabs.length === 1 && tabs[0]?.workspaceId === pane.workspaceId
-    );
-  };
 
   const ownershipMismatch = (operation: string, message: string) =>
     processError(operation, "herdr_ownership_mismatch", message);
@@ -162,7 +137,7 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
     waitForAvailableShell,
     activatePaneInput,
     confirmShellInput,
-  } = makeHerdrLaunchSafety(cli, exactPaneContext);
+  } = makeHerdrLaunchSafety(cli);
 
   const runSelectorsAbsent = (snapshot: HerdrSnapshot, run: OwnedRun): boolean =>
     !snapshot.panes.some(
@@ -179,24 +154,11 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   const provisionalSelectorsAbsent = (
     snapshot: HerdrSnapshot,
     evidence: ProvisionalLaunchEvidence,
-  ): boolean => {
-    const agentMayHaveApplied =
-      evidence.startedIdentity !== undefined || evidence.agentStartUncertain === true;
-    return (
-      !snapshot.panes.some(
-        (pane) =>
-          pane.paneId === evidence.pane.paneId || pane.terminalId === evidence.pane.terminalId,
-      ) &&
-      !snapshot.agents.some(
-        (agent) =>
-          agent.paneId === evidence.pane.paneId ||
-          agent.terminalId === evidence.pane.terminalId ||
-          (agentMayHaveApplied && agent.name === evidence.agentName) ||
-          (evidence.startedIdentity !== undefined &&
-            sameAgentSession(evidence.startedIdentity.agentSession, agent.agentSession)),
-      )
-    );
-  };
+  ): boolean =>
+    !snapshot.panes.some(
+      (pane) =>
+        pane.paneId === evidence.pane.paneId || pane.terminalId === evidence.pane.terminalId,
+    ) && !snapshot.agents.some(provisionalOccupant(evidence));
 
   const quarantineRun = (run: OwnedRun): void => void (run.quarantined = true);
   const quarantinedRunError = (operation: string) =>
@@ -218,17 +180,18 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
         ),
       );
     return cli.currentPane.pipe(
-      Effect.flatMap((pane) =>
-        pane.paneId === callingPaneId && exactPaneContext(pane, snapshot)
-          ? Effect.succeed(matchingPaneIdentity(pane, snapshot)!)
+      Effect.flatMap((pane) => {
+        const exact = pane.paneId === callingPaneId ? exactPaneContext(pane, snapshot) : undefined;
+        return exact
+          ? Effect.succeed(exact)
           : Effect.fail(
               processError(
                 "resolve calling pane",
                 "herdr_calling_pane_unresolvable",
                 "The inherited Herdr calling pane did not match one exact live pane/terminal/workspace/tab tuple.",
               ),
-            ),
-      ),
+            );
+      }),
     );
   };
 
@@ -241,8 +204,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
         run.quarantined
       )
         continue;
-      if (exactPaneContext(run, snapshot) && matchingAgent(run, snapshot))
-        return matchingPane(run, snapshot)!;
+      const owned = exactPaneContext(run, snapshot);
+      if (owned && matchingAgent(run, snapshot)) return owned;
       quarantineRun(run);
     }
     return pane;
@@ -331,19 +294,8 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
   ): Effect.Effect<void, SubagentProcessError> =>
     Effect.gen(function* () {
       const snapshot = yield* cli.snapshot;
-      const pane = exactPaneContext(evidence.pane, snapshot)
-        ? matchingPaneIdentity(evidence.pane, snapshot)
-        : undefined;
-      const agentMayHaveApplied =
-        evidence.startedIdentity !== undefined || evidence.agentStartUncertain === true;
-      const occupants = snapshot.agents.filter(
-        (agent) =>
-          agent.paneId === evidence.pane.paneId ||
-          agent.terminalId === evidence.pane.terminalId ||
-          (agentMayHaveApplied && agent.name === evidence.agentName) ||
-          (evidence.startedIdentity !== undefined &&
-            sameAgentSession(evidence.startedIdentity.agentSession, agent.agentSession)),
-      );
+      const pane = exactPaneContext(evidence.pane, snapshot);
+      const occupants = snapshot.agents.filter(provisionalOccupant(evidence));
       const occupant = occupants[0];
       if (
         !pane ||
@@ -520,13 +472,11 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           provisional.startedIdentity = identity;
           const run: OwnedRun = {
             runId: request.runId,
-            runtime,
             agentName,
             workspaceId: pane.workspaceId,
             tabId: pane.tabId,
             paneId: pane.paneId,
             terminalId: pane.terminalId,
-            nativeSession: identity.agentSession.value,
             identity,
             launchCleanup,
             harness,
@@ -547,16 +497,10 @@ const makeHerdrHost = Effect.fn("HerdrHost.make")(function* () {
           committed = run;
           records.set(run.runId, run);
           const hosted: HerdrHostedAgent = {
-            runId: run.runId,
-            runtime,
             agentName,
             workspaceId: run.workspaceId,
             tabId: run.tabId,
             paneId: run.paneId,
-            terminalId: run.terminalId,
-            nativeSession: run.nativeSession,
-            agentSession: { ...run.identity.agentSession },
-            sessionIdentity: cli.sessionIdentity,
             inspect: withLock(inspectOwned(run)),
             prompt: (text) =>
               withLock(

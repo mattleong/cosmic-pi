@@ -2,9 +2,8 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { notifyAtHostBoundary, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
-import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
-import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import type { BackgroundTaskProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackgroundTaskConfig } from "../config/schema.ts";
 import { TaskManagerComponent } from "../ui/manager.ts";
@@ -80,26 +79,18 @@ function openTaskManager(
       );
     return Promise.resolve();
   }
-  const viewport = createScreenViewport();
-  return ctx.ui.custom<void>(
-    (tui, theme, keybindings, done) => {
-      viewport.attach(() => tui.terminal);
+  return openOwnedSurfacePromise<undefined>(ctx, {
+    placement: "screen",
+    closedValue: undefined,
+    create: ({ tui, theme, keybindings, getHeight, finish }) => {
       const manager = new TaskManagerComponent({
         theme,
         getProjection: bridge.get,
-        getHeight: viewport.getHeight,
+        getHeight,
         getNow: synchronousNow,
-        matchesKeybinding: (data, id) => keybindings.matches(data, id),
-        keybindingLabel: (id, fallback) =>
-          fullScreenKeybindingLabel(
-            id,
-            fallback,
-            keybindings.getKeys !== undefined
-              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-              : undefined,
-          ),
+        ...fullScreenKeybindingOptions(keybindings),
         requestRender: () => tui.requestRender(),
-        close: () => done(undefined),
+        close: () => finish(undefined),
         stop: (id) =>
           void actions
             .stop(id)
@@ -131,11 +122,10 @@ function openTaskManager(
         },
       };
     },
-    {
-      overlay: true,
-      overlayOptions: viewport.overlayOptions,
-    },
-  );
+  }).then((outcome) => {
+    // A failed opening rejects the command, as Pi's own custom Promise does.
+    if (outcome._tag === "Failed") throw outcome.cause;
+  });
 }
 
 export function registerTaskManagerCommand(

@@ -18,6 +18,17 @@ export const blockedExplanation = (reason: McpManagerBlocked): string =>
     "not-applicable": "This action does not apply to the current server state.",
   })[reason];
 
+/** Short labels shared by action hints and dashboard status. */
+export const blockedLabel = {
+  untrusted: "Session untrusted",
+  disabled: "Disabled",
+  invalid: "Invalid config",
+  "auth-running": "Signing in",
+  "auth-suspended": "Auth interrupted",
+  "cleanup-running": "Disconnecting",
+  "cleanup-unconfirmed": "Cleanup unconfirmed",
+} satisfies Record<Exclude<McpManagerBlocked, "not-applicable">, string>;
+
 export const serverActions = (
   row: Omit<McpManagerServer, "actions">,
   trusted: boolean,

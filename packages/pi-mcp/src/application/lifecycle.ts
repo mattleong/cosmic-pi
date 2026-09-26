@@ -8,7 +8,6 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import * as Option from "effect/Option";
 import {
   loadCodePreviewSettings,
   CodePreviewSchedulerService,
@@ -44,7 +43,11 @@ import {
 } from "../layer.ts";
 import { buildMcpTool, wrapMcpTool, type McpToolDefinition } from "../tools/controller.ts";
 import type { McpProgress } from "../observations/model.ts";
-import type { McpGatewayExecution, McpGatewayReply } from "../tools/model.ts";
+import {
+  MCP_GATEWAY_ACTIONS,
+  type McpGatewayExecution,
+  type McpGatewayReply,
+} from "../tools/model.ts";
 import { McpExecution, type McpExecutionContract } from "../tools/service.ts";
 import { McpManager } from "../manager/service.ts";
 import type { McpManagerContract } from "../manager/model.ts";
@@ -56,32 +59,12 @@ import { acquireMcpStatusHost, type McpStatusHost } from "../boundary/host-mcp-s
 import { makeAskUserHost } from "../boundary/host-ask-user.ts";
 import { makeSynchronousIngress } from "pi-cosmic-core";
 
-// Error-label decoding never traverses a rejected argument payload. The shared
-// execution decoder remains the only authority for admitting the complete request.
-const ErrorActionSchema = Schema.Struct({
-  action: Schema.Literals([
-    "status",
-    "connect",
-    "disconnect",
-    "refresh",
-    "server.instructions",
-    "completion.complete",
-    "resources.subscribe",
-    "resources.unsubscribe",
-    "resources.subscriptions",
-    "events.read",
-    "tools.list",
-    "tools.search",
-    "tools.describe",
-    "tools.call",
-    "resources.list",
-    "resources.templates",
-    "resources.read",
-    "prompts.list",
-    "prompts.get",
-    "result.read",
-  ]),
-});
+// Error labels read only the action value. The shared execution decoder remains the only
+// authority for admitting the complete request.
+const isGatewayAction = Schema.is(Schema.Literals(MCP_GATEWAY_ACTIONS));
+
+const CONFLICT_NOTICE =
+  "MCP tool name conflicts with another extension. Its tool was left unchanged.";
 
 /** Failure labels must not invoke rejected getters or turn unknown actions into status. */
 const failureAction = <Input>(request: Input): string =>
@@ -90,11 +73,7 @@ const failureAction = <Input>(request: Input): string =>
     const descriptor = Object.getOwnPropertyDescriptor(request, "action");
     if (descriptor === undefined) return "status";
     if (!("value" in descriptor)) return "unknown";
-    return (
-      Option.getOrUndefined(
-        Schema.decodeUnknownOption(ErrorActionSchema)({ action: descriptor.value }),
-      )?.action ?? "unknown"
-    );
+    return isGatewayAction(descriptor.value) ? descriptor.value : "unknown";
   }, "unknown");
 
 interface McpSessionInput extends McpLayerInput {
@@ -147,6 +126,8 @@ export const makeMcpLifecycle = (
   let previousSessionId: string | undefined;
 
   const visibleTool = () => pi.getAllTools().find((tool) => tool.name === "mcp");
+  const foreignTool = () =>
+    invokeHostCallback(() => visibleTool() !== undefined && !ownsTool(), true);
   const ownsTool = (): boolean =>
     invokeHostCallback(() => {
       const tool = visibleTool();
@@ -174,63 +155,66 @@ export const makeMcpLifecycle = (
   const current = (input: McpSessionInput, token: number) =>
     active?.input === input && slot.isCurrent(token);
 
-  const rawExecute = <Input>(
-    input: McpSessionInput,
-    token: number,
-    execution: McpExecutionContract,
-    request: Input,
-    signal: AbortSignal | undefined,
-    maxOutputBytes: number,
-    images: boolean,
-    onProgress?: (progress: McpProgress) => void,
-  ): Promise<McpGatewayExecution> => {
-    if (!current(input, token))
-      return Promise.reject(boundaryError("stale", "not-sent", "MCP session is no longer active."));
-    if (signal?.aborted)
-      return Promise.reject(boundaryError("cancelled", "not-sent", "MCP operation was cancelled."));
-    const projection = { maxOutputBytes, images };
-    const observedProjection = onProgress
-      ? {
-          ...projection,
-          onProgress: (progress: McpProgress) => {
-            if (current(input, token) && !signal?.aborted) onProgress(progress);
-          },
-        }
-      : projection;
-    // Running the Result, not the failing Effect, preserves the typed error rather
-    // than exposing Effect's FiberFailure wrapper to Code Mode certainty handling.
-    return slot.run(Effect.result(execution.execute(request, observedProjection)), signal).then(
-      (result) => {
-        const outcome = Result.isFailure(result)
-          ? result.failure.outcome
-          : result.success.reply.outcome;
-        if (!current(input, token))
-          throw boundaryError("stale", outcome, "MCP session was replaced.");
-        // Cancellation can arrive after the Effect settles but before this host continuation.
-        if (signal?.aborted)
-          throw boundaryError("cancelled", outcome, "MCP operation was cancelled.");
-        if (Result.isFailure(result)) {
-          const action = failureAction(request);
-          if (
-            result.failure.kind === "auth-required" ||
-            promptArgumentHint(action, result.failure) !== undefined
-          ) {
-            // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
-            return { reply: mcpFailureReply(action, result.failure), images: [] };
-          }
-          throw result.failure;
-        }
-        return result.success;
-      },
-      () => {
-        throw boundaryError(
-          signal?.aborted ? "cancelled" : "unavailable",
-          "unknown",
-          "MCP operation did not return a confirmed outcome.",
+  const executor =
+    (input: McpSessionInput, token: number, execution: McpExecutionContract) =>
+    <Input>(
+      request: Input,
+      signal: AbortSignal | undefined,
+      maxOutputBytes: number,
+      images: boolean,
+      onProgress?: (progress: McpProgress) => void,
+    ): Promise<McpGatewayExecution> => {
+      if (!current(input, token))
+        return Promise.reject(
+          boundaryError("stale", "not-sent", "MCP session is no longer active."),
         );
-      },
-    );
-  };
+      if (signal?.aborted)
+        return Promise.reject(
+          boundaryError("cancelled", "not-sent", "MCP operation was cancelled."),
+        );
+      const projection = { maxOutputBytes, images };
+      const observedProjection = onProgress
+        ? {
+            ...projection,
+            onProgress: (progress: McpProgress) => {
+              if (current(input, token) && !signal?.aborted) onProgress(progress);
+            },
+          }
+        : projection;
+      // Running the Result, not the failing Effect, preserves the typed error rather
+      // than exposing Effect's FiberFailure wrapper to Code Mode certainty handling.
+      return slot.run(Effect.result(execution.execute(request, observedProjection)), signal).then(
+        (result) => {
+          const outcome = Result.isFailure(result)
+            ? result.failure.outcome
+            : result.success.reply.outcome;
+          if (!current(input, token))
+            throw boundaryError("stale", outcome, "MCP session was replaced.");
+          // Cancellation can arrive after the Effect settles but before this host continuation.
+          if (signal?.aborted)
+            throw boundaryError("cancelled", outcome, "MCP operation was cancelled.");
+          if (Result.isFailure(result)) {
+            const action = failureAction(request);
+            if (
+              result.failure.kind === "auth-required" ||
+              promptArgumentHint(action, result.failure) !== undefined
+            ) {
+              // Preserve fixed recovery guidance through Code Mode's message-redacting boundary.
+              return { reply: mcpFailureReply(action, result.failure), images: [] };
+            }
+            throw result.failure;
+          }
+          return result.success;
+        },
+        () => {
+          throw boundaryError(
+            signal?.aborted ? "cancelled" : "unavailable",
+            "unknown",
+            "MCP operation did not return a confirmed outcome.",
+          );
+        },
+      );
+    };
 
   const slot = makePiSessionRuntimeSlot<
     McpSessionInput,
@@ -264,17 +248,13 @@ export const makeMcpLifecycle = (
       }),
     onActivated: (input, token, { execution, manager, scheduler }) => {
       // Detect a foreign gateway immediately before mutation as well as before startup.
-      const conflict = invokeHostCallback(() => visibleTool() !== undefined && !ownsTool(), true);
-      if (conflict) {
-        notifyAtHostBoundary(
-          input.ctx,
-          "MCP tool name conflicts with another extension. Its tool was left unchanged.",
-          "warning",
-        );
+      if (foreignTool()) {
+        notifyAtHostBoundary(input.ctx, CONFLICT_NOTICE, "warning");
         return;
       }
       active = { input, token, execution, manager };
       receipts.activate(input.owner);
+      const run = executor(input, token, execution);
       let wrapped: McpToolDefinition | undefined;
       try {
         wrapped = boundaries.wrapTool(
@@ -282,16 +262,7 @@ export const makeMcpLifecycle = (
             owner: input.owner,
             receipts,
             execute: (_callId, request, signal, maxOutputBytes, images, onProgress) =>
-              rawExecute(
-                input,
-                token,
-                execution,
-                request,
-                signal,
-                maxOutputBytes,
-                images,
-                onProgress,
-              ).catch((error) => {
+              run(request, signal, maxOutputBytes, images, onProgress).catch((error) => {
                 if (!current(input, token))
                   throw boundaryError("stale", "unknown", "MCP session was replaced.");
                 const failure =
@@ -333,9 +304,7 @@ export const makeMcpLifecycle = (
         toolActive,
         trusted: () => input.isTrusted() && execution.isAvailable(),
         execute: (_callId, request, signal, maxOutputBytes): Promise<McpGatewayReply> =>
-          rawExecute(input, token, execution, request, signal, maxOutputBytes, false).then(
-            (result) => result.reply,
-          ),
+          run(request, signal, maxOutputBytes, false).then((result) => result.reply),
       });
       if (input.sessionId)
         slot.fork(
@@ -420,19 +389,12 @@ export const makeMcpLifecycle = (
     if (sessionId === undefined || sessionId !== previousSessionId) userDeactivated = false;
     previousSessionId = sessionId;
     const captured = captureSessionHost(ctx);
-    let conflict: boolean;
-    try {
-      conflict = visibleTool() !== undefined && !ownsTool();
-    } catch {
-      conflict = true;
-    }
+    const conflict = foreignTool();
     if (captured._tag === "Unavailable" || conflict) {
       const stopping = slot.shutdown();
       notifyAtHostBoundary(
         ctx,
-        conflict
-          ? "MCP tool name conflicts with another extension. Its tool was left unchanged."
-          : "MCP session context is unavailable.",
+        conflict ? CONFLICT_NOTICE : "MCP session context is unavailable.",
         "warning",
       );
       return stopping;

@@ -1,14 +1,14 @@
 import * as Predicate from "effect/Predicate";
 import {
   claimCompactIssue,
+  getTextContent,
   summaryCompactIssues,
   withCompactIssues,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import type { ToolParams } from "./types.ts";
+import { isCodexImageDetails, type ToolParams } from "./types.ts";
 
 const short = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 100);
-const optionalString = <Value>(value: Value) => value === undefined || Predicate.isString(value);
 
 /** Projects display state only. Pi retains ownership of result images and execution. */
 const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
@@ -34,10 +34,7 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
       result.content.some((part) => part.type !== "text")
     )
       return undefined;
-    const details = result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
+    const details = getTextContent(result.content);
     if (!details.trim()) return undefined;
     return {
       action,
@@ -49,25 +46,15 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
 
   const details = result?.details;
   if (
-    !Predicate.isObject(details) ||
-    !Predicate.isString(details.id) ||
+    !isCodexImageDetails(details) ||
     details.id.length === 0 ||
     details.id.length > 256 ||
-    !Predicate.isString(details.status) ||
-    !Predicate.isString(details.prompt) ||
-    !Predicate.isString(details.mimeType) ||
-    !Predicate.isString(details.model) ||
-    !Predicate.isString(details.action) ||
-    !Predicate.isString(details.outputFormat) ||
-    !optionalString(details.savedPath) ||
-    !optionalString(details.revisedPrompt) ||
-    !optionalString(details.imageModel) ||
-    !["auto", "generate", "edit"].includes(String(details.action)) ||
-    !["png", "jpeg", "webp"].includes(String(details.outputFormat))
+    !["auto", "generate", "edit"].includes(details.action) ||
+    !["png", "jpeg", "webp"].includes(details.outputFormat)
   )
     return undefined;
-  const savedPath = Predicate.isString(details.savedPath) ? details.savedPath : undefined;
-  const finalSubject = savedPath || short(String(details.prompt));
+  const savedPath = details.savedPath;
+  const base = { action: details.action, subject: savedPath || short(details.prompt) };
   const notices = savedPath
     ? [
         {
@@ -82,12 +69,11 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
     case "completed":
       // A completed record without an image is not evidence of a delivered image.
       if (!result?.content.some((part) => part.type === "image")) return undefined;
-      return { action: String(details.action), subject: finalSubject, outcome: "success" };
+      return { ...base, outcome: "success" };
     case "failed":
       // Status alone cannot account for remote diagnostic text or recovery.
       return {
-        action: String(details.action),
-        subject: finalSubject,
+        ...base,
         outcome: "error",
         notices,
         issues: {
@@ -105,17 +91,11 @@ const projectImageSummary: CompactSummaryProvider<ToolParams> = ({
         },
       };
     case "cancelled":
-      return {
-        action: String(details.action),
-        subject: finalSubject,
-        outcome: "cancelled",
-        notices,
-      };
+      return { ...base, outcome: "cancelled", notices };
     case "in_progress":
     case "incomplete":
       return {
-        action: String(details.action),
-        subject: finalSubject,
+        ...base,
         outcome: "uncertain",
         notices: [
           ...notices,

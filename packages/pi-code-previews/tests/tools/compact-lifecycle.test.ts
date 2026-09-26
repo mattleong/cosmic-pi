@@ -1,15 +1,12 @@
 import assert from "node:assert/strict";
-import {
-  createReadToolDefinition,
-  type ReadToolInput,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition, type ReadToolInput } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { afterEach, test } from "vitest";
+import { afterEach, beforeEach, test } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
+import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler";
 import {
   clearCodePreviewSessionCapability,
@@ -26,7 +23,7 @@ import type {
   CompactSummaryProvider,
 } from "../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
-import { testTheme } from "../support/render";
+import { failingRenderer, plainTheme, textResult as result } from "../support/render";
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Result = Awaited<ReturnType<Definition["execute"]>>;
@@ -37,13 +34,6 @@ interface State {
 }
 type Context = ToolRenderContext<State, ReadToolInput>;
 type Provider = CompactSummaryProvider<ReadToolInput, Result["details"], State>;
-// SAFETY: This render-only theme implements the styling methods exercised by the shell.
-const theme = { ...testTheme(), bg: (_key: string, text: string) => text } as Theme;
-const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
-const result = (text: string): Result => ({
-  content: [{ type: "text", text }],
-  details: undefined,
-});
 const textOf = (value: Result | undefined) =>
   value?.content.map((part) => (part.type === "text" ? part.text : "")).join("\n") ?? "";
 const summarize: Provider = ({ args, phase, result: value }) => {
@@ -54,14 +44,24 @@ const summarize: Provider = ({ args, phase, result: value }) => {
   if (phase === "settled") summary.outcome = "success";
   return summary;
 };
-const brokenRenderer = () => {
-  throw new Error("renderer failed");
-};
 
-afterEach(() => {
-  clearCodePreviewSessionCapability();
-  setCodePreviewSettings(originalSettings);
-});
+beforeEach(() => applyPresentationSettings({}));
+afterEach(() => clearCodePreviewSessionCapability());
+
+function installRecordingScheduler() {
+  const scheduled = new Set<() => void>();
+  installCodePreviewSessionCapability({
+    run: () => Promise.reject(new Error("not used")),
+    defer: () => () => undefined,
+    schedule: (_interval, task) => {
+      scheduled.add(task);
+      return () => {
+        scheduled.delete(task);
+      };
+    },
+  });
+  return scheduled;
+}
 
 function harness(
   provider: Provider = summarize,
@@ -91,20 +91,11 @@ function harness(
     ...(options.scheduleAnimation && { scheduleAnimation: options.scheduleAnimation }),
   });
   const state: State = {};
-  let context: Context = {
+  let context: Context = renderContextFixture({
     args: { path: "file.ts" },
     state,
-    toolCallId: "call",
-    cwd: "/project",
-    lastComponent: undefined,
-    executionStarted: false,
     argsComplete: false,
-    isPartial: true,
-    expanded: false,
-    showImages: true,
-    isError: false,
-    invalidate: () => undefined,
-  };
+  });
   let callSlot: Component | undefined;
   let resultSlot: Component | undefined;
   let retainedResult: Result | undefined;
@@ -113,7 +104,7 @@ function harness(
     state,
     call(overrides: Partial<Context> = {}) {
       context = { ...context, ...overrides, lastComponent: callSlot };
-      callSlot = tool.renderCall(context.args, theme, context);
+      callSlot = tool.renderCall(context.args, plainTheme, context);
       return callSlot;
     },
     result(value: Result, overrides: Partial<Context> = {}) {
@@ -122,7 +113,7 @@ function harness(
       resultSlot = tool.renderResult(
         value,
         { expanded: context.expanded, isPartial: context.isPartial },
-        theme,
+        plainTheme,
         context,
       );
       return resultSlot;
@@ -263,34 +254,43 @@ test("result-only rendering stays visible and is not duplicated when a call slot
 });
 
 test("missing outcomes, declines and throwing providers keep domain failure bodies on expansion", () => {
-  for (const provider of [
-    () => undefined,
-    () => ({ subject: "subject" }),
-    () => {
-      throw new Error("summary failure");
-    },
-  ] satisfies Provider[]) {
-    const h = harness(provider);
-    h.update({ isPartial: false }, result("domain failed, recover with resume"));
-    assert.doesNotMatch(h.rows().join("\n"), /CALL file.ts|domain failed/u);
-    h.update({ expanded: true });
-    assert.match(h.rows().join("\n"), /CALL file.ts/u);
-    assert.match(h.rows().join("\n"), /domain failed, recover with resume/u);
+  const body = Array.from({ length: 100 }, (_, index) => `recovery-step-${index}`).join("\n");
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const provider of [
+      () => undefined,
+      () => ({ subject: "subject" }),
+      () => {
+        throw new Error("summary failure");
+      },
+    ] satisfies Provider[]) {
+      const h = harness(provider, mode);
+      h.update({ isPartial: false }, result(body));
+      assert.doesNotMatch(h.rows().join("\n"), /CALL file.ts|recovery-step/u);
+      const expanded = h.update({ expanded: true }).join("\n");
+      assert.match(expanded, /CALL file.ts/u);
+      for (const step of body.split("\n")) assert.ok(expanded.includes(step));
+    }
   }
 });
 
 test("errors, cancellation and uncertainty retain full notices and original details even when expanded", () => {
-  for (const outcome of ["error", "cancelled", "uncertain"] as const) {
-    const h = harness(({ args }) => ({
-      subject: args.path ?? "",
-      outcome,
-      notices: [{ kind: "recovery", text: "line-one\nline-two recovery command" }],
-    }));
-    h.update({ isPartial: false }, result("rich failure body"));
-    for (const expanded of [false, true]) {
-      const rows = h.update({ expanded });
-      assert.equal(rows.join("\n").includes("rich failure body"), expanded);
-      assert.equal(rows.join("\n").includes("line-two recovery command"), expanded);
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const outcome of ["error", "cancelled", "uncertain"] as const) {
+      const h = harness(
+        ({ args }) => ({
+          subject: args.path ?? "",
+          outcome,
+          notices: [{ kind: "recovery", text: "line-one\nline-two recovery command" }],
+        }),
+        mode,
+      );
+      h.update({ isPartial: false }, result("rich failure body"));
+      for (const expanded of [false, true, false, true]) {
+        const text = h.update({ expanded }).join("\n");
+        assert.equal(text.includes("rich failure body"), expanded);
+        assert.equal(text.includes("line-two recovery command"), expanded);
+        assert.equal(text.includes("CALL file.ts"), expanded);
+      }
     }
   }
   const h = harness(summarize);
@@ -372,7 +372,8 @@ test("warnings remain visible while normal live output stays hidden", () => {
 
 test("lazy original renderer exceptions use per-slot fallback instead of escaping component render", () => {
   for (const expanded of [false, true]) {
-    const h = harness(() => undefined, "off", { call: brokenRenderer, result: brokenRenderer });
+    const broken = failingRenderer("factory");
+    const h = harness(() => undefined, "off", { call: broken, result: broken });
     h.update(
       { expanded, isPartial: false, isError: true },
       result("all raw error details\nrecover here\u001b[2J"),
@@ -387,7 +388,7 @@ test("lazy original renderer exceptions use per-slot fallback instead of escapin
 
 test("expanded ownership survives neither factory nor component rendering failure", () => {
   for (const mode of ["on", "off", "border"] as const) {
-    for (const failure of ["factory", "render"] as const) {
+    for (const failure of ["factory", "draw"] as const) {
       const h = harness(
         () => ({
           subject: "file.ts",
@@ -408,15 +409,7 @@ test("expanded ownership survives neither factory nor component rendering failur
           },
         }),
         mode,
-        {
-          result:
-            failure === "factory"
-              ? brokenRenderer
-              : () => ({
-                  render: brokenRenderer,
-                  invalidate: () => undefined,
-                }),
-        },
+        { result: failingRenderer(failure) },
       );
       const rows = h.update(
         { expanded: true, isPartial: false },
@@ -431,7 +424,7 @@ test("expanded ownership survives neither factory nor component rendering failur
 });
 
 test("unknown coverage transfers individual issues but never whole-call ownership", () => {
-  for (const failure of ["none", "factory", "render"] as const) {
+  for (const failure of ["none", "factory", "draw"] as const) {
     const h = harness(
       () => ({
         subject: "file.ts",
@@ -471,14 +464,7 @@ test("unknown coverage transfers individual issues but never whole-call ownershi
         },
       }),
       "off",
-      {
-        result:
-          failure === "factory"
-            ? brokenRenderer
-            : failure === "render"
-              ? () => ({ render: brokenRenderer, invalidate: () => undefined })
-              : () => new Text("Owned cause\nOriginal diagnostics", 0, 0),
-      },
+      { result: failingRenderer(failure, ["Owned cause", "Original diagnostics"]) },
     );
     for (const expanded of [false, true, false]) {
       const text = h
@@ -524,13 +510,6 @@ test("incomplete and malformed evidence stays compact with original details on e
     assert.doesNotMatch(rows.join("\n"), /complete original recovery/u);
     assert.match(h.update({ expanded: true }).join("\n"), /complete original recovery/u);
   }
-  const h = harness(() => {
-    throw new Error("hostile provider");
-  });
-  assert.match(
-    h.update({ isPartial: false, expanded: true }, result("original recovery survives")).join("\n"),
-    /original recovery survives/u,
-  );
 });
 
 test("expansion, arguments, result and error changes are not hidden by a timing token", () => {
@@ -548,17 +527,7 @@ test("expansion, arguments, result and error changes are not hidden by a timing 
 });
 
 test("timing starts only on observed execution, freezes on final and remains independent across calls", () => {
-  const scheduled = new Set<() => void>();
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: () => () => undefined,
-    schedule: (_interval, task) => {
-      scheduled.add(task);
-      return () => {
-        scheduled.delete(task);
-      };
-    },
-  });
+  const scheduled = installRecordingScheduler();
   const first = harness(summarize, "off", { timing: true });
   const second = harness(summarize, "off", { timing: true });
   first.call();
@@ -609,17 +578,7 @@ test("the timing preference gates overall and nested measured durations together
 });
 
 test("enabling duration display at settlement still cancels an animation-only timer", () => {
-  const scheduled = new Set<() => void>();
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: () => () => undefined,
-    schedule: (_interval, task) => {
-      scheduled.add(task);
-      return () => {
-        scheduled.delete(task);
-      };
-    },
-  });
+  const scheduled = installRecordingScheduler();
   const h = harness(summarize, "off", { timing: false });
   h.call({ executionStarted: true });
   assert.equal(scheduled.size, 1);

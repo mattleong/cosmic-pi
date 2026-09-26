@@ -11,7 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
+import { notifyListeners, sanitizeTerminalLine, scopedListener } from "pi-cosmic-core";
 import { McpActivity } from "../activity/service.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpActionBinding } from "../connection/model.ts";
@@ -35,7 +35,6 @@ export interface McpAuthAttempt {
   readonly subscribe: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
 }
 export interface McpAuthFlowContract {
-  readonly snapshot: () => McpAuthProgress | undefined;
   readonly subscribe: (
     listener: (progress: McpAuthProgress) => void,
   ) => Effect.Effect<void, never, Scope.Scope>;
@@ -64,21 +63,10 @@ export const makeMcpAuthFlow = Effect.gen(function* () {
   const clock = yield* Clock.Clock;
   const admission = yield* Semaphore.make(1);
   const counter = yield* Ref.make(0);
-  const latest = yield* Ref.make<McpAuthProgress | undefined>(undefined);
   const listeners = new Set<(progress: McpAuthProgress) => void>();
-  const notify = (value: McpAuthProgress) => {
-    for (const listener of listeners) invokeHostCallback(() => listener(value), undefined);
-  };
+  const notify = (value: McpAuthProgress) => notifyListeners(listeners, value);
   const subscribe: McpAuthFlowContract["subscribe"] = (listener) =>
-    Effect.acquireRelease(
-      Effect.sync(() => {
-        listeners.add(listener);
-      }),
-      () =>
-        Effect.sync(() => {
-          listeners.delete(listener);
-        }),
-    );
+    scopedListener(listeners, listener);
   const run: McpAuthFlowContract["run"] = (server, ui, present, expected) =>
     Effect.scoped(
       Effect.uninterruptibleMask((restore) =>
@@ -116,13 +104,8 @@ export const makeMcpAuthFlow = Effect.gen(function* () {
           const update = (change: (previous: McpAuthProgress) => McpAuthProgress) =>
             Ref.updateAndGet(progress, (previous) => Object.freeze(change(previous))).pipe(
               Effect.tap((value) =>
-                Ref.update(latest, (current) =>
-                  current?.attemptId === attemptId ? value : current,
-                ),
-              ),
-              Effect.tap((value) =>
                 Effect.sync(() => {
-                  if (Ref.getUnsafe(latest)?.attemptId === attemptId) notify(value);
+                  if (Ref.getUnsafe(counter) === attemptId) notify(value);
                 }),
               ),
               Effect.tap((value) => {
@@ -279,7 +262,6 @@ export const makeMcpAuthFlow = Effect.gen(function* () {
             reopen,
             subscribe: (listener) => subscribe(() => listener()),
           };
-          yield* Ref.set(latest, Ref.getUnsafe(progress));
           yield* Effect.sync(() => notify(Ref.getUnsafe(progress)));
           const ownedUi: McpLoginUi = { ...ui, progress: emit, waitForCallback };
           const work = execution.login(server, ownedUi, expected).pipe(
@@ -368,7 +350,7 @@ export const makeMcpAuthFlow = Effect.gen(function* () {
         ),
       ),
     );
-  return { run, snapshot: () => Ref.getUnsafe(latest), subscribe } satisfies McpAuthFlowContract;
+  return { run, subscribe } satisfies McpAuthFlowContract;
 });
 export class McpAuthFlow extends Context.Service<McpAuthFlow, McpAuthFlowContract>()(
   "pi-mcp/auth/flow/McpAuthFlow",

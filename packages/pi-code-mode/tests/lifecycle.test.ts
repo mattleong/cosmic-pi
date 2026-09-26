@@ -1,146 +1,47 @@
 // Code Mode's Pi boundary owns preview preparation, registration currency, and snapshots.
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { tmpdir } from "node:os";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { afterEach, vi } from "vitest";
-import {
-  registerCodeModeApplication,
-  type CodeModeApplicationBoundaries,
-} from "../src/application.ts";
 import { CodeModeConfigStore } from "../src/config/store.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { opaqueFixture } from "pi-cosmic-core/testing";
+import { codeModeStateFixture } from "./support/host.ts";
 import {
-  codeModeStateFixture,
-  extensionApiFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+  applicationHarness,
+  cleanupApplications,
+  temporaryDirectory,
+} from "./support/application.ts";
 
-// Raw Node builtin access for synchronous test scaffolding, mirroring pi-cosmic-core's
-// platform boundary; the Effect FileSystem service does not expose these sync contracts.
-const nodeFsModule = process.getBuiltinModule("node:fs");
-const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = nodeFsModule;
-const { join } = nodePathModule;
-
-// Mutating the agent-directory slot is this suite's process-environment host boundary.
-const processEnv: NodeJS.ProcessEnv = process.env;
-
-const tempDirectories: string[] = [];
-afterEach(() => {
-  for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true });
-  delete processEnv.PI_CODING_AGENT_DIR;
-});
-
-const newDirectory = (prefix: string): string => {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
-};
+afterEach(cleanupApplications);
 
 describe("code mode application lifecycle at the Pi boundary", () => {
-  type Handler = ExtensionHandler<any, any>;
-  type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
-  type LifecycleEventFixture = { readonly reason: string };
-
-  function applicationHarness(
-    boundaryOverrides: Partial<CodeModeApplicationBoundaries> = {},
-    initialActiveTools: string[] = [],
-  ) {
-    const agentDir = newDirectory("pi-code-mode-lc-agent-");
-    processEnv.PI_CODING_AGENT_DIR = agentDir;
-    const handlers = new Map<string, Handler>();
-    const commands = new Map<string, CommandDefinition>();
-    const notify = vi.fn();
-    const registerTool = vi.fn<ExtensionAPI["registerTool"]>();
-    let activeTools = [...initialActiveTools];
-    const pi = extensionApiFixture({
-      on(name: string, handler: Handler) {
-        handlers.set(name, handler);
-      },
-      registerCommand(name: string, definition: CommandDefinition) {
-        commands.set(name, definition);
-      },
-      registerTool,
-      getActiveTools: () => [...activeTools],
-      setActiveTools(names: string[]) {
-        activeTools = [...names];
-      },
-      events: { emit: vi.fn(), on: vi.fn() },
-    });
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    registerCodeModeApplication(pi, {
-      loadSettings: () => Promise.resolve(opaqueHostFixture({})),
-      wrapTool: (tool) => tool,
-      makeNestedDefinitions: () => ({}) as never,
-      ...boundaryOverrides,
-    });
-
-    const makeContext = (cwd: string, signal?: AbortSignal, trusted = true) =>
-      extensionContextFixture({
-        cwd,
-        mode: "rpc",
-        hasUI: true,
-        signal,
-        ui: { notify, custom: vi.fn(), select: vi.fn(), input: vi.fn() },
-        isProjectTrusted: vi.fn(() => trusted),
-      });
-    const invoke = (
-      name: string,
-      event: LifecycleEventFixture,
-      ctx: ReturnType<typeof makeContext>,
-    ) => Promise.resolve(handlers.get(name)?.(event, ctx)).then(() => undefined);
-    return {
-      agentDir,
-      notify,
-      registerTool,
-      activeTools: () => [...activeTools],
-      makeContext,
-      start: (ctx: ReturnType<typeof makeContext>, reason = "startup") =>
-        invoke("session_start", { reason }, ctx),
-      shutdown: (ctx: ReturnType<typeof makeContext>, reason = "quit") =>
-        invoke("session_shutdown", { reason }, ctx),
-      tree: (ctx: ReturnType<typeof makeContext>) =>
-        invoke("session_tree", { reason: "tree" }, ctx),
-      command: (args: string, ctx: ReturnType<typeof makeContext>) =>
-        Promise.resolve(commands.get("code-mode-settings")?.handler(args, ctx)).then(
-          () => undefined,
-        ),
-    };
-  }
-
   it.effect(
     "interrupts a pending preview load on replacement and registers only the replacement",
     () =>
       Effect.gen(function* () {
-        const firstCwd = newDirectory("pi-code-mode-lc-cwd-");
-        const secondCwd = newDirectory("pi-code-mode-lc-cwd-");
+        const firstCwd = temporaryDirectory("pi-code-mode-lc-cwd-");
+        const secondCwd = temporaryDirectory("pi-code-mode-lc-cwd-");
         const previewStarted = Deferred.makeUnsafe<void>();
         let firstSignal: AbortSignal | undefined;
-        const makeNestedDefinitions = vi.fn(() => {
-          // SAFETY: The registered tool is never executed in this lifecycle test.
-          return {} as never;
-        });
+        // The registered tool is never executed in this lifecycle test.
+        const makeNestedDefinitions = vi.fn(() => opaqueFixture({}));
         const h = applicationHarness({
           loadSettings: (cwd, _trusted, signal) => {
-            if (cwd !== firstCwd) return Promise.resolve(opaqueHostFixture({}));
+            if (cwd !== firstCwd) return Promise.resolve(opaqueFixture({}));
             firstSignal = signal;
             void Deferred.doneUnsafe(previewStarted, Effect.void);
             return Promise.race([]);
           },
           makeNestedDefinitions,
         });
-        const firstCtx = h.makeContext(firstCwd);
+        const firstCtx = h.makeContext({ cwd: firstCwd });
         const firstStart = h.start(firstCtx);
         yield* Deferred.await(previewStarted);
 
-        const secondCtx = h.makeContext(secondCwd);
+        const secondCtx = h.makeContext({ cwd: secondCwd });
         const secondStart = h.start(secondCtx, "new");
         yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
 
@@ -163,7 +64,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
           return Promise.race([]);
         },
       });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      const ctx = h.makeContext();
       const starting = h.start(ctx);
       yield* Deferred.await(previewStarted);
       const shutdown = h.shutdown(ctx);
@@ -180,7 +81,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
       const h = applicationHarness({
         loadSettings: () => Promise.reject(new Error("preview settings unavailable")),
       });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      const ctx = h.makeContext();
       yield* Effect.promise(() => h.start(ctx));
       expect(h.registerTool).toHaveBeenCalledTimes(1);
       yield* Effect.promise(() => h.shutdown(ctx));
@@ -189,24 +90,18 @@ describe("code mode application lifecycle at the Pi boundary", () => {
 
   it.effect("skips preview preparation and registration when unavailable or disabled", () =>
     Effect.gen(function* () {
-      const untrustedLoad = vi.fn(() => Promise.resolve(opaqueHostFixture({})));
+      const untrustedLoad = vi.fn(() => Promise.resolve(opaqueFixture({})));
       const untrusted = applicationHarness({ loadSettings: untrustedLoad });
-      const untrustedCtx = untrusted.makeContext(
-        newDirectory("pi-code-mode-lc-cwd-"),
-        undefined,
-        false,
-      );
+      const untrustedCtx = untrusted.makeContext({ trusted: false });
       yield* Effect.promise(() => untrusted.start(untrustedCtx));
       expect(untrustedLoad).not.toHaveBeenCalled();
       expect(untrusted.registerTool).not.toHaveBeenCalled();
       yield* Effect.promise(() => untrusted.shutdown(untrustedCtx));
 
-      const disabledLoad = vi.fn(() => Promise.resolve(opaqueHostFixture({})));
+      const disabledLoad = vi.fn(() => Promise.resolve(opaqueFixture({})));
       const disabled = applicationHarness({ loadSettings: disabledLoad });
-      const configDir = join(disabled.agentDir, "extensions");
-      mkdirSync(configDir, { recursive: true });
-      writeFileSync(join(configDir, "pi-code-mode.json"), '{"enabled":false}\n');
-      const disabledCtx = disabled.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      disabled.writeGlobalConfig('{"enabled":false}\n');
+      const disabledCtx = disabled.makeContext();
       yield* Effect.promise(() => disabled.start(disabledCtx));
       expect(disabledLoad).not.toHaveBeenCalled();
       expect(disabled.registerTool).not.toHaveBeenCalled();
@@ -221,7 +116,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
           throw new Error("definition factory failed");
         },
       });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      const ctx = h.makeContext();
       yield* Effect.promise(() => h.start(ctx));
 
       expect(h.registerTool).not.toHaveBeenCalled();
@@ -239,10 +134,10 @@ describe("code mode application lifecycle at the Pi boundary", () => {
       const h = applicationHarness({
         loadSettings: () => {
           void Deferred.doneUnsafe(previewStarted, Effect.void);
-          return runPromise(Deferred.await(releasePreview)).then(() => opaqueHostFixture({}));
+          return runPromise(Deferred.await(releasePreview)).then(() => opaqueFixture({}));
         },
       });
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"), new AbortController().signal);
+      const ctx = h.makeContext({ signal: new AbortController().signal });
       const starting = h.start(ctx);
       yield* Deferred.await(previewStarted);
 
@@ -260,8 +155,8 @@ describe("code mode application lifecycle at the Pi boundary", () => {
     "rejects a deactivated session's late publication until its replacement publishes",
     () =>
       Effect.gen(function* () {
-        const firstCwd = newDirectory("pi-code-mode-lc-cwd-");
-        const secondCwd = newDirectory("pi-code-mode-lc-cwd-");
+        const firstCwd = temporaryDirectory("pi-code-mode-lc-cwd-");
+        const secondCwd = temporaryDirectory("pi-code-mode-lc-cwd-");
         const commit = Deferred.makeUnsafe<void>();
         const release = Deferred.makeUnsafe<void>();
         const nextStart = Deferred.makeUnsafe<void>();
@@ -310,12 +205,12 @@ describe("code mode application lifecycle at the Pi boundary", () => {
             );
           },
         });
-        const firstCtx = h.makeContext(firstCwd);
+        const firstCtx = h.makeContext({ cwd: firstCwd });
         yield* Effect.promise(() => h.start(firstCtx));
         const oldWrite = h.command("global catalogBudget 7", firstCtx);
         yield* Deferred.await(commit);
 
-        const secondCtx = h.makeContext(secondCwd);
+        const secondCtx = h.makeContext({ cwd: secondCwd });
         const replacing = h.start(secondCtx, "new");
         h.notify.mockClear();
         yield* Effect.promise(() => h.command("status", secondCtx));
@@ -343,22 +238,20 @@ describe("code mode application lifecycle at the Pi boundary", () => {
     () =>
       Effect.gen(function* () {
         const h = applicationHarness();
-        const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+        const ctx = h.makeContext();
         yield* Effect.promise(() => h.start(ctx));
         yield* Effect.promise(() => h.command("global maxOutputBytes 600", ctx));
         const original = h.registerTool.mock.calls.at(-1)![0];
-        const retained = yield* Effect.promise(() =>
-          original.execute(
-            "retain",
-            { code: 'return "x".repeat(5000);' },
-            undefined,
-            undefined,
-            ctx,
-          ),
-        );
-        const { resultId: id } = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ resultId: Schema.String }),
-        )(retained.details);
+        const retainedId = (tool: typeof original, callId: string, code: string) =>
+          Effect.promise(() => tool.execute(callId, { code }, undefined, undefined, ctx)).pipe(
+            Effect.flatMap((result) =>
+              Schema.decodeUnknownEffect(Schema.Struct({ resultId: Schema.String }))(
+                result.details,
+              ),
+            ),
+            Effect.map(({ resultId }) => resultId),
+          );
+        const id = yield* retainedId(original, "retain", 'return "x".repeat(5000);');
         expect(id).toBeTruthy();
         yield* Effect.promise(() => h.tree(ctx));
         const replacement = h.registerTool.mock.calls.at(-1)![0];
@@ -373,18 +266,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
             original.execute("stale", { action: "result.read", id }, undefined, undefined, ctx),
           ).rejects.toThrow(),
         );
-        const fresh = yield* Effect.promise(() =>
-          replacement.execute(
-            "fresh",
-            { code: 'return "y".repeat(5000);' },
-            undefined,
-            undefined,
-            ctx,
-          ),
-        );
-        const { resultId: freshId } = yield* Schema.decodeUnknownEffect(
-          Schema.Struct({ resultId: Schema.String }),
-        )(fresh.details);
+        const freshId = yield* retainedId(replacement, "fresh", 'return "y".repeat(5000);');
         expect(freshId).not.toBe(id);
         yield* Effect.promise(() => h.shutdown(ctx));
         yield* Effect.promise(() =>
@@ -427,7 +309,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
               write: { execute: write },
             }),
         });
-        const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+        const ctx = h.makeContext();
         yield* Effect.promise(() => h.start(ctx));
         yield* Effect.promise(() => h.command("global maxToolCalls 100", ctx));
         const hasCounts = Schema.is(
@@ -494,7 +376,7 @@ describe("code mode application lifecycle at the Pi boundary", () => {
   it.effect("preserves unrelated active-tool order and duplicates during reconciliation", () =>
     Effect.gen(function* () {
       const h = applicationHarness({}, ["read", "read", "bash"]);
-      const ctx = h.makeContext(newDirectory("pi-code-mode-lc-cwd-"));
+      const ctx = h.makeContext();
       yield* Effect.promise(() => h.start(ctx));
       expect(h.activeTools()).toEqual(["read", "read", "bash", "code_mode"]);
 

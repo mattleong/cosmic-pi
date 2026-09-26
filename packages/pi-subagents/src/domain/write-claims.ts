@@ -93,12 +93,6 @@ export const normalizeWriteClaims = (
     keys.add(key);
     claims.push(claim);
   }
-  if (claims.length === 0)
-    return {
-      ok: false,
-      code: "write_claims_required",
-      message: "When writes is present it must contain at least one exact file path.",
-    };
   return { ok: true, claims };
 };
 

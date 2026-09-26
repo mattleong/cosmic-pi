@@ -1,4 +1,10 @@
-import { freezeSnapshot, sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
+import {
+  freezeSnapshot,
+  safeTextPrefix,
+  sanitizeDiagnosticError,
+  stripTerminalControls,
+  utf8Prefix,
+} from "pi-cosmic-core";
 import type { SubagentRunView, SubagentUsage } from "./model.ts";
 
 export const MAX_NAME_CHARS = 80;
@@ -6,19 +12,7 @@ export const MAX_TASK_CHARS = 128 * 1024;
 export const MAX_FINAL_TEXT_CHARS = 32 * 1024;
 export const MAX_ERROR_CHARS = 8 * 1024;
 
-export const safeTextPrefix = (value: string, maximumCodeUnits: number): string => {
-  let end = Math.max(0, Math.min(value.length, Math.floor(maximumCodeUnits)));
-  if (
-    end > 0 &&
-    end < value.length &&
-    value.charCodeAt(end - 1) >= 0xd800 &&
-    value.charCodeAt(end - 1) <= 0xdbff &&
-    value.charCodeAt(end) >= 0xdc00 &&
-    value.charCodeAt(end) <= 0xdfff
-  )
-    end -= 1;
-  return value.slice(0, end);
-};
+export { safeTextPrefix };
 
 export const clipWithMarker = (value: string, maximum: number, marker: string): string =>
   value.length <= maximum
@@ -28,16 +22,8 @@ export const clipWithMarker = (value: string, maximum: number, marker: string): 
 export const clipUtf8Text = (value: string, maximumBytes: number): string => {
   if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
   const marker = "…";
-  const contentBudget = Math.max(0, maximumBytes - Buffer.byteLength(marker, "utf8"));
-  let low = 0;
-  let high = value.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const prefix = safeTextPrefix(value, middle);
-    if (Buffer.byteLength(prefix, "utf8") <= contentBudget) low = middle;
-    else high = middle - 1;
-  }
-  return `${safeTextPrefix(value, low)}${marker}`;
+  const prefix = utf8Prefix(value, Math.max(0, maximumBytes - Buffer.byteLength(marker, "utf8")));
+  return `${prefix}${marker}`;
 };
 
 export const sanitizeName = (value: string): string => {
@@ -59,30 +45,7 @@ const frozenViewSnapshots = new WeakMap<SubagentRunView, SubagentRunView>();
 export const snapshotView = (view: SubagentRunView): SubagentRunView => {
   const cached = frozenViewSnapshots.get(view);
   if (cached) return cached;
-  const snapshot = freezeSnapshot({
-    ...view,
-    capabilities: [...view.capabilities],
-    selection: {
-      ...view.selection,
-      skippedCandidates: view.selection.skippedCandidates.map((candidate) => ({ ...candidate })),
-    },
-    sessionEvents: view.sessionEvents.map((event) => ({ ...event })),
-    nativeActivity: view.nativeActivity
-      ? {
-          ...view.nativeActivity,
-          latest: view.nativeActivity.latest ? { ...view.nativeActivity.latest } : undefined,
-        }
-      : undefined,
-    writeClaims: view.writeClaims ? [...view.writeClaims] : undefined,
-    writeAudit: view.writeAudit
-      ? {
-          observedFileWrites: [...view.writeAudit.observedFileWrites],
-          violations: view.writeAudit.violations.map((violation) => ({ ...violation })),
-          bashWriteHints: view.writeAudit.bashWriteHints,
-        }
-      : undefined,
-    usage: { ...view.usage },
-  });
+  const snapshot = freezeSnapshot(view);
   frozenViewSnapshots.set(view, snapshot);
   return snapshot;
 };

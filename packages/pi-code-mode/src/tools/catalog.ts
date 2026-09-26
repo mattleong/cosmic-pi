@@ -103,7 +103,6 @@ const GUEST_TOOL_DESCRIPTIONS = {
 } satisfies Readonly<Record<PiGuestToolName, string>>;
 
 const GUEST_TOOL_INPUTS = {
-  read: ReadGuestInputSchema,
   bash: ShellInput,
   powershell: ShellInput,
   edit: EditInput,
@@ -205,7 +204,7 @@ const makeCodeModeGuestTools = (
   invokePi: NestedPiToolDispatch,
   invokeBackgroundTask: BackgroundTaskDispatch,
   invokeMcp: McpDispatch,
-  options: CodeModeCatalogOptions,
+  includePowerShell: boolean,
 ) => {
   const portablePi = {
     read: readTool(invokePi),
@@ -217,7 +216,7 @@ const makeCodeModeGuestTools = (
     ls: guestTool("ls", invokePi),
   };
   return {
-    pi: options.includePowerShell
+    pi: includePowerShell
       ? { ...portablePi, powershell: guestTool("powershell", invokePi) }
       : portablePi,
     session: {
@@ -296,21 +295,18 @@ export const makeExecutionGuestTools = (
               "MCP output exceeds the remaining cumulative budget. Use a narrower result.read if retained; never repeat the original operation to recover output.",
           }),
       ),
-    options,
+    options.includePowerShell,
   );
 };
 
 /** Model-facing catalog instructions rendered over the same shapes the program will see. */
 export const describeCodeModeCatalog = (
   catalogBudget: number,
-  options: CodeModeCatalogOptions,
-): string =>
-  CodeMode.make({
-    tools: makeCodeModeGuestTools(
-      () => Effect.fail(toolError("Tool preview is not executable.")),
-      () => Effect.fail(toolError("Tool preview is not executable.")),
-      () => Effect.fail(toolError("Tool preview is not executable.")),
-      options,
-    ),
+  includePowerShell: boolean,
+): string => {
+  const preview = () => Effect.fail(toolError("Tool preview is not executable."));
+  return CodeMode.make({
+    tools: makeCodeModeGuestTools(preview, preview, preview, includePowerShell),
     discovery: { catalogBudget },
   }).instructions();
+};

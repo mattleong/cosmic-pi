@@ -10,7 +10,12 @@ import {
 } from "../run/model.ts";
 import { aggregateUsage } from "./metrics.ts";
 import { subagentUiRefreshCadence, type SubagentUiRefreshCadence } from "./refresh.ts";
-import { formatSessionAge, projectRunRoutePresentation, shortRunId } from "./run-presentation.ts";
+import {
+  formatRunRouteLine,
+  formatSessionAge,
+  projectRunRoutePresentation,
+  shortRunId,
+} from "./run-presentation.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { animatedRunStateGlyph, runStateColor, runStateLabel } from "./run-state.ts";
 
@@ -224,25 +229,15 @@ const renderRunRoute = (
   layout: RunRouteLayout,
   dimmed: boolean,
 ): string => {
+  if (layout === "full")
+    return dimmed ? theme.fg("dim", formatRunRouteLine(run)) : formatRunRouteLine(run, theme);
   const { profile, hostRuntime, model, narrowModel } = projectRunRoutePresentation(run);
   const plain =
-    layout === "model"
-      ? `${profile} · ${narrowModel}`
-      : layout === "compact"
-        ? `${profile} ${hostRuntime} ${model}`
-        : `${profile} → ${hostRuntime} · ${model}`;
+    layout === "model" ? `${profile} · ${narrowModel}` : `${profile} ${hostRuntime} ${model}`;
   if (dimmed) return theme.fg("dim", plain);
-  if (layout === "model")
-    return `${theme.fg("muted", profile)}${theme.fg("dim", " · ")}${theme.fg(
-      "toolOutput",
-      narrowModel,
-    )}`;
-  return layout === "compact"
-    ? `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`
-    : `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg(
-        "toolOutput",
-        `${hostRuntime} · ${model}`,
-      )}`;
+  return layout === "model"
+    ? `${theme.fg("muted", profile)}${theme.fg("dim", " · ")}${theme.fg("toolOutput", narrowModel)}`
+    : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", `${hostRuntime} ${model}`)}`;
 };
 
 const renderActivityRow = (

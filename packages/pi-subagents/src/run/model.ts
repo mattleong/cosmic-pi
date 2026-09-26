@@ -29,15 +29,7 @@ export const SUBAGENT_RUN_STATES = [
 ] as const;
 export type SubagentRunState = (typeof SUBAGENT_RUN_STATES)[number];
 
-export type SubagentCapability =
-  | "steer"
-  | "interrupt"
-  | "resume"
-  | "rename-display"
-  | "parent-contact"
-  | "peer-notice"
-  | "native-fork";
-
+/** Pi supports every capability; other backends declare subsets of this list. */
 export const PI_SUBAGENT_CAPABILITIES = [
   "steer",
   "interrupt",
@@ -46,7 +38,8 @@ export const PI_SUBAGENT_CAPABILITIES = [
   "parent-contact",
   "peer-notice",
   "native-fork",
-] as const satisfies ReadonlyArray<SubagentCapability>;
+] as const;
+export type SubagentCapability = (typeof PI_SUBAGENT_CAPABILITIES)[number];
 
 export interface SubagentUsage {
   readonly input: number;

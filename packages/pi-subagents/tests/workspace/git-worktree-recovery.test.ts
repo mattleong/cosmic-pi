@@ -1,33 +1,21 @@
 import { it } from "@effect/vitest";
 import { expect, vi } from "vitest";
 import * as Effect from "effect/Effect";
-import * as os from "node:os";
 import * as snapshot from "../../src/boundary/git-worktree-snapshot.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import { git, workspaceIO } from "../../src/boundary/git-worktree-process.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import type { WorkspaceRecord } from "../../src/workspace/model.ts";
+import { commitRepository, io, readText, temporaryDirectory } from "./fixtures/repository.ts";
 
 const fixture = <A, E>(
   test: (agent: string, source: string) => Effect.Effect<A, E, WorkspaceService>,
 ) =>
   Effect.gen(function* () {
-    const temporary = yield* Effect.acquireRelease(
-      workspaceIO("fixture", () =>
-        fs.mkdtemp(path.join(os.tmpdir(), "pi-seed-recovery-")).then((dir) => fs.realpath(dir)),
-      ),
-      (dir) =>
-        workspaceIO("fixture", () => fs.rm(dir, { recursive: true, force: true })).pipe(
-          Effect.ignore,
-        ),
-    );
+    const temporary = yield* temporaryDirectory("pi-seed-recovery-");
     const source = path.join(temporary, "source");
     const agent = path.join(temporary, "agent");
-    yield* workspaceIO("fixture", () => fs.mkdir(source));
-    yield* git(source, ["init", "--template="]);
-    yield* workspaceIO("fixture", () => fs.writeFile(path.join(source, "main.ts"), "baseline\n"));
-    yield* git(source, ["add", "main.ts"]);
-    yield* git(source, ["commit", "-m", "fixture"]);
+    yield* commitRepository(source, [["main.ts", "baseline\n"]]);
     return yield* test(agent, source).pipe(
       Effect.provide(WorkspaceService.layer({ agentDirectory: agent })),
     );
@@ -72,7 +60,7 @@ for (const mismatch of ["none", "missing provenance", "owner", "source", "regist
             if (mismatch === "registration") {
               yield* git(repository, ["worktree", "remove", "--force", seed]);
               // An unrelated real checkout at the same path is never deletion authority.
-              yield* workspaceIO("fixture", () => fs.mkdir(seed));
+              yield* io(() => fs.mkdir(seed));
               yield* git(seed, ["init", "--template="]);
             } else {
               let changed: WorkspaceRecord = failed;
@@ -93,7 +81,7 @@ for (const mismatch of ["none", "missing provenance", "owner", "source", "regist
                   },
                 };
               }
-              yield* workspaceIO("fixture", () =>
+              yield* io(() =>
                 fs.writeFile(path.join(directory, "record.json"), JSON.stringify(changed)),
               );
             }
@@ -110,21 +98,15 @@ for (const mismatch of ["none", "missing provenance", "owner", "source", "regist
             if (mismatch === "none") {
               yield* recovered.recoverDiscard(target);
               expect((yield* recovered.inspect(target)).status).toBe("discarded");
-              expect(yield* workspaceIO("fixture", () => fs.readdir(directory))).not.toContain(
-                "seed",
-              );
+              expect(yield* io(() => fs.readdir(directory))).not.toContain("seed");
               expect(yield* git(repository, ["worktree", "list", "--porcelain"])).not.toContain(
                 seed,
               );
-              expect(
-                yield* workspaceIO("fixture", () =>
-                  fs.readFile(path.join(predecessor.cwd, "main.ts"), "utf8"),
-                ),
-              ).toBe("baseline\n");
+              expect(yield* readText(predecessor.cwd, "main.ts")).toBe("baseline\n");
             } else {
               yield* recovered.recoverDiscard(target).pipe(Effect.flip);
               expect((yield* recovered.inspect(target)).status).toBe("creating");
-              expect(yield* workspaceIO("fixture", () => fs.readdir(directory))).toContain("seed");
+              expect(yield* io(() => fs.readdir(directory))).toContain("seed");
             }
           }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: agent })));
         }),

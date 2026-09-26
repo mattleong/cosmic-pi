@@ -1,7 +1,7 @@
 import type { OverlayAnchor, OverlayOptions } from "@earendil-works/pi-tui";
 import { screenViewport, type TerminalSize } from "../manager/viewport.ts";
 
-/** One instance per custom UI opening. Hosts retain all overlay lifecycle ownership. */
+/** One instance per custom UI opening; the owned surface owns its overlay lifecycle. */
 export const createScreenViewport = (fallbackAnchor: OverlayAnchor = "top-left") => {
   let readTerminal: () => TerminalSize = () => ({ columns: 0, rows: 0 });
   const getSize = () => screenViewport(readTerminal());

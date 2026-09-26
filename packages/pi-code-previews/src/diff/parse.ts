@@ -7,15 +7,11 @@ export type AddedDiffLine = ParsedDiffLine & { kind: "+" };
 export type RemovedDiffLine = ParsedDiffLine & { kind: "-" };
 
 export function diffLineNumberWidth(lines: Array<ParsedDiffLine | null>): number {
-  return lines.reduce((width, line) => Math.max(width, normalizedDiffLineNumber(line).length), 0);
+  return lines.reduce((width, line) => Math.max(width, line?.lineNumber.trim().length ?? 0), 0);
 }
 
 export function formatDiffLineNumber(lineNumber: string, width: number): string {
   return lineNumber.trim().padStart(width, " ");
-}
-
-function normalizedDiffLineNumber(line: ParsedDiffLine | null): string {
-  return line?.lineNumber.trim() ?? "";
 }
 
 export function parseDiffLine(line: string): ParsedDiffLine | null {

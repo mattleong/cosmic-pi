@@ -15,11 +15,13 @@ import {
   type BackgroundTaskCodeModeInput,
   type BackgroundTaskCodeModeOutput,
 } from "pi-background-task/code-mode";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback, querySessionCapability } from "pi-cosmic-core";
 import { formatForeignRejection } from "../tools/format.ts";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
 const decodeOutput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeOutputSchema);
+const unrecognized = () =>
+  toolError("Nested tool 'session.backgroundTask' returned an unrecognized result shape.");
 
 /** Leave time for reply validation, guest projection, and outer settlement. Best effort only. */
 const WAIT_SETTLEMENT_RESERVE_MS = 1_000;
@@ -66,24 +68,17 @@ export const makeBackgroundTaskDispatch = (options: {
             ),
           );
         }
-        const candidates: Array<
-          NonNullable<ReturnType<typeof normalizeBackgroundTaskCodeModeCapability>>
-        > = [];
-        let discovering = true;
-        const emitted = invokeHostCallback(() => {
-          options.events.emit(BACKGROUND_TASK_CODE_MODE_QUERY, {
-            version: BACKGROUND_TASK_CODE_MODE_VERSION,
-            sessionId,
-            respond: <Candidate>(candidate: Candidate) => {
-              if (!discovering || candidates.length >= 2) return;
-              const normalized = normalizeBackgroundTaskCodeModeCapability(candidate);
-              if (normalized?.sessionId === sessionId) candidates.push(normalized);
-            },
-          });
-          return true;
-        }, false);
-        discovering = false;
-        if (!emitted || candidates.length === 0) {
+        const { candidates, failed } = querySessionCapability(
+          options.events,
+          BACKGROUND_TASK_CODE_MODE_QUERY,
+          { version: BACKGROUND_TASK_CODE_MODE_VERSION, sessionId },
+          (candidate) => {
+            const normalized = normalizeBackgroundTaskCodeModeCapability(candidate);
+            return normalized?.sessionId === sessionId ? normalized : undefined;
+          },
+          2,
+        );
+        if (failed || candidates.length === 0) {
           return Effect.fail(
             toolError(
               "Nested tool 'session.backgroundTask' is unavailable. Load and activate pi-background-task for this session.",
@@ -141,25 +136,14 @@ export const makeBackgroundTaskDispatch = (options: {
               returned = true;
               invokeHostCallback(() => options.onOperation?.(invocationId, "completed"), undefined);
               return decodeOutput(output).pipe(
-                Effect.mapError(() =>
-                  toolError(
-                    "Nested tool 'session.backgroundTask' returned an unrecognized result shape.",
-                  ),
-                ),
-                Effect.flatMap((decoded) =>
-                  decoded.action !== input.action
-                    ? Effect.fail(
-                        toolError(
-                          "Nested tool 'session.backgroundTask' returned an unrecognized result shape.",
-                        ),
-                      )
-                    : backgroundTaskCodeModeOutputFits(decoded, maxOutputBytes)
-                      ? Effect.succeed(decoded)
-                      : Effect.fail(
-                          toolError(
-                            "Nested tool 'session.backgroundTask' returned output beyond the current child-output allowance.",
-                          ),
-                        ),
+                Effect.mapError(unrecognized),
+                Effect.filterOrFail((decoded) => decoded.action === input.action, unrecognized),
+                Effect.filterOrFail(
+                  (decoded) => backgroundTaskCodeModeOutputFits(decoded, maxOutputBytes),
+                  () =>
+                    toolError(
+                      "Nested tool 'session.backgroundTask' returned output beyond the current child-output allowance.",
+                    ),
                 ),
               );
             }),

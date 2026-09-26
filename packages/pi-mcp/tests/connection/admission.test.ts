@@ -2,18 +2,10 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { McpBoundaryError } from "../../src/client/errors.ts";
-import type { McpSettings } from "../../src/config/model.ts";
 import { McpAdmission, type AdmissionTicket } from "../../src/connection/admission.ts";
+import { testSettings } from "../fixtures/services.ts";
 
-const settings: McpSettings = {
-  enabled: true,
-  connectTimeoutMs: 15_000,
-  requestTimeoutMs: 60_000,
-  idleTimeoutMs: 600_000,
-  maxConcurrent: 2,
-  maxPerServer: 1,
-  maxQueued: 2,
-};
+const settings = testSettings({ maxConcurrent: 2, maxPerServer: 1, maxQueued: 2 });
 const issue = (state: McpAdmission, server: string, now = 0): AdmissionTicket => {
   const ticket = state.issue(server, now);
   if (ticket instanceof McpBoundaryError) throw ticket;
@@ -59,15 +51,9 @@ it.effect("bounds a saturated single-server queue and releases cancelled waiters
     const queued = state.enqueue(queuedTicket);
     state.enqueue(issue(state, "a"));
     const overflow = state.enqueue(issue(state, "a"));
-    expect(yield* Effect.result(Deferred.await(overflow.ready))).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "busy" },
-    });
+    expect((yield* Deferred.await(overflow.ready).pipe(Effect.flip)).kind).toBe("busy");
     state.release(queuedTicket);
-    expect(yield* Effect.result(Deferred.await(queued.ready))).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "stale" },
-    });
+    expect((yield* Deferred.await(queued.ready).pipe(Effect.flip)).kind).toBe("stale");
     expect(state.snapshot()).toEqual({ active: 1, queued: 1 });
     state.finish(first);
     state.finish(first);
@@ -86,25 +72,23 @@ it.effect(
         maxQueued: 0,
       }));
       const caller = issue(state, "a");
-      const dependency = state.issueDependency("a", 10);
+      const dependency = state.issue("a", 10, true);
       if (dependency instanceof McpBoundaryError) return yield* dependency;
       const active = state.enqueue(dependency);
       yield* Deferred.await(active.ready);
-      expect(state.issueDependency("b", 10)).toMatchObject({ kind: "busy" });
+      expect(state.issue("b", 10, true)).toMatchObject({ kind: "busy" });
       expect(state.issue("b", 10)).toMatchObject({ kind: "busy" });
       state.release(caller);
       const replacement = issue(state, "b");
       const overflow = state.enqueue(replacement);
-      expect(yield* Effect.result(Deferred.await(overflow.ready))).toMatchObject({
-        failure: { kind: "busy" },
-      });
+      expect((yield* Deferred.await(overflow.ready).pipe(Effect.flip)).kind).toBe("busy");
       expect(state.snapshot()).toEqual({ active: 1, queued: 0 });
       state.cancel(dependency);
-      expect(state.issueDependency("b", 20)).toMatchObject({ kind: "busy" });
+      expect(state.issue("b", 20, true)).toMatchObject({ kind: "busy" });
       state.finish(active);
       state.release(dependency);
       state.release(replacement);
-      const fresh = state.issueDependency("b", 30);
+      const fresh = state.issue("b", 30, true);
       if (fresh instanceof McpBoundaryError) return yield* fresh;
       const dispatch = state.enqueue(fresh);
       yield* Deferred.await(dispatch.ready);
@@ -123,12 +107,8 @@ it.effect("revocation wakes queued work but retains active permits through clean
     const queued = state.enqueue(issue(state, "a"));
     const sibling = state.enqueue(issue(state, "b"));
     state.revoke("a");
-    expect(yield* Effect.result(Deferred.await(activeTicket.revoked))).toMatchObject({
-      failure: { outcome: "unknown" },
-    });
-    expect(yield* Effect.result(Deferred.await(queued.ready))).toMatchObject({
-      failure: { kind: "stale" },
-    });
+    expect((yield* Deferred.await(activeTicket.revoked).pipe(Effect.flip)).outcome).toBe("unknown");
+    expect((yield* Deferred.await(queued.ready).pipe(Effect.flip)).kind).toBe("stale");
     yield* Deferred.await(sibling.ready);
     expect(state.snapshot()).toEqual({ active: 2, queued: 0 });
     state.finish(active);

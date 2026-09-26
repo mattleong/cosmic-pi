@@ -7,28 +7,19 @@ import {
   AgentDirectory,
   decodeTolerantFields,
   makeConfigDocumentErrorFactory,
-  readConfigOrWarn,
-  readOptionalJsonObject,
-  scopedDocumentPaths,
-  selectScopedDocument,
+  makeScopedConfigStore,
+  type JsonObject,
 } from "pi-cosmic-core";
 import { normalizeConfig } from "./options.ts";
 import type { BackgroundTaskConfig } from "./schema.ts";
-
-const CONFIG_BASENAME = "pi-background-task.json";
 
 export class BackgroundTaskConfigError extends Schema.TaggedError<BackgroundTaskConfigError>()(
   "BackgroundTaskConfigError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
 
-const mapDocumentError = makeConfigDocumentErrorFactory(
-  BackgroundTaskConfigError,
-  "Background Tasks",
-);
-
-function decodeConfig<ValueInput>(value: ValueInput): Partial<BackgroundTaskConfig> {
-  return decodeTolerantFields(
+const decodeConfig = (value: JsonObject): Partial<BackgroundTaskConfig> =>
+  decodeTolerantFields(
     value,
     {
       enabled: Schema.Boolean,
@@ -43,10 +34,19 @@ function decodeConfig<ValueInput>(value: ValueInput): Partial<BackgroundTaskConf
     },
     { path: "config" },
   ).value;
-}
 
-const readConfig = Effect.fn("BackgroundTaskConfig.read")(function* (path: string) {
-  return yield* readOptionalJsonObject(path, decodeConfig, mapDocumentError);
+// No default document, so resolution never writes; untrusted projects are never probed.
+const store = makeScopedConfigStore({
+  errorFactory: makeConfigDocumentErrorFactory(BackgroundTaskConfigError, "Background Tasks"),
+  label: "Background Tasks",
+  spanPrefix: "BackgroundTaskConfig",
+  projectConfigDirectory: CONFIG_DIR_NAME,
+  basename: "pi-background-task.json",
+  decode: decodeConfig,
+  resolve: (metadata, project, global) => ({
+    ...metadata,
+    config: normalizeConfig({ ...global, ...project }),
+  }),
 });
 
 export class BackgroundTaskConfigStore extends Context.Service<
@@ -56,30 +56,8 @@ export class BackgroundTaskConfigStore extends Context.Service<
   static readonly layer = (options: { readonly cwd: string; readonly projectTrusted: boolean }) =>
     Layer.effect(
       this,
-      Effect.gen(function* () {
-        const agentDirectory = yield* AgentDirectory;
-        const paths = yield* scopedDocumentPaths(options.cwd, agentDirectory, {
-          projectConfigDirectory: CONFIG_DIR_NAME,
-          basename: CONFIG_BASENAME,
-        });
-        // Untrusted projects never probe the project document: its path stays inert metadata.
-        const selected = yield* selectScopedDocument(paths, {
-          probeProject: options.projectTrusted,
-        }).pipe(Effect.mapError((error) => mapDocumentError("inspect", error.path)()));
-        const warning = "Unable to read Background Tasks configuration.";
-        const global = yield* readConfigOrWarn(
-          paths.global,
-          selected.globalExists,
-          readConfig,
-          warning,
-        );
-        const project = yield* readConfigOrWarn(
-          paths.project,
-          options.projectTrusted && selected.projectExists,
-          readConfig,
-          warning,
-        );
-        return normalizeConfig({ ...global, ...project });
-      }),
+      AgentDirectory.use((directory) =>
+        store.resolveConfig(options.cwd, directory, options.projectTrusted),
+      ).pipe(Effect.map(({ config }) => config)),
     );
 }

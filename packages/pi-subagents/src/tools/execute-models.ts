@@ -6,12 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
-import {
-  normalizeProfileId,
-  profileCandidateLabel,
-  PROFILE_IDS,
-  type ProfileId,
-} from "../profiles/model.ts";
+import { profileCandidateLabel, PROFILE_IDS, type ProfileId } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { makeCompactToolDetails } from "./details.ts";
 import { boundToolOutput } from "./format.ts";
@@ -51,8 +46,7 @@ export const executeModelsAction = (
   Effect.gen(function* () {
     const profileService = yield* SubagentProfileService;
     const snapshot = yield* profileService.capture;
-    const requestedProfile = input.profile ? normalizeProfileId(input.profile) : undefined;
-    const ids = input.profile ? (requestedProfile ? [requestedProfile] : []) : PROFILE_IDS;
+    const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
     const environment = hostProfileEnvironment(pi, ctx);
     const profiles: ReadonlyArray<SubagentProfileView> = ids.flatMap((id) => {
       const definition = profileService.definition(id);

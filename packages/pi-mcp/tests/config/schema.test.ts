@@ -128,6 +128,15 @@ describe("MCP configuration boundaries", () => {
     }),
   );
 
+  it.effect("charges exact compact JSON without counting array indices as keys", () => {
+    const entry = { command: "server", args: Array.from({ length: 4_000 }, () => "a") };
+    const bytes = new TextEncoder().encode(JSON.stringify(entry)).byteLength;
+    return Effect.gen(function* () {
+      yield* checkConfigBounds(entry, bytes);
+      expect((yield* checkConfigBounds(entry, bytes - 1).pipe(Effect.flip)).kind).toBe("config");
+    });
+  });
+
   it.effect("accepts disabled tombstones without inspecting stale transport fields", () =>
     Effect.gen(function* () {
       expect(

@@ -40,15 +40,6 @@ const negotiationEvidence = (error: JSONRPCErrorResponse["error"]): boolean => {
   );
 };
 
-// SAFETY: supported Node engines provide ES2024 Promise.withResolvers; the workspace targets ES2022.
-const NativePromise = Promise as PromiseConstructor & {
-  withResolvers<A>(): {
-    promise: Promise<A>;
-    resolve: (value: A | PromiseLike<A>) => void;
-    reject: (error: Error) => void;
-  };
-};
-
 /** Tighten SDK fallback policy on already decoded, exactly correlated probe replies. */
 export const guardNegotiation = (transport: Transport): Transport => {
   let pending: { id: RequestId; accept: () => void; reject: (error: Error) => void } | undefined;
@@ -71,7 +62,7 @@ export const guardNegotiation = (transport: Transport): Transport => {
       if (!isJSONRPCRequest(message) || message.method !== "server/discover")
         return transport.send(message, options);
       pending?.reject(failure());
-      const checked = NativePromise.withResolvers<void>();
+      const checked = Promise.withResolvers<void>();
       pending = { id: message.id, accept: () => checked.resolve(), reject: checked.reject };
       return Promise.all([
         Promise.resolve()

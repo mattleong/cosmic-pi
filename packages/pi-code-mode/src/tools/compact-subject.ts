@@ -5,9 +5,10 @@ import {
 } from "pi-background-task/code-mode";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "pi-code-previews";
 import { decodeOption, truncateDisplay } from "./format.ts";
+import { cleanDiagnosticText } from "./issue-evidence.ts";
 
 export const MAX_NESTED_SUBJECT_LENGTH = 1024;
 const tools = new Map<string, BuiltinCompactTool>([
@@ -20,6 +21,7 @@ const tools = new Map<string, BuiltinCompactTool>([
   ["pi.find", "find"],
   ["pi.ls", "ls"],
 ]);
+export const isCompactPiTool = (name: string): boolean => tools.has(name);
 const InputSchema = Schema.Struct({
   path: Schema.optional(Schema.Unknown),
   command: Schema.optional(Schema.Unknown),
@@ -30,11 +32,7 @@ const InputSchema = Schema.Struct({
 
 // Redact the complete allowlisted field before the shared formatter clips or escapes it.
 const safeField = <Value>(value: Value): string | undefined =>
-  Predicate.isString(value)
-    ? sanitizeDiagnosticContent(sanitizeTerminalLine(value), {
-        maximumLength: Number.MAX_SAFE_INTEGER,
-      })
-    : undefined;
+  Predicate.isString(value) ? cleanDiagnosticText(sanitizeTerminalLine(value)) : undefined;
 
 export const normalizeNestedSubject = (subject: string): string =>
   truncateDisplay(safeField(subject) ?? "", MAX_NESTED_SUBJECT_LENGTH);

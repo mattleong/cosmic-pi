@@ -1,21 +1,17 @@
-import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it } from "vitest";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
 import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../pi-code-previews/src/config/state.ts";
+  animationSchedulerProbe,
+  applyPresentationSettings,
+  captureRegistrations,
+  createToolPresentationHarness,
+  probeAnimationOwnership,
+} from "pi-code-previews/testing";
+import type { CompactAnimationScheduler } from "pi-code-previews";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 
-const settings = { ...codePreviewSettings };
-afterEach(() => setCodePreviewSettings(settings));
-// SAFETY: The fixture supplies the styling operations the tool uses.
-const theme = {
-  fg: (_key: string, text: string) => text,
-  bg: (_key: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
+const restoreSettings = applyPresentationSettings({});
+afterEach(restoreSettings);
 const snapshot = {
   id: "task-1",
   command: "run",
@@ -42,28 +38,33 @@ const fixtures = [
   { action: "status", snapshot: { ...snapshot, state: "timed_out" } },
   { action: "wait", wait: { id: "task-1", outcome: "timeout", snapshot, ...cursors } },
   { action: "logs", logs: { id: "task-1", state: "running", ...cursors, droppedBytes: 50 } },
+  { action: "logs", logs: { id: "task-1", state: "exited", ...cursors } },
+  { action: "logs", logs: { id: "task-1", state: "failed", ...cursors } },
+  { action: "status", snapshot: { ...snapshot, state: "exited", exitCode: 2 } },
 ];
+const registeredTool = (
+  mode: "on" | "off" | "border",
+  style: "compact" | "preview" = "compact",
+  scheduleAnimation?: CompactAnimationScheduler,
+) => {
+  applyPresentationSettings({
+    toolCallBackground: mode,
+    toolCallCollapsedStyle: style,
+    toolCallTiming: false,
+  });
+  const run = () => Promise.reject(new Error("not executed"));
+  return captureRegistrations((pi) =>
+    registerBackgroundTaskTool(pi, { run, ...(scheduleAnimation && { scheduleAnimation }) }),
+  ).tools[0]!;
+};
 
 it("renders the registered management actions and task states without parsing fetched text", () => {
   for (const mode of ["on", "off", "border"] as const)
     for (const style of ["compact", "preview"] as const) {
-      setCodePreviewSettings({
-        ...settings,
-        toolCallBackground: mode,
-        toolCallCollapsedStyle: style,
-        toolCallTiming: false,
-      });
-      let registered: ToolDefinition | undefined;
-      // SAFETY: Registration reads no other ExtensionAPI members.
-      const pi = {
-        registerTool: (tool: ToolDefinition) => {
-          registered = tool;
-        },
-      } as ExtensionAPI;
-      registerBackgroundTaskTool(pi, { run: () => Promise.reject(new Error("not executed")) });
+      const tool = registeredTool(mode, style);
       for (const details of [...fixtures, undefined, { malformed: true }]) {
         const action = details && "action" in details ? details.action : "status";
-        const args = { action, id: "task-1" };
+        const args = Object.freeze({ action, id: "task-1" });
         const result = {
           content: [
             {
@@ -74,7 +75,7 @@ it("renders the registered management actions and task states without parsing fe
           details,
         };
         const before = structuredClone(result);
-        const harness = createToolPresentationHarness(registered!, { theme });
+        const harness = createToolPresentationHarness(tool);
         harness.call(args, { executionStarted: false });
         for (const isError of [false, true])
           for (const expanded of [false, true, false]) {
@@ -107,72 +108,31 @@ it("renders the registered management actions and task states without parsing fe
     }
 });
 
-it("renders each classified task warning once beside labeled raw output", () => {
-  for (const mode of ["on", "off", "border"] as const) {
-    setCodePreviewSettings({
-      ...settings,
-      toolCallBackground: mode,
-      toolCallCollapsedStyle: "compact",
-      toolCallTiming: false,
-    });
-    let registered: ToolDefinition | undefined;
-    // SAFETY: Only registration is exercised; the runner must not execute.
-    const pi = {
-      registerTool: (tool: ToolDefinition) => {
-        registered = tool;
-      },
-    } as ExtensionAPI;
-    registerBackgroundTaskTool(pi, { run: () => Promise.reject(new Error("not executed")) });
-    const result = {
-      content: [{ type: "text" as const, text: "Original task result marker" }],
+it.each([
+  [
+    "renders each classified task warning once beside labeled raw output",
+    {
+      args: { action: "status", id: snapshot.id },
       details: {
         action: "status",
         snapshot: { ...snapshot, state: "failed", exitCode: 9, droppedLogBytes: 50 },
       },
-    };
-    const before = structuredClone(result);
-    const harness = createToolPresentationHarness(registered!, { theme });
-    for (const expanded of [false, true, false, true]) {
-      harness.call({ action: "status", id: snapshot.id }, { expanded });
-      harness.result(result, { expanded });
-      const text = harness.render(240).join("\n");
-      expect(
-        text.split(
-          expanded
-            ? "50 log bytes discarded; discarded output cannot be recovered."
-            : "Some task output was discarded and cannot be recovered.",
-        ),
-      ).toHaveLength(2);
-      expect(
-        text.split(expanded ? "Process exited with code 9." : "The task exited with code 9."),
-      ).toHaveLength(2);
-      if (expanded) {
-        expect(text).toContain("Raw task result");
-        expect(text).toContain("Original task result marker");
-      } else expect(text).not.toContain("Original task result marker");
-    }
-    expect(result).toEqual(before);
-  }
-});
-
-it("attributes same-named tasks' independent warnings by task ID", () => {
-  for (const mode of ["on", "off", "border"] as const) {
-    setCodePreviewSettings({
-      ...settings,
-      toolCallBackground: mode,
-      toolCallCollapsedStyle: "compact",
-      toolCallTiming: false,
-    });
-    let registered: ToolDefinition | undefined;
-    // SAFETY: Only registration is exercised; the runner must not execute.
-    const pi = {
-      registerTool: (tool: ToolDefinition) => {
-        registered = tool;
-      },
-    } as ExtensionAPI;
-    registerBackgroundTaskTool(pi, { run: () => Promise.reject(new Error("not executed")) });
-    const result = {
-      content: [{ type: "text" as const, text: "Original task list marker" }],
+      once: (expanded: boolean) =>
+        expanded
+          ? [
+              "50 log bytes discarded; discarded output cannot be recovered.",
+              "Process exited with code 9.",
+            ]
+          : [
+              "Some task output was discarded and cannot be recovered.",
+              "The task exited with code 9.",
+            ],
+    },
+  ],
+  [
+    "attributes same-named tasks' independent warnings by task ID",
+    {
+      args: { action: "list" },
       details: {
         action: "list",
         tasks: [
@@ -180,21 +140,29 @@ it("attributes same-named tasks' independent warnings by task ID", () => {
           { ...snapshot, id: "task-b", name: "worker", state: "stopping" },
         ],
       },
-    };
+      once: (expanded: boolean) =>
+        ["task-a", "task-b"].map((id) =>
+          expanded
+            ? `${id}: Process-tree cleanup is not confirmed; inspect status before retrying work.`
+            : `${id}: Some task processes may still be running.`,
+        ),
+    },
+  ],
+] as const)("%s", (_name, { args, details, once }) => {
+  const marker = "Original task result marker";
+  for (const mode of ["on", "off", "border"] as const) {
+    const result = { content: [{ type: "text" as const, text: marker }], details };
     const before = structuredClone(result);
-    const harness = createToolPresentationHarness(registered!, { theme });
+    const harness = createToolPresentationHarness(registeredTool(mode));
     for (const expanded of [false, true, false, true]) {
-      harness.call({ action: "list" }, { expanded });
+      harness.call(args, { expanded });
       harness.result(result, { expanded });
       const text = harness.render(240).join("\n");
-      for (const id of ["task-a", "task-b"]) {
-        const warning = expanded
-          ? `${id}: Process-tree cleanup is not confirmed; inspect status before retrying work.`
-          : `${id}: Some task processes may still be running.`;
-        expect(text.split(warning)).toHaveLength(2);
-      }
-      if (expanded) expect(text).toContain("Raw task result");
-      else expect(text).not.toContain("Original task list marker");
+      for (const warning of once(expanded)) expect(text.split(warning)).toHaveLength(2);
+      if (expanded) {
+        expect(text).toContain("Raw task result");
+        expect(text).toContain(marker);
+      } else expect(text).not.toContain(marker);
     }
     expect(result).toEqual(before);
   }
@@ -217,4 +185,45 @@ it("keeps successful command delivery distinct from failed task state and discar
     expect.arrayContaining(["task-1:exit-code", "task-1:log-loss"]),
   );
   expect(summary?.expandedResultOwnsIssues).toBeUndefined();
+});
+
+it("keeps the owned log metadata header and all expanded logs without another cursor footer", () => {
+  const lines = Array.from({ length: 30 }, (_, index) => `log entry ${index}`);
+  const header = "[task-1 state=running cursor=123 earliest=45]";
+  const result = {
+    content: [{ type: "text" as const, text: `${header}\n${lines.join("\n")}` }],
+    details: {
+      action: "logs",
+      logs: {
+        id: "task-1",
+        state: "running",
+        ...cursors,
+        nextCursor: 123,
+        earliestAvailableCursor: 45,
+      },
+    },
+  };
+  const before = structuredClone(result);
+  const harness = createToolPresentationHarness(registeredTool("on"), { width: 120 });
+  const cycled = harness.cycle({ action: "logs", id: "task-1" }, result, {
+    states: [true, false, true],
+    overrides: () => ({ executionStarted: true, isPartial: false }),
+  });
+  for (const { text } of cycled.filter(({ expanded }) => expanded)) {
+    expect(text.match(/123/g)).toHaveLength(1);
+    expect(text.match(/45/g)).toHaveLength(1);
+    for (const line of lines) expect(text).toContain(line);
+  }
+  expect(result).toEqual(before);
+});
+
+it("uses the registering owner's scheduler and releases it when the call settles", () => {
+  const scheduler = animationSchedulerProbe();
+  const tool = registeredTool("on", "compact", scheduler.schedule);
+  const [probe] = probeAnimationOwnership([tool], scheduler, {
+    args: () => ({ action: "wait", id: "task-1" }),
+  });
+  expect(probe?.scheduled).toBeGreaterThan(0);
+  expect(probe?.invalidated).toBe(true);
+  expect(probe?.stops).toBeGreaterThan(0);
 });

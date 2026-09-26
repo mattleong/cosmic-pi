@@ -159,10 +159,8 @@ function applyArgumentLanes(
     ];
   }
   if (lanes.action) summary.action = lanes.action;
-  if (phase !== "settled" && details.action !== "start" && details.action !== "await") {
-    summary.metadata = [];
+  if (phase !== "settled" && details.action !== "start" && details.action !== "await")
     summary.counters = lanes.counters ?? [];
-  }
 }
 
 /** Decoded domain summaries own collapsed attention; original evidence stays on expansion. */
@@ -239,7 +237,6 @@ function summarizeStart(
   summary.counters = [
     progressDetail(started, details.startEntries.length, "started", summary.subject),
   ];
-  summary.metadata = [];
   for (const entry of details.startEntries) {
     if (entry.routeStatus === "selected" && entry.warning) add(undefined, entry.warning, "warning");
     if (
@@ -294,15 +291,12 @@ function awaitNotices(
   notices: Notices,
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
-  _phase: Phase,
 ): void {
   const add = appendNotice(notices);
   const finished = cards.filter((card) =>
     ["reported", "completed", "failed", "stopped"].includes(card.state),
   ).length;
-  const settledMetadata: string[] = [];
   summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
-  summary.metadata = settledMetadata;
   if (cards.length < targets.length) {
     add(
       "targets-omitted",
@@ -419,28 +413,9 @@ function summarizeModels(
   if (disabled) counters.push(`${disabled} disabled profiles`);
   if (unavailable) counters.push(`${unavailable} unavailable profiles`);
   summary.counters = [counters.join(", ")];
-  summary.metadata = [];
   if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
     summary.outcome = "warning";
   return summary;
-}
-
-function appendRunHistory(
-  summary: CompactSummary,
-  notices: Notices,
-  cards: readonly SubagentRunCard[],
-  phase: Phase,
-  reportsOnlyOmitted: boolean,
-  expanded: boolean,
-): void {
-  const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
-  const { notices: cardNotices } = compactRunNotices(
-    cards,
-    reportsOnlyOmitted,
-    quietHistory,
-    expanded,
-  );
-  notices.push(...cardNotices);
 }
 
 function isSingleRequestedRun(
@@ -477,7 +452,6 @@ function summarizeDetails(
   }
   if (details.action === "models") return summarizeModels(details, summary, notices);
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
-  summary.metadata = [];
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   if (summary.outcome === "success") {
     if (cards.some((card) => card.state === "stopping")) summary.outcome = "uncertain";
@@ -493,9 +467,12 @@ function summarizeDetails(
       summary.outcome = "warning";
     else if (cards.some((card) => card.state === "stopped")) summary.outcome = "cancelled";
   }
-  if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!, phase);
+  if (details.action === "await") awaitNotices(details, summary, notices, cards, targets!);
   else runNotices(details, summary, notices, cards);
-  appendRunHistory(summary, notices, cards, phase, details.reportsOnlyOmitted === true, expanded);
+  const quietHistory = phase === "settled" && summary.outcome === "success" && notices.length === 0;
+  notices.push(
+    ...compactRunNotices(cards, details.reportsOnlyOmitted === true, quietHistory, expanded),
+  );
   if (notices.some((notice) => notice.kind === "error")) summary.outcome = "error";
   else if (summary.outcome === "success" && notices.some((notice) => notice.kind === "warning"))
     summary.outcome = "warning";

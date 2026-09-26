@@ -2,11 +2,12 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { synchronousNow } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
-import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { decodeCompactToolDetails, type SubagentRunCard } from "../tools/details-schema.ts";
-import type { SubagentToolInput } from "../tools/schema.ts";
+import type { SubagentLifecycleInput, SubagentToolInput } from "../tools/schema.ts";
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
+import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { SubagentFleetComponent, type FleetMessageMode } from "../ui/fleet.ts";
 
 export type SubagentProxyCall = (
@@ -14,58 +15,50 @@ export type SubagentProxyCall = (
   signal?: AbortSignal,
 ) => Promise<AgentToolResult<unknown>>;
 
-const cardView = (card: SubagentRunCard): SubagentRunView => {
-  let view: SubagentRunView = {
-    id: card.id,
-    name: card.name,
-    task: "Task details are available through subagent_status.",
-    selection: card.selection,
-    cwd: "",
-    state: card.state,
-    context: card.context,
-    writeIntent: card.writeIntent,
-    openaiFastMode: card.openaiFastMode,
-    host: card.host,
-    runtime: card.runtime,
-    closeOnReport: card.closeOnReport,
-    reportGeneration: card.reportGeneration,
-    capabilities: card.capabilities,
-    model: card.model,
-    effort: card.effort,
-    startedAt: card.startedAt,
-    lastActivityAt: card.lastActivityAt,
-    sessionEvents: [],
-    usage: card.usage,
-  };
-  if (card.profile) view = { ...view, profile: card.profile };
-  if (card.parentRunId) view = { ...view, parentRunId: card.parentRunId };
-  if (card.depth !== undefined) view = { ...view, depth: card.depth };
-  if (card.directChildCount !== undefined)
-    view = { ...view, directChildCount: card.directChildCount };
-  if (card.descendantCount !== undefined) view = { ...view, descendantCount: card.descendantCount };
-  if (card.nativeActivity) view = { ...view, nativeActivity: card.nativeActivity };
-  if (card.writeClaims) view = { ...view, writeClaims: card.writeClaims };
-  if (card.writeAudit) view = { ...view, writeAudit: card.writeAudit };
-  if (card.writeAdmissionPaused) view = { ...view, writeAdmissionPaused: true };
-  if (card.endedAt !== undefined) view = { ...view, endedAt: card.endedAt };
-  if (card.currentTool) view = { ...view, currentTool: card.currentTool };
-  if (card.progress) view = { ...view, progress: card.progress };
-  if (card.warning) view = { ...view, warning: card.warning };
-  if (card.warningSource) view = { ...view, warningSource: card.warningSource };
-  if (card.systemWarning) view = { ...view, systemWarning: card.systemWarning };
-  if (card.question)
-    view = {
-      ...view,
-      question: {
-        requestId: "proxy-question",
-        message: card.question.message,
-        createdAt: card.lastActivityAt,
-      },
-    };
-  if (card.finalText) view = { ...view, finalText: card.finalText };
-  if (card.error) view = { ...view, error: card.error };
-  return view;
-};
+const cardView = (card: SubagentRunCard): SubagentRunView => ({
+  id: card.id,
+  name: card.name,
+  task: "Task details are available through subagent_status.",
+  selection: card.selection,
+  cwd: "",
+  state: card.state,
+  context: card.context,
+  writeIntent: card.writeIntent,
+  openaiFastMode: card.openaiFastMode,
+  host: card.host,
+  runtime: card.runtime,
+  closeOnReport: card.closeOnReport,
+  reportGeneration: card.reportGeneration,
+  capabilities: card.capabilities,
+  model: card.model,
+  effort: card.effort,
+  startedAt: card.startedAt,
+  lastActivityAt: card.lastActivityAt,
+  sessionEvents: [],
+  usage: card.usage,
+  profile: card.profile,
+  parentRunId: card.parentRunId,
+  depth: card.depth,
+  directChildCount: card.directChildCount,
+  descendantCount: card.descendantCount,
+  nativeActivity: card.nativeActivity,
+  writeClaims: card.writeClaims,
+  writeAudit: card.writeAudit,
+  writeAdmissionPaused: card.writeAdmissionPaused,
+  endedAt: card.endedAt,
+  currentTool: card.currentTool,
+  progress: card.progress,
+  warning: card.warning,
+  warningSource: card.warningSource,
+  systemWarning: card.systemWarning,
+  question: card.question && {
+    requestId: "proxy-question",
+    message: card.question.message,
+    createdAt: card.lastActivityAt,
+  },
+  finalText: card.finalText,
+  error: card.error,
+});
 
 const projectionFromResult = (
   result: AgentToolResult<unknown>,
@@ -106,81 +99,76 @@ export const registerSubagentProxyManagerCommand = (
       let refreshInFlight: Promise<void> | undefined;
       const refresh = (signal?: AbortSignal): Promise<void> => {
         if (refreshInFlight) return refreshInFlight;
-        const pending = call({ action: "list" }, signal).then((result) => {
+        const pending = call({ tool: SUBAGENT_TOOL_NAME.list, args: {} }, signal).then((result) => {
           projection = projectionFromResult(result, ++revision);
         });
         refreshInFlight = pending;
-        void pending.then(
-          () => {
-            if (refreshInFlight === pending) refreshInFlight = undefined;
-          },
-          () => {
-            if (refreshInFlight === pending) refreshInFlight = undefined;
-          },
-        );
+        const clear = () => {
+          if (refreshInFlight === pending) refreshInFlight = undefined;
+        };
+        void pending.then(clear, clear);
         return pending;
       };
-      const viewport = createScreenViewport();
-      return refresh().then(() =>
-        ctx.ui.custom<void>(
-          (tui, theme, keybindings, done) => {
-            viewport.attach(() => tui.terminal);
-            let closed = false;
-            const stopRefresh = startHostUiTicker(750, () => {
-              if (closed) return;
-              void refresh().then(
-                () => tui.requestRender(),
-                () => undefined,
-              );
-            });
-            const close = () => {
-              if (closed) return;
+      let stopRefresh: (() => void) | undefined;
+      let closed = false;
+      return refresh()
+        .then(() =>
+          openOwnedSurfacePromise<undefined>(ctx, {
+            placement: "screen",
+            closedValue: undefined,
+            onClose: () => {
               closed = true;
-              stopRefresh();
-              done(undefined);
-            };
-            const action = (input: SubagentToolInput) =>
-              call(input)
-                .then(() => refresh())
-                .then(() => tui.requestRender());
-            return new SubagentFleetComponent({
-              theme,
-              visibilityRootId,
-              getProjection: () => projection,
-              getHeight: viewport.getHeight,
-              getNow: synchronousNow,
-              matchesKeybinding: (data, id) => keybindings.matches(data, id),
-              keybindingLabel: (id, fallback) =>
-                fullScreenKeybindingLabel(id, fallback, (candidate) =>
-                  keybindings.getKeys(candidate),
-                ),
-              requestRender: () => tui.requestRender(),
-              close,
-              actions: {
-                stop: (id) => action({ action: "stop", runIds: [id] }),
-                interrupt: (id) => action({ action: "interrupt", runIds: [id] }),
-                resume: (id, message) =>
-                  action(
-                    message
-                      ? { action: "resume", runIds: [id], message }
-                      : { action: "resume", runIds: [id] },
-                  ),
-                message: (id, mode: FleetMessageMode, message) =>
-                  action(
-                    mode === "reply"
-                      ? { action: "reply", runId: id, message }
-                      : { action: "send", runIds: [id], message },
-                  ),
-                rename: (id, name) => action({ action: "rename", runId: id, name }),
-              },
-            });
-          },
-          {
-            overlay: true,
-            overlayOptions: viewport.overlayOptions,
-          },
-        ),
-      );
+              stopRefresh?.();
+            },
+            create: ({ tui, theme, keybindings, getHeight, finish }) => {
+              stopRefresh = startHostUiTicker(750, () => {
+                if (closed) return;
+                void refresh().then(
+                  () => tui.requestRender(),
+                  () => undefined,
+                );
+              });
+              const action = (input: SubagentToolInput) =>
+                call(input)
+                  .then(() => refresh())
+                  .then(() => tui.requestRender());
+              const lifecycle = (args: SubagentLifecycleInput) =>
+                action({ tool: SUBAGENT_TOOL_NAME.lifecycle, args });
+              return new SubagentFleetComponent({
+                theme,
+                visibilityRootId,
+                getProjection: () => projection,
+                getHeight,
+                getNow: synchronousNow,
+                ...fullScreenKeybindingOptions(keybindings),
+                requestRender: () => tui.requestRender(),
+                close: () => finish(undefined),
+                actions: {
+                  stop: (id) => lifecycle({ action: "stop", runIds: [id] }),
+                  interrupt: (id) => lifecycle({ action: "interrupt", runIds: [id] }),
+                  resume: (id, message) =>
+                    lifecycle(
+                      message
+                        ? { action: "resume", runIds: [id], message }
+                        : { action: "resume", runIds: [id] },
+                    ),
+                  message: (id, mode: FleetMessageMode, message) =>
+                    action(
+                      mode === "reply"
+                        ? { tool: SUBAGENT_TOOL_NAME.reply, args: { runId: id, message } }
+                        : { tool: SUBAGENT_TOOL_NAME.send, args: { runIds: [id], message } },
+                    ),
+                  rename: (id, name) =>
+                    action({ tool: SUBAGENT_TOOL_NAME.rename, args: { runId: id, name } }),
+                },
+              });
+            },
+          }),
+        )
+        .then((outcome) => {
+          // A failed opening rejects the command, as Pi's own custom Promise does.
+          if (outcome._tag === "Failed") throw outcome.cause;
+        });
     },
   });
 };

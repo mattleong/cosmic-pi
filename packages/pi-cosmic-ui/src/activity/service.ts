@@ -16,6 +16,7 @@ import {
   type ActivityProviderOptions,
 } from "./protocol.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
+import { detachActivityItem } from "./detach.ts";
 
 export class ActivityError extends Schema.TaggedError<ActivityError>()("ActivityError", {
   reason: Schema.Literals(["invalid", "stale", "failed"]),
@@ -141,29 +142,14 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
                   return unchanged;
                 const generation = isNew ? old.serial + 1 : current!.generation;
                 const items: readonly ActivityRow[] = decoded.map((item) => {
-                  const detached = {
-                    ...item,
-                    title: cleanText(item.title),
-                    actions: (item.actions ?? []).map((action) => {
-                      const value = { ...action, label: cleanText(action.label) };
-                      if (action.confirmation !== undefined)
-                        Object.assign(value, { confirmation: cleanText(action.confirmation) });
-                      return value;
-                    }),
+                  const detached = detachActivityItem(item, cleanText, cleanDetail);
+                  return {
+                    ...detached,
+                    actions: detached.actions ?? [],
                     key: activityKey(event.providerId, item.id),
                     providerId: event.providerId,
                     generation,
                   };
-                  if (item.parent) Object.assign(detached, { parent: { ...item.parent } });
-                  if (item.profile !== undefined)
-                    Object.assign(detached, { profile: cleanText(item.profile) });
-                  if (item.route !== undefined)
-                    Object.assign(detached, { route: cleanText(item.route) });
-                  if (item.summary !== undefined)
-                    Object.assign(detached, { summary: cleanText(item.summary) });
-                  if (item.detail !== undefined)
-                    Object.assign(detached, { detail: cleanDetail(item.detail) });
-                  return detached;
                 });
                 const provider: Provider = isNew
                   ? {

@@ -1,11 +1,9 @@
-import { EventEmitter } from "node:events";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import {
   QUESTIONNAIRE_CAPABILITY_QUERY,
   type AskUserOutcome,
@@ -13,31 +11,10 @@ import {
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
 import { askParentQuestionnaire } from "../../src/boundary/host-ask-user.ts";
-import { SubagentService } from "../../src/run/service.ts";
-import { fakeChildLayer, request, serviceLayer } from "./fixtures/service-harness.ts";
+import { eventBus, pickQuestionnaire } from "../support/questionnaire.ts";
+import { fakeChildLayer, request, serviceLayer, withService } from "./fixtures/service-harness.ts";
 
-const promiseGate = <A>() =>
-  // SAFETY: Supported Node versions implement withResolvers; ES2023 libs omit it.
-  (
-    Promise as PromiseConstructor & {
-      withResolvers<Value>(): { promise: Promise<Value>; resolve: (value: Value) => void };
-    }
-  ).withResolvers<A>();
-
-const argumentsJson = JSON.stringify({
-  questions: [
-    {
-      key: "pick",
-      title: "Pick",
-      prompt: "Which?",
-      mode: "single",
-      choices: [
-        { value: "a", label: "A", description: "First" },
-        { value: "b", label: "B", description: "Second" },
-      ],
-    },
-  ],
-});
+const argumentsJson = JSON.stringify(pickQuestionnaire);
 
 describe("assignment-owned questionnaire proxy", () => {
   it.effect("does not reopen a settled request identity within an assignment", () =>
@@ -54,8 +31,7 @@ describe("assignment-owned questionnaire proxy", () => {
             };
           }),
       }).pipe(Layer.provide(fake.layer));
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "replay" }));
         const child = fake.controls[0]!;
         const send = () =>
@@ -75,26 +51,15 @@ describe("assignment-owned questionnaire proxy", () => {
           child.ipc.some((message) => message.type === "proxy_response" && !message.ok),
         );
         expect(presentations).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     }),
   );
   for (const ending of ["stop", "shutdown"] as const) {
     it.effect(`joins root editor cleanup on ${ending} after proxy cancellation`, () =>
       Effect.gen(function* () {
         const fake = fakeChildLayer();
-        const emitter = new EventEmitter();
-        const events = {
-          on: (name: string, handler: (event: any) => void) => {
-            emitter.on(name, handler);
-            return () => {
-              emitter.off(name, handler);
-            };
-          },
-          emit: (name: string, event: any) => {
-            emitter.emit(name, event);
-          },
-        };
-        const editorCleanup = promiseGate<void>();
+        const events = eventBus();
+        const editorCleanup = deferredPromise();
         let owner: QuestionnaireOwner | undefined;
         let aborted = false;
         let cancelling = false;
@@ -117,7 +82,7 @@ describe("assignment-owned questionnaire proxy", () => {
             );
             // The user never answers. Only the explicit owned cleanup acknowledgement
             // may retain the relay after interruption, not this foreign Promise.
-            return promiseGate<AskUserOutcome>().promise;
+            return deferredPromise<AskUserOutcome>().promise;
           },
           cancel: (authenticatedOwner) => {
             expect(authenticatedOwner).toBe(owner);
@@ -127,13 +92,12 @@ describe("assignment-owned questionnaire proxy", () => {
             });
           },
         };
-        emitter.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
+        events.on(QUESTIONNAIRE_CAPABILITY_QUERY, (query) => query.respond(capability));
         const layer = serviceLayer({
           questionnaireHandler: (input, authenticatedOwner) =>
             askParentQuestionnaire(events, "root", input, authenticatedOwner),
         }).pipe(Layer.provide(fake.layer));
-        const running = yield* Effect.gen(function* () {
-          const service = yield* SubagentService;
+        const running = yield* withService(layer, function* (service) {
           const run = yield* service.start(request({ name: "root-editor" }));
           const child = fake.controls[0]!;
           child.offerIpc({
@@ -152,8 +116,6 @@ describe("assignment-owned questionnaire proxy", () => {
             stopped = true;
           }
         }).pipe(
-          Effect.scoped,
-          provideBuiltLayer(layer),
           Effect.andThen(
             Effect.sync(() => {
               finished = true;
@@ -167,7 +129,7 @@ describe("assignment-owned questionnaire proxy", () => {
         expect(stopped).toBe(false);
         expect(finished).toBe(false);
         expect(fake.controls[0]!.released()).toBe(0);
-        editorCleanup.resolve(undefined);
+        editorCleanup.resolve();
         yield* Fiber.join(running);
         expect(cleaned).toBe(true);
         expect(finished).toBe(true);
@@ -180,6 +142,65 @@ describe("assignment-owned questionnaire proxy", () => {
       }),
     );
   }
+
+  it.effect("drains an outstanding questionnaire before launch compensation releases", () =>
+    Effect.gen(function* () {
+      const promptGate = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const fake = fakeChildLayer(Effect.void, {
+        initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
+        initialFailures: [{ spawnIndex: 0, type: "prompt", error: "Prompt was rejected." }],
+      });
+      let owner: QuestionnaireOwner | undefined;
+      let interrupted = false;
+      let cleaned = false;
+      const layer = serviceLayer({
+        questionnaireHandler: (_request, authenticatedOwner) => {
+          owner = authenticatedOwner;
+          return Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                interrupted = true;
+              }).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    cleaned = true;
+                  }),
+                ),
+              ),
+            ),
+          );
+        },
+      }).pipe(Layer.provide(fake.layer));
+      yield* withService(layer, function* (service) {
+        const starting = yield* service
+          .start(request({ name: "compensated" }))
+          .pipe(Effect.flip, Effect.forkScoped);
+        yield* yieldUntil(() => fake.controls[0]?.sent("prompt") === true);
+        const child = fake.controls[0]!;
+        child.offerIpc({
+          channel: "pi-subagents",
+          type: "proxy_request",
+          requestId: "q-start",
+          tool: "ask_user",
+          argumentsJson,
+        });
+        yield* yieldUntil(() => owner !== undefined);
+        yield* Deferred.succeed(promptGate, undefined);
+        yield* yieldUntil(() => interrupted);
+        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        // Record before releasing so a regression fails here instead of stalling shutdown.
+        const releasedBeforeCleanup = child.released();
+        yield* Deferred.succeed(release, undefined);
+        const failure = yield* Fiber.join(starting);
+        expect(releasedBeforeCleanup).toBe(0);
+        expect(failure.message).toContain("Prompt was rejected.");
+        expect(cleaned).toBe(true);
+        expect(child.released()).toBe(1);
+      });
+    }),
+  );
 
   for (const ending of ["stop", "exit", "shutdown", "interrupt"] as const) {
     it.effect(`revokes and joins questionnaire cleanup on ${ending}`, () =>
@@ -209,8 +230,7 @@ describe("assignment-owned questionnaire proxy", () => {
             );
           },
         }).pipe(Layer.provide(fake.layer));
-        const running = yield* Effect.gen(function* () {
-          const service = yield* SubagentService;
+        const running = yield* withService(layer, function* (service) {
           const run = yield* service.start(request({ name: "question" }));
           const child = fake.controls[0]!;
           child.offerIpc({
@@ -233,8 +253,6 @@ describe("assignment-owned questionnaire proxy", () => {
             yield* yieldUntil(() => child.released() > 0);
           }
         }).pipe(
-          Effect.scoped,
-          provideBuiltLayer(layer),
           Effect.andThen(
             Effect.sync(() => {
               finished = true;

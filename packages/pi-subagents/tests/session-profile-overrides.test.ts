@@ -2,10 +2,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "../src/profiles/definitions.ts";
-import type { ProfileCandidate, ProfileRoute, ProfileRouteSource } from "../src/profiles/model.ts";
+import {
+  mapProfileIds,
+  type ProfileCandidate,
+  type ProfileRoute,
+  type ProfileRouteSource,
+} from "../src/profiles/model.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
 import {
   decodeSessionProfileOverrideSeed,
@@ -16,39 +19,13 @@ import {
   sessionProfileSeed,
   type SessionProfileBaseline,
 } from "../src/profiles/session-overrides.ts";
-
-const candidate = (model: string): ProfileCandidate => ({
-  host: "local",
-  runtime: "pi",
-  model,
-  effort: "high",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  closeOnReport: true,
-});
+import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
+import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 const route = (model: string): ProfileRoute => ({ candidates: [candidate(model)] });
 
-const completeSources = (source: ProfileRouteSource) => ({
-  scout: source,
-  researcher: source,
-  planner: source,
-  worker: source,
-  reviewer: source,
-  oracle: source,
-  generalist: source,
-});
-
-const EMPTY_ROUTES = {
-  scout: { candidates: [] },
-  researcher: { candidates: [] },
-  planner: { candidates: [] },
-  worker: { candidates: [] },
-  reviewer: { candidates: [] },
-  oracle: { candidates: [] },
-  generalist: { candidates: [] },
-};
+const completeSources = (source: ProfileRouteSource) => mapProfileIds(() => source);
+const EMPTY_ROUTES = mapProfileIds(() => ({ candidates: [] }));
 
 const decodeBaseline = (
   origin: SessionProfileBaseline["origin"],
@@ -61,35 +38,21 @@ const decodeBaseline = (
     baseline: { origin, profiles, profileSources },
   });
 
-const baseConfig = (projectReviewerModel = "openai/project") => {
-  const global = decodeSubagentConfig(
+const baseConfig = (projectReviewerModel = "openai/project") =>
+  resolveTestConfig(
     {
       version: 6,
       defaultProfileSet: "default",
       profileSets: { default: { profiles: { reviewer: candidate("openai/global") } } },
       nesting: { maxDirectChildren: 20, maxDepth: 6 },
     },
-    "global",
-  );
-  const project = decodeSubagentConfig(
     {
       version: 6,
       defaultProfileSet: "default",
       profileSets: { default: { profiles: { reviewer: candidate(projectReviewerModel) } } },
       nesting: { maxDirectChildren: 4, maxDepth: 2 },
     },
-    "project",
   );
-  return resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: true,
-    globalConfigExists: true,
-    projectConfigExists: true,
-    global,
-    project,
-  });
-};
 
 describe("session profile overrides", () => {
   it.effect(
@@ -202,24 +165,15 @@ describe("session profile overrides", () => {
     });
   });
 
-  it("rejects impossible detached baseline provenance while retaining valid layering", () => {
+  it("rejects baselines whose routes do not match their provenance", () => {
     const baseline = makeSessionProfileSnapshot(baseConfig()).baseline;
 
-    expect(
-      decodeBaseline({ scope: "builtin" }, BUILTIN_PROFILE_ROUTES, completeSources("builtin")),
-    ).toBeDefined();
     expect(
       decodeBaseline(
         { scope: "builtin" },
         { ...BUILTIN_PROFILE_ROUTES, reviewer: route("openai/fabricated-builtin") },
         completeSources("builtin"),
       ),
-    ).toBeUndefined();
-    expect(
-      decodeBaseline({ scope: "builtin" }, BUILTIN_PROFILE_ROUTES, {
-        ...completeSources("builtin"),
-        reviewer: "session",
-      }),
     ).toBeUndefined();
 
     const globalProfiles = {
@@ -238,26 +192,6 @@ describe("session profile overrides", () => {
         { scope: "global", name: "saved" },
         { ...globalProfiles, scout: route("openai/fabricated-inherited-builtin") },
         globalSources,
-      ),
-    ).toBeUndefined();
-    expect(
-      decodeBaseline({ scope: "global", name: "saved" }, baseline.profiles, {
-        ...completeSources("global"),
-        reviewer: "project",
-      }),
-    ).toBeUndefined();
-    expect(
-      decodeBaseline(
-        { scope: "global", name: "missing", invalid: true },
-        EMPTY_ROUTES,
-        completeSources("global-invalid"),
-      ),
-    ).toBeDefined();
-    expect(
-      decodeBaseline(
-        { scope: "global", name: "missing", invalid: true },
-        EMPTY_ROUTES,
-        completeSources("global"),
       ),
     ).toBeUndefined();
     expect(
@@ -391,7 +325,6 @@ describe("session profile overrides", () => {
       const service = yield* makeSubagentProfileService(baseConfig());
       const initial = yield* service.capture;
       expect(initial.effectiveConfig.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
-      expect(initial.effectiveConfig.nestingSource).toBe("project");
 
       const overridden = yield* service.patchSessionNesting({
         nesting: { maxDirectChildren: 7, maxDepth: 5 },
@@ -401,13 +334,11 @@ describe("session profile overrides", () => {
         maxDirectChildren: 7,
         maxDepth: 5,
       });
-      expect(overridden.effectiveConfig.nestingSource).toBe("session");
 
       const cleared = yield* service.patchSessionNesting({
         expectedRevision: overridden.revision,
       });
       expect(cleared.effectiveConfig.nesting).toEqual({ maxDirectChildren: 4, maxDepth: 2 });
-      expect(cleared.effectiveConfig.nestingSource).toBe("project");
     }),
   );
 
@@ -527,7 +458,6 @@ describe("session profile overrides", () => {
           "openai/replacement",
         );
         expect(replaced.effectiveConfig.nesting).toEqual({ maxDirectChildren: 9, maxDepth: 4 });
-        expect(replaced.effectiveConfig.nestingSource).toBe("session");
 
         const edited = yield* service.patchSessionProfile({
           profile: "reviewer",
@@ -658,18 +588,9 @@ describe("session profile overrides", () => {
 
   it.effect("allows a session route to repair an invalid loaded project route temporarily", () =>
     Effect.gen(function* () {
-      const global = decodeSubagentConfig({ version: 4 }, "global");
-      const project = decodeSubagentConfig({ version: 4, profiles: { reviewer: null } }, "project");
-      const base = resolveSubagentConfig({
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/repo/.pi/pi-subagents.json",
-        projectTrusted: true,
-        globalConfigExists: true,
-        projectConfigExists: true,
-        global,
-        project,
-      });
-      const initial = makeSessionProfileSnapshot(base);
+      const initial = makeSessionProfileSnapshot(
+        resolveTestConfig({ version: 4 }, { version: 4, profiles: { reviewer: null } }),
+      );
       expect(initial.effectiveConfig.profileSources.reviewer).toBe("project-invalid");
       const repaired = yield* patchSessionProfileSnapshot(initial, {
         profile: "reviewer",

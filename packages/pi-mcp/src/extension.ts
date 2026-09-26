@@ -1,6 +1,2 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerMcpApplication } from "./application/register.ts";
-
-export default function mcp(pi: ExtensionAPI): void {
-  registerMcpApplication(pi);
-}
+/** Thin Pi registration adapter for MCP. */
+export { registerMcpApplication as default } from "./application/register.ts";

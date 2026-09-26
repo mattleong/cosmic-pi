@@ -3,6 +3,13 @@ import * as Effect from "effect/Effect";
 import { McpExecution } from "../../src/tools/service.ts";
 import { discovered, optionalFixture, projection, reply } from "../fixtures/optional-features.ts";
 
+const input = {
+  action: "completion.complete",
+  server: "fixture",
+  ref: { type: "ref/prompt", name: "example" },
+  argument: { name: "value", value: "" },
+};
+
 it.live(
   "completes only advertised prompt and exact template arguments through the real SDK",
   () => {
@@ -62,12 +69,6 @@ it.live(
         ? reply(request.id!, { completion: { values: Array.from({ length: 101 }, () => "value") } })
         : undefined,
     );
-    const input = {
-      action: "completion.complete",
-      server: "fixture",
-      ref: { type: "ref/prompt", name: "example" },
-      argument: { name: "value", value: "" },
-    };
     return Effect.gen(function* () {
       yield* Effect.gen(function* () {
         expect(
@@ -93,15 +94,7 @@ it.live("omitted prompt arguments advertise no completion argument or context au
   return Effect.gen(function* () {
     expect(
       yield* (yield* McpExecution)
-        .execute(
-          {
-            action: "completion.complete",
-            server: "fixture",
-            ref: { type: "ref/prompt", name: "example" },
-            argument: { name: "invented", value: "" },
-          },
-          projection,
-        )
+        .execute({ ...input, argument: { name: "invented", value: "" } }, projection)
         .pipe(Effect.flip),
     ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
     expect(fixture.requests.some((request) => request.method === "completion/complete")).toBe(
@@ -119,17 +112,7 @@ it.live(
       return reply(request.id!, { completion: { values: ["one"] } });
     });
     return Effect.gen(function* () {
-      const result = yield* (yield* McpExecution)
-        .execute(
-          {
-            action: "completion.complete",
-            server: "fixture",
-            ref: { type: "ref/prompt", name: "example" },
-            argument: { name: "value", value: "" },
-          },
-          projection,
-        )
-        .pipe(Effect.flip);
+      const result = yield* (yield* McpExecution).execute(input, projection).pipe(Effect.flip);
       expect(result.outcome).not.toBe("not-sent");
     }).pipe(Effect.provide(fixture.layer));
   },

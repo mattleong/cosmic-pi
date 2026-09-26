@@ -15,7 +15,7 @@ Install `pi-cosmic-ui` as well to render Better xAI's usage primitive with the s
 - pi with xAI OAuth login (`/login xai` → **Use a subscription**)
 - SuperGrok or eligible X Premium entitlement on the authenticated account
 
-Usage display requires pi's `xai` OAuth credentials.
+Usage display requires pi's `xai` OAuth credentials. The extension reads them through pi's model registry, which refreshes and saves them; it never writes pi's auth store.
 
 1. Run `/login xai` and complete subscription OAuth.
 2. Verify with `/xai-usage`, or open `/xai-settings` and check **Diagnostics**.
@@ -59,7 +59,7 @@ Stored at `~/.pi/agent/extensions/pi-better-xai.json` (or project `.pi/extension
 
 ## Effect runtime
 
-Better xAI now runs each started Pi session through an Effect v4 managed runtime. Configuration, credential refresh, HTTP decoding, polling, cancellation, and shutdown are typed and scoped. Billing and OAuth payloads are decoded with Effect Schema; malformed monthly responses fail the refresh, while unavailable or malformed weekly responses degrade to monthly-only usage.
+Better xAI now runs each started Pi session through an Effect v4 managed runtime. Configuration, HTTP decoding, polling, cancellation, and shutdown are typed and scoped. Billing payloads are decoded with Effect Schema; malformed monthly responses fail the refresh, while unavailable or malformed weekly responses degrade to monthly-only usage.
 
 Configuration updates preserve unknown fields. Malformed known fields fall back to documented defaults. The minimum refresh interval remains 5 seconds.
 

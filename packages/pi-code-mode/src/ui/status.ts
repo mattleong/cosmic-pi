@@ -6,17 +6,12 @@ import type {
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import {
-  renderCompactIssues,
-  renderExpandedAttention,
-  summaryCompactIssues,
-  type CompactSummary,
-  type CompactSummaryProvider,
-} from "pi-code-previews";
+import { invokeHostCallback } from "pi-cosmic-core";
+import type { CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { decodeOption } from "../tools/format.ts";
 import { CodeModeStatusSchema, codeModeStatusFits, type CodeModeStatus } from "../tools/status.ts";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
-import { codeModeOutputText } from "./result-output.ts";
+import { renderPlainResultView } from "./result-read-renderer.ts";
 
 const StatusRequestSchema = Schema.Struct({ action: Schema.Literal("status") });
 const StatusDetailsSchema = Schema.Struct({
@@ -118,12 +113,10 @@ export const codeModeStatusCompactSummary = ({
 };
 
 export const renderCodeModeStatusCall = (theme: Theme): Component => {
-  let header = "Code Mode status · Effective limits";
-  try {
-    header = renderToolHeader({ title: "Code Mode status", subtitle: "· Effective limits" }, theme);
-  } catch {
-    // Plain text keeps the status call visible under a hostile theme.
-  }
+  const header = invokeHostCallback(
+    () => renderToolHeader({ title: "Code Mode status", subtitle: "· Effective limits" }, theme),
+    "Code Mode status · Effective limits",
+  );
   return new Text(header, 0, 0);
 };
 
@@ -150,62 +143,18 @@ export const renderCodeModeStatusResult = (
   } catch {
     // Hostile render state falls back to a conservative settled-unknown view.
   }
-  const lines: Array<{ readonly text: string; readonly color: "muted" | "error" | "toolOutput" }> =
-    [];
-  if (!contentOnly || summary === undefined) {
-    lines.push({
-      text: isPartial
-        ? "Reading effective limits"
-        : isError || summary?.outcome === "error"
-          ? "Status failed"
-          : summary?.outcome === "success"
-            ? "Effective limits loaded"
-            : summary?.outcome === "warning"
-              ? "Status refused by output limit"
-              : "Status outcome unavailable",
-      color: isError || summary?.outcome === "error" ? "error" : "muted",
-    });
-  }
-  let raw = "";
-  try {
-    raw = rawText(result);
-  } catch {
-    // Hostile result content cannot establish status or suppress other presentation.
-  }
-  if (expanded && !isPartial && raw.length > 0) {
-    lines.push(
-      { text: "Raw output", color: "muted" },
-      { text: codeModeOutputText(raw), color: "toolOutput" },
-    );
-  }
-  const issues = summary && !contentOnly ? summaryCompactIssues(summary, expanded) : undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      const body = new Text(
-        lines
-          .map(({ text, color }) => {
-            const safe = codeModeOutputText(text);
-            try {
-              return theme.fg(color, safe);
-            } catch {
-              return safe;
-            }
-          })
-          .join("\n"),
-        0,
-        0,
-      ).render(Math.floor(width));
-      if (!issues) return body;
-      try {
-        const attention = expanded
-          ? renderExpandedAttention(issues, [], theme, width)
-          : renderCompactIssues(issues, theme, width);
-        return [...attention, ...body];
-      } catch {
-        return body;
-      }
-    },
-    invalidate() {},
-  };
+  const failed = isError || summary?.outcome === "error";
+  const status = isPartial
+    ? "Reading effective limits"
+    : failed
+      ? "Status failed"
+      : summary?.outcome === "success"
+        ? "Effective limits loaded"
+        : summary?.outcome === "warning"
+          ? "Status refused by output limit"
+          : "Status outcome unavailable";
+  // Hostile result content cannot establish status or suppress other presentation.
+  const raw = invokeHostCallback(() => rawText(result), "");
+  const view = { isPartial, failed, expanded, contentOnly };
+  return renderPlainResultView(status, raw, summary, view, theme);
 };

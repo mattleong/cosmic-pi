@@ -1,57 +1,29 @@
 // Behavior-first component tests for the /subagents fleet: expandable hierarchy,
 // selection identity across reorder, Esc detail → list → close, and pending action/prompt
 // clearing on identity change. Assertions use transitions and callbacks, not exact chrome.
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import type { SubagentRunView } from "../src/run/model.ts";
 import {
   SubagentFleetComponent,
   type FleetActions,
   type FleetKeybindingId,
 } from "../src/ui/fleet.ts";
+import { view } from "./tools/fixtures/tool-harness.ts";
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used here.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-
-const run = (id: string, overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
-  id,
-  name: id,
-  task: "task",
-  parentRunId: "root",
-  depth: 1,
-  selection: {
-    source: "profile-candidate",
-    reason: "Selected in configured order.",
-    skippedCandidates: [],
-  },
-  cwd: "/tmp",
-  state: "running",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  host: "herdr",
-  runtime: "claude",
-  closeOnReport: false,
-  reportGeneration: 0,
-  capabilities: ["steer", "interrupt", "resume", "rename-display", "parent-contact"],
-  model: "provider/model",
-  effort: "high",
-  startedAt: 1,
-  lastActivityAt: 2,
-  sessionEvents: [],
-  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
-  ...overrides,
-});
+const run = (id: string, overrides: Partial<SubagentRunView> = {}): SubagentRunView =>
+  view({ id, name: id, parentRunId: "root", depth: 1, ...overrides });
 
 const makeFleet = (
   initial: ReadonlyArray<SubagentRunView>,
-  height = 12,
-  matchesKeybinding?: (data: string, id: FleetKeybindingId) => boolean,
+  options: {
+    readonly height?: number;
+    readonly matchesKeybinding?: (data: string, id: FleetKeybindingId) => boolean;
+    readonly visibilityRootId?: string;
+  } = {},
 ) => {
   let runs = initial;
+  let height = options.height ?? 12;
   const actions: FleetActions = {
     stop: vi.fn(() => Promise.resolve()),
     interrupt: vi.fn(() => Promise.resolve()),
@@ -61,11 +33,12 @@ const makeFleet = (
   };
   const close = vi.fn();
   const component = new SubagentFleetComponent({
-    theme,
+    theme: plainTheme,
     getProjection: () => ({ revision: 1, runs }),
     getHeight: () => height,
     getNow: () => 1_000,
-    matchesKeybinding,
+    matchesKeybinding: options.matchesKeybinding,
+    visibilityRootId: options.visibilityRootId,
     requestRender: () => {},
     close,
     actions,
@@ -86,7 +59,7 @@ const makeFleet = (
 it("keeps the selected row reachable through live shrinking and growing", () => {
   const fixture = makeFleet(
     Array.from({ length: 40 }, (_, index) => run(`item-${index}`)),
-    32,
+    { height: 32 },
   );
   fixture.component.render(128);
   fixture.component.handleInput("G");
@@ -166,27 +139,17 @@ describe("/subagents tree navigation", () => {
     (treeKey) => {
       const { component } = makeFleet(
         [run("alpha"), run("beta", { parentRunId: "alpha", depth: 2 })],
-        12,
-        (data, id) => data === treeKey && id === "tui.select.down",
+        { matchesKeybinding: (data, id) => data === treeKey && id === "tui.select.down" },
       );
       component.handleInput(treeKey);
       expect(component.render(120).join("\n")).not.toContain("beta");
     },
   );
 
-  it("uses l to inspect a leaf and h to return through shared pane navigation", () => {
+  it.each(["l", ENTER])("uses h as shared pane navigation after entering detail with %j", (key) => {
     const { component, close } = makeFleet([run("alpha")]);
     component.render(120);
-    component.handleInput("l");
-    component.handleInput("h");
-    component.handleInput(ESC);
-    expect(close).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses h/l as shared pane navigation after entering detail", () => {
-    const { component, close } = makeFleet([run("alpha")]);
-    component.render(120);
-    component.handleInput(ENTER);
+    component.handleInput(key);
     component.handleInput("h");
     component.handleInput(ESC);
     expect(close).toHaveBeenCalledTimes(1);
@@ -211,27 +174,15 @@ describe("/subagents tree navigation", () => {
   );
 
   it("renders only descendants of a nested visibility root", () => {
-    const root = run("alpha");
-    const child = run("beta", { parentRunId: "alpha", depth: 2 });
-    const grandchild = run("gamma", { parentRunId: "beta", depth: 3 });
-    const outsider = run("outside");
-    const runs = [root, child, grandchild, outsider];
-    const component = new SubagentFleetComponent({
-      theme,
-      visibilityRootId: "alpha",
-      getProjection: () => ({ revision: 1, runs }),
-      getHeight: () => 12,
-      getNow: () => 1_000,
-      requestRender: () => {},
-      close: vi.fn(),
-      actions: {
-        stop: vi.fn(() => Promise.resolve()),
-        interrupt: vi.fn(() => Promise.resolve()),
-        resume: vi.fn(() => Promise.resolve()),
-        message: vi.fn(() => Promise.resolve()),
-        rename: vi.fn(() => Promise.resolve()),
-      },
-    });
+    const { component } = makeFleet(
+      [
+        run("alpha"),
+        run("beta", { parentRunId: "alpha", depth: 2 }),
+        run("gamma", { parentRunId: "beta", depth: 3 }),
+        run("outside"),
+      ],
+      { visibilityRootId: "alpha" },
+    );
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("beta");
     expect(rendered).toContain("gamma");
@@ -240,25 +191,10 @@ describe("/subagents tree navigation", () => {
   });
 
   it("never renders the authenticated visibility root when malformed ancestry cycles to it", () => {
-    const root = run("alpha", { parentRunId: "beta" });
-    const child = run("beta", { parentRunId: "alpha", depth: 2 });
-    const runs = [root, child];
-    const component = new SubagentFleetComponent({
-      theme,
-      visibilityRootId: "alpha",
-      getProjection: () => ({ revision: 1, runs }),
-      getHeight: () => 12,
-      getNow: () => 1_000,
-      requestRender: () => {},
-      close: vi.fn(),
-      actions: {
-        stop: vi.fn(() => Promise.resolve()),
-        interrupt: vi.fn(() => Promise.resolve()),
-        resume: vi.fn(() => Promise.resolve()),
-        message: vi.fn(() => Promise.resolve()),
-        rename: vi.fn(() => Promise.resolve()),
-      },
-    });
+    const { component } = makeFleet(
+      [run("alpha", { parentRunId: "beta" }), run("beta", { parentRunId: "alpha", depth: 2 })],
+      { visibilityRootId: "alpha" },
+    );
     const rendered = component.render(120).join("\n");
     expect(rendered).toContain("beta");
     expect(rendered).not.toContain("alpha");

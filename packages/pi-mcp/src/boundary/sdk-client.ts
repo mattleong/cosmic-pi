@@ -161,85 +161,61 @@ export const executeSdkRequest = (
   dispatchOptions?: McpDispatchOptions,
 ): Promise<SdkResult | InputRequiredResult> => {
   const options = { ...nativeOptions, ...dispatchOptions };
+  const send = <Output>(method: string, params: Request["params"], schema: SdkSchemaHandle) =>
+    requestWithSdkSchema<Output>(client, { method, params }, schema, options);
+  const page = (cursor: string | undefined) => (cursor === undefined ? {} : { cursor });
   switch (input.action) {
     case "completion.complete":
-      return requestWithSdkSchema<CompleteResult>(
-        client,
-        {
-          method: "completion/complete",
-          params: input.context
-            ? { ref: input.ref, argument: input.argument, context: input.context }
-            : { ref: input.ref, argument: input.argument },
-        },
+      return send<CompleteResult>(
+        "completion/complete",
+        input.context
+          ? { ref: input.ref, argument: input.argument, context: input.context }
+          : { ref: input.ref, argument: input.argument },
         CompleteResultSchema,
-        options,
       );
     case "tools.list":
-      return requestWithSdkSchema<ListToolsResult>(
-        client,
-        {
-          method: "tools/list",
-          params: input.cursor === undefined ? {} : { cursor: input.cursor },
-        },
-        ListToolsResultSchema,
-        options,
-      );
+      return send<ListToolsResult>("tools/list", page(input.cursor), ListToolsResultSchema);
     case "tools.call":
-      return requestWithSdkSchema<CallToolResult>(
-        client,
-        { method: "tools/call", params: { name: input.tool, arguments: input.arguments ?? {} } },
+      return send<CallToolResult>(
+        "tools/call",
+        { name: input.tool, arguments: input.arguments ?? {} },
         CallToolResultSchema,
-        options,
       );
     case "resources.list":
-      return requestWithSdkSchema<ListResourcesResult>(
-        client,
-        {
-          method: "resources/list",
-          params: input.cursor === undefined ? {} : { cursor: input.cursor },
-        },
+      return send<ListResourcesResult>(
+        "resources/list",
+        page(input.cursor),
         ListResourcesResultSchema,
-        options,
       );
     case "resources.templates":
-      return requestWithSdkSchema<ListResourceTemplatesResult>(
-        client,
-        {
-          method: "resources/templates/list",
-          params: input.cursor === undefined ? {} : { cursor: input.cursor },
-        },
+      return send<ListResourceTemplatesResult>(
+        "resources/templates/list",
+        page(input.cursor),
         ListResourceTemplatesResultSchema,
-        options,
       );
     case "resources.read":
-      return requestWithSdkSchema<ReadResourceResult>(
-        client,
-        { method: "resources/read", params: { uri: input.uri } },
+      return send<ReadResourceResult>(
+        "resources/read",
+        { uri: input.uri },
         ReadResourceResultSchema,
-        options,
       );
     case "prompts.list":
-      return requestWithSdkSchema<ListPromptsResult>(
-        client,
-        {
-          method: "prompts/list",
-          params: input.cursor === undefined ? {} : { cursor: input.cursor },
-        },
-        ListPromptsResultSchema,
-        options,
-      );
+      return send<ListPromptsResult>("prompts/list", page(input.cursor), ListPromptsResultSchema);
     case "prompts.get":
-      return requestWithSdkSchema<GetPromptResult>(
-        client,
-        { method: "prompts/get", params: { name: input.prompt, arguments: input.arguments ?? {} } },
+      return send<GetPromptResult>(
+        "prompts/get",
+        { name: input.prompt, arguments: input.arguments ?? {} },
         GetPromptResultSchema,
-        options,
       );
   }
   throw new Error("Unsupported MCP request action.");
 };
 
-export const decodeMcpRequest = <Input>(value: Input) =>
+/** Decode one request and bound its encoded size; transports may narrow the global limit. */
+export const decodeMcpRequest = <Input>(
+  value: Input,
+  maxBytes = MCP_BOUNDARY_LIMITS.requestBytes,
+) =>
   Schema.decodeUnknownEffect(McpRequestSchema)(value, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() => boundaryError("invalid-input", "not-sent", "Invalid MCP request.")),
     Effect.flatMap((input) =>
@@ -249,7 +225,7 @@ export const decodeMcpRequest = <Input>(value: Input) =>
         ),
         Effect.map((json) => new TextEncoder().encode(json).byteLength),
         Effect.flatMap((bytes) =>
-          bytes <= MCP_BOUNDARY_LIMITS.requestBytes
+          bytes <= maxBytes
             ? Effect.succeed(input)
             : Effect.fail(
                 boundaryError("invalid-input", "not-sent", "MCP request exceeds its byte limit."),

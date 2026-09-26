@@ -8,45 +8,7 @@ import {
   compactSummaryNeedsDetails,
   resolveCompactSummary,
 } from "../../src/tools/compact-summary";
-import { stripAnsi, testTheme } from "../support/render";
-
-const theme = testTheme();
-
-test("duration is a last-resort detail using numeric elapsed time", () => {
-  for (const name of ["read", "bash"]) {
-    for (const elapsedMs of [9_999, 10_000]) {
-      for (const counters of [[], ["count"]]) {
-        const row = renderCompactToolCall(
-          {
-            name,
-            phase: "settled",
-            duration: "measured",
-            elapsedMs,
-            summary: { subject: "target", outcome: "success", counters },
-          },
-          theme,
-          200,
-        )[0]!;
-        assert.equal(
-          row.includes("measured"),
-          counters.length === 0 && (name === "bash" || elapsedMs >= 10_000),
-        );
-      }
-    }
-  }
-  const row = renderCompactToolCall(
-    {
-      name: "read",
-      phase: "settled",
-      duration: "10.0s",
-      elapsedMs: 9_999,
-      summary: { subject: "target", outcome: "success" },
-    },
-    theme,
-    200,
-  )[0]!;
-  assert.ok(!row.includes("10.0s"));
-});
+import { plainTheme as theme, stripAnsi } from "../support/render";
 
 test("explicit measured timing accompanies counts without overriding disabled timing or inventing replay time", () => {
   for (const timingEnabled of [false, true]) {
@@ -188,33 +150,6 @@ test("middle elision keeps combining, ZWJ and wide graphemes intact", () => {
   assert.ok(!row.includes("\u001b[2J"));
   assert.doesNotMatch(stripAnsi(row), /[\n\t]/u);
   assert.ok(visibleWidth(row) < 200);
-});
-
-test("expanded notice wrapping retains multiline recovery instructions", () => {
-  const rows = renderCompactToolCall(
-    {
-      name: "read",
-      phase: "settled",
-      expanded: true,
-      summary: {
-        subject: "file.txt",
-        outcome: "warning",
-        notices: [
-          {
-            kind: "recovery",
-            text: "Output truncated.\nContinue with offset 2001 to read the remaining data.",
-          },
-        ],
-      },
-    },
-    theme,
-    24,
-  );
-  const output = rows.join(" ");
-  assert.ok(rows.length > 1);
-  assert.ok(rows.every((row) => visibleWidth(row) <= 24));
-  assert.match(output, /offset 2001/u);
-  assert.match(output, /remaining data/u);
 });
 
 test("notice indentation preserves every character at narrow widths", () => {

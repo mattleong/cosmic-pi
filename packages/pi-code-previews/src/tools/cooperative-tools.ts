@@ -79,23 +79,14 @@ export function withCodePreviewShell<
   )
     return tool;
 
-  const originalRenderCall = tool.renderCall;
-  const originalRenderResult = tool.renderResult;
-
   return createCodePreviewToolDefinition<TTool>(tool, {
     mode,
     compactSummary: options.compactSummary,
     scheduleAnimation: options.scheduleAnimation,
     // SAFETY: Both callback sets derive their args/details/state from this same tool definition.
     expandedContent: options.expandedContent as CodePreviewToolRenderers<TTool>["expandedContent"],
-    renderCall: (args, theme, context) =>
-      originalRenderCall
-        ? originalRenderCall(args, theme, context)
-        : renderFallbackToolCall(tool, theme),
-    renderResult: (result, resultOptions, theme, context) =>
-      originalRenderResult
-        ? originalRenderResult(result, resultOptions, theme, context)
-        : renderFallbackToolResult(result, resultOptions, theme, context),
+    renderCall: tool.renderCall ?? ((_args, theme) => renderFallbackToolCall(tool, theme)),
+    renderResult: tool.renderResult ?? renderFallbackToolResult,
   });
 }
 

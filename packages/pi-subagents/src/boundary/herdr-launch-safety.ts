@@ -1,7 +1,7 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { hasAvailableHerdrShell } from "../backend/herdr-shell-readiness.ts";
-import { matchingPaneIdentity } from "../backend/herdr-ownership.ts";
+import { exactPaneContext } from "../backend/herdr-ownership.ts";
 import { processError, SubagentProcessError } from "../run/errors.ts";
 import type { HerdrCliContract, HerdrPane, HerdrSnapshot } from "./herdr-cli.ts";
 import type { HerdrPreparedHarness } from "./herdr-harness.ts";
@@ -46,10 +46,7 @@ export interface HerdrLaunchSafety {
 }
 
 /** I/O safety gate for focus-neutral provisional pane mutation. */
-export const makeHerdrLaunchSafety = (
-  cli: HerdrCliContract,
-  exactPaneContext: (pane: HerdrPane, snapshot: HerdrSnapshot) => boolean,
-): HerdrLaunchSafety => {
+export const makeHerdrLaunchSafety = (cli: HerdrCliContract): HerdrLaunchSafety => {
   const inspectProvisionalPane: HerdrLaunchSafety["inspectProvisionalPane"] = (
     pane,
     operation,
@@ -57,8 +54,7 @@ export const makeHerdrLaunchSafety = (
   ) =>
     cli.snapshot.pipe(
       Effect.flatMap((snapshot) => {
-        const exactPane = matchingPaneIdentity(pane, snapshot);
-        if (!exactPaneContext(pane, snapshot) || !exactPane) {
+        if (!exactPaneContext(pane, snapshot)) {
           invalidate();
           return Effect.fail(
             provisionalOwnershipMismatch(

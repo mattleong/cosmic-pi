@@ -1,6 +1,4 @@
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { boundaryError } from "../client/errors.ts";
 
 export const registrationReceiptSchema = Schema.Struct({
   identity: Schema.String,
@@ -39,19 +37,3 @@ export const validGrantTimes = (grant: McpGrant) =>
   grant.receivedAt >= 0 &&
   (grant.expiresAt === undefined ||
     (Number.isFinite(grant.expiresAt) && grant.expiresAt >= grant.receivedAt));
-const invalid = () =>
-  boundaryError("unavailable", "not-sent", "Stored OAuth grant is invalid or unavailable.");
-export const decodeGrant = (raw: string) =>
-  new TextEncoder().encode(raw).length > maximumGrantBytes
-    ? Effect.fail(invalid())
-    : Schema.decodeEffect(Schema.fromJsonString(grantSchema))(raw, {
-        onExcessProperty: "error",
-      }).pipe(Effect.mapError(invalid), Effect.filterOrFail(validGrantTimes, invalid));
-export const encodeGrant = (grant: McpGrant) =>
-  Schema.encodeEffect(Schema.fromJsonString(grantSchema))(grant).pipe(
-    Effect.mapError(invalid),
-    Effect.filterOrFail(
-      (raw) => new TextEncoder().encode(raw).length <= maximumGrantBytes,
-      invalid,
-    ),
-  );

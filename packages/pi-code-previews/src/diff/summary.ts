@@ -25,56 +25,49 @@ export function describeDiffContract(summary: DiffSummary): string {
 }
 
 export function summarizeDiff(diff: string): DiffSummary {
-  let additions = 0;
-  let removals = 0;
-  let replacements = 0;
-  let insertions = 0;
-  let deletions = 0;
-  let hunks = 0;
+  const summary: DiffSummary = {
+    additions: 0,
+    removals: 0,
+    replacements: 0,
+    insertions: 0,
+    deletions: 0,
+    totalLines: 0,
+    hunks: 0,
+  };
   let groupAdditions = 0;
   let groupRemovals = 0;
-  let totalLines = 0;
 
   function flushChangeGroup() {
     if (groupAdditions === 0 && groupRemovals === 0) return;
-    hunks++;
+    summary.hunks++;
     if (groupAdditions > 0 && groupRemovals > 0) {
-      replacements++;
-      insertions += Math.max(0, groupAdditions - groupRemovals);
-      deletions += Math.max(0, groupRemovals - groupAdditions);
+      summary.replacements++;
+      summary.insertions += Math.max(0, groupAdditions - groupRemovals);
+      summary.deletions += Math.max(0, groupRemovals - groupAdditions);
     } else if (groupAdditions > 0) {
-      insertions += groupAdditions;
+      summary.insertions += groupAdditions;
     } else {
-      deletions += groupRemovals;
+      summary.deletions += groupRemovals;
     }
     groupAdditions = 0;
     groupRemovals = 0;
   }
 
   forEachRawTextLine(diff, (line) => {
-    totalLines++;
+    summary.totalLines++;
     const isAddition = line.startsWith("+") && !line.startsWith("+++");
     const isRemoval = line.startsWith("-") && !line.startsWith("---");
 
     if (isAddition) {
-      additions++;
+      summary.additions++;
       groupAdditions++;
     } else if (isRemoval) {
-      removals++;
+      summary.removals++;
       groupRemovals++;
     } else {
       flushChangeGroup();
     }
   });
   flushChangeGroup();
-
-  return {
-    additions,
-    removals,
-    replacements,
-    insertions,
-    deletions,
-    totalLines,
-    hunks,
-  };
+  return summary;
 }

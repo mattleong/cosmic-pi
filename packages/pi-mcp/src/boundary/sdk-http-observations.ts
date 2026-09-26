@@ -28,7 +28,7 @@ export const observeHttpLog = (
     const decoded = Schema.decodeUnknownOption(Log)(message);
     if (
       Option.isNone(decoded) ||
-      logSeverity[decoded.value.params.level] < logSeverity[scope.threshold]
+      logSeverity(decoded.value.params.level) < logSeverity(scope.threshold)
     )
       return;
     const { data, level } = decoded.value.params;

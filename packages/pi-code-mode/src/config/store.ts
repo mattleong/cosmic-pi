@@ -53,15 +53,6 @@ function decodeConfigFile(value: JsonObject): Partial<CodeModeConfig> {
   return decodeTolerantFields(value, CODE_MODE_FIELD_SCHEMAS, { path: "config" }).value;
 }
 
-const resolveValues = (
-  global: Partial<CodeModeConfig> | undefined,
-  project: Partial<CodeModeConfig> | undefined,
-) => ({
-  ...resolveCodeModeConfig(global, project),
-  globalValues: global ?? {},
-  projectValues: project ?? {},
-});
-
 const store = makeScopedConfigStore({
   errorFactory: mapDocumentError,
   label: "Code Mode",
@@ -74,7 +65,12 @@ const store = makeScopedConfigStore({
     metadata: ScopedConfigMetadata,
     project: Partial<CodeModeConfig> | undefined,
     global: Partial<CodeModeConfig> | undefined,
-  ) => ({ ...metadata, ...resolveValues(global, project) }),
+  ) => ({
+    ...metadata,
+    ...resolveCodeModeConfig(global, project),
+    globalValues: global ?? {},
+    projectValues: project ?? {},
+  }),
 });
 
 /** Immutable, plain-data resolved configuration published after every persisted change. */
@@ -109,7 +105,7 @@ export interface CodeModeConfigStoreContract {
 }
 
 const toState = (
-  resolved: ReturnType<typeof resolveValues>,
+  resolved: Omit<CodeModeState, "projectTrusted" | "available">,
   projectTrusted: boolean,
 ): CodeModeState => ({
   projectTrusted,
@@ -207,16 +203,14 @@ export class CodeModeConfigStore extends Context.Service<
                   : options.projectTrusted
                     ? yield* readOtherScope(projectConfigPath)
                     : undefined;
-              const fallback = other === undefined ? undefined : decodeConfigFile(other);
               const publication = yield* Deferred.make<CodeModeState, ProjectionError>();
               yield* provideDependencies(
                 store.modifyConfig(targetPath, (document) => {
                   const committed = mutate(document);
-                  const values = decodeConfigFile(committed);
+                  // The committed scope is the one `configPath` names, so point it at the target.
+                  const current = { ...initial, configPath: targetPath };
                   const next = toState(
-                    scope === "project"
-                      ? resolveValues(fallback, values)
-                      : resolveValues(values, fallback),
+                    store.resolveCommittedConfig(current, committed, other),
                     options.projectTrusted,
                   );
                   return {

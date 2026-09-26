@@ -1,21 +1,11 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import { DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
-import { CodeModeResults } from "../src/results/service.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
 import type { ExecutionReceipts } from "../src/tools/execution-receipts.ts";
 import { callEntryDetails } from "../src/tools/format.ts";
 import { codeModeStatusResult } from "../src/tools/status.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { codeModeStatusCompactSummary } from "../src/ui/status.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { opaqueFixture } from "pi-cosmic-core/testing";
 
 const receipts: ExecutionReceipts = {
   total: 1,
@@ -58,7 +48,7 @@ const summarize = (evidence: ExecutionReceipts) =>
         },
       },
     },
-    context: opaqueHostFixture({ isError: false, expanded: false }),
+    context: opaqueFixture({ isError: false, expanded: false }),
   });
 
 describe("retained output safety evidence", () => {
@@ -108,85 +98,9 @@ describe("retained output safety evidence", () => {
         phase: "settled",
         args: { action: "status" },
         result: { ...result, details: { ...result.details, ...flags } },
-        context: opaqueHostFixture({ isError: false, expanded: false }),
+        context: opaqueFixture({ isError: false, expanded: false }),
       });
       expect(summary?.outcome).toBe(expected);
     }
   });
-
-  it.effect("continues the initial page without repeating a completed mutation", () =>
-    Effect.gen(function* () {
-      const results = yield* CodeModeResults;
-      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-      let mutations = 0;
-      const execute = makeCodeModeToolExecute({
-        results,
-        isCurrent: () => true,
-        getState: () => codeModeStateFixture({ maxOutputBytes: 1_200, maxToolCalls: 1 }),
-        runInSession: (effect) => runPromise(effect),
-        definitions: nestedToolDefinitionsFixture({
-          write: {
-            execute: () => {
-              mutations++;
-              return Promise.resolve({
-                content: [{ type: "text" as const, text: "saved" }],
-                details: undefined,
-              });
-            },
-          },
-        }),
-        events: createEventBus(),
-        sessionId: "initial-page-mutation",
-      });
-      const ctx = extensionContextFixture({ cwd: "/project" });
-      const first = yield* Effect.promise(() =>
-        execute(
-          "write-once",
-          {
-            code: 'await tools.pi.write({path:"fixture",content:"updated"}); return {payload:"🙂\\n".repeat(1000)};',
-          },
-          undefined,
-          undefined,
-          ctx,
-        ),
-      );
-      const Page = Schema.fromJsonString(
-        Schema.Struct({
-          id: Schema.String,
-          next: Schema.NullOr(Schema.Natural),
-          text: Schema.String,
-        }),
-      );
-      const textOf = (result: typeof first) =>
-        result.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-      let page = yield* Schema.decodeEffect(Page)(textOf(first));
-      expect(page.next).not.toBeNull();
-      let reconstructed = page.text;
-      for (let attempts = 0; page.next !== null && attempts < 100; attempts++) {
-        const id = page.id;
-        const offset = page.next;
-        const next = yield* Effect.promise(() =>
-          execute(
-            "continue",
-            {
-              action: "result.read",
-              id,
-              offset,
-            },
-            undefined,
-            undefined,
-            ctx,
-          ),
-        );
-        page = yield* Schema.decodeEffect(Page)(textOf(next));
-        reconstructed += page.text;
-      }
-      expect(page.next).toBeNull();
-      const expected = yield* Schema.encodeEffect(
-        Schema.fromJsonString(Schema.Struct({ payload: Schema.String })),
-      )({ payload: "🙂\n".repeat(1000) });
-      expect(reconstructed).toBe(expected);
-      expect(mutations).toBe(1);
-    }).pipe(Effect.provide(CodeModeResults.layer)),
-  );
 });

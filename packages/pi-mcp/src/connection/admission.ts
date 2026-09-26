@@ -36,21 +36,9 @@ export class McpAdmission {
     this.changed = changed;
   }
 
-  issue(server: string, now: number): AdmissionTicket | McpBoundaryError {
-    return this.allocate(server, now, false);
-  }
-
-  /** Shared prerequisites have a separate bounded population, not a second caller charge.
-   * They still use the same remote permits and the exact configured dispatch queue. */
-  issueDependency(server: string, now: number): AdmissionTicket | McpBoundaryError {
-    return this.allocate(server, now, true);
-  }
-
-  private allocate(
-    server: string,
-    now: number,
-    dependency: boolean,
-  ): AdmissionTicket | McpBoundaryError {
+  /** A `dependency` (shared prerequisite) has a separate bounded population, not a second
+   * caller charge. It still uses the same remote permits and the exact configured dispatch queue. */
+  issue(server: string, now: number, dependency = false): AdmissionTicket | McpBoundaryError {
     const settings = this.settings();
     const count = dependency ? this.dependencies.size : this.tickets.size - this.dependencies.size;
     if (count >= settings.maxConcurrent + settings.maxQueued) {

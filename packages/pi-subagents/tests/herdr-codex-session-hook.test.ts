@@ -1,18 +1,19 @@
 // Packaged child-hook execution is intentional boundary-test process IO.
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect } from "vitest";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath, nodeSpawn as spawn } from "./support/node-builtins.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { dirname, join } = nodePath;
 
 const hook = fileURLToPath(
   new URL("../src/boundary/herdr-codex-session-hook.mjs", import.meta.url),
 );
-const directories: string[] = [];
 
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
@@ -22,7 +23,7 @@ const run = (
   environment: NodeJS.ProcessEnv,
   executableHook = hook,
 ): Promise<{ readonly code: number | null; readonly stdout: string }> => {
-  const settled = Deferred.makeUnsafe<{ readonly code: number | null; readonly stdout: string }>();
+  const settled = deferredPromise<{ readonly code: number | null; readonly stdout: string }>();
   const child = spawn(process.execPath, [executableHook, ...args], {
     env: environment,
     stdio: ["pipe", "pipe", "ignore"],
@@ -31,26 +32,21 @@ const run = (
   child.stdout?.on("data", (chunk: Buffer) => {
     stdout += chunk.toString("utf8");
   });
-  child.once("error", (error) => Deferred.doneUnsafe(settled, Effect.die(error)));
-  child.once("close", (code) => Deferred.doneUnsafe(settled, Effect.succeed({ code, stdout })));
+  child.once("error", settled.reject);
+  child.once("close", (code) => settled.resolve({ code, stdout }));
   child.stdin?.end(input);
-  return Effect.runPromise(Deferred.await(settled));
+  return settled.promise;
 };
 
-afterEach(() =>
-  Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  ).then(() => undefined),
-);
+afterEach(removeTemporaryDirectories);
 
 describe("Herdr Codex SessionStart compatibility hook", () => {
   effectTest(
     "adapts a nullable transcript for the validated integration and stops bootstrap inference",
     function* () {
       const directory = yield* step(() =>
-        fs.mkdtemp(join(tmpdir(), "pi-subagents-codex-session-hook-")),
+        makeTemporaryDirectory("pi-subagents-codex-session-hook-"),
       );
-      directories.push(directory);
       const integration = join(directory, "integration.sh");
       const capture = join(directory, "capture.json");
       const fallback = join(directory, "session-anchor.jsonl");
@@ -87,19 +83,12 @@ describe("Herdr Codex SessionStart compatibility hook", () => {
     },
   );
 
-  effectTest("still blocks bootstrap inference when lifecycle input is invalid", function* () {
-    const result = yield* step(() => run([], "{not-json", { PATH: inheritedPath(process.env) }));
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ continue: false });
-  });
-
   effectTest(
-    "runs from an installed node_modules path without TypeScript package loading",
+    "blocks bootstrap inference on invalid lifecycle input from an installed node_modules path",
     function* () {
       const directory = yield* step(() =>
-        fs.mkdtemp(join(tmpdir(), "pi-subagents-installed-session-hook-")),
+        makeTemporaryDirectory("pi-subagents-installed-session-hook-"),
       );
-      directories.push(directory);
       const installed = join(
         directory,
         "node_modules",

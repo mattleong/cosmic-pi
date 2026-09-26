@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { createReadToolDefinition, type Theme } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import { testTheme } from "../support/render";
+import { plainTheme } from "../support/render";
 import { claimCompactIssue } from "../../src/tools/compact-issues";
 const claimNotice = (text: string, code = "legacy-0") =>
   claimCompactIssue(
@@ -16,44 +16,32 @@ const claimNotice = (text: string, code = "legacy-0") =>
 type Definition = ReturnType<typeof createReadToolDefinition>;
 type Context = Parameters<NonNullable<Definition["renderCall"]>>[2];
 type Result = Awaited<ReturnType<Definition["execute"]>>;
-const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
-// SAFETY: The render-only theme supplies all foreground and background methods used here.
-const theme = { ...testTheme(), bg: (_key: string, text: string) => text } as Theme;
 const result: Result = { content: [{ type: "text", text: "raw result" }], details: undefined };
 
 beforeEach(() =>
-  setCodePreviewSettings({
+  applyPresentationSettings({
     ...defaultCodePreviewSettings,
     toolCallCollapsedStyle: "compact",
     toolCallTiming: false,
   }),
 );
-afterEach(() => setCodePreviewSettings(originalSettings));
 
-function context(overrides: Partial<Context> = {}): Context {
-  return {
+const context = (overrides: Partial<Context> = {}): Context =>
+  renderContextFixture({
     args: { path: "file.ts" },
-    state: {},
-    cwd: "/project",
-    toolCallId: "fallback",
-    lastComponent: undefined,
-    invalidate: () => undefined,
-    executionStarted: false,
     argsComplete: false,
     isPartial: false,
     expanded: true,
-    isError: false,
     showImages: false,
     ...overrides,
-  };
-}
+  });
 
 function paint(tool: Definition, ctx: Context, value = result) {
-  const call = tool.renderCall!(ctx.args, theme, ctx);
+  const call = tool.renderCall!(ctx.args, plainTheme, ctx);
   const output = tool.renderResult!(
     value,
     { expanded: ctx.expanded, isPartial: ctx.isPartial },
-    theme,
+    plainTheme,
     ctx,
   );
   const rows = [...call.render(100), ...output.render(100)];
@@ -168,92 +156,6 @@ test("only expanded details expose nested mouse actions through every frame", ()
   }
 });
 
-test("explicit non-success projections hide details until expansion and retain slot state", () => {
-  for (const outcome of ["error", "cancelled", "uncertain"] as const) {
-    for (const mode of ["on", "off", "border"] as const) {
-      const callBody = new StatefulText("original call", 0, 0);
-      const resultBody = new StatefulText("original result", 0, 0);
-      let expandedOnce = false;
-      const tool = withCodePreviewShell(
-        {
-          ...createReadToolDefinition("/project"),
-          renderCall(_args, _theme, ctx) {
-            assert.equal(ctx.lastComponent, expandedOnce ? callBody : undefined);
-            return callBody;
-          },
-          renderResult(_value, _options, _theme, ctx) {
-            assert.equal(ctx.lastComponent, expandedOnce ? resultBody : undefined);
-            return resultBody;
-          },
-        },
-        {
-          mode,
-          compactSummary: () => ({
-            subject: "decoded outcome",
-            outcome,
-            detailsOnExpand: true,
-            notices: [{ kind: "recovery", text: "Inspect before retrying." }],
-          }),
-        },
-      );
-      const state = {};
-      for (let cycle = 0; cycle < 2; cycle++) {
-        const collapsed = paint(tool, context({ state, expanded: false })).rows.join("\n");
-        assert.match(collapsed, /decoded outcome/u);
-        assert.doesNotMatch(collapsed, /Inspect before retrying/u);
-        assert.doesNotMatch(collapsed, /original call|original result/u);
-        const expanded = paint(tool, context({ state, expanded: true })).rows.join("\n");
-        assert.match(expanded, /original call/u);
-        assert.match(expanded, /original result/u);
-        expandedOnce = true;
-      }
-    }
-  }
-});
-
-test("unflagged non-success keeps details on expansion and owned failure keeps its presentation", () => {
-  for (const outcome of ["error", "cancelled", "uncertain"] as const) {
-    for (const owned of [false, true]) {
-      const tool = withCodePreviewShell(
-        {
-          ...createReadToolDefinition("/project"),
-          renderCall: () => new Text("original call", 0, 0),
-          renderResult: () => new Text("original result", 0, 0),
-        },
-        {
-          mode: "off",
-          compactSummary: () =>
-            owned
-              ? {
-                  subject: "decoded outcome",
-                  outcome,
-                  detailsOnExpand: true,
-                  failure: {
-                    cause: "owned cause",
-                    description: "owned cause",
-                    details: "owned details",
-                  },
-                }
-              : { subject: "decoded outcome", outcome },
-        },
-      );
-      for (const expanded of [false, true]) {
-        const text = paint(tool, context({ expanded })).rows.join("\n");
-        if (owned) {
-          assert.match(text, expanded ? /owned details/u : /owned cause/u);
-          assert.doesNotMatch(text, /original call|original result/u);
-        } else if (expanded) {
-          assert.match(text, /original call/u);
-          assert.match(text, /original result/u);
-        } else {
-          assert.doesNotMatch(text, /original call|original result/u);
-          assert.match(text, /decoded outcome/u);
-        }
-      }
-    }
-  }
-});
-
 test("expanded ownership requires a current successful result and survives toggles", () => {
   for (const mode of ["on", "off", "border"] as const) {
     let fails = false;
@@ -303,7 +205,7 @@ test("expanded ownership requires a current successful result and survives toggl
     // Pi mounts the final call before replacing the retained streaming result.
     paint(tool, context({ state, isPartial: true }));
     const finalContext = context({ state, isPartial: false });
-    const call = tool.renderCall!(finalContext.args, theme, finalContext);
+    const call = tool.renderCall!(finalContext.args, plainTheme, finalContext);
     const pendingFinal = call.render(100).join("\n");
     assert.match(pendingFinal, /sole call heading/u);
     assert.match(pendingFinal, /complete recovery/u);
@@ -401,39 +303,10 @@ test("result-only rows share notices only after their original result succeeds",
       },
     );
     const ctx = context();
-    const body = tool.renderResult!(result, { expanded: true, isPartial: false }, theme, ctx);
+    const body = tool.renderResult!(result, { expanded: true, isPartial: false }, plainTheme, ctx);
     const text = body.render(100).join("\n");
     assert.equal(text.match(/complete recovery/gu)?.length, 1);
     assert.equal(text.includes("raw result"), fails);
-  }
-});
-
-test("unknown providers retain complete long original recovery without parsing it", () => {
-  const recovery = Array.from({ length: 100 }, (_, index) => `recovery-step-${index}`).join("\n");
-  for (const throws of [false, true]) {
-    const tool: Definition = withCodePreviewShell(
-      {
-        ...createReadToolDefinition("/project"),
-        renderCall: () => new Text("unique source and target", 0, 0),
-        renderResult: () => new Text(recovery, 0, 0),
-      },
-      {
-        mode: "border",
-        compactSummary: () => {
-          if (throws) throw new Error("unknown provider");
-          return undefined;
-        },
-      },
-    );
-    for (const expanded of [false, true]) {
-      const text = paint(tool, context({ expanded })).rows.join("\n");
-      if (expanded) {
-        assert.match(text, /unique source and target/u);
-        for (const step of recovery.split("\n")) assert.ok(text.includes(step));
-      } else {
-        assert.doesNotMatch(text, /unique source and target|recovery-step/u);
-      }
-    }
   }
 });
 

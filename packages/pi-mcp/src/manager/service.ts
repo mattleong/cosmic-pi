@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { invokeHostCallback, makeSynchronousIngress } from "pi-cosmic-core";
+import { makeSynchronousIngress, notifyListeners, scopedListener } from "pi-cosmic-core";
 import { boundaryError } from "../client/errors.ts";
 import { McpConnections } from "../connection/service.ts";
 import type { McpActionBinding } from "../connection/model.ts";
@@ -40,12 +40,7 @@ const makeManager = Effect.gen(function* () {
   let generation = 0;
   let publishedGeneration = -1;
   let closed = false;
-  const notify = () => {
-    const currentListeners = Array.from(listeners);
-    for (const listener of currentListeners) {
-      if (listeners.has(listener)) invokeHostCallback(listener, undefined);
-    }
-  };
+  const notify = () => notifyListeners(listeners);
   const refresh = Effect.gen(function* () {
     const requested = generation;
     const config = yield* connections.config;
@@ -174,24 +169,13 @@ const makeManager = Effect.gen(function* () {
     withView: (effect) =>
       effect.pipe(
         viewPermit.withPermitsIfAvailable(1),
-        Effect.flatMap((result) =>
-          Effect.fromOption(result).pipe(
-            Effect.mapError(() =>
-              boundaryError("busy", "not-sent", "The MCP manager is already open."),
-            ),
+        Effect.flatMap(
+          Effect.fromOption(() =>
+            boundaryError("busy", "not-sent", "The MCP manager is already open."),
           ),
         ),
       ),
-    subscribe: (listener) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          listeners.add(listener);
-        }),
-        () =>
-          Effect.sync(() => {
-            listeners.delete(listener);
-          }),
-      ),
+    subscribe: (listener) => scopedListener(listeners, listener),
     capture: (row, action) =>
       Effect.gen(function* () {
         const choice = row.actions.find((item) => item.action === action);

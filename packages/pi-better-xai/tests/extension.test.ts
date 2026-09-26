@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import {
   COSMIC_UI_FOOTER_REMOVE,
   COSMIC_UI_HOST_QUERY,
@@ -20,7 +21,7 @@ import {
 } from "../src/application.ts";
 import betterXai from "../src/extension.ts";
 import * as usageRequests from "../src/usage/request.ts";
-import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
+import { usageSnapshot } from "./support/fixtures.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -47,7 +48,13 @@ type TestSurfaceFactory = (
   done: (result: undefined) => void,
 ) => TestSurface;
 
-const harness = (dependencies?: BetterXaiExtensionDependencies) =>
+const harness = (
+  options: {
+    readonly startupEffect?: BetterXaiExtensionDependencies["startupEffect"];
+    /** Installs a Cosmic UI host-query responder reporting this footer ownership. */
+    readonly cosmicUi?: { readonly active: () => boolean; readonly hidden?: string[] };
+  } = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -72,6 +79,17 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
       },
       events: { emit: vi.fn(), on: vi.fn() },
     });
+    const { cosmicUi } = options;
+    if (cosmicUi)
+      vi.mocked(pi.events.emit).mockImplementation((name, data) => {
+        if (name !== COSMIC_UI_HOST_QUERY) return;
+        // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
+        (data as CosmicUiHostQuery).respond({
+          active: cosmicUi.active(),
+          ready: true,
+          hidden: cosmicUi.hidden ?? [],
+        });
+      });
     const ctx = extensionContextFixture({
       cwd,
       mode: "tui",
@@ -79,13 +97,14 @@ const harness = (dependencies?: BetterXaiExtensionDependencies) =>
       model: { provider: "xai", id: "grok" },
       modelRegistry: {
         isUsingOAuth: () => true,
-        getApiKeyForProvider: () => Promise.resolve(undefined),
+        getProviderAuth: () => Promise.resolve(undefined),
       },
       ui: { notify, setStatus, setFooter },
       isProjectTrusted: vi.fn(() => true),
     });
 
-    if (dependencies) registerBetterXaiApplication(pi, dependencies);
+    if (options.startupEffect)
+      registerBetterXaiApplication(pi, { startupEffect: options.startupEffect });
     else betterXai(pi);
     yield* Effect.addFinalizer(() =>
       invoke(handlers.get("session_shutdown")?.({ reason: "quit" }, ctx)),
@@ -106,24 +125,25 @@ function stalledStartup() {
 const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
   Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
+/** Replaces each property with a getter that throws, as a hostile host would. */
+const throwOnRead = <Target extends object>(
+  target: Target,
+  ...keys: Array<keyof Target & string>
+) => {
+  for (const key of keys)
+    Object.defineProperty(target, key, {
+      configurable: true,
+      get() {
+        throw new Error(`host-${key}-secret`);
+      },
+    });
+};
+
 layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
   it.effect("contains hostile terminal-UI getters without aborting activation", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      Object.defineProperties(h.ctx, {
-        mode: {
-          configurable: true,
-          get() {
-            throw new Error("host-mode-secret");
-          },
-        },
-        hasUI: {
-          configurable: true,
-          get() {
-            throw new Error("host-ui-secret");
-          },
-        },
-      });
+      throwOnRead(h.ctx, "mode", "hasUI");
 
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
@@ -140,29 +160,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
   it.effect("restores status fallback when Cosmic UI releases footer ownership", () =>
     Effect.gen(function* () {
       vi.spyOn(usageRequests, "requestXaiUsage").mockReturnValue(
-        Effect.succeed({
-          snapshot: {
-            capturedAt: 0,
-            weeklyUsedPercent: 25,
-            weeklyLeftPercent: 75,
-            weeklyResetInSeconds: null,
-            monthlyUsed: 10,
-            monthlyLimit: 100,
-            monthlyLeftPercent: 90,
-            monthlyResetInSeconds: null,
-            onDemandCap: null,
-            onDemandUsed: null,
-          },
-        }),
+        Effect.succeed({ snapshot: usageSnapshot(10, 25) }),
       );
-      const h = yield* harness();
       let active = false;
-      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
-        if (name === COSMIC_UI_HOST_QUERY) {
-          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active, ready: true, hidden: [] });
-        }
-      });
+      const h = yield* harness({ cosmicUi: { active: () => active } });
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
       yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", expect.any(String));
@@ -171,23 +172,15 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
       const stateListener = vi
         .mocked(h.pi.events.on)
         .mock.calls.find(([name]) => name === COSMIC_UI_HOST_STATE)?.[1];
+      const publish = (next: boolean) => {
+        active = next;
+        stateListener?.({ version: COSMIC_UI_PROTOCOL_VERSION, active, ready: true, hidden: [] });
+      };
 
-      active = true;
-      stateListener?.({
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        active,
-        ready: true,
-        hidden: [],
-      });
+      publish(true);
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", undefined);
 
-      active = false;
-      stateListener?.({
-        version: COSMIC_UI_PROTOCOL_VERSION,
-        active,
-        ready: true,
-        hidden: [],
-      });
+      publish(false);
       expect(h.setStatus).toHaveBeenLastCalledWith("better-xai", fallback);
       expect(h.setFooter).not.toHaveBeenCalled();
     }),
@@ -195,13 +188,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
 
   it.effect("removes Cosmic contributions when usage is hidden", () =>
     Effect.gen(function* () {
-      const h = yield* harness();
-      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
-        if (name === COSMIC_UI_HOST_QUERY) {
-          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: true, ready: true, hidden: ["xai.usage"] });
-        }
-      });
+      const h = yield* harness({ cosmicUi: { active: () => true, hidden: ["xai.usage"] } });
 
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
@@ -250,18 +237,9 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
   it.effect("fails closed when session cwd cannot be materialized", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      Object.defineProperty(h.ctx, "cwd", {
-        configurable: true,
-        get() {
-          throw new Error("host-cwd-secret");
-        },
-      });
+      throwOnRead(h.ctx, "cwd");
 
-      let startup: unknown;
-      expect(() => {
-        startup = h.handlers.get("session_start")?.({}, h.ctx);
-      }).not.toThrow();
-      yield* invoke(startup);
+      yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
       h.notify.mockClear();
@@ -274,27 +252,14 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     Effect.gen(function* () {
       const h = yield* harness();
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      Object.defineProperty(h.ctx, "signal", {
-        configurable: true,
-        get() {
-          throw new Error("host-signal-secret");
-        },
-      });
+      throwOnRead(h.ctx, "signal");
 
       h.notify.mockClear();
-      let usage: unknown;
-      expect(() => {
-        usage = h.commands.get("xai-usage")?.("", h.ctx);
-      }).not.toThrow();
-      yield* invoke(usage);
+      yield* invoke(h.commands.get("xai-usage")?.("", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       h.notify.mockClear();
-      let settings: unknown;
-      expect(() => {
-        settings = h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx);
-      }).not.toThrow();
-      yield* invoke(settings);
+      yield* invoke(h.commands.get("xai-settings")?.("usage.showResetTimes false", h.ctx));
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
 
       expect(() => h.handlers.get("turn_end")?.({}, h.ctx)).not.toThrow();
@@ -306,19 +271,10 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     Effect.gen(function* () {
       const h = yield* harness();
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
-      Object.defineProperty(h.ctx.ui, "custom", {
-        configurable: true,
-        get() {
-          throw new Error("host-custom-capability-secret");
-        },
-      });
+      throwOnRead(h.ctx.ui, "custom");
 
       h.notify.mockClear();
-      let command: unknown;
-      expect(() => {
-        command = h.commands.get("xai-settings")?.("", h.ctx);
-      }).not.toThrow();
-      yield* invoke(command);
+      yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
 
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
     }),
@@ -350,11 +306,7 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
         Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: open });
 
         h.notify.mockClear();
-        let command: unknown;
-        expect(() => {
-          command = h.commands.get("xai-settings")?.("", h.ctx);
-        }).not.toThrow();
-        yield* invoke(command);
+        yield* invoke(h.commands.get("xai-settings")?.("", h.ctx));
 
         expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
         yield* invoke(h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx));
@@ -411,12 +363,13 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
     }),
   );
 
-  it.effect("degrades a throwing settings factory to an inert surface", () =>
+  it.effect("reports a throwing settings factory as a failed open", () =>
     Effect.gen(function* () {
       const h = yield* harness();
       yield* invoke(h.handlers.get("session_start")?.({}, h.ctx));
+      // Pinned Pi rejects its custom Promise when the factory throws.
       const custom = (factory: TestSurfaceFactory) => {
-        const surface = factory(
+        factory(
           { terminal: { rows: 24 }, requestRender: () => undefined },
           {
             bold: (text) => text,
@@ -429,8 +382,6 @@ layer(nodeFilePlatformLayer)("Better xAI Effect boundary", (it) => {
             throw new Error("host-done-secret");
           },
         );
-        expect(() => surface.render?.(80)).not.toThrow();
-        expect(() => surface.handleInput?.("j")).not.toThrow();
         return Promise.resolve(undefined);
       };
       Object.defineProperty(h.ctx.ui, "custom", { configurable: true, value: custom });

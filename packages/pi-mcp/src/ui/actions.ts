@@ -1,42 +1,22 @@
 import type { SearchableSelectPageChoice } from "pi-cosmic-ui/manager/searchable-select";
 import type { McpActionChoice, McpManagerAction, McpManagerServer } from "../manager/model.ts";
-import { blockedExplanation } from "../manager/policy.ts";
+import { blockedExplanation, blockedLabel } from "../manager/policy.ts";
 
 const disabledHint = (choice: McpActionChoice, row: McpManagerServer): string | undefined => {
-  switch (choice.reason) {
-    case undefined:
-      return undefined;
-    case "untrusted":
-      return "Session untrusted";
-    case "disabled":
-      return "Disabled";
-    case "invalid":
-      return "Invalid config";
-    case "auth-running":
-      return "Signing in";
-    case "auth-suspended":
-      return "Auth interrupted";
-    case "cleanup-running":
-      return "Disconnecting";
-    case "cleanup-unconfirmed":
-      return "Cleanup unconfirmed";
-    case "not-applicable":
-      if ((choice.action === "auth" || choice.action === "logout") && row.authType !== "oauth")
-        return "OAuth only";
-      if (choice.action === "connect")
-        return row.state === "connected"
-          ? "Already connected"
-          : row.state === "connecting"
-            ? "Connecting"
-            : row.state === "closing"
-              ? "Disconnecting"
-              : "Connection blocked";
-      if (choice.action === "disconnect")
-        return row.blockedReason === "cleanup-unconfirmed"
-          ? "Cleanup unconfirmed"
-          : "Not connected";
-      return "Unavailable";
-  }
+  if (choice.reason !== "not-applicable") return choice.reason && blockedLabel[choice.reason];
+  if ((choice.action === "auth" || choice.action === "logout") && row.authType !== "oauth")
+    return "OAuth only";
+  if (choice.action === "connect")
+    return row.state === "connected"
+      ? "Already connected"
+      : row.state === "connecting"
+        ? "Connecting"
+        : row.state === "closing"
+          ? "Disconnecting"
+          : "Connection blocked";
+  if (choice.action === "disconnect")
+    return row.blockedReason === "cleanup-unconfirmed" ? "Cleanup unconfirmed" : "Not connected";
+  return "Unavailable";
 };
 
 /** Highlight a useful enabled action without executing it or changing admission policy. */

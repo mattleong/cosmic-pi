@@ -1,27 +1,13 @@
 import * as Effect from "effect/Effect";
 import { MAX_WRITE_CLAIMS, normalizeWriteClaims } from "../domain/write-claims.ts";
 import { writerConflictError } from "./admission.ts";
-import {
-  InvalidSubagentRequestError,
-  type SubagentError,
-  SubagentNotFoundError,
-} from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import type { RunContext, RunRecord } from "./internal.ts";
 import { isTerminalRunState, type SubagentRunView } from "./model.ts";
 import { snapshotView } from "./state.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
 
-export interface RunWriteClaimControlDependencies {
-  readonly records: Map<string, RunRecord>;
-  readonly writerPools: Map<string, WriterPoolEntry>;
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
-  readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
-  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-}
-
-const invalid = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
+const includesClaim = (claims: ReadonlyArray<string>, path: string): boolean =>
+  claims.some((claim) => claim.toLocaleLowerCase("en-US") === path.toLocaleLowerCase("en-US"));
 
 const isBlockingClaimQuestionTool = (toolName: string): boolean => {
   const normalized = toolName.trim().toLocaleLowerCase("en-US");
@@ -33,7 +19,7 @@ const isBlockingClaimQuestionTool = (toolName: string): boolean => {
   );
 };
 
-export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDependencies) {
+export function makeRunWriteClaimControl(dependencies: RunContext) {
   const { records, writerPools, withLock, publish, requireRecord, sendPeerNotices } = dependencies;
 
   const normalizePaths = (paths: ReadonlyArray<string>) => {
@@ -80,51 +66,24 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
       return record;
     });
 
-  const grant = (
+  /** Normalizes `paths`, commits the claims `next` returns under the lock, then notifies peers. */
+  const changeClaims = (
     id: string,
     paths: ReadonlyArray<string>,
+    next: (
+      current: ReadonlyArray<string>,
+      requested: ReadonlyArray<string>,
+      record: RunRecord,
+    ) => Effect.Effect<ReadonlyArray<string>, SubagentError>,
   ): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
-      const additions = yield* normalizePaths(paths);
+      const requested = yield* normalizePaths(paths);
       const view = yield* withLock(
         Effect.gen(function* () {
           const record = yield* claimChangeRecord(id);
-          const current = record.view.writeClaims ?? [];
-          const canonicalCwd = record.canonicalWriterCwd;
-          if (!canonicalCwd)
-            return yield* invalid(
-              "writer_cwd_canonicalization_missing",
-              `Subagent ${id} has no canonical writer cwd ownership evidence.`,
-            );
-          const combined = [
-            ...current,
-            ...additions.filter(
-              (path) =>
-                !current.some(
-                  (existing) =>
-                    existing.toLocaleLowerCase("en-US") === path.toLocaleLowerCase("en-US"),
-                ),
-            ),
-          ];
-          if (combined.length > MAX_WRITE_CLAIMS)
-            return yield* invalid(
-              "too_many_write_claims",
-              `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
-            );
-          const conflictPools =
-            record.view.state === "paused" && record.writerPool?.violationRunIds.has(id)
-              ? new Map([...writerPools].filter(([digest]) => digest !== canonicalCwd.digest))
-              : writerPools;
-          const conflict = writerConflictError(
-            records,
-            conflictPools,
-            canonicalCwd,
-            combined,
-            record,
-          );
-          if (conflict) return yield* conflict;
-          record.writerPool?.members.set(record.view.id, combined);
-          record.view = { ...record.view, writeClaims: combined };
+          const claims = yield* next(record.view.writeClaims ?? [], requested, record);
+          record.writerPool?.members.set(record.view.id, claims);
+          record.view = { ...record.view, writeClaims: claims };
           yield* publish;
           return snapshotView(record.view);
         }),
@@ -133,48 +92,55 @@ export function makeRunWriteClaimControl(dependencies: RunWriteClaimControlDepen
       return view;
     });
 
-  const revoke = (
-    id: string,
-    paths: ReadonlyArray<string>,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    Effect.gen(function* () {
-      const removals = yield* normalizePaths(paths);
-      const view = yield* withLock(
-        Effect.gen(function* () {
-          const record = yield* claimChangeRecord(id);
-          const current = record.view.writeClaims ?? [];
-          const missing = removals.find(
-            (path) =>
-              !current.some(
-                (existing) =>
-                  existing.toLocaleLowerCase("en-US") === path.toLocaleLowerCase("en-US"),
-              ),
+  const grant = (id: string, paths: ReadonlyArray<string>) =>
+    changeClaims(id, paths, (current, additions, record) =>
+      Effect.gen(function* () {
+        const canonicalCwd = record.canonicalWriterCwd;
+        if (!canonicalCwd)
+          return yield* invalid(
+            "writer_cwd_canonicalization_missing",
+            `Subagent ${id} has no canonical writer cwd ownership evidence.`,
           );
-          if (missing)
-            return yield* invalid(
-              "write_claim_not_owned",
-              `Subagent ${id} does not claim ${missing}.`,
-            );
-          const remaining = current.filter(
-            (existing) =>
-              !removals.some(
-                (path) => path.toLocaleLowerCase("en-US") === existing.toLocaleLowerCase("en-US"),
-              ),
+        const combined = [...current, ...additions.filter((path) => !includesClaim(current, path))];
+        if (combined.length > MAX_WRITE_CLAIMS)
+          return yield* invalid(
+            "too_many_write_claims",
+            `A writer may claim at most ${MAX_WRITE_CLAIMS} files.`,
           );
-          if (remaining.length === 0)
-            return yield* invalid(
-              "write_claims_cannot_be_empty",
-              `Subagent ${id} must retain at least one claim while it remains active. Stop it instead.`,
-            );
-          record.writerPool?.members.set(record.view.id, remaining);
-          record.view = { ...record.view, writeClaims: remaining };
-          yield* publish;
-          return snapshotView(record.view);
-        }),
-      );
-      yield* sendPeerNotices(id);
-      return view;
-    });
+        const conflictPools =
+          record.view.state === "paused" && record.writerPool?.violationRunIds.has(id)
+            ? new Map([...writerPools].filter(([digest]) => digest !== canonicalCwd.digest))
+            : writerPools;
+        const conflict = writerConflictError(
+          records,
+          conflictPools,
+          canonicalCwd,
+          combined,
+          record,
+        );
+        if (conflict) return yield* conflict;
+        return combined;
+      }),
+    );
+
+  const revoke = (id: string, paths: ReadonlyArray<string>) =>
+    changeClaims(id, paths, (current, removals) =>
+      Effect.gen(function* () {
+        const missing = removals.find((path) => !includesClaim(current, path));
+        if (missing)
+          return yield* invalid(
+            "write_claim_not_owned",
+            `Subagent ${id} does not claim ${missing}.`,
+          );
+        const remaining = current.filter((existing) => !includesClaim(removals, existing));
+        if (remaining.length === 0)
+          return yield* invalid(
+            "write_claims_cannot_be_empty",
+            `Subagent ${id} must retain at least one claim while it remains active. Stop it instead.`,
+          );
+        return remaining;
+      }),
+    );
 
   const resumeAdmission = (id: string): Effect.Effect<SubagentRunView, SubagentError> =>
     withLock(

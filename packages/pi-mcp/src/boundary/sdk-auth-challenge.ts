@@ -4,9 +4,9 @@ import { oauthScopes } from "../auth/scopes.ts";
 import { boundaryError } from "../client/errors.ts";
 
 export interface BearerChallenge {
-  readonly resourceMetadata?: string;
-  readonly scope?: string;
-  readonly error?: string;
+  readonly resourceMetadata?: string | undefined;
+  readonly scope?: string | undefined;
+  readonly error?: string | undefined;
 }
 export const invalidChallenge = () =>
   boundaryError(
@@ -78,11 +78,7 @@ export const parseBearerChallenge = (header: string) =>
         (scope !== undefined && (!scope || !Schema.is(oauthScopes)(scope.split(" "))))
       )
         throw invalidChallenge();
-      const result: BearerChallenge = {};
-      if (resourceMetadata !== undefined) Object.assign(result, { resourceMetadata });
-      if (scope !== undefined) Object.assign(result, { scope });
-      if (error !== undefined) Object.assign(result, { error });
-      return result;
+      return { resourceMetadata, scope, error };
     },
     catch: invalidChallenge,
   });

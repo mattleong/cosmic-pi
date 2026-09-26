@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -92,11 +93,7 @@ export function createCosmicFooterClient(
             active = event.active;
             hidden = event.hidden;
             ready = event.ready;
-            try {
-              listener(Object.freeze({ active, ready, hidden }));
-            } catch {
-              // A consumer callback cannot break event-bus delivery.
-            }
+            invokeHostCallback(() => listener(Object.freeze({ active, ready, hidden })), undefined);
           }) ?? (() => undefined)
         );
       } catch {
@@ -124,6 +121,28 @@ export function createCosmicFooterClient(
       hidden = [];
       if (removeOwner)
         emit(COSMIC_UI_FOOTER_REMOVE, { version: COSMIC_UI_PROTOCOL_VERSION, owner });
+    },
+  };
+}
+
+export interface HostStateWatch {
+  readonly start: () => void;
+  readonly stop: () => void;
+}
+
+/** Idempotent host-state subscription; `start` while already watching is a no-op. */
+export function makeHostStateWatch(
+  client: Pick<CosmicFooterClient, "onHostStateChange">,
+  listener: (state: CosmicUiHostState) => void,
+): HostStateWatch {
+  let unsubscribe: (() => void) | undefined;
+  return {
+    start: () => {
+      unsubscribe ??= client.onHostStateChange(listener);
+    },
+    stop: () => {
+      unsubscribe?.();
+      unsubscribe = undefined;
     },
   };
 }

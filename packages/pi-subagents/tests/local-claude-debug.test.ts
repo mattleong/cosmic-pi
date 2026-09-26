@@ -1,6 +1,5 @@
 // The opt-in replay ledger is private filesystem state, so these tests exercise
 // its real permissions, retention, bounds, and content-safety properties.
-import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
@@ -8,29 +7,32 @@ import {
   localClaudeDebugEnabled,
 } from "../src/boundary/local-claude-debug.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
-const directories: string[] = [];
 
 const setup = () =>
   Effect.promise(() =>
-    fs.mkdtemp(join(tmpdir(), "pi-subagents-claude-debug-")).then((directory) => {
-      directories.push(directory);
+    makeTemporaryDirectory("pi-subagents-claude-debug-").then((directory) => {
       const agentDirectory = join(directory, "agent");
       return fs.mkdir(agentDirectory, { mode: 0o700 }).then(() => ({ agentDirectory }));
     }),
   );
 
-const recordTail = (agentDirectory: string, runId: string, entries: number) =>
+/** Records a bounded tail and reports whether the environment enabled a recorder. */
+const recordTail = (
+  agentDirectory: string,
+  runId: string,
+  entries: number,
+  environment: NodeJS.ProcessEnv = { PI_SUBAGENTS_CLAUDE_DEBUG: "1" },
+) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const recorder = yield* acquireLocalClaudeDebug({
-        agentDirectory,
-        environment: { PI_SUBAGENTS_CLAUDE_DEBUG: "1" },
-        runId,
-      });
-      expect(recorder).toBeDefined();
-      if (!recorder) return;
+      const recorder = yield* acquireLocalClaudeDebug({ agentDirectory, environment, runId });
+      if (!recorder) return false;
       for (let sequence = 0; sequence < entries; sequence += 1)
         yield* recorder.record({
           kind: "outbound-user",
@@ -39,14 +41,11 @@ const recordTail = (agentDirectory: string, runId: string, entries: number) =>
           epoch: 7,
           shouldQuery: true,
         });
+      return true;
     }),
   );
 
-afterEach(() =>
-  Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  ).then(() => undefined),
-);
+afterEach(removeTemporaryDirectories);
 
 describe("local Claude debug ledger", () => {
   it("requires the exact opt-in value", () => {
@@ -55,66 +54,16 @@ describe("local Claude debug ledger", () => {
     expect(localClaudeDebugEnabled({ PI_SUBAGENTS_CLAUDE_DEBUG: "1" })).toBe(true);
   });
 
-  it.effect("creates no state while disabled", () =>
+  it.effect.each([
+    ["creates no state while disabled", {}, "", 1, false],
+    ["does not publish an empty ledger", undefined, "", 0, true],
+    ["contains persistence failures without changing scope success", undefined, "missing", 1, true],
+  ] as const)("%s", ([, environment, subdirectory, entries, acquired]) =>
     Effect.gen(function* () {
       const { agentDirectory } = yield* setup();
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const recorder = yield* acquireLocalClaudeDebug({
-            agentDirectory,
-            environment: {},
-            runId: "secret-disabled-run",
-          });
-          expect(recorder).toBeUndefined();
-        }),
-      );
-      const entries = yield* Effect.promise(() => fs.readdir(agentDirectory));
-      expect(entries).toEqual([]);
-    }),
-  );
-
-  it.effect("does not publish an empty ledger", () =>
-    Effect.gen(function* () {
-      const { agentDirectory } = yield* setup();
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const recorder = yield* acquireLocalClaudeDebug({
-            agentDirectory,
-            environment: { PI_SUBAGENTS_CLAUDE_DEBUG: "1" },
-            runId: "empty-run",
-          });
-          expect(recorder).toBeDefined();
-        }),
-      );
-      const entries = yield* Effect.promise(() => fs.readdir(agentDirectory));
-      expect(entries).toEqual([]);
-    }),
-  );
-
-  it.effect("contains persistence failures without changing scope success", () =>
-    Effect.gen(function* () {
-      const { agentDirectory } = yield* setup();
-      const unavailableDirectory = join(agentDirectory, "missing");
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const recorder = yield* acquireLocalClaudeDebug({
-            agentDirectory: unavailableDirectory,
-            environment: { PI_SUBAGENTS_CLAUDE_DEBUG: "1" },
-            runId: "unwritable-run",
-          });
-          expect(recorder).toBeDefined();
-          if (!recorder) return;
-          yield* recorder.record({
-            kind: "outbound-user",
-            sequence: 1,
-            operation: "start",
-            epoch: 1,
-            shouldQuery: true,
-          });
-        }),
-      );
-      const entries = yield* Effect.promise(() => fs.readdir(agentDirectory));
-      expect(entries).toEqual([]);
+      const target = join(agentDirectory, subdirectory);
+      expect(yield* recordTail(target, "secret-run", entries, environment)).toBe(acquired);
+      expect(yield* Effect.promise(() => fs.readdir(agentDirectory))).toEqual([]);
     }),
   );
 

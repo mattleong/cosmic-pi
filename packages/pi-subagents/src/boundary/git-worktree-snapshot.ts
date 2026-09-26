@@ -10,7 +10,14 @@ import {
   sensitiveWorkspaceContent,
 } from "../workspace/policy.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
-import { checkDirectory, git, oid, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
+import {
+  checkDirectory,
+  git,
+  oid,
+  workspaceFailure,
+  workspaceIO,
+  workspaceIOIfPresent,
+} from "./git-worktree-process.ts";
 import { newWorkspaceId } from "./git-worktree-store.ts";
 import { readWorkspaceSymlink } from "./git-worktree-symlink.ts";
 
@@ -52,14 +59,8 @@ export const inspectSource = (cwd: string) =>
       );
     // Linked source worktrees, bare repositories, sparse indexes and submodules are not supported.
     yield* checkDirectory(path.join(sourceRoot, ".git"));
-    const sparse = yield* workspaceIO("source", () =>
-      fs.access(path.join(sourceRoot, ".git", "info", "sparse-checkout")).then(
-        () => true,
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return false;
-          throw error;
-        },
-      ),
+    const sparse = yield* workspaceIOIfPresent("source", () =>
+      fs.access(path.join(sourceRoot, ".git", "info", "sparse-checkout")).then(() => true),
     );
     if (sparse) return yield* workspaceFailure("source", "Sparse checkouts are unsupported.");
     return { sourceRoot, sourceCwd, subdirectory };
@@ -75,12 +76,7 @@ export const readWorkspaceFile = (
       return yield* workspaceFailure("snapshot", "Unsafe workspace path.");
     const full = path.join(root, relative);
     yield* checkDirectory(path.dirname(full), true);
-    const before = yield* workspaceIO("snapshot", () =>
-      fs.lstat(full).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      }),
-    );
+    const before = yield* workspaceIOIfPresent("snapshot", () => fs.lstat(full));
     if (!before) return undefined;
     if (before.isSymbolicLink() && snapshotPaths?.links.has(relative))
       return yield* readWorkspaceSymlink(root, relative, snapshotPaths.files);
@@ -179,13 +175,7 @@ export const captureSnapshot = (
         "snapshot",
         "Workspace file count exceeds the snapshot limit.",
       );
-    const files: Array<{
-      path: string;
-      mode: string;
-      permissions: number;
-      bytes: Uint8Array;
-      symlinkTarget?: string;
-    }> = [];
+    const files: Array<Omit<SnapshotEntry, "oid"> & { readonly symlinkTarget?: string }> = [];
     const includedPaths = new Set(candidates.filter((name) => !excludedWorkspacePath(name)));
     let size = 0;
     for (const name of candidates) {

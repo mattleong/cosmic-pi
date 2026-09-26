@@ -1,5 +1,5 @@
 import type { changedLineSimilarityDocuments, similarityTokenWeight } from "./line-similarity";
-import { competingCandidateValue, topTwoCandidateValues } from "./line-pair-scoring";
+import { competingCandidateValues } from "./line-pair-scoring";
 
 export type SparseChangedLinePairCandidate = {
   removedPosition: number;
@@ -66,7 +66,11 @@ export function sparseChangedLinePairCandidates(
   }
 
   const candidateList = [...candidates.values()];
-  addCompetingSparseEvidence(candidateList);
+  const competingEvidence = competingCandidateValues(
+    candidateList,
+    (candidate) => candidate.evidence,
+  );
+  for (const candidate of candidateList) candidate.competingEvidence = competingEvidence(candidate);
   return boundedSparseChangedLinePairCandidates(candidateList);
 }
 
@@ -82,25 +86,6 @@ function similarityFeaturePositions(featureLists: string[][]): Map<string, numbe
     }
   }
   return positions;
-}
-
-function addCompetingSparseEvidence(candidates: SparseChangedLinePairCandidate[]): void {
-  const removedEvidence = topTwoCandidateValues(
-    candidates,
-    (candidate) => candidate.removedPosition,
-    (candidate) => candidate.evidence,
-  );
-  const addedEvidence = topTwoCandidateValues(
-    candidates,
-    (candidate) => candidate.addedPosition,
-    (candidate) => candidate.evidence,
-  );
-  for (const candidate of candidates) {
-    candidate.competingEvidence = Math.max(
-      competingCandidateValue(removedEvidence.get(candidate.removedPosition), candidate.evidence),
-      competingCandidateValue(addedEvidence.get(candidate.addedPosition), candidate.evidence),
-    );
-  }
 }
 
 function boundedSparseChangedLinePairCandidates(

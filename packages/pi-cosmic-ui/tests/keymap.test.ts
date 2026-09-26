@@ -6,15 +6,20 @@ const ESC = "\x1b";
 const UP = "\x1b[A";
 
 describe("FullScreenKeymap", () => {
-  it("keeps screen-owned shortcuts ahead of configured movement", () => {
-    const keymap = new FullScreenKeymap();
+  it.each([
+    [
+      "screen-owned shortcuts",
+      "x",
+      { reservedKeys: new Set(["x"]) },
+      { _tag: "Shortcut", key: "x" },
+    ],
+    ["shared printable actions", "q", {}, { action: "quit" }],
+  ])("keeps %s ahead of configured movement bindings", (_name, key, options, expected) => {
+    const matchesKeybinding = (data: string, id: string) =>
+      data === key && id === "tui.select.down";
     expect(
-      keymap.resolve("x", {
-        mode: "navigation",
-        reservedKeys: new Set(["x"]),
-        matchesKeybinding: (data, id) => data === "x" && id === "tui.select.down",
-      }),
-    ).toEqual({ _tag: "Shortcut", key: "x" });
+      new FullScreenKeymap().resolve(key, { mode: "navigation", ...options, matchesKeybinding }),
+    ).toMatchObject(expected);
   });
 
   it("resolves shared navigation and confirmation semantics", () => {
@@ -44,16 +49,6 @@ describe("FullScreenKeymap", () => {
       }),
     ).toBeUndefined();
     expect(decodeFullScreenPrintable("\x7f")).toBeUndefined();
-  });
-
-  it("keeps shared printable actions ahead of configured movement bindings", () => {
-    const keymap = new FullScreenKeymap();
-    const matchesKeybinding = (data: string, id: string) =>
-      data === "q" && id === "tui.select.down";
-
-    expect(keymap.resolve("q", { mode: "navigation", matchesKeybinding })).toMatchObject({
-      action: "quit",
-    });
   });
 
   it("lets printable input belong to search and supports the gg chord", () => {

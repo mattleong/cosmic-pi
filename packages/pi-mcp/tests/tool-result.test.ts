@@ -1,4 +1,4 @@
-import type { ExtensionContext, Theme, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -11,7 +11,7 @@ import {
   mcpFailureReply,
 } from "../src/boundary/host-tool-result.ts";
 import { boundaryError } from "../src/client/errors.ts";
-import { buildMcpTool } from "../src/tools/controller.ts";
+import { buildMcpTool, type McpToolDefinition } from "../src/tools/controller.ts";
 import type { McpGatewayReply, McpGatewayExecution } from "../src/tools/model.ts";
 
 const failure: McpGatewayReply = {
@@ -35,20 +35,35 @@ const event = (details: McpGatewayReply, toolCallId = "call"): ToolResultEvent =
   isError: false,
 });
 
+/** Builds an activated owned tool whose execution port returns `execution`. */
+const owned = (execution: McpGatewayExecution) => {
+  const receipts = makeMcpErrorReceipts();
+  const owner = Symbol();
+  receipts.activate(owner);
+  let executions = 0;
+  const tool = buildMcpTool({
+    owner,
+    receipts,
+    execute: () => {
+      executions++;
+      return Promise.resolve(execution);
+    },
+  });
+  const run = (input: Parameters<McpToolDefinition["execute"]>[1] = {}) =>
+    Effect.tryPromise(() => tool.execute("call", input, undefined, undefined, unusedContext));
+  return { receipts, tool, run, executions: () => executions };
+};
+
 describe("owned MCP error delivery", () => {
   it.effect.each(["completed", "unknown", "not-sent"] as const)(
     "withdraws output cancelled at final host publication without changing %s certainty",
     (outcome) =>
       Effect.gen(function* () {
-        const receipts = makeMcpErrorReceipts();
-        const owner = Symbol();
-        receipts.activate(owner);
         const abort = new AbortController();
-        const execution: McpGatewayExecution = {
+        const { receipts, tool } = owned({
           reply: { ...failure, outcome, data: { secret: "private-body" } },
           images: [{ type: "image", data: "private-image", mimeType: "image/png" }],
-        };
-        const tool = buildMcpTool({ owner, receipts, execute: () => Promise.resolve(execution) });
+        });
         const result = yield* Effect.tryPromise(() => {
           const pending = tool.execute("call", {}, abort.signal, undefined, unusedContext);
           // Execution is already resolved. Abort before the controller's publication continuation.
@@ -68,61 +83,17 @@ describe("owned MCP error delivery", () => {
   );
 
   it.effect(
-    "rendering preserves the machine envelope, native images and receipt identity without another execution",
+    "shapes the machine envelope, native images and receipt identity from one execution",
     () =>
       Effect.gen(function* () {
-        const receipts = makeMcpErrorReceipts();
-        const owner = Symbol();
-        receipts.activate(owner);
         const image = {
           type: "image" as const,
           mimeType: "image/png",
           data: "existing-image-bytes",
         };
-        let executions = 0;
-        const tool = buildMcpTool({
-          owner,
-          receipts,
-          execute: () => {
-            executions++;
-            return Promise.resolve({ reply: failure, images: [image] });
-          },
-        });
-        const result = yield* Effect.tryPromise(() =>
-          tool.execute(
-            "call",
-            { action: "tools.call", server: "docs", tool: "lookup" },
-            undefined,
-            undefined,
-            unusedContext,
-          ),
-        );
-        const serialized = serialize(result);
-        // SAFETY: Only these two semantic theme methods are consumed by this card fixture.
-        const theme = {
-          fg: (_color: string, text: string) => text,
-          bold: (text: string) => text,
-        } as Theme;
-        const context = {
-          args: {},
-          toolCallId: "call",
-          invalidate: () => undefined,
-          lastComponent: undefined,
-          state: {},
-          cwd: "/project",
-          executionStarted: true,
-          argsComplete: true,
-          isPartial: false,
-          expanded: false,
-          showImages: true,
-          isError: true,
-        };
-        for (const expanded of [false, true, false]) {
-          tool.renderCall!({}, theme, context).render(60);
-          tool.renderResult!(result, { expanded, isPartial: false }, theme, context).render(60);
-        }
-        expect(executions).toBe(1);
-        expect(serialize(result)).toBe(serialized);
+        const { receipts, run, executions } = owned({ reply: failure, images: [image] });
+        const result = yield* run({ action: "tools.call", server: "docs", tool: "lookup" });
+        expect(executions()).toBe(1);
         expect(result.details).toBe(failure);
         expect(result.content[0]).toEqual({ type: "text", text: serialize(failure) });
         expect(result.content[1]).toBe(image);
@@ -161,17 +132,8 @@ describe("owned MCP error delivery", () => {
     "patches an actual owned execute result once without replacing bounded details or prior content",
     (reply) =>
       Effect.gen(function* () {
-        const receipts = makeMcpErrorReceipts();
-        const owner = Symbol();
-        receipts.activate(owner);
-        const tool = buildMcpTool({
-          owner,
-          receipts,
-          execute: () => Promise.resolve({ reply, images: [] }),
-        });
-        const result = yield* Effect.tryPromise(() =>
-          tool.execute("call", {}, undefined, undefined, unusedContext),
-        );
+        const { receipts, run } = owned({ reply, images: [] });
+        const result = yield* run();
         const original = event(result.details);
         const patch = receipts.apply(original);
         expect({ ...original, ...patch }).toMatchObject({
@@ -224,17 +186,7 @@ describe("owned MCP error delivery", () => {
   it.effect("does not put an oversized server payload into text or details", () =>
     Effect.gen(function* () {
       const large = { ...failure, data: { text: "x".repeat(8 * 1024 * 1024) } };
-      const receipts = makeMcpErrorReceipts();
-      const owner = Symbol();
-      receipts.activate(owner);
-      const tool = buildMcpTool({
-        owner,
-        receipts,
-        execute: () => Promise.resolve({ reply: large, images: [] }),
-      });
-      const result = yield* Effect.tryPromise(() =>
-        tool.execute("large", {}, undefined, undefined, unusedContext),
-      );
+      const result = yield* owned({ reply: large, images: [] }).run();
       expect(Buffer.byteLength(serialize(result))).toBeLessThan(2_000);
       expect(result.details).toMatchObject({
         outcome: "completed",

@@ -12,7 +12,7 @@ The package exports:
 
 - typed JSON-document, JSON HTTP, raw streaming HTTP, path, file, and agent-directory services;
 - schema-first request/response and tolerant scoped-configuration helpers;
-- `ProcessCoordinator` for process-local keyed coordination across independently built runtimes;
+- process-local serialization of each JSON document across independently built runtimes;
 - subscription refresh coordination;
 - frozen synchronous projections and bounded synchronous ingress for mandatory Pi/TUI edges;
 - secret-safe tagged platform errors and telemetry boundaries.
@@ -21,6 +21,6 @@ Pure reducers, formatting, parsing of already trusted values, and synchronous re
 
 ## Test subpath
 
-`pi-cosmic-core/testing` provides the shared fakes that have multiple real consumers: in-memory documents, schema-aware JSON and streaming HTTP Layers, lifecycle probes, bounded yield polling, and stable logger/tracer capture snapshots. Package-specific Pi session harnesses and fault policies stay local until their host shapes genuinely converge; this avoids a broad test abstraction that would erase provider or extension behavior.
+`pi-cosmic-core/testing` provides the shared fakes that have multiple real consumers: in-memory documents, schema-aware JSON and streaming HTTP Layers, lifecycle probes, bounded yield polling, stable logger/tracer capture snapshots, a fake Windows `taskkill` helper, typed Pi host fixture casts (`extensionApiFixture`, `extensionContextFixture`, `opaqueFixture`), an identity `plainTheme`, `deferredPromise`, and a scoped real-process IPC harness (`temporaryDirectory`, `spawnIpcChild`, `killChild`). Package-specific Pi session harnesses and fault policies stay local until their host shapes genuinely converge; this avoids a broad test abstraction that would erase provider or extension behavior.
 
 See [`docs/architecture/effect-v4.md`](../../docs/architecture/effect-v4.md), [`pi-boundaries.md`](../../docs/architecture/pi-boundaries.md), and [`testing.md`](../../docs/architecture/testing.md) for the complete ownership and exception contracts.

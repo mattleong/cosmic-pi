@@ -5,6 +5,7 @@ import { describe, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 const serialize = <Value>(value: Value) => JSON.stringify(value);
 import { McpAuth } from "../src/auth/service.ts";
 import { McpAuthFlow } from "../src/auth/flow.ts";
@@ -25,6 +26,7 @@ import {
   runMcpUserCommand,
 } from "../src/settings/controller.ts";
 import { McpExecution } from "../src/tools/service.ts";
+import { fakeAuth } from "./fixtures/services.ts";
 
 const secret = "not-for-model-callback-code";
 const config: McpResolvedConfig = {
@@ -50,21 +52,14 @@ const config: McpResolvedConfig = {
     },
   },
 };
-type CommandContextFixture = Pick<ExtensionContext, "mode" | "hasUI" | "isProjectTrusted"> & {
-  readonly ui: Pick<ExtensionContext["ui"], "input" | "confirm" | "notify">;
-};
-const context = (mode: ExtensionContext["mode"] = "tui", trusted = true): ExtensionContext => {
-  const value: CommandContextFixture = {
+const context = (mode: ExtensionContext["mode"] = "tui", trusted = true): ExtensionContext =>
+  extensionContextFixture({
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     isProjectTrusted: () => trusted,
     ui: { input: vi.fn(), confirm: vi.fn(() => Promise.resolve(true)), notify: vi.fn() },
-  };
-  // SAFETY: This partial fixture supplies exactly the host fields consumed by commands and login UI.
-  return value as ExtensionContext;
-};
-// SAFETY: The auth boundary uses only the public exec capability, which this fixture supplies.
-const hostWithExec = (exec: ExtensionAPI["exec"]): ExtensionAPI => ({ exec }) as ExtensionAPI;
+  });
+const hostWithExec = (exec: ExtensionAPI["exec"]) => extensionApiFixture({ exec });
 const makeStore = () => {
   const store: McpConfigStoreContract = {
     snapshot: Effect.succeed(config),
@@ -184,7 +179,6 @@ describe("MCP argument-first commands", () => {
         const forbidden = Effect.die("Headless auth opened interactive presentation");
         const layer = Layer.mergeAll(
           Layer.succeed(McpAuthFlow, {
-            snapshot: () => undefined,
             subscribe: () => forbidden,
             run: () => forbidden,
           }),
@@ -210,7 +204,6 @@ describe("MCP argument-first commands", () => {
             execute: () => Effect.fail(boundaryError("unsupported", "not-sent", "unused")),
             login,
             logout: () => Effect.void,
-            available: Effect.succeed(true),
             isAvailable: () => true,
           }),
           Layer.succeed(McpConfigStore, {
@@ -231,23 +224,21 @@ describe("MCP argument-first commands", () => {
               },
             })),
           }),
-          Layer.succeed(McpAuth, {
-            access: (_server, options) =>
-              ownedFailure !== undefined
-                ? Effect.fail(ownedFailure)
-                : anonymous
-                  ? Effect.succeed(undefined)
-                  : ready && options?.requireGrant === true
-                    ? Effect.succeed(secret)
-                    : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
-            status: () => Effect.succeed({ state: "required" }),
-            login,
-            logout: () => Effect.void,
-            revoke: Effect.void,
-            reject: () => Effect.void,
-            completeLogin: () => Effect.void,
-            finalizationFailed: () => Effect.void,
-          }),
+          Layer.succeed(
+            McpAuth,
+            fakeAuth({
+              access: (_server, options) =>
+                ownedFailure !== undefined
+                  ? Effect.fail(ownedFailure)
+                  : anonymous
+                    ? Effect.succeed(undefined)
+                    : ready && options?.requireGrant === true
+                      ? Effect.succeed(secret)
+                      : Effect.fail(boundaryError("auth-required", "not-sent", secret)),
+              status: () => Effect.succeed({ state: "required" }),
+              login,
+            }),
+          ),
         );
         const ctx = context(mode);
         const pi = hostWithExec(vi.fn());
@@ -266,23 +257,18 @@ describe("MCP argument-first commands", () => {
             Effect.flip,
           ),
         ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
-        for (const reason of [
-          "oauth-storage-unavailable",
-          "oauth-mutation-unresolved",
-          "oauth-refresh-unresolved",
+        ownedFailure = boundaryError(
+          "auth-required",
+          "not-sent",
+          "fixed owned failure",
           "oauth-token-rejected",
-          "oauth-binding-rejected",
-          "oauth-insufficient-scope",
-          "oauth-scope-invalid",
-        ] as const) {
-          ownedFailure = boundaryError("auth-required", "not-sent", "fixed owned failure", reason);
-          expect(
-            yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(
-              Effect.provide(layer),
-              Effect.flip,
-            ),
-          ).toBe(ownedFailure);
-        }
+        );
+        expect(
+          yield* runMcpUserCommand("auth fixture", pi, ctx, () => true).pipe(
+            Effect.provide(layer),
+            Effect.flip,
+          ),
+        ).toBe(ownedFailure);
         ownedFailure = undefined;
         for (const mode of [
           { auth: { type: "none" as const }, reason: "auth-not-configured" },

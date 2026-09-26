@@ -3,7 +3,6 @@ import { sameProfileCandidate, MAX_PROFILE_CANDIDATES } from "../profiles/model.
 import {
   declaredRouteForDraft,
   defaultRouteCandidate,
-  hasOwnProfileRouteDeclaration,
   addRouteCandidate,
   replaceRouteCandidate,
   type CandidateUpdate,
@@ -12,12 +11,12 @@ import {
 import type { ProfileEditRestore } from "./profile-edit-visit.ts";
 import {
   applyProfileWorkspaceDraftAction,
-  type ProfileWorkspaceDraftAction,
+  type CandidateMenuAction,
 } from "./ui/profile-workspace-actions.ts";
 import { ProfileWorkspaceState } from "./profile-workspace-state.ts";
 
 export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
-  protected performDraftAction(action: ProfileWorkspaceDraftAction): void {
+  protected performDraftAction(action: CandidateMenuAction | "add" | "reset"): void {
     if (action === "add") {
       if (this.refreshBlocked || this.draft().candidates.length >= MAX_PROFILE_CANDIDATES) {
         this.setMessage(
@@ -41,21 +40,13 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       if ("error" in plan) {
         this.setMessage("warning", plan.error);
         this.renderSoon();
-      } else this.persist(plan.draft, "Changes undone", 0, plan.draft, undefined, plan.restore);
+      } else this.persist(plan.draft, 0, undefined, plan.restore);
       return;
     }
     const result = applyProfileWorkspaceDraftAction({
       action,
       draft: this.draft(),
-      profile: this.profile(),
       candidateIndex: this.candidateIndex,
-      scope: this.scope,
-      inspection: this.inspection,
-      hasOwnDeclaration: hasOwnProfileRouteDeclaration(
-        this.inspection,
-        this.options.target,
-        this.profile(),
-      ),
     });
     if ("error" in result) {
       this.setMessage("warning", result.error);
@@ -65,15 +56,13 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       this.setMessage("info", "Nothing to change");
       this.renderSoon();
     } else {
-      this.persist(result.draft, result.description, result.candidateIndex);
+      this.persist(result.draft, result.candidateIndex);
     }
   }
 
   protected persist(
     next: ProfileRouteDraft,
-    _description: string,
     preferredCandidateIndex = this.candidateIndex,
-    optimisticDraft: ProfileRouteDraft = next,
     successNotice?: string,
     restore?: ProfileEditRestore,
   ): void {
@@ -92,8 +81,8 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
     const profile = this.profile();
     const beforeInspection = this.inspection;
     const field = this.rows()[this.fieldIndex]?.field ?? "model";
-    this.remapSelection(this.draft(), optimisticDraft);
-    this.optimisticDraft = optimisticDraft;
+    this.remapSelection(this.draft(), next);
+    this.optimisticDraft = next;
     this.optimisticProfile = profile;
     this.candidateIndex = preferredCandidateIndex;
     this.selectField(field);
@@ -149,7 +138,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       });
   }
 
-  protected applyCandidateUpdate(update: CandidateUpdate | undefined, description: string): void {
+  protected applyCandidateUpdate(update: CandidateUpdate | undefined): void {
     if (!update) return;
     if (update.error || !update.candidate) {
       this.addingCandidate = false;
@@ -164,13 +153,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       if (next) {
         this.pane = "fields";
         this.fieldIndex = 0;
-        this.persist(
-          next,
-          "Candidate added",
-          draft.candidates.length,
-          next,
-          update.notices.join(" "),
-        );
+        this.persist(next, draft.candidates.length, update.notices.join(" "));
       }
       return;
     }
@@ -181,6 +164,6 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       return;
     }
     const next = replaceRouteCandidate(this.draft(), this.candidateIndex, update.candidate);
-    this.persist(next, description, this.candidateIndex, next, update.notices.join(" "));
+    this.persist(next, this.candidateIndex, update.notices.join(" "));
   }
 }

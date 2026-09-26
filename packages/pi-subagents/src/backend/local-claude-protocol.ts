@@ -7,7 +7,7 @@ import type { SubagentUsage } from "../run/model.ts";
 const MAX_ID_CHARS = 256;
 const MAX_NAME_CHARS = 256;
 const MAX_TEXT_CHARS = 1024 * 1024;
-const INTERRUPT_MARKER = "[Request interrupted by user]";
+export const CLAUDE_INTERRUPT_MARKER = "[Request interrupted by user]";
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_ID_CHARS));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NAME_CHARS));
 const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT_CHARS));
@@ -150,8 +150,6 @@ export type ClaudeProtocolEvent =
       readonly cwd: string;
       readonly sessionId: string;
       readonly model: string;
-      readonly tools: ReadonlyArray<string>;
-      readonly mcpServers: ReadonlyArray<{ readonly name: string; readonly status: string }>;
       readonly hasMcpServerErrors: boolean;
     }
   | {
@@ -207,17 +205,6 @@ export type ClaudeProtocolEvent =
       readonly response?: unknown;
     }
   | { readonly type: "ignored" };
-
-export interface ClaudeNativeInitialization {
-  readonly cwd: string;
-  readonly sessionId: string;
-  readonly model: string;
-  readonly tools: ReadonlyArray<string>;
-  readonly mcpServers: ReadonlyArray<{ readonly name: string; readonly status: string }>;
-  readonly hasMcpServerErrors: boolean;
-}
-
-export const CLAUDE_INTERRUPT_MARKER = INTERRUPT_MARKER;
 
 const textFromContent = (content: string | ReadonlyArray<unknown>): string =>
   Predicate.isString(content)
@@ -328,8 +315,6 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           cwd: event.cwd,
           sessionId: event.session_id,
           model: event.model,
-          tools: event.tools,
-          mcpServers: event.mcp_servers,
           hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
         };
       }
@@ -397,23 +382,11 @@ export const claudeUserFrame = (
     ...(options.shouldQuery !== undefined && { shouldQuery: options.shouldQuery }),
   }) as const;
 
-export const claudeInitializeFrame = (requestId: string) =>
-  ({
-    type: "control_request",
-    request_id: requestId,
-    request: { subtype: "initialize" },
-  }) as const;
+const controlFrame =
+  <const Request extends { readonly subtype: string }>(request: Request) =>
+  (requestId: string) =>
+    ({ type: "control_request", request_id: requestId, request }) as const;
 
-export const claudeMcpStatusFrame = (requestId: string) =>
-  ({
-    type: "control_request",
-    request_id: requestId,
-    request: { subtype: "mcp_status" },
-  }) as const;
-
-export const claudeInterruptFrame = (requestId: string) =>
-  ({
-    type: "control_request",
-    request_id: requestId,
-    request: { subtype: "interrupt", cancel_queued: true },
-  }) as const;
+export const claudeInitializeFrame = controlFrame({ subtype: "initialize" });
+export const claudeMcpStatusFrame = controlFrame({ subtype: "mcp_status" });
+export const claudeInterruptFrame = controlFrame({ subtype: "interrupt", cancel_queued: true });

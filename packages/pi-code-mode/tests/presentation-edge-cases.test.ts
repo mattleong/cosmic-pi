@@ -1,4 +1,3 @@
-import { createEventBus, type AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,42 +8,19 @@ import {
   renderCompactNotices,
   selectCompactChildren,
 } from "pi-code-previews";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+import { executeHarness } from "./support/execute.ts";
 import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
 
 const result = <Details>(text: string, details?: Details) => ({
   content: [{ type: "text" as const, text }],
   details,
 });
-const theme = opaqueHostFixture({
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-});
-const harness = (definitions: NestedPiToolDefinitions) => {
-  const state = codeModeStateFixture();
-  const execute = makeCodeModeToolExecute({
-    definitions,
-    getState: () => state,
-    isCurrent: () => true,
-    events: createEventBus(),
-    sessionId: "edge-cases",
-    runInSession: (effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined),
-  });
-  return (
-    code: string,
-    signal?: AbortSignal,
-    update?: AgentToolUpdateCallback<CodeModeToolDetails>,
-  ) =>
-    execute("edge-cases", { code }, signal, update, extensionContextFixture({ cwd: "/project" }));
-};
+const harness = (definitions: NestedPiToolDefinitions) =>
+  executeHarness({ definitions, cwd: "/project" }).run;
 const summary = (
   details: CodeModeToolDetails,
   phase: "running" | "settled" = "settled",
@@ -54,7 +30,7 @@ const summary = (
     phase,
     args: {},
     result: result(text, details),
-    context: opaqueHostFixture({ expanded: false, isError: false }),
+    context: opaqueFixture({ expanded: false, isError: false }),
   });
 
 describe("presentation edge cases", () => {
@@ -74,13 +50,11 @@ describe("presentation edge cases", () => {
         }),
       );
       const completed = yield* Effect.promise(() =>
-        run(
-          'return await tools.pi.bash({command:"echo password=PRIVATE_REVIEW_FIXTURE"});',
-          undefined,
-          (update) => {
+        run('return await tools.pi.bash({command:"echo password=PRIVATE_REVIEW_FIXTURE"});', {
+          onUpdate: (update) => {
             if (update.details) snapshots.push(update.details);
           },
-        ),
+        }),
       );
       expect(received).toBe(command);
       expect(completed.content).toEqual([{ type: "text", text: "unchanged result" }]);
@@ -92,7 +66,7 @@ describe("presentation edge cases", () => {
       expect(recorded).toContain("[REDACTED]");
       const projected = summary(completed.details!);
       expect(projected?.children?.entries[0]?.subject).toContain("[REDACTED]");
-      expect(renderCompactChildren(projected?.children, theme, 100).join("\n")).not.toContain(
+      expect(renderCompactChildren(projected?.children, plainTheme, 100).join("\n")).not.toContain(
         "PRIVATE_REVIEW_FIXTURE",
       );
     }),
@@ -123,7 +97,7 @@ describe("presentation edge cases", () => {
       yield* Effect.addFinalizer(() => Effect.sync(() => controller.abort()));
       const pending = run(
         'await tools.pi.write({path:"file",content:"changed"}); await tools.pi.bash({command:"wait"});',
-        controller.signal,
+        { signal: controller.signal },
       );
       yield* Deferred.await(started);
       controller.abort();
@@ -188,15 +162,17 @@ describe("presentation edge cases", () => {
         );
         const pending = run(
           'await Promise.allSettled([tools.pi.bash({command:"fail"}), tools.pi.bash({command:"wait"}), ...[1,2,3,4,5,6].map(() => tools.pi.read({path:"file"}))]); return 1;',
-          controller.signal,
-          (update) => {
-            const details = update.details;
-            if (
-              details?.counts?.failed === 1 &&
-              details.counts.running === 1 &&
-              details.counts.succeeded === 6
-            )
-              Deferred.doneUnsafe(ready, Effect.succeed(details));
+          {
+            signal: controller.signal,
+            onUpdate: (update) => {
+              const details = update.details;
+              if (
+                details?.counts?.failed === 1 &&
+                details.counts.running === 1 &&
+                details.counts.succeeded === 6
+              )
+                Deferred.doneUnsafe(ready, Effect.succeed(details));
+            },
           },
         );
         try {
@@ -213,8 +189,8 @@ describe("presentation edge cases", () => {
             false,
           );
           const rendered = [
-            ...renderCompactChildren(children, theme, 100),
-            ...renderCompactNotices(projected?.notices, theme, 100),
+            ...renderCompactChildren(children, plainTheme, 100),
+            ...renderCompactNotices(projected?.notices, plainTheme, 100),
           ].join("\n");
           expect(rendered.split(explanation.text)).toHaveLength(2);
           yield* Deferred.succeed(finish, undefined);
@@ -273,8 +249,8 @@ describe("presentation edge cases", () => {
       expect(recovery.some((notice) => notice.text.includes("/tmp/retained-output.txt"))).toBe(
         true,
       );
-      const compact = renderCompactChildren(children, theme, 100).join("\n");
-      const expanded = renderCompactChildren(children, theme, 100, 0, true, true, "flat").join(
+      const compact = renderCompactChildren(children, plainTheme, 100).join("\n");
+      const expanded = renderCompactChildren(children, plainTheme, 100, 0, true, true, "flat").join(
         "\n",
       );
       expect(compact).not.toContain("/tmp/retained-output.txt");

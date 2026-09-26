@@ -3,7 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
 import { McpExecution } from "../../src/tools/service.ts";
-import { optionalFixture, projection } from "../fixtures/optional-features.ts";
+import { legacyInitialized, rpcError, rpcResult } from "../fixtures/json-rpc.ts";
+import { legacyInitialize, optionalFixture, projection } from "../fixtures/optional-features.ts";
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const privateMessage = "private-subscription-error";
@@ -13,11 +14,6 @@ const cases = [
   { code: -32601, kind: "unsupported", reason: "rpc-method-not-found" },
   { code: -32002, kind: "not-found", reason: "rpc-resource-not-found" },
 ] as const;
-const initialized = {
-  protocolVersion: "2025-11-25",
-  capabilities: { resources: { subscribe: true } },
-  serverInfo: { name: "fixture", version: "1" },
-};
 
 // The same rejection and later successful lease run through both owned transports.
 const stdioScript = `
@@ -27,7 +23,7 @@ const stdioScript = `
   readline.createInterface({ input: process.stdin }).on("line", line => {
     const request = JSON.parse(line);
     if (request.id === undefined) return;
-    if (request.method === "initialize") return reply(request.id, ${serialize(initialized)});
+    if (request.method === "initialize") return reply(request.id, ${serialize(legacyInitialized({ resources: { subscribe: true } }))});
     if (request.method === "resources/subscribe" && request.params.uri === "test://missing")
       return send({ jsonrpc: "2.0", id: request.id, error: {
         code: Number(process.argv[1]), message: "${privateMessage}", data: { secret: "${privateMessage}" }
@@ -56,23 +52,15 @@ for (const transport of ["http", "stdio"] as const)
             }
           : { protocol: "legacy" as const };
       const fixture = optionalFixture((request) => {
-        if (request.method === "initialize")
-          return new Response(serialize({ jsonrpc: "2.0", id: request.id, result: initialized }), {
-            headers: { "content-type": "application/json" },
+        if (request.method === "initialize") return legacyInitialize(request.id!);
+        if (request.method === "resources/subscribe" && request.params?.uri === "test://missing")
+          return rpcError(request.id!, {
+            code,
+            message: privateMessage,
+            data: { secret: privateMessage },
           });
         if (request.method === "resources/subscribe" || request.method === "resources/unsubscribe")
-          return new Response(
-            serialize(
-              request.method === "resources/subscribe" && request.params?.uri === "test://missing"
-                ? {
-                    jsonrpc: "2.0",
-                    id: request.id,
-                    error: { code, message: privateMessage, data: { secret: privateMessage } },
-                  }
-                : { jsonrpc: "2.0", id: request.id, result: {} },
-            ),
-            { headers: { "content-type": "application/json" } },
-          );
+          return rpcResult(request.id!, {});
         return undefined;
       }, options);
       return Effect.gen(function* () {

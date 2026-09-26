@@ -51,14 +51,6 @@ describe("workspace tool", () => {
         { action: "review", workspaceId: "workspace", revisionId: "immutable", offset: 16_000 },
         "parent",
       ).pipe(Effect.provideService(SubagentService, service), Effect.orDie);
-      const firstText = first.content[0];
-      const secondText = second.content[0];
-      expect(firstText?.type === "text" && firstText.text.includes(diff.slice(0, 16_000))).toBe(
-        true,
-      );
-      expect(secondText?.type === "text" && secondText.text.includes(diff.slice(16_000))).toBe(
-        true,
-      );
       for (const [page, expected] of [
         [first, diff.slice(0, 16_000)],
         [second, diff.slice(16_000)],

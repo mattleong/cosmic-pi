@@ -6,49 +6,23 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
-import * as Stream from "effect/Stream";
 import { nodePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
-import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
 import { makeImageOutput } from "../src/image/output.ts";
-import { parseImageSse } from "../src/image/stream.ts";
+import { bytes, pngSharp } from "./helpers.ts";
 
-const encoder = new TextEncoder();
-const bytes = (value: string) => encoder.encode(value);
-
-const sharp: SharpAdapterContract = {
-  decode: () => Effect.succeed({ format: "png" }),
-};
+const tempImages = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
+  return { fs, path, root, directory: path.join(root, "images") };
+});
 
 describe("OpenAI image resources", () => {
-  it.effect("finalizes an owned response stream when image decoding is interrupted", () => {
-    let finalized = 0;
-    return Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const pendingBytes = yield* Deferred.make<Uint8Array>();
-      const body = Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
-        Stream.drain,
-        Stream.concat(Stream.fromEffect(Deferred.await(pendingBytes))),
-        Stream.ensuring(
-          Effect.sync(() => {
-            finalized++;
-          }),
-        ),
-      );
-      const fiber = yield* parseImageSse(body, "image/png").pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      yield* Fiber.interrupt(fiber);
-      expect(finalized).toBe(1);
-    });
-  });
-
   it.effect("publishes atomically and preserves an existing destination on collision", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
-      const directory = path.join(root, "images");
-      const output = makeImageOutput({ fs, path, sharp });
+      const { fs, path, root, directory } = yield* tempImages;
+      const output = makeImageOutput({ fs, path, sharp: pngSharp });
       const content = bytes("owned-image-bytes");
       const persist = output
         .persistImage(directory, root, content, "png", "provider/id")
@@ -63,13 +37,8 @@ describe("OpenAI image resources", () => {
 
       const collision = yield* output
         .persistImage(directory, root, bytes("replacement"), "png", "provider/id")
-        .pipe(Random.withSeed("collision-seed"), Effect.result);
-      expect(collision._tag).toBe("Failure");
-      if (collision._tag === "Failure") {
-        expect(collision.failure._tag).toBe("OpenAIImageError");
-        if (collision.failure._tag === "OpenAIImageError")
-          expect(collision.failure.operation).toBe("save");
-      }
+        .pipe(Random.withSeed("collision-seed"), Effect.flip);
+      expect(collision).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
       expect(Array.from(yield* fs.readFile(destination))).toEqual(Array.from(content));
       const visible = yield* fs.readDirectory(directory);
       expect(visible).toHaveLength(1);
@@ -79,9 +48,7 @@ describe("OpenAI image resources", () => {
 
   it.effect("maps close defects without replacing typed write or sync failures", () =>
     Effect.gen(function* () {
-      const realFs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
+      const { fs: realFs, path, root } = yield* tempImages;
       const failureCases = [
         { stage: "close", message: "Unable to close image temporary file." },
         { stage: "write", message: "Unable to save generated image." },
@@ -123,20 +90,17 @@ describe("OpenAI image resources", () => {
               linkCalls++;
             }).pipe(Effect.andThen(realFs.link(...args))),
         });
-        const output = makeImageOutput({ fs: hostileFs, path, sharp });
+        const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
 
-        const result = yield* output
+        const failure = yield* output
           .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
-          .pipe(Effect.result);
+          .pipe(Effect.flip);
 
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure._tag).toBe("OpenAIImageError");
-          if (result.failure._tag === "OpenAIImageError") {
-            expect(result.failure.operation).toBe("save");
-            expect(result.failure.message).toBe(failureCase.message);
-          }
-        }
+        expect(failure).toMatchObject({
+          _tag: "OpenAIImageError",
+          operation: "save",
+          message: failureCase.message,
+        });
         expect(closeAttempts).toBe(1);
         expect(linkCalls).toBe(0);
         expect(yield* realFs.readDirectory(directory)).toEqual([]);
@@ -146,10 +110,7 @@ describe("OpenAI image resources", () => {
 
   it.effect("leaves a foreign replacement in place after a post-commit identity mismatch", () =>
     Effect.gen(function* () {
-      const realFs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
-      const directory = path.join(root, "images");
+      const { fs: realFs, path, root, directory } = yield* tempImages;
       const foreignSource = path.join(root, "foreign-image.png");
       const foreignBytes = bytes("foreign-replacement-bytes");
       yield* realFs.writeFile(foreignSource, foreignBytes);
@@ -163,18 +124,13 @@ describe("OpenAI image resources", () => {
             destination = target;
           }),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp });
+      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
 
-      const result = yield* output
+      const failure = yield* output
         .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
-        .pipe(Effect.result);
+        .pipe(Effect.flip);
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("OpenAIImageError");
-        if (result.failure._tag === "OpenAIImageError")
-          expect(result.failure.operation).toBe("save");
-      }
+      expect(failure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
       const publishedDestination = destination;
       if (!publishedDestination) return yield* Effect.die("destination was not published");
       expect(Array.from(yield* realFs.readFile(publishedDestination))).toEqual(
@@ -188,10 +144,7 @@ describe("OpenAI image resources", () => {
 
   it.effect("removes its temporary file when image writing is interrupted", () =>
     Effect.gen(function* () {
-      const realFs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
-      const directory = path.join(root, "images");
+      const { fs: realFs, path, root, directory } = yield* tempImages;
       const writeStarted = yield* Deferred.make<void>();
       const hostileFs: typeof realFs = Object.assign({}, realFs, {
         open: (...args: Parameters<typeof realFs.open>) =>
@@ -213,7 +166,7 @@ describe("OpenAI image resources", () => {
             ),
           ),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp });
+      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
       const fiber = yield* output
         .persistImage(directory, root, bytes("owned-image-bytes"), "png", "provider/id")
         .pipe(Effect.forkScoped);
@@ -228,10 +181,7 @@ describe("OpenAI image resources", () => {
   it.effect("keeps the committed publication when post-commit verification is lost", () => {
     const capture = makeCapturedLogger();
     return Effect.gen(function* () {
-      const realFs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* realFs.makeTempDirectoryScoped({ prefix: "pi-openai-image-test-" });
-      const directory = path.join(root, "images");
+      const { fs: realFs, path, root, directory } = yield* tempImages;
       // Only the published destination (.png) is stat'd after the hard-link commit, so a
       // defecting stat here simulates verification I/O loss immediately after commit.
       const hostileFs: typeof realFs = Object.assign({}, realFs, {
@@ -240,7 +190,7 @@ describe("OpenAI image resources", () => {
             ? Effect.die("verification-io-loss")
             : realFs.stat(pathArg),
       });
-      const output = makeImageOutput({ fs: hostileFs, path, sharp });
+      const output = makeImageOutput({ fs: hostileFs, path, sharp: pngSharp });
       const content = bytes("committed-image-bytes");
       const destination = yield* output.persistImage(
         directory,

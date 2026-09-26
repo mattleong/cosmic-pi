@@ -2,6 +2,7 @@ import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import type { McpBoundaryError } from "../client/errors.ts";
+import type { McpSettingsSchema } from "./schema.ts";
 
 export type McpConfigScope = "global" | "project";
 export interface McpOAuthConfig {
@@ -55,15 +56,7 @@ export interface McpEffectiveServer {
   readonly definition?: McpServerDefinition;
   readonly diagnostic?: string;
 }
-export interface McpSettings {
-  readonly enabled: boolean;
-  readonly connectTimeoutMs: number;
-  readonly requestTimeoutMs: number;
-  readonly idleTimeoutMs: number;
-  readonly maxConcurrent: number;
-  readonly maxPerServer: number;
-  readonly maxQueued: number;
-}
+export type McpSettings = typeof McpSettingsSchema.Type;
 export interface McpResolvedConfig {
   readonly revision: number;
   readonly trusted: boolean;

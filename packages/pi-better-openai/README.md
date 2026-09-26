@@ -24,7 +24,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
 
 1. In pi, run `/login openai-codex`.
 2. Verify subscription usage with `/openai-usage`, or run `/openai-settings diagnostics`.
-3. The extension reads auth from pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
+3. The extension reads credentials through pi's model registry, which refreshes and saves them in pi's agent auth store, normally `~/.pi/agent/auth.json`. Do not copy, paste, or commit values from this file.
 4. If `PI_CODING_AGENT_DIR` is set, the auth store, global extension config, and global generated-image directory use that agent directory instead of `~/.pi/agent`. A leading `~/` is expanded to your home directory.
 
 ## Features
@@ -39,7 +39,7 @@ Usage display and image generation require pi's `openai-codex` OAuth credentials
   - `/fast` toggles fast mode.
   - `/openai-image <prompt>` generates an image directly.
   - `/openai-usage` shows current OpenAI subscription usage.
-  - `/openai-settings` opens the interactive picker; `/openai-settings help` lists settings and `/openai-settings diagnostics` shows diagnostics.
+  - `/openai-settings` opens the interactive picker, or shows help outside the TUI; `/openai-settings help` lists settings and `/openai-settings diagnostics` shows diagnostics.
 
 ## UI primitives
 

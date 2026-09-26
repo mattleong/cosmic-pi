@@ -33,7 +33,7 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback, synchronousNow } from "pi-cosmic-core";
 
 const HANDOFF_SLOT_KEY = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 
@@ -60,11 +60,7 @@ const processState = (): typeof globalThis & CodeModeHandoffGlobalState =>
   globalThis as typeof globalThis & CodeModeHandoffGlobalState;
 
 const clearEnvelope = (): void => {
-  try {
-    Reflect.deleteProperty(processState(), HANDOFF_SLOT_KEY);
-  } catch {
-    // A malformed process slot must not escape this best-effort handoff boundary.
-  }
+  invokeHostCallback(() => Reflect.deleteProperty(processState(), HANDOFF_SLOT_KEY), false);
 };
 
 const readEnvelope = (): HandoffEnvelope | undefined => {
@@ -116,25 +112,15 @@ export const captureCodeModeDeactivation = (
 /** Publishes a deliberate deactivation for a recreated extension instance to consume. */
 export const publishCodeModeDeactivation = (key: CodeModeSessionKey | undefined): void => {
   if (key === undefined) return;
-  let envelope: HandoffEnvelope;
-  try {
-    envelope = Object.freeze({
-      version: 2,
-      key,
-      deactivated: true,
-      expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
-    });
-  } catch {
-    return;
-  }
+  const envelope: HandoffEnvelope = Object.freeze({
+    version: 2,
+    key,
+    deactivated: true,
+    expiresAt: synchronousNow() + SESSION_KEY_TTL_MS,
+  });
 
-  const writeEnvelope = (): boolean => {
-    try {
-      return Reflect.set(processState(), HANDOFF_SLOT_KEY, envelope);
-    } catch {
-      return false;
-    }
-  };
+  const writeEnvelope = (): boolean =>
+    invokeHostCallback(() => Reflect.set(processState(), HANDOFF_SLOT_KEY, envelope), false);
   if (writeEnvelope()) return;
 
   // A configurable hostile or stale descriptor can reject the first write. Remove it and make

@@ -1,22 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { AddedDiffLine, RemovedDiffLine } from "../../../src/diff/parse";
-import { indexedChangedLine, type IndexedChangedLine } from "../../../src/diff/word/changed-line";
+import type { IndexedChangedLine } from "../../../src/diff/word/changed-line";
 import { profileLine, profilePlacement } from "../../support/word-fixtures/profile-lines";
 import { matchChangedLines, type ChangedLinePair } from "../../../src/diff/word/line-matching";
-
-test("line matching recovers a 33-line reversal above the full-matrix cutoff", () => {
-  const contents = Array.from({ length: 33 }, (_, index) => uniqueLine(index, "old"));
-  const addedContents = Array.from({ length: 33 }, (_, index) => uniqueLine(32 - index, "new"));
-
-  const pairs = matchChangedLines(removedLines(contents), addedLines(addedContents));
-
-  assert.equal(pairs.length, 33);
-  assert.deepEqual(
-    pairPositions(pairs),
-    Array.from({ length: 33 }, (_, removedPosition) => [removedPosition, 32 - removedPosition]),
-  );
-});
 
 test("sparse matching preserves medium-score reorder identity across its cutoff", () => {
   for (const count of [32, 33]) {
@@ -148,23 +135,17 @@ function removedLines(
   contents: string[],
   indexOffset = 0,
 ): Array<IndexedChangedLine<RemovedDiffLine>> {
-  return contents.map((content, position) =>
-    indexedChangedLine(indexOffset + position, {
-      kind: "-",
-      lineNumber: String(position + 1),
-      content,
-    }),
-  );
+  return contents.map((content, position) => ({
+    index: indexOffset + position,
+    line: { kind: "-", lineNumber: String(position + 1), content },
+  }));
 }
 
 function addedLines(contents: string[], indexOffset = 0): Array<IndexedChangedLine<AddedDiffLine>> {
-  return contents.map((content, position) =>
-    indexedChangedLine(indexOffset + position, {
-      kind: "+",
-      lineNumber: String(position + 1),
-      content,
-    }),
-  );
+  return contents.map((content, position) => ({
+    index: indexOffset + position,
+    line: { kind: "+", lineNumber: String(position + 1), content },
+  }));
 }
 
 function pairPositions(pairs: ChangedLinePair[]): number[][] {

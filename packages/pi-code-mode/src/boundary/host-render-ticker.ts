@@ -7,7 +7,7 @@
  * access is guarded, and the weak ticker cleans itself up once the state is collected.
  */
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
+import { hasObjectRuntimeType, invokeHostCallback, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import { codeModeCompactSummary } from "../ui/compact-summary.ts";
 import { liveChildElapsed } from "./host-child-timing.ts";
@@ -40,10 +40,7 @@ export const syncProgressTicker = (
         state.piCodeModeProgressTicker = undefined;
         state.piCodeModeProgressInvalidate = undefined;
       } catch {}
-      if (Predicate.isFunction(stop))
-        try {
-          stop();
-        } catch {}
+      if (Predicate.isFunction(stop)) invokeHostCallback(() => stop(), undefined);
       return;
     }
     const invalidate = context?.invalidate;
@@ -56,9 +53,7 @@ export const syncProgressTicker = (
     const cleanup = () => {
       if (stopped) return;
       stopped = true;
-      try {
-        stopTimer();
-      } catch {}
+      invokeHostCallback(stopTimer, undefined);
     };
     const tick = () => {
       const active = weakState.deref();
@@ -77,12 +72,7 @@ export const syncProgressTicker = (
       const stop = startTicker(SPINNER_INTERVAL_MS, tick);
       if (!Predicate.isFunction(stop)) return cleanup();
       stopTimer = stop;
-      if (stopped) {
-        try {
-          stop();
-        } catch {}
-        return;
-      }
+      if (stopped) return invokeHostCallback(stop, undefined);
       state.piCodeModeProgressTicker = cleanup;
     } catch {
       try {
@@ -105,10 +95,5 @@ export const codeModeCompactSummaryAtHost: typeof codeModeCompactSummary = (inpu
   return summary;
 };
 
-export const animationFrame = (): number => {
-  try {
-    return Math.floor(Math.max(0, synchronousNow()) / SPINNER_INTERVAL_MS);
-  } catch {
-    return 0;
-  }
-};
+export const animationFrame = (): number =>
+  Math.floor(Math.max(0, synchronousNow()) / SPINNER_INTERVAL_MS);

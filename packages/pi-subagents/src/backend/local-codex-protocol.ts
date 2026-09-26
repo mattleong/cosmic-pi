@@ -85,34 +85,23 @@ export const decodeCodexEnvelope = Effect.fn("LocalCodexProtocol.decodeEnvelope"
   return envelope;
 });
 
-const InitializeResult = Schema.Struct({
+export const InitializeResult = Schema.Struct({
   codexHome: Schema.String,
   platformFamily: Schema.String,
   platformOs: Schema.String,
   userAgent: Schema.String,
 });
-const ThreadStartResult = Schema.Struct({
+export const ThreadStartResult = Schema.Struct({
   model: Id,
   cwd: Schema.String,
   serviceTier: Schema.Union([Schema.String, Schema.Null]),
   thread: Schema.Struct({ id: Id, sessionId: Schema.optional(Id) }),
 });
-const TurnStartResult = Schema.Struct({
+export const TurnStartResult = Schema.Struct({
   turn: Schema.Struct({ id: Id, status: Schema.String }),
 });
-const TurnSteerResult = Schema.Struct({ turnId: Id });
-const EmptyObject = Schema.Record(Schema.String, Schema.Unknown);
-
-export const decodeInitializeResult = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(InitializeResult)(value);
-export const decodeThreadStartResult = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(ThreadStartResult)(value);
-export const decodeTurnStartResult = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(TurnStartResult)(value);
-export const decodeTurnSteerResult = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(TurnSteerResult)(value);
-export const decodeEmptyResult = <ValueInput>(value: ValueInput) =>
-  Schema.decodeUnknownEffect(EmptyObject)(value);
+export const TurnSteerResult = Schema.Struct({ turnId: Id });
+export const EmptyObject = Schema.Record(Schema.String, Schema.Unknown);
 
 const TurnStarted = Schema.Struct({
   threadId: Id,
@@ -145,8 +134,6 @@ const Item = Schema.Struct({
   arguments: Schema.optional(Schema.Unknown),
   changes: Schema.optional(FileChanges),
 });
-const ItemStarted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });
-const ItemCompleted = Schema.Struct({ threadId: Id, turnId: Id, item: Item });
 const NativeItemEnvelope = Schema.Struct({
   threadId: Id,
   turnId: Id,
@@ -312,13 +299,11 @@ const decodeCodexItemNotification = Effect.fn("LocalCodexProtocol.decodeItemNoti
               : ("activity" as const),
       };
     }
-    const schema = method === "item/started" ? ItemStarted : ItemCompleted;
-    const value = yield* Schema.decodeUnknownEffect(schema)(params);
     return {
       type: method === "item/started" ? ("item_started" as const) : ("item_completed" as const),
-      threadId: value.threadId,
-      turnId: value.turnId,
-      item: value.item,
+      threadId: envelope.threadId,
+      turnId: envelope.turnId,
+      item: yield* Schema.decodeUnknownEffect(Item)(envelope.item),
     };
   },
 );
@@ -400,6 +385,13 @@ export interface CodexTextInput {
   readonly type: "text";
   readonly text: string;
   readonly text_elements: ReadonlyArray<never>;
+}
+
+/** Herdr hook-trust requests on the same app-server; the hook boundary validates each result. */
+export interface CodexHookRequest {
+  readonly id: string;
+  readonly method: "hooks/list" | "config/batchWrite";
+  readonly params: Schema.MutableJson;
 }
 
 export type CodexRequest =

@@ -4,27 +4,31 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
-import * as Cause from "effect/Cause";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import {
   captureCodePreviewPresentationPolicy,
+  getTextContent,
   withCompactIssues,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
 import { imageMessagePresentation, renderImageContent } from "./presentation.ts";
-import { sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core";
-import { ignoreHostUi, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
+import { stripTerminalControls } from "pi-cosmic-core";
+import { containCommandFailure, safeHostSignal, safeHostUi } from "../boundary/host-ui.ts";
 import { imageCompactSummary } from "./compact-summary.ts";
 import { OpenAIImageService } from "./service.ts";
-import { TOOL_PARAMS, type CodexImageResult, type ToolParams } from "./types.ts";
+import {
+  TOOL_PARAMS,
+  isCodexImageDetails,
+  type CodexImageDetails,
+  type CodexImageResult,
+  type ToolParams,
+} from "./types.ts";
 
 const OPENAI_IMAGE_TOOL = "openai_image";
 const OPENAI_IMAGE_COMMAND = "openai-image";
-
-type CodexImageDetails = Omit<CodexImageResult, "data">;
 
 const imageDetails = ({ data: _data, ...details }: CodexImageResult): CodexImageDetails => details;
 
@@ -39,22 +43,6 @@ const resultText = (result: CodexImageDetails): string => {
   if (result.savedPath) parts.push(`Saved: ${result.savedPath}`);
   return parts.join("\n");
 };
-
-const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
-  value === undefined || Predicate.isString(value);
-
-const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDetails =>
-  Predicate.isObject(value) &&
-  Predicate.isString(value.id) &&
-  Predicate.isString(value.status) &&
-  Predicate.isString(value.prompt) &&
-  isOptionalString(value.revisedPrompt) &&
-  Predicate.isString(value.mimeType) &&
-  isOptionalString(value.savedPath) &&
-  Predicate.isString(value.model) &&
-  isOptionalString(value.imageModel) &&
-  Predicate.isString(value.action) &&
-  Predicate.isString(value.outputFormat);
 
 const isLegacyCodexImageResult = <Value>(value: Value): value is Value & CodexImageResult =>
   isCodexImageDetails(value) &&
@@ -86,27 +74,13 @@ export function registerOpenAIImage(
     const details = isCodexImageDetails(message.details) ? message.details : undefined;
     const raw = Predicate.isString(message.content)
       ? message.content
-      : message.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n");
+      : getTextContent(message.content);
     const text = details
       ? [resultText(details), ...(raw ? ["Raw result", raw] : [])].join("\n")
       : raw;
-    const contentImage = Array.isArray(message.content)
-      ? message.content.find(isImageContent)
-      : undefined;
-    let image: { data: string; mimeType: string; savedPath?: string } | undefined;
-    if (contentImage)
-      image = details?.savedPath ? { ...contentImage, savedPath: details.savedPath } : contentImage;
-    else if (isLegacyCodexImageResult(message.details))
-      image = message.details.savedPath
-        ? {
-            data: message.details.data,
-            mimeType: message.details.mimeType,
-            savedPath: message.details.savedPath,
-          }
-        : { data: message.details.data, mimeType: message.details.mimeType };
+    const image =
+      (Array.isArray(message.content) ? message.content.find(isImageContent) : undefined) ??
+      (isLegacyCodexImageResult(message.details) ? message.details : undefined);
     const container = new Container();
     const box = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
     const outcome =
@@ -167,8 +141,8 @@ export function registerOpenAIImage(
           image.data,
           image.mimeType,
           { fallbackColor: (line) => theme.fg("dim", line) },
-          image.savedPath
-            ? { maxWidthCells: 80, maxHeightCells: 24, filename: image.savedPath }
+          details?.savedPath
+            ? { maxWidthCells: 80, maxHeightCells: 24, filename: details.savedPath }
             : { maxWidthCells: 80, maxHeightCells: 24 },
         ),
       );
@@ -186,29 +160,11 @@ export function registerOpenAIImage(
       safeHostUi(() => ctx.ui.notify("Requesting OpenAI image...", "info"));
       updateContext(ctx);
       const signal = safeHostSignal(ctx);
-      const request = generateEffect({ prompt }).pipe(
-        Effect.tapError((error) =>
-          ignoreHostUi(() =>
-            ctx.ui.notify(
-              `OpenAI image generation failed: ${sanitizeDiagnosticError(error.message)}.`,
-              "warning",
-            ),
-          ),
-        ),
-        Effect.option,
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.succeed(Option.none())
-            : Effect.logError("Better OpenAI image command raised an unexpected defect.").pipe(
-                Effect.andThen(
-                  ignoreHostUi(() =>
-                    ctx.ui.notify("OpenAI image generation failed unexpectedly.", "warning"),
-                  ),
-                ),
-                Effect.as(Option.none()),
-              ),
-        ),
-      );
+      const request = containCommandFailure(generateEffect({ prompt }), ctx, {
+        failed: (message) => `OpenAI image generation failed: ${message}.`,
+        unexpected: "OpenAI image generation failed unexpectedly.",
+        defect: "Better OpenAI image command raised an unexpected defect.",
+      });
       return run(request, signal)
         .then((result) => {
           if (Option.isNone(result)) return undefined;

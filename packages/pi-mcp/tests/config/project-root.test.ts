@@ -1,28 +1,14 @@
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore } from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { McpConfigStore } from "../../src/config/store.ts";
-
-const GLOBAL = "/agent/extensions/pi-mcp.json";
-const PROJECT_ROOT = "/project/.mcp.json";
-const PROJECT = `/project/${CONFIG_DIR_NAME}/extensions/pi-mcp.json`;
-const layerFor = (memory: InMemoryDocuments) =>
-  McpConfigStore.layer({ cwd: "/project", projectTrusted: true }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(JsonDocumentStore, memory.service),
-        AgentDirectory.layer("/agent"),
-        Path.layer,
-        NodeCrypto.layer,
-      ),
-    ),
-  );
+import {
+  GLOBAL,
+  PROJECT,
+  PROJECT_ROOT,
+  layerFor,
+  serializedConfig,
+} from "../fixtures/config-store.ts";
 
 const inherited = {
   url: "https://global.test/mcp",
@@ -117,7 +103,7 @@ describe("project root .mcp.json", () => {
           "shared",
         ]);
         expect(config.servers.global?.scope).toBe("global");
-        expect(config.servers.local?.scope).toBe("project");
+        expect(config.servers.local).toMatchObject({ scope: "project", directory: "/project" });
         expect(config.servers.shared?.definition).toMatchObject({
           url: "https://shared.test/mcp",
           headers: {},
@@ -131,9 +117,8 @@ describe("project root .mcp.json", () => {
         expect(config.servers.disabled?.enabled).toBe(false);
         expect(config.servers.invalid?.enabled).toBe(false);
         expect(config.servers.invalid?.definition).toBeUndefined();
-        expect(
-          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(config),
-        ).not.toMatch(/private-|GLOBAL_TOKEN|SHARED_TOKEN/);
+        expect(config.servers.invalid?.diagnostic).toContain('"url"');
+        expect(serializedConfig(config)).not.toMatch(/private-|GLOBAL_TOKEN|SHARED_TOKEN/);
         expect(config.settings).toMatchObject({
           maxQueued: 0,
           requestTimeoutMs: 30_000,
@@ -155,9 +140,7 @@ describe("project root .mcp.json", () => {
         const config = yield* (yield* McpConfigStore).snapshot;
         expect(config.servers.server).toMatchObject({ scope: "project", enabled: false });
         expect(config.servers.server?.definition).toBeUndefined();
-        expect(
-          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(config),
-        ).not.toMatch(/private-|GLOBAL_TOKEN/);
+        expect(serializedConfig(config)).not.toMatch(/private-|GLOBAL_TOKEN/);
       }).pipe(Effect.provide(layerFor(memory)));
     },
   );

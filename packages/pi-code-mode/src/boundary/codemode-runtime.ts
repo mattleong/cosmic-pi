@@ -65,16 +65,9 @@ interface CodeModeExecuteOptions {
     event: CodeModeToolCallLifecycleEvent,
   ) => Effect.Effect<void, never>;
   readonly onToolCallStart?: (call: {
-    readonly index: number;
     readonly lifecycleId?: number;
     readonly name: string;
     readonly input: unknown;
-  }) => Effect.Effect<void, never>;
-  readonly onToolCallEnd?: (call: {
-    readonly index: number;
-    readonly lifecycleId?: number;
-    readonly durationMs: number;
-    readonly outcome: "success" | "failure";
   }) => Effect.Effect<void, never>;
 }
 

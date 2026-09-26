@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import { identity } from "effect/Function";
 import * as Schema from "effect/Schema";
 import {
   isJsonObject,
@@ -37,8 +39,7 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
   extract: (document: JsonObject) => JsonObject,
   fallback: CodePreviewSettings,
 ) {
-  const documents = deps.documents;
-  const document = yield* documents
+  const document = yield* deps.documents
     .readObject(settingsPath)
     .pipe(
       Effect.catchTag("JsonDocumentError", () =>
@@ -63,9 +64,7 @@ const loadSettingsFile = Effect.fn("CodePreviewSettings.loadFile")(function* (
  */
 export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.loadSaveContext")(
   function* (deps: SettingsDocumentDependencies, options: LoadSettingsOptions = {}) {
-    const path = deps.path;
-    const agentDir = deps.agentDir;
-    const environment = deps.environment;
+    const { path, agentDir, environment } = deps;
     const settingsPath = path.join(agentDir, "code-previews.json");
     const projectCwd = options.projectCwd ?? process.cwd();
     let effective = cloneCodePreviewSettings(environment.defaults);
@@ -78,12 +77,7 @@ export const loadSettingsSaveContextEffect = Effect.fn("CodePreviewSettings.load
       if (next) effective = next;
     }
     const baseline = cloneCodePreviewSettings(effective);
-    const globalSettings = yield* loadSettingsFile(
-      deps,
-      settingsPath,
-      flatCodePreviewSettings,
-      effective,
-    );
+    const globalSettings = yield* loadSettingsFile(deps, settingsPath, identity, effective);
     if (globalSettings) effective = globalSettings;
     return {
       baseline,
@@ -98,9 +92,7 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
   context: SettingsSaveContext,
   afterCommit: (context: SettingsSaveContext) => Effect.Effect<void>,
 ) {
-  const path = deps.path;
-  const agentDir = deps.agentDir;
-  const documents = deps.documents;
+  const { path, agentDir, documents } = deps;
   const settingsPath = path.join(agentDir, "code-previews.json");
   const committedSettings = yield* Schema.decodeUnknownEffect(CodePreviewSettingsSchema)(
     settings,
@@ -120,14 +112,7 @@ export const saveSettingsStateEffect = Effect.fn("CodePreviewSettings.saveState"
         }),
     ),
   );
-  const modifyObject = documents.modifyObject;
-  if (!modifyObject)
-    return yield* new JsonDocumentError({
-      operation: "write",
-      path: settingsPath,
-      message: "Atomic JSON document modification is unavailable.",
-    });
-  return yield* modifyObject(settingsPath, (latest) =>
+  return yield* documents.modifyObject(settingsPath, (latest) =>
     Effect.try({
       try: () => {
         const document = settingsDocument(committedSettings, context, latest);
@@ -166,45 +151,15 @@ function settingsDocument(
   }
   for (const key of CODE_PREVIEW_SETTING_KEYS) {
     const value = settings[key];
-    if (settingValuesEqual(value, context.loaded[key])) continue;
-    if (settingValuesEqual(value, context.baseline[key])) delete document[key];
+    if (Equal.equals(value, context.loaded[key])) continue;
+    if (Equal.equals(value, context.baseline[key])) delete document[key];
     else document[key] = value;
   }
   return document;
-}
-
-type CodePreviewSettingValue = CodePreviewSettings[keyof CodePreviewSettings];
-
-function settingValuesEqual(
-  left: CodePreviewSettingValue,
-  right: CodePreviewSettingValue,
-): boolean {
-  return Array.isArray(left)
-    ? Array.isArray(right) &&
-        left.length === right.length &&
-        left.every((entry, index) => entry === right[index])
-    : left === right;
-}
-
-export function defaultSettingsSaveContext(defaults: CodePreviewSettings): SettingsSaveContext {
-  return {
-    baseline: cloneCodePreviewSettings(defaults),
-    loaded: cloneCodePreviewSettings(defaults),
-  };
 }
 
 /** `settings.json` documents contribute settings through their nested `codePreview` object only. */
 export function nestedCodePreviewSettings(document: JsonObject): JsonObject {
   const nested = document.codePreview;
   return isJsonObject(nested) ? nested : {};
-}
-
-/** The package `code-previews.json` document carries current setting keys flat at the root only. */
-export function flatCodePreviewSettings(document: JsonObject): JsonObject {
-  const extracted: JsonObject = {};
-  for (const key of CODE_PREVIEW_SETTING_KEYS) {
-    const value = document[key];
-    if (value !== undefined) extracted[key] = value;
-  }
-  return extracted;
 }

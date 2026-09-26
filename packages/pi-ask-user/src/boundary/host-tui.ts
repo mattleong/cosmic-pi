@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { createInputDock } from "pi-cosmic-ui/boundary/host-input-dock";
+import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
@@ -11,16 +11,29 @@ import { captureExternalEditorCommand, editWithExternalEditor } from "./host-ext
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
-/** Pi 0.85 done() pops the global overlay stack. Protect unrelated overlays with an owned guard. */
-export const finishOwnedOverlay = (tui: TUI, handle: OverlayHandle, done: () => void): void => {
-  handle.hide();
-  const guard = tui.showOverlay({ render: () => [], invalidate: () => {} }, { nonCapturing: true });
-  try {
-    done();
-  } finally {
-    guard.hide();
-  }
-};
+/** Admission beside `custom`. Its release frees the prompt gate, then the dialog's bridge token. */
+export const admitDialog =
+  (
+    bridge: AskUserDialogBridge,
+    token: () => number | undefined,
+    gate: AskUserPromptGate | undefined,
+    recheck: boolean,
+  ) =>
+  (): false | (() => void) => {
+    if (recheck && gate && !gate.canOpen()) return false;
+    const releasePrompt = gate?.enter();
+    return () => {
+      releasePrompt?.();
+      const owned = token();
+      if (owned !== undefined) bridge.clear(owned);
+    };
+  };
+
+const renderFailed = () =>
+  new AskUserHostError({
+    operation: "render",
+    message: "Unable to render the user questionnaire.",
+  });
 
 export const makeAskUserTuiHost =
   (
@@ -33,23 +46,17 @@ export const makeAskUserTuiHost =
       Effect.tap(() => (queued && promptGate ? promptGate.awaitOpen : Effect.void)),
       Effect.flatMap(({ AskUserDialog }) =>
         Effect.suspend(() => {
-          const dock = createInputDock(ctx.ui);
-          const editorCommand = captureExternalEditorCommand(ctx);
           const authority = new AbortController();
-          let requested: AskUserOutcome | undefined;
-          let settled = false;
-          let hostDone: ((outcome: AskUserOutcome) => void) | undefined;
-          let hostTui: TUI | undefined;
-          let overlay: OverlayHandle | undefined;
+          let handle: OverlayHandle | undefined;
           let bridgeToken: number | undefined;
-          let dialog: InstanceType<typeof AskUserDialog> | undefined;
-          let releasePrompt: (() => void) | undefined;
-          let blocked = false;
-          let rejectCompletion: (() => void) | undefined;
           const editors = new Set<Promise<void>>();
-          const editExternally = (tui: TUI, value: string): Promise<string | undefined> => {
+          const editExternally = (
+            tui: TUI,
+            command: string | undefined,
+            value: string,
+          ): Promise<string | undefined> => {
             if (authority.signal.aborted) return Promise.resolve(undefined);
-            const editing = editWithExternalEditor(tui, editorCommand, value, authority.signal);
+            const editing = editWithExternalEditor(tui, command, value, authority.signal);
             // Settlement includes the owned process, temporary files, and TUI restoration.
             // Retain only nonrejecting joins; dialog consumers still receive live failures.
             const settled = editing.then(
@@ -67,135 +74,55 @@ export const makeAskUserTuiHost =
             );
           };
 
-          const finish = (outcome: AskUserOutcome): void => {
-            requested ??= outcome;
-            if (settled || !overlay || !hostDone || !hostTui) return;
-            settled = true;
-            const finalOutcome = requested;
-            const done = hostDone;
-            try {
-              finishOwnedOverlay(hostTui, overlay, () => done(finalOutcome));
-            } catch {
-              // Pi's custom Promise may remain pending when synchronous finish fails.
-              // Reject the owned Effect instead; never retry an unguarded global pop.
-              rejectCompletion?.();
-            }
-          };
-          const close = (): void => {
-            rejectCompletion = undefined;
-            authority.abort();
-            try {
-              finish(cancelQuestionnaire());
-            } finally {
-              try {
-                dock.dispose();
-              } finally {
-                releasePrompt?.();
-                if (bridgeToken !== undefined) bridge.clear(bridgeToken);
-              }
-            }
-          };
-          const cleanup = Effect.try({
-            try: close,
-            catch: () =>
-              new AskUserHostError({
-                operation: "close",
-                message: "Unable to close the questionnaire overlay.",
-              }),
+          return openOwnedSurface<AskUserOutcome>(ctx, {
+            placement: "dock",
+            closedValue: cancelQuestionnaire(),
+            // Recheck after the lazy import, in the same synchronous call as custom().
+            admit: admitDialog(bridge, () => bridgeToken, promptGate, !!(opened || queued)),
+            onClose: () => authority.abort(),
+            create: ({ tui, theme, keybindings, getHeight, finish }) => {
+              const editorCommand = captureExternalEditorCommand(ctx);
+              const dialog = new AskUserDialog({
+                tui,
+                theme,
+                keybindings,
+                request,
+                getHeight,
+                done: finish,
+                editExternally: (value) => editExternally(tui, editorCommand, value),
+                collapse: () => {
+                  handle?.setHidden(true);
+                  if (!authority.signal.aborted && bridgeToken !== undefined)
+                    bridge.markCollapsed(bridgeToken);
+                },
+              });
+              bridgeToken = bridge.activate(() => {
+                if (authority.signal.aborted) return;
+                handle?.setHidden(false);
+                tui.requestRender(true);
+              });
+              return dialog;
+            },
+            onMounted: (mounted) => {
+              handle = mounted;
+              if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
+              if (opened) Deferred.doneUnsafe(opened, Effect.void);
+            },
           }).pipe(
-            Effect.ignore,
             // Ordered finalization joins only admitted, owned editor cleanup, never
-            // the arbitrary custom Promise. Revocation above prevents late admissions.
-            Effect.andThen(Effect.promise(() => Promise.all(editors))),
-          );
-
-          return Effect.callback<AskUserOutcome, AskUserHostError>((resume) => {
-            const fail = () =>
-              resume(
-                Effect.fail(
-                  new AskUserHostError({
-                    operation: "render",
-                    message: "Unable to render the user questionnaire.",
-                  }),
-                ),
-              );
-            rejectCompletion = fail;
-            try {
-              // Recheck after the lazy import, in the same synchronous call as custom().
-              if ((opened || queued) && promptGate && !promptGate.canOpen()) {
-                blocked = true;
-                throw new Error("Another UI prompt owns input.");
-              }
-              releasePrompt = promptGate?.enter();
-              ctx.ui
-                .custom<AskUserOutcome>(
-                  (tui, theme, keybindings, done) => {
-                    hostDone = done;
-                    hostTui = tui;
-                    if (authority.signal.aborted) return { render: () => [], invalidate: () => {} };
-                    dialog = new AskUserDialog({
-                      tui,
-                      theme,
-                      keybindings,
-                      request,
-                      getHeight: dock.getHeight,
-                      done: finish,
-                      editExternally: (value) => editExternally(tui, value),
-                      onCollapse: () => {
-                        if (!authority.signal.aborted && bridgeToken !== undefined)
-                          bridge.markCollapsed(bridgeToken);
-                      },
-                    });
-                    if (!authority.signal.aborted)
-                      bridgeToken = bridge.activate(() => {
-                        if (!authority.signal.aborted) dialog?.resume();
-                      });
-                    dock.mount(tui, dialog);
-                    return dock.input;
-                  },
-                  {
-                    overlay: true,
-                    overlayOptions: { anchor: "top-left", width: 1, maxHeight: 0 },
-                    onHandle: (handle) => {
-                      overlay = dock.handle(handle);
-                      if (authority.signal.aborted || requested) {
-                        finish(requested ?? cancelQuestionnaire());
-                        return;
-                      }
-                      dialog?.setOverlayHandle(overlay);
-                      if (bridgeToken !== undefined) bridge.markOpened(bridgeToken);
-                      if (opened) Deferred.doneUnsafe(opened, Effect.void);
-                    },
-                  },
-                )
-                .then((outcome) => resume(Effect.succeed(outcome)), fail);
-            } catch {
-              fail();
-            }
-          }).pipe(
-            Effect.ensuring(cleanup),
-            Effect.catch(() =>
-              blocked && queued && promptGate
+            // the arbitrary custom Promise. Closing revoked later admissions first.
+            Effect.ensuring(Effect.promise(() => Promise.all(editors))),
+            Effect.catch((error) =>
+              error.reason === "blocked" && queued && promptGate
                 ? promptGate.awaitOpen.pipe(
                     Effect.andThen(
                       makeAskUserTuiHost(ctx, bridge, promptGate)(request, opened, queued),
                     ),
                   )
-                : Effect.fail(
-                    new AskUserHostError({
-                      operation: "render",
-                      message: "Unable to render the user questionnaire.",
-                    }),
-                  ),
+                : Effect.fail(renderFailed()),
             ),
           );
         }),
       ),
-      Effect.mapError(
-        () =>
-          new AskUserHostError({
-            operation: "render",
-            message: "Unable to render the user questionnaire.",
-          }),
-      ),
+      Effect.mapError(renderFailed),
     );

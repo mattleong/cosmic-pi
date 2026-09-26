@@ -37,12 +37,21 @@ describe("retained output pages", () => {
     }
     expect(text).toBe(artifact.text);
   });
-  it("admits exact final-page fits when the null cursor shrinks metadata", () => {
-    const large = { ...artifact, outcome: "succeeded" as const, text: "x".repeat(1_000_000) };
-    const expected = projectResultPage(large, 999_999, 1, 1000);
-    const exact = projectResultPage(large, 999_999, 1, utf8ByteLength(expected.text));
+  it.each([
+    { name: "the null cursor shrinks metadata", text: "x".repeat(1_000_000), offset: 999_999 },
+    {
+      name: "continuation recovery makes the EOF prefix larger",
+      text: "😀",
+      offset: 0,
+      options: { includeRecovery: true, receipts: { total: 1, completed: 1 } },
+    },
+  ])("admits exact final-page fits when $name", ({ text, offset, options }) => {
+    const page = { ...artifact, outcome: "succeeded" as const, text };
+    const limit = text.length - offset;
+    const expected = projectResultPage(page, offset, limit, 1_000, options);
+    const exact = projectResultPage(page, offset, limit, utf8ByteLength(expected.text), options);
     expect(exact).toEqual(expected);
-    expect(JSON.parse(exact.text)).toMatchObject({ next: null, text: "x" });
+    expect(JSON.parse(exact.text)).toMatchObject({ next: null, text: text.slice(offset) });
   });
   it("rejects split and out-of-range offsets without rounding or stale cursors", () => {
     for (const offset of [-1, 2, 1.5, artifact.text.length + 1]) {
@@ -91,25 +100,5 @@ describe("retained output pages", () => {
         expect(projected.text).not.toContain('"next"');
       }
     }
-  });
-
-  it("preserves the EOF endpoint check when continuation recovery makes prefixes larger", () => {
-    const escaped = { ...artifact, outcome: "succeeded" as const, text: "😀" };
-    const expected = projectResultPage(escaped, 0, escaped.text.length, 1_000, {
-      includeRecovery: true,
-      receipts: { total: 1, completed: 1 },
-    });
-    const exact = projectResultPage(
-      escaped,
-      0,
-      escaped.text.length,
-      utf8ByteLength(expected.text),
-      {
-        includeRecovery: true,
-        receipts: { total: 1, completed: 1 },
-      },
-    );
-    expect(exact).toEqual(expected);
-    expect(JSON.parse(exact.text)).toMatchObject({ next: null, text: "😀" });
   });
 });

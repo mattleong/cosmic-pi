@@ -8,8 +8,6 @@ import {
   DEFAULT_FOOTER_ORDER,
   FOOTER_DENSITIES,
   FooterDensitySchema,
-  MEDIA_PLACEMENTS,
-  MediaPlacementSchema,
   type ResolvedCosmicUiConfig,
 } from "../config/schema.ts";
 import {
@@ -22,7 +20,7 @@ import {
   createSettingsListSurface,
   settingsRowGenerations,
 } from "../manager/settings-surface.ts";
-import { decodeUnknownOrUndefined } from "../schema/decode.ts";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 const BooleanSettingSchema = Schema.Literals(["true", "false"]);
 const VisibilityIdSchema = Schema.Literals(DEFAULT_FOOTER_ORDER);
@@ -76,12 +74,6 @@ function decodeCosmicUiSettingChange<IdInput, ValueInput>(
     const density = decodeUnknownOrUndefined(FooterDensitySchema, value);
     return density === undefined ? undefined : { _tag: "UpdateFooter", patch: { density } };
   }
-  if (id === "mediaPlacement") {
-    const mediaPlacement = decodeUnknownOrUndefined(MediaPlacementSchema, value);
-    return mediaPlacement === undefined
-      ? undefined
-      : { _tag: "UpdateFooter", patch: { mediaPlacement } };
-  }
   if (!id.startsWith("visible:") || booleanValue === undefined) return undefined;
   const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
   return visibilityId === undefined
@@ -92,7 +84,6 @@ function decodeCosmicUiSettingChange<IdInput, ValueInput>(
 const projectedSettingValue = (config: ResolvedCosmicUiConfig, id: string): string | undefined => {
   if (id === "enabled") return String(config.footer.enabled);
   if (id === "density") return config.footer.density;
-  if (id === "mediaPlacement") return config.footer.mediaPlacement;
   if (!id.startsWith("visible:")) return undefined;
   const visibilityId = decodeUnknownOrUndefined(VisibilityIdSchema, id.slice("visible:".length));
   return visibilityId === undefined
@@ -140,12 +131,6 @@ export function registerSettingsCommand(
           label: "Footer density",
           currentValue: cfg.footer.density,
           values: [...FOOTER_DENSITIES],
-        },
-        {
-          id: "mediaPlacement",
-          label: "Media placement",
-          currentValue: cfg.footer.mediaPlacement,
-          values: [...MEDIA_PLACEMENTS],
         },
         ...DEFAULT_FOOTER_ORDER.map((id) => ({
           id: `visible:${id}`,

@@ -1,4 +1,3 @@
-import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -7,6 +6,7 @@ import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import type { Scope } from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { makeLocalClaudeBackendDriver } from "../src/backend/local-claude.ts";
@@ -15,7 +15,7 @@ import {
   type ClaudeInboundFrame,
   type ClaudeUserFrame,
 } from "../src/backend/local-claude-protocol.ts";
-import type { BackendHandle, BackendLaunchRequest } from "../src/backend/model.ts";
+import type { BackendHandle } from "../src/backend/model.ts";
 import type { LocalCliProcessContract } from "../src/boundary/local-cli-process.ts";
 import type {
   LocalCliHandle,
@@ -23,7 +23,14 @@ import type {
   LocalCliWireEvent,
 } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorChannelContract } from "../src/boundary/supervisor-channel.ts";
+import type { SubagentError } from "../src/run/errors.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
+import {
+  backendLaunch,
+  backendSupervisor,
+  supervisorMetadata,
+  takeBackendEvent,
+} from "./fixtures/backend-supervisor.ts";
 
 const SUPERVISOR_TOOLS = [
   "supervisor_progress",
@@ -49,22 +56,6 @@ type ReplayScenario =
   | "accepted-report-result"
   | "accepted-report-cost-only"
   | "accepted-report-close";
-
-const launch = (model: ReplayScenario): BackendLaunchRequest => ({
-  runId: `agent-${model}`,
-  name: "claude-replay-worker",
-  closeOnReport: true,
-  cwd: process.cwd(),
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  model,
-  effort: "high",
-  activeTools: [],
-  projectTrusted: false,
-  parentSessionId: "parent-session",
-  systemPrompt: "Use the private supervisor report tool.",
-});
 
 interface ReplayHarness {
   readonly processes: LocalCliProcessContract;
@@ -326,8 +317,8 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
         }),
     };
     const supervisors: SupervisorChannelContract = {
-      open: ({ runId }) => {
-        const handle = backendSupervisor(supervisorMetadata(runId), supervisorEvents, {
+      open: () => {
+        const handle = backendSupervisor(supervisorMetadata(), supervisorEvents, {
           hasAcceptedReport: () => Effect.succeed(true),
           acceptedReportForEpoch: (epoch) =>
             Effect.succeed(acceptedReport?.assignmentEpoch === epoch ? acceptedReport : undefined),
@@ -372,30 +363,33 @@ const makeReplayHarness = (scenario: ReplayScenario): Effect.Effect<ReplayHarnes
     };
   });
 
-const withReplayHarness = <A, E>(
+const withStartedBackend = <A, E>(
   scenario: ReplayScenario,
-  use: (harness: ReplayHarness) => Effect.Effect<A, E, import("effect/Scope").Scope>,
-): Effect.Effect<A, E> =>
-  Effect.scoped(Effect.acquireUseRelease(makeReplayHarness(scenario), use, ({ close }) => close));
-
-const take = (backend: BackendHandle) =>
-  Queue.take(backend.events).pipe(
-    Effect.timeoutOption("5 seconds"),
-    Effect.flatMap((event) =>
-      Option.isSome(event) ? Effect.succeed(event.value) : Effect.die("fixture event timeout"),
+  epoch: number,
+  use: (backend: BackendHandle, harness: ReplayHarness) => Effect.Effect<A, E, Scope>,
+): Effect.Effect<A, E | SubagentError> =>
+  Effect.scoped(
+    Effect.acquireUseRelease(
+      makeReplayHarness(scenario),
+      (harness) =>
+        Effect.gen(function* () {
+          const backend = yield* makeLocalClaudeBackendDriver(
+            harness.processes,
+            harness.supervisors,
+          ).spawn(backendLaunch({ runId: `agent-${scenario}`, model: scenario }));
+          yield* backend.controls.initialize;
+          yield* backend.controls.start("Run the replay fixture", epoch);
+          return yield* use(backend, harness);
+        }),
+      ({ close }) => close,
     ),
-    Effect.tap((event) => Effect.sync(() => backend.acknowledge(event))),
   );
 
-const expectInternalUserFrame = (scenario: ReplayScenario) =>
-  withReplayHarness(scenario, ({ processes, supervisors }) =>
-    Effect.gen(function* () {
-      const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-        launch(scenario),
-      );
-      yield* backend.controls.initialize;
-      yield* backend.controls.start("Run the replay fixture", 8);
+const take = (backend: BackendHandle) => takeBackendEvent(backend, { acknowledge: true });
 
+const expectInternalUserFrame = (scenario: ReplayScenario) =>
+  withStartedBackend(scenario, 8, (backend) =>
+    Effect.gen(function* () {
       expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 8 });
       expect(yield* take(backend)).toMatchObject({ type: "assistant_message", assignmentEpoch: 8 });
       expect(yield* take(backend)).toEqual({ type: "activity", assignmentEpoch: 8 });
@@ -408,19 +402,11 @@ const expectInternalUserFrame = (scenario: ReplayScenario) =>
     }),
   );
 
-const takeRejectedUserFrame = (scenario: ReplayScenario, epoch: number) =>
-  withReplayHarness(scenario, ({ processes, supervisors }) =>
+const takeRejectedUserFrame = (scenario: ReplayScenario) =>
+  withStartedBackend(scenario, 9, (backend) =>
     Effect.gen(function* () {
-      const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-        launch(scenario),
-      );
-      yield* backend.controls.initialize;
-      yield* backend.controls.start("Reject untrusted input", epoch);
-      expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: epoch });
-      expect(yield* take(backend)).toMatchObject({
-        type: "assistant_message",
-        assignmentEpoch: epoch,
-      });
+      expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 9 });
+      expect(yield* take(backend)).toMatchObject({ type: "assistant_message", assignmentEpoch: 9 });
       return yield* take(backend);
     }),
   );
@@ -462,60 +448,66 @@ describe("local Claude replay classification", () => {
     }),
   );
 
-  it.effect("treats forwarded native-agent user text as assignment activity", () =>
-    expectInternalUserFrame("forwarded-user"),
-  );
+  it.effect.each([
+    ["treats forwarded native-agent user text as assignment activity", "forwarded-user"],
+    [
+      "owns UUID-less internal notifications through their result lifecycle",
+      "uuidless-task-notification",
+    ],
+    ["owns Claude command-queue task-notification replays", "queued-task-notification"],
+    [
+      "suppresses duplicate internal task-notification replays without sent UUID aliasing",
+      "queued-task-notification-duplicate",
+    ],
+  ] as const)("%s", ([, scenario]) => expectInternalUserFrame(scenario));
 
-  it.effect("owns UUID-less internal notifications through their result lifecycle", () =>
-    expectInternalUserFrame("uuidless-task-notification"),
-  );
-
-  it.effect("owns Claude command-queue task-notification replays", () =>
-    expectInternalUserFrame("queued-task-notification"),
-  );
-
-  it.effect(
-    "suppresses duplicate internal task-notification replays without sent UUID aliasing",
-    () => expectInternalUserFrame("queued-task-notification-duplicate"),
-  );
-
-  it.effect("fails closed on cross-session task notifications", () =>
-    Effect.gen(function* () {
-      expect(yield* takeRejectedUserFrame("cross-session-task-notification", 9)).toMatchObject({
-        type: "protocol_error",
-        message: expect.stringContaining("subkind=peer-send-message"),
-      });
-    }),
-  );
-
-  it.effect("rejects near-miss command-queue task notifications", () =>
-    Effect.gen(function* () {
-      for (const scenario of [
+  it.effect.each([
+    [
+      "fails closed on cross-session task notifications",
+      "cross-session-task-notification",
+      "subkind=peer-send-message",
+    ],
+    ...(
+      [
         "queued-task-notification-cross-session",
         "tagged-task-notification-nonreplay",
         "tagged-task-notification-channel",
-      ] as const) {
-        const failure = yield* takeRejectedUserFrame(scenario, 15);
-        expect(failure).toMatchObject({
-          type: "protocol_error",
-          message: expect.stringContaining("tag=task-notification"),
-        });
-      }
-    }),
-  );
-
-  it.effect("rejects task-shaped input that is not synthetic", () =>
+      ] as const
+    ).map(
+      (scenario) =>
+        [
+          `rejects near-miss command-queue task notification ${scenario}`,
+          scenario,
+          "tag=task-notification",
+        ] as const,
+    ),
+    [
+      "rejects task-shaped input that is not synthetic",
+      "nonsynthetic-task-notification",
+      "synthetic=false",
+    ],
+    [
+      "uses content matches only as evidence and never as replay authority",
+      "same-content-foreign-replay",
+      "content=assignment",
+    ],
+    [
+      "rejects a confirmed UUID replayed from another native session",
+      "known-replay-cross-session",
+      "session=mismatch",
+    ],
+  ] as const)("%s", ([, scenario, diagnostic]) =>
     Effect.gen(function* () {
-      expect(yield* takeRejectedUserFrame("nonsynthetic-task-notification", 10)).toMatchObject({
+      expect(yield* takeRejectedUserFrame(scenario)).toMatchObject({
         type: "protocol_error",
-        message: expect.stringContaining("synthetic=false"),
+        message: expect.stringContaining(diagnostic),
       });
     }),
   );
 
   it.effect("keeps foreign top-level UUIDs fail closed with bounded diagnostics", () =>
     Effect.gen(function* () {
-      const failure = yield* takeRejectedUserFrame("foreign-replay", 11);
+      const failure = yield* takeRejectedUserFrame("foreign-replay");
       expect(failure).toMatchObject({
         type: "protocol_error",
         message: expect.stringContaining("uuid=present"),
@@ -530,36 +522,11 @@ describe("local Claude replay classification", () => {
     }),
   );
 
-  it.effect("uses content matches only as evidence and never as replay authority", () =>
-    Effect.gen(function* () {
-      const failure = yield* takeRejectedUserFrame("same-content-foreign-replay", 14);
-      expect(failure).toMatchObject({
-        type: "protocol_error",
-        message: expect.stringContaining("content=assignment"),
-      });
-    }),
-  );
-
-  it.effect("rejects a confirmed UUID replayed from another native session", () =>
-    Effect.gen(function* () {
-      const failure = yield* takeRejectedUserFrame("known-replay-cross-session", 13);
-      expect(failure).toMatchObject({
-        type: "protocol_error",
-        message: expect.stringContaining("session=mismatch"),
-      });
-    }),
-  );
-
   it.effect("queues final usage and cost before settling an already-buffered report", () =>
     Effect.gen(function* () {
       for (const scenario of ["accepted-report-result", "accepted-report-cost-only"] as const) {
-        yield* withReplayHarness(scenario, ({ processes, supervisors, finishResult, close }) =>
+        yield* withStartedBackend(scenario, 12, (backend, { finishResult, close }) =>
           Effect.gen(function* () {
-            const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-              launch(scenario),
-            );
-            yield* backend.controls.initialize;
-            yield* backend.controls.start("Report before native finalization", 12);
             const initial = [yield* take(backend), yield* take(backend), yield* take(backend)];
             expect(initial).toEqual(
               expect.arrayContaining([
@@ -598,37 +565,25 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("keeps exact UUID replay correlated after guidance caller cancellation", () =>
-    withReplayHarness(
-      "accepted-report-close",
-      ({ processes, supervisors, guidanceSent, replayGuidance }) =>
-        Effect.gen(function* () {
-          const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-            launch("accepted-report-close"),
-          );
-          yield* backend.controls.initialize;
-          yield* backend.controls.start("Start", 12);
-          yield* take(backend);
-          yield* take(backend);
-          const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
-          yield* guidanceSent;
-          yield* Fiber.interrupt(caller);
-          yield* replayGuidance;
-          expect(yield* take(backend)).toMatchObject({
-            type: "assistant_message",
-            text: "Guidance consumed",
-          });
-        }),
+    withStartedBackend("accepted-report-close", 12, (backend, { guidanceSent, replayGuidance }) =>
+      Effect.gen(function* () {
+        yield* take(backend);
+        yield* take(backend);
+        const caller = yield* Effect.forkChild(backend.controls.steer("Delayed guidance"));
+        yield* guidanceSent;
+        yield* Fiber.interrupt(caller);
+        yield* replayGuidance;
+        expect(yield* take(backend)).toMatchObject({
+          type: "assistant_message",
+          text: "Guidance consumed",
+        });
+      }),
     ),
   );
 
   it.effect("preserves accepted evidence behind a full queue and delayed consumer", () =>
-    withReplayHarness("accepted-report-close", ({ processes, supervisors, close, fillProgress }) =>
+    withStartedBackend("accepted-report-close", 12, (backend, { close, fillProgress }) =>
       Effect.gen(function* () {
-        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-          launch("accepted-report-close"),
-        );
-        yield* backend.controls.initialize;
-        yield* backend.controls.start("Start", 12);
         yield* take(backend);
         yield* take(backend);
         yield* fillProgress;
@@ -644,13 +599,8 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("recovers accepted evidence when transport closes before report forwarding", () =>
-    withReplayHarness("accepted-report-close", ({ processes, supervisors, close }) =>
+    withStartedBackend("accepted-report-close", 12, (backend, { close }) =>
       Effect.gen(function* () {
-        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-          launch("accepted-report-close"),
-        );
-        yield* backend.controls.initialize;
-        yield* backend.controls.start("Preserve accepted report on exit", 12);
         expect(yield* take(backend)).toMatchObject({ type: "run_started" });
         expect(yield* take(backend)).toMatchObject({ type: "assistant_message" });
         yield* close;
@@ -662,14 +612,8 @@ describe("local Claude replay classification", () => {
   );
 
   it.effect("preserves an accepted report when a trailing unknown replay arrives", () =>
-    withReplayHarness("accepted-report-foreign-replay", ({ processes, supervisors }) =>
+    withStartedBackend("accepted-report-foreign-replay", 12, (backend) =>
       Effect.gen(function* () {
-        const scenario = "accepted-report-foreign-replay" as const;
-        const backend = yield* makeLocalClaudeBackendDriver(processes, supervisors).spawn(
-          launch(scenario),
-        );
-        yield* backend.controls.initialize;
-        yield* backend.controls.start("Preserve accepted report", 12);
         expect(yield* take(backend)).toMatchObject({ type: "run_started", assignmentEpoch: 12 });
         expect(yield* take(backend)).toMatchObject({
           type: "assistant_message",

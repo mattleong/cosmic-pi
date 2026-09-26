@@ -1,5 +1,4 @@
 import type {
-  ExtensionAPI,
   ExtensionContext,
   ExtensionHandler,
   SessionEntry,
@@ -12,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { registerDirectoryModelsApplication } from "../src/application.ts";
 import { preferenceFilename } from "../src/config/path-key.ts";
@@ -178,16 +178,14 @@ const harness = (
       if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
       else void handlers.get("thinking_level_select")?.(event, ctx);
     });
-    const piFixture = {
+    const pi = extensionApiFixture({
       on(name: string, handler: Handler) {
         handlers.set(name, handler);
       },
       setModel,
       getThinkingLevel: () => thinkingLevel,
       setThinkingLevel,
-    };
-    // SAFETY: Tests invoke only the ExtensionAPI members implemented by this fixture.
-    const pi = piFixture as typeof piFixture & ExtensionAPI;
+    });
     const getEntries = vi.fn(() => {
       if (options.sessionReadFailure === "entries" || options.sessionReadFailure === "both") {
         throw new Error("entries read failed");
@@ -201,7 +199,7 @@ const harness = (
       if (options.leafId !== undefined) return options.leafId;
       return options.entries?.at(-1)?.id ?? null;
     });
-    const contextFixture = {
+    ctx = extensionContextFixture({
       cwd,
       get model() {
         if (options.modelReadFailure) throw new Error("model getter failed");
@@ -214,9 +212,7 @@ const harness = (
       },
       sessionManager: { getEntries, getLeafId },
       ui: { notify },
-    };
-    // SAFETY: Tests invoke only the ExtensionContext members implemented by this fixture.
-    ctx = contextFixture as typeof contextFixture & ExtensionContext;
+    });
     registerDirectoryModelsApplication(pi, options.explicitPreference ?? false);
 
     const emit = <Event>(name: string, event: Event): Effect.Effect<void> =>
@@ -233,6 +229,8 @@ const harness = (
       remembered,
       rememberedPreference,
       seedRememberedPreference: () => writePreference(agentDirectory, cwd, rememberedPreference),
+      readPreference: () => readPreference(agentDirectory, cwd),
+      preferenceExists: () => Effect.flatMap(preferencePath(agentDirectory, cwd), fs.exists),
       alternate,
       notify,
       getEntries,
@@ -272,7 +270,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       const h = yield* harness();
       yield* h.start();
 
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      expect(yield* h.readPreference()).toMatchObject({
         cwd: yield* fs.realPath(h.cwd),
         provider: h.initial.provider,
         model: h.initial.id,
@@ -334,41 +332,26 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     );
   });
 
-  it.effect("leaves explicit CLI preferences and resumed session choices alone", () =>
+  it.effect("leaves explicit CLI preferences alone", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const explicit = yield* harness({ explicitPreference: true });
-      yield* explicit.start();
-      expect(yield* fs.exists(yield* preferencePath(explicit.agentDirectory, explicit.cwd))).toBe(
-        false,
-      );
-      expect(explicit.setModel).not.toHaveBeenCalled();
-      yield* explicit.start("new");
-      expect(yield* fs.exists(yield* preferencePath(explicit.agentDirectory, explicit.cwd))).toBe(
-        false,
-      );
-      yield* explicit.shutdown();
-
-      for (const entries of [[userEntry("user")], [customMessageEntry("custom-message")]]) {
-        const resumed = yield* harness({ entries });
-        yield* resumed.start();
-        expect(yield* fs.exists(yield* preferencePath(resumed.agentDirectory, resumed.cwd))).toBe(
-          false,
-        );
-        expect(resumed.setModel).not.toHaveBeenCalled();
-        yield* resumed.shutdown();
-      }
+      const h = yield* harness({ explicitPreference: true });
+      yield* h.start();
+      expect(yield* h.preferenceExists()).toBe(false);
+      expect(h.setModel).not.toHaveBeenCalled();
+      yield* h.start("new");
+      expect(yield* h.preferenceExists()).toBe(false);
     }),
   );
 
   it.effect("uses Pi's resolved session context to classify startup freshness", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const cases: ReadonlyArray<{
         entries: readonly SessionEntry[];
         leafId?: string;
         initializes: boolean;
       }> = [
+        { entries: [userEntry("user")], initializes: false },
+        { entries: [customMessageEntry("custom-message")], initializes: false },
         { entries: [compactionEntry("compaction")], initializes: false },
         { entries: [branchSummaryEntry("branch-summary")], initializes: false },
         { entries: [customEntry("custom")], initializes: true },
@@ -381,9 +364,8 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       for (const testCase of cases) {
         const h = yield* harness(testCase);
         yield* h.start();
-        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(
-          testCase.initializes,
-        );
+        expect(yield* h.preferenceExists()).toBe(testCase.initializes);
+        expect(h.setModel).not.toHaveBeenCalled();
         yield* h.shutdown();
       }
     }),
@@ -391,13 +373,11 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
   it.effect("fails closed when startup cannot resolve the active session context", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       for (const sessionReadFailure of ["entries", "leaf"] as const) {
         const h = yield* harness({ sessionReadFailure });
         yield* h.start();
-        expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(false);
-        expect(h.notify).toHaveBeenCalledTimes(1);
-        expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+        expect(yield* h.preferenceExists()).toBe(false);
+        expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
         yield* h.shutdown();
       }
     }),
@@ -421,18 +401,18 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       for (const reason of ["resume", "fork", "reload"] as const) {
         const h = yield* harness({ sessionReadFailure: "both" });
         yield* h.seedRememberedPreference();
-        const saved = yield* readPreference(h.agentDirectory, h.cwd);
+        const saved = yield* h.readPreference();
         yield* h.start(reason);
         expect(h.model()).toEqual(h.initial);
         expect(h.thinking()).toBe("low");
-        expect(yield* readPreference(h.agentDirectory, h.cwd)).toEqual(saved);
+        expect(yield* h.readPreference()).toEqual(saved);
         expect(h.getEntries).not.toHaveBeenCalled();
         expect(h.getLeafId).not.toHaveBeenCalled();
         expect(h.setModel).not.toHaveBeenCalled();
 
         h.select(h.alternate, "medium");
         yield* h.emitModel(h.alternate, h.initial);
-        expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+        expect(yield* h.readPreference()).toMatchObject({
           provider: h.alternate.provider,
           model: h.alternate.id,
           thinkingLevel: "medium",
@@ -450,7 +430,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       h.select(h.remembered, "medium");
       yield* h.emitModel(h.remembered, h.initial);
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      expect(yield* h.readPreference()).toMatchObject({
         provider: h.remembered.provider,
         model: h.remembered.id,
         thinkingLevel: "medium",
@@ -458,11 +438,11 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       h.select(h.remembered, "high");
       yield* h.emitThinking("high", "medium");
-      expect((yield* readPreference(h.agentDirectory, h.cwd)).thinkingLevel).toBe("high");
+      expect((yield* h.readPreference()).thinkingLevel).toBe("high");
 
       h.select(h.alternate, "low");
       yield* h.emitModel(h.alternate, h.remembered, "restore");
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
+      expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
     }),
   );
 
@@ -474,7 +454,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       yield* h.emitThinking("unexpected-level", "low");
 
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      expect(yield* h.readPreference()).toMatchObject({
         provider: h.initial.provider,
         model: h.initial.id,
         thinkingLevel: "low",
@@ -492,7 +472,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.emitModel(h.alternate, h.remembered);
       yield* h.flushThinkingEvents();
 
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      expect(yield* h.readPreference()).toMatchObject({
         provider: h.alternate.provider,
         model: h.alternate.id,
         thinkingLevel: "medium",
@@ -500,31 +480,21 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("keeps the preference and session state intact when setModel resolves false", () =>
+  it.effect.each([
+    ["setModel resolves false", { setModelDenied: true }, true],
+    ["Pi's current model getter fails", { modelReadFailure: true }, true],
+    ["a CLI preference is explicit", { explicitPreference: true }, false],
+  ] as const)("keeps the preference and session state intact when %s", ([, options, warns]) =>
     Effect.gen(function* () {
-      const h = yield* harness({ setModelDenied: true });
+      const h = yield* harness(options);
       yield* h.seedRememberedPreference();
 
       yield* h.start();
       expect(h.model()).toBe(h.initial);
       expect(h.thinking()).toBe("low");
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
-      expect(h.notify).toHaveBeenCalledTimes(1);
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
-    }),
-  );
-
-  it.effect("retains the preference when Pi's current model getter fails", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ modelReadFailure: true });
-      yield* h.seedRememberedPreference();
-
-      yield* h.start();
-      expect(h.setModel).not.toHaveBeenCalled();
       expect(h.setThinkingLevel).not.toHaveBeenCalled();
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
-      expect(h.notify).toHaveBeenCalledTimes(1);
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
+      expect(h.notify.mock.calls).toEqual(warns ? [[expect.any(String), "warning"]] : []);
     }),
   );
 
@@ -539,35 +509,33 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject({
+      expect(yield* h.readPreference()).toMatchObject({
         provider: "missing-provider",
         model: "missing-model",
       });
-      expect(h.notify).toHaveBeenCalledTimes(1);
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
     }),
   );
 
   it.effect("ignores model and thinking events before startup and after shutdown", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const h = yield* harness();
 
       h.select(h.remembered, "high");
       yield* h.emitModel(h.remembered, h.initial);
       yield* h.emitThinking("high", "low");
-      expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, h.cwd))).toBe(false);
+      expect(yield* h.preferenceExists()).toBe(false);
       expect(h.notify).not.toHaveBeenCalled();
 
       h.select(h.initial, "low");
       yield* h.start();
       yield* h.shutdown();
-      const persisted = yield* readPreference(h.agentDirectory, h.cwd);
+      const persisted = yield* h.readPreference();
 
       h.select(h.alternate, "high");
       yield* h.emitModel(h.alternate, h.initial);
       yield* h.emitThinking("high", "low");
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toEqual(persisted);
+      expect(yield* h.readPreference()).toEqual(persisted);
       expect(h.notify).not.toHaveBeenCalled();
     }),
   );
@@ -589,7 +557,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       h.select(h.remembered, "high");
       yield* h.emitModel(h.remembered, h.initial);
 
-      expect(yield* readPreference(h.agentDirectory, cwd)).toMatchObject(h.rememberedPreference);
+      expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
       expect(h.notify).toHaveBeenCalledTimes(1);
     }),
   );
@@ -627,18 +595,6 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("suppresses the atomic restore when a CLI preference is explicit", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ explicitPreference: true });
-      yield* h.seedRememberedPreference();
-
-      yield* h.start();
-      expect(h.setModel).not.toHaveBeenCalled();
-      expect(h.setThinkingLevel).not.toHaveBeenCalled();
-      expect(yield* readPreference(h.agentDirectory, h.cwd)).toMatchObject(h.rememberedPreference);
-    }),
-  );
-
   it.effect("canonicalizes symlink aliases to the target directory preference", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -655,7 +611,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect((yield* readPreference(h.agentDirectory, target)).cwd).toBe(
         yield* fs.realPath(target),
       );
-      expect(yield* fs.exists(yield* preferencePath(h.agentDirectory, alias))).toBe(true);
+      expect(yield* h.preferenceExists()).toBe(true);
     }),
   );
 });

@@ -11,24 +11,18 @@ export function formatToolsSettingValue(tools: readonly CodePreviewToolName[]): 
   return tools.length ? tools.join(", ") : "none";
 }
 
-function getRequiredCodePreviewTools(settings: RequiredToolSettings): Set<CodePreviewToolName> {
-  const tools = new Set<CodePreviewToolName>();
-  if (!settings.readContentPreview) tools.add("read");
-  if (!settings.writeContentPreview) tools.add("write");
-  if (!settings.editDiffPreview) tools.add("edit");
-  if (!settings.grepResultPreview) tools.add("grep");
-  if (!settings.findResultPreview) tools.add("find");
-  if (!settings.lsResultPreview) tools.add("ls");
-  if (requiresBashResultPolicy(settings)) tools.add("bash");
-  return tools;
-}
-
 export function getEffectiveCodePreviewToolSet(
   configuredTools: Iterable<CodePreviewToolName>,
   settings: RequiredToolSettings,
 ): Set<CodePreviewToolName> {
   const enabled = new Set(configuredTools);
-  for (const tool of getRequiredCodePreviewTools(settings)) enabled.add(tool);
+  if (!settings.readContentPreview) enabled.add("read");
+  if (!settings.writeContentPreview) enabled.add("write");
+  if (!settings.editDiffPreview) enabled.add("edit");
+  if (!settings.grepResultPreview) enabled.add("grep");
+  if (!settings.findResultPreview) enabled.add("find");
+  if (!settings.lsResultPreview) enabled.add("ls");
+  if (requiresBashResultPolicy(settings)) enabled.add("bash");
   return enabled;
 }
 

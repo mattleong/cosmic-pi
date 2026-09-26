@@ -13,6 +13,7 @@ import { makeMcpActivity, type McpActivityContract } from "../../src/activity/se
 import type { McpStatusCounts } from "../../src/activity/model.ts";
 
 const serialize = <Value>(value: Value) => JSON.stringify(value);
+const rejects = <A>(run: () => Promise<A>) => Effect.promise(() => expect(run()).rejects.toThrow());
 const setup = (activity: McpActivityContract, mode: ExtensionContext["mode"] = "tui") => {
   const events = createEventBus();
   const status = new Map<string, string>();
@@ -56,8 +57,8 @@ const setup = (activity: McpActivityContract, mode: ExtensionContext["mode"] = "
       return Promise.resolve();
     },
   };
-  const announce = (hostToken = {}) =>
-    events.emit(ACTIVITY_HOST, { version: 1, sessionId: "session", hostToken, available: true });
+  const announce = (hostToken = {}, available = true) =>
+    events.emit(ACTIVITY_HOST, { version: 1, sessionId: "session", hostToken, available });
   return {
     options,
     status,
@@ -66,6 +67,12 @@ const setup = (activity: McpActivityContract, mode: ExtensionContext["mode"] = "
     listeners,
     opened,
     announce,
+    /** The latest Activity registration, acknowledged as owned. */
+    register: () => {
+      const registration = envelopes.findLast((entry) => entry.operation === "register")!;
+      registration.acknowledge?.(true);
+      return registration;
+    },
     revoke: () => {
       current = false;
     },
@@ -91,20 +98,13 @@ describe("MCP Activity and keyed footer host", () => {
         const token = {};
         h.announce(token);
         expect(h.status.get("pi-mcp")).toBe(fallback);
-        expect(host.isActivityAvailable()).toBe(false);
         const registration = h.envelopes.findLast((entry) => entry.operation === "register")!;
         expect(registration.items).toMatchObject([
           { kind: "command", status: "needs-input", inputTarget: "user" },
         ]);
         registration.acknowledge?.(true);
-        expect(host.isActivityAvailable()).toBe(true);
         expect(h.status.has("pi-mcp")).toBe(false);
-        h.options.events.emit(ACTIVITY_HOST, {
-          version: 1,
-          sessionId: "session",
-          hostToken: token,
-          available: false,
-        });
+        h.announce(token, false);
         expect(h.status.get("pi-mcp")).toBe(fallback);
         host.dispose();
         expect(h.status.has("pi-mcp")).toBe(false);
@@ -127,27 +127,18 @@ describe("MCP Activity and keyed footer host", () => {
       const h = setup(journal);
       const host = makeMcpStatusHost(h.options);
       h.announce();
-      const registration = h.envelopes.findLast((entry) => entry.operation === "register")!;
-      registration.acknowledge?.(true);
+      const registration = h.register();
       const old = journal.snapshot()[0]!;
       yield* journal.update(handle, { phase: "browser-approval" });
       const signal = yield* Effect.abortSignal;
-      yield* Effect.promise(() =>
-        expect(registration.invoke!(old.id, "inspect", old.revision, signal)).rejects.toThrow(),
-      );
+      yield* rejects(() => registration.invoke!(old.id, "inspect", old.revision, signal));
       expect(h.opened).toEqual([]);
       const current = journal.snapshot()[0]!;
       const cancelled = AbortSignal.abort();
-      yield* Effect.promise(() =>
-        expect(
-          registration.invoke!(current.id, "inspect", current.revision, cancelled),
-        ).rejects.toThrow(),
+      yield* rejects(() =>
+        registration.invoke!(current.id, "inspect", current.revision, cancelled),
       );
-      yield* Effect.promise(() =>
-        expect(
-          registration.invoke!(current.id, "login", current.revision, signal),
-        ).rejects.toThrow(),
-      );
+      yield* rejects(() => registration.invoke!(current.id, "login", current.revision, signal));
       yield* Effect.tryPromise(() =>
         registration.invoke!(current.id, "inspect", current.revision, signal),
       );
@@ -168,14 +159,8 @@ describe("MCP Activity and keyed footer host", () => {
         /PRIVATE|https?:|accessToken|callbackUrl|reopen|credentialIdentity/,
       );
       h.revoke();
-      yield* Effect.promise(() =>
-        expect(registration.getDetail!(failed.id, failed.revision, signal)).rejects.toThrow(),
-      );
-      yield* Effect.promise(() =>
-        expect(
-          registration.invoke!(failed.id, "inspect", failed.revision, signal),
-        ).rejects.toThrow(),
-      );
+      yield* rejects(() => registration.getDetail!(failed.id, failed.revision, signal));
+      yield* rejects(() => registration.invoke!(failed.id, "inspect", failed.revision, signal));
       expect(h.opened).toEqual(["docs"]);
       host.dispose();
     }),
@@ -188,8 +173,7 @@ describe("MCP Activity and keyed footer host", () => {
       h.setCounts({ connected: 1, active: 0, queued: 0, attention: 0 });
       const old = makeMcpStatusHost(h.options);
       h.announce();
-      const oldRegistration = h.envelopes.findLast((entry) => entry.operation === "register")!;
-      oldRegistration.acknowledge?.(true);
+      const oldRegistration = h.register();
       const stalePublish = [...h.listeners][0]!;
       h.setCounts({ connected: 9, active: 2, queued: 3, attention: 1 });
       const next = makeMcpStatusHost(h.options);
@@ -201,7 +185,6 @@ describe("MCP Activity and keyed footer host", () => {
       oldRegistration.acknowledge?.(true);
       expect(h.status.get("pi-mcp")).toBe(replacement);
       expect(h.listeners.size).toBe(1);
-      expect(next.isActivityAvailable()).toBe(false);
       next.dispose();
       expect(h.status.has("pi-mcp")).toBe(false);
       expect(h.listeners.size).toBe(0);

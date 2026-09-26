@@ -1,41 +1,23 @@
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
-import { tmpdir } from "node:os";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { afterEach, beforeEach, vi } from "vitest";
-import { registerCodeModeApplication } from "../src/application.ts";
-import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
+import { afterEach, beforeEach } from "vitest";
 import {
   captureCodeModeDeactivation,
   codeModeSessionKey,
   publishCodeModeDeactivation,
 } from "../src/boundary/host-deactivation-handoff.ts";
 import { CODE_MODE_TOOL_NAME } from "../src/tools/controller.ts";
-import { extensionApiFixture, extensionContextFixture, opaqueHostFixture } from "./support/host.ts";
-
-const nodeFsModule = process.getBuiltinModule("node:fs");
-const nodePathModule = process.getBuiltinModule("node:path");
-if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { mkdtempSync, rmSync } = nodeFsModule;
-const { join } = nodePathModule;
-const processEnv: NodeJS.ProcessEnv = process.env;
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { applicationHarness, cleanupApplications } from "./support/application.ts";
 
 const HANDOFF_SLOT = Symbol.for("@cosmic-pi/pi-code-mode/code-mode-deactivation-handoff/v2");
 const clearSlot = () => Reflect.deleteProperty(globalThis, HANDOFF_SLOT);
-const tempDirectories: string[] = [];
 
 beforeEach(clearSlot);
 afterEach(() => {
   clearSlot();
-  for (const directory of tempDirectories.splice(0)) rmSync(directory, { recursive: true });
-  delete processEnv.PI_CODING_AGENT_DIR;
+  cleanupApplications();
 });
-
-const temporaryDirectory = (prefix: string): string => {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
-};
 
 describe("code mode deactivation handoff", () => {
   it("extracts only a non-empty stable Pi session id", () => {
@@ -105,83 +87,6 @@ describe("code mode deactivation handoff", () => {
   });
 });
 
-type Handler = ExtensionHandler<any, any>;
-
-/** One extension instance over a caller-owned active-tool list. */
-const applicationInstance = (activeTools: string[]) => {
-  processEnv.PI_CODING_AGENT_DIR = temporaryDirectory("pi-code-mode-handoff-agent-");
-  const cwd = temporaryDirectory("pi-code-mode-handoff-cwd-");
-  const handlers = new Map<string, Handler>();
-  const registerTool = vi.fn();
-  let restoreCodeModeAfterNextObservation = false;
-  const pi = extensionApiFixture({
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
-    registerCommand: () => undefined,
-    registerTool,
-    getActiveTools: () => {
-      const snapshot = [...activeTools];
-      if (restoreCodeModeAfterNextObservation) {
-        restoreCodeModeAfterNextObservation = false;
-        if (!activeTools.includes(CODE_MODE_TOOL_NAME)) activeTools.push(CODE_MODE_TOOL_NAME);
-      }
-      return snapshot;
-    },
-    setActiveTools: (names: string[]) => {
-      activeTools.splice(0, activeTools.length, ...names);
-    },
-    events: { emit: vi.fn(), on: vi.fn() },
-  });
-  registerCodeModeApplication(pi, {
-    loadSettings: () => Promise.resolve(opaqueHostFixture({})),
-    wrapTool: (tool) => tool,
-    makeNestedDefinitions: () => {
-      // SAFETY: Execution is never invoked in these lifecycle-only tests.
-      return {} as NestedPiToolDefinitions;
-    },
-  });
-  const context = (sessionId: string | undefined) => {
-    const mode = "rpc" as const;
-    const base = {
-      cwd,
-      mode,
-      hasUI: true,
-      ui: { notify: vi.fn(), custom: vi.fn(), select: vi.fn() },
-      isProjectTrusted: () => true,
-    };
-    return sessionId === undefined
-      ? extensionContextFixture(base)
-      : extensionContextFixture({
-          ...base,
-          sessionManager: { getSessionId: () => sessionId },
-        });
-  };
-  return {
-    handlers,
-    registerTool,
-    context,
-    restoreCodeModeAfterNextObservation: () => {
-      restoreCodeModeAfterNextObservation = true;
-    },
-  };
-};
-
-const start = (
-  application: ReturnType<typeof applicationInstance>,
-  ctx: ReturnType<ReturnType<typeof applicationInstance>["context"]>,
-  reason = "startup",
-) =>
-  Effect.promise(() =>
-    Promise.resolve(application.handlers.get("session_start")?.({ reason }, ctx)),
-  );
-
-const shutdown = (
-  application: ReturnType<typeof applicationInstance>,
-  ctx: ReturnType<ReturnType<typeof applicationInstance>["context"]>,
-) =>
-  Effect.promise(() =>
-    Promise.resolve(application.handlers.get("session_shutdown")?.({ reason: "reload" }, ctx)),
-  );
-
 const deactivate = (activeTools: string[]): void => {
   const index = activeTools.indexOf(CODE_MODE_TOOL_NAME);
   if (index >= 0) activeTools.splice(index, 1);
@@ -191,9 +96,9 @@ describe("deactivation intent across sessions", () => {
   it.effect("finishes teardown when the process handoff slot rejects its first write", () =>
     Effect.gen(function* () {
       const active = ["read", "bash"];
-      const application = applicationInstance(active);
-      const ctx = application.context("session-A");
-      yield* start(application, ctx);
+      const application = applicationHarness({}, active);
+      const ctx = application.makeContext({ sessionId: "session-A" });
+      yield* Effect.promise(() => application.start(ctx));
       deactivate(active);
 
       Object.defineProperty(globalThis, HANDOFF_SLOT, {
@@ -205,61 +110,45 @@ describe("deactivation intent across sessions", () => {
       });
       // Simulate the host restoring the registered tool immediately after intent observation.
       // Shutdown must still remove it after the optional handoff publication attempt.
-      application.restoreCodeModeAfterNextObservation();
-      yield* shutdown(application, ctx);
+      application.restoreAfterNextRead();
+      yield* Effect.promise(() => application.shutdown(ctx, "reload"));
 
       expect(active).toEqual(["read", "bash"]);
       expect(captureCodeModeDeactivation("session-A")).toBe(true);
     }),
   );
 
-  it.effect("applies closure intent only to the same stable session", () =>
-    Effect.gen(function* () {
-      const transitions = [
-        { next: "session-A", active: false },
-        { next: "session-B", active: true },
-        { next: undefined, active: true },
-      ] as const;
-      for (const transition of transitions) {
-        clearSlot();
-        const active = ["read", "bash"];
-        const application = applicationInstance(active);
-        yield* start(application, application.context("session-A"));
-        deactivate(active);
-        const next = application.context(transition.next);
-        yield* start(application, next, transition.next === "session-A" ? "reload" : "new");
-        expect(active.includes(CODE_MODE_TOOL_NAME), String(transition.next)).toBe(
-          transition.active,
-        );
-        yield* shutdown(application, next);
-      }
-    }),
-  );
-
-  it.effect("restores a recreated instance only for a matching handoff", () =>
-    Effect.gen(function* () {
-      const transitions = [
-        { next: "session-A", active: false },
-        { next: "session-B", active: true },
-        { next: undefined, active: true },
-      ] as const;
-      for (const transition of transitions) {
-        clearSlot();
-        const active = ["read", "bash"];
-        const oldInstance = applicationInstance(active);
-        yield* start(oldInstance, oldInstance.context("session-A"));
-        deactivate(active);
-        // Shutdown context cannot replace the key captured at start.
-        yield* shutdown(oldInstance, oldInstance.context("session-B"));
-
-        const recreated = applicationInstance(active);
-        const next = recreated.context(transition.next);
-        yield* start(recreated, next, transition.next === "session-A" ? "reload" : "new");
-        expect(active.includes(CODE_MODE_TOOL_NAME), String(transition.next)).toBe(
-          transition.active,
-        );
-        yield* shutdown(recreated, next);
-      }
-    }),
+  it.effect.each([false, true])(
+    "applies closure intent only to the same stable session (recreated=%s)",
+    (recreate) =>
+      Effect.gen(function* () {
+        const transitions = [
+          { next: "session-A", active: false },
+          { next: "session-B", active: true },
+          { next: undefined, active: true },
+        ] as const;
+        for (const transition of transitions) {
+          clearSlot();
+          const active = ["read", "bash"];
+          let application = applicationHarness({}, active);
+          yield* Effect.promise(() =>
+            application.start(application.makeContext({ sessionId: "session-A" })),
+          );
+          deactivate(active);
+          if (recreate) {
+            // Shutdown context cannot replace the key captured at start.
+            const shutdownCtx = application.makeContext({ sessionId: "session-B" });
+            yield* Effect.promise(() => application.shutdown(shutdownCtx, "reload"));
+            application = applicationHarness({}, active);
+          }
+          const next = application.makeContext({ sessionId: transition.next });
+          const reason = transition.next === "session-A" ? "reload" : "new";
+          yield* Effect.promise(() => application.start(next, reason));
+          expect(active.includes(CODE_MODE_TOOL_NAME), String(transition.next)).toBe(
+            transition.active,
+          );
+          yield* Effect.promise(() => application.shutdown(next, "reload"));
+        }
+      }),
   );
 });

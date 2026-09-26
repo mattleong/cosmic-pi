@@ -5,7 +5,7 @@ import type {
   Transport,
 } from "@modelcontextprotocol/client";
 import { SDK_OPERATION_HEADER } from "./sdk-fetch.ts";
-import { makeNativeContext } from "pi-cosmic-core";
+import { invokeHostCallback, makeNativeContext } from "pi-cosmic-core";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type * as Cause from "effect/Cause";
@@ -31,11 +31,8 @@ export const observeSdkCleanup = (
   observer: ((confirmed: boolean) => void) | undefined,
   confirmed: boolean,
 ): void => {
-  try {
-    observer?.(confirmed);
-  } catch {
-    // This private observer reports evidence only; it owns no resource cleanup.
-  }
+  // This private observer reports evidence only; it owns no resource cleanup.
+  invokeHostCallback(() => observer?.(confirmed), undefined);
 };
 
 export const sdkCapabilities = (
@@ -297,15 +294,10 @@ export const makeSdkEvents = (
                 [...subscriptions.values()].find((owner) =>
                   owner.requests.has(cancelling.value.params.requestId),
                 ) ?? entry;
-            if (entry?.kind === "subscription" && "id" in message && "method" in message)
+            if (entry?.kind === "subscription" && "id" in message && "method" in message) {
               entry.requests.add(message.id);
-            if (
-              entry?.kind === "subscription" &&
-              "method" in message &&
-              "id" in message &&
-              message.method === "subscriptions/listen"
-            )
-              entry.id = message.id;
+              if (message.method === "subscriptions/listen") entry.id = message.id;
+            }
             if (entry?.kind === "progress" && "id" in message && "method" in message) {
               const value = Schema.decodeUnknownOption(ProgressRequest)(message);
               if (Option.isSome(value)) {
@@ -340,17 +332,13 @@ export const makeSdkEvents = (
         transport.onclose = () => decorated.onclose?.();
         transport.onerror = (error) => decorated.onerror?.(error);
         transport.onmessage = (message, extra) => {
-          if (!("method" in message) && "id" in message) {
+          const method = "method" in message ? message.method : undefined;
+          if (method === undefined && "id" in message) {
             for (const entry of subscriptions.values())
               if (entry.id === message.id) entry.writes.remoteTerminated();
             for (const [token, entry] of progress)
               if (entry.id === message.id) progress.delete(token);
-          } else if (
-            "method" in message &&
-            message.method === "notifications/progress" &&
-            !ended &&
-            !state.closing
-          ) {
+          } else if (method === "notifications/progress" && !ended && !state.closing) {
             const value = Schema.decodeUnknownOption(ProgressNotification)(message);
             if (Option.isSome(value)) {
               try {
@@ -361,10 +349,7 @@ export const makeSdkEvents = (
               }
             }
           }
-          if (
-            "method" in message &&
-            message.method === "notifications/subscriptions/acknowledged"
-          ) {
+          if (method === "notifications/subscriptions/acknowledged") {
             const acknowledged = Schema.decodeUnknownOption(SubscriptionAcknowledgement)(message);
             if (Option.isSome(acknowledged))
               for (const entry of subscriptions.values())
@@ -377,13 +362,13 @@ export const makeSdkEvents = (
                   entry.acknowledged =
                     acknowledged.value.params.notifications.resourceSubscriptions ?? [];
           }
-          if ("method" in message && message.method === "notifications/cancelled") {
+          if (method === "notifications/cancelled") {
             const cancelled = Schema.decodeUnknownOption(Cancellation)(message);
             if (Option.isSome(cancelled))
               for (const entry of subscriptions.values())
                 if (entry.id === cancelled.value.params.requestId) entry.writes.remoteTerminated();
           }
-          if ("method" in message && message.method === "notifications/resources/updated") {
+          if (method === "notifications/resources/updated") {
             if (ended || state.closing) return;
             const value = Schema.decodeUnknownOption(SubscriptionNotification)(message);
             if (Option.isNone(value)) return;

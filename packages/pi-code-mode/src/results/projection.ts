@@ -1,6 +1,6 @@
 import { utf8ByteLength } from "../tools/limits.ts";
 import { resultReadFailure, type ResultReadProjection } from "./read-presentation.ts";
-import type { ResultArtifact, ResultPage } from "./model.ts";
+import type { ResultArtifact } from "./model.ts";
 
 const boundary = (text: string, offset: number) =>
   offset > 0 &&
@@ -45,10 +45,10 @@ export function projectResultPage<ReceiptEvidence = never>(
       text: artifact.text.slice(start, finish),
       ...(options.includeRecovery === true &&
         next !== null && {
-          recovery: { action: "result.read" as const, id: artifact.id, offset: next },
+          recovery: { action: "result.read", id: artifact.id, offset: next },
         }),
       ...(options.receipts !== undefined && { receipts: options.receipts }),
-    } satisfies ResultPage<ReceiptEvidence>);
+    });
   };
   const project = (finish: number, text: string): ResultReadProjection => ({
     text,

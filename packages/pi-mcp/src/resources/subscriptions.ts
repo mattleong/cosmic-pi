@@ -43,7 +43,7 @@ export const makeResourceSubscriptions = (hooks: Hooks) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* restore(hooks.check(owner));
-          if (!connection.capabilities.resourceSubscriptions || !connection.subscribeResource)
+          if (!connection.capabilities.resourceSubscriptions)
             return yield* boundaryError(
               "unsupported",
               "not-sent",
@@ -120,7 +120,7 @@ export const makeResourceSubscriptions = (hooks: Hooks) =>
           }
           const opening = yield* Effect.forkIn(
             Effect.gen(function* () {
-              const handle = yield* connection.subscribeResource!(uri, entry.identity);
+              const handle = yield* connection.subscribeResource(uri, entry.identity);
               entry.handle = handle;
               yield* hooks.check(owner);
               if (entry.closing) return yield* gone();

@@ -20,7 +20,7 @@ import { DEFAULT_CODE_MODE_CONFIG } from "../src/config/schema.ts";
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = nodeFsModule;
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = nodeFsModule;
 const { dirname, join } = nodePathModule;
 
 const tempDirectories: string[] = [];
@@ -36,14 +36,14 @@ afterEach(() =>
   }),
 );
 
-function harness(projectTrusted: boolean) {
+function harness() {
   const cwd = mkdtempSync(join(tmpdir(), "pi-code-mode-cwd-"));
   const agentDir = mkdtempSync(join(tmpdir(), "pi-code-mode-agent-"));
   tempDirectories.push(cwd, agentDir);
   const published: CodeModeState[] = [];
   const layer = CodeModeConfigStore.layer({
     cwd,
-    projectTrusted,
+    projectTrusted: true,
     publish: (state) => published.push(state),
   }).pipe(Layer.provide(Layer.merge(nodeFilePlatformLayer, AgentDirectory.layer(agentDir))));
   // One long-lived runtime per harness: every operation exercises the same store authority.
@@ -68,7 +68,7 @@ function harness(projectTrusted: boolean) {
 describe("code mode config store", () => {
   it.effect("resolves locked defaults, seeds an empty global document, and freezes the state", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
       expect(state.config).toEqual(DEFAULT_CODE_MODE_CONFIG);
       expect(state.available).toBe(true);
@@ -82,7 +82,7 @@ describe("code mode config store", () => {
 
   it.effect("resolves project fields over global fields one field at a time", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       h.writeDoc(h.globalPath, { timeoutMs: 60_000, enabled: false, maxOutputBytes: 1_024 });
       h.writeDoc(h.projectPath, { enabled: true, maxToolCalls: 64 });
       const state = yield* Effect.promise(() => h.use((store) => Effect.sync(store.snapshot)));
@@ -99,7 +99,7 @@ describe("code mode config store", () => {
 
   it.effect("drops malformed fields independently", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       h.writeDoc(h.globalPath, {
         timeoutMs: "soon",
         maxToolCalls: 64,
@@ -119,7 +119,7 @@ describe("code mode config store", () => {
 
   it.effect("writes, resets, and inherits fields per scope through the single door", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       const afterGlobal = yield* Effect.promise(() =>
         h.use((store) => store.setSetting("global", "timeoutMs", "60000")),
       );
@@ -134,6 +134,15 @@ describe("code mode config store", () => {
       expect(afterProject.provenance.timeoutMs).toBe("project");
       expect(h.readDoc(h.projectPath)).toEqual({ timeoutMs: 45_000 });
 
+      // Global writes keep trusted project values and overlay global-only fields.
+      const afterGlobalOnly = yield* Effect.promise(() =>
+        h.use((store) => store.setSetting("global", "enabled", "false")),
+      );
+      expect(afterGlobalOnly.config.timeoutMs).toBe(45_000);
+      expect(afterGlobalOnly.provenance.timeoutMs).toBe("project");
+      expect(afterGlobalOnly.config.enabled).toBe(false);
+      expect(afterGlobalOnly.provenance.enabled).toBe("global");
+
       const afterClearProject = yield* Effect.promise(() =>
         h.use((store) => store.clearSetting("project", "timeoutMs")),
       );
@@ -146,14 +155,14 @@ describe("code mode config store", () => {
       );
       expect(afterClearGlobal.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
       expect(afterClearGlobal.provenance.timeoutMs).toBe("default");
-      expect(h.readDoc(h.globalPath)).toEqual({});
+      expect(h.readDoc(h.globalPath)).toEqual({ enabled: false });
       expect(h.published.at(-1)?.config.timeoutMs).toBe(DEFAULT_CODE_MODE_CONFIG.timeoutMs);
     }),
   );
 
   it.effect("preserves unrelated JSON fields on writes and clears", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       h.writeDoc(h.globalPath, { future: { keep: true }, timeoutMs: 15_000 });
       yield* Effect.promise(() =>
         h.use((store) => store.setSetting("global", "maxToolCalls", "8")),
@@ -168,24 +177,9 @@ describe("code mode config store", () => {
     }),
   );
 
-  it.effect("refuses project-scope writes while the project is untrusted", () =>
-    Effect.gen(function* () {
-      const h = harness(false);
-      const error = yield* Effect.promise(() =>
-        h.use((store) => store.setSetting("project", "enabled", "true").pipe(Effect.flip)),
-      );
-      expect(error._tag).toBe("CodeModeUntrustedScopeError");
-      const clearError = yield* Effect.promise(() =>
-        h.use((store) => store.clearSetting("project", "enabled").pipe(Effect.flip)),
-      );
-      expect(clearError._tag).toBe("CodeModeUntrustedScopeError");
-      expect(existsSync(h.projectPath)).toBe(false);
-    }),
-  );
-
   it.effect("does not persist invalid or out-of-range integers", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       h.writeDoc(h.globalPath, { timeoutMs: 15_000 });
       for (const raw of ["nope", "1.5", "999999999"]) {
         const error: CodeModeSettingsError = yield* Effect.promise(() =>
@@ -199,7 +193,7 @@ describe("code mode config store", () => {
 
   it.effect("rejects unknown setting identifiers without touching documents", () =>
     Effect.gen(function* () {
-      const h = harness(true);
+      const h = harness();
       const error = yield* Effect.promise(() =>
         h.use((store) => store.setSetting("global", "notASetting", "1").pipe(Effect.flip)),
       );

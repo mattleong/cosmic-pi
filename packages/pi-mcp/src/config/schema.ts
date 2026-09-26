@@ -1,9 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import { boundaryError } from "../client/errors.ts";
 import { oauthScopes } from "../auth/scopes.ts";
-import type { McpSettings } from "./model.ts";
+import { measureBoundedJson } from "../validation/schema-policy.ts";
 
 export const MCP_CONFIG_BASENAME = "pi-mcp.json";
 export const MCP_PROJECT_CONFIG_BASENAME = ".mcp.json";
@@ -50,16 +51,8 @@ export const McpSettingsSchema = Schema.Struct({
   maxPerServer: integer(1, 128),
   maxQueued: integer(0, 4_096),
 });
-export const McpSettingsPatchSchema = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  connectTimeoutMs: Schema.optionalKey(McpSettingsSchema.fields.connectTimeoutMs),
-  requestTimeoutMs: Schema.optionalKey(McpSettingsSchema.fields.requestTimeoutMs),
-  idleTimeoutMs: Schema.optionalKey(McpSettingsSchema.fields.idleTimeoutMs),
-  maxConcurrent: Schema.optionalKey(McpSettingsSchema.fields.maxConcurrent),
-  maxPerServer: Schema.optionalKey(McpSettingsSchema.fields.maxPerServer),
-  maxQueued: Schema.optionalKey(McpSettingsSchema.fields.maxQueued),
-});
-export const DEFAULT_MCP_SETTINGS: McpSettings = Object.freeze({
+export const McpSettingsPatchSchema = McpSettingsSchema.mapFields(Struct.map(Schema.optionalKey));
+export const DEFAULT_MCP_SETTINGS: typeof McpSettingsSchema.Type = Object.freeze({
   enabled: true,
   connectTimeoutMs: 15_000,
   requestTimeoutMs: 60_000,
@@ -151,43 +144,10 @@ export const McpDocumentSchema = Schema.StructWithRest(
 );
 export type McpDecodedDocument = typeof McpDocumentSchema.Type;
 
-const isConfigContainer = (value: Schema.Json): value is Schema.JsonArray | Schema.JsonObject =>
-  Predicate.isObjectOrArray(value);
-const encodedStringBytes = (value: string) =>
-  new TextEncoder().encode(JSON.stringify(value)).byteLength;
-
 /** Bound traversal before invoking recursive codecs. Core has already decoded document JSON. */
-export const checkConfigBounds = (
-  value: Schema.Json,
-  byteLimit: number = MCP_CONFIG_LIMITS.bytes,
-) =>
+export const checkConfigBounds = (value: Schema.Json, bytes: number = MCP_CONFIG_LIMITS.bytes) =>
   Effect.try({
-    try: () => {
-      let nodes = 0;
-      let bytes = 0;
-      const pending = [{ value, depth: 0 }];
-      while (pending.length > 0) {
-        const entry = pending.pop()!;
-        nodes++;
-        if (nodes > MCP_CONFIG_LIMITS.nodes || entry.depth > MCP_CONFIG_LIMITS.depth)
-          throw new Error("bounds");
-        const item = entry.value;
-        if (Predicate.isString(item)) {
-          if (item.length > byteLimit) throw new Error("bounds");
-          bytes += encodedStringBytes(item);
-        } else if (isConfigContainer(item)) {
-          const children = Object.entries<Schema.Json>(item);
-          if (children.length > MCP_CONFIG_LIMITS.nodes) throw new Error("bounds");
-          bytes += 2;
-          for (const [key, child] of children) {
-            if (key.length > byteLimit) throw new Error("bounds");
-            bytes += encodedStringBytes(key) + 2;
-            pending.push({ value: child, depth: entry.depth + 1 });
-          }
-        } else bytes += String(item).length + 1;
-        if (bytes > byteLimit) throw new Error("bounds");
-      }
-    },
+    try: () => measureBoundedJson(value, { ...MCP_CONFIG_LIMITS, bytes }),
     catch: () => boundaryError("config", "not-sent", "MCP configuration exceeds its limits."),
   });
 

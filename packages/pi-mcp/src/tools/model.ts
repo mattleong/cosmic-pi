@@ -78,6 +78,29 @@ export const McpGatewayRequestSchema = Schema.Union([
 ]);
 export type McpDataRequest = typeof McpDataRequestSchema.Type;
 export type McpGatewayRequest = typeof McpGatewayRequestSchema.Type;
+/** Model-facing order of every gateway action; the Pi tool schema lists them in this order. */
+export const MCP_GATEWAY_ACTIONS = [
+  "status",
+  "connect",
+  "disconnect",
+  "refresh",
+  "server.instructions",
+  "completion.complete",
+  "events.read",
+  "resources.subscribe",
+  "resources.unsubscribe",
+  "resources.subscriptions",
+  "tools.list",
+  "tools.search",
+  "tools.describe",
+  "tools.call",
+  "resources.list",
+  "resources.templates",
+  "resources.read",
+  "prompts.list",
+  "prompts.get",
+  "result.read",
+] as const satisfies ReadonlyArray<McpGatewayRequest["action"]>;
 
 export const McpGatewayReplySchema = Schema.Struct({
   action: Schema.String.check(Schema.isMaxLength(64)),

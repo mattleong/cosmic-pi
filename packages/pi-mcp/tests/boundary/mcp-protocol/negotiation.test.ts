@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { openSdkStdio } from "../../../src/boundary/sdk-stdio.ts";
 
@@ -12,13 +12,11 @@ const options = {
   requestTimeoutMs: 1_000,
   cleanupTimeoutMs: 500,
 };
-const mac = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  process.platform === "darwin" ? Effect.asVoid(effect) : Effect.void;
 
-it.live.each(["modern", "dual", "legacy", "silent"])(
-  "negotiates %s stdio on a disposable child before fresh acquisition",
-  (mode) =>
-    mac(
+describe.skipIf(process.platform !== "darwin")("macOS stdio negotiation", () => {
+  it.live.each(["modern", "dual", "legacy", "silent"])(
+    "negotiates %s stdio on a disposable child before fresh acquisition",
+    (mode) =>
       Effect.gen(function* () {
         const cleanup: boolean[] = [];
         const connection = yield* openSdkStdio({
@@ -41,13 +39,11 @@ it.live.each(["modern", "dual", "legacy", "silent"])(
         yield* connection.close;
         expect(cleanup).toEqual([true]);
       }),
-    ),
-);
+  );
 
-it.live.each(["malformed", "exit-before-init", "silent-all"])(
-  "does not guess legacy after failed %s negotiation",
-  (mode) =>
-    mac(
+  it.live.each(["malformed", "exit-before-init", "silent-all"])(
+    "does not guess legacy after failed %s negotiation",
+    (mode) =>
       Effect.gen(function* () {
         const cleanup: boolean[] = [];
         const result = yield* openSdkStdio({
@@ -66,22 +62,22 @@ it.live.each(["malformed", "exit-before-init", "silent-all"])(
         }
         expect(cleanup).toEqual([true]);
       }),
-    ),
-);
+  );
 
-it.live("explicit legacy override handles a server which exits on any pre-initialize method", () =>
-  mac(
-    Effect.gen(function* () {
-      const connection = yield* openSdkStdio({
-        ...options,
-        protocol: "legacy",
-        environment: { FIXTURE_MODE: "exit-before-init" },
-      });
-      expect(connection.protocolVersion).toBe("2025-11-25");
-      expect((yield* connection.request({ action: "tools.call", tool: "pid" })).outcome).toBe(
-        "completed",
-      );
-      yield* connection.close;
-    }),
-  ),
-);
+  it.live(
+    "explicit legacy override handles a server which exits on any pre-initialize method",
+    () =>
+      Effect.gen(function* () {
+        const connection = yield* openSdkStdio({
+          ...options,
+          protocol: "legacy",
+          environment: { FIXTURE_MODE: "exit-before-init" },
+        });
+        expect(connection.protocolVersion).toBe("2025-11-25");
+        expect((yield* connection.request({ action: "tools.call", tool: "pid" })).outcome).toBe(
+          "completed",
+        );
+        yield* connection.close;
+      }),
+  );
+});

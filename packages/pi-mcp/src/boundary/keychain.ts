@@ -20,7 +20,7 @@ export interface KeychainOptions {
   readonly lockDirectory?: string;
 }
 export interface KeychainMutationOwner {
-  readonly lease?: CrossProcessLease;
+  readonly lease?: CrossProcessLease | undefined;
   readonly isCurrent?: () => boolean;
   readonly checkCurrent?: Effect.Effect<void, McpBoundaryError>;
 }

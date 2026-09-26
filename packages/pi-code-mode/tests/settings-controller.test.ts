@@ -14,6 +14,13 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+  yieldUntil,
+} from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import type { SettingsSurfaceResult } from "../src/boundary/host-ui.ts";
 import { InvalidCodeModeSettingError } from "../src/config/options.ts";
@@ -23,12 +30,7 @@ import {
   type CodeModeState,
 } from "../src/config/store.ts";
 import { registerCodeModeSettingsController } from "../src/settings/controller.ts";
-import {
-  codeModeStateFixture,
-  extensionApiFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+import { codeModeStateFixture } from "./support/host.ts";
 
 type CommandDefinition = Parameters<ExtensionAPI["registerCommand"]>[1];
 type HostFactory = (
@@ -38,17 +40,17 @@ type HostFactory = (
   done: (result: SettingsSurfaceResult) => void,
 ) => Component & { dispose?(): void };
 
-const waitFor = (predicate: () => boolean): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    for (let index = 0; index < 100 && !predicate(); index += 1) yield* Effect.yieldNow;
-  });
-
 const makeHarness = (
-  store: CodeModeConfigStoreContract,
   getState: () => CodeModeState,
+  setSetting: CodeModeConfigStoreContract["setSetting"],
   input: () => Promise<string | undefined> = () => Promise.resolve(undefined),
   capturedSignal?: AbortSignal,
 ) => {
+  const store: CodeModeConfigStoreContract = {
+    snapshot: getState,
+    setSetting,
+    clearSetting: () => Effect.succeed(getState()),
+  };
   initTheme();
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   const commands = new Map<string, CommandDefinition>();
@@ -62,12 +64,8 @@ const makeHarness = (
   let runCount = 0;
   let customOpenCount = 0;
   let surface: Component | undefined;
-  const tui: TUI = opaqueHostFixture({ requestRender });
-  const theme: Theme = opaqueHostFixture({
-    bold: (text: string) => text,
-    fg: (_color: string, text: string) => text,
-  });
-  const keybindings: KeybindingsManager = opaqueHostFixture({
+  const tui: TUI = opaqueFixture({ requestRender });
+  const keybindings: KeybindingsManager = opaqueFixture({
     matches: (_data: string, id: string) => id === "tui.select.confirm",
   });
   const enter = (slot: typeof activeEditor) => {
@@ -97,7 +95,7 @@ const makeHarness = (
         customOpenCount += 1;
         order.push("custom-open");
         const completed = Deferred.makeUnsafe<SettingsSurfaceResult>();
-        surface = factory(tui, theme, keybindings, (result) => {
+        surface = factory(tui, plainTheme, keybindings, (result) => {
           hostDone(result);
           order.push(`custom-close:${result._tag}`);
           leave("custom");
@@ -172,15 +170,11 @@ describe("code mode settings controller surface ownership", () => {
             );
             return Effect.succeed(state);
           });
-          const h = makeHarness(
-            { snapshot: () => state, setSetting, clearSetting: () => Effect.succeed(state) },
-            () => state,
-            testCase.input,
-          );
+          const h = makeHarness(() => state, setSetting, testCase.input);
           const opening = h.open();
-          yield* waitFor(() => h.customOpenCount() === 1);
+          yield* yieldUntil(() => h.customOpenCount() === 1);
           chooseCustomTimeout(h.surface());
-          yield* waitFor(() => h.customOpenCount() === 2);
+          yield* yieldUntil(() => h.customOpenCount() === 2);
 
           expect(h.customOpenCount(), testCase.name).toBe(2);
           expect(h.overlaps(), testCase.name).toBe(0);
@@ -226,24 +220,24 @@ describe("code mode settings controller surface ownership", () => {
           : commit;
       });
       const h = makeHarness(
-        { snapshot: () => state, setSetting, clearSetting: () => Effect.succeed(state) },
         () => state,
+        setSetting,
         () => {
           inputSawEnabled = state.config.enabled;
           return Promise.resolve("123");
         },
       );
       const opening = h.open();
-      yield* waitFor(() => h.customOpenCount() === 1);
+      yield* yieldUntil(() => h.customOpenCount() === 1);
       h.surface()?.handleInput?.("\r");
       yield* Deferred.await(commitStarted);
       chooseCustomTimeout(h.surface());
-      yield* waitFor(() => h.order.includes("custom-close:PromptInteger"));
+      yield* yieldUntil(() => h.order.includes("custom-close:PromptInteger"));
       expect(h.order).not.toContain("input");
       expect(h.customOpenCount()).toBe(1);
 
       yield* Deferred.succeed(releaseCommit, undefined);
-      yield* waitFor(() => h.customOpenCount() === 2);
+      yield* yieldUntil(() => h.customOpenCount() === 2);
       expect(inputSawEnabled).toBe(false);
       expect(rendered(h.surface())).toMatch(/Code Mode enabled.*false/);
       expect(rendered(h.surface())).toMatch(/Program timeout \(ms\).*123/);
@@ -260,14 +254,11 @@ describe("code mode settings controller surface ownership", () => {
           new InvalidCodeModeSettingError({ id: "enabled", message: "rejected setting" }),
         ),
       );
-      const h = makeHarness(
-        { snapshot: () => state, setSetting, clearSetting: () => Effect.succeed(state) },
-        () => state,
-      );
+      const h = makeHarness(() => state, setSetting);
       const opening = h.open();
-      yield* waitFor(() => h.customOpenCount() === 1);
+      yield* yieldUntil(() => h.customOpenCount() === 1);
       h.surface()?.handleInput?.("\r");
-      yield* waitFor(() => h.notify.mock.calls.some((call) => call[1] === "error"));
+      yield* yieldUntil(() => h.notify.mock.calls.some((call) => call[1] === "error"));
 
       expect(setSetting).toHaveBeenCalledOnce();
       expect(rendered(h.surface())).toMatch(/Code Mode enabled.*true/);
@@ -281,17 +272,12 @@ describe("code mode settings controller surface ownership", () => {
     Effect.gen(function* () {
       const state = codeModeStateFixture();
       const setSetting = vi.fn(() => Effect.succeed(state));
-      const hostileSignal = opaqueHostFixture({
+      const hostileSignal = opaqueFixture({
         get aborted() {
           throw new Error("hostile aborted getter");
         },
       });
-      const h = makeHarness(
-        { snapshot: () => state, setSetting, clearSetting: () => Effect.succeed(state) },
-        () => state,
-        undefined,
-        hostileSignal,
-      );
+      const h = makeHarness(() => state, setSetting, undefined, hostileSignal);
       yield* Effect.promise(() => h.open());
       expect(h.runCount()).toBe(0);
       expect(h.customOpenCount()).toBe(0);
@@ -304,12 +290,9 @@ describe("code mode settings controller surface ownership", () => {
     Effect.gen(function* () {
       const state = codeModeStateFixture();
       const setSetting = vi.fn(() => Effect.succeed(state));
-      const h = makeHarness(
-        { snapshot: () => state, setSetting, clearSetting: () => Effect.succeed(state) },
-        () => state,
-      );
+      const h = makeHarness(() => state, setSetting);
       const opening = h.open();
-      yield* waitFor(() => h.customOpenCount() === 1);
+      yield* yieldUntil(() => h.customOpenCount() === 1);
       h.commandAbort.abort();
       yield* Effect.promise(() => opening);
       h.notify.mockClear();

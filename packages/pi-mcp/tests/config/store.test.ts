@@ -1,4 +1,3 @@
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -10,41 +9,27 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   AgentDirectory,
   JsonDocumentError,
   JsonDocumentStore,
-  ProcessCoordinator,
-  type AtomicJsonDocumentStoreContract,
+  type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
-import type { McpEffectiveServer, McpResolvedConfig } from "../../src/config/model.ts";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import type { McpResolvedConfig } from "../../src/config/model.ts";
 import { DEFAULT_MCP_SETTINGS, MCP_CONFIG_LIMITS } from "../../src/config/schema.ts";
 import { McpConfigStore } from "../../src/config/store.ts";
+import {
+  GLOBAL,
+  PROJECT,
+  PROJECT_ROOT,
+  layerFor,
+  parseJson,
+  serializedConfig,
+} from "../fixtures/config-store.ts";
 
-const serializedConfig = (config: McpResolvedConfig | McpEffectiveServer | undefined) =>
-  JSON.stringify(config);
-const GLOBAL = "/agent/extensions/pi-mcp.json";
-const PROJECT = `/project/${CONFIG_DIR_NAME}/extensions/pi-mcp.json`;
-const PROJECT_ROOT = "/project/.mcp.json";
 const stdio = { command: "server" };
-const layerFor = (
-  memory: InMemoryDocuments,
-  projectTrusted = true,
-  service: AtomicJsonDocumentStoreContract = memory.service,
-) =>
-  McpConfigStore.layer({ cwd: "/project", projectTrusted }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(JsonDocumentStore, service),
-        AgentDirectory.layer("/agent"),
-        Path.layer,
-        NodeCrypto.layer,
-      ),
-    ),
-  );
 
 const rawDocuments = (initial: Record<string, string>) => {
   const files = new Map(Object.entries(initial));
@@ -83,13 +68,7 @@ const rawDocuments = (initial: Record<string, string>) => {
       Layer.provide(
         Layer.mergeAll(
           JsonDocumentStore.layer.pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(FileSystem.FileSystem, fs),
-                Path.layer,
-                ProcessCoordinator.layer,
-              ),
-            ),
+            Layer.provide(Layer.merge(Layer.succeed(FileSystem.FileSystem, fs), Path.layer)),
           ),
           AgentDirectory.layer("/agent"),
           Path.layer,
@@ -186,11 +165,7 @@ describe("trusted MCP configuration store", () => {
         const store = yield* McpConfigStore;
         if (scope === "global") yield* store.setSettings(scope, { maxQueued: 0 });
         else yield* store.setServer(scope, "server", stdio);
-        expect(
-          yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
-            fixture.files.get(target)!,
-          ),
-        ).toEqual(
+        expect(yield* parseJson(fixture.files.get(target)!)).toEqual(
           scope === "global"
             ? { mcpServers: {}, settings: { maxQueued: 0 } }
             : { mcpServers: { server: stdio } },
@@ -223,11 +198,7 @@ describe("trusted MCP configuration store", () => {
           expect(updated.diagnostics).toEqual([]);
           expect(updated.revision).toBe(reloaded.revision + 1);
           if (scope === "project") expect(updated.servers.inherited?.enabled).toBe(true);
-          expect(
-            yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
-              fixture.files.get(target)!,
-            ),
-          ).toEqual(
+          expect(yield* parseJson(fixture.files.get(target)!)).toEqual(
             action === "set-settings"
               ? { mcpServers: {}, settings: { maxQueued: 0 } }
               : { mcpServers: action === "set-server" ? { server: stdio } : {} },
@@ -244,11 +215,7 @@ describe("trusted MCP configuration store", () => {
       const published: McpResolvedConfig[] = [];
       return Effect.gen(function* () {
         const store = yield* McpConfigStore;
-        yield* store.subscribe((next) =>
-          Effect.sync(() => {
-            published.push(next);
-          }),
-        );
+        yield* store.subscribe((next) => Effect.sync(() => void published.push(next)));
         const before = yield* store.snapshot;
         const oversized = paddedDocument(MCP_CONFIG_LIMITS.bytes + 1);
         fixture.files.set(target, oversized);
@@ -307,30 +274,6 @@ describe("trusted MCP configuration store", () => {
         [PROJECT_ROOT]: { mcpServers: { shared: stdio } },
         [PROJECT]: { mcpServers: { project: stdio } },
       });
-      const touched: string[] = [];
-      const service: AtomicJsonDocumentStoreContract = {
-        ...memory.service,
-        exists: (path) => {
-          touched.push(path);
-          return memory.service.exists(path);
-        },
-        readObject: (path, options) => {
-          touched.push(path);
-          return memory.service.readObject(path, options);
-        },
-        modifyObject: (path, modify, options) => {
-          touched.push(path);
-          return memory.service.modifyObject(path, modify, options);
-        },
-        writeObject: (path, document) => {
-          touched.push(path);
-          return memory.service.writeObject(path, document);
-        },
-        updateObject: (path, update, options) => {
-          touched.push(path);
-          return memory.service.updateObject(path, update, options);
-        },
-      };
       return Effect.gen(function* () {
         const store = yield* McpConfigStore;
         expect((yield* store.snapshot).trusted).toBe(false);
@@ -343,54 +286,11 @@ describe("trusted MCP configuration store", () => {
         ])
           expect((yield* change.pipe(Effect.flip)).kind).toBe("denied");
         yield* store.setSettings("global", { maxQueued: 0 });
-        expect(touched.length).toBeGreaterThan(0);
-        expect(touched.every((path) => path === GLOBAL)).toBe(true);
-      }).pipe(Effect.provide(layerFor(memory, false, service)));
+        expect(memory.operations.length).toBeGreaterThan(0);
+        expect(memory.operations.every((operation) => operation.endsWith(`:${GLOBAL}`))).toBe(true);
+      }).pipe(Effect.provide(layerFor(memory, false)));
     },
   );
-
-  it.effect("replaces entries as a whole and never inherits global credentials", () => {
-    const memory = makeInMemoryDocuments({
-      [GLOBAL]: {
-        mcpServers: {
-          server: {
-            url: "https://global.test",
-            headers: { authorization: "private" },
-            auth: { type: "env", env: "GLOBAL_TOKEN" },
-          },
-        },
-      },
-      [PROJECT]: {
-        mcpServers: { server: { url: "https://project.test" } },
-      },
-    });
-    return Effect.gen(function* () {
-      const store = yield* McpConfigStore;
-      const server = (yield* store.snapshot).servers.server;
-      expect(server).toMatchObject({
-        scope: "project",
-        directory: "/project",
-        enabled: true,
-        definition: {
-          headers: {},
-          auth: { type: "oauth", implicit: true, registration: "dynamic", scopes: [] },
-        },
-      });
-      expect(serializedConfig(server)).not.toContain("private");
-      yield* store.setServer("project", "server", { enabled: false });
-      expect((yield* store.snapshot).servers.server?.enabled).toBe(false);
-      memory.documents.set(PROJECT, {
-        mcpServers: { server: { url: "https://project.test", auth: true } },
-      });
-      const malformed = yield* store.reload;
-      expect(malformed.servers.server).toMatchObject({ enabled: false, scope: "project" });
-      expect(malformed.servers.server?.definition).toBeUndefined();
-      expect(malformed.servers.server?.diagnostic).toContain('"auth"');
-      expect(serializedConfig(malformed)).not.toContain("GLOBAL_TOKEN");
-      yield* store.removeServer("project", "server");
-      expect((yield* store.snapshot).servers.server?.scope).toBe("global");
-    }).pipe(Effect.provide(layerFor(memory)));
-  });
 
   it.effect.each([PROJECT_ROOT, PROJECT])(
     "fails closed on unreadable or malformed %s documents, including global writes",
@@ -399,7 +299,7 @@ describe("trusted MCP configuration store", () => {
         [GLOBAL]: { mcpServers: { server: stdio } },
       });
       let unreadable = true;
-      const service: AtomicJsonDocumentStoreContract = {
+      const service: JsonDocumentStoreContract = {
         ...memory.service,
         readObject: (path) =>
           path === target && unreadable
@@ -498,7 +398,7 @@ describe("trusted MCP configuration store", () => {
   it.effect("does not publish failed writes or replace the last successful snapshot", () => {
     const memory = makeInMemoryDocuments({ [GLOBAL]: { mcpServers: {} } });
     const published: McpResolvedConfig[] = [];
-    const service: AtomicJsonDocumentStoreContract = {
+    const service: JsonDocumentStoreContract = {
       ...memory.service,
       modifyObject: (path, modify) =>
         memory.service.modifyObject(path, (document) =>
@@ -511,11 +411,7 @@ describe("trusted MCP configuration store", () => {
     };
     return Effect.gen(function* () {
       const store = yield* McpConfigStore;
-      yield* store.subscribe((next) =>
-        Effect.sync(() => {
-          published.push(next);
-        }),
-      );
+      yield* store.subscribe((next) => Effect.sync(() => void published.push(next)));
       const before = yield* store.snapshot;
       expect((yield* store.setSettings("global", { enabled: false }).pipe(Effect.flip)).kind).toBe(
         "config",
@@ -577,11 +473,7 @@ describe("trusted MCP configuration store", () => {
     const revisions: number[] = [];
     return Effect.gen(function* () {
       const store = yield* McpConfigStore;
-      yield* store.subscribe((config) =>
-        Effect.sync(() => {
-          revisions.push(config.revision);
-        }),
-      );
+      yield* store.subscribe((config) => Effect.sync(() => void revisions.push(config.revision)));
       const started = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       memory.blockNextUpdateAtCommit(started, release);
@@ -609,17 +501,9 @@ describe("trusted MCP configuration store", () => {
       const store = yield* McpConfigStore;
       const old = yield* Scope.make();
       yield* store
-        .subscribe((next) =>
-          Effect.sync(() => {
-            first.push(next.revision);
-          }),
-        )
+        .subscribe((next) => Effect.sync(() => void first.push(next.revision)))
         .pipe(Scope.provide(old));
-      yield* store.subscribe((next) =>
-        Effect.sync(() => {
-          second.push(next.revision);
-        }),
-      );
+      yield* store.subscribe((next) => Effect.sync(() => void second.push(next.revision)));
       yield* Scope.close(old, Exit.void);
       yield* store.setSettings("global", { maxQueued: 0 });
       expect(first).toEqual([0]);

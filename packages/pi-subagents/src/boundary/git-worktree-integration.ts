@@ -1,12 +1,13 @@
 import * as Effect from "effect/Effect";
 import type { WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
-import { checkDirectory, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
 import {
-  createWorkspaceDirectory,
-  publishWorkspaceFile,
-  type WorkspacePublicationRequest,
-} from "./git-worktree-publish.ts";
+  checkDirectory,
+  workspaceFailure,
+  workspaceIO,
+  workspaceIOIfPresent,
+} from "./git-worktree-process.ts";
+import { createWorkspaceDirectory, publishWorkspaceFile } from "./git-worktree-publish.ts";
 import {
   bytesEqual,
   readWorkspaceFile,
@@ -81,16 +82,8 @@ export const publishWorkspace = (
       let parent = path.dirname(name);
       while (parent !== ".") {
         const full = path.join(root, parent);
-        const exists = yield* workspaceIO("integrate", () =>
-          fs.lstat(full).then(
-            () => true,
-            (error: NodeJS.ErrnoException) => {
-              if (error.code === "ENOENT") return false;
-              throw error;
-            },
-          ),
-        );
-        if (!exists) missingDirectories.add(parent);
+        if (!(yield* workspaceIOIfPresent("integrate", () => fs.lstat(full))))
+          missingDirectories.add(parent);
         else {
           if (!record.preparation!.leaseDirectories.includes(full))
             return yield* workspaceFailure(
@@ -109,24 +102,22 @@ export const publishWorkspace = (
     const entries = yield* Effect.forEach(changed, (name) =>
       Effect.gen(function* () {
         const token = yield* newWorkspaceId();
+        const expected = previous.get(name),
+          content = next.get(name);
         return {
           path: name,
           temporaryPath: path.join(path.dirname(name), `.pi-workspace-new-${token}`),
           backupPath: path.join(path.dirname(name), `.pi-workspace-old-${token}`),
-          before: previous.get(name)
-            ? {
-                oid: previous.get(name)!.oid,
-                mode: previous.get(name)!.mode,
-                permissions: previous.get(name)!.permissions,
-              }
-            : undefined,
-          after: next.get(name)
-            ? {
-                oid: next.get(name)!.oid,
-                mode: next.get(name)!.mode,
-                permissions: permissions(name),
-              }
-            : undefined,
+          before: expected && {
+            oid: expected.oid,
+            mode: expected.mode,
+            permissions: expected.permissions,
+          },
+          after: content && {
+            oid: content.oid,
+            mode: content.mode,
+            permissions: permissions(name),
+          },
         };
       }),
     );
@@ -163,18 +154,15 @@ export const publishWorkspace = (
         return yield* workspaceFailure("integrate", "Missing publication directory ownership.");
       const expected = previous.get(entry.path),
         content = next.get(entry.path);
-      let request: WorkspacePublicationRequest = {
+      const result = yield* publishWorkspaceFile({
         directory,
         ...identity,
         name: path.basename(entry.path),
         temporaryName: path.basename(entry.temporaryPath),
         backupName: path.basename(entry.backupPath),
-      };
-      if (expected)
-        request = { ...request, before: { bytes: expected.bytes, mode: expected.permissions } };
-      if (content)
-        request = { ...request, after: { bytes: content.bytes, mode: permissions(entry.path) } };
-      const result = yield* publishWorkspaceFile(request);
+        ...(expected && { before: { bytes: expected.bytes, mode: expected.permissions } }),
+        ...(content && { after: { bytes: content.bytes, mode: permissions(entry.path) } }),
+      });
       if (result.status !== "success")
         return yield* workspaceFailure(
           "integrate",

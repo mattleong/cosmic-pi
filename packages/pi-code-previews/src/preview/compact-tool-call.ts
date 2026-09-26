@@ -6,10 +6,9 @@ import {
   summaryCompactIssues,
   normalizeCompactIssues,
   compactIssueSeverity,
-  withoutFailureBodyIssues,
+  subtractCompactIssueClaims,
 } from "../tools/compact-issues";
 import { renderCompactIssues } from "./compact-issues";
-export { renderCompactNotices, compactSingleLine } from "./compact-row";
 
 interface CompactToolCallInput {
   name: string;
@@ -82,7 +81,7 @@ export function renderCompactFailure(
       ...header,
       ...indentedCompactText(failure.details, "  ", color, theme, width),
       ...renderCompactIssues(
-        withoutFailureBodyIssues(issues, failure.ownedIssues),
+        subtractCompactIssueClaims(issues, failure.ownedIssues),
         theme,
         width,
         true,

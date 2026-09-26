@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
   applyHostPreference,
@@ -21,7 +21,6 @@ describe("directory model host capture", () => {
         throw new Error("host getter failed");
       },
     });
-    expect(() => captureSelectedModel(hostile)).not.toThrow();
     expect(captureSelectedModel(hostile)).toBeUndefined();
     expect(captureThinkingLevel("unsupported")).toBeUndefined();
   });
@@ -33,8 +32,7 @@ describe("directory model host capture", () => {
         throw new Error("host getter failed");
       },
     });
-    // SAFETY: The tested operation fails at the model getter before reading other host members.
-    const ctx = hostileContext as ExtensionContext;
+    const ctx = extensionContextFixture(hostileContext);
     expect(captureContextModel(ctx)).toBeUndefined();
 
     const preference = makeDirectoryModelPreference(
@@ -43,8 +41,7 @@ describe("directory model host capture", () => {
       "gpt-5.6-sol",
       "high",
     );
-    // SAFETY: The tested operation fails before reading any ExtensionAPI member.
-    const pi = {} as ExtensionAPI;
+    const pi = extensionApiFixture({});
     const error = Effect.runSync(Effect.flip(applyHostPreference(pi, ctx, preference)));
     expect(error).toMatchObject({ _tag: "DirectoryModelHostError", operation: "read" });
   });

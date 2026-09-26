@@ -54,21 +54,8 @@ describe("producer MCP presentation", () => {
       expect(receipt.notices.join(" ")).toMatch(/does not change that outcome/);
     },
   );
-  it.each(["failed", "unavailable"])("preserves %s validation and recovery", (outputValidation) => {
-    const receipt = projectMcpPresentation(
-      reply(
-        {
-          origin: { action: "tools.call", outcome: "completed", isError: false, outputValidation },
-        },
-        { action: "result.read", resultId: "retained-1" },
-      ),
-    );
-    expect(receipt.isError).toBe(outputValidation === "failed");
-    expect(receipt.notices.join(" ")).toMatch(/validation/);
-    expect(receipt.notices.join(" ")).toContain('result.read id="retained-1"');
-  });
   it.each(["failed", "unavailable"] as const)(
-    "uses only envelope origin evidence for %s validation notice ownership",
+    "preserves %s validation recovery and uses only envelope origin evidence for notice ownership",
     (outputValidation) => {
       const notice = MCP_VALIDATION_NOTICES[outputValidation].invocation;
       const origin = {
@@ -86,6 +73,12 @@ describe("producer MCP presentation", () => {
         retained.issues.entries.some((entry) => entry.code === `validation-${outputValidation}`),
       ).toBe(true);
       expect(retained.notices.join(" ")).toMatch(/do not replay/iu);
+      const receipt = projectMcpPresentation(
+        reply({ origin }, { action: "result.read", resultId: "retained-1" }),
+      );
+      expect(receipt.isError).toBe(outputValidation === "failed");
+      expect(receipt.notices.join(" ")).toMatch(/validation/);
+      expect(receipt.notices.join(" ")).toContain('result.read id="retained-1"');
 
       const spoofed = projectMcpPresentation(
         reply({ result: { origin } }, { action: "result.read", notices: [notice] }),
@@ -139,22 +132,6 @@ describe("producer MCP presentation", () => {
     expect(receipt.resultId).toBeUndefined();
     expect(JSON.stringify(receipt)).not.toContain("secret");
   });
-  it("does not invoke metadata accessors or stringify unknown values", () => {
-    const hostile = {
-      get outcome() {
-        throw new Error("getter");
-      },
-      toString() {
-        throw new Error("coercion");
-      },
-    };
-    expect(projectMcpPresentation(hostile)).toMatchObject({ outcome: "unknown", incomplete: true });
-    expect(
-      projectMcpPresentation(
-        reply({ origin: { outcome: "completed", isError: false, outputValidation: hostile } }),
-      ).incomplete,
-    ).toBe(true);
-  });
   it("retains no-replay guidance for origin failures without a retained ID", () => {
     for (const origin of [
       { outcome: "completed", isError: true },
@@ -165,7 +142,7 @@ describe("producer MCP presentation", () => {
       expect(receipt.notices.join(" ")).toMatch(/do not replay/iu);
     }
   });
-  it("marks unreadable optional metadata incomplete without invoking getters", () => {
+  it("marks unreadable metadata incomplete without invoking getters or stringifying values", () => {
     let invoked = false;
     const unreadable = (key: string) =>
       Object.defineProperty({}, key, {
@@ -178,11 +155,18 @@ describe("producer MCP presentation", () => {
       outcome: "completed",
       isError: false,
     });
+    const uncoercible = {
+      toString() {
+        throw new Error("coercion");
+      },
+    };
     const samples = [
+      unreadable("outcome"),
       ...["origin", "truncated", "omitted", "result", "kind", "message"].map((key) =>
         reply(unreadable(key)),
       ),
       reply({ origin }),
+      reply({ origin: { outcome: "completed", isError: false, outputValidation: uncoercible } }),
       reply({ result: unreadable("truncated") }, { action: "server.instructions" }),
       Object.assign(unreadable("resultId"), reply({})),
       reply(
@@ -207,6 +191,7 @@ describe("producer MCP presentation", () => {
         }),
       ).toBeUndefined();
     }
+    expect(projectMcpPresentation(unreadable("outcome")).outcome).toBe("unknown");
     expect(invoked).toBe(false);
   });
   it("redacts complete notices before applying the receipt bound", () => {

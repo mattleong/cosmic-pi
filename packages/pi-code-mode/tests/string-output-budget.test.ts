@@ -1,30 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import { executeHarness } from "./support/execute.ts";
 
 const MAX_OUTPUT_BYTES = 51_200;
-const context = extensionContextFixture({ cwd: "/project" });
-
-const makeExecute = () => {
-  const state = codeModeStateFixture({ maxOutputBytes: MAX_OUTPUT_BYTES });
-  return makeCodeModeToolExecute({
-    isCurrent: () => true,
-    getState: () => state,
-    runInSession: (effect, signal) =>
-      Effect.runPromise(effect, signal === undefined ? undefined : { signal }),
-    definitions: nestedToolDefinitionsFixture({}),
-    events: createEventBus(),
-    sessionId: "string-output-budget",
-  });
-};
 
 describe("verbatim string output budget", () => {
   it.effect("delivers exact ASCII and escape-heavy strings through the execution boundary", () =>
     Effect.gen(function* () {
-      const execute = makeExecute();
+      const { run } = executeHarness({
+        cwd: "/project",
+        config: { maxOutputBytes: MAX_OUTPUT_BYTES },
+      });
       const cases = [
         {
           name: "exact-ascii",
@@ -39,15 +25,7 @@ describe("verbatim string output budget", () => {
       ] as const;
 
       for (const testCase of cases) {
-        const result = yield* Effect.promise(() =>
-          execute(
-            `string-output-${testCase.name}`,
-            { code: testCase.code },
-            undefined,
-            undefined,
-            context,
-          ),
-        );
+        const result = yield* Effect.promise(() => run(testCase.code));
         expect(result.content, testCase.name).toStrictEqual([
           { type: "text", text: testCase.expected },
         ]);

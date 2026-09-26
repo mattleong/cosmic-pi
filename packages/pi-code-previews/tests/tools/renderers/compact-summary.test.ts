@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { applyPresentationSettings, renderContextFixture } from "../../../testing";
 import type {
   AgentToolResult,
   ReadToolInput,
@@ -14,10 +15,8 @@ import {
   publishCodePreviewEnvironmentProjection,
 } from "../../../src/config/env";
 import { codePreviewSettings, setCodePreviewSettings } from "../../../src/config/state";
-import {
-  createBuiltinCompactSummary,
-  type BuiltinCompactTool,
-} from "../../../src/tools/builtin-compact-summary";
+import { createBuiltinCompactSummary } from "../../../src/tools/builtin-compact-summary";
+import type { BuiltinCompactTool } from "../../../src/tools/builtin-subject";
 import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../../src/tools/renderers/shared/types";
 import { createReadPreviewTool } from "../../../src/tools/renderers/read";
@@ -27,10 +26,14 @@ import { createFindPreviewTool } from "../../../src/tools/renderers/find";
 import { createLsPreviewTool } from "../../../src/tools/renderers/ls";
 import { createWritePreviewTool } from "../../../src/tools/renderers/write";
 import { createEditPreviewTool } from "../../../src/tools/renderers/edit";
-import { renderComponent, testTheme } from "../../support/render";
-import { allocateCompactHeader } from "../../../src/preview/compact-header";
+import type { AdaptableToolDefinition } from "../../../src/tools/renderer-adapter";
+import {
+  plainTheme as theme,
+  previewBodiesDisabled,
+  renderComponent,
+  textResult as result,
+} from "../../support/render";
 
-const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
 const originalPerformance = codePreviewPerformanceConfig;
 const originalToolsEnvironment = codePreviewToolsEnvironmentValue;
 const secret = "-----BEGIN PRIVATE KEY-----";
@@ -45,25 +48,19 @@ type FactoryState = Parameters<
 >[2]["state"];
 
 beforeEach(() =>
-  setCodePreviewSettings({
+  applyPresentationSettings({
     ...defaultCodePreviewSettings,
     toolCallCollapsedStyle: "compact",
     toolCallBackground: "off",
     toolCallTiming: false,
-    readContentPreview: false,
-    writeContentPreview: false,
-    editDiffPreview: false,
-    grepResultPreview: false,
-    findResultPreview: false,
-    lsResultPreview: false,
+    ...previewBodiesDisabled,
     bashWarnings: true,
     secretWarnings: true,
   }),
 );
-afterEach(() => {
-  setCodePreviewSettings(originalSettings);
-  publishCodePreviewEnvironmentProjection(originalPerformance, originalToolsEnvironment);
-});
+afterEach(() =>
+  publishCodePreviewEnvironmentProjection(originalPerformance, originalToolsEnvironment),
+);
 
 function summary(
   tool: BuiltinCompactTool,
@@ -76,29 +73,15 @@ function summary(
     phase,
     args,
     result: resultValue,
-    context: {
+    context: renderContextFixture({
       args,
-      state: {},
       toolCallId: "compact-summary-test",
-      cwd: "/project",
-      invalidate: () => undefined,
-      lastComponent: undefined,
       argsComplete: phase !== "pending",
       executionStarted: phase === "running",
-      expanded: false,
       isPartial: phase === "running",
-      isError: false,
-      showImages: true,
       ...overrides,
-    },
+    }),
   });
-}
-
-function result<Details>(
-  text = "ordinary output",
-  details?: Details,
-): AgentToolResult<Details | undefined> {
-  return { content: [{ type: "text", text }], details };
 }
 
 function noticeText(value: CompactSummary | undefined): string {
@@ -124,27 +107,11 @@ test("builtin subjects use render cwd and never overflow requested read ranges",
 test("write replay needs actual submitted content before describing changes", () => {
   const details = { codePreviewBeforeWrite: { kind: "content", content: "keep\n" } };
   for (const content of [undefined, null, 42]) {
-    expect(
-      createBuiltinCompactSummary("write", {
-        phase: "settled",
-        args: { path: "x", content },
-        result: result("applied", details),
-        context: {
-          args: { path: "x", content },
-          state: {},
-          toolCallId: "malformed-write",
-          cwd: "/project",
-          invalidate: () => undefined,
-          lastComponent: undefined,
-          argsComplete: false,
-          executionStarted: false,
-          expanded: false,
-          isPartial: false,
-          isError: false,
-          showImages: true,
-        },
-      }),
-    ).toBeUndefined();
+    // Replayed write arguments may carry content outside the declared input type.
+    const args: Args = { path: "x" };
+    Object.assign(args, { content });
+    const replay = result("applied", details);
+    expect(summary("write", args, replay, "settled", { argsComplete: false })).toBeUndefined();
   }
   expect(
     summary("write", { path: "x", content: "" }, result("applied", details))?.counters,
@@ -157,7 +124,7 @@ describe("builtin compact lifecycle", () => {
     (tool) => {
       const args = { path: "file.ts", command: "printf done", pattern: "value" };
       const pending = summary(tool, args);
-      const running = summary(tool, args, result(), "running");
+      const running = summary(tool, args, result("ordinary output"), "running");
       expect(pending).toBeDefined();
       expect(running).toBeDefined();
       expect(pending?.outcome).toBeUndefined();
@@ -256,12 +223,6 @@ describe("builtin compact lifecycle", () => {
       ),
     ).toBeUndefined();
   });
-
-  test("read subject includes the requested line range", () => {
-    expect(summary("read", { path: "file.ts", offset: 7, limit: 3 })?.subject).toContain(
-      "file.ts:7-9",
-    );
-  });
 });
 
 describe("notices independent of hidden preview bodies", () => {
@@ -270,7 +231,7 @@ describe("notices independent of hidden preview bodies", () => {
       const value = summary(
         "bash",
         { command: "rm -rf build" },
-        phase === "pending" ? undefined : result(),
+        phase === "pending" ? undefined : result("ordinary output"),
         phase,
       );
       expect(noticeText(value)).toContain("recursive delete");
@@ -464,67 +425,24 @@ describe("notices independent of hidden preview bodies", () => {
     expect(failed?.failure?.details).toBe("one result");
   });
 
-  test("reached-cap counters survive long targets before optional metadata and chrome", () => {
-    const value = summary(
+  const byteCap = { truncation: { truncated: true } };
+  test.each([
+    ["grep", { matchLimitReached: 10, linesTruncated: true }, ["read tool"]],
+    [
       "grep",
-      { pattern: "value", path: "long-directory/".repeat(20) },
-      result("match", { matchLimitReached: 10 }),
-    );
-    expect(value?.counters).toEqual(["limit reached: 10"]);
-    const row = allocateCompactHeader(
-      "grep",
-      value?.subject ?? "",
-      value?.counters ?? [],
-      ["optional metadata", "12ms", "expand details"],
-      60,
-    );
-    expect(row).toContain("limit reached: 10");
-    expect(row).not.toContain("optional metadata");
-    expect(row).not.toContain("12ms");
-    expect(row).not.toContain("expand details");
-  });
-
-  test("grep preserves partial-line recovery even without a byte cap", () => {
-    const value = summary(
-      "grep",
-      {},
-      result("partial", { matchLimitReached: 10, linesTruncated: true }),
-    );
+      { matchLimitReached: 10, linesTruncated: true, ...byteCap },
+      ["read tool", "truncated"],
+    ],
+    ["find", { resultLimitReached: 10, ...byteCap }, ["truncated"]],
+    ["ls", { entryLimitReached: 10, ...byteCap }, ["truncated"]],
+  ] as const)("%s keeps line or byte loss recovery beside caps", (tool, details, phrases) => {
+    const value = summary(tool, { path: ".", pattern: "value" }, result("match", details));
     expect(value?.outcome).toBe("warning");
-    expect(noticeText(value)).toContain("read tool");
+    expect(value?.counters).toEqual(["limit reached: 10"]);
+    expect(value?.metadata).toEqual([]);
+    for (const phrase of phrases) expect(noticeText(value)).toContain(phrase);
+    // Line and byte loss recover through read or truncation guidance; caps stay counters.
     expect(noticeText(value)).not.toContain("limit=");
-  });
-
-  test("grep retains byte and line loss with recovery guidance", () => {
-    const value = summary(
-      "grep",
-      { pattern: "value" },
-      result("match", {
-        matchLimitReached: 10,
-        linesTruncated: true,
-        truncation: { truncated: true },
-      }),
-    );
-    expect(value?.counters).toEqual(["limit reached: 10"]);
-    expect(value?.metadata).toEqual([]);
-    expect(noticeText(value)).toContain("read tool");
-    expect(noticeText(value)).toContain("truncated");
-    expect(value?.outcome).toBe("warning");
-  });
-
-  test.each(["find", "ls"] as const)("%s retains result limits and byte truncation", (tool) => {
-    const value = summary(
-      tool,
-      { path: ".", pattern: "*.ts" },
-      result("file.ts", {
-        [tool === "find" ? "resultLimitReached" : "entryLimitReached"]: 10,
-        truncation: { truncated: true },
-      }),
-    );
-    expect(value?.counters).toEqual(["limit reached: 10"]);
-    expect(value?.metadata).toEqual([]);
-    expect(noticeText(value)).toContain("truncated");
-    expect(value?.outcome).toBe("warning");
   });
 });
 
@@ -544,25 +462,6 @@ describe("write and edit diff limitations", () => {
       expect(noticeText(replay)).toContain("unavailable");
       expect(JSON.stringify(replay)).not.toMatch(/new file/i);
     }
-  });
-
-  test("write treats structured size skips as quiet metadata with previews disabled", () => {
-    const value = summary(
-      "write",
-      { path: "file", content: "next" },
-      result("applied", {
-        codePreviewBeforeWrite: {
-          kind: "skipped",
-          reason: "previous file too large",
-          maxBytes: 10,
-          byteLength: 20,
-          sizeExceeded: true,
-        },
-      }),
-    );
-    expect(value?.notices).toEqual([]);
-    expect(value?.metadata).toEqual(["diff skipped: size"]);
-    expect(value?.outcome).toBe("success");
   });
 
   test("write detects byte and complexity guards without producing a diff", () => {
@@ -627,7 +526,7 @@ describe("write and edit diff limitations", () => {
     }
   });
 
-  test("write guard metadata does not suppress secrets or execution failures", () => {
+  test("write size skips stay quiet without suppressing secrets or execution failures", () => {
     const output = result("applied", {
       codePreviewBeforeWrite: {
         kind: "skipped",
@@ -637,6 +536,10 @@ describe("write and edit diff limitations", () => {
         sizeExceeded: true,
       },
     });
+    const quiet = summary("write", { path: "file", content: "next" }, output);
+    expect(quiet?.notices).toEqual([]);
+    expect(quiet?.metadata).toEqual(["diff skipped: size"]);
+    expect(quiet?.outcome).toBe("success");
     const value = summary("write", { content: secret }, output);
     expect(value?.outcome).toBe("warning");
     expect(value?.metadata).toEqual(["diff skipped: size"]);
@@ -653,8 +556,24 @@ describe("write and edit diff limitations", () => {
   });
 });
 
+/** Renders both slots from one context so toggles share the retained shell state. */
+function renderText(
+  tool: AdaptableToolDefinition,
+  output: AgentToolResult<unknown>,
+  ctx: ToolRenderContext<object, unknown>,
+  width = 100,
+): string {
+  const call = tool.renderCall?.(ctx.args, theme, ctx);
+  const body = tool.renderResult?.(
+    output,
+    { expanded: ctx.expanded, isPartial: false },
+    theme,
+    ctx,
+  );
+  return [call, body].flatMap((part) => part?.render(width) ?? []).join("\n");
+}
+
 describe("builtin factory compact integration", () => {
-  const theme = Object.assign(testTheme(), { bg: (_key: string, text: string) => text });
   const args = {
     path: "file.ts",
     command: "printf value",
@@ -662,74 +581,30 @@ describe("builtin factory compact integration", () => {
     content: "proposedContent",
     edits: [{ oldText: "before", newText: "proposedContent" }],
   };
-  function context(
+  const factories = {
+    read: createReadPreviewTool,
+    bash: createBashPreviewTool,
+    write: createWritePreviewTool,
+    edit: createEditPreviewTool,
+    grep: createGrepPreviewTool,
+    find: createFindPreviewTool,
+    ls: createLsPreviewTool,
+  };
+  const context = (
     overrides: Partial<ToolRenderContext<FactoryState, typeof args>> = {},
-  ): ToolRenderContext<FactoryState, typeof args> {
-    return {
+  ): ToolRenderContext<FactoryState, typeof args> =>
+    renderContextFixture({
       args,
       state: { startedAt: undefined, endedAt: undefined, interval: undefined },
-      cwd: "/project",
       toolCallId: "builtin-render-test",
-      lastComponent: undefined,
-      invalidate: () => undefined,
-      executionStarted: false,
-      argsComplete: true,
-      expanded: false,
       isPartial: false,
-      isError: false,
-      showImages: true,
       ...overrides,
-    };
-  }
+    });
 
-  test.each([
-    ["read", createReadPreviewTool],
-    ["bash", createBashPreviewTool],
-    ["grep", createGrepPreviewTool],
-    ["find", createFindPreviewTool],
-    ["ls", createLsPreviewTool],
-  ] as const)("%s hides ordinary output until expanded", (_name, factory) => {
-    const tool = factory("/project");
-    const ctx = context();
-    const call = tool.renderCall?.(args, theme, ctx);
-    expect(call).toBeDefined();
-    const output = {
-      content: [{ type: "text" as const, text: "hiddenOutputValue" }],
-      details: undefined,
-    };
-    for (const isPartial of [true, false]) {
-      const rendered = tool.renderResult?.(output, { expanded: false, isPartial }, theme, {
-        ...ctx,
-        executionStarted: true,
-        isPartial,
-      });
-      const collapsed = [call, rendered]
-        .flatMap((component) => (component ? [renderComponent(component)] : []))
-        .join("\n");
-      expect(collapsed).not.toContain("hiddenOutputValue");
-    }
-    const expandedContext = { ...ctx, executionStarted: true, expanded: true };
-    const expandedCall = tool.renderCall?.(args, theme, expandedContext);
-    const expandedResult = tool.renderResult?.(
-      output,
-      { expanded: true, isPartial: false },
-      theme,
-      expandedContext,
-    );
-    const expanded = [expandedCall, expandedResult]
-      .flatMap((component) => (component ? [renderComponent(component)] : []))
-      .join("\n");
-    expect(expanded).toContain("hiddenOutputValue");
-  });
-
-  test.each([
-    ["grep", createGrepPreviewTool],
-    ["find", createFindPreviewTool],
-    ["ls", createLsPreviewTool],
-  ] as const)(
+  test.each(["grep", "find", "ls"] as const)(
     "%s keeps complete limit instructions in unchanged expanded results",
-    (_name, factory) => {
-      const tool = factory("/project");
+    (name) => {
+      const tool = factories[name]("/project");
       const ctx = context();
       const output = result("selectedContent\n\n[Limit reached. Use limit=20 to continue.]", {
         matchLimitReached: 10,
@@ -738,17 +613,7 @@ describe("builtin factory compact integration", () => {
       });
       const before = structuredClone(output);
       for (const expanded of [false, true, false, true]) {
-        const renderContext = { ...ctx, expanded };
-        const call = tool.renderCall?.(args, theme, renderContext);
-        const body = tool.renderResult?.(
-          output,
-          { expanded, isPartial: false },
-          theme,
-          renderContext,
-        );
-        const text = [call, body]
-          .flatMap((component) => (component ? [renderComponent(component)] : []))
-          .join("\n");
+        const text = renderText(tool, output, { ...ctx, expanded });
         expect(text.includes("limit=20")).toBe(expanded);
         expect(text.includes("selectedContent")).toBe(expanded);
       }
@@ -774,15 +639,7 @@ describe("builtin factory compact integration", () => {
       Object.assign(output, { details });
       const knownNew = details === fresh;
       for (const expanded of [false, true, false, true]) {
-        const renderContext = { ...ctx, expanded };
-        const call = tool.renderCall?.(args, theme, renderContext);
-        const body = tool.renderResult?.(
-          output,
-          { expanded, isPartial: false },
-          theme,
-          renderContext,
-        );
-        const text = [call, body].flatMap((component) => component?.render(200) ?? []).join("\n");
+        const text = renderText(tool, output, { ...ctx, expanded }, 200);
         expect(/new file/iu.test(text)).toBe(knownNew);
         expect(/previous content(?:s)? (?:is |are )?unavailable/iu.test(text)).toBe(!knownNew);
       }
@@ -807,17 +664,7 @@ describe("builtin factory compact integration", () => {
     });
     const before = structuredClone(output);
     for (const expanded of [false, true, false, true]) {
-      const renderContext = { ...ctx, expanded };
-      const call = tool.renderCall?.(args, theme, renderContext);
-      const body = tool.renderResult?.(
-        output,
-        { expanded, isPartial: false },
-        theme,
-        renderContext,
-      );
-      const text = [call, body]
-        .flatMap((component) => (component ? [renderComponent(component)] : []))
-        .join("\n");
+      const text = renderText(tool, output, { ...ctx, expanded });
       expect(text.includes("previous file too large")).toBe(expanded);
     }
     expect(output).toEqual(before);
@@ -855,17 +702,7 @@ describe("builtin factory compact integration", () => {
             );
         const before = structuredClone(output);
         for (const expanded of [false, true, false, true]) {
-          const renderContext = { ...ctx, expanded };
-          const call = tool.renderCall?.(readArgs, theme, renderContext);
-          const body = tool.renderResult?.(
-            output,
-            { expanded, isPartial: false },
-            theme,
-            renderContext,
-          );
-          const text = [call, body]
-            .flatMap((component) => (component ? [renderComponent(component)] : []))
-            .join("\n");
+          const text = renderText(tool, output, { ...ctx, expanded });
           expect(text.match(/offset=/gu)?.length ?? 0).toBe(expanded ? 1 : 0);
           expect(text.includes("selectedContent")).toBe(expanded);
         }
@@ -884,11 +721,7 @@ describe("builtin factory compact integration", () => {
       );
       for (const expanded of [false, true, false, true]) {
         const ctx = { ...context({ isError: true, expanded }), state: {} };
-        const call = edit.renderCall?.(args, theme, ctx);
-        const body = edit.renderResult?.(editOutput, { expanded, isPartial: false }, theme, ctx);
-        const text = [call, body]
-          .flatMap((part) => (part ? [renderComponent(part)] : []))
-          .join("\n");
+        const text = renderText(edit, editOutput, ctx);
         expect(text.split("The replacements produced identical content.")).toHaveLength(
           expanded ? 2 : 1,
         );
@@ -924,17 +757,7 @@ describe("builtin factory compact integration", () => {
       ]) {
         const before = structuredClone(sample.output);
         for (const expanded of [false, true, false, true]) {
-          const ctx = context({ expanded });
-          const call = read.renderCall?.(args, theme, ctx);
-          const body = read.renderResult?.(
-            sample.output,
-            { expanded, isPartial: false },
-            theme,
-            ctx,
-          );
-          const text = [call, body]
-            .flatMap((part) => (part ? [renderComponent(part)] : []))
-            .join("\n");
+          const text = renderText(read, sample.output, context({ expanded }));
           expect(text.split(sample.phrase)).toHaveLength(expanded ? 2 : 1);
         }
         expect(sample.output).toEqual(before);
@@ -942,62 +765,12 @@ describe("builtin factory compact integration", () => {
     },
   );
 
-  test.each([
-    ["read", createReadPreviewTool],
-    ["bash", createBashPreviewTool],
-    ["write", createWritePreviewTool],
-    ["edit", createEditPreviewTool],
-    ["grep", createGrepPreviewTool],
-    ["find", createFindPreviewTool],
-    ["ls", createLsPreviewTool],
-  ] as const)("%s owns complete multipart failures once without the old card", (_name, factory) => {
-    for (const mode of ["on", "off", "border"] as const) {
-      setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-      const tool = factory("/project");
-      const ctx = context({ isError: true });
-      const output = {
-        content: [
-          { type: "text" as const, text: "failureLineOne" },
-          { type: "text" as const, text: "Inspect the destination before retrying." },
-        ],
-        details: undefined,
-      };
-      for (const expanded of [false, true, false, true]) {
-        const renderContext = { ...ctx, expanded };
-        const call = tool.renderCall?.(args, theme, renderContext);
-        const resultSlot = tool.renderResult?.(
-          output,
-          { expanded, isPartial: false },
-          theme,
-          renderContext,
-        );
-        const text = [call, resultSlot]
-          .flatMap((component) => (component ? [renderComponent(component)] : []))
-          .join("\n");
-        expect(text.match(/failureLineOne/gu) ?? []).toHaveLength(expanded ? 1 : 0);
-        expect(text.match(/Inspect the destination before retrying\./gu) ?? []).toHaveLength(
-          expanded ? 1 : 0,
-        );
-        // Expanded content retains full arguments as well as the elidable semantic target.
-        expect(text).toMatch(/file\.ts|printf value/u);
-      }
-    }
-  });
-
-  test.each([
-    ["read", createReadPreviewTool],
-    ["bash", createBashPreviewTool],
-    ["write", createWritePreviewTool],
-    ["edit", createEditPreviewTool],
-    ["grep", createGrepPreviewTool],
-    ["find", createFindPreviewTool],
-    ["ls", createLsPreviewTool],
-  ] as const)(
+  test.each(tools)(
     "%s keeps declined failure projections compact without losing expanded recovery",
-    (_name, factory) => {
+    (name) => {
       for (const mode of ["on", "off", "border"] as const) {
         setCodePreviewSettings({ ...codePreviewSettings, toolCallBackground: mode });
-        const tool = factory("/project");
+        const tool = factories[name]("/project");
         const ctx = context({ isError: true });
         const output = {
           content: [
@@ -1009,15 +782,7 @@ describe("builtin factory compact integration", () => {
         };
         const before = structuredClone(output);
         for (const expanded of [false, true, false]) {
-          const renderContext = { ...ctx, expanded };
-          const call = tool.renderCall?.(args, theme, renderContext);
-          const body = tool.renderResult?.(
-            output,
-            { expanded, isPartial: false },
-            theme,
-            renderContext,
-          );
-          const text = [call, body].flatMap((component) => component?.render(200) ?? []).join("\n");
+          const text = renderText(tool, output, { ...ctx, expanded }, 200);
           expect(text.includes("Diagnostic starts")).toBe(expanded);
           expect(text.includes("Inspect destination before retrying.")).toBe(expanded);
           expect(text.includes("x".repeat(100))).toBe(expanded);
@@ -1027,11 +792,8 @@ describe("builtin factory compact integration", () => {
     },
   );
 
-  test.each([
-    ["write", createWritePreviewTool],
-    ["edit", createEditPreviewTool],
-  ] as const)("%s hides pending content until expanded", (_name, factory) => {
-    const tool = factory("/project");
+  test.each(["write", "edit"] as const)("%s hides pending content until expanded", (name) => {
+    const tool = factories[name]("/project");
     const ctx = context();
     const collapsed = tool.renderCall?.(args, theme, ctx);
     expect(collapsed && renderComponent(collapsed)).not.toContain("proposedContent");

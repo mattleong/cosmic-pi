@@ -9,15 +9,10 @@ import type { SharpAdapterContract } from "../src/boundary/sharp.ts";
 import { makeImageInputReader } from "../src/image/input.ts";
 import { makeImageOutput } from "../src/image/output.ts";
 import { parseImageSse } from "../src/image/stream.ts";
+import { bytes, pngSharp } from "./helpers.ts";
 
-const encoder = new TextEncoder();
-const bytes = (value: string) => encoder.encode(value);
 const body = (value: string) => Stream.make(bytes(value));
 const dataEvent = <Value>(value: Value) => `data: ${JSON.stringify(value)}\n\n`;
-
-const pngSharp: SharpAdapterContract = {
-  decode: () => Effect.succeed({ format: "png" }),
-};
 
 const fileLayer = Layer.merge(
   nodePlatformLayer,
@@ -83,14 +78,11 @@ describe("OpenAI image protocol", () => {
         expect(result).toMatchObject({ id: "complete", data: "ZmluYWw=" });
 
         for (const input of [partial, dataEvent({ [field]: 42 })]) {
-          const failed = yield* parseImageSse(body(input), "image/png").pipe(Effect.result);
-          expect(failed._tag).toBe("Failure");
-          if (failed._tag === "Failure") {
-            expect(failed.failure.operation).toBe("stream");
-            expect(failed.failure.message).toContain(
-              input === partial ? "completed image" : "malformed event",
-            );
-          }
+          const failure = yield* parseImageSse(body(input), "image/png").pipe(Effect.flip);
+          expect(failure.operation).toBe("stream");
+          expect(failure.message).toContain(
+            input === partial ? "completed image" : "malformed event",
+          );
         }
       }),
   );
@@ -105,24 +97,20 @@ describe("OpenAI image protocol", () => {
           }),
         ),
         "image/png",
-      ).pipe(Effect.result);
+      ).pipe(Effect.flip);
       const terminated = yield* parseImageSse(body("data: [DONE]\n\n"), "image/png").pipe(
-        Effect.result,
+        Effect.flip,
       );
 
-      expect(malformed._tag).toBe("Failure");
-      if (malformed._tag === "Failure") {
-        expect(malformed.failure.operation).toBe("stream");
-        expect(malformed.failure.message).toContain("malformed event");
-      }
-      expect(terminated._tag).toBe("Failure");
-      if (terminated._tag === "Failure") expect(terminated.failure.operation).toBe("stream");
+      expect(malformed.operation).toBe("stream");
+      expect(malformed.message).toContain("malformed event");
+      expect(terminated.operation).toBe("stream");
     }),
   );
 
   it.effect("sanitizes provider failure messages", () =>
     Effect.gen(function* () {
-      const result = yield* parseImageSse(
+      const failure = yield* parseImageSse(
         body(
           dataEvent({
             type: "response.failed",
@@ -130,13 +118,10 @@ describe("OpenAI image protocol", () => {
           }),
         ),
         "image/png",
-      ).pipe(Effect.result);
+      ).pipe(Effect.flip);
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.operation).toBe("response");
-        expect(result.failure.message).not.toContain("provider-secret");
-      }
+      expect(failure.operation).toBe("response");
+      expect(failure.message).not.toContain("provider-secret");
     }),
   );
 });
@@ -155,15 +140,14 @@ describe("OpenAI image byte and path validation", () => {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       const output = makeImageOutput({ fs, path: pathService, sharp });
-      const result = yield* output
+      const failure = yield* output
         .validatedGeneratedImage(
           { id: "image", status: "completed", data: "Y Q==", mimeType: "image/png" },
           "png",
         )
-        .pipe(Effect.result);
+        .pipe(Effect.flip);
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.operation).toBe("response");
+      expect(failure.operation).toBe("response");
       expect(decodeCount).toBe(0);
     }).pipe(provideBuiltLayer(nodePlatformLayer));
   });
@@ -181,19 +165,13 @@ describe("OpenAI image byte and path validation", () => {
       const reader = makeImageInputReader({ fs, path, safeFile, sharp: pngSharp });
       const output = makeImageOutput({ fs, path, sharp: pngSharp });
 
-      const inputResult = yield* reader(["../outside.png"], workspace).pipe(Effect.result);
-      const outputResult = yield* output
+      const inputFailure = yield* reader(["../outside.png"], workspace).pipe(Effect.flip);
+      const outputFailure = yield* output
         .persistImage(path.join(workspace, "..", "escaped"), workspace, bytes("image"), "png", "id")
-        .pipe(Effect.result);
+        .pipe(Effect.flip);
 
-      expect(inputResult._tag).toBe("Failure");
-      if (inputResult._tag === "Failure") expect(inputResult.failure.operation).toBe("input");
-      expect(outputResult._tag).toBe("Failure");
-      if (outputResult._tag === "Failure") {
-        expect(outputResult.failure._tag).toBe("OpenAIImageError");
-        if (outputResult.failure._tag === "OpenAIImageError")
-          expect(outputResult.failure.operation).toBe("save");
-      }
+      expect(inputFailure.operation).toBe("input");
+      expect(outputFailure).toMatchObject({ _tag: "OpenAIImageError", operation: "save" });
       expect(yield* fs.exists(path.join(root, "escaped"))).toBe(false);
     }).pipe(provideBuiltLayer(fileLayer)),
   );

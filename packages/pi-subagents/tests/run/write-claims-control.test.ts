@@ -2,9 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { SubagentService } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
   fakeRetainedBackendLayer,
@@ -12,13 +10,13 @@ import {
   contactParentFrame,
   localServiceFixture,
   retainedServiceFixture,
+  withService,
 } from "./fixtures/service-harness.ts";
 
 describe("shared-cwd write claims", () => {
   it.effect("grants and revokes claims while a claim requester waits for the parent", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const first = yield* service.start(
         request({
           name: "claim-requester",
@@ -74,13 +72,12 @@ describe("shared-cwd write claims", () => {
       expect(revoked.writeClaims).toEqual(["src/c.ts"]);
       const empty = yield* service.revokeWriteClaims(first.id, ["src/c.ts"]).pipe(Effect.flip);
       expect(empty).toMatchObject({ code: "write_claims_cannot_be_empty" });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("interrupts an out-of-claim native edit and pauses new writer admission", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const first = yield* service.start(
         request({
           name: "violating-writer",
@@ -186,7 +183,7 @@ describe("shared-cwd write claims", () => {
           }),
         )).state,
       ).toBe("running");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("stops a starting writer when a violating edit races task issue", () =>
@@ -198,8 +195,7 @@ describe("shared-cwd write claims", () => {
           initialSendGates: [{ spawnIndex: 0, type: "prompt", gate: promptGate }],
         }),
       );
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         const starting = yield* service
           .start(
             request({
@@ -209,9 +205,7 @@ describe("shared-cwd write claims", () => {
             }),
           )
           .pipe(Effect.forkScoped);
-        yield* yieldUntil(
-          () => fake.controls[0]?.commands.some((command) => command.type === "prompt") === true,
-        );
+        yield* yieldUntil(() => fake.controls[0]?.sent("prompt") === true);
         fake.controls[0]?.offer({
           type: "tool_execution_start",
           toolCallId: "starting-edit-outside-claim",
@@ -244,14 +238,13 @@ describe("shared-cwd write claims", () => {
           )
           .pipe(Effect.flip);
         expect(blocked).toMatchObject({ _tag: "SubagentWriterConflictError" });
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     }),
   );
 
   it.effect("repairs a confirmed paused offender without repeating the violation", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(
         request({
           name: "repairable-writer",
@@ -307,13 +300,12 @@ describe("shared-cwd write claims", () => {
         writeAudit: { violations: [{ path: "src/c.ts" }] },
       });
       expect(repaired.writeAudit?.violations).toHaveLength(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("rejects claim changes for ordinary pauses and non-offending peers", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const ordinary = yield* service.start(
         request({ name: "ordinary-pause", writeIntent: "writer", writes: ["src/a.ts"] }),
       );
@@ -347,19 +339,14 @@ describe("shared-cwd write claims", () => {
       });
       const peerChange = yield* service.grantWriteClaims(peer.id, ["src/f.ts"]).pipe(Effect.flip);
       expect(peerChange).toMatchObject({ code: "write_claim_change_not_waiting" });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("stops an interrupt-capable backend that cannot resume", () => {
     const { backend, projections, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer({
-        capabilities: ["interrupt", "rename-display"],
-      }),
-      {},
-      { publishReturnsCount: true },
+      fakeRetainedBackendLayer({ capabilities: ["interrupt", "rename-display"] }),
     );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(
         request({
           name: "non-resumable-writer",
@@ -384,13 +371,12 @@ describe("shared-cwd write claims", () => {
       );
       yield* yieldUntil(() => backend.controls[0]?.released() === 1);
       expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("keeps admission paused until terminal offender cleanup is confirmed", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(
         request({
           name: "cleanup-pending-writer",
@@ -425,13 +411,12 @@ describe("shared-cwd write claims", () => {
       yield* Deferred.succeed(releaseGate, undefined);
       yield* yieldUntil(() => fake.controls[0]?.released() === 1);
       expect((yield* service.resumeWriterAdmission(run.id)).writeAdmissionPaused).toBeUndefined();
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("records likely mutating Bash as an audit notice without a sticky warning", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(
         request({ name: "bash-writer", writeIntent: "writer", writes: ["src/a.ts"] }),
       );
@@ -451,6 +436,6 @@ describe("shared-cwd write claims", () => {
       expect(observed.writeAdmissionPaused).toBeUndefined();
       expect(observed.writeAudit?.bashWriteHints).toBe(1);
       expect(observed.warning).toBeUndefined();
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 });

@@ -1,20 +1,16 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerHerdrBtwApplication } from "../src/application.ts";
 
 type Handler = ExtensionHandler<any, any>;
-type HarnessContext = ExtensionContext & { cwd: string; signal?: AbortSignal };
 
 const harness = () => {
   const handlers = new Map<string, Handler[]>();
   const notify = vi.fn();
-  const piFixture = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
@@ -22,8 +18,8 @@ const harness = () => {
     registerFlag() {},
     getFlag: () => undefined,
     appendEntry() {},
-  };
-  const contextFixture = {
+  });
+  const ctx = extensionContextFixture({
     cwd: "/project",
     mode: "tui" as const,
     hasUI: true,
@@ -35,11 +31,7 @@ const harness = () => {
       getHeader: () => null,
     },
     ui: { notify },
-  };
-  // SAFETY: The fixture implements every ExtensionAPI member used by the application.
-  const pi = piFixture as typeof piFixture & ExtensionAPI;
-  // SAFETY: The fixture implements every ExtensionContext member used by the application.
-  const ctx = contextFixture as typeof contextFixture & HarnessContext;
+  });
   registerHerdrBtwApplication(pi);
   const invokeAll = <EventInput>(name: string, event: EventInput) =>
     Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
@@ -88,7 +80,7 @@ describe("herdr-btw session host capture", () => {
 
   it.effect("fails closed when the host signal cannot be captured safely", () =>
     Effect.gen(function* () {
-      const setups: ReadonlyArray<(ctx: HarnessContext) => void> = [
+      const setups: ReadonlyArray<(ctx: ReturnType<typeof harness>["ctx"]) => void> = [
         (ctx) =>
           void Object.defineProperty(ctx, "signal", {
             configurable: true,
@@ -115,11 +107,7 @@ describe("herdr-btw session host capture", () => {
       for (const setup of setups) {
         const h = harness();
         setup(h.ctx);
-        let startup!: ReturnType<typeof h.start>;
-        expect(() => {
-          startup = h.start();
-        }).not.toThrow();
-        yield* Effect.promise(() => startup);
+        yield* Effect.promise(() => h.start());
         expect(h.notify).toHaveBeenCalledOnce();
         expect(h.notify).toHaveBeenCalledWith(expect.any(String), "error");
       }

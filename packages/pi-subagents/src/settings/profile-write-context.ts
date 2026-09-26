@@ -1,6 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { hasObjectRuntimeType, isProjectTrusted } from "pi-cosmic-core";
-import { SessionProfileConflictError } from "../profiles/session-overrides.ts";
+import { isProjectTrusted } from "pi-cosmic-core";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 export const profileSetPatchBase = (
   inspection: ProfileSettingsInspection,
@@ -16,13 +15,6 @@ export const profileSetPatchBase = (
     projectTrusted,
   };
 };
-
-export const isSessionProfileConflict = <ErrorInput>(error: ErrorInput): boolean =>
-  error instanceof SessionProfileConflictError ||
-  (hasObjectRuntimeType(error) &&
-    error !== null &&
-    // SAFETY: the object guard permits reading an optional error tag.
-    (error as { readonly _tag?: unknown })._tag === "SessionProfileConflictError");
 
 export const captureProjectWriteTrust = (
   ctx: ExtensionCommandContext,

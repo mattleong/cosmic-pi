@@ -1,7 +1,6 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
-import type * as Scope from "effect/Scope";
 import type {
   SubagentNotification,
   SubagentNotificationDelivery,
@@ -12,7 +11,7 @@ import {
   deliveredCompletionKeys,
   hasEligibleCompletion,
 } from "./completion.ts";
-import type { CompletionGenerationRecord, RunRecord } from "./internal.ts";
+import type { CompletionGenerationRecord, RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { COMPLETION_RETRY_INITIAL_MILLIS, COMPLETION_RETRY_MAX_MILLIS } from "./limits.ts";
 
 export type SubagentQuestionNotification = Extract<
@@ -20,14 +19,9 @@ export type SubagentQuestionNotification = Extract<
   { readonly type: "question" }
 >;
 
-export interface RunNotificationDeliveryDependencies {
-  /** Owner scope for the persistent outbox workers. */
-  readonly ownerScope: Scope.Scope;
-  readonly records: ReadonlyMap<string, RunRecord>;
-  /** The shared service lock. Every `*Locked` method requires the caller to hold it. */
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+export interface RunNotificationDeliveryDependencies extends RunContext {
   /** Serializes both delivery workers against await claim acquisition. */
-  readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly withCompletionGate: WithRunLock;
   /** Host/ancestor boundary; must be called outside the service lock. */
   readonly notify: (
     notification: SubagentNotification,
@@ -268,11 +262,6 @@ export const makeRunNotificationDelivery = Effect.fn("RunNotificationDelivery.ma
   };
 });
 
-export type RunNotificationDelivery =
-  ReturnType<typeof makeRunNotificationDelivery> extends Effect.Effect<
-    infer Success,
-    unknown,
-    unknown
-  >
-    ? Success
-    : never;
+export type RunNotificationDelivery = Effect.Success<
+  ReturnType<typeof makeRunNotificationDelivery>
+>;

@@ -9,15 +9,11 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Semaphore from "effect/Semaphore";
 import * as Tracer from "effect/Tracer";
-import { mergeRefreshRequest, type RefreshRequest } from "./coordination/refresh-coordinator.ts";
+import type { RefreshRequest } from "./coordination/refresh-coordinator.ts";
 import { makeSubscriptionRefresh } from "./coordination/subscription-refresh.ts";
 import type { ScopedConfigMetadata, ScopedConfigStore } from "./config/scoped-config-store.ts";
 import { AgentDirectory } from "./platform/agent-directory.ts";
-import {
-  JsonDocumentStore,
-  type JsonDocumentModification,
-  type JsonObject,
-} from "./platform/json-document.ts";
+import { JsonDocumentStore, type JsonObject } from "./platform/json-document.ts";
 import { JsonHttpClient } from "./platform/json-http.ts";
 import { invokeHostCallback } from "./host-session.ts";
 import { makeFrozenProjection } from "./projection.ts";
@@ -29,6 +25,11 @@ import { withUsageEligibility, type UsageProjectionBase } from "./usage-projecti
 export interface UsageControllerConfigFields {
   readonly refreshIntervalMs: number;
   readonly showOnlyOnSubscriptionModels: boolean;
+}
+
+/** Resolved subscription-usage settings. Each provider owns its schema, defaults, and clamping. */
+export interface SubscriptionUsageConfig extends UsageControllerConfigFields {
+  readonly showResetTimes: boolean;
 }
 
 /** Minimal resolved-config shape required by the shared controller. */
@@ -59,25 +60,7 @@ type RefreshValue<Snapshot, Patch> =
     });
 
 /** Scoped configuration store operations used by the shared controller. */
-export interface UsageControllerStore<Resolved, E> {
-  readonly resolveConfig: (
-    cwd: string,
-    agentDir: string,
-    projectTrusted?: boolean,
-  ) => Effect.Effect<Resolved, E, JsonDocumentStore | Path.Path>;
-  readonly readRawConfig: (path: string) => Effect.Effect<JsonObject, E, JsonDocumentStore>;
-  readonly resolveCommittedConfig: (
-    current: Resolved,
-    committed: JsonObject,
-    globalFallback: JsonObject | undefined,
-  ) => Resolved;
-  readonly modifyConfig: <A, AfterCommitR = never>(
-    path: string,
-    modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
-  ) => Effect.Effect<A, E, JsonDocumentStore | AfterCommitR>;
-}
-
-type ScopedUsageControllerStore<Resolved extends ScopedConfigMetadata, E> = Pick<
+export type UsageControllerStore<Resolved extends ScopedConfigMetadata, E> = Pick<
   ScopedConfigStore<unknown, Resolved, E>,
   "resolveConfig" | "readRawConfig" | "resolveCommittedConfig" | "modifyConfig"
 >;
@@ -132,7 +115,6 @@ export interface UsageRefreshControllerOptions<
   readonly fetchOutcome: (args: {
     readonly ctx: ExtensionContext;
     readonly cfg: Resolved;
-    readonly authPath: string;
   }) => Effect.Effect<
     UsageFetchOutcome<Snapshot, Partial<P>>,
     never,
@@ -156,7 +138,6 @@ export interface UsageRefreshController<
   readonly contextChanged: (clearUsage?: boolean) => Effect.Effect<void>;
   readonly updateSetting: (id: string, value: string) => Effect.Effect<void, E | EI>;
   readonly agentDir: string;
-  readonly authPath: string;
   /** Extension seams for provider-specific config mutations sharing the same serialization. */
   readonly getState: Effect.Effect<P>;
   readonly updateState: (f: (current: P) => P) => Effect.Effect<P>;
@@ -169,7 +150,6 @@ export interface UsageRefreshController<
   readonly readGlobalFallback: (
     current: Resolved,
   ) => Effect.Effect<JsonObject | undefined, E, JsonDocumentStore>;
-  readonly invalidate: Effect.Effect<void>;
   readonly provideDependencies: <A, E2>(
     effect: Effect.Effect<A, E2, UsageProviderRequirements | R>,
   ) => Effect.Effect<A, E2>;
@@ -191,8 +171,7 @@ export const makeUsageRefreshController = <
   options: UsageRefreshControllerOptions<P, Resolved, Snapshot, E, EI, R>,
 ) =>
   Effect.gen(function* () {
-    const { context, cwd, projection, onChange, logLabel } = options;
-    const store: ScopedUsageControllerStore<Resolved, E> = options.store;
+    const { context, cwd, projection, onChange, logLabel, store } = options;
     const ambientDependencies = yield* Effect.context<UsageProviderRequirements>();
     // Capture only these shared services, never the whole ambient context. Context.merge keeps
     // the second context on key collisions, so provider dependencies cannot replace them.
@@ -269,13 +248,11 @@ export const makeUsageRefreshController = <
       return segments.join(":");
     });
     const refreshEngine = yield* makeSubscriptionRefresh<
-      RefreshRequest,
       string,
       RefreshValue<Snapshot, Partial<P>>,
       never,
       UsageProviderRequirements | R
     >({
-      mergeRequest: mergeRefreshRequest,
       currentKey: key,
       interval: state.getState.pipe(
         Effect.map((current) => current.config?.usage.refreshIntervalMs ?? 60_000),
@@ -298,7 +275,7 @@ export const makeUsageRefreshController = <
             now - current.lastFetchAt < cfg.usage.refreshIntervalMs
           )
             return { _tag: "Skipped" } as const;
-          const outcome = yield* options.fetchOutcome({ ctx, cfg, authPath });
+          const outcome = yield* options.fetchOutcome({ ctx, cfg });
           return { ...outcome, notify, fetchedAt: now };
         }),
       commit: (value) =>
@@ -411,13 +388,11 @@ export const makeUsageRefreshController = <
       contextChanged,
       updateSetting,
       agentDir,
-      authPath,
       getState: state.getState,
       updateState,
       synchronize,
       withSettingsPermit: (effect) => settingUpdates.withPermit(effect),
       readGlobalFallback,
-      invalidate: refreshEngine.invalidate,
       provideDependencies,
     };
     return controller;
@@ -428,7 +403,7 @@ export interface UsageDebugReport {
   readonly currentModel: string;
   readonly eligible: boolean;
   readonly requiresSubscriptionModel: boolean;
-  /** Rendered auth summary, e.g. "found", "found (authFile)", or "missing". */
+  /** Rendered auth summary, e.g. "found" or "missing". */
   readonly auth: string;
   /** Provider identity line; the value is masked before rendering. */
   readonly identityLabel: string;

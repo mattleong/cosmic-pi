@@ -1,18 +1,10 @@
 import { expect, it } from "@effect/vitest";
-import { serializeMessage, type FetchLike } from "@modelcontextprotocol/client";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import { openSdkHttp } from "../../../src/boundary/sdk-http.ts";
+import { legacyInitialized, parseWire, rpcError, rpcResult } from "../../fixtures/json-rpc.ts";
 
-const decode = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      method: Schema.String,
-      id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Finite])),
-    }),
-  ),
-);
 it.live.each(
   [400, 404, 200].flatMap((status) => [-32601, -32022].map((code) => ({ status, code }))),
 )("allows explicit legacy evidence $code in HTTP $status negotiation replies", ({ status, code }) =>
@@ -21,33 +13,18 @@ it.live.each(
     const fetch: FetchLike = (_url, init) =>
       Promise.resolve().then(() => {
         if (init?.method !== "POST") return new Response(null, { status: 405 });
-        const request = decode(init.body);
+        const request = parseWire(init.body);
         if (request.id === undefined) return new Response(null, { status: 202 });
         if (request.method === "server/discover")
-          return new Response(
-            serializeMessage({
-              jsonrpc: "2.0",
-              id: request.id,
-              error:
-                code === -32022
-                  ? { code: -32022, message: "version", data: { supported: ["2025-11-25"] } }
-                  : { code: -32601, message: "unknown method" },
-            }),
-            { status, headers: { "content-type": "application/json" } },
+          return rpcError(
+            request.id,
+            code === -32022
+              ? { code: -32022, message: "version", data: { supported: ["2025-11-25"] } }
+              : { code: -32601, message: "unknown method" },
+            status,
           );
         initializations++;
-        return new Response(
-          serializeMessage({
-            jsonrpc: "2.0",
-            id: request.id,
-            result: {
-              protocolVersion: "2025-11-25",
-              capabilities: {},
-              serverInfo: { name: "fixture", version: "1" },
-            },
-          }),
-          { headers: { "content-type": "application/json" } },
-        );
+        return rpcResult(request.id, legacyInitialized());
       });
     const connection = yield* openSdkHttp({
       url: new URL("https://fixture.test/mcp"),
@@ -75,24 +52,16 @@ it.live.each(
             return new Response(null, { status });
           }
           if (init?.method === "DELETE") return new Response(null, { status: 204 });
-          const message = decode(init?.body);
+          const message = parseWire(init?.body);
           if (message.id === undefined) return new Response(null, { status: 202 });
           const headers = new Headers({ "content-type": "application/json" });
           if (session) headers.set("mcp-session-id", "session");
-          return new Response(
-            serializeMessage({
-              jsonrpc: "2.0",
-              id: message.id,
-              result:
-                message.method === "tools/list"
-                  ? { tools: [] }
-                  : {
-                      protocolVersion: "2025-11-25",
-                      capabilities: { tools: { listChanged: true } },
-                      serverInfo: { name: "fixture", version: "1" },
-                    },
-            }),
-            { headers },
+          return rpcResult(
+            message.id,
+            message.method === "tools/list"
+              ? { tools: [] }
+              : legacyInitialized({ tools: { listChanged: true } }),
+            headers,
           );
         });
       const connection = yield* openSdkHttp({

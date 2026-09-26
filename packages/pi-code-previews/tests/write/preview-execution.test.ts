@@ -1,6 +1,5 @@
-// Test boundary intentionally uses Node temp-directory helpers.
+// Raw lstat inspects symbolic links because Effect FileSystem.stat follows them.
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
 import { layer } from "@effect/vitest";
 import { createWriteTool, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -10,7 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { expectTypeOf, test } from "vitest";
 import {
@@ -25,46 +24,18 @@ import { CodePreviewWriteService } from "../../src/write/service";
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
-const {
-  chmod,
-  link: createLink,
-  lstat,
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} = nodeFsModule.promises;
+const { lstat } = nodeFsModule.promises;
 const { join } = nodePathModule;
 
-class TestFileSystemError extends Schema.TaggedError<TestFileSystemError>()("TestFileSystemError", {
-  operation: Schema.String,
-}) {}
+const isSymlink = (path: string) =>
+  Effect.promise(() => lstat(path).then((stats) => stats.isSymbolicLink()));
 
-const testFileSystem = <A>(
-  operation: string,
-  evaluate: () => PromiseLike<A>,
-): Effect.Effect<A, TestFileSystemError> =>
-  Effect.tryPromise({
-    try: evaluate,
-    catch: () => new TestFileSystemError({ operation }),
+/** The shared FileSystem plus a temp directory removed when the test scope closes. */
+const fixture = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return { fs, dir: yield* fs.makeTempDirectoryScoped({ prefix }) };
   });
-
-const withTempDirectory = <A, E, R>(
-  prefix: string,
-  use: (directory: string) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | TestFileSystemError, R> =>
-  Effect.acquireUseRelease(
-    testFileSystem("make temp directory", () => mkdtemp(join(tmpdir(), prefix))),
-    use,
-    (directory) =>
-      testFileSystem("remove temp directory", () =>
-        rm(directory, { recursive: true, force: true }),
-      ),
-  );
 
 test("before-write details replace undefined details and preserve object fields", () => {
   const resultWithoutDetails: AgentToolResult<undefined> = { content: [], details: undefined };
@@ -96,387 +67,273 @@ test("before-write details replace undefined details and preserve object fields"
     });
 });
 
-layer(CodePreviewWriteService.layer)("session write service", (it) => {
+const testLayer = Layer.mergeAll(
+  CodePreviewWriteService.layer,
+  NodeFileSystem.layer,
+  NodePath.layer,
+);
+
+layer(testLayer)("session write service", (it) => {
   it.effect("writes preserve an existing symlink and update its target", () =>
-    withTempDirectory("pi-code-preview-link-", (dir) =>
-      Effect.gen(function* () {
-        yield* testFileSystem("write fixture", () => writeFile(join(dir, "target.txt"), "before"));
-        yield* testFileSystem("create symbolic link", () =>
-          symlink("target.txt", join(dir, "link.txt")),
-        );
-        yield* executeWriteWithPreviewEffect("tool-link", "link.txt", "after", dir);
-        assert.equal(
-          yield* testFileSystem("read target", () => readFile(join(dir, "target.txt"), "utf8")),
-          "after",
-        );
-        assert.equal(
-          (yield* testFileSystem("inspect symbolic link", () =>
-            lstat(join(dir, "link.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-link-");
+      yield* fs.writeFileString(join(dir, "target.txt"), "before");
+      yield* fs.symlink("target.txt", join(dir, "link.txt"));
+      yield* executeWriteWithPreviewEffect("tool-link", "link.txt", "after", dir);
+      assert.equal(yield* fs.readFileString(join(dir, "target.txt")), "after");
+      assert.equal(yield* isSymlink(join(dir, "link.txt")), true);
+    }),
   );
 
   it.effect("writes follow mixed relative and absolute final symlink chains", () =>
-    withTempDirectory("pi-code-preview-chain-", (dir) =>
-      Effect.gen(function* () {
-        const target = join(dir, "target.txt");
-        yield* testFileSystem("write fixture", () => writeFile(target, "before"));
-        yield* testFileSystem("create absolute symbolic link", () =>
-          symlink(target, join(dir, "absolute-link.txt")),
-        );
-        yield* testFileSystem("create relative symbolic link", () =>
-          symlink("absolute-link.txt", join(dir, "relative-link.txt")),
-        );
-        yield* executeWriteWithPreviewEffect("tool-chain", "relative-link.txt", "after", dir);
-        assert.equal(yield* testFileSystem("read target", () => readFile(target, "utf8")), "after");
-        assert.equal(
-          (yield* testFileSystem("inspect relative symbolic link", () =>
-            lstat(join(dir, "relative-link.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
-        assert.equal(
-          (yield* testFileSystem("inspect absolute symbolic link", () =>
-            lstat(join(dir, "absolute-link.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-chain-");
+      const target = join(dir, "target.txt");
+      yield* fs.writeFileString(target, "before");
+      yield* fs.symlink(target, join(dir, "absolute-link.txt"));
+      yield* fs.symlink("absolute-link.txt", join(dir, "relative-link.txt"));
+      yield* executeWriteWithPreviewEffect("tool-chain", "relative-link.txt", "after", dir);
+      assert.equal(yield* fs.readFileString(target), "after");
+      assert.equal(yield* isSymlink(join(dir, "relative-link.txt")), true);
+      assert.equal(yield* isSymlink(join(dir, "absolute-link.txt")), true);
+    }),
   );
 
   it.effect("resolves relative final links from their physical symlinked directory", () =>
-    withTempDirectory("pi-code-preview-parent-link-", (dir) =>
-      Effect.gen(function* () {
-        const real = join(dir, "real");
-        const nested = join(real, "sub");
-        yield* testFileSystem("make fixture directory", () => mkdir(nested, { recursive: true }));
-        yield* testFileSystem("write fixture", () => writeFile(join(real, "target.txt"), "before"));
-        yield* testFileSystem("create parent symbolic link", () =>
-          symlink("real/sub", join(dir, "alias")),
-        );
-        yield* testFileSystem("create leaf symbolic link", () =>
-          symlink("../target.txt", join(nested, "leaf")),
-        );
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-parent-link-");
+      const real = join(dir, "real");
+      const nested = join(real, "sub");
+      yield* fs.makeDirectory(nested, { recursive: true });
+      yield* fs.writeFileString(join(real, "target.txt"), "before");
+      yield* fs.symlink("real/sub", join(dir, "alias"));
+      yield* fs.symlink("../target.txt", join(nested, "leaf"));
 
-        yield* executeWriteWithPreviewEffect("tool-parent-link", "alias/leaf", "after", dir);
+      yield* executeWriteWithPreviewEffect("tool-parent-link", "alias/leaf", "after", dir);
 
-        assert.equal(
-          yield* testFileSystem("read target", () => readFile(join(real, "target.txt"), "utf8")),
-          "after",
-        );
-        assert.equal(
-          yield* Effect.promise(() =>
-            readFile(join(dir, "target.txt"), "utf8").then(
-              () => true,
-              () => false,
-            ),
-          ),
-          false,
-        );
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+      assert.equal(yield* fs.readFileString(join(real, "target.txt")), "after");
+      assert.equal(yield* fs.exists(join(dir, "target.txt")), false);
+    }),
   );
 
   it.effect("writes preserve target inode, mode, hard-link aliases, and open descriptors", () =>
-    withTempDirectory("pi-code-preview-inode-", (dir) =>
-      Effect.gen(function* () {
-        const target = join(dir, "target.txt");
-        const alias = join(dir, "alias.txt");
-        yield* testFileSystem("write fixture", () => writeFile(target, "before"));
-        yield* testFileSystem("set fixture mode", () => chmod(target, 0o640));
-        yield* testFileSystem("create hard link", () => createLink(target, alias));
-        const before = yield* testFileSystem("inspect target", () => stat(target));
-        yield* Effect.acquireUseRelease(
-          testFileSystem("open target", () => open(target, "r")),
-          (descriptor) =>
-            Effect.gen(function* () {
-              yield* executeWriteWithPreviewEffect("tool-inode", "target.txt", "after", dir);
-              const after = yield* testFileSystem("inspect updated target", () => stat(target));
-              const aliasAfter = yield* testFileSystem("inspect hard-link alias", () =>
-                stat(alias),
-              );
-              const buffer = Buffer.alloc(5);
-              const read = yield* testFileSystem("read open descriptor", () =>
-                descriptor.read(buffer, 0, buffer.length, 0),
-              );
-              assert.equal(buffer.subarray(0, read.bytesRead).toString("utf8"), "after");
-              assert.equal(
-                yield* testFileSystem("read hard-link alias", () => readFile(alias, "utf8")),
-                "after",
-              );
-              assert.equal(after.ino, before.ino);
-              assert.equal(aliasAfter.ino, before.ino);
-              assert.equal(after.mode & 0o777, 0o640);
-            }),
-          (descriptor) => testFileSystem("close target", () => descriptor.close()),
-        );
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-inode-");
+      const target = join(dir, "target.txt");
+      const alias = join(dir, "alias.txt");
+      yield* fs.writeFileString(target, "before");
+      yield* fs.chmod(target, 0o640);
+      yield* fs.link(target, alias);
+      const before = yield* fs.stat(target);
+      const descriptor = yield* fs.open(target);
+      yield* executeWriteWithPreviewEffect("tool-inode", "target.txt", "after", dir);
+      const after = yield* fs.stat(target);
+      const aliasAfter = yield* fs.stat(alias);
+      const read = yield* descriptor.readAlloc(5);
+      assert.equal(new TextDecoder().decode(Option.getOrThrow(read)), "after");
+      assert.equal(yield* fs.readFileString(alias), "after");
+      assert.equal(Option.getOrThrow(after.ino), Option.getOrThrow(before.ino));
+      assert.equal(Option.getOrThrow(aliasAfter.ino), Option.getOrThrow(before.ino));
+      assert.equal(after.mode & 0o777, 0o640);
+    }),
   );
 
   it.effect("new files use normal writeFile creation mode under the process umask", () =>
-    withTempDirectory("pi-code-preview-mode-", (dir) =>
-      Effect.gen(function* () {
-        const control = join(dir, "control.txt");
-        const preview = join(dir, "preview.txt");
-        yield* testFileSystem("write control fixture", () => writeFile(control, "control"));
-        yield* executeWriteWithPreviewEffect("tool-mode", "preview.txt", "preview", dir);
-        const controlMode =
-          (yield* testFileSystem("inspect control fixture", () => stat(control))).mode & 0o777;
-        const previewMode =
-          (yield* testFileSystem("inspect preview fixture", () => stat(preview))).mode & 0o777;
-        assert.equal(previewMode, controlMode);
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-mode-");
+      const control = join(dir, "control.txt");
+      yield* fs.writeFileString(control, "control");
+      yield* executeWriteWithPreviewEffect("tool-mode", "preview.txt", "preview", dir);
+      const controlMode = (yield* fs.stat(control)).mode & 0o777;
+      const previewMode = (yield* fs.stat(join(dir, "preview.txt"))).mode & 0o777;
+      assert.equal(previewMode, controlMode);
+    }),
   );
 
   it.effect("dangling symlinks do not create target directories", () =>
-    withTempDirectory("pi-code-preview-dangling-", (dir) =>
-      Effect.gen(function* () {
-        const link = join(dir, "link.txt");
-        const missingDirectory = join(dir, "missing");
-        yield* testFileSystem("create dangling symbolic link", () =>
-          symlink("missing/target.txt", link),
-        );
-        const error = yield* Effect.flip(
-          executeWriteWithPreviewEffect("tool-dangling", "link.txt", "after", dir),
-        );
-        assert.equal("operation" in error, true);
-        if (!("operation" in error)) return;
-        assert.equal(error.operation, "write");
-        assert.equal(
-          (yield* testFileSystem("inspect dangling symbolic link", () =>
-            lstat(link),
-          )).isSymbolicLink(),
-          true,
-        );
-        const created = yield* Effect.promise(() =>
-          lstat(missingDirectory).then(
-            () => true,
-            () => false,
-          ),
-        );
-        assert.equal(created, false);
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-dangling-");
+      const link = join(dir, "link.txt");
+      yield* fs.symlink("missing/target.txt", link);
+      const error = yield* Effect.flip(
+        executeWriteWithPreviewEffect("tool-dangling", "link.txt", "after", dir),
+      );
+      assert.equal("operation" in error, true);
+      if (!("operation" in error)) return;
+      assert.equal(error.operation, "write");
+      assert.equal(yield* isSymlink(link), true);
+      assert.equal(yield* fs.exists(join(dir, "missing")), false);
+    }),
   );
 
   it.effect("cyclic and over-depth final symlink chains fail without replacing links", () =>
-    withTempDirectory("pi-code-preview-cycle-", (dir) =>
-      Effect.gen(function* () {
-        yield* testFileSystem("create first cyclic symbolic link", () =>
-          symlink("b.txt", join(dir, "a.txt")),
-        );
-        yield* testFileSystem("create second cyclic symbolic link", () =>
-          symlink("a.txt", join(dir, "b.txt")),
-        );
-        yield* Effect.flip(executeWriteWithPreviewEffect("tool-cycle", "a.txt", "after", dir));
-        assert.equal(
-          (yield* testFileSystem("inspect first cyclic symbolic link", () =>
-            lstat(join(dir, "a.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
-        assert.equal(
-          (yield* testFileSystem("inspect second cyclic symbolic link", () =>
-            lstat(join(dir, "b.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-cycle-");
+      yield* fs.symlink("b.txt", join(dir, "a.txt"));
+      yield* fs.symlink("a.txt", join(dir, "b.txt"));
+      yield* Effect.flip(executeWriteWithPreviewEffect("tool-cycle", "a.txt", "after", dir));
+      assert.equal(yield* isSymlink(join(dir, "a.txt")), true);
+      assert.equal(yield* isSymlink(join(dir, "b.txt")), true);
 
-        yield* testFileSystem("write deep-link target", () =>
-          writeFile(join(dir, "deep-target.txt"), "before"),
-        );
-        for (let index = 0; index <= 40; index++) {
-          const destination = index === 40 ? "deep-target.txt" : `deep-${index + 1}.txt`;
-          yield* testFileSystem("create deep symbolic link", () =>
-            symlink(destination, join(dir, `deep-${index}.txt`)),
-          );
-        }
-        yield* Effect.flip(executeWriteWithPreviewEffect("tool-deep", "deep-0.txt", "after", dir));
-        assert.equal(
-          yield* testFileSystem("read deep-link target", () =>
-            readFile(join(dir, "deep-target.txt"), "utf8"),
-          ),
-          "before",
-        );
-        assert.equal(
-          (yield* testFileSystem("inspect first deep symbolic link", () =>
-            lstat(join(dir, "deep-0.txt")),
-          )).isSymbolicLink(),
-          true,
-        );
-      }),
-    ).pipe(provideBuiltLayer(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+      yield* fs.writeFileString(join(dir, "deep-target.txt"), "before");
+      for (let index = 0; index <= 40; index++) {
+        const destination = index === 40 ? "deep-target.txt" : `deep-${index + 1}.txt`;
+        yield* fs.symlink(destination, join(dir, `deep-${index}.txt`));
+      }
+      yield* Effect.flip(executeWriteWithPreviewEffect("tool-deep", "deep-0.txt", "after", dir));
+      assert.equal(yield* fs.readFileString(join(dir, "deep-target.txt")), "before");
+      assert.equal(yield* isSymlink(join(dir, "deep-0.txt")), true);
+    }),
   );
 
   it.effect("captures before-state only after a native predecessor has committed", () =>
-    withTempDirectory("pi-code-preview-native-first-", (dir) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const target = join(dir, "file");
-        yield* fs.writeFileString(target, "original");
-        const entered = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const run = Effect.runPromiseWith(yield* Effect.context<never>());
-        const native = createWriteTool(dir, {
-          operations: {
-            mkdir: () => Promise.resolve(),
-            writeFile: (path, content) =>
-              run(
-                Deferred.succeed(entered, undefined).pipe(
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(fs.writeFileString(path, content)),
-                ),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-native-first-");
+      const target = join(dir, "file");
+      yield* fs.writeFileString(target, "original");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const run = Effect.runPromiseWith(yield* Effect.context<never>());
+      const native = createWriteTool(dir, {
+        operations: {
+          mkdir: () => Promise.resolve(),
+          writeFile: (path, content) =>
+            run(
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(fs.writeFileString(path, content)),
               ),
-          },
-        });
-        const predecessor = yield* Effect.promise(() =>
-          native.execute("native-first", { path: "file", content: "native" }, undefined),
-        ).pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
-        const preview = yield* executeWriteWithPreviewEffect(
-          "preview-after-native",
-          "file",
-          "preview",
-          dir,
-        ).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        assert.equal(preview.pollUnsafe(), undefined);
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(predecessor);
-        yield* Fiber.join(preview);
-        assert.deepEqual(lookupBeforeWrite("preview-after-native"), {
-          kind: "content",
-          content: "native",
-        });
-        assert.equal(yield* fs.readFileString(target), "preview");
-      }).pipe(Effect.scoped),
-    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+            ),
+        },
+      });
+      const predecessor = yield* Effect.promise(() =>
+        native.execute("native-first", { path: "file", content: "native" }, undefined),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const preview = yield* executeWriteWithPreviewEffect(
+        "preview-after-native",
+        "file",
+        "preview",
+        dir,
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      assert.equal(preview.pollUnsafe(), undefined);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(predecessor);
+      yield* Fiber.join(preview);
+      assert.deepEqual(lookupBeforeWrite("preview-after-native"), {
+        kind: "content",
+        content: "native",
+      });
+      assert.equal(yield* fs.readFileString(target), "preview");
+    }).pipe(Effect.scoped),
   );
 
   it.effect("cancellation during mkdir settles the operation without admitting a write", () =>
-    withTempDirectory("pi-code-preview-mkdir-", (dir) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const started = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        let wrote = false;
-        const delayed = FileSystem.FileSystem.of({
-          ...fs,
-          makeDirectory: (directory, options) =>
-            Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Deferred.await(release)),
-              Effect.andThen(fs.makeDirectory(directory, options)),
-            ),
-          writeFileString: (target, next, options) =>
-            Effect.sync(() => {
-              wrote = true;
-            }).pipe(Effect.andThen(fs.writeFileString(target, next, options))),
-        });
-        const first = yield* executeWriteWithPreviewEffect(
-          "mkdir-cancelled",
-          "new/file",
-          "stale",
-          dir,
-        ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
-        yield* Deferred.await(started);
-        const cancellation = yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        assert.equal(cancellation.pollUnsafe(), undefined);
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(cancellation);
-        const result = yield* executeWriteWithPreviewEffect("mkdir-next", "new/file", "fresh", dir);
-        assert.equal(wrote, false);
-        assert.equal(lookupBeforeWrite("mkdir-cancelled"), undefined);
-        assert.equal(result.details.codePreviewBeforeWrite, undefined);
-        assert.equal(yield* fs.readFileString(join(dir, "new/file")), "fresh");
-      }).pipe(Effect.scoped),
-    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-mkdir-");
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let wrote = false;
+      const delayed = FileSystem.FileSystem.of({
+        ...fs,
+        makeDirectory: (directory, options) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(fs.makeDirectory(directory, options)),
+          ),
+        writeFileString: (target, next, options) =>
+          Effect.sync(() => {
+            wrote = true;
+          }).pipe(Effect.andThen(fs.writeFileString(target, next, options))),
+      });
+      const first = yield* executeWriteWithPreviewEffect(
+        "mkdir-cancelled",
+        "new/file",
+        "stale",
+        dir,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
+      yield* Deferred.await(started);
+      const cancellation = yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      assert.equal(cancellation.pollUnsafe(), undefined);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(cancellation);
+      const result = yield* executeWriteWithPreviewEffect("mkdir-next", "new/file", "fresh", dir);
+      assert.equal(wrote, false);
+      assert.equal(lookupBeforeWrite("mkdir-cancelled"), undefined);
+      assert.equal(result.details.codePreviewBeforeWrite, undefined);
+      assert.equal(yield* fs.readFileString(join(dir, "new/file")), "fresh");
+    }).pipe(Effect.scoped),
   );
 
   it.effect("cancellation during the queued before-state read cannot mutate the file", () =>
-    withTempDirectory("pi-code-preview-read-", (dir) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const target = join(dir, "file");
-        yield* fs.writeFileString(target, "before");
-        const started = yield* Deferred.make<void>();
-        const delayed = FileSystem.FileSystem.of({
-          ...fs,
-          open: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-        });
-        const first = yield* executeWriteWithPreviewEffect(
-          "read-cancelled",
-          "file",
-          "stale",
-          dir,
-        ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
-        yield* Deferred.await(started);
-        yield* Fiber.interrupt(first);
-        const next = yield* executeWriteWithPreviewEffect("read-next", "file", "fresh", dir);
-        assert.deepEqual(lookupBeforeWrite("read-next"), { kind: "content", content: "before" });
-        assert.equal(lookupBeforeWrite("read-cancelled"), undefined);
-        assert.deepEqual(next.details.codePreviewBeforeWrite, { kind: "content", byteLength: 6 });
-      }).pipe(Effect.scoped),
-    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-read-");
+      const target = join(dir, "file");
+      yield* fs.writeFileString(target, "before");
+      const started = yield* Deferred.make<void>();
+      const delayed = FileSystem.FileSystem.of({
+        ...fs,
+        open: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const first = yield* executeWriteWithPreviewEffect(
+        "read-cancelled",
+        "file",
+        "stale",
+        dir,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, delayed), Effect.forkScoped);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(first);
+      const next = yield* executeWriteWithPreviewEffect("read-next", "file", "fresh", dir);
+      assert.deepEqual(lookupBeforeWrite("read-next"), { kind: "content", content: "before" });
+      assert.equal(lookupBeforeWrite("read-cancelled"), undefined);
+      assert.deepEqual(next.details.codePreviewBeforeWrite, { kind: "content", byteLength: 6 });
+    }).pipe(Effect.scoped),
   );
 
   it.effect("interruption holds Pi's queue through mutation and correlation settlement", () =>
-    withTempDirectory("pi-code-preview-write-", (dir) =>
-      Effect.gen(function* () {
-        yield* testFileSystem("write fixture", () => writeFile(join(dir, "target.txt"), "before"));
-        const started = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const fs = yield* FileSystem.FileSystem;
-        const delayedFileSystem = Layer.succeed(
-          FileSystem.FileSystem,
-          FileSystem.FileSystem.of({
-            ...fs,
-            writeFileString: (path, content, options) =>
-              Deferred.succeed(started, undefined).pipe(
-                Effect.andThen(Deferred.await(release)),
-                Effect.andThen(fs.writeFileString(path, content, options)),
-              ),
-          }),
-        );
-        const providers = Layer.merge(delayedFileSystem, NodePath.layer);
-        const first = yield* executeWriteWithPreviewEffect(
-          "tool-1",
-          "target.txt",
-          "first",
-          dir,
-        ).pipe(provideBuiltLayer(providers), Effect.forkScoped);
-        yield* Deferred.await(started);
-        const second = yield* Effect.promise(() =>
-          createWriteTool(dir).execute(
-            "native-tool",
-            { path: "target.txt", content: "second" },
-            undefined,
-          ),
-        ).pipe(Effect.forkScoped);
-        yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        const pendingBeforeRelease = second.pollUnsafe();
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(second);
-        assert.equal(pendingBeforeRelease, undefined);
-        assert.equal(
-          yield* testFileSystem("read final target", () =>
-            readFile(join(dir, "target.txt"), "utf8"),
-          ),
-          "second",
-        );
-        assert.deepEqual(lookupBeforeWrite("tool-1"), { kind: "content", content: "before" });
-        yield* executeWriteWithPreviewEffect("tool-2", "target.txt", "third", dir).pipe(
-          provideBuiltLayer(providers),
-        );
-        assert.deepEqual(lookupBeforeWrite("tool-2"), { kind: "content", content: "second" });
-      }).pipe(Effect.scoped),
-    ).pipe(provideBuiltLayer(NodeFileSystem.layer)),
+    Effect.gen(function* () {
+      const { fs, dir } = yield* fixture("pi-code-preview-write-");
+      yield* fs.writeFileString(join(dir, "target.txt"), "before");
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const delayedFileSystem = Layer.succeed(
+        FileSystem.FileSystem,
+        FileSystem.FileSystem.of({
+          ...fs,
+          writeFileString: (path, content, options) =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(fs.writeFileString(path, content, options)),
+            ),
+        }),
+      );
+      const providers = Layer.merge(delayedFileSystem, NodePath.layer);
+      const first = yield* executeWriteWithPreviewEffect("tool-1", "target.txt", "first", dir).pipe(
+        provideBuiltLayer(providers),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(started);
+      const second = yield* Effect.promise(() =>
+        createWriteTool(dir).execute(
+          "native-tool",
+          { path: "target.txt", content: "second" },
+          undefined,
+        ),
+      ).pipe(Effect.forkScoped);
+      yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const pendingBeforeRelease = second.pollUnsafe();
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(second);
+      assert.equal(pendingBeforeRelease, undefined);
+      assert.equal(yield* fs.readFileString(join(dir, "target.txt")), "second");
+      assert.deepEqual(lookupBeforeWrite("tool-1"), { kind: "content", content: "before" });
+      yield* executeWriteWithPreviewEffect("tool-2", "target.txt", "third", dir).pipe(
+        provideBuiltLayer(providers),
+      );
+      assert.deepEqual(lookupBeforeWrite("tool-2"), { kind: "content", content: "second" });
+    }).pipe(Effect.scoped),
   );
 });

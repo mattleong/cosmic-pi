@@ -1,230 +1,213 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
-import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { describe, expect, it } from "vitest";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
-import {
-  makeWorkingMessageHost,
-  type WorkingMessageHostContract,
-  type WorkingMessageHostResult,
-} from "../src/boundary/host-working-message.ts";
-import { WorkingTimerService } from "../src/working/service.ts";
-import { extensionContextFixture } from "./support/host.ts";
+import { makeWorkingRow } from "../src/working/row.ts";
 
-function workingHarness(
-  set: (message?: string) => Effect.Effect<WorkingMessageHostResult> = () =>
-    Effect.succeed("written"),
-) {
-  const messages: Array<string | undefined> = [];
+/** A bound working row over a scriptable host context, a manual clock, and a manual ticker pool. */
+function workingHarness() {
+  let time = 0;
+  let mode: "tui" | "rpc" = "tui";
+  let failNext = false;
+  const attempted: Array<string | undefined> = [];
   const delivered: Array<string | undefined> = [];
-  const host: WorkingMessageHostContract = {
-    set: (message) =>
-      Effect.sync(() => {
-        messages.push(message);
-      }).pipe(
-        Effect.andThen(set(message)),
-        Effect.tap((result) =>
-          Effect.sync(() => {
-            if (result === "written") delivered.push(message);
-          }),
-        ),
-      ),
+  const tickers = new Set<() => void>();
+  const context = MutableRef.make<ExtensionContext>(
+    extensionContextFixture({
+      get mode() {
+        return mode;
+      },
+      ui: {
+        setWorkingMessage(message?: string) {
+          attempted.push(message);
+          if (failNext) {
+            failNext = false;
+            throw new Error("secret host failure");
+          }
+          delivered.push(message);
+        },
+      },
+    }),
+  );
+  const row = makeWorkingRow({
+    callbacks: makeHostCallbackBoundary(),
+    now: () => time,
+    every: (_intervalMs, tick) => {
+      const subscription = () => tick();
+      tickers.add(subscription);
+      return () => void tickers.delete(subscription);
+    },
+  });
+  row.activate(context);
+  return {
+    row,
+    context,
+    attempted,
+    delivered,
+    tickers,
+    setMode: (next: "tui" | "rpc") => {
+      mode = next;
+    },
+    failNextWrite: () => {
+      failNext = true;
+    },
+    advance: (seconds: number) => {
+      for (let second = 0; second < seconds; second += 1) {
+        time += 1_000;
+        for (const tick of tickers) tick();
+      }
+    },
   };
-  const layer = WorkingTimerService.layer(host);
-  return { messages, delivered, provide: provideBuiltLayer(layer) };
 }
 
-describe("Working message host", () => {
-  it.effect("builds a contained live-context boundary", () => {
-    const messages: Array<string | undefined> = [];
-    const callbacks = makeHostCallbackBoundary();
-    const context = MutableRef.make<ExtensionContext>(
-      extensionContextFixture({
-        mode: "tui" as const,
-        ui: { setWorkingMessage: (message?: string) => void messages.push(message) },
-      }),
-    );
-    const host = makeWorkingMessageHost({ context, callbacks });
+describe("working row", () => {
+  it("contains a throwing host write and retries it on the next tick", () => {
+    const h = workingHarness();
+    h.failNextWrite();
+    expect(() => h.row.agentStart()).not.toThrow();
+    h.advance(1);
+    h.failNextWrite();
+    h.advance(2);
 
-    return Effect.gen(function* () {
-      expect(yield* host.set("Working")).toBe("written");
-      expect(messages).toEqual(["Working"]);
-
-      MutableRef.set(context, extensionContextFixture({ mode: "rpc" as const }));
-      expect(yield* host.set("Hidden")).toBe("unavailable");
-      expect(messages).toEqual(["Working"]);
-
-      MutableRef.set(
-        context,
-        extensionContextFixture({
-          mode: "tui" as const,
-          ui: {
-            setWorkingMessage() {
-              throw new Error("secret host failure");
-            },
-          },
-        }),
-      );
-      expect(yield* host.set("Contained")).toBe("failed");
-      expect(callbacks.diagnostics()).toEqual([{ operation: "working-message" }]);
-    });
-  });
-});
-
-describe("WorkingTimerService", () => {
-  it.effect("retries after the initial TUI write throws", () => {
-    let failFirst = true;
-    const attempted: Array<string | undefined> = [];
-    const delivered: Array<string | undefined> = [];
-    const callbacks = makeHostCallbackBoundary();
-    const context = MutableRef.make<ExtensionContext>(
-      extensionContextFixture({
-        mode: "tui" as const,
-        ui: {
-          setWorkingMessage(message?: string) {
-            attempted.push(message);
-            if (failFirst) {
-              failFirst = false;
-              throw new Error("transient host failure");
-            }
-            delivered.push(message);
-          },
-        },
-      }),
-    );
-    const layer = WorkingTimerService.layer(makeWorkingMessageHost({ context, callbacks }));
-
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      expect(attempted).toHaveLength(1);
-      expect(delivered).toHaveLength(0);
-
-      yield* TestClock.adjust("1 second");
-      expect(attempted).toHaveLength(2);
-      expect(delivered.at(-1)).toBe("Working · 1s");
-    }).pipe(provideBuiltLayer(layer));
+    expect(h.attempted).toEqual(["Working · 0s", "Working · 1s", "Working · 2s", "Working · 3s"]);
+    expect(h.delivered).toEqual(["Working · 1s", "Working · 3s"]);
   });
 
-  it.effect("does not tick when the working-message host is unavailable", () => {
-    const harness = workingHarness(() => Effect.succeed("unavailable"));
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      expect(harness.messages).toHaveLength(1);
+  it("writes nothing and does not tick without a TUI working row", () => {
+    const h = workingHarness();
+    h.setMode("rpc");
+    h.row.agentStart();
+    h.advance(5);
 
-      yield* TestClock.adjust("5 seconds");
-      expect(harness.messages).toHaveLength(1);
-    }).pipe(harness.provide);
+    expect(h.attempted).toEqual([]);
+    expect(h.tickers.size).toBe(0);
   });
 
-  it.effect("excludes an idempotent user-prompt span from elapsed work", () => {
-    const harness = workingHarness();
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      yield* TestClock.adjust("3 seconds");
+  it("an unavailable tick freezes the clocks until a later write succeeds", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.advance(2);
+    h.setMode("rpc");
+    h.advance(1);
+    expect(h.tickers.size).toBe(0);
 
-      yield* timer.waitForUser;
-      yield* timer.waitForUser;
-      expect(harness.messages.at(-1)).toBe("Waiting for user");
-
-      yield* TestClock.adjust("8 seconds");
-      expect(harness.messages.at(-1)).toBe("Waiting for user");
-
-      yield* timer.resumeFromUser;
-      yield* timer.resumeFromUser;
-      expect(harness.messages.at(-1)).toBe("Working · 3s");
-
-      yield* TestClock.adjust("2 seconds");
-      expect(harness.messages.at(-1)).toBe("Working · 5s");
-    }).pipe(harness.provide);
+    h.setMode("tui");
+    h.advance(3);
+    expect(h.delivered.at(-1)).toBe("Working · 2s");
+    h.row.promptStart();
+    h.row.promptEnd();
+    expect(h.delivered.at(-1)).toBe("Working · 3s");
+    h.advance(1);
+    expect(h.delivered.at(-1)).toBe("Working · 4s");
   });
 
-  it.effect("drops output admitted while waiting and excludes the wait from throughput", () => {
-    const harness = workingHarness();
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      timer.noteOutputCharacters(40);
-      yield* TestClock.adjust("2 seconds");
-      expect(harness.messages.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
+  it("keeps ticking after a successful resume that follows an unavailable prompt write", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.advance(1);
+    h.setMode("rpc");
+    h.row.promptStart();
+    h.setMode("tui");
+    h.advance(2);
+    expect(h.delivered.at(-1)).toBe("Working · 1s");
 
-      yield* timer.waitForUser;
-      timer.noteOutputCharacters(400);
-      yield* TestClock.adjust("8 seconds");
-      yield* timer.resumeFromUser;
-      expect(harness.messages.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
-
-      timer.noteOutputCharacters(40);
-      yield* TestClock.adjust("2 seconds");
-      expect(harness.messages.at(-1)).toBe("Working · 4s · ~5.0 tok/s");
-    }).pipe(harness.provide);
+    h.row.promptEnd();
+    expect(h.delivered.at(-1)).toBe("Working · 1s");
+    h.advance(1);
+    expect(h.delivered.at(-1)).toBe("Working · 2s");
   });
 
-  it.effect("preserves a prompt wait admitted before timer startup", () => {
-    const harness = workingHarness();
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.waitForUser;
-      yield* timer.start;
+  it("excludes an idempotent user-prompt span from elapsed work", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.advance(3);
 
-      yield* TestClock.adjust("8 seconds");
-      expect(harness.messages.at(-1)).toBe("Waiting for user");
+    h.row.promptStart();
+    h.row.promptStart();
+    expect(h.delivered.at(-1)).toBe("Waiting for user");
+    h.advance(8);
+    expect(h.delivered.at(-1)).toBe("Waiting for user");
 
-      yield* timer.resumeFromUser;
-      expect(harness.messages.at(-1)).toBe("Working · 0s");
-      yield* TestClock.adjust("1 second");
-      expect(harness.messages.at(-1)).toBe("Working · 1s");
-    }).pipe(harness.provide);
+    h.row.promptEnd();
+    h.row.promptEnd();
+    expect(h.delivered.at(-1)).toBe("Working · 3s");
+    h.advance(2);
+    expect(h.delivered.at(-1)).toBe("Working · 5s");
   });
 
-  it.effect("keeps prompt timing active when transient host writes defect", () => {
-    let failNext = false;
-    const harness = workingHarness(() => {
-      if (!failNext) return Effect.succeed("written" as const);
-      failNext = false;
-      return Effect.die(new Error("host write failed"));
-    });
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      yield* TestClock.adjust("2 seconds");
+  it("drops output while waiting and excludes the wait from throughput", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.row.output(40);
+    h.advance(2);
+    expect(h.delivered.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
 
-      failNext = true;
-      yield* timer.waitForUser;
-      const writesAfterFailedWait = harness.messages.length;
-      yield* TestClock.adjust("8 seconds");
-      expect(harness.messages.length).toBeGreaterThan(writesAfterFailedWait);
-      expect(harness.delivered.at(-1)).toBe("Waiting for user");
-      failNext = true;
-      yield* timer.resumeFromUser;
-      yield* TestClock.adjust("1 second");
+    h.row.promptStart();
+    h.row.output(400);
+    h.advance(8);
+    h.row.promptEnd();
+    expect(h.delivered.at(-1)).toBe("Working · 2s · ~5.0 tok/s");
 
-      expect(harness.messages.at(-1)).toBe("Working · 3s");
-      yield* timer.stop;
-    }).pipe(harness.provide);
+    h.row.output(40);
+    h.advance(2);
+    expect(h.delivered.at(-1)).toBe("Working · 4s · ~5.0 tok/s");
   });
 
-  it.effect("retries after a transient ticker write defect", () => {
-    let failNext = false;
-    const harness = workingHarness(() => {
-      if (!failNext) return Effect.succeed("written" as const);
-      failNext = false;
-      return Effect.die(new Error("host write failed"));
-    });
-    return Effect.gen(function* () {
-      const timer = yield* WorkingTimerService;
-      yield* timer.start;
-      failNext = true;
-      yield* TestClock.adjust("1 second");
-      const writesAfterFailure = harness.messages.length;
+  it("pauses only the output clock between messages", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.row.output(40);
+    h.advance(1);
+    h.row.pauseOutput();
+    h.advance(3);
+    expect(h.delivered.at(-1)).toBe("Working · 4s · ~10.0 tok/s");
+  });
 
-      yield* TestClock.adjust("1 second");
-      expect(harness.messages.length).toBe(writesAfterFailure + 1);
-      expect(harness.delivered.at(-1)).toBe("Working · 2s");
-    }).pipe(harness.provide);
+  it("keeps prompt timing active when transient host writes fail", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.advance(2);
+
+    h.failNextWrite();
+    h.row.promptStart();
+    const writesAfterFailedWait = h.attempted.length;
+    h.advance(8);
+    expect(h.attempted.length).toBeGreaterThan(writesAfterFailedWait);
+    expect(h.delivered.at(-1)).toBe("Waiting for user");
+
+    h.failNextWrite();
+    h.row.promptEnd();
+    h.advance(1);
+    expect(h.delivered.at(-1)).toBe("Working · 3s");
+  });
+
+  it("settlement and deactivation clear a running row and stop ticking", () => {
+    const h = workingHarness();
+    h.row.agentStart();
+    h.advance(1);
+    h.row.agentEnd();
+    expect(h.delivered.slice(-2)).toEqual(["Working · 1s", undefined]);
+    expect(h.tickers.size).toBe(0);
+
+    h.row.agentStart();
+    h.row.promptStart();
+    h.row.deactivate();
+    expect(h.delivered.slice(-2)).toEqual(["Waiting for user", undefined]);
+    expect(h.tickers.size).toBe(0);
+    expect(h.row.isPrompting()).toBe(false);
+  });
+
+  it("ignores runs while unbound and prompts outside a run", () => {
+    const h = workingHarness();
+    h.row.deactivate();
+    h.row.agentStart();
+    h.row.activate(h.context);
+    h.row.promptStart();
+    h.row.output(40);
+    h.advance(2);
+
+    expect(h.attempted).toEqual([]);
+    expect(h.row.canPrompt()).toBe(false);
   });
 });

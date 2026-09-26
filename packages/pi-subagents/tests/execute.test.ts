@@ -8,7 +8,7 @@ import * as References from "effect/References";
 import type { ProfileRouteContinuation } from "../src/profiles/model.ts";
 import { runSessionOwned } from "../src/run/session-owned.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
-import { captureSubagentTools, context, view } from "./tools/fixtures/tool-harness.ts";
+import { captureSubagentTools, executeTool, view } from "./tools/fixtures/tool-harness.ts";
 
 const route: ProfileRouteContinuation = {
   profile: "reviewer",
@@ -83,12 +83,10 @@ describe("retry claim ownership", () => {
           });
           const tool = captureSubagentTools(service).get("subagent_lifecycle")!;
           const waiting = yield* Effect.tryPromise(() =>
-            tool.execute(
-              "retry",
+            executeTool(
+              tool,
               { action: "retry", runIds: ["agent-1"] },
-              controller.signal,
-              undefined,
-              context,
+              { callID: "retry", signal: controller.signal },
             ),
           ).pipe(Effect.exit, Effect.forkScoped);
           if (!cancelBeforeOwnership) {

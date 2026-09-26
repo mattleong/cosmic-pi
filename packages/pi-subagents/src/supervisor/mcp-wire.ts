@@ -1,44 +1,28 @@
 import * as Cause from "effect/Cause";
-import * as Data from "effect/Data";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { isJsonObject, runtimeTypeName, type JsonObject, type JsonValue } from "pi-cosmic-core";
-import { SupervisorDeliveryIdSchema, SupervisorRpcFailure } from "./protocol.ts";
+import type { SupervisorRpcFailure } from "./protocol.ts";
+import type { SupervisorToolFailure } from "./tool-call.ts";
 import {
-  isSupervisorMcpMessageArguments,
-  isSupervisorMcpProxyArguments,
-  isSupervisorMcpReportArguments,
   MAX_SUPERVISOR_MCP_DELIVERY_ID_CHARS,
   MAX_SUPERVISOR_MCP_MESSAGE_CHARS,
   MAX_SUPERVISOR_MCP_REPORT_CHARS,
-  MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS,
-  MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS,
   SUPERVISOR_MCP_DELIVERY_ID_PATTERN_SOURCE,
   SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS,
   SUPERVISOR_MCP_MESSAGE_TOOL_NAMES,
   SUPERVISOR_MCP_NONBLANK_PATTERN_SOURCE,
-  SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
-  SUPERVISOR_MCP_PROXY_TOOL_NAME,
   SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS,
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "./mcp-contract.ts";
 
 const MAX_ID_CHARS = 256;
 
-export class McpToolCallFailure extends Data.TaggedError("McpToolCallFailure")<{
-  readonly failure: unknown;
-}> {}
-
 export type RpcId = string | number;
 
 export type DecodedMcpMessage =
-  | {
-      readonly method: "initialize";
-      readonly id: RpcId;
-      readonly protocolVersion: string;
-      readonly piBridge: boolean;
-    }
+  | { readonly method: "initialize"; readonly id: RpcId; readonly protocolVersion: string }
   | { readonly method: "notifications/initialized" }
   | { readonly method: "notifications/cancelled"; readonly requestId: RpcId }
   | { readonly method: "ping" | "tools/list"; readonly id: RpcId }
@@ -55,15 +39,6 @@ export type DecodedMcpMessage =
     };
 
 export type ToolCall = Extract<DecodedMcpMessage, { readonly method: "tools/call" }>;
-
-type DecodedToolArguments =
-  | { readonly kind: "message"; readonly message: string }
-  | { readonly kind: "proxy"; readonly tool: string; readonly argumentsJson: string }
-  | {
-      readonly kind: "report";
-      readonly deliveryId: ReturnType<typeof SupervisorDeliveryIdSchema.make>;
-      readonly report: string;
-    };
 
 export interface McpToolResult {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
@@ -181,44 +156,6 @@ export const toolDefinitions = [
   },
 ];
 
-export const proxyToolDefinition = {
-  name: SUPERVISOR_MCP_PROXY_TOOL_NAME,
-  description: "Private delegated-Pi coordinator proxy.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      tool: { type: "string", minLength: 1, maxLength: MAX_SUPERVISOR_MCP_PROXY_TOOL_CHARS },
-      arguments_json: { type: "string", maxLength: MAX_SUPERVISOR_MCP_PROXY_JSON_CHARS },
-    },
-    required: SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS,
-    additionalProperties: false,
-  },
-  annotations: toolAnnotations,
-} as const;
-
-export const decodeToolArguments = <ValueInput>(
-  name: string,
-  value: ValueInput,
-  piBridgeClient: boolean,
-): DecodedToolArguments | undefined => {
-  if (name === SUPERVISOR_MCP_PROXY_TOOL_NAME) {
-    if (!piBridgeClient || !isSupervisorMcpProxyArguments(value)) return undefined;
-    return { kind: "proxy", tool: value.tool, argumentsJson: value.arguments_json };
-  }
-  if (name === SUPERVISOR_MCP_TOOL_NAMES[3]) {
-    if (!isSupervisorMcpReportArguments(value)) return undefined;
-    const deliveryId = SupervisorDeliveryIdSchema.makeOption(value.delivery_id);
-    if (Option.isNone(deliveryId)) return undefined;
-    return { kind: "report", deliveryId: deliveryId.value, report: value.report };
-  }
-  if (
-    !SUPERVISOR_MCP_MESSAGE_TOOL_NAMES.some((toolName) => toolName === name) ||
-    !isSupervisorMcpMessageArguments(value)
-  )
-    return undefined;
-  return { kind: "message", message: value.message };
-};
-
 const decodeInitializeMessage = <ParamsInput>(
   params: ParamsInput,
   id: RpcId | undefined,
@@ -234,13 +171,7 @@ const decodeInitializeMessage = <ParamsInput>(
     (own(params, "_meta") && !boundedMetadata(params._meta))
   )
     return undefined;
-  return {
-    method: "initialize",
-    id,
-    protocolVersion: params.protocolVersion,
-    piBridge:
-      isJsonObject(params.clientInfo) && params.clientInfo.name === "pi-subagents-pi-bridge",
-  };
+  return { method: "initialize", id, protocolVersion: params.protocolVersion };
 };
 
 const decodeInitializedMessage = <ParamsInput>(
@@ -325,29 +256,14 @@ export const toolResult = (text: string, isError = false): McpToolResult => {
   return result;
 };
 
-const failureCode = <FailureInput>(failure: FailureInput): string | undefined =>
-  failure instanceof SupervisorRpcFailure
-    ? failure.code
-    : isJsonObject(failure) && Predicate.isString(failure.code)
-      ? failure.code
-      : undefined;
-
-const failureMessage = <FailureInput>(failure: FailureInput): string | undefined =>
-  failure instanceof SupervisorRpcFailure
-    ? failure.message
-    : isJsonObject(failure) && boundedString(failure.message, 512)
-      ? failure.message
-      : undefined;
-
 const isCancellationCode = (code: string | undefined): boolean =>
-  code === "request_cancelled" ||
   code === "question_cancelled" ||
   code === "question_cancelled_by_report" ||
   code === "question_assignment_advanced";
 
 export const toolResponseFromExit = (
   id: RpcId,
-  exit: Exit.Exit<McpToolResult, McpToolCallFailure>,
+  exit: Exit.Exit<McpToolResult, SupervisorRpcFailure | SupervisorToolFailure>,
 ) => {
   if (Exit.isSuccess(exit)) return { jsonrpc: "2.0", id, result: exit.value };
   if (Cause.hasInterruptsOnly(exit.cause))
@@ -356,15 +272,13 @@ export const toolResponseFromExit = (
       id,
       error: { code: -32800, message: "MCP request was cancelled." },
     };
-  const wrapped = Cause.findErrorOption(exit.cause);
-  const failure = Option.isSome(wrapped) ? wrapped.value.failure : undefined;
-  const code = failureCode(failure);
+  const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
   return {
     jsonrpc: "2.0",
     id,
     error: {
-      code: isCancellationCode(code) ? -32800 : -32000,
-      message: failureMessage(failure) ?? "Private supervisor tool delivery failed.",
+      code: isCancellationCode(failure?.code) ? -32800 : -32000,
+      message: failure?.message ?? "Private supervisor tool delivery failed.",
     },
   };
 };

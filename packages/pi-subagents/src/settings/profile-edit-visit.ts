@@ -1,6 +1,10 @@
 import { isJsonObject, type JsonObject } from "pi-cosmic-core";
-import { decodeSubagentConfig } from "../config/schema.ts";
-import { captureRestoreDeclaration } from "../config/profile-restore.ts";
+import { decodeSubagentConfig, isLegacyConfigVersion } from "../config/schema.ts";
+import {
+  captureRestoreDeclaration,
+  migrateLegacyRouteJson,
+  stableJson,
+} from "../config/profile-restore.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { PROFILE_IDS, cloneProfileCandidates, type ProfileId } from "../profiles/model.ts";
 import {
@@ -23,36 +27,13 @@ export interface ProfileEditUndoPlan {
   readonly draft: ProfileRouteDraft;
   readonly restore?: ProfileEditRestore;
 }
-const canonical = (value: JsonObject[string] | undefined): string => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (isJsonObject(value))
-    return `{${Object.keys(value)
-      .sort()
-      .map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`)
-      .join(",")}}`;
-  return JSON.stringify(value) ?? "absent";
-};
 // Match store migration for comparison only; retain the raw checkpoint for exact restore.
-const restoreKey = (restore: ProfileEditRestore): string => {
-  const declaration = restore.declaration;
-  if (restore.sourceVersion !== 4 && restore.sourceVersion !== 5) return canonical(declaration);
-  const migrateCandidate = (value: JsonObject[string]): JsonObject[string] => {
-    if (!isJsonObject(value)) return value;
-    const next: JsonObject = {};
-    for (const [field, entry] of Object.entries(value)) {
-      if (field !== "fastMode") next[field] = entry;
-    }
-    if (value.fastMode === true) next.openaiFastMode = true;
-    return next;
-  };
-  return canonical(
-    Array.isArray(declaration)
-      ? declaration.map(migrateCandidate)
-      : declaration === undefined
-        ? undefined
-        : migrateCandidate(declaration),
-  );
-};
+const restoreKey = ({ declaration, sourceVersion }: ProfileEditRestore): string =>
+  declaration === undefined
+    ? "absent"
+    : stableJson(
+        isLegacyConfigVersion(sourceVersion) ? migrateLegacyRouteJson(declaration) : declaration,
+      );
 const rawRestore = (
   target: ProfileWorkspaceTarget,
   profile: ProfileId,

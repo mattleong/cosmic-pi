@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -15,6 +16,7 @@ import {
 } from "../../src/boundary/sdk-fetch.ts";
 import { makeSdkHttpControl } from "../../src/boundary/sdk-http-control.ts";
 import { SdkHttpOperationRegistry, SdkHttpTraffic } from "../../src/boundary/sdk-http-transport.ts";
+import { streamResponse } from "../fixtures/json-rpc.ts";
 
 const native = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({
@@ -25,14 +27,6 @@ const native = <A>(run: () => Promise<A>) =>
 const settled = <A>(run: () => Promise<A>) =>
   Effect.promise(() => Promise.resolve().then(run).then(Result.succeed, Result.fail));
 const url = "http://example.test/mcp";
-
-const ownership = () => {
-  const registry = new SdkHttpOperationRegistry(1);
-  const operation = registry.begin();
-  if (operation === undefined) throw new Error("Test operation admission failed.");
-  operation.bindRequestId(7);
-  return { registry, operation, session: registry.traffic };
-};
 
 const request = { method: "POST", body: '{"jsonrpc":"2.0","method":"tools/call","id":7}' };
 
@@ -48,19 +42,34 @@ const makeSdkFetch = (options: Omit<SdkFetchOptions, "beginControl">) =>
     },
   });
 
+/** One admitted operation for request ID 7, with a bounded fetch builder bound to it. */
+const ownership = () => {
+  const registry = new SdkHttpOperationRegistry();
+  const operation = registry.begin();
+  if (operation === undefined) throw new Error("Test operation admission failed.");
+  operation.bindRequestId(7);
+  const session = registry.traffic;
+  const boundedFetch = (fetch: FetchLike, maxBytes = 128) =>
+    makeSdkFetch({ maxBytes, session, lookupOperation: registry.lookupRequestId, fetch });
+  return { registry, operation, session, boundedFetch };
+};
+/** Session traffic that no admitted operation owns. */
+const uncorrelated = (fetch: FetchLike) => {
+  const session = new SdkHttpTraffic();
+  return {
+    session,
+    bounded: makeSdkFetch({ maxBytes: 128, session, lookupOperation: () => undefined, fetch }),
+  };
+};
+
 describe("bounded SDK fetch", () => {
   it.effect("strips private headers and owns a completed body", () =>
     Effect.gen(function* () {
-      const { registry, operation, session } = ownership();
+      const { operation, session, boundedFetch } = ownership();
       let observed: RequestInit | undefined;
-      const bounded = makeSdkFetch({
-        maxBytes: 128,
-        session,
-        lookupOperation: registry.lookupRequestId,
-        fetch: (_url, init) => {
-          observed = init;
-          return Promise.resolve(new Response("hello"));
-        },
+      const bounded = boundedFetch((_url, init) => {
+        observed = init;
+        return Promise.resolve(new Response("hello"));
       });
       const response = yield* native(() =>
         bounded(url, {
@@ -79,18 +88,13 @@ describe("bounded SDK fetch", () => {
 
   it.effect("never publishes idle between fetch and body ownership", () =>
     Effect.gen(function* () {
-      const { registry, session } = ownership();
+      const { session, boundedFetch } = ownership();
       const headers = yield* Deferred.make<Response>();
       const fetchSeen = yield* Deferred.make<void>();
       const idleSeen = yield* Deferred.make<void>();
-      const bounded = makeSdkFetch({
-        maxBytes: 128,
-        session,
-        lookupOperation: registry.lookupRequestId,
-        fetch: () => {
-          Deferred.doneUnsafe(fetchSeen, Effect.void);
-          return Effect.runPromise(Deferred.await(headers));
-        },
+      const bounded = boundedFetch(() => {
+        Deferred.doneUnsafe(fetchSeen, Effect.void);
+        return Effect.runPromise(Deferred.await(headers));
       });
       const pending = yield* Effect.forkChild(native(() => bounded(url, request)));
       yield* Deferred.await(fetchSeen);
@@ -111,25 +115,20 @@ describe("bounded SDK fetch", () => {
   for (const kind of ["redirect", "declared-limit"] as const) {
     it.effect(`retains ${kind} discard ownership until source cleanup settles`, () =>
       Effect.gen(function* () {
-        const { registry, session, operation } = ownership();
+        const { session, operation, boundedFetch } = ownership();
         const release = yield* Deferred.make<void>();
         let cancelled = false;
-        const response = new Response(
-          new ReadableStream<Uint8Array>({
+        const response = streamResponse(
+          {
             cancel() {
               cancelled = true;
               return Effect.runPromise(Deferred.await(release));
             },
-          }),
+          },
           { headers: kind === "declared-limit" ? { "content-length": "1000" } : {} },
         );
         if (kind === "redirect") Object.defineProperty(response, "redirected", { value: true });
-        const bounded = makeSdkFetch({
-          maxBytes: 128,
-          session,
-          lookupOperation: registry.lookupRequestId,
-          fetch: () => Promise.resolve(response),
-        });
+        const bounded = boundedFetch(() => Promise.resolve(response));
         const result = yield* settled(() => bounded(url, request));
         expect(Result.isFailure(result) && result.failure).toBeInstanceOf(
           kind === "redirect" ? SdkFetchRedirectError : SdkFetchResponseLimitError,
@@ -146,25 +145,19 @@ describe("bounded SDK fetch", () => {
 
   it.effect("settles text immediately on abort while source cancellation remains pending", () =>
     Effect.gen(function* () {
-      const { registry, session, operation } = ownership();
+      const { session, operation, boundedFetch } = ownership();
       const release = yield* Deferred.make<void>();
       let cancellations = 0;
-      const bounded = makeSdkFetch({
-        maxBytes: 128,
-        session,
-        lookupOperation: registry.lookupRequestId,
-        fetch: () =>
-          Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
-                cancel() {
-                  cancellations += 1;
-                  return Effect.runPromise(Deferred.await(release));
-                },
-              }),
-            ),
-          ),
-      });
+      const bounded = boundedFetch(() =>
+        Promise.resolve(
+          streamResponse({
+            cancel() {
+              cancellations += 1;
+              return Effect.runPromise(Deferred.await(release));
+            },
+          }),
+        ),
+      );
       const response = yield* native(() => bounded(url, request));
       const reading = yield* Effect.forkChild(settled(() => response.text()));
       yield* Effect.yieldNow;
@@ -181,24 +174,20 @@ describe("bounded SDK fetch", () => {
 
   it.effect("reports streamed byte overflow before a delayed cancel settles", () =>
     Effect.gen(function* () {
-      const { registry, session, operation } = ownership();
+      const { session, operation, boundedFetch } = ownership();
       const release = yield* Deferred.make<void>();
-      const bounded = makeSdkFetch({
-        maxBytes: 4,
-        session,
-        lookupOperation: registry.lookupRequestId,
-        fetch: () =>
+      const bounded = boundedFetch(
+        () =>
           Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
-                start(controller) {
-                  controller.enqueue(new TextEncoder().encode("123456"));
-                },
-                cancel: () => Effect.runPromise(Deferred.await(release)),
-              }),
-            ),
+            streamResponse({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode("123456"));
+              },
+              cancel: () => Effect.runPromise(Deferred.await(release)),
+            }),
           ),
-      });
+        4,
+      );
       const response = yield* native(() => bounded(url, request));
       const result = yield* settled(() => response.text());
       expect(Result.isFailure(result) && result.failure).toBeInstanceOf(SdkFetchResponseLimitError);
@@ -211,20 +200,11 @@ describe("bounded SDK fetch", () => {
 
   it.effect("does not treat rejected source cancellation as confirmed cleanup", () =>
     Effect.gen(function* () {
-      const session = new SdkHttpTraffic();
-      const bounded = makeSdkFetch({
-        maxBytes: 128,
-        session,
-        lookupOperation: () => undefined,
-        fetch: () =>
-          Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
-                cancel: () => Promise.reject(new Error("source cleanup rejected")),
-              }),
-            ),
-          ),
-      });
+      const { session, bounded } = uncorrelated(() =>
+        Promise.resolve(
+          streamResponse({ cancel: () => Promise.reject(new Error("source cleanup rejected")) }),
+        ),
+      );
       const response = yield* native(() => bounded(url));
       const reading = yield* Effect.forkChild(settled(() => response.text()));
       session.abort();
@@ -236,25 +216,17 @@ describe("bounded SDK fetch", () => {
   for (const method of ["GET", "DELETE", "POST"]) {
     it.effect(`owns uncorrelated ${method} traffic and rejects late admission`, () =>
       Effect.gen(function* () {
-        const session = new SdkHttpTraffic();
         let cancelled = false;
         let fetches = 0;
-        const bounded = makeSdkFetch({
-          maxBytes: 128,
-          session,
-          lookupOperation: () => undefined,
-          fetch: () => {
-            fetches += 1;
-            return Promise.resolve(
-              new Response(
-                new ReadableStream<Uint8Array>({
-                  cancel() {
-                    cancelled = true;
-                  },
-                }),
-              ),
-            );
-          },
+        const { session, bounded } = uncorrelated(() => {
+          fetches += 1;
+          return Promise.resolve(
+            streamResponse({
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          );
         });
         const response = yield* native(() => bounded(url, { method }));
         const reading = yield* Effect.forkChild(settled(() => response.text()));
@@ -270,18 +242,13 @@ describe("bounded SDK fetch", () => {
 
   it.effect("discards late headers after abort and ignores late operation failures", () =>
     Effect.gen(function* () {
-      const { registry, session, operation } = ownership();
+      const { session, operation, boundedFetch } = ownership();
       const headers = yield* Deferred.make<Response>();
       const seen = yield* Deferred.make<void>();
       let cancelled = false;
-      const bounded = makeSdkFetch({
-        maxBytes: 128,
-        session,
-        lookupOperation: registry.lookupRequestId,
-        fetch: () => {
-          Deferred.doneUnsafe(seen, Effect.void);
-          return Effect.runPromise(Deferred.await(headers));
-        },
+      const bounded = boundedFetch(() => {
+        Deferred.doneUnsafe(seen, Effect.void);
+        return Effect.runPromise(Deferred.await(headers));
       });
       const pending = yield* Effect.forkChild(settled(() => bounded(url, request)));
       yield* Deferred.await(seen);
@@ -289,13 +256,11 @@ describe("bounded SDK fetch", () => {
       expect(operation.isIdle).toBe(false);
       yield* Deferred.succeed(
         headers,
-        new Response(
-          new ReadableStream<Uint8Array>({
-            cancel() {
-              cancelled = true;
-            },
-          }),
-        ),
+        streamResponse({
+          cancel() {
+            cancelled = true;
+          },
+        }),
       );
       const result = yield* Fiber.join(pending);
       expect(Result.isFailure(result) && result.failure).toMatchObject({ name: "AbortError" });
@@ -334,14 +299,12 @@ describe("bounded SDK fetch", () => {
             lookupOperation: registry.lookupRequestId,
             fetch: (_url, init) =>
               Promise.resolve(
-                new Response(
-                  new ReadableStream<Uint8Array>({
-                    cancel() {
-                      if (init?.method === "GET") getCancelled = true;
-                      else controlCancelled = true;
-                    },
-                  }),
-                ),
+                streamResponse({
+                  cancel() {
+                    if (init?.method === "GET") getCancelled = true;
+                    else controlCancelled = true;
+                  },
+                }),
               ),
           });
           const get = yield* native(() => bounded(url, { method: "GET" }));
@@ -388,14 +351,12 @@ describe("bounded SDK fetch", () => {
           fetch: () => {
             fetches += 1;
             return Promise.resolve(
-              new Response(
-                new ReadableStream<Uint8Array>({
-                  cancel() {
-                    cancellations += 1;
-                    return Effect.runPromise(Deferred.await(release));
-                  },
-                }),
-              ),
+              streamResponse({
+                cancel() {
+                  cancellations += 1;
+                  return Effect.runPromise(Deferred.await(release));
+                },
+              }),
             );
           },
         });

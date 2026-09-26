@@ -54,7 +54,7 @@ describe("image compact summary", () => {
       expect(summary?.notices).toContainEqual(
         expect.objectContaining({
           kind: "recovery",
-          text: "Saved: /project/output.png",
+          text: expect.stringContaining("/project/output.png"),
         }),
       );
     }

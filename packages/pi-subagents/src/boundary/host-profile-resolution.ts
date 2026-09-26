@@ -156,33 +156,23 @@ const inheritedParentEffort = (pi: ExtensionAPI): SubagentEffort =>
 export const hostProfileEnvironment = (
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-): ProfileResolutionEnvironment =>
-  (() => {
-    const baseResult = {
-      availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
-        provider: model.provider,
-        id: model.id,
-        supportedEfforts: getSupportedThinkingLevels(model).flatMap((effort) => {
-          const decoded = decodeSubagentEffort(effort);
-          return decoded === undefined ? [] : [decoded];
-        }),
-      })),
-    };
-    const withParentModel = ctx.model
-      ? {
-          ...baseResult,
-          parentModel: {
-            model: `${ctx.model.provider}/${ctx.model.id}`,
-            effort: inheritedParentEffort(pi),
-          },
-        }
-      : baseResult;
-    const withForkAvailable = {
-      ...withParentModel,
-      forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
-    };
-    return withForkAvailable;
-  })();
+): ProfileResolutionEnvironment => ({
+  availablePiModels: ctx.modelRegistry.getAvailable().map((model) => ({
+    provider: model.provider,
+    id: model.id,
+    supportedEfforts: getSupportedThinkingLevels(model).flatMap((effort) => {
+      const decoded = decodeSubagentEffort(effort);
+      return decoded === undefined ? [] : [decoded];
+    }),
+  })),
+  ...(ctx.model && {
+    parentModel: {
+      model: `${ctx.model.provider}/${ctx.model.id}`,
+      effort: inheritedParentEffort(pi),
+    },
+  }),
+  forkAvailable: Boolean(ctx.sessionManager.getSessionFile() && stableParentLeaf(ctx)),
+});
 
 const resolveConcreteModel = (
   attempt: ProfileCandidateAttempt,
@@ -443,19 +433,12 @@ const resolvePlannedStart = (
         message: "Forked context requires a persisted parent session with a stable leaf.",
       });
     const concrete = selected.concrete;
-    if (normalizedClaims && selected.attempt.writeIntent !== "writer")
-      return yield* new InvalidSubagentRequestError({
-        code: "write_claims_read_only",
-        message: `Profile ${input.definition.id} resolved to read-only; writes may be supplied only for a writer profile.`,
-      });
     const routeContinuation = freezeSnapshot({
       profile: input.definition.id,
       routeSource: input.routeSource,
-      candidates: input.routeCandidates.map((candidate) => ({ ...candidate })),
+      candidates: input.routeCandidates,
       selectedCandidateIndex: selected.attempt.candidateIndex,
-      skippedCandidates: selected.selection.skippedCandidates.map((candidate) => ({
-        ...candidate,
-      })),
+      skippedCandidates: selected.selection.skippedCandidates,
     });
     const activeTools =
       concrete.runtime === "pi" ? yield* piRootActiveToolSnapshot(pi.getActiveTools()) : [];

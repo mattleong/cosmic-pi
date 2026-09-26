@@ -1,6 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { detachActivityItem } from "./detach.ts";
 
 export const ACTIVITY_VERSION = 1 as const;
 export const ACTIVITY_EVENT = "cosmic-ui:activity:v1";
@@ -85,19 +87,22 @@ export interface ActivityProviderRegistration {
   dispose(): void;
   isAvailable(): boolean;
 }
-export interface ActivityEnvelope {
-  readonly version: 1;
-  readonly sessionId: string;
-  readonly providerId: string;
-  readonly token: object;
-  readonly hostToken: object;
-  readonly operation: "register" | "publish" | "revoke";
-  readonly items?: unknown;
-  readonly starting?: unknown;
-  readonly invoke?: ActivityProviderOptions["invoke"];
-  readonly getDetail?: ActivityProviderOptions["getDetail"];
-  readonly acknowledge?: (available: boolean) => void;
-}
+const callback = <F>() =>
+  Schema.optional(Schema.declare<F>((value): value is F => Predicate.isFunction(value)));
+export const ActivityEnvelopeSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  sessionId: Schema.String,
+  providerId: Id,
+  operation: Schema.Literals(["register", "publish", "revoke"]),
+  token: Schema.ObjectKeyword,
+  hostToken: Schema.ObjectKeyword,
+  items: Schema.optional(Schema.Unknown),
+  starting: Schema.optional(Schema.Unknown),
+  invoke: callback<ActivityProviderOptions["invoke"]>(),
+  getDetail: callback<NonNullable<ActivityProviderOptions["getDetail"]>>(),
+  acknowledge: callback<(available: boolean) => void>(),
+});
+export type ActivityEnvelope = typeof ActivityEnvelopeSchema.Type;
 export const ActivityHostSchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Id,
@@ -110,29 +115,11 @@ const safeSummary = (text: string, limit: number) =>
 const detachedSummaries = (items: readonly ActivityItem[]): readonly ActivityItem[] | undefined => {
   if (items.length > 512 || items.some((item) => (item.actions?.length ?? 0) > 16))
     return undefined;
-  return items.map((item) => {
-    const detached = { ...item, title: safeSummary(item.title, 512) };
-    if (item.parent) Object.assign(detached, { parent: { ...item.parent } });
-    if (item.profile !== undefined)
-      Object.assign(detached, { profile: safeSummary(item.profile, 80) });
-    if (item.route !== undefined) Object.assign(detached, { route: safeSummary(item.route, 512) });
-    if (item.summary !== undefined)
-      Object.assign(detached, { summary: safeSummary(item.summary, 4096) });
-    if (item.detail !== undefined)
-      Object.assign(detached, {
-        detail: sanitizeDiagnosticContent(item.detail.slice(0, 16384), { maximumLength: 16384 }),
-      });
-    if (item.actions)
-      Object.assign(detached, {
-        actions: item.actions.map((action) => {
-          const value = { ...action, label: safeSummary(action.label, 4096) };
-          if (action.confirmation !== undefined)
-            Object.assign(value, { confirmation: safeSummary(action.confirmation, 4096) });
-          return value;
-        }),
-      });
-    return detached;
-  });
+  return items.map((item) =>
+    detachActivityItem(item, safeSummary, (detail) =>
+      sanitizeDiagnosticContent(detail.slice(0, 16384), { maximumLength: 16384 }),
+    ),
+  );
 };
 
 /** Plain callback adapter. Its owner must dispose it when the producer session closes. */
@@ -222,5 +209,66 @@ export function registerActivityProvider(
       disposed = true;
       unsubscribe();
     },
+  };
+}
+
+export interface RevisionedActivityProviderOptions {
+  readonly sessionId: string;
+  readonly providerId: string;
+  readonly isCurrent: () => boolean;
+  readonly items: () => readonly ActivityItem[];
+  /** Detail for an item that passed the session and exact-revision checks. */
+  readonly detail: (item: ActivityItem) => string;
+  /** Runs an action that the checked item revision currently offers. */
+  readonly act: (item: ActivityItem, actionId: string, signal: AbortSignal) => Promise<void>;
+  /** Change sources that republish the snapshot; each returns its unsubscribe. */
+  readonly subscriptions: ReadonlyArray<(publish: () => void) => () => void>;
+  readonly starting?: () => number;
+  readonly onAvailability?: (available: boolean, current: () => boolean) => void;
+}
+
+/**
+ * Registers a provider whose detail and actions require the current session and the exact item
+ * revision, and whose actions must be offered by that revision. Returns the disposer.
+ */
+export function registerRevisionedActivityProvider(
+  events: ActivityEvents,
+  options: RevisionedActivityProviderOptions,
+): () => void {
+  let live = true;
+  const current = () => live && options.isCurrent();
+  const lookup = (id: string, revision: string, signal: AbortSignal) => {
+    if (!current() || signal.aborted) throw new Error("Activity provider is unavailable.");
+    const item = options.items().find((item) => item.id === id && item.revision === revision);
+    if (!item) throw new Error("Activity item changed.");
+    return item;
+  };
+  const { starting, onAvailability } = options;
+  const registration = registerActivityProvider(events, {
+    sessionId: options.sessionId,
+    providerId: options.providerId,
+    snapshot: () => (current() ? options.items() : []),
+    ...(starting && { starting: () => (current() ? starting() : 0) }),
+    getDetail: (id, revision, signal) =>
+      Promise.resolve().then(() => options.detail(lookup(id, revision, signal))),
+    invoke: (id, action, revision, signal) =>
+      Promise.resolve().then(() => {
+        const item = lookup(id, revision, signal);
+        if (!item.actions?.some((allowed) => allowed.id === action))
+          throw new Error("Activity action is unavailable.");
+        return options.act(item, action, signal);
+      }),
+    ...(onAvailability && {
+      onAvailability: (available: boolean) => onAvailability(available, current),
+    }),
+  });
+  const unsubscribes = options.subscriptions.map((subscribe) =>
+    subscribe(() => registration.publish()),
+  );
+  registration.publish();
+  return () => {
+    live = false;
+    for (const unsubscribe of unsubscribes) unsubscribe();
+    registration.dispose();
   };
 }

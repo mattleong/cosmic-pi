@@ -12,7 +12,6 @@ import {
   activityAttentionTotals,
   activityStatus,
 } from "./attention.ts";
-export { activityStatus } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import {
   activityPath,

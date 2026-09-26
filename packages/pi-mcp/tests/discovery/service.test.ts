@@ -20,31 +20,30 @@ import type {
   McpReply,
   McpRequest,
 } from "../../src/client/model.ts";
-import type { McpEffectiveServer, McpResolvedConfig } from "../../src/config/model.ts";
-import { McpConfigStore } from "../../src/config/store.ts";
+import type { McpResolvedConfig } from "../../src/config/model.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import type { McpOperation } from "../../src/connection/model.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
-import type { McpDiscoveryQueryResult, McpDiscoveryRequest } from "../../src/discovery/model.ts";
+import { gate } from "../fixtures/probes.ts";
+import {
+  fakeAuth,
+  fakeConfigStore,
+  fakeConnection,
+  runWith,
+  stdioDefinition,
+  testConfig,
+  testServer,
+} from "../fixtures/services.ts";
+import type {
+  McpDiscoveryContract,
+  McpDiscoveryQueryResult,
+  McpDiscoveryRequest,
+} from "../../src/discovery/model.ts";
 
 const server = (
   id: string,
   policy: { allowTools?: ReadonlyArray<string>; denyTools?: ReadonlyArray<string> } = {},
-): McpEffectiveServer => ({
-  id,
-  scope: "global",
-  identity: `identity-${id}`,
-  directory: "/fixture",
-  enabled: true,
-  definition: {
-    transport: "stdio",
-    command: "fixture",
-    args: [],
-    environment: {},
-    denyTools: [],
-    ...policy,
-  },
-});
+) => testServer(id, { definition: stdioDefinition(policy) });
 const tool = (name: string): Schema.Json => ({ name, inputSchema: { type: "object" } });
 const reply = (request: McpRequest, result: Schema.JsonObject): McpReply => ({
   action: request.action,
@@ -70,76 +69,30 @@ const makeHarness = (
   capabilities: McpCapabilities = { tools: true, resources: false, prompts: false },
 ) =>
   Effect.gen(function* () {
-    const config = yield* Ref.make<McpResolvedConfig>({
-      revision: 1,
-      trusted: true,
-      diagnostics: [],
-      servers,
-      settings: {
-        enabled: true,
-        connectTimeoutMs: 15_000,
-        requestTimeoutMs: 60_000,
-        idleTimeoutMs: 600_000,
-        maxConcurrent: 8,
-        maxPerServer: 4,
-        maxQueued: 64,
-      },
-    });
-    const subscriber = yield* Ref.make<
-      ((next: McpResolvedConfig) => Effect.Effect<void>) | undefined
-    >(undefined);
+    const store = fakeConfigStore(testConfig({ servers }));
     const route = yield* Ref.make<Route>(defaultRoute);
     const calls = yield* Ref.make<Array<{ server: string; request: McpRequest }>>([]);
     const opened = yield* Ref.make<Array<string>>([]);
     const streams = new Map<string, Queue.Queue<McpMetadataFamily, Cause.Done>>();
-    const unsupported = Effect.fail(
-      boundaryError("unsupported", "not-sent", "Fixture operation is unsupported."),
-    );
     const activity = McpActivity.layer();
     const dependencies = Layer.mergeAll(
       activity,
-      Layer.succeed(McpConfigStore, {
-        snapshot: Ref.get(config),
-        subscribe: (publish) =>
-          Effect.acquireRelease(Ref.set(subscriber, publish), () => Ref.set(subscriber, undefined)),
-        reload: Ref.get(config),
-        setServer: () => unsupported,
-        removeServer: () => unsupported,
-        setSettings: () => unsupported,
-      }),
-      Layer.succeed(McpAuth, {
-        access: () => Effect.succeed(undefined),
-        status: () => Effect.succeed({ state: "none" }),
-        login: () => unsupported,
-        logout: () => Effect.void,
-        reject: () => Effect.void,
-        completeLogin: () => Effect.void,
-        finalizationFailed: () => Effect.void,
-        revoke: Effect.void,
-      }),
+      store.layer,
+      Layer.succeed(McpAuth, fakeAuth()),
       Layer.succeed(McpConnector, {
         open: (effective) =>
           Effect.gen(function* () {
             yield* Ref.update(opened, (ids) => [...ids, effective.id]);
             const queue = yield* Queue.make<McpMetadataFamily, Cause.Done>();
             streams.set(effective.id, queue);
-            const terminal = yield* Deferred.make<void, McpBoundaryError>();
-            const closed = yield* Ref.make(false);
-            const close = Ref.set(closed, true).pipe(
-              Effect.andThen(Queue.end(queue)),
-              Effect.andThen(Deferred.succeed(terminal, undefined)),
-              Effect.asVoid,
-            );
-            yield* Effect.addFinalizer(() => close);
-            return {
+            return yield* fakeConnection((terminal) => ({
               capabilities,
               changes: Stream.fromQueue(queue),
-              terminal: Deferred.await(terminal),
-              health: Ref.get(closed).pipe(
-                Effect.map((done) => ({ closed: done, cleanupUnconfirmed: false })),
+              close: Queue.end(queue).pipe(
+                Effect.andThen(Deferred.succeed(terminal, undefined)),
+                Effect.asVoid,
               ),
-              setToken: () => Effect.void,
-              request: (request: McpRequest) =>
+              request: (request) =>
                 Ref.update(calls, (previous) => [
                   ...previous,
                   { server: effective.id, request },
@@ -147,8 +100,7 @@ const makeHarness = (
                   Effect.andThen(Ref.get(route)),
                   Effect.flatMap((run) => run(request, effective.id)),
                 ),
-              close,
-            };
+            }));
           }),
       }),
     );
@@ -159,7 +111,13 @@ const makeHarness = (
       Layer.provideMerge(Layer.mergeAll(connections, activity)),
     );
     return {
-      layer,
+      run: runWith(
+        Effect.all({
+          discovery: Effect.service(McpDiscovery),
+          connections: Effect.service(McpConnections),
+        }),
+        layer,
+      ),
       calls,
       opened,
       route,
@@ -176,11 +134,7 @@ const makeHarness = (
           yield* Queue.end(queue);
         }),
       update: (change: (previous: McpResolvedConfig) => McpResolvedConfig) =>
-        Effect.gen(function* () {
-          const next = yield* Ref.updateAndGet(config, change);
-          const publish = yield* Ref.get(subscriber);
-          if (publish !== undefined) yield* publish(next);
-        }),
+        Effect.suspend(() => store.publish(change(store.current()))),
     };
   });
 const Page = Schema.Struct({
@@ -193,28 +147,28 @@ const Page = Schema.Struct({
 });
 const decodePage = (result: McpDiscoveryQueryResult) =>
   Schema.decodeUnknownEffect(Page)(result.data);
+const queryPage = (
+  discovery: McpDiscoveryContract,
+  request: McpDiscoveryRequest,
+  operation?: McpOperation,
+) => discovery.query(request, operation).pipe(Effect.flatMap(decodePage));
 
 it.effect(
   "unscoped list and search use only known metadata without connecting undiscovered servers",
   () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const empty = yield* discovery
-          .query({ action: "tools.search", query: "" })
-          .pipe(Effect.flatMap(decodePage));
+      yield* harness.run(function* ({ discovery }) {
+        const empty = yield* queryPage(discovery, { action: "tools.search", query: "" });
         expect(empty.page).toMatchObject({ items: [], total: 0 });
         expect(empty.undiscovered).toEqual(["a", "b"]);
         expect(yield* Ref.get(harness.opened)).toEqual([]);
         yield* discovery.query({ action: "tools.list", server: "a" });
-        const found = yield* discovery
-          .query({ action: "tools.search", query: "ALPHA" })
-          .pipe(Effect.flatMap(decodePage));
+        const found = yield* queryPage(discovery, { action: "tools.search", query: "ALPHA" });
         expect(found.page.items).toHaveLength(1);
         expect(found.undiscovered).toEqual(["b"]);
         expect(yield* Ref.get(harness.opened)).toEqual(["a"]);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -224,31 +178,24 @@ it.effect("deny wins across list, search and exact describe without leaking deni
       a: server("a", { allowTools: ["alpha", "beta"], denyTools: ["beta"] }),
       b: server("b", { allowTools: [] }),
     });
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
+    yield* harness.run(function* ({ discovery }) {
       const denied = yield* Effect.result(
         discovery.query({ action: "tools.describe", server: "a", tool: "beta" }),
       );
       expect(denied).toMatchObject({ _tag: "Failure", failure: { kind: "denied" } });
       expect(yield* Ref.get(harness.calls)).toHaveLength(0);
-      const first = yield* discovery
-        .query({ action: "tools.list", server: "a" })
-        .pipe(Effect.flatMap(decodePage));
+      const first = yield* queryPage(discovery, { action: "tools.list", server: "a" });
       expect(first.page.items).toHaveLength(1);
       expect(first.page.items).toEqual([expect.objectContaining({ name: "alpha" })]);
-      const none = yield* discovery
-        .query({ action: "tools.list", server: "b" })
-        .pipe(Effect.flatMap(decodePage));
+      const none = yield* queryPage(discovery, { action: "tools.list", server: "b" });
       expect(none.page.items).toEqual([]);
-      const search = yield* discovery
-        .query({ action: "tools.search", query: "beta" })
-        .pipe(Effect.flatMap(decodePage));
+      const search = yield* queryPage(discovery, { action: "tools.search", query: "beta" });
       expect(search.page.items).toEqual([]);
       const exact = yield* Effect.result(
         discovery.query({ action: "tools.describe", server: "a", tool: "ALPHA" }),
       );
       expect(exact).toMatchObject({ _tag: "Failure", failure: { kind: "denied" } });
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -278,9 +225,7 @@ it.effect(
             )
           : defaultRoute(request, id),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(snapshot.resources[0]?.uri).toEqual("file:///remote-only");
         expect(snapshot.templates[0]?.uriTemplate).toEqual("https://remote/{id}");
@@ -288,9 +233,7 @@ it.effect(
         expect(snapshot.tools[0]?.inputSchema).toEqual({ $ref: "https://untrusted/schema" });
         expect(snapshot.tools[0]?.extension).toEqual({ nested: [1] });
         expect(Object.isFrozen(snapshot.tools[0]?.extension)).toBe(true);
-        const listing = yield* discovery
-          .query({ action: "tools.list", server: "a" })
-          .pipe(Effect.flatMap(decodePage));
+        const listing = yield* queryPage(discovery, { action: "tools.list", server: "a" });
         expect(listing.page.items).toEqual([{ server: "a", name: "alpha" }]);
         const described = yield* discovery.query({
           action: "tools.describe",
@@ -303,15 +246,13 @@ it.effect(
           ["resources.templates", snapshot.templates],
           ["prompts.list", snapshot.prompts],
         ] as const) {
-          const page = yield* discovery
-            .query({ action, server: "a" })
-            .pipe(Effect.flatMap(decodePage));
+          const page = yield* queryPage(discovery, { action, server: "a" });
           expect(page.page.items).toEqual(entries);
         }
         expect((yield* Ref.get(harness.calls)).map((call) => call.request.action)).not.toContain(
           "resources.read",
         );
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -333,9 +274,7 @@ it.effect("keeps tools when advertised resource listings are unavailable", () =>
           )
         : defaultRoute(request, id),
     );
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    yield* harness.run(function* ({ discovery, connections }) {
       const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
       expect(snapshot.tools.map((entry) => entry.name)).toEqual(["alpha", "beta", "gamma"]);
       expect(snapshot.support).toEqual({
@@ -375,7 +314,7 @@ it.effect("keeps tools when advertised resource listings are unavailable", () =>
       const count = (yield* Ref.get(harness.calls)).length;
       expect(yield* connections.withOperation("a", {}, discovery.ensure)).toBe(snapshot);
       expect(yield* Ref.get(harness.calls)).toHaveLength(count);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -399,9 +338,7 @@ it.effect.each([
             )
           : defaultRoute(request, id),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const first = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(first.support[family]).toBe(false);
         expect(first[family]).toEqual([]);
@@ -425,7 +362,7 @@ it.effect.each([
         yield* connections.disconnect("a");
         expect(yield* discovery.known).toEqual([]);
         expect((yield* discovery.cached({ family })).catalogs[0]?.reason).toBeUndefined();
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -445,23 +382,20 @@ it.effect.each([
     yield* Ref.set(harness.route, (request, id) =>
       request.action === "resources.list" ? Effect.fail(failure) : defaultRoute(request, id),
     );
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
+    yield* harness.run(function* ({ discovery }) {
       expect(
         yield* discovery.query({ action: "tools.list", server: "a" }).pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       expect(yield* discovery.known).toEqual([]);
       expect((yield* discovery.cached({ family: "tools" })).entries).toEqual([]);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
 it.effect("refresh failure preserves the previous complete metadata revision", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness(undefined, { tools: true, resources: true, prompts: true });
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    yield* harness.run(function* ({ discovery, connections }) {
       const before = yield* connections.withOperation("a", {}, discovery.ensure);
       yield* connections.withOperation("b", {}, discovery.ensure);
       const queries: ReadonlyArray<McpDiscoveryRequest> = [
@@ -506,7 +440,7 @@ it.effect("refresh failure preserves the previous complete metadata revision", (
       expect(recovered.revision).toBeGreaterThan(before.revision);
       for (const query of queries)
         expect((yield* discovery.query(query)).notices.join(" ")).not.toContain("refresh");
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -515,20 +449,14 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         yield* discovery.query({ action: "tools.list", server: "a" });
         yield* discovery.query({ action: "tools.list", server: "b" });
-        const first = yield* discovery
-          .query({ action: "tools.list", limit: 1 })
-          .pipe(Effect.flatMap(decodePage));
+        const first = yield* queryPage(discovery, { action: "tools.list", limit: 1 });
         const cursor = first.page.nextCursor;
         expect(cursor).toBeDefined();
         if (cursor === undefined) return;
-        const second = yield* discovery
-          .query({ action: "tools.list", cursor, limit: 1 })
-          .pipe(Effect.flatMap(decodePage));
+        const second = yield* queryPage(discovery, { action: "tools.list", cursor, limit: 1 });
         expect(second.page.items).not.toEqual(first.page.items);
         expect(
           yield* Effect.result(discovery.query({ action: "tools.search", query: "", cursor })),
@@ -537,9 +465,7 @@ it.effect(
         expect(
           yield* Effect.result(discovery.query({ action: "tools.list", cursor })),
         ).toMatchObject({ _tag: "Failure", failure: { kind: "stale" } });
-        const current = yield* discovery
-          .query({ action: "tools.list", limit: 1 })
-          .pipe(Effect.flatMap(decodePage));
+        const current = yield* queryPage(discovery, { action: "tools.list", limit: 1 });
         yield* harness.update((config) => ({ ...config, revision: 2 }));
         if (current.page.nextCursor !== undefined)
           expect(
@@ -548,7 +474,7 @@ it.effect(
             ),
           ).toMatchObject({ _tag: "Failure", failure: { kind: "stale" } });
         expect(yield* discovery.known).toEqual([]);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -557,29 +483,24 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      const started = yield* Deferred.make<void>();
-      const finish = yield* Deferred.make<void>();
+      const held = yield* gate();
       yield* Ref.set(harness.route, (request, id) =>
-        Deferred.succeed(started, undefined).pipe(
-          Effect.andThen(Deferred.await(finish)),
-          Effect.andThen(defaultRoute(request, id)),
-        ),
+        held.pass.pipe(Effect.andThen(defaultRoute(request, id))),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
+      yield* harness.run(function* ({ discovery }) {
         const first = yield* Effect.forkScoped(
           discovery.query({ action: "tools.list", server: "a" }),
         );
-        yield* Deferred.await(started);
+        yield* held.entered;
         const second = yield* Effect.forkScoped(
           discovery.query({ action: "tools.list", server: "a" }),
         );
         yield* Fiber.interrupt(first);
-        yield* Deferred.succeed(finish, undefined);
+        yield* held.open;
         const result = yield* Fiber.join(second).pipe(Effect.flatMap(decodePage));
         expect(result.page.total).toBe(3);
         expect(yield* Ref.get(harness.calls)).toHaveLength(1);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -589,8 +510,7 @@ it.effect(
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const refreshed = yield* Deferred.make<void>();
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
+      yield* harness.run(function* ({ discovery }) {
         yield* discovery.query({ action: "tools.list", server: "a" });
         yield* discovery.query({ action: "tools.list", server: "a" });
         yield* Ref.set(harness.route, (request) =>
@@ -603,12 +523,10 @@ it.effect(
         yield* harness.notify("a", "prompts");
         yield* TestClock.adjust("30 millis");
         yield* Deferred.await(refreshed);
-        const found = yield* discovery
-          .query({ action: "tools.list", server: "a" })
-          .pipe(Effect.flatMap(decodePage));
+        const found = yield* queryPage(discovery, { action: "tools.list", server: "a" });
         expect(found.page.items).toEqual([expect.objectContaining({ name: "changed" })]);
         expect(yield* Ref.get(harness.calls)).toHaveLength(2);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -624,13 +542,9 @@ const notificationProbe = Effect.gen(function* () {
       shared: (key, use) =>
         Effect.suspend(() => {
           entered++;
-          return operation.shared(key, use).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                settled++;
-              }),
-            ),
-          );
+          return operation
+            .shared(key, use)
+            .pipe(Effect.ensuring(Effect.sync(() => void settled++)));
         }),
     }),
   );
@@ -656,16 +570,12 @@ it.effect.each([
   ({ phase, ttlMs }) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
-      const held = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
+      const held = yield* gate();
       const refreshed = yield* Deferred.make<void>();
-      const pause = Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release)));
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const probe = yield* notificationProbe;
         yield* Ref.set(harness.route, (request) =>
-          (phase === "response" ? pause : Effect.void).pipe(
+          (phase === "response" ? held.pass : Effect.void).pipe(
             Effect.as(reply(request, { tools: [tool("superseded")] })),
           ),
         );
@@ -675,12 +585,14 @@ it.effect.each([
               ...operation,
               shared: (key, use) =>
                 operation.shared(key, (owned) =>
-                  use(owned).pipe(Effect.tap(() => (phase === "settlement" ? pause : Effect.void))),
+                  use(owned).pipe(
+                    Effect.tap(() => (phase === "settlement" ? held.pass : Effect.void)),
+                  ),
                 ),
             }),
           )
           .pipe(Effect.result, Effect.forkChild);
-        yield* Deferred.await(held);
+        yield* held.entered;
         yield* harness.notify("a", "tools");
         yield* probe.joined;
         yield* Ref.set(harness.route, (request) =>
@@ -688,58 +600,60 @@ it.effect.each([
             Effect.as(reply(request, { ttlMs, tools: [tool("changed")] })),
           ),
         );
-        yield* Deferred.succeed(release, undefined);
+        yield* held.open;
         yield* Fiber.join(foreground);
         yield* probe.settled(3);
         expect(yield* Deferred.isDone(refreshed)).toBe(true);
         const cached = yield* discovery.cached({ family: "tools" });
         expect(cached.catalogs[0]?.state).toBe(ttlMs === 0 ? "stale" : "ready");
-        const page = yield* discovery
-          .query({ action: "tools.list" })
-          .pipe(Effect.flatMap(decodePage));
+        const page = yield* queryPage(discovery, { action: "tools.list" });
         expect(page.page.items).toEqual([expect.objectContaining({ name: "changed" })]);
         yield* TestClock.adjust("100 millis");
         expect(yield* Ref.get(harness.calls)).toHaveLength(3);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
+
+/** Holds a foreground refresh, notifies during it, then releases it once `followup` has started. */
+const holdRefreshThenNotify = (
+  harness: Effect.Success<ReturnType<typeof makeHarness>>,
+  followup: Route,
+) =>
+  Effect.gen(function* () {
+    const discovery = yield* McpDiscovery;
+    const connections = yield* McpConnections;
+    const probe = yield* notificationProbe;
+    const held = yield* gate();
+    const started = yield* Deferred.make<void>();
+    yield* Ref.set(harness.route, (request) =>
+      held.pass.pipe(Effect.as(reply(request, { tools: [tool("superseded")] }))),
+    );
+    const foreground = yield* connections
+      .withOperation("a", {}, discovery.refresh)
+      .pipe(Effect.result, Effect.forkChild);
+    yield* held.entered;
+    yield* harness.notify("a", "tools");
+    yield* probe.joined;
+    yield* Ref.set(harness.route, (request, id) =>
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(followup(request, id))),
+    );
+    yield* held.open;
+    yield* Fiber.join(foreground);
+    yield* yieldUntil(() => Deferred.isDoneUnsafe(started));
+    return { discovery, connections, probe };
+  });
 
 it.effect.each(["failure", "deadline", "revocation"] as const)(
   "notification follow-up stays bounded after %s",
   (outcome) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
-      const held = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const followup = yield* Deferred.make<void>();
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
-        const probe = yield* notificationProbe;
-        yield* Ref.set(harness.route, (request) =>
-          Deferred.succeed(held, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-            Effect.as(reply(request, { tools: [tool("superseded")] })),
-          ),
+      yield* harness.run(function* () {
+        const { discovery, connections, probe } = yield* holdRefreshThenNotify(harness, () =>
+          outcome === "failure"
+            ? Effect.fail(boundaryError("transport", "unknown", "Fixture refresh failed."))
+            : Effect.never,
         );
-        const foreground = yield* connections
-          .withOperation("a", {}, discovery.refresh)
-          .pipe(Effect.result, Effect.forkChild);
-        yield* Deferred.await(held);
-        yield* harness.notify("a", "tools");
-        yield* probe.joined;
-        yield* Ref.set(harness.route, () =>
-          Deferred.succeed(followup, undefined).pipe(
-            Effect.andThen(
-              outcome === "failure"
-                ? Effect.fail(boundaryError("transport", "unknown", "Fixture refresh failed."))
-                : Effect.never,
-            ),
-          ),
-        );
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(foreground);
-        yield* yieldUntil(() => Deferred.isDoneUnsafe(followup));
         if (outcome === "revocation") yield* connections.revoke("a");
         yield* TestClock.adjust("61 seconds");
         yield* probe.settled(3);
@@ -750,47 +664,23 @@ it.effect.each(["failure", "deadline", "revocation"] as const)(
           expect(yield* discovery.known).toEqual([]);
         } else {
           expect(cached.catalogs[0]?.state).toBe("refresh-failed");
-          const page = yield* discovery
-            .query({ action: "tools.list" })
-            .pipe(Effect.flatMap(decodePage));
+          const page = yield* queryPage(discovery, { action: "tools.list" });
           expect(page.page.items).toHaveLength(3);
         }
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
 it.effect("notifications arriving during the bounded follow-up remain pending", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness({ a: server("a") });
-    const held = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const followup = yield* Deferred.make<void>();
     const finish = yield* Deferred.make<void>();
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
-      const probe = yield* notificationProbe;
-      yield* Ref.set(harness.route, (request) =>
-        Deferred.succeed(held, undefined).pipe(
-          Effect.andThen(Deferred.await(release)),
-          Effect.as(reply(request, { tools: [tool("superseded")] })),
-        ),
-      );
-      const foreground = yield* connections
-        .withOperation("a", {}, discovery.refresh)
-        .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(held);
-      yield* harness.notify("a", "tools");
-      yield* probe.joined;
-      yield* Ref.set(harness.route, (request) =>
-        Deferred.succeed(followup, undefined).pipe(
-          Effect.andThen(Deferred.await(finish)),
+    yield* harness.run(function* () {
+      const { discovery, probe } = yield* holdRefreshThenNotify(harness, (request) =>
+        Deferred.await(finish).pipe(
           Effect.as(reply(request, { tools: [tool("also-superseded")] })),
         ),
       );
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(foreground);
-      yield* yieldUntil(() => Deferred.isDoneUnsafe(followup));
       let arrivals = 0;
       yield* discovery.subscribeChanges(() => {
         arrivals++;
@@ -806,20 +696,17 @@ it.effect("notifications arriving during the bounded follow-up remain pending", 
       yield* TestClock.adjust("30 millis");
       yield* probe.settled(4);
       expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe("ready");
-      const page = yield* discovery
-        .query({ action: "tools.list" })
-        .pipe(Effect.flatMap(decodePage));
+      const page = yield* queryPage(discovery, { action: "tools.list" });
       expect(page.page.items).toEqual([expect.objectContaining({ name: "latest" })]);
       expect(yield* Ref.get(harness.calls)).toHaveLength(4);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
 it.effect("a notification-owned failed refresh is not retried", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness({ a: server("a") });
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
+    yield* harness.run(function* ({ discovery }) {
       const probe = yield* notificationProbe;
       yield* Ref.set(harness.route, () =>
         Effect.fail(boundaryError("transport", "unknown", "Fixture refresh failed.")),
@@ -832,7 +719,7 @@ it.effect("a notification-owned failed refresh is not retried", () =>
       expect((yield* discovery.cached({ family: "tools" })).catalogs[0]?.state).toBe(
         "refresh-failed",
       );
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -842,9 +729,7 @@ it.effect(
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const started = yield* Deferred.make<void>();
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         yield* discovery.query({ action: "tools.list", server: "a" });
         yield* Ref.set(harness.route, () =>
           Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
@@ -856,52 +741,39 @@ it.effect(
         yield* connections.revoke("a");
         expect(yield* discovery.known).toEqual([]);
         expect(yield* Fiber.await(pending)).toMatchObject({ _tag: "Failure" });
-        const known = yield* discovery
-          .query({ action: "tools.list" })
-          .pipe(Effect.flatMap(decodePage));
+        const known = yield* queryPage(discovery, { action: "tools.list" });
         expect(known.page.items).toEqual([]);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
 it.effect("an expired notification owner cannot be repopulated by a late refresh", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness();
-    const started = yield* Deferred.make<void>();
-    const finish = yield* Deferred.make<void>();
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    const held = yield* gate();
+    yield* harness.run(function* ({ discovery, connections }) {
       yield* discovery.query({ action: "tools.list", server: "a" });
       yield* Ref.set(harness.route, (request, id) =>
-        Deferred.succeed(started, undefined).pipe(
-          Effect.andThen(Deferred.await(finish)),
-          Effect.andThen(defaultRoute(request, id)),
-        ),
+        held.pass.pipe(Effect.andThen(defaultRoute(request, id))),
       );
       const pending = yield* Effect.forkScoped(
         connections.withOperation("a", {}, discovery.refresh),
       );
-      yield* Deferred.await(started);
+      yield* held.entered;
       yield* harness.endChanges("a");
       yield* TestClock.adjust("30 millis");
       expect(yield* discovery.known).toEqual([]);
-      yield* Deferred.succeed(finish, undefined);
-      expect(yield* Effect.result(Fiber.join(pending))).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "stale" },
-      });
+      yield* held.open;
+      expect((yield* Fiber.join(pending).pipe(Effect.flip)).kind).toBe("stale");
       expect(yield* discovery.known).toEqual([]);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
 it.effect("targeted queries reuse an existing admission and reject a mismatched operation", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness();
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    yield* harness.run(function* ({ discovery, connections }) {
       const result = yield* connections.withOperation("a", {}, (operation) =>
         discovery.query({ action: "tools.describe", server: "a", tool: "alpha" }, operation),
       );
@@ -917,7 +789,7 @@ it.effect("targeted queries reuse an existing admission and reject a mismatched 
       );
       expect(mismatch).toMatchObject({ _tag: "Failure", failure: { kind: "invalid-input" } });
       expect(yield* Ref.get(harness.opened)).toEqual(["a"]);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -940,13 +812,9 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
         ? Effect.succeed(reply(request, { tools: id === "a" ? catalog : [...catalog].reverse() }))
         : defaultRoute(request, id),
     );
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    yield* harness.run(function* ({ discovery, connections }) {
       yield* discovery.query({ action: "tools.list", server: "b" });
-      const listing = yield* discovery
-        .query({ action: "tools.list", server: "a" })
-        .pipe(Effect.flatMap(decodePage));
+      const listing = yield* queryPage(discovery, { action: "tools.list", server: "a" });
       const Identity = Schema.Struct({ server: Schema.String, name: Schema.String });
       const identities = (items: ReadonlyArray<Schema.Json>) =>
         Schema.decodeUnknownSync(Schema.Array(Identity))(items).map(
@@ -974,7 +842,7 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
       do {
         const input = { action: "tools.search" as const, query: "read file", limit: 2 };
         const request = cursor === undefined ? input : { ...input, cursor };
-        const page = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
+        const page = yield* queryPage(discovery, request);
         expect(page.page.total).toBe(expected.length);
         expect(page.undiscovered).toEqual(["unknown"]);
         for (const item of page.page.items) {
@@ -988,9 +856,11 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
       const cached = yield* discovery.cached({ family: "tools", query: "read file" });
       expect(cached.entries.map(({ ref }) => `${ref.server}/${ref.id}`)).toEqual(expected);
       expect(yield* Ref.get(harness.opened)).toEqual(["b", "a"]);
-      const first = yield* discovery
-        .query({ action: "tools.search", query: "readFile", limit: 1 })
-        .pipe(Effect.flatMap(decodePage));
+      const first = yield* queryPage(discovery, {
+        action: "tools.search",
+        query: "readFile",
+        limit: 1,
+      });
       const token = first.page.nextCursor!;
       expect(
         yield* discovery
@@ -1003,15 +873,14 @@ it.effect("ranks full metadata globally before paging and agrees with cached sea
           .query({ action: "tools.search", query: "readFile", cursor: token })
           .pipe(Effect.flip),
       ).toMatchObject({ kind: "stale" });
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
 it.effect("keeps an empty metadata search distinct from unsupported dispatcher operations", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness({ a: server("a") });
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
+    yield* harness.run(function* ({ discovery }) {
       const missing = yield* discovery.query({
         action: "tools.search",
         server: "a",
@@ -1028,7 +897,7 @@ it.effect("keeps an empty metadata search distinct from unsupported dispatcher o
       });
       expect((yield* decodePage(found)).page.total).toBe(1);
       expect(found.notices.join(" ")).not.toContain("dispatcher");
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -1047,9 +916,7 @@ it.effect.each([undefined, -1, 0, 1e100])(
               : { ttlMs, tools: [tool("first"), tool("second")] },
         }),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const first = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(first.tools).toHaveLength(2);
         expect(first.cacheScope).toBe("private");
@@ -1066,7 +933,7 @@ it.effect.each([undefined, -1, 0, 1e100])(
             .query({ action: "tools.list", cursor: old.page.nextCursor! })
             .pipe(Effect.flip),
         ).toMatchObject({ kind: "stale" });
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1084,9 +951,7 @@ it.effect(
           }),
         ),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const first = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(first.cacheScope).toBe("public");
         yield* TestClock.adjust("99 millis");
@@ -1114,7 +979,7 @@ it.effect(
         expect(
           (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
         ).toBeGreaterThan(first.revision);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1123,8 +988,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
-      const lastStarted = yield* Deferred.make<void>();
-      const lastAllowed = yield* Deferred.make<void>();
+      const last = yield* gate();
       yield* Ref.set(harness.route, (request) =>
         request.action === "tools.list" && request.cursor === undefined
           ? Effect.succeed(
@@ -1135,22 +999,19 @@ it.effect(
                 nextCursor: "last",
               }),
             )
-          : Deferred.succeed(lastStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(lastAllowed)),
+          : last.pass.pipe(
               Effect.as(
                 reply(request, { tools: [tool("last")], ttlMs: 60_000, cacheScope: "private" }),
               ),
             ),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const collecting = yield* connections
           .withOperation("a", {}, discovery.ensure)
           .pipe(Effect.forkChild);
-        yield* Deferred.await(lastStarted);
+        yield* last.entered;
         yield* TestClock.adjust("11 millis");
-        yield* Deferred.succeed(lastAllowed, undefined);
+        yield* last.open;
         const first = yield* Fiber.join(collecting);
         expect(first.tools).toHaveLength(2);
         expect(first.cacheScope).toBe("private");
@@ -1159,39 +1020,33 @@ it.effect(
         expect(
           (yield* connections.withOperation("a", {}, discovery.ensure)).revision,
         ).toBeGreaterThan(first.revision);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
 it.effect("expired ensure joins an existing metadata refresh, including a zero-TTL result", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness({ a: server("a") });
-    const started = yield* Deferred.make<void>();
-    const finish = yield* Deferred.make<void>();
-    yield* Effect.gen(function* () {
-      const discovery = yield* McpDiscovery;
-      const connections = yield* McpConnections;
+    const held = yield* gate();
+    yield* harness.run(function* ({ discovery, connections }) {
       yield* connections.withOperation("a", {}, discovery.ensure);
       yield* TestClock.adjust("60 seconds");
       yield* Ref.set(harness.route, (request) =>
-        Deferred.succeed(started, undefined).pipe(
-          Effect.andThen(Deferred.await(finish)),
-          Effect.as(reply(request, { ttlMs: 0, tools: [tool("new")] })),
-        ),
+        held.pass.pipe(Effect.as(reply(request, { ttlMs: 0, tools: [tool("new")] }))),
       );
       const refresh = yield* connections
         .withOperation("a", {}, discovery.refresh)
         .pipe(Effect.forkChild);
-      yield* Deferred.await(started);
+      yield* held.entered;
       const joined = yield* connections
         .withOperation("a", {}, discovery.ensure)
         .pipe(Effect.forkChild);
       // Drain runnable fibers so the ensure waiter has reached shared-refresh admission.
       yield* TestClock.adjust("0 millis");
-      yield* Deferred.succeed(finish, undefined);
+      yield* held.open;
       expect(yield* Fiber.join(joined)).toBe(yield* Fiber.join(refresh));
       expect(yield* Ref.get(harness.calls)).toHaveLength(2);
-    }).pipe(Effect.provide(harness.layer));
+    });
   }),
 );
 
@@ -1209,9 +1064,7 @@ it.effect.each(["private", "public"] as const)(
       yield* Ref.set(harness.route, (request) =>
         Effect.succeed(reply(request, { cacheScope, tools: [tool("old-user")] })),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const ensure = () =>
           connections.withOperation("a", {}, (operation) => discovery.ensure(authorize(operation)));
         const first = yield* ensure();
@@ -1229,7 +1082,7 @@ it.effect.each(["private", "public"] as const)(
         const next = yield* ensure();
         expect(next.authorizationRevision).toBe(1);
         expect(next.revision).toBeGreaterThan(first.revision);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1274,10 +1127,8 @@ it.effect.each(
           result: ttlMs === undefined ? result : { ...result, ttlMs },
         });
       });
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
-        const first = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
+      yield* harness.run(function* ({ discovery, connections }) {
+        const first = yield* queryPage(discovery, request);
         const revision = (yield* discovery.known)[0]!.revision;
         yield* TestClock.adjust("100 millis");
         const calls = yield* Ref.get(harness.calls);
@@ -1312,7 +1163,7 @@ it.effect.each(
         expect(yield* discovery.query(request).pipe(Effect.flip)).toMatchObject({
           kind: "transport",
         });
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1321,11 +1172,9 @@ it.effect.each(["refresh", "notification", "auth", "config", "owner"] as const)(
   (change) =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ a: server("a") });
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const input = { action: "tools.list", server: "a", limit: 1 } as const;
-        const first = yield* discovery.query(input).pipe(Effect.flatMap(decodePage));
+        const first = yield* queryPage(discovery, input);
         if (change === "refresh") yield* connections.withOperation("a", {}, discovery.refresh);
         else if (change === "auth") yield* connections.withAuth("a", () => Effect.void);
         else if (change === "config")
@@ -1343,7 +1192,7 @@ it.effect.each(["refresh", "notification", "auth", "config", "owner"] as const)(
         ).toMatchObject({ kind: "stale", outcome: "not-sent" });
         expect(yield* Ref.get(harness.calls)).toEqual(calls);
         expect(yield* Ref.get(harness.opened)).toEqual(opened);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1364,19 +1213,15 @@ it.effect(
           }),
         ),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const input = { action: "tools.list", server: "a", limit: 1 } as const;
-        const first = yield* discovery.query(input).pipe(Effect.flatMap(decodePage));
+        const first = yield* queryPage(discovery, input);
         const request = { ...input, cursor: first.page.nextCursor! };
         // Hold the server's only ticket. A continuation that reacquires admission cannot settle.
         yield* connections.withOperation("a", {}, (operation) =>
           Effect.gen(function* () {
-            const local = yield* discovery.query(request).pipe(Effect.flatMap(decodePage));
-            const admitted = yield* discovery
-              .query(request, operation)
-              .pipe(Effect.flatMap(decodePage));
+            const local = yield* queryPage(discovery, request);
+            const admitted = yield* queryPage(discovery, request, operation);
             expect(local.page.items).toEqual([expect.objectContaining({ name: "beta" })]);
             expect(admitted.page.items).toEqual(local.page.items);
             expect(
@@ -1385,7 +1230,7 @@ it.effect(
                   ...operation,
                   binding: {
                     ...operation.binding,
-                    authorizationRevision: (operation.binding.authorizationRevision ?? 0) + 1,
+                    authorizationRevision: operation.binding.authorizationRevision + 1,
                   },
                 })
                 .pipe(Effect.flip),
@@ -1393,7 +1238,7 @@ it.effect(
           }).pipe(Effect.orDie),
         );
         expect(yield* Ref.get(harness.calls)).toHaveLength(1);
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );
 
@@ -1435,20 +1280,14 @@ it.effect.each([true, false])(
           }),
         ),
       );
-      yield* Effect.gen(function* () {
-        const discovery = yield* McpDiscovery;
-        const connections = yield* McpConnections;
+      yield* harness.run(function* ({ discovery, connections }) {
         const snapshot = yield* connections.withOperation("a", {}, discovery.ensure);
         expect(snapshot.tools.map((entry) => entry.name)).toEqual(
           modern ? validNames : [...validNames, "invalid"],
         );
-        const listed = yield* discovery
-          .query({ action: "tools.list", server: "a" })
-          .pipe(Effect.flatMap(decodePage));
+        const listed = yield* queryPage(discovery, { action: "tools.list", server: "a" });
         expect(listed.page.total).toBe(validNames.length + (modern ? 0 : 1));
-        const found = yield* discovery
-          .query({ action: "tools.search", query: "invalid" })
-          .pipe(Effect.flatMap(decodePage));
+        const found = yield* queryPage(discovery, { action: "tools.search", query: "invalid" });
         expect(found.page.total).toBe(modern ? 0 : 1);
         const exact = yield* discovery
           .query({ action: "tools.describe", server: "a", tool: "invalid" })
@@ -1457,6 +1296,6 @@ it.effect.each([true, false])(
         expect((yield* discovery.cached({ family: "tools" })).total).toBe(
           validNames.length + (modern ? 0 : 1),
         );
-      }).pipe(Effect.provide(harness.layer));
+      });
     }),
 );

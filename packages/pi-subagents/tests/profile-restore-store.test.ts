@@ -162,7 +162,7 @@ describe("profile declaration visit restore", () => {
   effectTest("returns the committed patch rather than a later document read", function* () {
     const { memory, layer } = setup();
     const receipt = yield* SubagentConfigStore.use((store) =>
-      store.patchProfileWithReceipt("/project", "/agent", {
+      store.patchProfile("/project", "/agent", {
         scope: "global",
         projectTrusted: false,
         expectedExists: true,

@@ -1,4 +1,4 @@
-import type { BuiltinCompactTool } from "./builtin-compact-summary";
+import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactNotice } from "./compact-summary";
 
 type Classification = {

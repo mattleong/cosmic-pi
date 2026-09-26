@@ -1,13 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import {
-  ACTIVITY_DISCOVER,
-  ACTIVITY_EVENT,
-  ACTIVITY_HOST,
-  type ActivityEnvelope,
-  type ActivityEvents,
-} from "pi-cosmic-ui/activity";
+import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
+import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
   backgroundTaskActivityDetail,
   backgroundTaskActivityItems,
@@ -26,38 +21,6 @@ const task: BackgroundTaskView = {
   droppedLogBytes: 0,
   logs: [{ cursor: 1, stream: "stdout", text: "private output", timestamp: 1, bytes: 14 }],
 };
-
-function host() {
-  const hostToken = {};
-  const listeners = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
-  let envelope: ActivityEnvelope | undefined;
-  let capability: ActivityEnvelope | undefined;
-  const events: ActivityEvents = {
-    on: (name, handler) => {
-      const handlers = listeners.get(name) ?? new Set();
-      handlers.add(handler);
-      listeners.set(name, handlers);
-      return () => {
-        handlers.delete(handler);
-      };
-    },
-    emit: (name, value) => {
-      for (const handler of listeners.get(name) ?? []) handler(value);
-    },
-  };
-  events.on(ACTIVITY_DISCOVER, () =>
-    events.emit(ACTIVITY_HOST, { version: 1, sessionId: "session", hostToken, available: true }),
-  );
-  events.on(ACTIVITY_EVENT, (value) => {
-    // SAFETY: The fixture captures only envelopes emitted by the owned protocol adapter.
-    envelope = value as ActivityEnvelope;
-    if (envelope.operation === "register") {
-      capability = envelope;
-      envelope.acknowledge?.(true);
-    }
-  });
-  return { events, hostToken, get: () => envelope, capability: () => capability };
-}
 
 describe("background task activity provider", () => {
   it("projects wait ownership without changing task status", () => {
@@ -111,7 +74,7 @@ describe("background task activity provider", () => {
     "checks current revision and session before authoritative stop and revokes on disposal",
     () =>
       Effect.gen(function* () {
-        const transport = host();
+        const transport = fakeActivityHost();
         const bridge = makeProjectionBridge();
         bridge.publish({ tasks: [task] });
         let current = true;

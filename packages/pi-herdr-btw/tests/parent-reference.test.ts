@@ -1,9 +1,9 @@
 import type {
-  ExtensionAPI,
   BeforeAgentStartEvent,
   ExtensionContext,
   ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerHerdrBtwParentReference } from "../src/boundary/host-parent-reference.ts";
 import type {
@@ -46,7 +46,7 @@ const harness = (options: HarnessOptions = {}) => {
       return options.identityResult ?? (leftPath === rightPath ? "same" : "distinct");
     },
   );
-  const piFixture = {
+  const pi = extensionApiFixture({
     on(name: string, handler: Handler) {
       const list = handlers.get(name) ?? [];
       list.push(handler);
@@ -60,14 +60,12 @@ const harness = (options: HarnessOptions = {}) => {
       if (name === "herdr-btw-child-session") return options.sessionId ?? "child-id";
       return undefined;
     },
-  };
-  // SAFETY: The registration uses only the ExtensionAPI members implemented here.
-  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  });
   const bridge = registerHerdrBtwParentReference(pi, { compareIdentity, probe });
 
   const makeCtx = (override: Partial<HarnessOptions> = {}) => {
     const merged = { ...options, ...override };
-    const contextFixture = {
+    return extensionContextFixture({
       sessionManager: {
         getSessionId: () => {
           if (merged.hostileSessionId) throw new Error("host-session-id-secret");
@@ -78,9 +76,7 @@ const harness = (options: HarnessOptions = {}) => {
           return merged.sessionFile ?? CHILD_FILE;
         },
       },
-    };
-    // SAFETY: The registration uses only the ExtensionContext members implemented here.
-    return contextFixture as typeof contextFixture & ExtensionContext;
+    });
   };
 
   const invoke = <EventInput>(name: string, event: EventInput, ctx: ExtensionContext) => {
@@ -185,18 +181,12 @@ describe("herdr-btw parent reference", () => {
     }
   });
 
-  it("stays inactive in unmarked Pi processes", () => {
-    const h = harness({ flag: undefined, parentSession: PARENT_FILE });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeUndefined();
-    expect(h.probe).not.toHaveBeenCalled();
-  });
-
-  it("rejects a non-string or malformed marker value", () => {
-    for (const flag of [true, "", "has spaces", "-leading", "a".repeat(200), "x\ny"]) {
+  it("stays inactive without a well-formed string marker", () => {
+    for (const flag of [undefined, true, "", "has spaces", "-leading", "a".repeat(200), "x\ny"]) {
       const h = harness({ flag, parentSession: PARENT_FILE });
       h.sessionStart();
       expect(h.beforeAgentStart()).toBeUndefined();
+      expect(h.probe).not.toHaveBeenCalled();
     }
   });
 
@@ -242,28 +232,10 @@ describe("herdr-btw parent reference", () => {
     expect(h.probe).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a missing, symlinked, or malformed parent file", () => {
-    const h = harness({
-      flag: PARENT_ID,
-      parentSession: PARENT_FILE,
-      probeResult: { _tag: "invalid" },
-    });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeUndefined();
-  });
-
-  it("rejects a parent header whose ID does not match the marker", () => {
-    const h = harness({
-      flag: PARENT_ID,
-      parentSession: PARENT_FILE,
-      probeResult: { _tag: "valid", header: { id: "some-other-session" } },
-    });
-    h.sessionStart();
-    expect(h.beforeAgentStart()).toBeUndefined();
-  });
-
-  it("contains throwing flag, session, and header-probe boundaries", () => {
+  it("rejects unusable parent headers and contains throwing host boundaries", () => {
     for (const hostile of [
+      { probeResult: { _tag: "invalid" as const } },
+      { probeResult: { _tag: "valid" as const, header: { id: "some-other-session" } } },
       { hostileFlag: true },
       { hostileSessionId: true },
       { hostileSessionFile: true },

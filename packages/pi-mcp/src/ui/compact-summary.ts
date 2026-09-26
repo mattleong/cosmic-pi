@@ -8,26 +8,14 @@ import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
-import { mcpBoundaryFailure } from "./boundary-failure.ts";
+import { ownPresentationField } from "../code-mode/presentation-evidence.ts";
 
 const searchQuery = <Args>(args: Args): string | undefined => {
-  try {
-    if (!Predicate.isObjectOrArray(args)) return undefined;
-    const field = Object.getOwnPropertyDescriptor(args, "query");
-    if (
-      !field ||
-      !("value" in field) ||
-      !Predicate.isString(field.value) ||
-      field.value.length > 1024
-    )
-      return undefined;
-    return (
-      sanitizeDiagnosticContent(sanitizeTerminalLine(field.value), { maximumLength: 160 }).trim() ||
-      undefined
-    );
-  } catch {
-    return undefined;
-  }
+  const query = ownPresentationField(args, "query").value;
+  return Predicate.isString(query) && query.length <= 1024
+    ? sanitizeDiagnosticContent(sanitizeTerminalLine(query), { maximumLength: 160 }).trim() ||
+        undefined
+    : undefined;
 };
 
 /** Typed causes may be concise without claiming complete diagnostic or recovery coverage. */
@@ -56,11 +44,8 @@ export const projectMcpCompactSummary = ({
   const card = decodeMcpCardDetails(result);
   // The raw card retains notices beyond the semantic issue budget.
   if (card.notices.join("\n").length > 2048) return undefined;
-  const boundary = card.action === action ? mcpBoundaryFailure(card) : undefined;
-  if (
-    boundary &&
-    card.presentation.issues.entries.some((issue) => issue.code === "boundary-failure")
-  )
+  const boundary = card.action === action ? card.boundary : undefined;
+  if (boundary)
     return {
       action,
       subject,
@@ -91,7 +76,7 @@ export const projectMcpCompactSummary = ({
       ? `page ${card.retainedPage.offset}..${card.retainedPage.end}/${card.retainedPage.total}${card.retainedPage.next === null ? " · EOF" : ""}`
       : card.page
         ? `${card.page.returned}${card.page.total === undefined ? "" : ` of ${card.page.total}`} entries${card.page.hasMore ? ", more available" : ""}`
-        : (card.counters[0] ??
+        : (card.counts[0] ??
           (card.attachmentCount
             ? `${card.attachmentsLimited ? "at least " : ""}${card.attachmentCount} attachments`
             : card.imageCount

@@ -62,21 +62,26 @@ export type CodeModeToolExecute = (
   ctx: ExtensionContext,
 ) => Promise<AgentToolResult<CodeModeToolDetails>>;
 
+/** Admission gate: the current session slot and an available state, read in that order. */
+const liveState = (environment: CodeModeExecutionEnvironment): CodeModeState => {
+  const state = environment.getState();
+  if (!environment.isCurrent() || state === undefined) {
+    throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
+  }
+  if (!state.available) {
+    throw new Error(
+      clampModelVisibleText(CODE_MODE_UNAVAILABLE_MESSAGE, state.config.maxOutputBytes),
+    );
+  }
+  return state;
+};
+
 export const makeCodeModeToolExecute =
   (environment: CodeModeExecutionEnvironment): CodeModeToolExecute =>
   (toolCallId, params, signal, onUpdate, ctx) =>
     // Synchronous refusals become rejections here, exactly as the prior async form produced.
     Promise.resolve().then(() => {
-      const state = environment.getState();
-      if (!environment.isCurrent() || state === undefined) {
-        throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
-      }
-      if (!state.available) {
-        throw new Error(
-          clampModelVisibleText(CODE_MODE_UNAVAILABLE_MESSAGE, state.config.maxOutputBytes),
-        );
-      }
-      const { config } = state;
+      const { config } = liveState(environment);
       if (invokeHostCallback(() => signal?.aborted === true, true)) {
         return cancelledResult(callEntryDetails([]), config.maxOutputBytes);
       }
@@ -84,19 +89,7 @@ export const makeCodeModeToolExecute =
         // Status is a live projection, not the registration-time description snapshot. Reread
         // after the current, availability, and cancellation gates so settings committed during
         // admission are reflected without entering the session runner or configuration store.
-        const currentState = environment.getState();
-        if (!environment.isCurrent() || currentState === undefined) {
-          throw new Error(CODE_MODE_UNAVAILABLE_MESSAGE);
-        }
-        if (!currentState.available) {
-          throw new Error(
-            clampModelVisibleText(
-              CODE_MODE_UNAVAILABLE_MESSAGE,
-              currentState.config.maxOutputBytes,
-            ),
-          );
-        }
-        return codeModeStatusResult(currentState.config);
+        return codeModeStatusResult(liveState(environment).config);
       }
       if (params.action === "result.read") {
         return environment

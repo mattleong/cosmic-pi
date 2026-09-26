@@ -1,19 +1,14 @@
-import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Image, type Component } from "@earendil-works/pi-tui";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
+import {
+  applyPresentationSettings,
+  captureRegistrations,
+  createToolPresentationHarness,
+} from "pi-code-previews/testing";
+import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultCodePreviewSettings } from "../../pi-code-previews/src/config/defaults.ts";
-import { setCodePreviewSettings } from "../../pi-code-previews/src/config/state.ts";
 import { registerOpenAIImage } from "../src/image/register.ts";
 import { renderImageContent } from "../src/image/presentation.ts";
 
-// SAFETY: These fixtures provide the registration and theme operations used by rendering only.
-const fixture = <T>(value: T): never => value as never;
-const theme: Theme = fixture({
-  fg: (_: string, text: string) => text,
-  bg: (_: string, text: string) => text,
-  bold: (text: string) => text,
-});
 const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 const details = {
   id: "image-identity",
@@ -27,27 +22,19 @@ const details = {
   outputFormat: "png",
 };
 function register(style: "compact" | "preview") {
-  setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallCollapsedStyle: style });
-  const tools: ToolDefinition[] = [];
-  const messages: Parameters<ExtensionAPI["registerMessageRenderer"]>[1][] = [];
-  const pi: ExtensionAPI = fixture({
-    registerTool: (tool: ToolDefinition) => tools.push(tool),
-    registerMessageRenderer: (
-      _name: string,
-      render: Parameters<ExtensionAPI["registerMessageRenderer"]>[1],
-    ) => messages.push(render),
-    registerCommand() {},
-  });
-  registerOpenAIImage(
-    pi,
-    () => {
-      throw new Error("Rendering must not execute");
-    },
-    () => {
-      throw new Error("Rendering must not update context");
-    },
+  applyPresentationSettings({ toolCallCollapsedStyle: style });
+  const { tools, messageRenderers } = captureRegistrations((pi) =>
+    registerOpenAIImage(
+      pi,
+      () => {
+        throw new Error("Rendering must not execute");
+      },
+      () => {
+        throw new Error("Rendering must not update context");
+      },
+    ),
   );
-  return { tool: tools[0]!, message: messages[0]! };
+  return { tool: tools[0]!, message: messageRenderers.get("openai-image")! };
 }
 const images = (component: Component): number =>
   component instanceof Image
@@ -55,7 +42,7 @@ const images = (component: Component): number =>
     : component instanceof Container || component instanceof Box
       ? component.children.reduce((count, child) => count + images(child), 0)
       : 0;
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+afterEach(applyPresentationSettings({}));
 
 describe("registered image presentation", () => {
   it.each(["compact", "preview"] as const)(
@@ -69,18 +56,15 @@ describe("registered image presentation", () => {
         const result = { details, content };
         const before = structuredClone(result);
         const harness = createToolPresentationHarness(tool, { theme, width: 180 });
-        for (const expanded of [false, true, false, true]) {
-          harness.call({ prompt: details.prompt }, { expanded });
-          harness.result(result, { expanded });
-          const text = harness.render().join("\n");
+        for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
           if (expanded && style === "compact") {
             expect(text).toContain("Full original prompt");
             expect(text).toContain(details.revisedPrompt);
             expect(text).toContain(details.savedPath);
           }
           expect(text).not.toContain(image.data);
-          expect(result).toEqual(before);
         }
+        expect(result).toEqual(before);
       }
     },
   );
@@ -120,10 +104,7 @@ describe("registered image presentation", () => {
       });
       const result = { details: { ...details, status }, content: [image] };
       const before = structuredClone(result);
-      for (const expanded of [false, true, false, true]) {
-        harness.call({ prompt: details.prompt }, { expanded });
-        harness.result(result, { expanded });
-        const text = harness.render().join("\n");
+      for (const { expanded, text } of harness.cycle({ prompt: details.prompt }, result)) {
         expect(text.match(/Saved: \/project\/saved image\.png/gu) ?? [], text).toHaveLength(
           expanded ? 1 : 0,
         );
@@ -149,7 +130,7 @@ describe("registered image presentation", () => {
     ];
     for (const expanded of [false, true, false]) {
       const component = message(
-        fixture({ customType: "openai-image", details: { invalid: true }, content }),
+        opaqueFixture({ customType: "openai-image", details: { invalid: true }, content }),
         { expanded, outputPad: 0 },
         theme,
       )!;
@@ -173,7 +154,7 @@ describe("registered image presentation", () => {
       };
       const before = structuredClone(record);
       for (const expanded of [false, true, false]) {
-        const text = message(fixture(record), { expanded, outputPad: 0 }, theme)!
+        const text = message(opaqueFixture(record), { expanded, outputPad: 0 }, theme)!
           .render(200)
           .join("\n");
         expect(text.includes("PROVIDER_RECOVERY_COMMAND")).toBe(expanded);
@@ -208,7 +189,7 @@ describe("registered image presentation", () => {
       for (const legacy of [false, true]) {
         for (const expanded of [false, true, false]) {
           const component = message(
-            fixture({
+            opaqueFixture({
               customType: "openai-image",
               content: legacy ? "" : [image],
               details: legacy ? { ...details, data: image.data } : details,

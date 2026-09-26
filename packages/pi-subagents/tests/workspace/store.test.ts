@@ -2,24 +2,17 @@ import { it, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import * as Schema from "effect/Schema";
-import * as os from "node:os";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Layer from "effect/Layer";
 import { readWorkspaceRecord, saveWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceRecordSchema, type WorkspaceRecord } from "../../src/workspace/model.ts";
+import { temporaryDirectory } from "./fixtures/repository.ts";
 
 it.live(
   "bounds encoded records at 64 MiB and preserves the readable record on escaping overflow",
   () =>
     Effect.gen(function* () {
-      const root = yield* Effect.acquireRelease(
-        Effect.promise(() =>
-          fs
-            .mkdtemp(path.join(os.tmpdir(), "workspace-record-"))
-            .then((directory) => fs.realpath(directory)),
-        ),
-        (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-      );
+      const root = yield* temporaryDirectory("workspace-record-");
       const workspaceId = "11111111-1111-1111-1111-111111111111";
       const directory = path.join(root, workspaceId);
       yield* Effect.promise(() => fs.mkdir(directory, { mode: 0o700 }));

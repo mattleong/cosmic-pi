@@ -1,12 +1,18 @@
 // Promise-shaped continuations belong to the single dashboard host lifetime.
 import type { FleetManagerActions } from "./controller.ts";
-import { resolveNamedProfileSet } from "../config/options.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
-import type { ProfileSettingsInspection, ProfileWorkspaceTarget } from "./profile-route-editor.ts";
+import {
+  resolvedSet,
+  type ProfileSettingsInspection,
+  type ProfileWorkspaceTarget,
+} from "./profile-route-editor.ts";
 import type { ProfileSetPickerAction } from "./profile-set-picker.ts";
-import type { ProfileSetSaveDestination } from "./profile-set-save-form.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
 
+export interface ProfileSetSaveDestination {
+  readonly scope: "global" | "project";
+  readonly name: string;
+}
 export interface ProfileSetActionHost {
   readonly actions: FleetManagerActions;
   readonly inspection: () => ProfileSettingsInspection;
@@ -43,10 +49,11 @@ export function runProfileSetAction(
       if (scope === "project" && !host.trusted())
         throw new Error("Trust this project before changing or using its saved profiles.");
     };
-    const finish = (message: string): Promise<void> => {
+    const finish = (message: string, apply?: (next: ProfileSettingsInspection) => void) => {
       guard();
-      return host.refresh().then(() => {
+      return host.refresh().then((next) => {
         guard();
+        apply?.(next);
         host.notify(message);
       });
     };
@@ -89,10 +96,7 @@ export function runProfileSetAction(
     guard(scope);
     const base = profileSetPatchBase(inspection, scope, host.trusted());
     if (action.action === "use-current" || action.action === "make-default") {
-      const input = { scope, name: action.target.name, global: inspection.global };
-      const resolved = resolveNamedProfileSet(
-        inspection.project ? { ...input, project: inspection.project } : input,
-      );
+      const resolved = resolvedSet(inspection, action.target);
       if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0)
         throw new Error("Fix this invalid saved set before using it or making it default.");
       if (action.action === "use-current") {
@@ -108,33 +112,24 @@ export function runProfileSetAction(
           .then((confirmed) => {
             guard(scope);
             if (!confirmed) return;
-            const patch = {
-              origin: resolved.origin,
-              profiles: resolved.profiles,
-              profileSources: resolved.profileSources,
-              expectedRevision: inspection.session.revision,
-            };
-            const commit = host.actions.replaceSessionProfilesWithReceipt
-              ? host.actions.replaceSessionProfilesWithReceipt(patch)
-              : host.actions.replaceSessionProfiles(patch).then(() => undefined);
-            return commit.then((snapshot) => {
-              guard();
-              return host.refresh().then((next) => {
-                guard();
-                host.used(snapshot ? { ...next, session: snapshot } : next, next);
-                host.notify(
+            return host.actions
+              .replaceSessionProfiles({
+                origin: resolved.origin,
+                profiles: resolved.profiles,
+                profileSources: resolved.profileSources,
+                expectedRevision: inspection.session.revision,
+              })
+              .then((snapshot) =>
+                finish(
                   `Copied ${scope}/${action.target.name} into Current Session. Active runs unchanged.`,
-                );
-              });
-            });
+                  (next) => host.used({ ...next, session: snapshot }, next),
+                ),
+              );
           });
       }
       return host.refresh().then((latest) => {
         guard(scope);
-        const latestInput = { scope, name: action.target.name, global: latest.global };
-        const valid = resolveNamedProfileSet(
-          latest.project ? { ...latestInput, project: latest.project } : latestInput,
-        );
+        const valid = resolvedSet(latest, action.target);
         if (valid.status !== "resolved" || valid.invalidProfiles.length > 0)
           throw new Error("Fix this invalid saved set before making it default.");
         return host.actions
@@ -176,24 +171,39 @@ export function runProfileSetAction(
               profileSet: source.name,
               nextProfileSet: name,
             })
-            .then(() => {
-              guard();
-              return host.refresh().then((next) => {
-                guard();
+            .then(() =>
+              finish(`Renamed ${scope}/${name}. Current Session unchanged.`, (next) =>
                 host.renamed(
                   { kind: "profile-set", set: source },
                   { kind: "profile-set", set: { ...source, name } },
                   next,
-                );
-                host.notify(`Renamed ${scope}/${name}. Current Session unchanged.`);
-              });
-            });
+                ),
+              ),
+            );
         });
     }
-    return host.actions.deleteProfileSet({ ...base, profileSet: action.target.name }).then(() => {
-      guard();
-      host.deleted({ kind: "profile-set", set: action.target });
-      return finish(`Deleted ${scope}/${action.target.name}. Current Session unchanged.`);
-    });
+    return host
+      .confirm(
+        `Delete ${scope}/${action.target.name}?`,
+        "This deletes the saved set. Current Session will not change.",
+      )
+      .then((confirmed) => {
+        guard(scope);
+        if (!confirmed) {
+          host.notify("Delete canceled.");
+          return;
+        }
+        return host.actions
+          .deleteProfileSet({
+            ...base,
+            projectTrusted: host.trusted(),
+            profileSet: action.target.name,
+          })
+          .then(() => {
+            guard();
+            host.deleted({ kind: "profile-set", set: action.target });
+            return finish(`Deleted ${scope}/${action.target.name}. Current Session unchanged.`);
+          });
+      });
   });
 }

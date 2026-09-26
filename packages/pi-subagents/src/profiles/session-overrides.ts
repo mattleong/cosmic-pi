@@ -8,13 +8,16 @@ import {
   decodeProfileCandidate,
   decodeSubagentNesting,
   isProfileSetName,
+  ownDataProperty,
   type SubagentNestingPolicy,
 } from "../config/schema.ts";
 import { BUILTIN_PROFILE_ROUTES } from "./definitions.ts";
 import {
   cloneProfileRoute,
+  mapProfileIds,
   MAX_PROFILE_CANDIDATES,
   PROFILE_IDS,
+  PROFILE_ROUTE_SOURCES,
   sameProfileRoute,
   type ProfileCandidate,
   type ProfileId,
@@ -27,14 +30,7 @@ export type SessionProfileOverrides = Partial<Readonly<Record<ProfileId, Profile
 /** Revisions remain exact integers; a state at this value is immutable except for no-op requests. */
 export const MAX_SESSION_PROFILE_REVISION = Number.MAX_SAFE_INTEGER;
 
-export type SessionProfileOrigin =
-  | { readonly scope: "builtin" }
-  | {
-      readonly scope: "global" | "project";
-      readonly name?: string | undefined;
-      /** Retained only for a fail-closed loaded default whose name or target is invalid. */
-      readonly invalid?: boolean | undefined;
-    };
+export type SessionProfileOrigin = ResolvedProfileSetSelection;
 
 export interface SessionProfileBaseline {
   readonly origin: SessionProfileOrigin;
@@ -93,17 +89,9 @@ const SessionBaselineProfilesInputSchema = Schema.Record(
   Schema.Literals(PROFILE_IDS),
   SessionRouteInputSchema,
 );
-const ProfileRouteSourceInputSchema = Schema.Literals([
-  "session",
-  "project",
-  "global",
-  "builtin",
-  "project-invalid",
-  "global-invalid",
-]);
 const SessionBaselineSourcesInputSchema = Schema.Record(
   Schema.Literals(PROFILE_IDS),
-  ProfileRouteSourceInputSchema,
+  Schema.Literals(PROFILE_ROUTE_SOURCES),
 );
 const SessionProfileOriginInputSchema = Schema.Union([
   Schema.Struct({ scope: Schema.Literal("builtin") }),
@@ -119,8 +107,7 @@ const SessionProfileBaselineInputSchema = Schema.Struct({
   profileSources: SessionBaselineSourcesInputSchema,
 });
 const SessionProfileOverrideSeedInputSchema = Schema.Struct({
-  revision: Schema.Number.check(
-    Schema.isFinite(),
+  revision: Schema.Finite.check(
     Schema.isInt(),
     Schema.isGreaterThanOrEqualTo(0),
     Schema.isLessThanOrEqualTo(MAX_SESSION_PROFILE_REVISION),
@@ -129,25 +116,9 @@ const SessionProfileOverrideSeedInputSchema = Schema.Struct({
   nesting: Schema.optional(Schema.Unknown),
   baseline: Schema.optional(SessionProfileBaselineInputSchema),
 });
-const exactDecodeOptions = { onExcessProperty: "error" as const };
-
-type OwnDataProperty =
-  | { readonly valid: true; readonly present: false }
-  | { readonly valid: true; readonly present: true; readonly value: unknown }
-  | { readonly valid: false };
-
-const ownDataProperty = <ValueInput>(value: ValueInput, key: string): OwnDataProperty => {
-  if (!Predicate.isObjectKeyword(value)) return { valid: true, present: false };
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor) return { valid: true, present: false };
-    return "value" in descriptor
-      ? { valid: true, present: true, value: descriptor.value }
-      : { valid: false };
-  } catch {
-    return { valid: false };
-  }
-};
+const decodeSeedInput = Schema.decodeUnknownOption(SessionProfileOverrideSeedInputSchema, {
+  onExcessProperty: "error",
+});
 
 const preflightRouteCandidateLengths = <ValueInput>(
   routesValue: ValueInput,
@@ -203,30 +174,16 @@ const cloneOrigin = (origin: SessionProfileOrigin): SessionProfileOrigin => {
   };
 };
 
-const cloneBaseline = (baseline: SessionProfileBaseline): SessionProfileBaseline => {
-  // SAFETY: Every fixed profile ID is assigned in this loop.
-  const profiles = {} as Record<ProfileId, ProfileRoute>;
-  // SAFETY: Every fixed profile ID is assigned in this loop.
-  const profileSources = {} as Record<ProfileId, ProfileRouteSource>;
-  for (const profile of PROFILE_IDS) {
-    profiles[profile] = cloneProfileRoute(baseline.profiles[profile]);
-    profileSources[profile] = baseline.profileSources[profile];
-  }
-  return freezeSnapshot({ origin: cloneOrigin(baseline.origin), profiles, profileSources });
-};
-
-const originFromSelection = (selection: ResolvedProfileSetSelection): SessionProfileOrigin => {
-  if (selection.scope === "builtin") return { scope: "builtin" };
-  return {
-    scope: selection.scope,
-    ...(selection.name !== undefined && { name: selection.name }),
-    ...(selection.invalid && { invalid: true }),
-  };
-};
+const cloneBaseline = (baseline: SessionProfileBaseline): SessionProfileBaseline =>
+  freezeSnapshot({
+    origin: cloneOrigin(baseline.origin),
+    profiles: mapProfileIds((profile) => cloneProfileRoute(baseline.profiles[profile])),
+    profileSources: mapProfileIds((profile) => baseline.profileSources[profile]),
+  });
 
 const baselineFromConfig = (config: ResolvedSubagentConfig): SessionProfileBaseline =>
   cloneBaseline({
-    origin: originFromSelection(config.currentProfileSet),
+    origin: config.currentProfileSet,
     profiles: config.profiles,
     profileSources: config.profileSources,
   });
@@ -244,20 +201,10 @@ const decodeRoute = (route: {
   return { candidates };
 };
 
-const decodeOrigin = (value: {
-  readonly scope: "builtin" | "global" | "project";
-  readonly name?: string | undefined;
-  readonly invalid?: boolean | undefined;
-}): SessionProfileOrigin | undefined => {
-  if (value.scope === "builtin") return { scope: "builtin" };
-  if (value.name !== undefined && !isProfileSetName(value.name)) return undefined;
-  if (value.name === undefined && value.invalid !== true) return undefined;
-  return {
-    scope: value.scope,
-    ...(value.name !== undefined && { name: value.name }),
-    ...(value.invalid === true && { invalid: true }),
-  };
-};
+/** A named origin needs a valid set name; an unnamed one survives only as an invalid default. */
+const isValidOrigin = (origin: SessionProfileOrigin): boolean =>
+  origin.scope === "builtin" ||
+  (origin.name === undefined ? origin.invalid === true : isProfileSetName(origin.name));
 
 /** Route sources a detached baseline may carry per valid origin scope; "session" is never one. */
 const DETACHED_BASELINE_SOURCES = {
@@ -312,23 +259,13 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
   value: ValueInput,
 ): SessionProfileOverrideSeed | undefined => {
   if (!preflightSessionCandidateLengths(value)) return undefined;
-  let decoded: ReturnType<
-    ReturnType<typeof Schema.decodeUnknownOption<typeof SessionProfileOverrideSeedInputSchema>>
-  >;
+  let decoded: ReturnType<typeof decodeSeedInput>;
   try {
-    decoded = Schema.decodeUnknownOption(
-      SessionProfileOverrideSeedInputSchema,
-      exactDecodeOptions,
-    )(value);
+    decoded = decodeSeedInput(value);
   } catch {
     return undefined;
   }
-  if (
-    Option.isNone(decoded) ||
-    !Number.isSafeInteger(decoded.value.revision) ||
-    decoded.value.revision > MAX_SESSION_PROFILE_REVISION
-  )
-    return undefined;
+  if (Option.isNone(decoded)) return undefined;
   const overrides: Partial<Record<ProfileId, ProfileRoute>> = {};
   for (const profile of PROFILE_IDS) {
     const route = decoded.value.overrides[profile];
@@ -342,8 +279,8 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
   if (decoded.value.nesting !== undefined && nesting === undefined) return undefined;
   let baseline: SessionProfileBaseline | undefined;
   if (decoded.value.baseline) {
-    const origin = decodeOrigin(decoded.value.baseline.origin);
-    if (!origin) return undefined;
+    const { origin, profileSources } = decoded.value.baseline;
+    if (!isValidOrigin(origin)) return undefined;
     // SAFETY: The complete input schema and loop assign every fixed profile ID.
     const profiles = {} as Record<ProfileId, ProfileRoute>;
     for (const profile of PROFILE_IDS) {
@@ -351,13 +288,8 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
       if (!normalized) return undefined;
       profiles[profile] = normalized;
     }
-    const decodedBaseline = {
-      origin,
-      profiles,
-      profileSources: decoded.value.baseline.profileSources,
-    } satisfies SessionProfileBaseline;
-    if (!isDetachedBaselineProvenanceValid(decodedBaseline)) return undefined;
-    baseline = cloneBaseline(decodedBaseline);
+    baseline = { origin, profiles, profileSources };
+    if (!isDetachedBaselineProvenanceValid(baseline)) return undefined;
   }
   return cloneSessionProfileOverrideSeed({
     revision: decoded.value.revision,
@@ -367,36 +299,20 @@ export const decodeSessionProfileOverrideSeed = <ValueInput>(
   });
 };
 
-const profileSelectionFromOrigin = (origin: SessionProfileOrigin): ResolvedProfileSetSelection => {
-  if (origin.scope === "builtin") return { scope: "builtin", invalid: false };
-  return {
-    scope: origin.scope,
-    ...(origin.name !== undefined && { name: origin.name }),
-    invalid: origin.invalid ?? false,
-  };
-};
-
 export const applySessionProfileOverrides = (
   baseConfig: ResolvedSubagentConfig,
   overrides: SessionProfileOverrides,
   nesting?: SubagentNestingPolicy,
   baseline: SessionProfileBaseline = baselineFromConfig(baseConfig),
 ): ResolvedSubagentConfig => {
-  // SAFETY: Every fixed profile ID is assigned in this loop.
-  const profiles = {} as Record<ProfileId, ProfileRoute>;
-  const profileSources = { ...baseline.profileSources };
-  for (const profile of PROFILE_IDS) {
-    const route = overrides[profile];
-    profiles[profile] = cloneProfileRoute(route ?? baseline.profiles[profile]);
-    if (route) profileSources[profile] = "session";
-  }
   return freezeSnapshot({
     ...baseConfig,
-    currentProfileSet: profileSelectionFromOrigin(baseline.origin),
-    profiles,
-    profileSources,
+    currentProfileSet: baseline.origin,
+    profiles: mapProfileIds((id) => cloneProfileRoute(overrides[id] ?? baseline.profiles[id])),
+    profileSources: mapProfileIds((id) =>
+      overrides[id] ? "session" : baseline.profileSources[id],
+    ),
     nesting: nesting ? { ...nesting } : baseConfig.nesting,
-    nestingSource: nesting ? "session" : baseConfig.nestingSource,
   });
 };
 
@@ -423,14 +339,9 @@ export const makeSessionProfileSnapshot = (
 
 /** Every published seed carries the complete detached baseline, even before the first edit. */
 export const sessionProfileSeed = (snapshot: SessionProfileSnapshot): SessionProfileOverrideSeed =>
-  cloneSessionProfileOverrideSeed({
-    revision: snapshot.revision,
-    overrides: snapshot.overrides,
-    baseline: snapshot.baseline,
-    ...(snapshot.nesting !== undefined && { nesting: snapshot.nesting }),
-  });
+  cloneSessionProfileOverrideSeed(snapshot);
 
-const conflict = (
+export const conflict = (
   snapshot: SessionProfileSnapshot,
   expectedRevision: number,
   message: string,
@@ -457,18 +368,6 @@ const incrementRevision = (snapshot: SessionProfileSnapshot): number | undefined
     ? snapshot.revision + 1
     : undefined;
 
-const nextSeed = (
-  revision: number,
-  overrides: SessionProfileOverrides,
-  baseline: SessionProfileBaseline,
-  nesting: SubagentNestingPolicy | undefined,
-): SessionProfileOverrideSeed => ({
-  revision,
-  overrides,
-  baseline,
-  ...(nesting !== undefined && { nesting }),
-});
-
 export const patchSessionProfileSnapshot = (
   snapshot: SessionProfileSnapshot,
   patch: SessionProfilePatch,
@@ -489,10 +388,7 @@ export const patchSessionProfileSnapshot = (
   if (patch.route === undefined) delete overrides[patch.profile];
   else overrides[patch.profile] = cloneProfileRoute(patch.route);
   return Effect.succeed(
-    makeSessionProfileSnapshot(
-      snapshot.baseConfig,
-      nextSeed(revision, overrides, snapshot.baseline, snapshot.nesting),
-    ),
+    makeSessionProfileSnapshot(snapshot.baseConfig, { ...snapshot, revision, overrides }),
   );
 };
 
@@ -553,10 +449,12 @@ export const replaceSessionProfileSnapshot = (
   const revision = incrementRevision(snapshot);
   if (revision === undefined) return revisionLimit(snapshot);
   return Effect.succeed(
-    makeSessionProfileSnapshot(
-      snapshot.baseConfig,
-      nextSeed(revision, {}, baseline, snapshot.nesting),
-    ),
+    makeSessionProfileSnapshot(snapshot.baseConfig, {
+      ...snapshot,
+      revision,
+      overrides: {},
+      baseline,
+    }),
   );
 };
 
@@ -577,9 +475,10 @@ export const patchSessionNestingSnapshot = (
   const revision = incrementRevision(snapshot);
   if (revision === undefined) return revisionLimit(snapshot);
   return Effect.succeed(
-    makeSessionProfileSnapshot(
-      snapshot.baseConfig,
-      nextSeed(revision, snapshot.overrides, snapshot.baseline, patch.nesting),
-    ),
+    makeSessionProfileSnapshot(snapshot.baseConfig, {
+      ...snapshot,
+      revision,
+      nesting: patch.nesting,
+    }),
   );
 };

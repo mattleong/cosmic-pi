@@ -57,31 +57,19 @@ export interface TaskManagerOptions {
 
 const TASK_MANAGER_SHORTCUTS = new Set(["c", "f", "t", "x"]);
 
+const STATE_PRESENTATION = {
+  starting: { glyph: startingSpinnerFrame, color: "accent", label: "starting…" },
+  running: { glyph: brailleSpinnerFrame, color: "success", label: "running" },
+  stopping: { glyph: () => managerStateGlyph("stopping"), color: "warning", label: "stopping…" },
+  exited: { glyph: () => managerStateGlyph("done"), color: "success", label: "finished" },
+  failed: { glyph: () => managerStateGlyph("failed"), color: "error", label: "failed" },
+  stopped: { glyph: () => managerStateGlyph("stopped"), color: "muted", label: "stopped" },
+  timed_out: { glyph: () => managerStateGlyph("failed"), color: "error", label: "timed out" },
+} as const;
+
 const statePresentation = (task: BackgroundTaskView, frame: number) => {
-  switch (task.state) {
-    case "starting":
-      return { glyph: startingSpinnerFrame(frame), color: "accent", label: "starting…" } as const;
-    case "running":
-      return { glyph: brailleSpinnerFrame(frame), color: "success", label: "running" } as const;
-    case "stopping":
-      return {
-        glyph: managerStateGlyph("stopping"),
-        color: "warning",
-        label: "stopping…",
-      } as const;
-    case "exited":
-      return { glyph: managerStateGlyph("done"), color: "success", label: "finished" } as const;
-    case "failed":
-      return { glyph: managerStateGlyph("failed"), color: "error", label: "failed" } as const;
-    case "stopped":
-      return { glyph: managerStateGlyph("stopped"), color: "muted", label: "stopped" } as const;
-    case "timed_out":
-      return {
-        glyph: managerStateGlyph("failed"),
-        color: "error",
-        label: "timed out",
-      } as const;
-  }
+  const presentation = STATE_PRESENTATION[task.state];
+  return { ...presentation, glyph: presentation.glyph(frame) };
 };
 
 const formatDuration = (milliseconds: number): string => {

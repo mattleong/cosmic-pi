@@ -1,19 +1,17 @@
-import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
+import type { CompactAnimationScheduler } from "pi-code-previews";
+import {
+  animationSchedulerProbe,
+  applyPresentationSettings,
+  captureRegistrations,
+  createToolPresentationHarness,
+  probeAnimationOwnership,
+} from "pi-code-previews/testing";
+import { opaqueFixture as fixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultCodePreviewSettings } from "../../pi-code-previews/src/config/defaults.ts";
-import { setCodePreviewSettings } from "../../pi-code-previews/src/config/state.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
 import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 
-// SAFETY: Fixtures implement only the registration and theme methods exercised by rendering.
-const fixture = <T>(value: T): never => value as never;
-const theme: Theme = fixture({
-  fg: (_: string, text: string) => text,
-  bg: (_: string, text: string) => text,
-  bold: (text: string) => text,
-});
 const args = {
   questions: [{ key: "decision", title: "Decision", prompt: "Explain", mode: "text" }],
 };
@@ -31,26 +29,26 @@ const snapshot = {
 const noExecution = () => {
   throw new Error("Rendering must not execute");
 };
-function register(style: "compact" | "preview", mode?: "on" | "off" | "border") {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
+function register(
+  style: "compact" | "preview",
+  mode?: "on" | "off" | "border",
+  scheduleAnimation?: CompactAnimationScheduler,
+) {
+  applyPresentationSettings({
     toolCallCollapsedStyle: style,
     ...(mode && { toolCallBackground: mode }),
   });
-  const tools: ToolDefinition[] = [];
-  const messages: Parameters<ExtensionAPI["registerMessageRenderer"]>[1][] = [];
-  const pi: ExtensionAPI = fixture({
-    registerTool: (tool: ToolDefinition) => tools.push(tool),
-    registerMessageRenderer: (
-      _name: string,
-      render: Parameters<ExtensionAPI["registerMessageRenderer"]>[1],
-    ) => messages.push(render),
+  const { tools, messageRenderers } = captureRegistrations((pi) => {
+    registerAskUserTool(pi, noExecution, scheduleAnimation);
+    registerAsyncAskUserTools(pi, noExecution, noExecution, scheduleAnimation);
   });
-  registerAskUserTool(pi, noExecution);
-  registerAsyncAskUserTools(pi, noExecution, noExecution);
-  return { tools, messages };
+  return { tools, messages: [...messageRenderers.values()] };
 }
-afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
+const restoreSettings = applyPresentationSettings({});
+afterEach(restoreSettings);
+/** The settled details each registered tool reports for one questionnaire. */
+const detailsFor = <Blocking, Row>(toolName: string, blocking: Blocking, row: Row) =>
+  toolName === "ask_user" ? blocking : toolName === "ask_user_async" ? row : { requests: [row] };
 
 describe("registered questionnaire presentation", () => {
   it.each(["compact", "preview"] as const)(
@@ -58,13 +56,8 @@ describe("registered questionnaire presentation", () => {
     (style) => {
       const { tools } = register(style);
       for (const tool of tools) {
-        const harness = createToolPresentationHarness(tool, { theme, width: 160 });
-        const details =
-          tool.name === "ask_user"
-            ? outcome
-            : tool.name === "ask_user_async"
-              ? snapshot
-              : { requests: [snapshot] };
+        const harness = createToolPresentationHarness(tool, { width: 160 });
+        const details = detailsFor(tool.name, outcome, snapshot);
         const result = { details, content: [{ type: "text" as const, text: "Historical answer" }] };
         const before = structuredClone(result);
         for (const expanded of [false, true, false, true]) {
@@ -122,7 +115,7 @@ describe("registered questionnaire presentation", () => {
     };
     const { tools, messages } = register("compact");
     for (const tool of tools) {
-      const harness = createToolPresentationHarness(tool, { theme, width: 160 });
+      const harness = createToolPresentationHarness(tool, { width: 160 });
       const isBlocking = tool.name === "ask_user";
       harness.call(
         tool.name.endsWith("control") ? { action: "status", requestId: row.requestId } : questions,
@@ -130,11 +123,7 @@ describe("registered questionnaire presentation", () => {
       );
       harness.result(
         {
-          details: isBlocking
-            ? selected
-            : tool.name === "ask_user_async"
-              ? row
-              : { requests: [row] },
+          details: detailsFor(tool.name, selected, row),
           content: [
             {
               type: "text",
@@ -197,7 +186,7 @@ describe("registered questionnaire presentation", () => {
           content: [{ type: "text" as const, text: "Independent raw result marker" }],
         };
         const before = structuredClone(result);
-        const harness = createToolPresentationHarness(tool, { theme, width: 200 });
+        const harness = createToolPresentationHarness(tool, { width: 200 });
         for (const expanded of [false, true, false, true]) {
           harness.call({ action: "status" }, { expanded });
           harness.result(result, { expanded });
@@ -225,7 +214,7 @@ describe("registered questionnaire presentation", () => {
     const tool = register("compact").tools.find(
       (entry) => entry.name === "ask_user_async_control",
     )!;
-    const harness = createToolPresentationHarness(tool, { theme, width: 200 });
+    const harness = createToolPresentationHarness(tool, { width: 200 });
     const result = {
       details: { ...snapshot, delivery: "failed" },
       content: [{ type: "text" as const, text: "AGENT_DELIVERY_PROCEDURE" }],
@@ -246,7 +235,7 @@ describe("registered questionnaire presentation", () => {
 
   it("retains raw malformed failures and cancellation guidance", () => {
     for (const tool of register("compact").tools) {
-      const harness = createToolPresentationHarness(tool, { theme });
+      const harness = createToolPresentationHarness(tool);
       harness.call(args, { expanded: true });
       harness.result(
         {
@@ -260,12 +249,7 @@ describe("registered questionnaire presentation", () => {
       const row = { ...snapshot, status: "cancelled", outcome: cancelled };
       harness.result(
         {
-          details:
-            tool.name === "ask_user"
-              ? cancelled
-              : tool.name === "ask_user_async"
-                ? row
-                : { requests: [row] },
+          details: detailsFor(tool.name, cancelled, row),
           content: [],
         },
         { expanded: true, isError: true },
@@ -294,6 +278,26 @@ describe("registered questionnaire presentation", () => {
       expect(text.includes("Retained note")).toBe(expanded);
       expect(text.includes("historical-generation")).toBe(expanded);
       expect(text.startsWith("  ")).toBe(true);
+    }
+  });
+
+  it("uses the registering owner's scheduler and releases it when the call settles", () => {
+    const scheduler = animationSchedulerProbe();
+    applyPresentationSettings({ toolCallTiming: false });
+    const report = probeAnimationOwnership(
+      register("compact", undefined, scheduler.schedule).tools,
+      scheduler,
+      {
+        args: (tool) =>
+          tool.name === "ask_user_async_control"
+            ? { action: "await", requestId: "request-1" }
+            : { questions: [{ title: "Library" }] },
+      },
+    );
+    for (const { scheduled, invalidated, stops } of report) {
+      expect(scheduled).toBeGreaterThan(0);
+      expect(invalidated).toBe(true);
+      expect(stops).toBeGreaterThan(0);
     }
   });
 });

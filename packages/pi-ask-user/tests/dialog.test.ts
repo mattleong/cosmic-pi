@@ -1,12 +1,8 @@
 import { initTheme, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { controlled as controllable, opaqueHostFixture, theme } from "./support/host.ts";
-import {
-  CURSOR_MARKER,
-  type KeyId,
-  matchesKey,
-  type TUI,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { deferredPromise, opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { cancelled, submitted } from "./support/questionnaire.ts";
+import { expectWithin, pageViews } from "./support/viewport.ts";
+import { CURSOR_MARKER, type KeyId, matchesKey, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -46,7 +42,7 @@ const KEY_BINDINGS: KeybindingFixture = {
   "app.editor.external": "ctrl+g",
 };
 
-const keybindings: KeybindingsManager = opaqueHostFixture({
+const keybindings: KeybindingsManager = opaqueFixture({
   matches(data: string, id: string) {
     const key = KEY_BINDINGS[id];
     return key !== undefined && matchesKey(data, key);
@@ -59,7 +55,8 @@ const makeDialog = (
   getHeight: () => number = () => Infinity,
 ) => {
   const done = vi.fn<(outcome: AskUserOutcome) => void>();
-  const tui: TUI = opaqueHostFixture({
+  const collapse = vi.fn();
+  const tui: TUI = opaqueFixture({
     requestRender: vi.fn(),
     terminal: { rows: 60, columns: 120 },
   });
@@ -71,9 +68,9 @@ const makeDialog = (
     getHeight,
     done,
     editExternally,
-    onCollapse: vi.fn(),
+    collapse,
   });
-  return { dialog, done };
+  return { dialog, done, collapse };
 };
 
 const typeText = (dialog: AskUserDialog, value: string): void => {
@@ -94,19 +91,15 @@ const textRequest: AskUserRequest = {
 
 describe("AskUserDialog", () => {
   it("opens text input directly, preserves literal shortcuts and drafts across escape, notes, hide and review", () => {
-    const { dialog, done } = makeDialog(textRequest);
-    const hidden = vi.fn();
-    dialog.setOverlayHandle(opaqueHostFixture({ setHidden: hidden }));
+    const { dialog, done, collapse } = makeDialog(textRequest);
     dialog.focused = true;
     typeText(dialog, "bq1234");
     dialog.handleInput("\x1b[200~\nnext line\x1b[201~");
-    expect(hidden).not.toHaveBeenCalled();
+    expect(collapse).not.toHaveBeenCalled();
     expect(dialog.render(30).join("\n")).toContain(CURSOR_MARKER);
     dialog.handleInput(ESCAPE);
     dialog.handleInput("b");
-    expect(hidden).toHaveBeenCalledWith(true);
-    dialog.resume();
-    expect(hidden).toHaveBeenCalledWith(false);
+    expect(collapse).toHaveBeenCalledOnce();
     dialog.handleInput("n");
     typeText(dialog, "context");
     dialog.handleInput(ENTER);
@@ -119,12 +112,14 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ENTER);
     expect(done).not.toHaveBeenCalled();
     dialog.handleInput(ENTER);
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [
-        { key: "details", kind: "text", text: "bq1234\nnext line revised", note: "context" },
-      ],
-    });
+    expect(done).toHaveBeenCalledWith(
+      submitted({
+        key: "details",
+        kind: "text",
+        text: "bq1234\nnext line revised",
+        note: "context",
+      }),
+    );
   });
 
   it("retries blank and over-limit text without truncation and accepts the exact bound", () => {
@@ -146,10 +141,9 @@ describe("AskUserDialog", () => {
       dialog.handleInput(ENTER);
       expect(done).not.toHaveBeenCalled();
       dialog.handleInput(ENTER);
-      expect(done).toHaveBeenCalledWith({
-        outcome: "submitted",
-        answers: [{ key: "details", kind: "text", text: replacement.slice(0, 4000) }],
-      });
+      expect(done).toHaveBeenCalledWith(
+        submitted({ key: "details", kind: "text", text: replacement.slice(0, 4000) }),
+      );
     });
   });
 
@@ -162,7 +156,7 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ENTER);
     expect(done).not.toHaveBeenCalled();
     dialog.handleInput(ESCAPE);
-    expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
+    expect(done).toHaveBeenCalledWith(cancelled);
   });
   it("navigates six questions and submits every answer in a narrow dialog", () => {
     const questions = Array.from({ length: 6 }, (_, index) => ({
@@ -174,23 +168,22 @@ describe("AskUserDialog", () => {
     const { dialog, done } = makeDialog({ questions }, undefined, () => 8);
     dialog.focused = true;
     for (let index = 0; index < questions.length; index++) {
-      const lines = dialog.render(24);
-      expect(lines.length).toBeLessThanOrEqual(8);
-      expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
+      expectWithin(dialog.render(24), 24, 8);
       dialog.handleInput(ENTER);
       typeText(dialog, `answer-${index + 1}`);
       dialog.handleInput(ENTER);
     }
     expect(done).not.toHaveBeenCalled();
     dialog.handleInput(ENTER);
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: questions.map((question, index) => ({
-        key: question.key,
-        kind: "text",
-        text: `answer-${index + 1}`,
-      })),
-    });
+    expect(done).toHaveBeenCalledWith(
+      submitted(
+        ...questions.map((question, index) => ({
+          key: question.key,
+          kind: "text" as const,
+          text: `answer-${index + 1}`,
+        })),
+      ),
+    );
   });
 
   it("keeps validation feedback visible beside a clipped custom editor", () => {
@@ -239,15 +232,7 @@ describe("AskUserDialog", () => {
       undefined,
       () => height,
     );
-    const views: string[] = [];
-    dialog.handleInput("\x1b[H");
-    for (let page = 0; page < 100; page++) {
-      const lines = dialog.render(40);
-      expect(lines.length).toBeLessThanOrEqual(height);
-      expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
-      views.push(lines.join("\n"));
-      dialog.handleInput("\x1b[6~");
-    }
+    const views = pageViews(dialog, 40, 100, { height });
     expect(views.some((view) => view.includes("PROMPT-END"))).toBe(true);
     expect(views.some((view) => view.includes("PREVIEW-END"))).toBe(true);
     expect(views.some((view) => view.includes("DETAIL-END-1"))).toBe(true);
@@ -259,10 +244,9 @@ describe("AskUserDialog", () => {
     height = 30;
     dialog.render(100);
     dialog.handleInput(ENTER);
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [{ key: "approach", kind: "choices", values: ["second"], labels: ["Second"] }],
-    });
+    expect(done).toHaveBeenCalledWith(
+      submitted({ key: "approach", kind: "choices", values: ["second"], labels: ["Second"] }),
+    );
   });
 
   it("keeps a long editor cursor visible, preserves text and releases focus across resize", () => {
@@ -275,8 +259,7 @@ describe("AskUserDialog", () => {
     for (const width of [80, 24, 8, 1, 100]) {
       height = width <= 8 ? 1 : 8;
       const lines = dialog.render(width);
-      expect(lines.length).toBeLessThanOrEqual(height);
-      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      expectWithin(lines, width, height);
       expect(lines.join("\n")).toContain(CURSOR_MARKER);
     }
     dialog.focused = false;
@@ -285,10 +268,7 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ENTER);
     expect(dialog.render(30).join("\n")).not.toContain(CURSOR_MARKER);
     dialog.handleInput(ENTER);
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [{ key: "approach", kind: "custom", text }],
-    });
+    expect(done).toHaveBeenCalledWith(submitted({ key: "approach", kind: "custom", text }));
   });
 
   it.each([
@@ -298,15 +278,12 @@ describe("AskUserDialog", () => {
     [2, 2],
   ])("bounds a tiny questionnaire at %i by %i without changing its answer", (width, height) => {
     const { dialog, done } = makeDialog(request(), undefined, () => height);
-    const lines = dialog.render(width);
-    expect(lines.length).toBeLessThanOrEqual(height);
-    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expectWithin(dialog.render(width), width, height);
     dialog.handleInput("1");
     dialog.handleInput(ENTER);
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [{ key: "approach", kind: "choices", values: ["first"], labels: ["First"] }],
-    });
+    expect(done).toHaveBeenCalledWith(
+      submitted({ key: "approach", kind: "choices", values: ["first"], labels: ["First"] }),
+    );
   });
 
   it("does not pad a short dialog to its height allocation", () => {
@@ -324,23 +301,11 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ENTER);
     dialog.handleInput(ENTER);
 
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [{ key: "approach", kind: "custom", text: "q" }],
-    });
-  });
-
-  it("discards completed drafts when cancelled", () => {
-    const { dialog, done } = makeDialog();
-
-    dialog.handleInput("1");
-    dialog.handleInput(ESCAPE);
-
-    expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
+    expect(done).toHaveBeenCalledWith(submitted({ key: "approach", kind: "custom", text: "q" }));
   });
 
   it("suppresses concurrent external editors and ignores a result for a replaced input", () => {
-    const external = controllable<string | undefined>();
+    const external = deferredPromise<string | undefined>();
     const editExternally = vi.fn(() => external.promise);
     const { dialog, done } = makeDialog(request(), editExternally);
     openCustomInput(dialog);
@@ -358,10 +323,9 @@ describe("AskUserDialog", () => {
       dialog.handleInput(ENTER);
       dialog.handleInput(ENTER);
 
-      expect(done).toHaveBeenCalledWith({
-        outcome: "submitted",
-        answers: [{ key: "approach", kind: "custom", text: "fresh" }],
-      });
+      expect(done).toHaveBeenCalledWith(
+        submitted({ key: "approach", kind: "custom", text: "fresh" }),
+      );
     });
   });
 
@@ -379,25 +343,18 @@ describe("AskUserDialog", () => {
     dialog.handleInput(ENTER);
     dialog.handleInput(ENTER);
 
-    expect(done).toHaveBeenCalledWith({
-      outcome: "submitted",
-      answers: [
-        {
-          key: "approach",
-          kind: "choices",
-          values: ["first", "second"],
-          labels: ["First", "Second"],
-          note: "Keep both paths.",
-        },
-      ],
-    });
+    expect(done).toHaveBeenCalledWith(
+      submitted({
+        key: "approach",
+        kind: "choices",
+        values: ["first", "second"],
+        labels: ["First", "Second"],
+        note: "Keep both paths.",
+      }),
+    );
   });
 
   it.each([24, 120])("keeps every rendered line within width %i", (width) => {
-    const { dialog } = makeDialog();
-
-    const lines = dialog.render(width);
-
-    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expectWithin(makeDialog().dialog.render(width), width);
   });
 });

@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -43,18 +44,9 @@ const ProfileReloadEnvelopeInputSchema = Schema.Struct({
   ),
   seed: Schema.Unknown,
 });
-const exactDecodeOptions = { onExcessProperty: "error" as const };
-
-const decodeEnvelope = <ValueInput>(value: ValueInput) => {
-  try {
-    return Schema.decodeUnknownOption(
-      ProfileReloadEnvelopeInputSchema,
-      exactDecodeOptions,
-    )(value).pipe((decoded) => (decoded._tag === "Some" ? decoded.value : undefined));
-  } catch {
-    return undefined;
-  }
-};
+const decodeEnvelope = Schema.decodeUnknownOption(ProfileReloadEnvelopeInputSchema, {
+  onExcessProperty: "error",
+});
 
 const deleteEnvelope = (): void => {
   try {
@@ -97,7 +89,7 @@ const readEnvelope = (): ProfileReloadEnvelope | undefined => {
   }
   if (!slot.present || slot.value === undefined) return undefined;
   try {
-    const decoded = decodeEnvelope(slot.value);
+    const decoded = Option.getOrUndefined(decodeEnvelope(slot.value));
     const seed = decoded ? decodeSessionProfileOverrideSeed(decoded.seed) : undefined;
     if (!decoded || !seed || (decoded.version === 2 && !seed.baseline)) {
       deleteEnvelope();

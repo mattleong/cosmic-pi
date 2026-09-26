@@ -1,12 +1,8 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { decodeUnknownOrUndefined } from "../schema/decode.ts";
-import {
-  detachCosmicFooterContribution,
-  detachCosmicFooterContributionFromReceiver,
-} from "./canonicalization.ts";
+import { decodeUnknownOrUndefined, sanitizeTerminalLine } from "pi-cosmic-core";
+import { detachCosmicFooterContribution } from "./canonicalization.ts";
 
 export const COSMIC_UI_PROTOCOL_VERSION = 2 as const;
 export const COSMIC_UI_HOST_QUERY = "cosmic-ui:v2:host:query";
@@ -16,7 +12,7 @@ export const COSMIC_UI_FOOTER_REMOVE = "cosmic-ui:v2:footer:remove";
 export const COSMIC_UI_FOOTER_INVALIDATE = "cosmic-ui:v2:footer:invalidate";
 
 export type CosmicFooterTone = "normal" | "accent" | "dim" | "success" | "warning" | "error";
-export type CosmicFooterRegion = "identity" | "metrics" | "details" | "media";
+export type CosmicFooterRegion = "identity" | "metrics" | "details";
 export const COSMIC_FOOTER_COLOR_TOKENS = [
   "accent",
   "border",
@@ -67,25 +63,14 @@ export const COSMIC_FOOTER_COLOR_TOKENS = [
   "bashMode",
 ] as const satisfies ReadonlyArray<ThemeColor>;
 export type CosmicFooterColor = (typeof COSMIC_FOOTER_COLOR_TOKENS)[number];
-export type CosmicFooterPlacement =
-  | "stacked"
-  | "inline-left"
-  | "inline-right"
-  | "badge"
-  | "habitat";
 
 export interface CosmicFooterTheme {
   fg(color: CosmicFooterColor, value: string): string;
 }
-export interface CosmicFooterSurfaceRenderOptions {
-  width: number;
-  placement: CosmicFooterPlacement;
-  theme: CosmicFooterTheme;
-}
 export interface CosmicFooterTextContribution {
   kind: "text";
   id: string;
-  region: Exclude<CosmicFooterRegion, "media">;
+  region: CosmicFooterRegion;
   text: string;
   compactText?: string;
   align?: "left" | "right";
@@ -112,27 +97,14 @@ export interface CosmicFooterTextContribution {
 export interface CosmicFooterStatusContribution {
   kind: "status";
   id: string;
-  region: Exclude<CosmicFooterRegion, "media">;
+  region: CosmicFooterRegion;
   align?: "left" | "right";
   priority?: number;
   order?: number;
 }
-export interface CosmicFooterSurfaceContribution {
-  kind: "surface";
-  id: string;
-  region: "media";
-  preferredWidth: number;
-  preferredPlacement?: CosmicFooterPlacement;
-  attach?(host: { requestRender(): void }): void;
-  detach?(): void;
-  render(options: CosmicFooterSurfaceRenderOptions): string[];
-  invalidate?(): void;
-  dispose?(): void;
-}
 export type CosmicFooterContribution =
   | CosmicFooterTextContribution
-  | CosmicFooterStatusContribution
-  | CosmicFooterSurfaceContribution;
+  | CosmicFooterStatusContribution;
 
 export { detachCosmicFooterContribution };
 
@@ -190,8 +162,8 @@ const TextContributionData = Schema.Struct({
   tone: Schema.optional(
     Schema.Literals(["normal", "accent", "dim", "success", "warning", "error"]),
   ),
-  priority: Schema.optional(Schema.Number),
-  order: Schema.optional(Schema.Number),
+  priority: Schema.optional(Schema.Finite),
+  order: Schema.optional(Schema.Finite),
   label: Schema.optional(NonEmpty),
   color: Schema.optional(FooterColorSchema),
   decorates: Schema.optional(NonEmpty),
@@ -201,31 +173,13 @@ const StatusContributionData = Schema.Struct({
   id: NonEmpty,
   region: Schema.Literals(["identity", "metrics", "details"]),
   align: Schema.optional(Schema.Literals(["left", "right"])),
-  priority: Schema.optional(Schema.Number),
-  order: Schema.optional(Schema.Number),
-});
-const SurfaceContributionData = Schema.Struct({
-  kind: Schema.Literal("surface"),
-  id: NonEmpty,
-  region: Schema.Literal("media"),
-  preferredWidth: Schema.Number,
-  preferredPlacement: Schema.optional(
-    Schema.Literals(["stacked", "inline-left", "inline-right", "badge", "habitat"]),
-  ),
-  attach: Schema.optional(Schema.Unknown),
-  detach: Schema.optional(Schema.Unknown),
-  render: Schema.Unknown,
-  invalidate: Schema.optional(Schema.Unknown),
-  dispose: Schema.optional(Schema.Unknown),
+  priority: Schema.optional(Schema.Finite),
+  order: Schema.optional(Schema.Finite),
 });
 const UpsertData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
   owner: NonEmpty,
-  contribution: Schema.Union([
-    TextContributionData,
-    StatusContributionData,
-    SurfaceContributionData,
-  ]),
+  contribution: Schema.Union([TextContributionData, StatusContributionData]),
 });
 const RemoveData = Schema.Struct({
   version: Schema.Literal(COSMIC_UI_PROTOCOL_VERSION),
@@ -238,42 +192,6 @@ const InvalidateData = Schema.Struct({
   id: Schema.optional(NonEmpty),
 });
 
-const optionalFunction = <Value>(value: Value) =>
-  value === undefined || Predicate.isFunction(value);
-
-type DecodedUpsert = typeof UpsertData.Type;
-interface DecodedUpsertWithReceiver {
-  readonly event: DecodedUpsert;
-  readonly callbackReceiver: object;
-}
-
-const decodeUpsertSafely = <Value>(value: Value): DecodedUpsertWithReceiver | undefined => {
-  try {
-    if (!Predicate.isObject(value)) return undefined;
-    const input = {
-      version: value.version,
-      owner: value.owner,
-      contribution: value.contribution,
-    };
-    if (!Predicate.isObject(input.contribution)) return undefined;
-    const event = decodeUnknownOrUndefined(UpsertData, input);
-    return event === undefined ? undefined : { event, callbackReceiver: input.contribution };
-  } catch {
-    return undefined;
-  }
-};
-
-const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => {
-  try {
-    return decodeUnknownOrUndefined(schema, value);
-  } catch {
-    return undefined;
-  }
-};
-
 /**
  * Reads every hostile query field exactly once and returns a detached plain snapshot.
  * Callers at the event-bus boundary must invoke this through HostCallbackBoundary.
@@ -281,7 +199,7 @@ const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
 export function normalizeCosmicUiHostQuery<ValueInput>(
   value: ValueInput,
 ): CosmicUiHostQuery | undefined {
-  const query = decodeSafely(HostQueryData, value);
+  const query = decodeUnknownOrUndefined(HostQueryData, value);
   if (!query || !Predicate.isFunction(query.respond)) return undefined;
   const respond = query.respond;
   return Object.freeze({
@@ -301,7 +219,7 @@ export function normalizeCosmicUiHostQuery<ValueInput>(
 export function normalizeCosmicUiHostStateEvent<ValueInput>(
   value: ValueInput,
 ): CosmicUiHostStateEvent | undefined {
-  const event = decodeSafely(HostStateData, value);
+  const event = decodeUnknownOrUndefined(HostStateData, value);
   return event
     ? Object.freeze({
         version: event.version,
@@ -316,52 +234,25 @@ export function normalizeCosmicUiHostStateEvent<ValueInput>(
 export function normalizeCosmicFooterUpsertEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterUpsertEvent | undefined {
-  const decoded = decodeUpsertSafely(value);
-  if (!decoded) return undefined;
-  const { event, callbackReceiver } = decoded;
-  const contribution = event.contribution;
-  if (contribution.kind === "text" || contribution.kind === "status") {
-    if (
-      (contribution.priority !== undefined && !Number.isFinite(contribution.priority)) ||
-      (contribution.order !== undefined && !Number.isFinite(contribution.order))
-    )
-      return undefined;
-  } else if (
-    !Number.isFinite(contribution.preferredWidth) ||
-    contribution.preferredWidth <= 0 ||
-    !Predicate.isFunction(contribution.render) ||
-    !optionalFunction(contribution.attach) ||
-    !optionalFunction(contribution.detach) ||
-    !optionalFunction(contribution.invalidate) ||
-    !optionalFunction(contribution.dispose)
-  )
-    return undefined;
+  const event = decodeUnknownOrUndefined(UpsertData, value);
+  if (!event) return undefined;
+  let contribution = event.contribution;
   if (contribution.kind === "text") {
     const { text, compactText, label, ...rest } = contribution;
     const sanitizedLabel = label === undefined ? undefined : sanitizeTerminalLine(label);
     if (sanitizedLabel === "") return undefined;
-    const detached = {
+    contribution = {
       ...rest,
       text: sanitizeTerminalLine(text),
+      ...(compactText !== undefined && { compactText: sanitizeTerminalLine(compactText) }),
+      ...(sanitizedLabel !== undefined && { label: sanitizedLabel }),
     };
-    if (compactText !== undefined)
-      Object.assign(detached, { compactText: sanitizeTerminalLine(compactText) });
-    if (sanitizedLabel !== undefined) Object.assign(detached, { label: sanitizedLabel });
-    // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-    return Object.freeze({
-      version: event.version,
-      owner: event.owner,
-      contribution: detachCosmicFooterContribution(detached as CosmicFooterContribution),
-    }) as CosmicFooterUpsertEvent;
   }
   // SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
   return Object.freeze({
     version: event.version,
     owner: event.owner,
-    contribution: detachCosmicFooterContributionFromReceiver(
-      contribution as CosmicFooterContribution,
-      { value: callbackReceiver },
-    ),
+    contribution: detachCosmicFooterContribution(contribution as CosmicFooterContribution),
   }) as CosmicFooterUpsertEvent;
 }
 
@@ -369,7 +260,7 @@ export function normalizeCosmicFooterUpsertEvent<ValueInput>(
 export function normalizeCosmicFooterRemoveEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterRemoveEvent | undefined {
-  const event = decodeSafely(RemoveData, value);
+  const event = decodeUnknownOrUndefined(RemoveData, value);
   if (!event) return undefined;
   const snapshot: CosmicFooterRemoveEvent = {
     version: event.version,
@@ -383,7 +274,7 @@ export function normalizeCosmicFooterRemoveEvent<ValueInput>(
 export function normalizeCosmicFooterInvalidateEvent<ValueInput>(
   value: ValueInput,
 ): CosmicFooterInvalidateEvent | undefined {
-  const event = decodeSafely(InvalidateData, value);
+  const event = decodeUnknownOrUndefined(InvalidateData, value);
   if (!event) return undefined;
   const snapshot: CosmicFooterInvalidateEvent = { version: event.version };
   if (event.owner !== undefined) snapshot.owner = event.owner;

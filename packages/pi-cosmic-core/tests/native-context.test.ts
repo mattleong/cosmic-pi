@@ -8,6 +8,7 @@ import * as Scope from "effect/Scope";
 import { describe, expect, vi } from "vitest";
 import { makeNativeContext, NativeContextError } from "../src/platform/native-context.ts";
 import * as NodeBuiltins from "../src/platform/node-builtins.ts";
+import { scopedSpy } from "./support/spies.ts";
 
 // Test-only Promise boundary. Each gate waiter belongs to the caller's scope.
 const makeNativePromiseGate = Effect.gen(function* () {
@@ -209,13 +210,10 @@ describe("scoped native callback context", () => {
 
   it.live("redacts unavailable native acquisition without manufacturing a fallback", () =>
     Effect.gen(function* () {
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          vi.spyOn(NodeBuiltins, "nodeCreateAsyncLocalStorage").mockImplementation(() => {
-            throw new Error("secret-native-diagnostic");
-          }),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
+      yield* scopedSpy(() =>
+        vi.spyOn(NodeBuiltins, "nodeCreateAsyncLocalStorage").mockImplementation(() => {
+          throw new Error("secret-native-diagnostic");
+        }),
       );
       const error = yield* makeNativeContext<string>().pipe(Effect.flip);
       expect(error).toBeInstanceOf(NativeContextError);
@@ -230,20 +228,17 @@ describe("scoped native callback context", () => {
     Effect.gen(function* () {
       const create = NodeBuiltins.nodeCreateAsyncLocalStorage;
       const duringDisable = vi.fn<() => void>();
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          vi.spyOn(NodeBuiltins, "nodeCreateAsyncLocalStorage").mockImplementation(<A>() => {
-            const storage = create<A>();
-            const disable = storage.disable.bind(storage);
-            storage.disable = () => {
-              duringDisable();
-              disable();
-              throw new Error("secret-cleanup-diagnostic");
-            };
-            return storage;
-          }),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
+      yield* scopedSpy(() =>
+        vi.spyOn(NodeBuiltins, "nodeCreateAsyncLocalStorage").mockImplementation(<A>() => {
+          const storage = create<A>();
+          const disable = storage.disable.bind(storage);
+          storage.disable = () => {
+            duringDisable();
+            disable();
+            throw new Error("secret-cleanup-diagnostic");
+          };
+          return storage;
+        }),
       );
       const owner = yield* Scope.fork(yield* Effect.scope);
       const context = yield* makeNativeContext<string>().pipe(

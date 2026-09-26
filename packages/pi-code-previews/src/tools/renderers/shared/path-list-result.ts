@@ -9,7 +9,8 @@ import { showingFooter, trimSingleTrailingNewline } from "../../../preview/forma
 import { createPathListChunkRenderer } from "../../../tools/path-list-render";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { renderSelectedOutputLines } from "./preview-text";
-import { renderHiddenPreviewPrelude, renderResultPrelude } from "./result-prelude";
+import { renderResultPrelude } from "./result-prelude";
+import { renderHiddenPreviewExpandHint } from "../../../preview/bordered-tool-call";
 import type { PathIconMode } from "../../../config/schema";
 import type { RendererState } from "./types";
 
@@ -46,13 +47,8 @@ export function renderPathListResult(
     errorText: (expanded ? output : output.split("\n")[0]) || config.errorLabel,
   });
   if (prelude) return prelude;
-  const hiddenPrelude = renderHiddenPreviewPrelude({
-    expanded,
-    state: context.state,
-    theme,
-    hidePreview: !config.previewEnabled,
-  });
-  if (hiddenPrelude) return hiddenPrelude;
+  if (!expanded && !config.previewEnabled)
+    return renderHiddenPreviewExpandHint(context.state, theme);
   if (!output || output === config.emptyMarker)
     return new Text(theme.fg("muted", config.emptyLabel(output)), 0, 0);
   if (expanded && !config.previewEnabled)

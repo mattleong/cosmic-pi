@@ -4,14 +4,14 @@ import { utf8ByteLength } from "../src/task/utf8.ts";
 
 describe("background log buffer", () => {
   it("counts UTF-8 bytes and retains a valid tail", () => {
-    const buffer = LogBuffer.empty().append("stdout", "a🙂bc", 1, 6);
+    const buffer = new LogBuffer().append("stdout", "a🙂bc", 1, 6);
     expect(buffer.bytes).toBeLessThanOrEqual(6);
     expect(buffer.events[0]).toMatchObject({ text: "🙂bc", droppedBefore: true });
     expect(buffer.droppedBytes).toBe(1);
   });
 
   it("advances cursors and reports dropped events", () => {
-    const buffer = LogBuffer.empty().append("stdout", "first\n", 1, 64);
+    const buffer = new LogBuffer().append("stdout", "first\n", 1, 64);
     buffer.append("stderr", "second\n", 2, 64);
     buffer.dropOldest();
     const slice = readLogBuffer("task-1", buffer, "running", { afterCursor: 0 });
@@ -22,7 +22,7 @@ describe("background log buffer", () => {
   });
 
   it("keeps detached snapshots through appends, eviction, and repeated compaction", () => {
-    const buffer = LogBuffer.empty();
+    const buffer = new LogBuffer();
     for (let index = 0; index < 64; index++) buffer.append("stdout", "🙂", index, 256);
     const events = buffer.events;
     const original = events.map((event) => ({ ...event }));
@@ -45,7 +45,7 @@ describe("background log buffer", () => {
   });
 
   it("returns a bounded line tail when no cursor is supplied", () => {
-    const buffer = LogBuffer.empty();
+    const buffer = new LogBuffer();
     buffer.append("stdout", "one\ntwo\n", 1, 1024);
     buffer.append("stdout", "three\nfour\n", 2, 1024);
     const slice = readLogBuffer("task-1", buffer, "running", { tailLines: 2 });

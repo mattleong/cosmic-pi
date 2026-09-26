@@ -37,14 +37,13 @@ import {
   renderProfileRoutesComponent,
   type SemanticOutcomeBanner,
 } from "./render-management.ts";
-import { formatAwaitSummary, renderAwaitProgressComponent } from "./render-await.ts";
-import { renderResponsiveRunRows } from "./render-run-rows.ts";
-import { renderStartProgressComponent, renderStartReceiptComponent } from "./render-start.ts";
-
-interface RunOverviewHierarchy {
-  readonly awaitedRunIds?: ReadonlySet<string> | undefined;
-  readonly contextOmitted?: boolean | undefined;
-}
+import {
+  awaitSummaryColor,
+  formatAwaitSummary,
+  renderAwaitProgressComponent,
+} from "./render-await.ts";
+import { renderResponsiveRunRows, type RunHierarchy } from "./render-run-rows.ts";
+import { renderStartReceiptComponent } from "./render-start.ts";
 
 interface RunReportSection {
   readonly name: string;
@@ -54,12 +53,11 @@ interface RunReportSection {
 
 const joinTextContent = (
   content: ReadonlyArray<{ readonly type: string; readonly text?: string }>,
-  separator = "\n",
 ): string =>
   content
     .filter((part) => part.type === "text")
     .map((part) => part.text ?? "")
-    .join(separator);
+    .join("\n");
 
 const expandedRunReportSections = (
   runs: ReadonlyArray<SubagentRunCard>,
@@ -147,13 +145,7 @@ const routineRunDiagnostics = (
   selection: string,
   retention: string,
 ): ReadonlyArray<string> => {
-  const details = [
-    run.context ? `context=${run.context}` : undefined,
-    retention,
-    run.capabilities ? `capabilities=${run.capabilities.join(", ") || "none"}` : undefined,
-  ]
-    .filter((value): value is string => value !== undefined)
-    .join(" · ");
+  const details = `context=${run.context} · ${retention} · capabilities=${run.capabilities.join(", ") || "none"}`;
   return [
     ...wrapTextWithAnsi(theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`), width),
     ...wrapTextWithAnsi(theme.fg("dim", selection), width),
@@ -255,10 +247,9 @@ interface RunOverviewOptions {
   readonly reportSections: ReadonlyArray<RunReportSection>;
   readonly banner?: SemanticOutcomeBanner | undefined;
   readonly showReportOutcomes?: boolean | undefined;
-  readonly hierarchy?: RunOverviewHierarchy | undefined;
+  readonly hierarchy?: RunHierarchy | undefined;
   readonly showRunRows?: boolean | undefined;
   readonly showOutcomeDetails?: boolean | undefined;
-  readonly showReportAffordance?: boolean | undefined;
   readonly showContextOmission?: boolean | undefined;
   readonly contentOnly?: boolean | undefined;
 }
@@ -381,11 +372,9 @@ const runOverviewComponent = (
               truncateToWidth(
                 theme.fg(
                   "warning",
-                  run.capabilities === undefined
-                    ? `${sanitizeTerminalLine(run.name)} is paused · check resume support with subagent_status, or stop it with subagent_lifecycle.`
-                    : run.capabilities.includes("resume")
-                      ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
-                      : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
+                  run.capabilities.includes("resume")
+                    ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
+                    : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
                 ),
                 safeWidth,
               ),
@@ -397,7 +386,7 @@ const runOverviewComponent = (
             .filter(Boolean)
             .map((line) => truncateToWidth(theme.fg("warning", line), safeWidth))
         : []),
-      ...(options.showReportAffordance !== false && options.reportSections.length > 0
+      ...(options.reportSections.length > 0
         ? [
             truncateToWidth(
               reportAffordance(options.reportSections, options.expanded, theme),
@@ -437,7 +426,7 @@ export const renderExpandedStartAwaitResult = (
   theme: Theme,
   banner?: SemanticOutcomeBanner,
   showReportOutcomes = true,
-  hierarchy?: RunOverviewHierarchy,
+  hierarchy?: RunHierarchy,
   reportRuns: ReadonlyArray<SubagentRunCard> = runs,
   reportsFirst = false,
 ): Component => {
@@ -462,11 +451,9 @@ export const renderExpandedStartAwaitResult = (
       expanded: false,
       reportSections: [],
       banner,
-      showReportOutcomes: false,
       hierarchy,
       showRunRows: false,
       showOutcomeDetails: false,
-      showReportAffordance: false,
     }),
   );
   appendReportSections(container, sections, theme);
@@ -480,17 +467,15 @@ export const renderExpandedStartAwaitResult = (
       reportSections: [],
       showReportOutcomes,
       hierarchy,
-      showReportAffordance: false,
       showContextOmission: false,
     }),
   );
   return container;
 };
 
-export const awaitResultBanner = (details: {
-  readonly action?: "start" | "await" | undefined;
-  readonly runs?: ReadonlyArray<SubagentRunCard> | undefined;
-  readonly awaitUntil?: SubagentAwaitUntil | undefined;
+const awaitResultBanner = (details: {
+  readonly runs: ReadonlyArray<SubagentRunCard>;
+  readonly awaitUntil: SubagentAwaitUntil;
   readonly timedOut?: boolean | undefined;
   readonly attentionRequired?: boolean | undefined;
   readonly cancelled?: boolean | undefined;
@@ -499,31 +484,11 @@ export const awaitResultBanner = (details: {
   readonly targetCount?: number | undefined;
   readonly descendantCount?: number | undefined;
 }): SemanticOutcomeBanner => {
-  const runs = details.runs ?? [];
-  const finishedRuns = runs
-    .filter((run) => isAssignmentFinishedRunState(run.state))
-    .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity));
-  const failed = runs.filter((run) => run.state === "failed").length;
-  const interrupted = details.cancelled || details.timedOut || details.attentionRequired;
-  const firstFinished = finishedRuns[0];
-  const color: SemanticOutcomeBanner["color"] = interrupted
-    ? "warning"
-    : details.awaitUntil === "any_finished" && firstFinished
-      ? firstFinished.state === "failed"
-        ? "error"
-        : "accent"
-      : failed > 0
-        ? "error"
-        : runs.length > 0 && finishedRuns.length === runs.length
-          ? "success"
-          : "warning";
+  const outcome = { ...details, settled: true };
   return {
-    color,
+    color: awaitSummaryColor(details.runs, details.awaitUntil, outcome),
     text: [
-      formatAwaitSummary(runs, details.awaitUntil ?? "all_finished", details.usage, {
-        ...details,
-        settled: true,
-      }),
+      formatAwaitSummary(details.runs, details.awaitUntil, details.usage, outcome),
       ...(details.cancellationCleanup === "unconfirmed"
         ? [
             "Root completion-claim cleanup is unconfirmed; claims may remain and an immediate replacement await may conflict.",
@@ -595,7 +560,7 @@ const awaitHierarchy = (details: {
   readonly cards: ReadonlyArray<SubagentRunCard>;
   readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
   readonly contextOmitted?: true | undefined;
-}): RunOverviewHierarchy => ({
+}) => ({
   awaitedRunIds: new Set(details.awaitedRunIds ?? details.cards.map((card) => card.id)),
   contextOmitted: details.contextOmitted,
 });
@@ -611,29 +576,23 @@ const renderPartialStartAwait = (
   expanded: boolean,
   theme: Theme,
   options: SubagentResultRenderOptions,
-): Component | undefined => {
+): Component => {
   if (options.panelOwnsLiveHierarchy) return renderComponent(() => []);
   if (details.action === "start")
-    return renderStartProgressComponent(
+    return renderStartReceiptComponent(
       details.startFailures ?? [],
       details.startEntries,
       expanded,
       theme,
+      true,
     );
-  if (!details.awaitUntil) return undefined;
-  const targets = awaitTargets(details);
-  const hierarchy = awaitHierarchy(details);
   return renderAwaitProgressComponent(
     details.cards,
-    targets,
+    awaitTargets(details),
     details.awaitUntil,
     theme,
-    hierarchy,
-    {
-      cancelled: details.cancelled,
-      timedOut: details.timedOut,
-      attentionRequired: details.attentionRequired,
-    },
+    awaitHierarchy(details),
+    details,
   );
 };
 
@@ -652,7 +611,7 @@ const renderSettledStartAwait = (
     );
   const targets = awaitTargets(details);
   const hierarchy = awaitHierarchy(details);
-  const targetIds = hierarchy.awaitedRunIds ?? new Set(targets.map((run) => run.id));
+  const targetIds = hierarchy.awaitedRunIds;
   const banner = includeContentOmission(
     awaitResultBanner({
       ...details,
@@ -668,7 +627,6 @@ const renderSettledStartAwait = (
       expanded: false,
       reportSections: expandedRunReportSections(targets),
       banner,
-      showReportOutcomes: true,
       hierarchy,
       showRunRows: false,
     });
@@ -689,9 +647,8 @@ const renderCompactDetails = (
   compact: CompactSubagentToolDetails,
   expanded: boolean,
   theme: Theme,
-): Component | undefined => {
-  if (compact.action === "models")
-    return compact.profiles ? renderProfileRoutesComponent(compact, expanded, theme) : undefined;
+): Component => {
+  if (compact.action === "models") return renderProfileRoutesComponent(compact, expanded, theme);
   const hierarchy = compact.action === "list" ? {} : undefined;
   const rendered = renderCompactResultComponent(
     compact,
@@ -780,11 +737,12 @@ export const renderSubagentExpandedContent = (
   const compact = decodeCompactToolDetails(result.details);
   if (details && isPartial && options.panelOwnsLiveHierarchy) return renderComponent(() => []);
   if (details?.action === "start")
-    return (isPartial ? renderStartProgressComponent : renderStartReceiptComponent)(
+    return renderStartReceiptComponent(
       details.startFailures ?? [],
       details.startEntries,
       true,
       theme,
+      isPartial,
       true,
     );
   if (compact?.action === "models") return renderProfileRoutesComponent(compact, true, theme, true);
@@ -803,7 +761,6 @@ export const renderSubagentExpandedContent = (
     runOverviewComponent(runs, theme, {
       expanded: true,
       reportSections: [],
-      showReportAffordance: false,
       showContextOmission: false,
       contentOnly: true,
       hierarchy: details?.action === "await" ? awaitHierarchy(details) : undefined,
@@ -820,15 +777,11 @@ export const renderSubagentResult = (
   options: SubagentResultRenderOptions = {},
 ): Component => {
   const details = decodeStartAwaitCardDetails(result.details);
-  if (details) {
-    if (!isPartial) return renderSettledStartAwait(result.content, details, expanded, theme);
-    const rendered = renderPartialStartAwait(details, expanded, theme, options);
-    if (rendered) return rendered;
-  }
+  if (details)
+    return isPartial
+      ? renderPartialStartAwait(details, expanded, theme, options)
+      : renderSettledStartAwait(result.content, details, expanded, theme);
   const compact = decodeCompactToolDetails(result.details);
-  if (compact) {
-    const rendered = renderCompactDetails(result.content, compact, expanded, theme);
-    if (rendered) return rendered;
-  }
+  if (compact) return renderCompactDetails(result.content, compact, expanded, theme);
   return renderTextFallback(result.content, isPartial, expanded, theme);
 };

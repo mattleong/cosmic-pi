@@ -1,7 +1,8 @@
 // Raw Node builtin access for adapters whose contracts the Effect FileSystem and
 // Path services cannot express: O_NOFOLLOW opens, inode identity checks, and
 // native platform path semantics. Duplex processes use the child-process door
-// for callback-backed stdin writes and detached process-group ownership.
+// for callback-backed stdin writes and detached process-group ownership, and the
+// Windows process-tree terminator uses it for its synchronously cancellable taskkill.
 const nodeFsModule = process.getBuiltinModule("node:fs");
 const nodePathModule = process.getBuiltinModule("node:path");
 if (!nodeFsModule || !nodePathModule) throw new Error("Node fs/path builtins are unavailable.");
@@ -32,6 +33,8 @@ export const nodeLockHash = (value: string) =>
   nodeCryptoModule.createHash("sha256").update(value).digest("hex");
 /** OS account lookup, deliberately independent of HOME and Pi's agent directory. */
 export const nodeHomeDirectory = () => nodeOsModule.userInfo().homedir;
+/** Test kits only: the OS temporary-directory root. */
+export const nodeTemporaryRoot = () => nodeOsModule.tmpdir();
 
 const nodeChildProcessModule = process.getBuiltinModule("node:child_process");
 if (!nodeChildProcessModule) throw new Error("Node child-process builtin is unavailable.");

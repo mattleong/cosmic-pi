@@ -2,6 +2,7 @@ import * as Predicate from "effect/Predicate";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_PROTOCOL_ID_CHARS } from "../run/limits.ts";
 
 const MAX_PROTOCOL_NAME_CHARS = 256;
@@ -22,6 +23,13 @@ const ParentMessageSchema = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS),
 );
+
+/** One `pi-subagents` IPC message: the channel and type literals, then its own fields. */
+const piSubagentsMessage = <const Type extends string, const Fields extends Schema.Struct.Fields>(
+  type: Type,
+  fields: Fields,
+) =>
+  Schema.Struct({ channel: Schema.Literal("pi-subagents"), type: Schema.Literal(type), ...fields });
 
 const RpcResponseSchema = Schema.Struct({
   type: Schema.Literal("response"),
@@ -75,79 +83,47 @@ const ExtensionUiRequestSchema = Schema.Struct({
   id: ProtocolIdSchema,
   method: ProtocolNameSchema,
 });
-const ContactParentSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("contact_parent"),
+const ContactParentSchema = piSubagentsMessage("contact_parent", {
   requestId: ProtocolIdSchema,
-  kind: Schema.Union([
-    Schema.Literal("progress"),
-    Schema.Literal("question"),
-    Schema.Literal("warning"),
-  ]),
+  kind: Schema.Literals(["progress", "question", "warning"]),
   message: ParentMessageSchema,
 });
-const ContactCancelSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("contact_cancel"),
-  requestId: ProtocolIdSchema,
-});
-const ProxyRequestSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("proxy_request"),
+const ContactCancelSchema = piSubagentsMessage("contact_cancel", { requestId: ProtocolIdSchema });
+const ProxyRequestSchema = piSubagentsMessage("proxy_request", {
   requestId: ProtocolIdSchema,
   tool: ProtocolNameSchema,
   argumentsJson: Schema.String.check(Schema.isMaxLength(MAX_PROXY_PAYLOAD_CHARS)),
 });
-const ProxyCancelSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("proxy_cancel"),
-  requestId: ProtocolIdSchema,
-});
-const ProxyNotificationAckSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("proxy_notification_ack"),
+const ProxyCancelSchema = piSubagentsMessage("proxy_cancel", { requestId: ProtocolIdSchema });
+const ProxyNotificationAckSchema = piSubagentsMessage("proxy_notification_ack", {
   requestId: ProtocolIdSchema,
   ok: Schema.Boolean,
 });
-const TurnInputBarrierAckSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("turn_input_barrier_ack"),
+const TurnInputBarrierAckSchema = piSubagentsMessage("turn_input_barrier_ack", {
   requestId: ProtocolIdSchema,
 });
-const ParentReplySchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("parent_reply"),
+const ParentReplySchema = piSubagentsMessage("parent_reply", {
   requestId: ProtocolIdSchema,
   ackId: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
-const ParentReplyAckSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("parent_reply_ack"),
+const ParentReplyAckSchema = piSubagentsMessage("parent_reply_ack", {
   requestId: ProtocolIdSchema,
   ok: Schema.Boolean,
 });
-const PeerNoticeSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("peer_notice"),
+const PeerNoticeSchema = piSubagentsMessage("peer_notice", {
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
-const ProxyResponseSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("proxy_response"),
+const ProxyResponseSchema = piSubagentsMessage("proxy_response", {
   requestId: ProtocolIdSchema,
   ok: Schema.Boolean,
   payloadJson: Schema.String.check(Schema.isMaxLength(MAX_PROXY_PAYLOAD_CHARS)),
 });
-const ProxyNotificationSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("proxy_notification"),
+const ProxyNotificationSchema = piSubagentsMessage("proxy_notification", {
   requestId: ProtocolIdSchema,
   message: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
 });
-const TurnInputBarrierSchema = Schema.Struct({
-  channel: Schema.Literal("pi-subagents"),
-  type: Schema.Literal("turn_input_barrier"),
+const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {
   requestId: ProtocolIdSchema,
 });
 export const LocalPiContactSchema = Schema.Union([
@@ -174,67 +150,41 @@ export const decodeLocalPiParentControlOption = Schema.decodeUnknownOption(
 );
 const IgnoredEventSchema = Schema.Struct({ type: Schema.String });
 const RpcDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.String) });
+const RpcEventSchema = Schema.Union([
+  RpcResponseSchema,
+  AgentStartSchema,
+  AgentEndSchema,
+  AgentSettledSchema,
+  MessageUpdateSchema,
+  MessageEndSchema,
+  MessageStartSchema,
+  ToolStartSchema,
+  ToolEndSchema,
+  ExtensionErrorSchema,
+  ExtensionUiRequestSchema,
+]);
+const RPC_EVENT_TYPES: ReadonlySet<string> = new Set(
+  RpcEventSchema.members.map((member) => member.fields.type.literal),
+);
 export type RpcResponse = Schema.Schema.Type<typeof RpcResponseSchema>;
-export type ContactParentEnvelope = Schema.Schema.Type<typeof ContactParentSchema>;
 export type RpcChildEnvelope =
-  | RpcResponse
-  | Schema.Schema.Type<typeof AgentStartSchema>
-  | Schema.Schema.Type<typeof AgentEndSchema>
-  | Schema.Schema.Type<typeof AgentSettledSchema>
-  | Schema.Schema.Type<typeof MessageUpdateSchema>
-  | Schema.Schema.Type<typeof MessageEndSchema>
-  | Schema.Schema.Type<typeof MessageStartSchema>
-  | Schema.Schema.Type<typeof ToolStartSchema>
-  | Schema.Schema.Type<typeof ToolEndSchema>
-  | Schema.Schema.Type<typeof ExtensionErrorSchema>
-  | Schema.Schema.Type<typeof ExtensionUiRequestSchema>
+  | typeof RpcEventSchema.Type
   | { readonly type: "ignored"; readonly eventType: string };
 
+/** Known event types decode strictly; any other typed event is ignored. */
 export function decodeRpcEnvelope<ValueInput>(
   value: ValueInput,
 ): Effect.Effect<RpcChildEnvelope, Schema.SchemaError> {
   return Effect.gen(function* () {
     const discriminant = yield* Schema.decodeUnknownEffect(RpcDiscriminantSchema)(value);
-    switch (discriminant.type) {
-      case "response":
-        return yield* Schema.decodeUnknownEffect(RpcResponseSchema)(value);
-      case "agent_start":
-        return yield* Schema.decodeUnknownEffect(AgentStartSchema)(value);
-      case "agent_end":
-        return yield* Schema.decodeUnknownEffect(AgentEndSchema)(value);
-      case "agent_settled":
-        return yield* Schema.decodeUnknownEffect(AgentSettledSchema)(value);
-      case "message_update":
-        return yield* Schema.decodeUnknownEffect(MessageUpdateSchema)(value);
-      case "message_end":
-        return yield* Schema.decodeUnknownEffect(MessageEndSchema)(value);
-      case "message_start":
-        return yield* Schema.decodeUnknownEffect(MessageStartSchema)(value);
-      case "tool_execution_start":
-        return yield* Schema.decodeUnknownEffect(ToolStartSchema)(value);
-      case "tool_execution_end":
-        return yield* Schema.decodeUnknownEffect(ToolEndSchema)(value);
-      case "extension_error":
-        return yield* Schema.decodeUnknownEffect(ExtensionErrorSchema)(value);
-      case "extension_ui_request":
-        return yield* Schema.decodeUnknownEffect(ExtensionUiRequestSchema)(value);
-      default: {
-        const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
-        return { type: "ignored" as const, eventType: ignored.type };
-      }
-    }
+    if (RPC_EVENT_TYPES.has(discriminant.type ?? ""))
+      return yield* Schema.decodeUnknownEffect(RpcEventSchema)(value);
+    const ignored = yield* Schema.decodeUnknownEffect(IgnoredEventSchema)(value);
+    return { type: "ignored" as const, eventType: ignored.type };
   });
 }
 
-const EffortSchema = Schema.Union([
-  Schema.Literal("off"),
-  Schema.Literal("minimal"),
-  Schema.Literal("low"),
-  Schema.Literal("medium"),
-  Schema.Literal("high"),
-  Schema.Literal("xhigh"),
-  Schema.Literal("max"),
-]);
+const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const RpcStateModelSchema = Schema.Struct({
   provider: ProtocolNameSchema,
   id: ProtocolNameSchema,
@@ -260,29 +210,6 @@ export const decodeRpcStateData = <ValueInput>(value: ValueInput) =>
 export const rpcStateModelId = (model: RpcStateData["model"]): string | undefined =>
   Predicate.isString(model) ? model : model ? `${model.provider}/${model.id}` : undefined;
 
-const UsageTokenSchema = Schema.Number.check(
-  Schema.isFinite(),
-  Schema.isInt(),
-  Schema.isGreaterThanOrEqualTo(0),
-);
-const UsageCostSchema = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThanOrEqualTo(0));
-const UsageSchema = Schema.Struct({
-  input: Schema.optional(UsageTokenSchema),
-  output: Schema.optional(UsageTokenSchema),
-  cacheRead: Schema.optional(UsageTokenSchema),
-  cacheWrite: Schema.optional(UsageTokenSchema),
-  totalTokens: Schema.optional(UsageTokenSchema),
-  cost: Schema.optional(
-    Schema.Struct({
-      total: Schema.optional(UsageCostSchema),
-    }),
-  ),
-});
-export type RpcUsage = Schema.Schema.Type<typeof UsageSchema>;
-export const decodeRpcUsageOption = <ValueInput>(value: ValueInput): RpcUsage | undefined => {
-  const decoded = Schema.decodeUnknownOption(UsageSchema)(value);
-  return decoded._tag === "Some" ? decoded.value : undefined;
-};
 const AssistantMessageSchema = Schema.Struct({
   role: Schema.Literal("assistant"),
   content: Schema.Array(Schema.Unknown),

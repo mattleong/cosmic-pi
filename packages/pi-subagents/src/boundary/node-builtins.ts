@@ -1,7 +1,7 @@
 // Raw Node builtin access for boundary adapters whose contracts the Effect FileSystem,
 // Path, and ChildProcess services cannot express: detached process-group spawns with
-// caller-owned stdio and tree termination, permission- and flag-constrained private
-// harness files, and native platform path semantics.
+// caller-owned stdio, permission- and flag-constrained private harness files, and native
+// platform path semantics.
 const childProcessModule = process.getBuiltinModule("node:child_process");
 const fsModule = process.getBuiltinModule("node:fs");
 const pathModule = process.getBuiltinModule("node:path");

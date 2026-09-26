@@ -11,7 +11,6 @@ import {
   type BuiltinBeforeWrite,
 } from "./builtin-projection";
 import type { BuiltinCompactTool } from "./builtin-subject";
-export type { BuiltinCompactTool } from "./builtin-subject";
 
 /** Detached, no-I/O snapshot of the currently published preview policy. */
 export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {

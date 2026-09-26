@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeCapturedLogger } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
-import { resolveNamedProfileSet, resolveSubagentConfig } from "../src/config/options.ts";
+import { resolveNamedProfileSet, type ResolvedSubagentConfig } from "../src/config/options.ts";
 import { decodeProfileCandidate, decodeSubagentConfig } from "../src/config/schema.ts";
 import { SubagentConfigStore } from "../src/config/store.ts";
 import { resolvePiModelSelector } from "../src/run/model-catalog.ts";
@@ -23,6 +23,7 @@ import {
 } from "../src/profiles/model.ts";
 import { resolveProfileContinuationPlan, resolveProfilePlan } from "../src/profiles/resolve.ts";
 import { SubagentProfileService, subagentProfileServiceLayer } from "../src/profiles/service.ts";
+import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 
 describe("Pi catalog selector classification", () => {
   const catalog = [
@@ -107,24 +108,20 @@ const legacyCandidate = (value: Partial<DeclaredProfileCandidate> = {}) => {
     ...(openaiFastMode !== undefined && { fastMode: openaiFastMode }),
   };
 };
-const resolved = <Project>(global = document(), project?: Project, projectTrusted = true) =>
-  resolveSubagentConfig(
-    (() => {
-      const baseResult = {
-        globalConfigPath: "/agent/pi-subagents.json",
-        projectConfigPath: "/repo/.pi/pi-subagents.json",
-        projectTrusted,
-        globalConfigExists: true,
-        projectConfigExists: project !== undefined,
-        global: decodeSubagentConfig(global, "global"),
-      };
-      const withProject =
-        project === undefined
-          ? baseResult
-          : { ...baseResult, project: decodeSubagentConfig(project, "project") };
-      return withProject;
-    })(),
-  );
+const staticStore = (config: ResolvedSubagentConfig) =>
+  Layer.succeed(SubagentConfigStore, {
+    load: () => Effect.succeed(config),
+    inspect: () => Effect.die("unused"),
+    patchProfile: () => Effect.succeed({ version: 6, profiles: {} }),
+    restoreProfileDeclaration: () => Effect.succeed({ version: 6, profiles: {} }),
+    patchDefaultProfileSet: () => Effect.die("unused"),
+    createProfileSetFromSnapshot: () => Effect.die("unused"),
+    copyProfileSet: () => Effect.die("unused"),
+    renameProfileSet: () => Effect.die("unused"),
+    deleteProfileSet: () => Effect.die("unused"),
+    patchNesting: () => Effect.die("unused"),
+    patchWriterWorkspace: () => Effect.die("unused"),
+  });
 
 const environment = {
   availablePiModels: [
@@ -137,7 +134,7 @@ const environment = {
 
 describe("subagent v6 profile configuration and resolution", () => {
   it("ships seven explicit local Pi parent routes preserving profile defaults", () => {
-    const config = resolved();
+    const config = resolveTestConfig(document());
     for (const id of PROFILE_IDS) {
       expect(config.profiles[id]).toEqual({
         candidates: [
@@ -277,7 +274,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       ]),
     );
 
-    const config = resolved(
+    const config = resolveTestConfig(
       document({
         defaultProfileSet: "missing",
         profileSets: { valid: { profiles: {} } },
@@ -312,7 +309,7 @@ describe("subagent v6 profile configuration and resolution", () => {
         project: { profiles: { reviewer: candidate({ model: "openai/project-reviewer" }) } },
       },
     });
-    const config = resolved(global, project);
+    const config = resolveTestConfig(global, project);
     expect(config.profiles.reviewer.candidates[0]?.model).toBe("openai/project-reviewer");
     expect(config.profileSources.reviewer).toBe("project");
     expect(config.profiles.worker.candidates).toEqual([]);
@@ -379,67 +376,26 @@ describe("subagent v6 profile configuration and resolution", () => {
     );
   });
 
-  it("defaults fast mode off and accepts only eligible persisted fast routes", () => {
-    for (const provider of ["openai", "openai-codex"]) {
-      const supportedPi = decodeSubagentConfig(
-        document({
-          profiles: {
-            generalist: candidate({ model: `${provider}/future-model`, openaiFastMode: true }),
-          },
-        }),
+  it.each([
+    ["pi", "openai/future-model", true],
+    ["pi", "openai-codex/future-model", true],
+    ["pi", "parent", true],
+    ["pi", "other-provider/not-priority", false],
+    ["codex", "future-codex", true],
+    ["codex", "-option", false],
+    ["claude", "sonnet", false],
+  ] as const)(
+    "accepts a persisted %s %s fast route only when eligible (%s)",
+    (runtime, model, eligible) => {
+      const decoded = decodeSubagentConfig(
+        document({ profiles: { generalist: candidate({ runtime, model, openaiFastMode: true }) } }),
       );
-      expect(supportedPi.file.profileSets?.default?.profiles?.generalist).toMatchObject({
-        openaiFastMode: true,
-      });
-    }
-
-    const parent = decodeSubagentConfig(
-      document({ profiles: { generalist: candidate({ model: "parent", openaiFastMode: true }) } }),
-    );
-    expect(parent.file.profileSets?.default?.profiles?.generalist).toMatchObject({
-      openaiFastMode: true,
-    });
-
-    const unsupportedPi = decodeSubagentConfig(
-      document({
-        profiles: {
-          generalist: candidate({ model: "other-provider/not-priority", openaiFastMode: true }),
-        },
-      }),
-    );
-    expect(unsupportedPi.file.profileSets?.default?.profiles?.generalist).toBeUndefined();
-    expect(unsupportedPi.invalidProfileRoutes).toEqual(["generalist"]);
-
-    const futureCodex = decodeSubagentConfig(
-      document({
-        profiles: {
-          generalist: candidate({ runtime: "codex", model: "future-codex", openaiFastMode: true }),
-        },
-      }),
-    );
-    expect(futureCodex.file.profileSets?.default?.profiles?.generalist).toMatchObject({
-      openaiFastMode: true,
-    });
-
-    const unsafeCodex = decodeSubagentConfig(
-      document({
-        profiles: {
-          generalist: candidate({ runtime: "codex", model: "-option", openaiFastMode: true }),
-        },
-      }),
-    );
-    expect(unsafeCodex.file.profileSets?.default?.profiles?.generalist).toBeUndefined();
-
-    const unsupportedClaude = decodeSubagentConfig(
-      document({
-        profiles: {
-          generalist: candidate({ runtime: "claude", model: "sonnet", openaiFastMode: true }),
-        },
-      }),
-    );
-    expect(unsupportedClaude.file.profileSets?.default?.profiles?.generalist).toBeUndefined();
-    expect(unsupportedClaude.invalidProfileRoutes).toEqual(["generalist"]);
-  });
+      expect(decoded.file.profileSets?.default?.profiles?.generalist).toEqual(
+        eligible ? expect.objectContaining({ openaiFastMode: true }) : undefined,
+      );
+      expect(decoded.invalidProfileRoutes).toEqual(eligible ? [] : ["generalist"]);
+    },
+  );
 
   it("owns exhaustive ordered candidate issues and accepts valid local/retained shapes", () => {
     const issues = profileCandidateValidationIssues(
@@ -484,17 +440,32 @@ describe("subagent v6 profile configuration and resolution", () => {
         );
         expect(decoded.invalidProfileRoutes).toEqual([]);
       }
-    expect(isNativeProfileModelSelector("pi", "openai/gpt-5")).toBe(true);
-    expect(isNativeProfileModelSelector("claude", "claude-opus-5")).toBe(true);
-    expect(isNativeProfileModelSelector("codex", "gpt-5.4")).toBe(true);
-    expect(isNativeProfileModelSelector("pi", "parent")).toBe(true);
-    expect(isNativeProfileModelSelector("pi", "bare")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", "-dangerous-option")).toBe(false);
-    expect(isNativeProfileModelSelector("codex", "-dangerous-option")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", "model,other")).toBe(false);
-    expect(isNativeProfileModelSelector("codex", "model/(glob)")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", " model ")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", "x".repeat(257))).toBe(false);
+  });
+
+  it.each([
+    ["pi", "openai/gpt-5", true],
+    ["pi", "parent", true],
+    ["pi", "cursor/gpt-5.5@1m", true],
+    ["pi", "cursor/gpt-5.5@272k:fast", true],
+    ["pi", "cursor@team/gpt-5.5@1m", true],
+    ["pi", "cursor/@1m", false],
+    ["pi", "bare", false],
+    ["claude", "claude-opus-5", true],
+    ["claude", "opus[1m]", true],
+    ["claude", "claude-fable-5[200k]", true],
+    ["claude", "model[abc]", false],
+    ["claude", "-dangerous-option", false],
+    ["claude", "model,other", false],
+    ["claude", " model ", false],
+    ["claude", "bad\u001bmodel", false],
+    ["claude", "x".repeat(257), false],
+    ["codex", "gpt-5.4", true],
+    ["codex", "gpt-5.6-codex", true],
+    ["codex", "-dangerous-option", false],
+    ["codex", "model/(glob)", false],
+    ["codex", "model,(glob)*", false],
+  ] as const)("classifies %s native selector case %#", (runtime, selector, valid) => {
+    expect(isNativeProfileModelSelector(runtime, selector)).toBe(valid);
   });
 
   it("treats OpenCode Go only as a Pi model-registry provider", () => {
@@ -581,19 +552,23 @@ describe("subagent v6 profile configuration and resolution", () => {
         ],
       },
     });
-    const inherited = resolved(global, document());
+    const inherited = resolveTestConfig(global, document());
     expect(inherited.profiles.worker.candidates).toHaveLength(2);
     expect(inherited.profileSources.worker).toBe("global");
     expect(inherited.profileSources.scout).toBe("builtin");
-    const invalid = resolved(global, document({ profiles: { worker: null } }));
+    const invalid = resolveTestConfig(global, document({ profiles: { worker: null } }));
     expect(invalid.profiles.worker).toEqual({ candidates: [] });
     expect(invalid.profileSources.worker).toBe("project-invalid");
-    const untrusted = resolved(global, document({ profiles: { worker: "disabled" } }), false);
+    const untrusted = resolveTestConfig(
+      global,
+      document({ profiles: { worker: "disabled" } }),
+      false,
+    );
     expect(untrusted.profiles.worker.candidates).toHaveLength(2);
   });
 
   it("plans unsupported host/runtime candidates without claiming adapter availability", () => {
-    const config = resolved(
+    const config = resolveTestConfig(
       document({
         profiles: {
           reviewer: [
@@ -615,7 +590,7 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("continues a frozen route strictly after the failed candidate and preserves original indexes", () => {
-    const config = resolved(
+    const config = resolveTestConfig(
       document({
         profiles: {
           reviewer: [
@@ -659,11 +634,11 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("uses default effort softly and concrete candidate effort hard", () => {
-    expect(resolveProfilePlan("scout", resolved(), environment)).toMatchObject({
+    expect(resolveProfilePlan("scout", resolveTestConfig(document()), environment)).toMatchObject({
       kind: "resolved",
       attempts: [{ effort: "low", effortWasExplicit: false }],
     });
-    const config = resolved(
+    const config = resolveTestConfig(
       document({
         profiles: {
           worker: candidate({ model: "openai/gpt-review", effort: "high", writeIntent: "writer" }),
@@ -677,12 +652,15 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("requires stable fork context for local Pi and never degrades to fresh", () => {
-    expect(resolveProfilePlan("oracle", resolved(), environment)).toMatchObject({
+    expect(resolveProfilePlan("oracle", resolveTestConfig(document()), environment)).toMatchObject({
       kind: "resolved",
       attempts: [{ effectiveContext: "fork" }],
     });
     expect(
-      resolveProfilePlan("oracle", resolved(), { ...environment, forkAvailable: false }),
+      resolveProfilePlan("oracle", resolveTestConfig(document()), {
+        ...environment,
+        forkAvailable: false,
+      }),
     ).toMatchObject({
       kind: "failed",
       code: "fork_context_unavailable",
@@ -691,7 +669,9 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("pairs parent and explicit local-Pi model resolution with failure codes", () => {
-    const parentRoute = resolved(document({ profiles: { scout: candidate({ model: "parent" }) } }));
+    const parentRoute = resolveTestConfig(
+      document({ profiles: { scout: candidate({ model: "parent" }) } }),
+    );
     expect(resolveProfilePlan("scout", parentRoute, environment)).toMatchObject({
       kind: "resolved",
       attempts: [{ source: "profile-parent-candidate", model: "openai/gpt-parent", effort: "low" }],
@@ -739,7 +719,7 @@ describe("subagent v6 profile configuration and resolution", () => {
       ],
     });
 
-    const explicitRoute = resolved(
+    const explicitRoute = resolveTestConfig(
       document({ profiles: { scout: candidate({ model: "openai/gpt" }) } }),
     );
     expect(resolveProfilePlan("scout", explicitRoute, environment)).toMatchObject({
@@ -921,28 +901,10 @@ describe("subagent v6 profile configuration and resolution", () => {
   });
 
   it("activates loaded base configuration when publication throws", () => {
-    const config = resolved(
+    const config = resolveTestConfig(
       document({ profiles: { reviewer: candidate({ model: "openai/base-after-throw" }) } }),
     );
-    const store = Layer.succeed(SubagentConfigStore, {
-      paths: () =>
-        Effect.succeed({
-          global: "/agent/pi-subagents.json",
-          project: "/repo/.pi/pi-subagents.json",
-        }),
-      load: () => Effect.succeed(config),
-      inspect: () => Effect.die("unused"),
-      patchProfile: () => Effect.die("unused"),
-      patchProfileWithReceipt: () => Effect.succeed({ version: 6, profiles: {} }),
-      restoreProfileDeclaration: () => Effect.succeed({ version: 6, profiles: {} }),
-      patchDefaultProfileSet: () => Effect.die("unused"),
-      createProfileSetFromSnapshot: () => Effect.die("unused"),
-      copyProfileSet: () => Effect.die("unused"),
-      renameProfileSet: () => Effect.die("unused"),
-      deleteProfileSet: () => Effect.die("unused"),
-      patchNesting: () => Effect.die("unused"),
-      patchWriterWorkspace: () => Effect.die("unused"),
-    });
+    const store = staticStore(config);
     let attempts = 0;
     return Effect.runPromise(
       SubagentProfileService.use((service) => service.capture).pipe(
@@ -951,7 +913,7 @@ describe("subagent v6 profile configuration and resolution", () => {
             cwd: "/repo",
             agentDirectory: "/agent",
             projectTrusted: true,
-            publishBaseConfig: () => {
+            publishSessionBaseConfig: () => {
               attempts += 1;
               throw new Error("hostile base publication");
             },
@@ -968,26 +930,8 @@ describe("subagent v6 profile configuration and resolution", () => {
 
   it("logs only path-safe diagnostics from loaded v4 configuration", () => {
     const captured = makeCapturedLogger();
-    const config = resolved(document({ denied: "secret-policy-value" }));
-    const store = Layer.succeed(SubagentConfigStore, {
-      paths: () =>
-        Effect.succeed({
-          global: "/agent/pi-subagents.json",
-          project: "/repo/.pi/pi-subagents.json",
-        }),
-      load: () => Effect.succeed(config),
-      inspect: () => Effect.die("unused"),
-      patchProfile: () => Effect.die("unused"),
-      patchProfileWithReceipt: () => Effect.succeed({ version: 6, profiles: {} }),
-      restoreProfileDeclaration: () => Effect.succeed({ version: 6, profiles: {} }),
-      patchDefaultProfileSet: () => Effect.die("unused"),
-      createProfileSetFromSnapshot: () => Effect.die("unused"),
-      copyProfileSet: () => Effect.die("unused"),
-      renameProfileSet: () => Effect.die("unused"),
-      deleteProfileSet: () => Effect.die("unused"),
-      patchNesting: () => Effect.die("unused"),
-      patchWriterWorkspace: () => Effect.die("unused"),
-    });
+    const config = resolveTestConfig(document({ denied: "secret-policy-value" }));
+    const store = staticStore(config);
     return Effect.runPromise(
       SubagentProfileService.use((service) =>
         service.capture.pipe(

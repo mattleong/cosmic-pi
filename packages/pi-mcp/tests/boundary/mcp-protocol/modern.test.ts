@@ -8,9 +8,16 @@ import { McpExecution } from "../../../src/tools/service.ts";
 import type { McpGatewayRequest } from "../../../src/tools/model.ts";
 import { startHttpServer } from "../../fixtures/http-server.ts";
 import {
+  legacyInitialized,
+  parseWire,
+  rpcError,
+  rpcResult,
+  sseFrames,
+  streamResponse,
+} from "../../fixtures/json-rpc.ts";
+import {
   SUBSCRIPTION_ID_META_KEY,
   Client,
-  serializeMessage,
   type FetchLike,
   type Transport,
 } from "@modelcontextprotocol/client";
@@ -26,14 +33,6 @@ import { boundaryError } from "../../../src/client/errors.ts";
 import { getAuthChallenge, setAuthChallenge } from "../../../src/auth/challenge.ts";
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const decode = Schema.decodeUnknownSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      method: Schema.String,
-      id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
-    }),
-  ),
-);
 const url = new URL("https://fixture.test/mcp");
 const defaults = { connectTimeoutMs: 500, requestTimeoutMs: 100, cleanupTimeoutMs: 200 };
 const discovered = {
@@ -41,16 +40,8 @@ const discovered = {
   capabilities: { tools: {} },
   instructions: "untrusted modern instructions",
 };
-const json = (body: string) =>
-  new Response(body, { headers: { "content-type": "application/json" } });
 const response = (id: string | number, result: Schema.JsonObject) =>
-  json(
-    serializeMessage({
-      jsonrpc: "2.0",
-      id,
-      result: { resultType: "complete", ttlMs: 0, cacheScope: "private", ...result },
-    }),
-  );
+  rpcResult(id, { resultType: "complete", ttlMs: 0, cacheScope: "private", ...result });
 
 it.live.each([
   "params",
@@ -83,13 +74,7 @@ it.live.each([
               jsonrpc: "2.0",
               id: message.id,
               result:
-                mode === "legacy"
-                  ? {
-                      protocolVersion: "2025-11-25",
-                      capabilities: {},
-                      serverInfo: { name: "fixture", version: "1" },
-                    }
-                  : { resultType: "complete", ...discovered },
+                mode === "legacy" ? legacyInitialized() : { resultType: "complete", ...discovered },
             });
           } else if (message.method === "subscriptions/listen") {
             listens++;
@@ -142,7 +127,7 @@ it.live.each(["lost-ack", "auth"] as const)(
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
           if (init?.method !== "POST") return new Response(null, { status: 405 });
-          const request = decode(init.body);
+          const request = parseWire(init.body);
           if (request.id === undefined) return new Response(null, { status: 202 });
           if (request.method === "server/discover")
             return response(request.id, {
@@ -152,19 +137,17 @@ it.live.each(["lost-ack", "auth"] as const)(
           listens++;
           return mode === "auth"
             ? new Response(null, { status: 401, headers: { "www-authenticate": challenge } })
-            : new Response(
-                new ReadableStream<Uint8Array>({
+            : streamResponse(
+                {
                   cancel() {
                     cancelled = true;
                   },
-                }),
-                {
-                  headers: { "content-type": "text/event-stream" },
                 },
+                { headers: { "content-type": "text/event-stream" } },
               );
         });
       const connection = yield* openSdkHttp({ url, fetch, ...defaults, requestTimeoutMs: 20 });
-      const error = yield* Effect.scoped(connection.subscribeResource!("test://one")).pipe(
+      const error = yield* Effect.scoped(connection.subscribeResource("test://one")).pipe(
         Effect.flip,
       );
       expect(error).toMatchObject({
@@ -199,11 +182,7 @@ it.live.each(["modern", "legacy"])(
             supportedVersions: [era === "modern" ? "2026-07-28" : "2025-11-25"],
             capabilities: { tools: {}, resources: {}, prompts: {} },
           },
-          initialize: {
-            protocolVersion: "2025-11-25",
-            capabilities: { tools: {}, resources: {}, prompts: {} },
-            serverInfo: { name: "fixture", version: "1" },
-          },
+          initialize: legacyInitialized({ tools: {}, resources: {}, prompts: {} }),
           "tools/list": { tools: [{ name: "echo", inputSchema: { type: "object" } }] },
           "tools/call": { content: [{ type: "text", text: "called once" }] },
           "resources/list": { resources: [{ name: "one", uri: "fixture://one" }] },
@@ -219,7 +198,7 @@ it.live.each(["modern", "legacy"])(
       const http = yield* startHttpServer((request) => {
         if (request.method !== "POST")
           return Effect.succeed(HttpServerResponse.empty({ status: 405 }));
-        const message = decode(request.body);
+        const message = parseWire(request.body);
         methods.push(message.method);
         if (message.id === undefined)
           return Effect.succeed(HttpServerResponse.empty({ status: 202 }));
@@ -286,25 +265,15 @@ it.live.each(["modern", "dual", "legacy"] as const)(
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
           if (init?.method !== "POST") return new Response(null, { status: 405 });
-          const request = decode(init.body);
+          const request = parseWire(init.body);
           methods.push(request.method);
           if (request.id === undefined) return new Response(null, { status: 202 });
           if (request.method === "server/discover")
             return era === "legacy"
-              ? json(
-                  serializeMessage({
-                    jsonrpc: "2.0",
-                    id: request.id,
-                    error: { code: -32601, message: "unknown" },
-                  }),
-                )
+              ? rpcError(request.id, { code: -32601, message: "unknown" })
               : response(request.id, discovered);
           if (request.method === "initialize")
-            return response(request.id, {
-              protocolVersion: "2025-11-25",
-              capabilities: { tools: {} },
-              serverInfo: { name: "fixture", version: "1" },
-            });
+            return response(request.id, legacyInitialized({ tools: {} }));
           return response(request.id, { content: [{ type: "text", text: "done" }] });
         });
       const connection = yield* openSdkHttp({ url, fetch, ...defaults });
@@ -328,7 +297,7 @@ it.live(
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
           calls++;
-          const request = decode(init?.body);
+          const request = parseWire(init?.body);
           return response(request.id!, discovered);
         });
       const plaintext = new URL("http://remote.test/mcp");
@@ -356,7 +325,7 @@ it.live.each([400, 401, 403, 404, 408, 422, 429, 500])(
       const methods: string[] = [];
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
-          if (init?.method === "POST") methods.push(decode(init.body).method);
+          if (init?.method === "POST") methods.push(parseWire(init.body).method);
           return new Response("broken", { status });
         });
       const result = yield* openSdkHttp({ url, fetch, ...defaults }).pipe(Effect.result);
@@ -379,7 +348,7 @@ it.live.each([
     const methods: string[] = [];
     const fetch: FetchLike = (_url, init) =>
       Promise.resolve().then(() => {
-        const request = decode(init?.body);
+        const request = parseWire(init?.body);
         methods.push(request.method);
         const supported = mode.includes("empty")
           ? []
@@ -388,21 +357,9 @@ it.live.each([
             : ["garbage"];
         if (mode === "malformed") return response(request.id!, { supportedVersions: 3 });
         if (mode === "server-error")
-          return json(
-            serializeMessage({
-              jsonrpc: "2.0",
-              id: request.id!,
-              error: { code: -32603, message: "failure" },
-            }),
-          );
+          return rpcError(request.id!, { code: -32603, message: "failure" });
         if (mode.startsWith("version-"))
-          return json(
-            serializeMessage({
-              jsonrpc: "2.0",
-              id: request.id!,
-              error: { code: -32022, message: "version", data: { supported } },
-            }),
-          );
+          return rpcError(request.id!, { code: -32022, message: "version", data: { supported } });
         return response(request.id!, { ...discovered, supportedVersions: supported });
       });
     expect((yield* openSdkHttp({ url, fetch, ...defaults }).pipe(Effect.result))._tag).toBe(
@@ -422,7 +379,7 @@ it.live(
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
           if (init?.method !== "POST") return new Response(null, { status: 405 });
-          const request = decode(init.body);
+          const request = parseWire(init.body);
           if (request.id === undefined) return new Response(null, { status: 202 });
           if (request.method === "server/discover")
             return response(request.id, {
@@ -431,18 +388,23 @@ it.live(
             });
           if (request.method === "subscriptions/listen") {
             subscriptionId = request.id;
-            return new Response(
-              new ReadableStream<Uint8Array>({
+            return streamResponse(
+              {
                 start(value) {
                   controller = value;
                   value.enqueue(
-                    encoder.encode(
-                      `data: ${serializeMessage({ jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { notifications: { toolsListChanged: true }, _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id } } }).trim()}\n\n`,
-                    ),
+                    sseFrames({
+                      jsonrpc: "2.0",
+                      method: "notifications/subscriptions/acknowledged",
+                      params: {
+                        notifications: { toolsListChanged: true },
+                        _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id },
+                      },
+                    }),
                   );
                 },
                 cancel() {},
-              }),
+              },
               { headers: { "content-type": "text/event-stream" } },
             );
           }
@@ -460,9 +422,11 @@ it.live(
       yield* Effect.sleep(80);
       expect(yield* connection.health).toMatchObject({ closed: false, observation: "active" });
       controller!.enqueue(
-        encoder.encode(
-          `data: ${serializeMessage({ jsonrpc: "2.0", method: "notifications/tools/list_changed", params: { _meta: { [SUBSCRIPTION_ID_META_KEY]: subscriptionId } } }).trim()}\n\n`,
-        ),
+        sseFrames({
+          jsonrpc: "2.0",
+          method: "notifications/tools/list_changed",
+          params: { _meta: { [SUBSCRIPTION_ID_META_KEY]: subscriptionId } },
+        }),
       );
       expect((yield* Fiber.join(change))._tag).toBe("Some");
       controller!.close();
@@ -482,7 +446,7 @@ it.live("reports subscription close failure after still joining native transport
     yield* Effect.addFinalizer(() => Effect.sync(() => listen.mockRestore()));
     const fetch: FetchLike = (_url, init) =>
       Promise.resolve(
-        response(decode(init?.body).id!, {
+        response(parseWire(init?.body).id!, {
           ...discovered,
           capabilities: { tools: { listChanged: true } },
         }),
@@ -508,27 +472,32 @@ it.live.each(["missing", "partial"])(
       const cleanup: boolean[] = [];
       const fetch: FetchLike = (_url, init) =>
         Promise.resolve().then(() => {
-          const request = decode(init?.body);
+          const request = parseWire(init?.body);
           if (request.id === undefined) return new Response(null, { status: 202 });
           if (request.method === "server/discover")
             return response(request.id, {
               ...discovered,
               capabilities: { tools: { listChanged: true } },
             });
-          return new Response(
-            new ReadableStream<Uint8Array>({
+          return streamResponse(
+            {
               start(controller) {
                 if (mode === "partial")
                   controller.enqueue(
-                    new TextEncoder().encode(
-                      `data: ${serializeMessage({ jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { notifications: {}, _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id } } }).trim()}\n\n`,
-                    ),
+                    sseFrames({
+                      jsonrpc: "2.0",
+                      method: "notifications/subscriptions/acknowledged",
+                      params: {
+                        notifications: {},
+                        _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id },
+                      },
+                    }),
                   );
               },
               cancel() {
                 cancelled = true;
               },
-            }),
+            },
             { headers: { "content-type": "text/event-stream" } },
           );
         });

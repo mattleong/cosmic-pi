@@ -2,6 +2,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
+import type { SubscriptionUsageConfig } from "./usage-controller.ts";
 
 export interface SettingsCompletionDescriptor {
   readonly id: string;
@@ -90,13 +91,7 @@ export const FiniteNumberFromJsonSchema = Schema.fromJsonString(
 
 /** The three usage settings shared by subscription providers; schemas stay provider-owned. */
 export const makeUsageSettingDescriptors = <
-  Config extends {
-    readonly usage: {
-      readonly refreshIntervalMs: number;
-      readonly showOnlyOnSubscriptionModels: boolean;
-      readonly showResetTimes: boolean;
-    };
-  },
+  Config extends { readonly usage: SubscriptionUsageConfig },
 >(
   subscriptionDescription: string,
 ): readonly SettingsOptionDescriptor<Config>[] => [

@@ -45,7 +45,6 @@ export const makeAskUserHost = (
         );
       };
       return {
-        generation: capability.generation,
         current: Effect.sync(current),
         openBrowser: browser,
         ask: (request: OwnedFormRequest, owner: ExtensionFormOwner) =>
@@ -62,19 +61,9 @@ export const makeAskUserHost = (
                 () => pendingCleanup.delete(fence),
                 () => undefined,
               );
-              return Effect.tryPromise({
-                try: () => settlement,
-                catch: () =>
-                  boundaryError("cleanup", "unknown", "MCP user input cleanup is unconfirmed."),
-              }).pipe(
+              return Effect.tryPromise(() => settlement).pipe(
                 Effect.interruptible,
-                Effect.timeoutOrElse({
-                  duration: cleanupWaitMs,
-                  orElse: () =>
-                    Effect.fail(
-                      boundaryError("cleanup", "unknown", "MCP user input cleanup is unconfirmed."),
-                    ),
-                }),
+                Effect.timeout(cleanupWaitMs),
                 Effect.tap(() =>
                   Effect.sync(() => {
                     joined = true;

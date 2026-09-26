@@ -1,14 +1,13 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 
-// SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
 const context = (setStatus: (key: string, value: string | undefined) => void) =>
-  ({ mode: "tui", ui: { setStatus } }) as ExtensionContext;
+  extensionContextFixture({ mode: "tui", ui: { setStatus } });
 
 it.effect(
   "queued mount waits for coalesced unrelated prompts, not just the owned overlay cleanup",
@@ -28,10 +27,12 @@ it.effect(
           ),
         ),
       );
+      // A foreign nested prompt produces no second start event in Pi.
       release();
       yield* Effect.yieldNow;
       expect(mounted).toBe(false);
       expect(gate.canQueue()).toBe(false);
+      expect(gate.canOpen()).toBe(false);
       gate.ended();
       yield* Fiber.join(waiting);
       expect(mounted).toBe(true);

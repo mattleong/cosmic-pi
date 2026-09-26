@@ -3,16 +3,18 @@ import { INCOMPLETE_ATTENTION } from "../src/tools/compact-evidence.ts";
 import { callEntryDetails, MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { renderCodeModeToolResult } from "../src/ui/tool-renderer.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import { renderResultText } from "./support/presentation.ts";
 
 const notices = Array.from({ length: 32 }, (_, index) => ({
   kind: "recovery" as const,
   text: `Check retained operation ${index} before retrying.`,
 }));
 const recovery = "Check separately retained operation before retrying.";
+const issues = { coverage: "complete", entries: [] };
 const receipt = {
-  version: 1,
+  version: 2,
+  issues,
   subject: "safe",
   outcome: "success",
   deliveryFailed: false,
@@ -25,7 +27,8 @@ const replay = <Compact>(compact?: Compact) => ({
   ],
   outputKind: "text",
   compactAttention: {
-    version: 1,
+    version: 2,
+    issues,
     admitted: 1,
     started: 1,
     observed: 1,
@@ -43,12 +46,8 @@ const summarize = <Details>(details: Details, expanded = false) =>
     phase: "settled",
     args: {},
     result: { details, content: [{ type: "text", text: "output" }] },
-    context: opaqueHostFixture({ expanded, isError: false }),
+    context: opaqueFixture({ expanded, isError: false }),
   });
-const theme = opaqueHostFixture({
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-});
 
 describe("replayed receipt recovery", () => {
   it("preserves independent recovery beyond the aggregate cap without trusting malformed outcomes", () => {
@@ -75,9 +74,34 @@ describe("replayed receipt recovery", () => {
       },
     };
     const normalized = decodeCodeModeRenderDetails(details);
-    expect(normalized.compactAttention?.notices).toHaveLength(32);
+    expect(normalized.recoveredNotices).toEqual([...notices, { kind: "recovery", text: recovery }]);
     expect(normalized.compactAttention?.incomplete).toBe(true);
     expect(summarize(details)?.notices?.some((notice) => notice.text === recovery)).toBe(true);
+  });
+
+  it("salvages v1 receipt and ledger notices as incomplete, uncertain history", () => {
+    const ledgerRecovery = "Check the recorded operation before retrying.";
+    const { issues: _receiptIssues, ...v1Receipt } = { ...receipt, version: 1 };
+    const { issues: _ledgerIssues, ...v1Ledger } = {
+      ...replay().compactAttention,
+      version: 1,
+      incomplete: false,
+      notices: [{ kind: "recovery", text: ledgerRecovery }],
+    };
+    const details = { ...replay(v1Receipt), compactAttention: v1Ledger };
+    const normalized = decodeCodeModeRenderDetails(details);
+    expect(normalized.toolCalls[0]?.compact).toBeUndefined();
+    expect(normalized.compactAttention?.incomplete).toBe(true);
+    expect(normalized.recoveredNotices?.map((notice) => notice.text)).toEqual([
+      ledgerRecovery,
+      recovery,
+    ]);
+    const summary = summarize(details);
+    expect(summary?.outcome).toBe("uncertain");
+    expect(summary?.children?.entries[0]?.status).toBe("returned");
+    expect(summary?.notices?.map((notice) => notice.text)).toEqual(
+      expect.arrayContaining([ledgerRecovery, recovery, INCOMPLETE_ATTENTION]),
+    );
   });
 
   it("redacts legacy activity before bounding its display", () => {
@@ -98,21 +122,17 @@ describe("replayed receipt recovery", () => {
     expect(summarize(details)).toBeUndefined();
     for (const expanded of [false, true]) {
       for (const fail of [false, true]) {
-        const selectedTheme = fail
-          ? opaqueHostFixture({
+        const theme = fail
+          ? opaqueFixture({
               fg: () => {
                 throw new Error("theme unavailable");
               },
             })
-          : theme;
-        const rendered = renderCodeModeToolResult(
+          : plainTheme;
+        const rendered = renderResultText(
           { details, content: [{ type: "text", text: "output" }] },
-          { isPartial: false },
-          selectedTheme,
-          { expanded },
-        )
-          .component.render(240)
-          .join("\n");
+          { expanded, theme },
+        );
         expect(rendered).toContain(recovery);
         expect(rendered).toContain(INCOMPLETE_ATTENTION);
       }
@@ -147,14 +167,7 @@ describe("replayed receipt recovery", () => {
     const summary = summarize(details);
     expect(summary?.notices?.find((notice) => notice.text === recovery)?.expandedOnly).toBe(true);
     for (const expanded of [false, true]) {
-      const rendered = renderCodeModeToolResult(
-        { details, content: [] },
-        { isPartial: false },
-        theme,
-        { expanded },
-      )
-        .component.render(240)
-        .join("\n");
+      const rendered = renderResultText({ details, content: [] }, { expanded });
       expect(rendered.includes(recovery)).toBe(expanded);
     }
   });

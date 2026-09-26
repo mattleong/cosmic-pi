@@ -1,26 +1,27 @@
 // Private hook-trust fixture IO is intentional boundary-test behavior.
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as Cause from "effect/Cause";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeHerdrCodexHooks } from "../src/boundary/herdr-codex-hooks.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import { processAlive, waitForDead, waitForPid } from "./support/process-liveness.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
 
 const fixture = fileURLToPath(new URL("./fixtures/codex-hook-trust-fixture.mjs", import.meta.url));
 const ChildProcess = process.getBuiltinModule("node:child_process")!.ChildProcess;
-const directories: string[] = [];
 
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
-const setup = (mode = "ok") =>
-  fs.mkdtemp(join(tmpdir(), "pi-subagents-codex-hooks-")).then((directory) => {
-    directories.push(directory);
+const setup = (mode = "ok", timeoutMillis = 2_000) =>
+  makeTemporaryDirectory("pi-subagents-codex-hooks-").then((directory) => {
     const codexHome = join(directory, "codex-home");
     const configPath = join(codexHome, "config.toml");
     const hooksPath = join(codexHome, "hooks.json");
@@ -49,43 +50,12 @@ const setup = (mode = "ok") =>
             HOME: directory,
             PATH: inheritedPath(process.env),
           },
-          timeoutMillis: 2_000,
+          timeoutMillis,
         }),
         input: { codexHome, configPath, hooksPath, cwd: process.cwd(), command },
         pidPath: join(codexHome, "fixture.pid"),
       }));
   });
-
-const processAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-// Real-time polling of live child processes deliberately runs on the live default clock.
-const waitForPid = (path: string): Promise<number> =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const value = yield* Effect.promise(() => fs.readFile(path, "utf8").catch(() => undefined));
-        const pid = value === undefined ? undefined : Number(value);
-        if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) return pid;
-        yield* Effect.sleep(Duration.millis(10));
-      }
-      return yield* Effect.die(new Error("Codex hook fixture pid was not published"));
-    }),
-  );
-
-const waitForDead = (pid: number): Promise<void> =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 200 && processAlive(pid); attempt++)
-        yield* Effect.sleep(Duration.millis(10));
-    }),
-  );
 
 const forceCloseFailure = () => {
   const kill = process.kill.bind(process);
@@ -104,11 +74,7 @@ const forceCloseFailure = () => {
   };
 };
 
-afterEach(() =>
-  Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  ).then(() => undefined),
-);
+afterEach(removeTemporaryDirectories);
 
 describe("Herdr Codex hook trust", () => {
   it("round-trips Codex's opaque key and hash and confirms the exact hook is trusted", () =>
@@ -116,18 +82,17 @@ describe("Herdr Codex hook trust", () => {
       expect(Effect.runPromise(test.hooks.establishTrust(test.input))).resolves.toBeUndefined(),
     ));
 
-  it.each(["extra", "wrong-command", "disabled", "warning", "modified", "overridden"])(
-    "fails closed for %s hook evidence",
-    (mode) =>
-      setup(mode).then((test) =>
-        expect(Effect.runPromise(test.hooks.establishTrust(test.input))).rejects.toMatchObject({
-          _tag: "HerdrCodexHooksError",
-          code: "codex_herdr_hook_unavailable",
-        }),
-      ),
-  );
-
-  it.each(["malformed", "exit", "timeout"])("bounds %s transport failure", (mode) =>
+  it.each([
+    "extra",
+    "wrong-command",
+    "disabled",
+    "warning",
+    "modified",
+    "overridden",
+    "malformed",
+    "exit",
+    "timeout",
+  ])("fails closed for %s hook evidence or transport", (mode) =>
     setup(mode).then((test) =>
       expect(Effect.runPromise(test.hooks.establishTrust(test.input))).rejects.toMatchObject({
         _tag: "HerdrCodexHooksError",
@@ -135,6 +100,13 @@ describe("Herdr Codex hook trust", () => {
       }),
     ),
   );
+
+  it("fails closed on a numeric JSON-RPC error code without waiting for the call bound", () =>
+    setup("rejected", 60_000).then((test) =>
+      expect(Effect.runPromise(test.hooks.establishTrust(test.input))).rejects.toMatchObject({
+        code: "codex_herdr_hook_unavailable",
+      }),
+    ));
 
   it("closes the scoped app-server when trust establishment is interrupted", () =>
     setup("timeout").then((test) => {
@@ -182,37 +154,41 @@ describe("Herdr Codex hook trust", () => {
         .finally(() => forced?.restore());
     }));
 
-  it("preserves interruption when explicit close also fails", () =>
-    setup("timeout").then((test) => {
-      const fiber = Effect.runFork(test.hooks.establishTrust(test.input));
-      let forced: ReturnType<typeof forceCloseFailure> | undefined;
-      let pid = 0;
-      return waitForPid(test.pidPath)
-        .then((observedPid) => {
-          pid = observedPid;
-          forced = forceCloseFailure();
-          return Effect.runPromise(
-            Fiber.interrupt(fiber).pipe(Effect.andThen(Fiber.join(fiber).pipe(Effect.exit))),
-          );
-        })
-        .then((exit) => {
-          expect(Exit.isFailure(exit)).toBe(true);
-          if (Exit.isFailure(exit)) {
-            expect(Cause.hasInterrupts(exit.cause)).toBe(true);
-            const first = exit.cause.reasons[0];
-            expect(first && Cause.isFailReason(first) ? first.error.code : undefined).toBe(
-              "codex_herdr_hook_cleanup_unconfirmed",
+  it(
+    "preserves interruption when explicit close also fails",
+    () =>
+      setup("timeout").then((test) => {
+        const fiber = Effect.runFork(test.hooks.establishTrust(test.input));
+        let forced: ReturnType<typeof forceCloseFailure> | undefined;
+        let pid = 0;
+        return waitForPid(test.pidPath)
+          .then((observedPid) => {
+            pid = observedPid;
+            forced = forceCloseFailure();
+            return Effect.runPromise(
+              Fiber.interrupt(fiber).pipe(Effect.andThen(Fiber.join(fiber).pipe(Effect.exit))),
             );
-          }
-        })
-        .finally(() => {
-          forced?.restore();
-          try {
-            forced?.kill(-pid, "SIGKILL");
-          } catch {
-            // The process may already have exited despite the forced cleanup failure.
-          }
-          return waitForDead(pid);
-        });
-    }));
+          })
+          .then((exit) => {
+            expect(Exit.isFailure(exit)).toBe(true);
+            if (Exit.isFailure(exit)) {
+              expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+              const first = exit.cause.reasons[0];
+              expect(first && Cause.isFailReason(first) ? first.error.code : undefined).toBe(
+                "codex_herdr_hook_cleanup_unconfirmed",
+              );
+            }
+          })
+          .finally(() => {
+            forced?.restore();
+            try {
+              forced?.kill(-pid, "SIGKILL");
+            } catch {
+              // The process may already have exited despite the forced cleanup failure.
+            }
+            return waitForDead(pid);
+          });
+      }),
+    10_000,
+  );
 });

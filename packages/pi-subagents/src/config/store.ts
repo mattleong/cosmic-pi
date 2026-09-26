@@ -16,11 +16,19 @@ import {
   type ProfileRoute,
 } from "../profiles/model.ts";
 import { resolveSubagentConfig, type ResolvedSubagentConfig } from "./options.ts";
-import { captureRestoreDeclaration } from "./profile-restore.ts";
+import {
+  captureRestoreDeclaration,
+  isRecord,
+  migrateLegacyRouteJson,
+  stableJson,
+} from "./profile-restore.ts";
 import {
   decodeProfileCandidate,
   decodeSubagentConfig,
+  isLegacyConfigVersion,
   isProfileSetName,
+  isSupportedConfigVersion,
+  ownDataProperty,
   type DecodedSubagentConfig,
   LEGACY_SUBAGENT_CONFIG_VERSION,
   MAX_PROFILE_SETS,
@@ -37,11 +45,6 @@ export class SubagentConfigStoreError extends Schema.TaggedError<SubagentConfigS
   "SubagentConfigStoreError",
   { operation: Schema.String, path: Schema.String, message: Schema.String },
 ) {}
-
-export interface SubagentConfigPaths {
-  readonly global: string;
-  readonly project: string;
-}
 
 export interface SubagentConfigInspection {
   readonly config: ResolvedSubagentConfig;
@@ -110,8 +113,13 @@ export interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
+type ConfigPatch<Patch, A = void> = (
+  cwd: string,
+  agentDirectory: string,
+  patch: Patch,
+) => Effect.Effect<A, SubagentConfigStoreError>;
+
 export interface SubagentConfigStoreContract {
-  readonly paths: (cwd: string, agentDirectory: string) => Effect.Effect<SubagentConfigPaths>;
   readonly load: (
     cwd: string,
     agentDirectory: string,
@@ -122,56 +130,15 @@ export interface SubagentConfigStoreContract {
     agentDirectory: string,
     projectTrusted: boolean,
   ) => Effect.Effect<SubagentConfigInspection, SubagentConfigStoreError>;
-  readonly patchProfile: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentProfilePatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly patchProfileWithReceipt: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentProfilePatch,
-  ) => Effect.Effect<JsonObject, SubagentConfigStoreError>;
-  readonly restoreProfileDeclaration: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentProfileRestorePatch,
-  ) => Effect.Effect<JsonObject, SubagentConfigStoreError>;
-  readonly patchDefaultProfileSet: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentDefaultProfileSetPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly createProfileSetFromSnapshot: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentCreateProfileSetFromSnapshotPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly copyProfileSet: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentCopyProfileSetPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly renameProfileSet: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentRenameProfileSetPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly deleteProfileSet: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentDeleteProfileSetPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly patchWriterWorkspace: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentWriterWorkspacePatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
-  readonly patchNesting: (
-    cwd: string,
-    agentDirectory: string,
-    patch: SubagentNestingPatch,
-  ) => Effect.Effect<void, SubagentConfigStoreError>;
+  readonly patchProfile: ConfigPatch<SubagentProfilePatch, JsonObject>;
+  readonly restoreProfileDeclaration: ConfigPatch<SubagentProfileRestorePatch, JsonObject>;
+  readonly patchDefaultProfileSet: ConfigPatch<SubagentDefaultProfileSetPatch>;
+  readonly createProfileSetFromSnapshot: ConfigPatch<SubagentCreateProfileSetFromSnapshotPatch>;
+  readonly copyProfileSet: ConfigPatch<SubagentCopyProfileSetPatch>;
+  readonly renameProfileSet: ConfigPatch<SubagentRenameProfileSetPatch>;
+  readonly deleteProfileSet: ConfigPatch<SubagentDeleteProfileSetPatch>;
+  readonly patchWriterWorkspace: ConfigPatch<SubagentWriterWorkspacePatch>;
+  readonly patchNesting: ConfigPatch<SubagentNestingPatch>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -181,48 +148,45 @@ export class SubagentConfigStore extends Context.Service<
 
 const storeError = makeConfigDocumentErrorFactory(SubagentConfigStoreError, "Subagents");
 
-const unsupportedVersionError = (path: string) =>
-  new SubagentConfigStoreError({
-    operation: "activate",
-    path,
-    message: `Subagents configuration must declare version ${LEGACY_SUBAGENT_CONFIG_VERSION}, ${PREVIOUS_SUBAGENT_CONFIG_VERSION}, or ${SUBAGENT_CONFIG_VERSION} and use that version's route contract.`,
-  });
+const configError = (operation: string, path: string, message: string) =>
+  new SubagentConfigStoreError({ operation, path, message });
 
-const unsupportedFieldsError = (path: string) =>
-  new SubagentConfigStoreError({
-    operation: "activate",
+const unsupportedVersionError = (path: string) =>
+  configError(
+    "activate",
     path,
-    message: "Subagents configuration contains fields that are not part of its declared version.",
-  });
+    `Subagents configuration must declare version ${LEGACY_SUBAGENT_CONFIG_VERSION}, ${PREVIOUS_SUBAGENT_CONFIG_VERSION}, or ${SUBAGENT_CONFIG_VERSION} and use that version's route contract.`,
+  );
+
+const mutationError = (path: string, message: string) => configError("update", path, message);
 
 const conflictError = (path: string) =>
-  new SubagentConfigStoreError({
-    operation: "update",
+  mutationError(
     path,
-    message: "Subagents settings changed on disk; reopen /subagents profiles and try again.",
-  });
+    "Subagents settings changed on disk; reopen /subagents profiles and try again.",
+  );
 
 const trustError = (path: string) =>
-  new SubagentConfigStoreError({
-    operation: "update",
-    path,
-    message: "Project subagent settings require a trusted project.",
-  });
+  mutationError(path, "Project subagent settings require a trusted project.");
 
-const mutationError = (path: string, message: string) =>
-  new SubagentConfigStoreError({ operation: "update", path, message });
-
-const stableJson = <ValueInput>(value: ValueInput): string => {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (hasObjectRuntimeType(value) && value !== null) {
-    // SAFETY: Configuration decoding validates the persisted value before this typed access.
-    const record = value as Readonly<JsonObject>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+/** Activation fails closed on an unsupported version or fields outside the declared version. */
+const decodeDocument = (
+  raw: JsonObject,
+  scope: SubagentConfigScope,
+  path: string,
+): Effect.Effect<DecodedSubagentConfig, SubagentConfigStoreError> => {
+  const decoded = decodeSubagentConfig(raw, scope);
+  if (decoded.unsupportedVersion) return Effect.fail(unsupportedVersionError(path));
+  const fatal = [`${scope}.<unknown>`, `${scope}.nesting`, `${scope}.writerWorkspaceMode`];
+  return decoded.diagnostics.some((diagnostic) => fatal.includes(diagnostic))
+    ? Effect.fail(
+        configError(
+          "activate",
+          path,
+          "Subagents configuration contains fields that are not part of its declared version.",
+        ),
+      )
+    : Effect.succeed(decoded);
 };
 
 const candidateJson = (
@@ -253,86 +217,30 @@ const routeJson = (
     : candidateJson(route as DeclaredProfileCandidate, version);
 };
 
-const isRecord = (value: JsonObject[string] | undefined): value is JsonObject =>
-  hasObjectRuntimeType(value) && value !== null && !Array.isArray(value);
-
 const own = (record: Readonly<JsonObject>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(record, key);
 
-const legacyCandidateJson = (value: JsonObject): JsonObject => {
-  const next: JsonObject = {};
-  for (const [key, field] of Object.entries(value)) {
-    if (key !== "fastMode") next[key] = field;
-  }
-  if (value.fastMode === true) next.openaiFastMode = true;
-  return next;
-};
-
-const migrateLegacyRouteJson = (value: JsonObject[string]): JsonObject[string] => {
-  if (value === "disabled") return value;
-  if (Array.isArray(value))
-    return value.map((candidate) =>
-      isRecord(candidate) ? legacyCandidateJson(candidate) : candidate,
-    );
-  return isRecord(value) ? legacyCandidateJson(value) : value;
-};
-
-const migrateLegacyProfiles = (value: JsonObject): JsonObject => {
-  const profiles: JsonObject = {};
-  for (const [profile, route] of Object.entries(value))
-    profiles[profile] = migrateLegacyRouteJson(route);
-  return profiles;
-};
-
-const isAcceptedVersion = (version: JsonObject[string] | undefined): boolean =>
-  version === LEGACY_SUBAGENT_CONFIG_VERSION ||
-  version === PREVIOUS_SUBAGENT_CONFIG_VERSION ||
-  version === SUBAGENT_CONFIG_VERSION;
-
-const ensureMigratableLegacy = (
-  document: JsonObject,
-  path: string,
-): SubagentConfigStoreError | undefined => {
-  if (document.version === SUBAGENT_CONFIG_VERSION) return undefined;
-  const decoded = decodeSubagentConfig(document, "migration");
-  if (
-    decoded.unsupportedVersion ||
-    decoded.invalidDefaultProfileSet ||
-    decoded.invalidProfileRoutes.length > 0 ||
-    decoded.diagnostics.some(
-      (diagnostic) =>
-        diagnostic === "migration.<unknown>" ||
-        diagnostic === "migration.profiles" ||
-        diagnostic === "migration.profiles.<unknown>" ||
-        diagnostic === "migration.nesting" ||
-        /^migration\.profiles\.(?:scout|researcher|planner|worker|reviewer|oracle|generalist)/u.test(
-          diagnostic,
-        ),
-    )
-  )
-    return mutationError(
-      path,
-      "Repair or remove every invalid legacy profile route before upgrading this document to version 6.",
-    );
-  return undefined;
-};
-
+/** Migrates only fully valid legacy data: every legacy decode diagnostic is fatal. */
 const upgradeDocument = (
   current: JsonObject,
   path: string,
 ): JsonObject | SubagentConfigStoreError => {
   if (current.version === SUBAGENT_CONFIG_VERSION)
     return { ...current, version: SUBAGENT_CONFIG_VERSION };
-  const migrationFailure = ensureMigratableLegacy(current, path);
-  if (migrationFailure) return migrationFailure;
+  if (decodeSubagentConfig(current, "migration").diagnostics.length > 0)
+    return mutationError(
+      path,
+      "Repair or remove every invalid legacy profile route before upgrading this document to version 6.",
+    );
   const next: JsonObject = { version: SUBAGENT_CONFIG_VERSION };
   if (current.version === PREVIOUS_SUBAGENT_CONFIG_VERSION && current.nesting !== undefined)
     next.nesting = current.nesting;
   if (isRecord(current.profiles)) {
     next.defaultProfileSet = MIGRATED_PROFILE_SET_NAME;
-    next.profileSets = {
-      [MIGRATED_PROFILE_SET_NAME]: { profiles: migrateLegacyProfiles(current.profiles) },
-    };
+    const profiles = Object.entries(current.profiles).map(
+      ([profile, route]) => [profile, migrateLegacyRouteJson(route)] as const,
+    );
+    next.profileSets = { [MIGRATED_PROFILE_SET_NAME]: { profiles: Object.fromEntries(profiles) } };
   }
   return next;
 };
@@ -356,9 +264,7 @@ const applyProfilePatch = (
   path: string,
 ): JsonObject | SubagentConfigStoreError => {
   if (!isProfileSetName(patch.profileSet)) return mutationError(path, "Invalid profile-set name.");
-  const legacy =
-    current.version === LEGACY_SUBAGENT_CONFIG_VERSION ||
-    current.version === PREVIOUS_SUBAGENT_CONFIG_VERSION;
+  const legacy = isLegacyConfigVersion(current.version);
   if (legacy && patch.profileSet !== MIGRATED_PROFILE_SET_NAME)
     return mutationError(path, "Legacy configuration can edit only its migrated default set.");
   if (legacy && own(current, "profiles") && !isRecord(current.profiles))
@@ -440,27 +346,14 @@ const applyDefaultProfileSetPatch = (
   return next;
 };
 
-interface OwnDataValue {
-  readonly value: unknown;
-}
-
-const readOwnDataValue = <ValueInput>(
-  value: ValueInput,
-  key: PropertyKey,
-): OwnDataValue | undefined => {
-  if (!hasObjectRuntimeType(value) || value === null) return undefined;
-  const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor && "value" in descriptor ? { value: descriptor.value } : undefined;
-};
-
 /** Captures one ordinary dense array without consulting an input iterator or invoking accessors. */
 const snapshotCandidateArray = <ValueInput>(
   value: ValueInput,
 ): ReadonlyArray<unknown> | undefined => {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return undefined;
   if (Object.getOwnPropertyDescriptor(value, Symbol.iterator) !== undefined) return undefined;
-  const lengthProperty = readOwnDataValue(value, "length");
-  const length = lengthProperty?.value;
+  const lengthProperty = ownDataProperty(value, "length");
+  const length = lengthProperty.valid && lengthProperty.present ? lengthProperty.value : undefined;
   if (
     !Predicate.isNumber(length) ||
     !Number.isSafeInteger(length) ||
@@ -470,8 +363,8 @@ const snapshotCandidateArray = <ValueInput>(
     return undefined;
   const snapshot: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
-    const element = readOwnDataValue(value, String(index));
-    if (!element) return undefined;
+    const element = ownDataProperty(value, String(index));
+    if (!element.valid || !element.present) return undefined;
     snapshot.push(element.value);
   }
   return snapshot;
@@ -492,17 +385,18 @@ const snapshotProfilesJson = (
       return mutationError(path, "A session snapshot must contain exactly all seven profiles.");
     const profiles: JsonObject = {};
     for (const profile of PROFILE_IDS) {
-      const routeProperty = readOwnDataValue(routes, profile);
-      const route = routeProperty?.value;
-      if (!routeProperty || !hasObjectRuntimeType(route) || route === null)
+      const routeProperty = ownDataProperty(routes, profile);
+      const route = routeProperty.valid && routeProperty.present ? routeProperty.value : undefined;
+      if (!hasObjectRuntimeType(route) || route === null)
         return mutationError(path, "The session snapshot contains an invalid profile route.");
       const routeKeys = Reflect.ownKeys(route);
       if (routeKeys.length !== 1 || routeKeys[0] !== "candidates")
         return mutationError(path, "The session snapshot contains an invalid profile route.");
-      const candidatesProperty = readOwnDataValue(route, "candidates");
-      const candidateInputs = candidatesProperty
-        ? snapshotCandidateArray(candidatesProperty.value)
-        : undefined;
+      const candidatesProperty = ownDataProperty(route, "candidates");
+      const candidateInputs =
+        candidatesProperty.valid && candidatesProperty.present
+          ? snapshotCandidateArray(candidatesProperty.value)
+          : undefined;
       if (!candidateInputs)
         return mutationError(path, "The session snapshot contains an invalid profile route.");
       if (candidateInputs.length === 0) {
@@ -645,57 +539,31 @@ export const subagentConfigStoreLayer = Layer.effect(
   Effect.gen(function* () {
     const documents = yield* JsonDocumentStore;
     const path = yield* Path.Path;
-    const paths: SubagentConfigStoreContract["paths"] = (cwd, agentDirectory) =>
-      Effect.succeed({
-        global: path.join(agentDirectory, SUBAGENT_CONFIG_BASENAME),
-        project: path.join(cwd, CONFIG_DIR_NAME, SUBAGENT_CONFIG_BASENAME),
-      });
+    const paths = (cwd: string, agentDirectory: string) => ({
+      global: path.join(agentDirectory, SUBAGENT_CONFIG_BASENAME),
+      project: path.join(cwd, CONFIG_DIR_NAME, SUBAGENT_CONFIG_BASENAME),
+    });
 
     const inspect: SubagentConfigStoreContract["inspect"] = (cwd, agentDirectory, projectTrusted) =>
       Effect.gen(function* () {
-        const locations = yield* paths(cwd, agentDirectory);
-        const globalRaw = yield* documents
-          .readObject(locations.global)
-          .pipe(Effect.mapError(storeError("read", locations.global)));
-        const projectRaw = projectTrusted
-          ? yield* documents
-              .readObject(locations.project)
-              .pipe(Effect.mapError(storeError("read", locations.project)))
-          : undefined;
-        const global = decodeSubagentConfig(
+        const locations = paths(cwd, agentDirectory);
+        const read = (target: string) =>
+          documents.readObject(target).pipe(Effect.mapError(storeError("read", target)));
+        const globalRaw = yield* read(locations.global);
+        const projectRaw = projectTrusted ? yield* read(locations.project) : undefined;
+        const global = yield* decodeDocument(
           globalRaw ?? { version: SUBAGENT_CONFIG_VERSION },
           "global",
+          locations.global,
         );
-        if (globalRaw !== undefined && global.unsupportedVersion)
-          return yield* unsupportedVersionError(locations.global);
-        if (
-          global.diagnostics.some(
-            (diagnostic) =>
-              diagnostic === "global.<unknown>" ||
-              diagnostic === "global.nesting" ||
-              diagnostic === "global.writerWorkspaceMode",
-          )
-        )
-          return yield* unsupportedFieldsError(locations.global);
         const project =
-          projectRaw === undefined ? undefined : decodeSubagentConfig(projectRaw, "project");
-        if (projectRaw !== undefined && project?.unsupportedVersion)
-          return yield* unsupportedVersionError(locations.project);
-        if (
-          project?.diagnostics.some(
-            (diagnostic) =>
-              diagnostic === "project.<unknown>" ||
-              diagnostic === "project.nesting" ||
-              diagnostic === "project.writerWorkspaceMode",
-          )
-        )
-          return yield* unsupportedFieldsError(locations.project);
+          projectRaw === undefined
+            ? undefined
+            : yield* decodeDocument(projectRaw, "project", locations.project);
         const config = resolveSubagentConfig({
           globalConfigPath: locations.global,
           projectConfigPath: locations.project,
           projectTrusted,
-          globalConfigExists: globalRaw !== undefined,
-          projectConfigExists: projectRaw !== undefined,
           global,
           ...(project !== undefined && { project }),
         });
@@ -711,108 +579,76 @@ export const subagentConfigStoreLayer = Layer.effect(
     const load: SubagentConfigStoreContract["load"] = (cwd, agentDirectory, projectTrusted) =>
       inspect(cwd, agentDirectory, projectTrusted).pipe(Effect.map((result) => result.config));
 
-    const patchDocumentWithReceipt = <Patch extends SubagentConfigPatchBase>(
-      cwd: string,
-      agentDirectory: string,
-      patch: Patch,
-      apply: (
-        current: JsonObject,
-        patch: Patch,
-        path: string,
-      ) => JsonObject | SubagentConfigStoreError,
-      missingIsNoop = false,
-    ): Effect.Effect<JsonObject, SubagentConfigStoreError> =>
-      Effect.gen(function* () {
-        const locations = yield* paths(cwd, agentDirectory);
-        const target = patch.scope === "global" ? locations.global : locations.project;
-        if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
-        const modifyObject = documents.modifyObject;
-        if (!modifyObject) return yield* storeError("update", target)();
-        return yield* modifyObject(target, (current) =>
-          Effect.gen(function* () {
-            const currentExists = yield* documents.exists(target);
-            const currentIsEmpty = Object.keys(current).length === 0;
-            if (
-              currentExists !== patch.expectedExists ||
-              (patch.expectedExists &&
-                stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
+    const patchWithReceipt =
+      <Patch extends SubagentConfigPatchBase>(
+        apply: (
+          current: JsonObject,
+          patch: Patch,
+          path: string,
+        ) => JsonObject | SubagentConfigStoreError,
+        missingIsNoop: (patch: Patch) => boolean = () => false,
+      ): ConfigPatch<Patch, JsonObject> =>
+      (cwd, agentDirectory, patch) =>
+        Effect.gen(function* () {
+          const locations = paths(cwd, agentDirectory);
+          const target = patch.scope === "global" ? locations.global : locations.project;
+          if (patch.scope === "project" && !patch.projectTrusted) return yield* trustError(target);
+          return yield* documents
+            .modifyObject(target, (current) =>
+              Effect.gen(function* () {
+                const currentExists = yield* documents.exists(target);
+                const currentIsEmpty = Object.keys(current).length === 0;
+                if (
+                  currentExists !== patch.expectedExists ||
+                  (patch.expectedExists &&
+                    stableJson(current) !== stableJson(patch.expectedDocument ?? {}))
+                )
+                  return yield* conflictError(target);
+                if (!currentIsEmpty && !isSupportedConfigVersion(current.version))
+                  return yield* unsupportedVersionError(target);
+                if (!currentExists && missingIsNoop(patch))
+                  return { value: structuredClone(current), document: current, write: false };
+                const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
+                const next = apply(base, patch, target);
+                if (next instanceof SubagentConfigStoreError) return yield* next;
+                return stableJson(next) === stableJson(current)
+                  ? { value: structuredClone(current), document: current, write: false }
+                  : { value: structuredClone(next), document: next };
+              }),
             )
-              return yield* conflictError(target);
-            if (!currentIsEmpty && !isAcceptedVersion(current.version))
-              return yield* unsupportedVersionError(target);
-            if (!currentExists && missingIsNoop)
-              return { value: structuredClone(current), document: current, write: false };
-            const base = currentIsEmpty ? { version: SUBAGENT_CONFIG_VERSION } : current;
-            const next = apply(base, patch, target);
-            if (next instanceof SubagentConfigStoreError) return yield* next;
-            return stableJson(next) === stableJson(current)
-              ? { value: structuredClone(current), document: current, write: false }
-              : { value: structuredClone(next), document: next };
-          }),
-        ).pipe(
-          Effect.mapError((error) =>
-            error instanceof SubagentConfigStoreError ? error : storeError("update", target)(),
-          ),
-        );
-      });
+            .pipe(
+              Effect.mapError((error) =>
+                error instanceof SubagentConfigStoreError ? error : storeError("update", target)(),
+              ),
+            );
+        });
 
-    const patchDocument = <Patch extends SubagentConfigPatchBase>(
-      cwd: string,
-      agentDirectory: string,
-      patch: Patch,
-      apply: (
-        current: JsonObject,
-        patch: Patch,
-        path: string,
-      ) => JsonObject | SubagentConfigStoreError,
-      missingIsNoop = false,
-    ): Effect.Effect<void, SubagentConfigStoreError> =>
-      patchDocumentWithReceipt(cwd, agentDirectory, patch, apply, missingIsNoop).pipe(
-        Effect.asVoid,
-      );
+    const patchVoid = <Patch extends SubagentConfigPatchBase>(
+      ...args: Parameters<typeof patchWithReceipt<Patch>>
+    ): ConfigPatch<Patch> => {
+      const patchDocument = patchWithReceipt(...args);
+      return (cwd, agentDirectory, patch) =>
+        patchDocument(cwd, agentDirectory, patch).pipe(Effect.asVoid);
+    };
 
     return SubagentConfigStore.of({
-      paths,
       load,
       inspect,
-      patchProfile: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyProfilePatch, patch.route === undefined),
-      patchProfileWithReceipt: (cwd, agentDirectory, patch) =>
-        patchDocumentWithReceipt(
-          cwd,
-          agentDirectory,
-          patch,
-          applyProfilePatch,
-          patch.route === undefined,
-        ),
-      restoreProfileDeclaration: (cwd, agentDirectory, patch) =>
-        patchDocumentWithReceipt(cwd, agentDirectory, patch, applyProfileRestore),
-      patchDefaultProfileSet: (cwd, agentDirectory, patch) =>
-        patchDocument(
-          cwd,
-          agentDirectory,
-          patch,
-          applyDefaultProfileSetPatch,
-          patch.defaultProfileSet === undefined,
-        ),
-      createProfileSetFromSnapshot: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyCreateProfileSetFromSnapshot),
-      copyProfileSet: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyCopyProfileSet),
-      renameProfileSet: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyRenameProfileSet),
-      deleteProfileSet: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyDeleteProfileSet, true),
-      patchWriterWorkspace: (cwd, agentDirectory, patch) =>
-        patchDocument(
-          cwd,
-          agentDirectory,
-          patch,
-          applyWriterWorkspacePatch,
-          patch.writerWorkspaceMode === undefined,
-        ),
-      patchNesting: (cwd, agentDirectory, patch) =>
-        patchDocument(cwd, agentDirectory, patch, applyNestingPatch, patch.nesting === undefined),
+      patchProfile: patchWithReceipt(applyProfilePatch, (patch) => patch.route === undefined),
+      restoreProfileDeclaration: patchWithReceipt(applyProfileRestore),
+      patchDefaultProfileSet: patchVoid(
+        applyDefaultProfileSetPatch,
+        (patch) => patch.defaultProfileSet === undefined,
+      ),
+      createProfileSetFromSnapshot: patchVoid(applyCreateProfileSetFromSnapshot),
+      copyProfileSet: patchVoid(applyCopyProfileSet),
+      renameProfileSet: patchVoid(applyRenameProfileSet),
+      deleteProfileSet: patchVoid(applyDeleteProfileSet, () => true),
+      patchWriterWorkspace: patchVoid(
+        applyWriterWorkspacePatch,
+        (patch) => patch.writerWorkspaceMode === undefined,
+      ),
+      patchNesting: patchVoid(applyNestingPatch, (patch) => patch.nesting === undefined),
     });
   }),
 );

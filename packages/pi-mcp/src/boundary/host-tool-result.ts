@@ -8,10 +8,8 @@ export type McpActivationMarker = symbol;
 /** Error receipts contain only already bounded details, never a retained server payload. */
 export const makeMcpErrorReceipts = () => {
   let activation: McpActivationMarker | undefined;
-  const receipts = new Map<
-    string,
-    { readonly activation: McpActivationMarker; readonly details: McpGatewayReply }
-  >();
+  // Activation changes clear the map, so every stored receipt belongs to the current one.
+  const receipts = new Map<string, McpGatewayReply>();
   return {
     activate: (owner: McpActivationMarker): void => {
       activation = owner;
@@ -32,15 +30,14 @@ export const makeMcpErrorReceipts = () => {
         const oldest = receipts.keys().next().value;
         if (oldest !== undefined) receipts.delete(oldest);
       }
-      receipts.set(callId, { activation: owner, details });
+      receipts.set(callId, details);
     },
     apply: (event: ToolResultEvent): { readonly isError: true } | undefined => {
       if (event.toolName !== "mcp") return;
       const receipt = receipts.get(event.toolCallId);
       // The details identity proves this is the result returned by our execute, not a
       // foreign or stale tool that happens to reuse a call id. Earlier content patches survive.
-      if (!receipt || receipt.activation !== activation || event.details !== receipt.details)
-        return;
+      if (receipt === undefined || event.details !== receipt) return;
       receipts.delete(event.toolCallId);
       return { isError: true };
     },

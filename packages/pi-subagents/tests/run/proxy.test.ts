@@ -3,16 +3,15 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { BackendProxyResult } from "../../src/backend/model.ts";
 import type { LocalPiParentControl } from "../../src/backend/local-pi-protocol.ts";
-import { SubagentService } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
   request,
   serviceLayer,
   type FakeChildControl,
+  withService,
 } from "./fixtures/service-harness.ts";
 
 type ProxyResponse = Extract<LocalPiParentControl, { readonly type: "proxy_response" }>;
@@ -78,8 +77,7 @@ describe("SubagentService parent proxy executions", () => {
           ),
       }).pipe(Layer.provide(fake.layer));
       let control: FakeChildControl | undefined;
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "proxy-cancel" }));
         control = fake.controls[0];
         offerProxyRequest(control!, "req-1");
@@ -96,7 +94,7 @@ describe("SubagentService parent proxy executions", () => {
         // Release the cancelled execution's finalizer before the scope closes; the FiberMap
         // finalizer waits for managed fibers to finish interrupting.
         yield* Deferred.succeed(slowCleanup, undefined);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     }),
   );
 
@@ -107,8 +105,7 @@ describe("SubagentService parent proxy executions", () => {
       const started: string[] = [];
       const layer = hangingHandlerLayer(fake, started, release);
       let conflict: ProxyResponse | undefined;
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "proxy-conflict" }));
         const control = fake.controls[0]!;
         offerProxyRequest(control, "same");
@@ -116,7 +113,7 @@ describe("SubagentService parent proxy executions", () => {
         offerProxyRequest(control, "same");
         yield* yieldUntil(() => responseFor(control, "same") !== undefined);
         conflict = responseFor(control, "same");
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
       expect(conflict).toMatchObject({ ok: false });
       expect(payloadCode(conflict!)).toBe("proxy_request_conflict");
       yield* Deferred.succeed(release, undefined);
@@ -131,8 +128,7 @@ describe("SubagentService parent proxy executions", () => {
       const layer = hangingHandlerLayer(fake, started, release);
       let rejected: ProxyResponse | undefined;
       let responseCount = 0;
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "proxy-capacity" }));
         const control = fake.controls[0]!;
         for (let index = 0; index < 16; index += 1) offerProxyRequest(control, `req-${index}`);
@@ -141,7 +137,7 @@ describe("SubagentService parent proxy executions", () => {
         yield* yieldUntil(() => responseFor(control, "req-16") !== undefined);
         rejected = responseFor(control, "req-16");
         responseCount = control.ipc.filter((message) => message.type === "proxy_response").length;
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
       expect(rejected).toMatchObject({ ok: false });
       expect(payloadCode(rejected!)).toBe("proxy_capacity");
       expect(responseCount).toBe(1);
@@ -155,22 +151,14 @@ describe("SubagentService parent proxy executions", () => {
       const neverReleased = yield* Deferred.make<void>();
       const started: string[] = [];
       const layer = hangingHandlerLayer(fake, started, neverReleased);
-      let ipc: FakeChildControl["ipc"] = [];
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      const control = yield* withService(layer, function* (service) {
         yield* service.start(request({ name: "proxy-shutdown" }));
         const control = fake.controls[0]!;
         offerProxyRequest(control, "req-1");
         yield* yieldUntil(() => started.includes("req-1"));
         return control;
-      }).pipe(
-        Effect.scoped,
-        provideBuiltLayer(layer),
-        Effect.map((control) => {
-          ipc = control.ipc;
-        }),
-      );
-      expect(ipc.filter((message) => message.type === "proxy_response")).toEqual([]);
+      });
+      expect(control.ipc.filter((message) => message.type === "proxy_response")).toEqual([]);
     }),
   );
 });

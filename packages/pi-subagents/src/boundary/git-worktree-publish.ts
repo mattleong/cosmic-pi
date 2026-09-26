@@ -7,9 +7,9 @@ import {
   publicationInputLimit,
   publicationResultSchema,
   directoryResultSchema,
+  type DirectoryWireRequest,
   type PublicationWireRequest,
 } from "./git-worktree-publish-helper.ts";
-export type { PublicationResult } from "./git-worktree-publish-helper.ts";
 
 export interface WorkspaceDirectoryRequest {
   readonly directory: string;
@@ -29,10 +29,11 @@ const failure = () =>
     message:
       "Workspace publication failed or is uncertain; preserve the journal and all artifacts for recovery.",
   });
-type DirectoryWireRequest = Omit<WorkspaceDirectoryRequest, "directory"> & {
-  readonly operation: "mkdir";
-};
-const launch = (directory: string, request: PublicationWireRequest | DirectoryWireRequest) =>
+const launch = <A>(
+  directory: string,
+  request: PublicationWireRequest | DirectoryWireRequest,
+  schema: Schema.Codec<A, unknown>,
+) =>
   Effect.gen(function* () {
     if (process.platform === "win32") return yield* failure();
     const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(request).pipe(
@@ -55,34 +56,24 @@ const launch = (directory: string, request: PublicationWireRequest | DirectoryWi
     }).pipe(Effect.mapError(failure));
     if (result.code !== 0 || result.timedOut || result.overflowed || result.cleanupUnconfirmed)
       return yield* failure();
-    return result.stdout;
+    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(result.stdout).pipe(
+      Effect.mapError(failure),
+    );
   });
 
-type MutablePublicationWireRequest = {
-  -readonly [K in keyof PublicationWireRequest]: PublicationWireRequest[K];
-};
+const base64 = (image?: { readonly bytes: Uint8Array; readonly mode: number }) =>
+  image && { bytes: Buffer.from(image.bytes).toString("base64"), mode: image.mode };
 
 /** Caller durably journals both artifact names before starting this process. No cleanup here. */
-export const publishWorkspaceFile = (request: WorkspacePublicationRequest) =>
-  Effect.gen(function* () {
-    const { directory, before, after, ...fields } = request;
-    const wire: MutablePublicationWireRequest = { ...fields };
-    if (before)
-      wire.before = { bytes: Buffer.from(before.bytes).toString("base64"), mode: before.mode };
-    if (after)
-      wire.after = { bytes: Buffer.from(after.bytes).toString("base64"), mode: after.mode };
-    const output = yield* launch(directory, wire);
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(publicationResultSchema))(
-      output,
-    ).pipe(Effect.mapError(failure));
-  });
+export const publishWorkspaceFile = (request: WorkspacePublicationRequest) => {
+  const { directory, before, after, ...fields } = request;
+  return launch(
+    directory,
+    { ...fields, before: base64(before), after: base64(after) },
+    publicationResultSchema,
+  );
+};
 
 /** Caller journals the planned directory first; existing destinations always fail closed. */
-export const createWorkspaceDirectory = (request: WorkspaceDirectoryRequest) =>
-  Effect.gen(function* () {
-    const { directory, ...fields } = request;
-    const output = yield* launch(directory, { ...fields, operation: "mkdir" });
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(directoryResultSchema))(
-      output,
-    ).pipe(Effect.mapError(failure));
-  });
+export const createWorkspaceDirectory = ({ directory, ...fields }: WorkspaceDirectoryRequest) =>
+  launch(directory, { ...fields, operation: "mkdir" }, directoryResultSchema);

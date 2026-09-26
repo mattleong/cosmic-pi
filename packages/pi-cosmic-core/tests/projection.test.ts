@@ -5,6 +5,18 @@ import * as Fiber from "effect/Fiber";
 import * as Scheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot, makeFrozenProjection, ProjectionError } from "../src/projection.ts";
+import { interruptingScheduler } from "../testing.ts";
+
+/** The typed failure raised for a value that cannot be projected. */
+const projectionFailure = <Value>(value: Value): ProjectionError => {
+  try {
+    freezeSnapshot(value);
+  } catch (error) {
+    if (error instanceof ProjectionError) return error;
+    throw error;
+  }
+  throw new Error("expected projection failure");
+};
 
 it.effect("commits authoritative state when interrupted at publication", () =>
   Effect.gen(function* () {
@@ -17,19 +29,9 @@ it.effect("commits authoritative state when interrupted at publication", () =>
         published = n;
       },
     );
-    const scheduler = new Scheduler.MixedScheduler();
-    const commitScheduler: Scheduler.Scheduler = {
-      executionMode: scheduler.executionMode,
-      makeDispatcher: () => scheduler.makeDispatcher(),
-      shouldYield: (fiber) => {
-        if (published === 1 && !interrupted) {
-          interrupted = true;
-          fiber.interruptUnsafe();
-          return true;
-        }
-        return false;
-      },
-    };
+    const commitScheduler = interruptingScheduler(
+      () => published === 1 && !interrupted && (interrupted = true),
+    );
     const fiber = yield* projection
       .transition(() => Effect.succeed([undefined, 1] as const))
       .pipe(Effect.provideService(Scheduler.Scheduler, commitScheduler), Effect.forkScoped);
@@ -112,22 +114,6 @@ it("allows acyclic shared references while preserving snapshot identity", () => 
   expect(Object.isFrozen(snapshot.left)).toBe(true);
 });
 
-it.each([
-  ["NaN", Number.NaN],
-  ["positive infinity", Number.POSITIVE_INFINITY],
-  ["negative infinity", Number.NEGATIVE_INFINITY],
-])("rejects %s as a typed projection failure", (_name, value) => {
-  try {
-    freezeSnapshot({ nested: value });
-    throw new Error("expected projection failure");
-  } catch (error) {
-    expect(error).toBeInstanceOf(ProjectionError);
-    if (!(error instanceof ProjectionError)) throw error;
-    expect(error.path).toBe("$.nested");
-    expect(error.message).toContain("non-finite number");
-  }
-});
-
 it("rejects direct and indirect cycles with the offending path", () => {
   const direct: DirectCycleFixture = {};
   direct.self = direct;
@@ -135,15 +121,9 @@ it("rejects direct and indirect cycles with the offending path", () => {
 
   const root: IndirectCycleFixture = { child: {} };
   root.child.parent = root;
-  try {
-    freezeSnapshot(root);
-    throw new Error("expected projection failure");
-  } catch (error) {
-    expect(error).toBeInstanceOf(ProjectionError);
-    if (!(error instanceof ProjectionError)) throw error;
-    expect(error.path).toBe("$.child.parent");
-    expect(error.message).toContain("cyclic reference to $");
-  }
+  const failure = projectionFailure(root);
+  expect(failure.path).toBe("$.child.parent");
+  expect(failure.message).toContain("cyclic reference to $");
 
   const array: unknown[] = [];
   array.push(array);
@@ -219,6 +199,9 @@ it.effect("serializes transitions and publishes each successful next state", () 
 );
 
 it.each([
+  ["NaN", { nested: Number.NaN }, "$.nested"],
+  ["positive infinity", { nested: Number.POSITIVE_INFINITY }, "$.nested"],
+  ["negative infinity", { nested: Number.NEGATIVE_INFINITY }, "$.nested"],
   ["symbol", { nested: [Symbol("capability")] }, "$.nested[0]"],
   ["bigint", { value: 1n }, "$.value"],
   ["Map", { capability: new Map() }, "$.capability"],
@@ -232,25 +215,12 @@ it.each([
     { nested: Object.defineProperty({}, "capability", { value: () => 42 }) },
     "$.nested.capability",
   ],
+  ["nested function", { nested: { capability: () => 42 } }, "$.nested.capability"],
   ["array function property", Object.assign([], { capability: () => 42 }), "$"],
   ["array symbol property", Object.assign([], { [Symbol("capability")]: true }), "$"],
-])("rejects nested %s snapshot capabilities with their path", (_name, value, path) => {
-  expect(() => freezeSnapshot(value)).toThrow(path);
-});
-
-it("reports unsupported values as typed projection failures", () => {
-  try {
-    freezeSnapshot({ nested: { capability: () => 42 } });
-    throw new Error("expected projection failure");
-  } catch (error) {
-    expect(error).toBeInstanceOf(ProjectionError);
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    expect((error as ProjectionError).path).toBe("$.nested.capability");
-  }
-});
-
-it("rejects symbol-keyed snapshot properties", () => {
-  expect(() => freezeSnapshot({ [Symbol("capability")]: true })).toThrow("symbol-keyed property");
+  ["symbol-keyed property", { [Symbol("capability")]: true }, "$"],
+])("rejects %s as a typed projection failure at its path", (_name, value, path) => {
+  expect(projectionFailure(value).path).toBe(path);
 });
 
 it.effect("does not commit or publish when external publication fails", () =>

@@ -7,6 +7,7 @@ import {
   checkDirectory,
   workspaceFailure,
   workspaceIO,
+  workspaceIOIfPresent,
   writeWorkspaceFile,
 } from "./git-worktree-process.ts";
 
@@ -34,12 +35,7 @@ export const initializeWorkspaceStore = (root: string) =>
     for (const part of absolute.slice(current.length).split(path.sep).filter(Boolean)) {
       const parent = current;
       current = path.join(current, part);
-      const stat = yield* workspaceIO("registry", () =>
-        fs.lstat(current).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined;
-          throw error;
-        }),
-      );
+      const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(current));
       if (stat) {
         if (!stat.isDirectory() || stat.isSymbolicLink())
           return yield* workspaceFailure("registry", "Registry ancestor is not a real directory.");

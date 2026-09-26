@@ -10,7 +10,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { AgentDirectory, JsonDocumentStore, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
+import { AgentDirectory, SafeFile, StreamingHttpClient } from "pi-cosmic-core";
 import { getCodexCredentials } from "../auth/codex-auth.ts";
 import { SharpAdapter } from "../boundary/sharp.ts";
 import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../config/schema.ts";
@@ -24,10 +24,8 @@ import {
   TOOL_PARAMS,
   ToolParamsSchema,
   fail,
+  failWith,
   type CodexImageResult,
-  type ImageAction,
-  type ImageOutputFormat,
-  type ImageSaveMode,
   type ToolParams,
 } from "./types.ts";
 
@@ -51,7 +49,6 @@ const resolveModel = (
 interface OpenAIImageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
-  readonly agentDir?: string;
 }
 
 export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
@@ -64,17 +61,10 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         const http = yield* StreamingHttpClient;
         const safeFile = yield* SafeFile;
         const sharp = yield* SharpAdapter;
-        const documents = yield* JsonDocumentStore;
-        const agentDir = options.agentDir ?? (yield* AgentDirectory);
-        const authPath = path.join(agentDir, "auth.json");
+        const agentDir = yield* AgentDirectory;
         const customSaveDir = yield* Config.option(Config.string("PI_IMAGE_SAVE_DIR"));
         const homeDirectory = yield* Config.option(Config.string("HOME"));
-        const credentialsFor = (ctx: Pick<ExtensionContext, "modelRegistry">) =>
-          getCodexCredentials(authPath, ctx).pipe(
-            Effect.provideService(JsonDocumentStore, documents),
-          );
 
-        const imageError = (operation: string, message: string) => () => fail(operation, message);
         const readInputs = makeImageInputReader({ fs, path, safeFile, sharp });
         const { validatedGeneratedImage, persistImage } = makeImageOutput({ fs, path, sharp });
         const generate = Effect.fn("OpenAIImage.generate")(function* <RawParams>(
@@ -84,28 +74,28 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         ) {
           const parameterKeys = yield* Effect.try({
             try: () => (Predicate.isObject(rawParams) ? Object.keys(rawParams) : undefined),
-            catch: imageError("params", "Invalid OpenAI image parameters."),
+            catch: failWith("params", "Invalid OpenAI image parameters."),
           });
           if (!parameterKeys || parameterKeys.some((key) => !TOOL_PARAM_KEYS.has(key)))
             return yield* fail("params", "Invalid OpenAI image parameters.");
           const params = yield* Schema.decodeUnknownEffect(ToolParamsSchema)(rawParams).pipe(
-            Effect.mapError(imageError("params", "Invalid OpenAI image parameters.")),
+            Effect.mapError(failWith("params", "Invalid OpenAI image parameters.")),
           );
           if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
           if (!cfg.image.enabled)
             return yield* fail("config", "OpenAI image generation is disabled in config.");
           const cwd = yield* Effect.try({
             try: () => ctx.cwd,
-            catch: imageError("context", "Unable to read the Pi working directory."),
+            catch: failWith("context", "Unable to read the Pi working directory."),
           });
           const model = yield* Effect.try({
             try: () => resolveModel(params, ctx, cfg),
-            catch: imageError("context", "Unable to read the Pi model context."),
+            catch: failWith("context", "Unable to read the Pi model context."),
           });
           const imageModel = params.imageModel ?? DEFAULT_IMAGE_MODEL;
-          const action: ImageAction = params.action ?? "auto";
-          const outputFormat: ImageOutputFormat = params.outputFormat ?? cfg.image.outputFormat;
-          const save: ImageSaveMode = params.save ?? cfg.image.defaultSave;
+          const action = params.action ?? "auto";
+          const outputFormat = params.outputFormat ?? cfg.image.outputFormat;
+          const save = params.save ?? cfg.image.defaultSave;
           const output = imageOutputMetadata(outputFormat);
           const customDirectory =
             params.saveDir?.trim() || Option.getOrUndefined(customSaveDir)?.trim();
@@ -127,7 +117,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
                   : resolveCustomDirectory(customDirectory);
           if (save === "custom" && !saveDir)
             return yield* fail("save", "save=custom requires saveDir or PI_IMAGE_SAVE_DIR.");
-          const credentials = yield* credentialsFor(ctx);
+          const credentials = yield* getCodexCredentials(ctx);
           if (!credentials)
             return yield* fail(
               "auth",
@@ -159,7 +149,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
               }),
             )
             .pipe(
-              Effect.mapError(imageError("request", "Codex image request failed.")),
+              Effect.mapError(failWith("request", "Codex image request failed.")),
               Effect.withSpan("pi-better-openai.image.request"),
             );
           if (response.status < 200 || response.status >= 300) {
@@ -172,30 +162,25 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           const validated = yield* validatedGeneratedImage(parsed, outputFormat).pipe(
             Effect.withSpan("pi-better-openai.image.convert"),
           );
-          let savedPath: string | undefined;
-          if (saveDir) {
-            const protectedBase =
-              save === "project" ? cwd : save === "global" ? agentDir : undefined;
-            savedPath = yield* persistImage(
-              saveDir,
-              protectedBase,
-              validated.bytes,
-              outputFormat,
-              validated.id,
-            ).pipe(Effect.withSpan("pi-better-openai.image.write"));
-          }
-          const { bytes: _bytes, ...image } = validated;
-          const result: CodexImageResult = savedPath
-            ? {
-                ...image,
-                prompt: params.prompt,
-                savedPath,
-                model,
-                imageModel,
-                action,
+          const savedPath = saveDir
+            ? yield* persistImage(
+                saveDir,
+                save === "project" ? cwd : save === "global" ? agentDir : undefined,
+                validated.bytes,
                 outputFormat,
-              }
-            : { ...image, prompt: params.prompt, model, imageModel, action, outputFormat };
+                validated.id,
+              ).pipe(Effect.withSpan("pi-better-openai.image.write"))
+            : undefined;
+          const { bytes: _bytes, ...image } = validated;
+          const result: CodexImageResult = {
+            ...image,
+            prompt: params.prompt,
+            ...(savedPath !== undefined && { savedPath }),
+            model,
+            imageModel,
+            action,
+            outputFormat,
+          };
           return result;
         });
         const safeGenerate = <Params>(params: Params) =>

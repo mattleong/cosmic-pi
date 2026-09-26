@@ -1,18 +1,6 @@
-import type { JsonObject } from "pi-cosmic-core";
 import { describe, expect, it } from "vitest";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-
-const resolve = (global: JsonObject, project?: JsonObject, trusted = true) =>
-  resolveSubagentConfig({
-    globalConfigPath: "/agent/pi-subagents.json",
-    projectConfigPath: "/repo/.pi/pi-subagents.json",
-    projectTrusted: trusted,
-    globalConfigExists: true,
-    projectConfigExists: project !== undefined,
-    global: decodeSubagentConfig(global),
-    ...(project && { project: decodeSubagentConfig(project) }),
-  });
+import { resolveTestConfig as resolve } from "./fixtures/profile-settings-inspection.ts";
 
 describe("writer workspace configuration", () => {
   it.each([4, 5, 6])("defaults existing version %s documents to shared checkout", (version) => {

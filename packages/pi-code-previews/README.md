@@ -204,7 +204,8 @@ need to install it separately.
 
 Compound renderers can call `getCodePreviewToolIcon(toolName)` to reuse the same emoji as the
 standalone `bash`, `read`, `write`, `edit`, `grep`, `find`, or `ls` call. Unsupported names return
-`undefined`, allowing the caller to keep a neutral fallback.
+`undefined`, allowing the caller to keep a neutral fallback. `getTextContent(content)` joins a
+tool result's text parts with newlines, the same projection the builtin renderers use.
 
 ### Compact summaries
 
@@ -222,7 +223,7 @@ Ownership requires an evidence snapshot. `claimCompactIssue(issue, { cause: true
 
 Only a successfully constructed and rendered result may consume its claims. Failure bodies use their own claims, never the original result's. `expandedResultOwnsCall` remains a conservative fallback promise requiring complete coverage and all call content in the result. Do not use it to hide source, commands, paths, tasks, or proposed diffs. Original and content-only slots keep independent caches.
 
-Use `createBoundedCompactIssuesSchema({ maxTextLength, maxEntries, maxRecoveryEntries, maxDiagnosticEntries })` for retained evidence with your existing limits. Ownership is renderer-local and excluded. Overflow rejects instead of silently truncating evidence. `pi-code-previews/testing` exports a source-only, test-runner-independent `createToolPresentationHarness(tool, { theme, width?, state?, cwd? })` with call/result updates, rendering, and invalidation. It never invokes execution. See the [normative standard](../../docs/architecture/tool-presentation.md) for the full contract and inventory.
+Use `createBoundedCompactIssuesSchema({ maxTextLength, maxEntries, maxRecoveryEntries, maxDiagnosticEntries })` for retained evidence with your existing limits. Ownership is renderer-local and excluded. Overflow rejects instead of silently truncating evidence. `pi-code-previews/testing` exports a source-only, test-runner-independent `createToolPresentationHarness(tool, { theme?, width?, state?, cwd? })` with call/result updates, rendering, invalidation, and `cycle()` over expansion states. It never invokes execution. The same subpath provides `renderContextFixture`, `applyPresentationSettings`/`withPresentationSettings`, `captureRegistrations`, and `animationSchedulerProbe`/`probeAnimationOwnership`. See the [normative standard](../../docs/architecture/tool-presentation.md) for the full contract and inventory.
 
 This example assumes `reportTool` takes a `path` argument. Its domain contract puts every warning and recovery instruction in `details.notices`, and `details.status === "ok"` means the work completed successfully. The provider leaves streaming results and unrecognized or non-clean reports to the shell's generic compact fallback. Register the wrapped tool after loading settings, as above.
 

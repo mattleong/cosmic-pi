@@ -1,10 +1,12 @@
 import type { JsonObject } from "pi-cosmic-core";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { hasObjectRuntimeType, invokeHostCallback } from "pi-cosmic-core";
 import {
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate,
+  PROFILE_CANDIDATE_BASE_KEYS,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
   PROFILE_CANDIDATE_HOSTS,
@@ -47,16 +49,6 @@ export const normalizeProfileSetName = (value: string): string | undefined => {
   return isProfileSetName(normalized) ? normalized : undefined;
 };
 
-export interface SubagentNestingPolicy {
-  readonly maxDirectChildren: number;
-  readonly maxDepth: number;
-}
-
-export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.freeze({
-  maxDirectChildren: DEFAULT_MAX_DIRECT_CHILDREN,
-  maxDepth: DEFAULT_MAX_SUBAGENT_DEPTH,
-});
-
 export interface SubagentProfileSet {
   readonly profiles: Partial<Readonly<Record<ProfileId, DeclaredProfileRoute>>>;
 }
@@ -85,25 +77,23 @@ export interface DecodedSubagentConfig {
   readonly unsupportedVersion: boolean;
 }
 
-export const ProfileHostSchema = Schema.Literals(PROFILE_CANDIDATE_HOSTS);
-export const ProfileRuntimeSchema = Schema.Literals(PROFILE_CANDIDATE_RUNTIMES);
-export const ProfileEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
-export const ProfileContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
-export const ProfileWriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
-
 const NestingContractSchema = Schema.Struct({
-  maxDirectChildren: Schema.Number.check(
-    Schema.isFinite(),
+  maxDirectChildren: Schema.Finite.check(
     Schema.isInt(),
     Schema.isGreaterThanOrEqualTo(MIN_DIRECT_CHILDREN),
     Schema.isLessThanOrEqualTo(MAX_DIRECT_CHILDREN),
   ),
-  maxDepth: Schema.Number.check(
-    Schema.isFinite(),
+  maxDepth: Schema.Finite.check(
     Schema.isInt(),
     Schema.isGreaterThanOrEqualTo(MIN_SUBAGENT_DEPTH),
     Schema.isLessThanOrEqualTo(MAX_SUBAGENT_DEPTH),
   ),
+});
+export type SubagentNestingPolicy = typeof NestingContractSchema.Type;
+
+export const DEFAULT_SUBAGENT_NESTING_POLICY: SubagentNestingPolicy = Object.freeze({
+  maxDirectChildren: DEFAULT_MAX_DIRECT_CHILDREN,
+  maxDepth: DEFAULT_MAX_SUBAGENT_DEPTH,
 });
 
 const NESTING_KEYS = new Set(["maxDirectChildren", "maxDepth"]);
@@ -121,33 +111,19 @@ export const decodeSubagentNesting = <ValueInput>(
   }
 };
 
-const CANDIDATE_BASE_KEYS = [
-  "host",
-  "runtime",
-  "model",
-  "effort",
-  "context",
-  "writeIntent",
-  "closeOnReport",
-] as const;
 const CandidateContractSchema = Schema.Struct({
-  host: ProfileHostSchema,
-  runtime: ProfileRuntimeSchema,
+  host: Schema.Literals(PROFILE_CANDIDATE_HOSTS),
+  runtime: Schema.Literals(PROFILE_CANDIDATE_RUNTIMES),
   model: Schema.String,
-  effort: ProfileEffortSchema,
-  context: ProfileContextSchema,
-  writeIntent: ProfileWriteIntentSchema,
+  effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
+  context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
+  writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
   openaiFastMode: Schema.optional(Schema.Boolean),
   closeOnReport: Schema.optional(Schema.Boolean),
 });
 
-const safeOwnKeys = (record: Readonly<JsonObject>): ReadonlyArray<string> | undefined => {
-  try {
-    return Object.keys(record);
-  } catch {
-    return undefined;
-  }
-};
+const safeOwnKeys = (record: Readonly<JsonObject>): ReadonlyArray<string> | undefined =>
+  invokeHostCallback(() => Object.keys(record), undefined);
 
 const ownKeysAre = (record: Readonly<JsonObject>, allowed: ReadonlySet<string>): boolean => {
   const keys = safeOwnKeys(record);
@@ -180,15 +156,22 @@ const readField = (
   }
 };
 
-const readCandidateField = (record: Readonly<JsonObject>, key: string) => {
+type OwnDataProperty =
+  | { readonly valid: true; readonly present: false }
+  | { readonly valid: true; readonly present: true; readonly value: unknown }
+  | { readonly valid: false };
+
+/** Descriptor-safe own read: accessors and throwing hostile objects are invalid, never invoked. */
+export const ownDataProperty = <ValueInput>(value: ValueInput, key: string): OwnDataProperty => {
+  if (!Predicate.isObjectKeyword(value)) return { valid: true, present: false };
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(record, key);
-    if (!descriptor) return { readable: true as const, present: false as const };
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor) return { valid: true, present: false };
     return "value" in descriptor
-      ? { readable: true as const, present: true as const, value: descriptor.value }
-      : { readable: false as const, present: true as const };
+      ? { valid: true, present: true, value: descriptor.value }
+      : { valid: false };
   } catch {
-    return { readable: false as const, present: true as const };
+    return { valid: false };
   }
 };
 
@@ -197,17 +180,17 @@ const readCandidateField = (record: Readonly<JsonObject>, key: string) => {
 const candidateFields = (record: Readonly<JsonObject>, fastModeKey: string) => {
   const values: Array<readonly [string, unknown]> = [];
   let decodable = true;
-  for (const key of [...CANDIDATE_BASE_KEYS, fastModeKey]) {
-    const field = readCandidateField(record, key);
+  for (const key of [...PROFILE_CANDIDATE_BASE_KEYS, fastModeKey]) {
+    const field = ownDataProperty(record, key);
     const required = key !== "closeOnReport" && key !== fastModeKey;
-    if (!field.readable || (required && !field.present)) decodable = false;
+    if (!field.valid || (required && !field.present)) decodable = false;
     else if (field.present)
       values.push([key === fastModeKey ? "openaiFastMode" : key, field.value]);
   }
   return { decodable, values };
 };
 
-const isLegacyConfigVersion = (version: number | undefined): version is 4 | 5 =>
+export const isLegacyConfigVersion = <Version>(version: Version): version is Version & (4 | 5) =>
   version === LEGACY_SUBAGENT_CONFIG_VERSION || version === PREVIOUS_SUBAGENT_CONFIG_VERSION;
 
 export const decodeProfileCandidate = <ValueInput>(
@@ -216,7 +199,7 @@ export const decodeProfileCandidate = <ValueInput>(
 ): ProfileCandidate | undefined => {
   const record = decodedRecord(value);
   const fastModeKey = isLegacyConfigVersion(version) ? "fastMode" : "openaiFastMode";
-  if (!record || !ownKeysAre(record, new Set([...CANDIDATE_BASE_KEYS, fastModeKey])))
+  if (!record || !ownKeysAre(record, new Set([...PROFILE_CANDIDATE_BASE_KEYS, fastModeKey])))
     return undefined;
   const { decodable, values } = candidateFields(record, fastModeKey);
   if (!decodable) return undefined;
@@ -389,6 +372,7 @@ const ConfigVersionSchema = Schema.Literals([
   PREVIOUS_SUBAGENT_CONFIG_VERSION,
   SUBAGENT_CONFIG_VERSION,
 ]);
+export const isSupportedConfigVersion = Schema.is(ConfigVersionSchema);
 
 /** Allowed root keys per declared version; unsupported versions use the current key set. */
 const ROOT_KEYS_BY_VERSION = {
@@ -435,14 +419,9 @@ const decodeCurrentBody = (rawRoot: Readonly<JsonObject>, scope: string, diagnos
     `${scope}.defaultProfileSet`,
     diagnostics,
   );
-  const decodedDefault = defaultField.present
-    ? Schema.decodeUnknownOption(Schema.String)(defaultField.value)
-    : undefined;
   const defaultProfileSet =
-    decodedDefault !== undefined &&
-    Option.isSome(decodedDefault) &&
-    isProfileSetName(decodedDefault.value)
-      ? decodedDefault.value
+    Predicate.isString(defaultField.value) && isProfileSetName(defaultField.value)
+      ? defaultField.value
       : undefined;
   const invalidDefaultProfileSet = defaultField.present && defaultProfileSet === undefined;
   if (invalidDefaultProfileSet) diagnostics.push(`${scope}.defaultProfileSet`);
@@ -471,13 +450,12 @@ const decodeLegacyBody = (
     : undefined;
   if (!decoded) return undefined;
   const profileSets = { [MIGRATED_PROFILE_SET_NAME]: { profiles: decoded.profiles } };
-  // SAFETY: This null-prototype map is populated only with the validated migrated set name.
-  const invalidProfileSetRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
-  if (decoded.invalidRoutes.length > 0)
-    invalidProfileSetRoutes[MIGRATED_PROFILE_SET_NAME] = decoded.invalidRoutes;
   return {
     file: { defaultProfileSet: MIGRATED_PROFILE_SET_NAME, profileSets },
-    invalidProfileSetRoutes,
+    invalidProfileSetRoutes:
+      decoded.invalidRoutes.length > 0
+        ? { [MIGRATED_PROFILE_SET_NAME]: decoded.invalidRoutes }
+        : {},
     invalidProfileSets: [],
     invalidDefaultProfileSet: false,
   };
@@ -498,23 +476,24 @@ export function decodeSubagentConfig<InputInput>(
   const version = Option.getOrUndefined(decodedVersion);
   if (!ownKeysAre(rawRoot, rootKeysFor(version))) diagnostics.push(`${scope}.<unknown>`);
 
-  // SAFETY: This null-prototype map is populated only by bounded profile decoders.
-  const invalidProfileSetRoutes = Object.create(null) as Record<string, ReadonlyArray<ProfileId>>;
-  let file: SubagentConfigFile = version === undefined ? {} : { version };
-  let invalidProfileSets: ReadonlyArray<string> = [];
-  let invalidDefaultProfileSet = false;
-
-  const body = isLegacyConfigVersion(version)
+  const body = (isLegacyConfigVersion(version)
     ? decodeLegacyBody(rawRoot, scope, version, diagnostics)
     : version === SUBAGENT_CONFIG_VERSION
       ? decodeCurrentBody(rawRoot, scope, diagnostics)
-      : undefined;
-  if (body) {
-    file = { ...file, ...body.file };
-    Object.assign(invalidProfileSetRoutes, body.invalidProfileSetRoutes);
-    invalidProfileSets = body.invalidProfileSets;
-    invalidDefaultProfileSet = body.invalidDefaultProfileSet;
-  }
+      : undefined) ?? {
+    file: {},
+    invalidProfileSetRoutes: {},
+    invalidProfileSets: [],
+    invalidDefaultProfileSet: false,
+  };
+  // SAFETY: This null-prototype map is populated only by bounded profile decoders.
+  const invalidProfileSetRoutes = Object.assign(
+    Object.create(null),
+    body.invalidProfileSetRoutes,
+  ) as Record<string, ReadonlyArray<ProfileId>>;
+  let file: SubagentConfigFile = { ...(version !== undefined && { version }), ...body.file };
+  const invalidProfileSets: ReadonlyArray<string> = body.invalidProfileSets;
+  let invalidDefaultProfileSet = body.invalidDefaultProfileSet;
   const nestingField = readField(rawRoot, "nesting", `${scope}.nesting`, diagnostics);
   const supportsNesting =
     version === PREVIOUS_SUBAGENT_CONFIG_VERSION || version === SUBAGENT_CONFIG_VERSION;

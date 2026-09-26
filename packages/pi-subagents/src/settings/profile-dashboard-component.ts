@@ -4,19 +4,11 @@ import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
 import { isProjectTrusted } from "pi-cosmic-core";
 import type { FleetManagerActions } from "./controller.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
-import {
-  ProfileWorkspaceComponent,
-  type ProfileWorkspaceOptions,
-  type ProfileWorkspaceCloseResult,
-} from "./profile-workspace.ts";
+import { ProfileWorkspaceComponent, type ProfileWorkspaceOptions } from "./profile-workspace.ts";
 import type { ProfileSettingsInspection, ProfileWorkspaceTarget } from "./profile-route-editor.ts";
 import { ProfileSetPickerComponent, type ProfileSetPickerAction } from "./profile-set-picker.ts";
-import {
-  ProfileSetSaveFormComponent,
-  type ProfileSetSaveDestination,
-} from "./profile-set-save-form.ts";
 import { ProfileDashboardDialog } from "./profile-dashboard-dialogs.ts";
-import { runProfileSetAction } from "./profile-set-actions.ts";
+import { runProfileSetAction, type ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import {
   profileDashboardChildHeight,
   renderProfileDashboard,
@@ -68,7 +60,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
     if (this.disposed) return false;
     if (this.options.isCurrent()) return true;
     this.dispose();
-    this.options.workspace.close(false);
+    this.options.workspace.close();
     return false;
   };
   private renderSoon = (): void => {
@@ -88,7 +80,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       projectTrusted: isProjectTrusted(this.options.ctx),
       close: (action) => {
         if (!this.current()) return;
-        if (!action) this.options.workspace.close(false);
+        if (!action) this.options.workspace.close();
         else this.act(action);
       },
     });
@@ -155,29 +147,20 @@ export class ProfileDashboardComponent implements Component, Focusable {
         });
       },
       onInspection: (inspection) => this.publish(inspection),
-      close: (result) => this.editorClosed(target, result),
+      close: () => this.editorClosed(target),
+      saveSession: () => this.act({ action: "save-session" }),
     });
     this.editors.set(key, editor);
     this.targets.set(key, target);
     return editor;
   }
-  private editorClosed(target: ProfileWorkspaceTarget, result: ProfileWorkspaceCloseResult): void {
+  private editorClosed(target: ProfileWorkspaceTarget): void {
     if (!this.current()) return;
-    if (result === false) {
-      if (target.kind === "session") this.options.workspace.close(false);
-      else this.savedTarget = undefined;
-    } else if (result.action === "save-session") {
-      if (this.tab === "session")
-        this.act({
-          action: "save-session",
-          preferredScope: isProjectTrusted(this.options.ctx) ? "project" : "global",
-        });
-    } else if (result.action === "use-current" && target.kind === "profile-set")
-      this.act({ action: "use-current", target: target.set });
-    else {
-      this.tab = "saved";
-      this.savedTarget = undefined;
+    if (target.kind === "session") {
+      this.options.workspace.close();
+      return;
     }
+    this.savedTarget = undefined;
     this.focused = this._focused;
     this.renderSoon();
   }
@@ -265,7 +248,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
                 title,
                 body,
                 kind: "confirm",
-                close: (value) => close(value === true),
+                close,
               }),
           ).then((value) => value === true),
         name: (title, initial) =>
@@ -276,15 +259,18 @@ export class ProfileDashboardComponent implements Component, Focusable {
                 title,
                 initial,
                 kind: "name",
-                close: (value) => close(value !== true && value !== false ? value : undefined),
+                close,
               }),
           ),
         save: () =>
           this.dialog<ProfileSetSaveDestination>(
             (close) =>
-              new ProfileSetSaveFormComponent({
-                ...this.host(),
-                projectTrusted: isProjectTrusted(this.options.ctx),
+              new ProfileDashboardDialog({
+                ...this.host(false),
+                title: "Save these profiles as a set",
+                body: "Copies all seven Current Session profiles. Does not apply the set or change the default.",
+                kind: "name",
+                destination: { projectTrusted: isProjectTrusted(this.options.ctx) },
                 close,
               }),
           ),
@@ -383,7 +369,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.renderSoon();
   }
   private handleBlocked(action: string | undefined): void {
-    if (action === "cancel" || action === "quit") this.options.workspace.close(false);
+    if (action === "cancel" || action === "quit") this.options.workspace.close();
   }
   private handleChildNavigation(
     child: Child,

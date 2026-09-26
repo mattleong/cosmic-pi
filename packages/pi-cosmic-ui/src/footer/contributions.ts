@@ -6,12 +6,6 @@ import type {
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
 
-export const FOOTER_LABEL_WIDTH = 8;
-
-export function footerLabel(label: string, theme: CosmicFooterTheme): string {
-  return theme.fg("mdLink", sanitizeTerminalLine(label).padEnd(FOOTER_LABEL_WIDTH));
-}
-
 export function alignSides(left: string, right: string, width: number): string {
   if (width <= 0) return "";
   if (!right) return truncateToWidth(left, width, "");
@@ -174,26 +168,4 @@ export function renderContributionLine(
 
   const padding = " ".repeat(Math.max(1, width - leftWidth - rightWidth));
   return truncateToWidth(`${styledLeft}${padding}${styledRight}`, width, "");
-}
-
-export function renderLabeledContributionLine(
-  label: string,
-  contributions: CosmicFooterTextContribution[],
-  width: number,
-  theme: CosmicFooterTheme,
-  compact: boolean,
-): string {
-  if (width <= 0) return "";
-  if (width <= FOOTER_LABEL_WIDTH)
-    return truncateToWidth(theme.fg("mdLink", sanitizeTerminalLine(label)), width, "");
-  return truncateToWidth(
-    `${footerLabel(label, theme)}${renderContributionLine(
-      contributions,
-      width - FOOTER_LABEL_WIDTH,
-      theme,
-      compact,
-    )}`,
-    width,
-    "",
-  );
 }

@@ -16,13 +16,6 @@ export type CodeModeFieldProvenance = "default" | "global" | "project";
 
 export type CodeModeProvenance = Readonly<Record<CodeModeFieldId, CodeModeFieldProvenance>>;
 
-type MutableCodeModeConfig = {
-  -readonly [Field in keyof CodeModeConfig]: CodeModeConfig[Field];
-};
-type MutableCodeModeProvenance = {
-  -readonly [Field in CodeModeFieldId]: CodeModeFieldProvenance;
-};
-
 interface CodeModeResolution {
   readonly config: CodeModeConfig;
   readonly provenance: CodeModeProvenance;
@@ -42,38 +35,32 @@ export function resolveCodeModeConfig(
   global: Partial<CodeModeConfig> | undefined,
   project: Partial<CodeModeConfig> | undefined,
 ): CodeModeResolution {
-  const config: MutableCodeModeConfig = {
-    ...DEFAULT_CODE_MODE_CONFIG,
-  };
-  // SAFETY: The seed derives every id from the same authoritative CODE_MODE_FIELD_IDS, so the
-  // widened record matches the per-field provenance keys exactly.
-  const provenance: MutableCodeModeProvenance = Object.fromEntries(
-    CODE_MODE_FIELD_IDS.map((field) => [field, "default" as const]),
-  ) as MutableCodeModeProvenance;
-  const setConfigField = <Field extends CodeModeFieldId>(
-    field: Field,
-    value: CodeModeConfig[Field],
-  ): void => {
-    config[field] = value;
-  };
-  for (const field of CODE_MODE_FIELD_IDS) {
-    const projectValue = project?.[field];
-    const globalValue = global?.[field];
-    if (projectValue !== undefined) {
-      setConfigField(field, projectValue);
-      provenance[field] = "project";
-    } else if (globalValue !== undefined) {
-      setConfigField(field, globalValue);
-      provenance[field] = "global";
-    }
-  }
+  const source = (field: CodeModeFieldId): CodeModeFieldProvenance =>
+    project?.[field] !== undefined
+      ? "project"
+      : global?.[field] !== undefined
+        ? "global"
+        : "default";
+  // SAFETY: Both records derive every key from the same authoritative CODE_MODE_FIELD_IDS, and
+  // each config value comes from a decoded field or the default for that same key.
   return {
-    config: Object.freeze(config),
-    provenance: Object.freeze(provenance),
+    config: Object.freeze(
+      Object.fromEntries(
+        CODE_MODE_FIELD_IDS.map((field) => [
+          field,
+          project?.[field] ?? global?.[field] ?? DEFAULT_CODE_MODE_CONFIG[field],
+        ]),
+      ) as CodeModeConfig,
+    ),
+    provenance: Object.freeze(
+      Object.fromEntries(
+        CODE_MODE_FIELD_IDS.map((field) => [field, source(field)]),
+      ) as CodeModeProvenance,
+    ),
   };
 }
 
-interface CodeModeSettingDescriptorBase {
+export type CodeModeSettingDescriptor = {
   readonly label: string;
   readonly description: string;
   /** Finite presets offered to completion and the interactive list; free integers are also valid. */
@@ -81,22 +68,11 @@ interface CodeModeSettingDescriptorBase {
   readonly decode: (
     rawValue: string,
   ) => Result.Result<boolean | number, InvalidCodeModeSettingError>;
-}
-
-interface CodeModeBooleanSettingDescriptor extends CodeModeSettingDescriptorBase {
-  readonly kind: "boolean";
-  readonly id: CodeModeFieldId;
-}
-
-/** Integer settings accept any in-bounds value, not only the presets. */
-interface CodeModeIntegerSettingDescriptor extends CodeModeSettingDescriptorBase {
-  readonly kind: "integer";
-  readonly id: CodeModeIntegerFieldId;
-}
-
-export type CodeModeSettingDescriptor =
-  | CodeModeBooleanSettingDescriptor
-  | CodeModeIntegerSettingDescriptor;
+} & (
+  | { readonly kind: "boolean"; readonly id: CodeModeFieldId }
+  /** Integer settings accept any in-bounds value, not only the presets. */
+  | { readonly kind: "integer"; readonly id: CodeModeIntegerFieldId }
+);
 
 const decodeBoolean = (id: CodeModeFieldId) => (rawValue: string) => {
   const trimmed = rawValue.trim();

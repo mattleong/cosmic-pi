@@ -35,7 +35,6 @@ export function renderCompactIssues(
 ): string[] {
   const severity = compactIssueSeverity(issues);
   if (!severity || width <= 0) return [];
-  const attributed = attribute;
   const text = issues.entries
     .flatMap((issue) => {
       const description =
@@ -54,7 +53,7 @@ export function renderCompactIssues(
         : description
           ? [description]
           : [];
-      return expanded && attributed
+      return expanded && attribute
         ? lines.map((line, index) => (index === 0 ? `${issue.operation}: ${line}` : line))
         : lines;
     })

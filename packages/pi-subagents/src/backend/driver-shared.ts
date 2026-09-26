@@ -2,9 +2,11 @@ import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import {
+  processError,
   SubagentProtocolError,
   UnsupportedSubagentCapabilityError,
   type SubagentError,
+  type SubagentProcessError,
 } from "../run/errors.ts";
 
 /**
@@ -13,6 +15,12 @@ import {
  */
 export const protocolError = (message: string): SubagentProtocolError =>
   new SubagentProtocolError({ message });
+
+/** Maps a supervisor channel failure to the process error of one backend operation. */
+export const supervisorError =
+  (operation: string) =>
+  ({ code, message }: { readonly code: string; readonly message: string }): SubagentProcessError =>
+    processError(operation, code, message);
 
 /**
  * Shared unsupported-capability failure factory. Each driver binds its own backend tag
@@ -46,8 +54,6 @@ export interface CorrelatedRequestOptions<Frame, Response> {
    * settled by the event consumer resolves immediately.
    */
   readonly awaitEarlyResponse?: boolean | undefined;
-  /** Optional post-timeout response validation (e.g. the local-pi `response.success` check). */
-  readonly decode?: ((response: Response) => Effect.Effect<Response, SubagentError>) | undefined;
 }
 
 /**
@@ -75,9 +81,6 @@ export const correlatedRequest = <Frame, Response>(
           duration: options.timeout,
           orElse: () => Effect.fail(options.timeoutError(frame)),
         }),
-        Effect.flatMap((response) =>
-          options.decode ? options.decode(response) : Effect.succeed(response),
-        ),
       );
     },
     ({ unregister }) => unregister,

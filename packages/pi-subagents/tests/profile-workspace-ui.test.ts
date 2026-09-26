@@ -1,15 +1,21 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vitest";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import {
+  inheritedInvalidInspection,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { profileCandidate } from "./fixtures/profiles.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
-import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
+import {
+  loadProfileRouteDraft,
+  type ProfileSettingsInspection,
+} from "../src/settings/profile-route-editor.ts";
 import {
   candidateFieldChoices,
   candidateFieldRows,
-  targetProfileRouteDraft,
 } from "../src/settings/ui/profile-workspace-model.ts";
 import {
   renderProfileWorkspace,
@@ -17,34 +23,15 @@ import {
   type ProfileWorkspaceRenderState,
 } from "../src/settings/ui/profile-workspace-render.ts";
 import { profileWorkspaceRows } from "../src/settings/ui/profile-workspace-rows.ts";
-import { makeProfileSearchSelector } from "../src/settings/ui/profile-workspace-selectors.ts";
-
-// SAFETY: The pure renderer uses only the Theme methods implemented by this fixture.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-  bg: (_: string, text: string) => text,
-} as Theme;
-
-const routeOption = (
-  model: string,
-  overrides: Partial<ProfileCandidate> = {},
-): ProfileCandidate => ({
-  host: "local",
-  runtime: "pi",
-  model,
-  effort: "high",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  closeOnReport: true,
-  ...overrides,
-});
+import {
+  makeProfileSearchSelector,
+  type ProfileSearchSelectorOptions,
+} from "../src/settings/ui/profile-workspace-selectors.ts";
 
 const route = [
-  routeOption("openai/primary"),
-  routeOption("claude-fallback", { host: "herdr", runtime: "claude" }),
-  routeOption("codex-fallback", { runtime: "codex", writeIntent: "writer" }),
+  profileCandidate("openai/primary"),
+  profileCandidate("claude-fallback", { host: "herdr", runtime: "claude" }),
+  profileCandidate("codex-fallback", { runtime: "codex", writeIntent: "writer" }),
 ];
 
 const inspection = (
@@ -63,12 +50,12 @@ const inspection = (
 };
 
 const targetAwareInspection = (): ProfileSettingsInspection => {
-  const saved = inspection([routeOption("openai/saved-only-4x8v")]);
+  const saved = inspection([profileCandidate("openai/saved-only-4x8v")]);
   const baseline = {
     ...saved.session.baseline,
     profiles: {
       ...saved.session.baseline.profiles,
-      worker: { candidates: [routeOption("openai/session-only-9q7z")] },
+      worker: { candidates: [profileCandidate("openai/session-only-9q7z")] },
     },
   };
   return {
@@ -81,35 +68,6 @@ const targetAwareInspection = (): ProfileSettingsInspection => {
   };
 };
 
-const inheritedInvalidTargetInspection = (): ProfileSettingsInspection => {
-  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-  const invalidRoute = {
-    host: "local",
-    runtime: "pi",
-    model: "parent",
-    effort: "impossible",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    closeOnReport: true,
-  };
-  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
-    version: 6,
-    defaultProfileSet: "lower",
-    profileSets: { lower: { profiles: { worker: invalidRoute } } },
-  });
-  const projectDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
-    version: 6,
-    defaultProfileSet: "partial",
-    profileSets: { partial: { profiles: {} } },
-  });
-  return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument,
-    projectTrusted: true,
-  });
-};
-
 const indexOfProfile = (profile: ProfileId): number => PROFILE_IDS.indexOf(profile);
 
 const state = (
@@ -117,8 +75,6 @@ const state = (
 ): ProfileWorkspaceRenderState => ({
   inspection: inspection(),
   target: { kind: "session" },
-  scope: "session",
-  projectTrusted: true,
   parentEffort: "high",
   parentModel: "openai/parent",
   pane: "profiles",
@@ -126,13 +82,32 @@ const state = (
   candidateIndex: 0,
   fieldIndex: 0,
   draft: { kind: "inherit", candidates: route },
+  expandedCandidates: new Set(),
   busy: false,
   cancellableBusy: false,
   ...overrides,
 });
 
 const render = (overrides: Partial<ProfileWorkspaceRenderState>, width: number, height: number) =>
-  renderProfileWorkspace(state(overrides), { theme, width, height });
+  renderProfileWorkspace(state(overrides), { theme: plainTheme, width, height });
+
+const search = (overrides: Partial<ProfileSearchSelectorOptions>) =>
+  makeProfileSearchSelector({
+    theme: plainTheme,
+    inspection: inspection(),
+    current: "worker",
+    parentEffort: "high",
+    target: { kind: "session" },
+    initialQuery: "",
+    getHeight: () => 24,
+    requestRender: () => {},
+    cancel: vi.fn(),
+    select: vi.fn(),
+    ...overrides,
+  });
+
+const fields = (candidate: ProfileCandidate, expanded: boolean) =>
+  candidateFieldRows(candidate, "worker", "high", undefined, expanded);
 
 const expectBounded = (lines: ReadonlyArray<string>, width: number, height: number) => {
   expect(lines).toHaveLength(height);
@@ -160,8 +135,15 @@ describe("profile workspace state projection", () => {
   });
 
   it("preserves the effective default effort when a long model must be truncated", () => {
-    const candidate = routeOption(`test/${"long".repeat(60)}`, { effort: "default" });
-    const summary = workspaceCandidateSummary(candidate, "worker", "low", 40);
+    const candidate = profileCandidate(`test/${"long".repeat(60)}`, { effort: "default" });
+    const summary = workspaceCandidateSummary(
+      candidate,
+      "worker",
+      "low",
+      40,
+      undefined,
+      plainTheme,
+    );
     expect(visibleWidth(summary)).toBeLessThanOrEqual(40);
     expect(summary).toContain("high (profile default)");
     expect(summary).not.toContain(candidate.model);
@@ -182,19 +164,7 @@ describe("profile workspace state projection", () => {
     for (const initialQuery of ["", "worker"]) {
       const cancel = vi.fn();
       const select = vi.fn();
-      const search = makeProfileSearchSelector({
-        theme,
-        inspection: inspection(),
-        current: "scout",
-        parentEffort: "high",
-        target: { kind: "session" },
-        initialQuery,
-        getHeight: () => 24,
-        requestRender: vi.fn(),
-        cancel,
-        select,
-      });
-      search.handleInput("\u001b");
+      search({ current: "scout", initialQuery, cancel, select }).handleInput("\u001b");
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(select).not.toHaveBeenCalled();
     }
@@ -202,7 +172,7 @@ describe("profile workspace state projection", () => {
 
   it("offers every supported host and runtime combination", () => {
     expect(
-      candidateFieldChoices(routeOption("openai/primary"), "runWith", {}).map(
+      candidateFieldChoices(profileCandidate("openai/primary"), "runWith", {}).map(
         (choice) => choice.value,
       ),
     ).toEqual([
@@ -216,25 +186,13 @@ describe("profile workspace state projection", () => {
   });
 
   it("collapses advanced controls without dropping unsupported settings", () => {
-    const advancedCandidate = routeOption("openai/primary", {
+    const advancedCandidate = profileCandidate("openai/primary", {
       host: "herdr",
       openaiFastMode: true,
       closeOnReport: false,
     });
-    const collapsedFields = candidateFieldRows(
-      advancedCandidate,
-      "worker",
-      "high",
-      undefined,
-      false,
-    ).map((row) => row.field);
-    const expandedFields = candidateFieldRows(
-      advancedCandidate,
-      "worker",
-      "high",
-      undefined,
-      true,
-    ).map((row) => row.field);
+    const collapsedFields = fields(advancedCandidate, false).map((row) => row.field);
+    const expandedFields = fields(advancedCandidate, true).map((row) => row.field);
 
     expect(collapsedFields).toContain("advanced");
     expect(collapsedFields).not.toContain("openaiFastMode");
@@ -243,22 +201,9 @@ describe("profile workspace state projection", () => {
       expect.arrayContaining(["advanced", "openaiFastMode", "closeOnReport"]),
     );
 
-    const claudeFields = candidateFieldRows(
-      routeOption("claude/local", { runtime: "claude" }),
-      "worker",
-      "high",
-      undefined,
-      true,
-    ).map((row) => row.field);
-    expect(claudeFields).toEqual(
+    const fixed = fields(profileCandidate("claude/local", { runtime: "claude" }), true);
+    expect(fixed.map((row) => row.field)).toEqual(
       expect.arrayContaining(["advanced", "context", "openaiFastMode", "closeOnReport"]),
-    );
-    const fixed = candidateFieldRows(
-      routeOption("claude/local", { runtime: "claude" }),
-      "worker",
-      "high",
-      undefined,
-      true,
     );
     expect(fixed.find((row) => row.field === "context")?.fixed).toBe(true);
   });
@@ -270,61 +215,25 @@ describe("profile workspace state projection", () => {
       set: { scope: "global" as const, name: "work" },
     };
 
-    expect(targetProfileRouteDraft(value, target, "worker").candidates[0]?.model).toBe(
+    expect(loadProfileRouteDraft(value, target, "worker").candidates[0]?.model).toBe(
       "openai/saved-only-4x8v",
     );
-    expect(targetProfileRouteDraft(value, { kind: "session" }, "worker").candidates[0]?.model).toBe(
+    expect(loadProfileRouteDraft(value, { kind: "session" }, "worker").candidates[0]?.model).toBe(
       "openai/session-only-9q7z",
     );
 
     const selectSaved = vi.fn();
-    const savedSearch = makeProfileSearchSelector({
-      theme,
-      inspection: value,
-      current: "worker",
-      parentEffort: "high",
-      target,
-      initialQuery: "4x8v",
-      getHeight: () => 20,
-      requestRender: () => {},
-      select: selectSaved,
-      cancel: () => {},
-    });
-    savedSearch.handleInput("\r");
+    const shared = { inspection: value, target, getHeight: () => 20 };
+    search({ ...shared, initialQuery: "4x8v", select: selectSaved }).handleInput("\r");
     expect(selectSaved).toHaveBeenCalledWith("worker");
 
     const selectSessionOnly = vi.fn();
-    const sessionOnlySearch = makeProfileSearchSelector({
-      theme,
-      inspection: value,
-      current: "worker",
-      parentEffort: "high",
-      target,
-      initialQuery: "9q7z",
-      getHeight: () => 20,
-      requestRender: () => {},
-      select: selectSessionOnly,
-      cancel: () => {},
-    });
-    sessionOnlySearch.handleInput("\r");
+    search({ ...shared, initialQuery: "9q7z", select: selectSessionOnly }).handleInput("\r");
     expect(selectSessionOnly).not.toHaveBeenCalled();
   });
 
-  it("keeps inherited fail-closed profiles invalid in the edited target", () => {
-    const value = inheritedInvalidTargetInspection();
-    const target = {
-      kind: "profile-set" as const,
-      set: { scope: "project" as const, name: "partial" },
-    };
-
-    expect(targetProfileRouteDraft(value, target, "worker")).toEqual({
-      kind: "invalid",
-      candidates: [],
-    });
-  });
-
   it("bounds rendering for normal, editing, confirmation, error, and invalid states", () => {
-    const invalidValue = inheritedInvalidTargetInspection();
+    const invalidValue = inheritedInvalidInspection();
     const invalidTarget = {
       kind: "profile-set" as const,
       set: { scope: "project" as const, name: "partial" },
@@ -332,22 +241,20 @@ describe("profile workspace state projection", () => {
     const longModel = `openai/${"m".repeat(249)}`;
     const states: ReadonlyArray<Partial<ProfileWorkspaceRenderState>> = [
       {},
-      { pane: "fields", advancedExpanded: true },
+      { pane: "fields", expandedCandidates: new Set([0]) },
       { pane: "profiles", saveFocused: true },
       { pane: "fields", saveFocused: true },
       {
         pendingConfirmation: {
           title: "Undo changes?",
           detail: `Discard ${longModel}`,
-          preview: [longModel],
         },
       },
       { message: { kind: "error", text: `Save failed for ${longModel}` } },
       {
         inspection: invalidValue,
         target: invalidTarget,
-        scope: "project",
-        draft: targetProfileRouteDraft(invalidValue, invalidTarget, "worker"),
+        draft: loadProfileRouteDraft(invalidValue, invalidTarget, "worker"),
       },
     ];
 

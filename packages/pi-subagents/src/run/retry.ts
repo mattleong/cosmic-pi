@@ -2,7 +2,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import type { RunContext, RunRecord } from "./internal.ts";
 import type { FailedStartRecovery, SubagentRunView } from "./model.ts";
 import { snapshotView } from "./state.ts";
 
@@ -10,13 +10,6 @@ export interface SubagentRetryClaim {
   readonly source: SubagentRunView;
   readonly continuation: ProfileRouteContinuation;
   readonly claimToken: string;
-}
-
-export interface RunRetryDependencies {
-  readonly records: ReadonlyMap<string, RunRecord>;
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
-  readonly allocateClaimToken: () => string;
 }
 
 const invalid = (code: string, message: string) =>
@@ -64,15 +57,10 @@ export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartReco
 };
 
 /** Owns exclusive failed-run continuation claims and route-exhaustion publication. */
-export function makeRunRetry(dependencies: RunRetryDependencies) {
-  const { records, withLock, publish, allocateClaimToken } = dependencies;
-
-  const requireRecord = (id: string): Effect.Effect<RunRecord, SubagentNotFoundError> => {
-    const record = records.get(id);
-    return record
-      ? Effect.succeed(record)
-      : Effect.fail(new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` }));
-  };
+export function makeRunRetry(
+  dependencies: RunContext & { readonly allocateClaimToken: () => string },
+) {
+  const { records, withLock, publish, allocateClaimToken, requireRecord } = dependencies;
 
   const claimRetryContinuation = (
     id: string,
@@ -180,10 +168,8 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
       }),
     );
 
-  const exhaustRetryClaim = (
-    id: string,
-    claimToken: string,
-  ): Effect.Effect<void, InvalidSubagentRequestError | SubagentNotFoundError> =>
+  /** Consumes a live retry claim and publishes the run's exhausted or blocked route. */
+  const finishRetryClaim = (id: string, claimToken: string, outcome: "exhausted" | "blocked") =>
     withLock(
       Effect.gen(function* () {
         const record = yield* requireRecord(id);
@@ -193,26 +179,11 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
             `Subagent ${id} no longer owns this retry claim.`,
           );
         record.retryClaim = undefined;
-        record.retryExhausted = true;
-        record.view = { ...record.view, retryExhausted: true };
-        yield* publish;
-      }),
-    );
-
-  const blockRetryClaim = (
-    id: string,
-    claimToken: string,
-  ): Effect.Effect<void, InvalidSubagentRequestError | SubagentNotFoundError> =>
-    withLock(
-      Effect.gen(function* () {
-        const record = yield* requireRecord(id);
-        if (record.retryClaim?.token !== claimToken)
-          return yield* invalid(
-            "retry_claim_stale",
-            `Subagent ${id} no longer owns this retry claim.`,
-          );
-        record.retryClaim = undefined;
-        record.view = { ...record.view, retryBlocked: true };
+        if (outcome === "exhausted") record.retryExhausted = true;
+        record.view = {
+          ...record.view,
+          ...(outcome === "exhausted" ? { retryExhausted: true } : { retryBlocked: true }),
+        };
         yield* publish;
       }),
     );
@@ -220,7 +191,9 @@ export function makeRunRetry(dependencies: RunRetryDependencies) {
   return {
     claimRetryContinuation,
     releaseRetryClaim,
-    exhaustRetryClaim,
-    blockRetryClaim,
+    exhaustRetryClaim: (id: string, claimToken: string) =>
+      finishRetryClaim(id, claimToken, "exhausted"),
+    blockRetryClaim: (id: string, claimToken: string) =>
+      finishRetryClaim(id, claimToken, "blocked"),
   };
 }

@@ -91,6 +91,13 @@ const progressContact = (message = "Still working."): LocalPiContact => ({
   message,
 });
 
+const ignoreParent = { onContact: () => {}, onProtocolError: () => {}, onDisconnect: () => {} };
+
+const isQuestion = (contact: LocalPiContact) =>
+  contact.type === "contact_parent" && contact.kind === "question";
+const hasMessage = (message: string) => (contact: LocalPiContact) =>
+  contact.type === "contact_parent" && contact.message === message;
+
 describe("Local Pi IPC boundary", () => {
   it("decodes child contacts before exposing them and rejects malformed envelopes", () => {
     const fake = fakePort<LocalPiParentControl>();
@@ -105,47 +112,17 @@ describe("Local Pi IPC boundary", () => {
       },
     });
 
+    const acks: LocalPiContact[] = [
+      { channel: "pi-subagents", type: "proxy_notification_ack", requestId: "n-1", ok: true },
+      { channel: "pi-subagents", type: "turn_input_barrier_ack", requestId: "barrier-1" },
+      { channel: "pi-subagents", type: "parent_reply_ack", requestId: "reply-1", ok: true },
+    ];
     fake.emitMessage(progressContact());
-    fake.emitMessage({
-      channel: "pi-subagents",
-      type: "proxy_notification_ack",
-      requestId: "notification-1",
-      ok: true,
-    });
-    fake.emitMessage({
-      channel: "pi-subagents",
-      type: "turn_input_barrier_ack",
-      requestId: "barrier-1",
-    });
-    fake.emitMessage({
-      channel: "pi-subagents",
-      type: "parent_reply_ack",
-      requestId: "reply-1",
-      ok: true,
-    });
+    for (const ack of acks) fake.emitMessage(ack);
     fake.emitMessage({ type: "agent_settled" });
     fake.disconnect();
 
-    expect(contacts).toEqual([
-      progressContact(),
-      {
-        channel: "pi-subagents",
-        type: "proxy_notification_ack",
-        requestId: "notification-1",
-        ok: true,
-      },
-      {
-        channel: "pi-subagents",
-        type: "turn_input_barrier_ack",
-        requestId: "barrier-1",
-      },
-      {
-        channel: "pi-subagents",
-        type: "parent_reply_ack",
-        requestId: "reply-1",
-        ok: true,
-      },
-    ]);
+    expect(contacts).toEqual([progressContact(), ...acks]);
     expect(protocolErrors).toEqual(["Subagent emitted an invalid parent-contact event."]);
     expect(disconnects).toBe(1);
 
@@ -159,11 +136,7 @@ describe("Local Pi IPC boundary", () => {
   it.effect("distinguishes definite parent-control rejection from uncertain delivery", () =>
     Effect.gen(function* () {
       const fake = fakePort<LocalPiParentControl>();
-      const channel = makeLocalPiParentIpcChannel(fake.port, {
-        onContact: () => {},
-        onProtocolError: () => {},
-        onDisconnect: () => {},
-      });
+      const channel = makeLocalPiParentIpcChannel(fake.port, ignoreParent);
 
       yield* channel.sendControl(parentReply());
       expect(fake.sent).toEqual([parentReply()]);
@@ -189,11 +162,7 @@ describe("Local Pi IPC boundary", () => {
     Effect.gen(function* () {
       const fake = fakePort<LocalPiParentControl>();
       fake.setBehavior("pending");
-      const channel = makeLocalPiParentIpcChannel(fake.port, {
-        onContact: () => {},
-        onProtocolError: () => {},
-        onDisconnect: () => {},
-      });
+      const channel = makeLocalPiParentIpcChannel(fake.port, ignoreParent);
       const sending = yield* channel
         .sendControl(parentReply())
         .pipe(Effect.flip, Effect.forkScoped);
@@ -254,20 +223,19 @@ describe("Local Pi IPC boundary", () => {
       });
       detach = ipc.detach;
 
-      const initial: LocalPiContact[] = [];
-      for (let index = 0; index < 4; index += 1) {
-        const hasReady = initial.some(
-          (contact) => contact.type === "contact_parent" && contact.message === "child-ready",
-        );
-        const hasQuestion = initial.some(
-          (contact) => contact.type === "contact_parent" && contact.kind === "question",
-        );
-        if (hasReady && hasQuestion) break;
-        initial.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
-      }
-      const question = initial.find(
-        (contact) => contact.type === "contact_parent" && contact.kind === "question",
-      );
+      // Takes at most four contacts until every predicate has matched one of them.
+      const takeUntil = (...predicates: ReadonlyArray<(contact: LocalPiContact) => boolean>) =>
+        Effect.gen(function* () {
+          const taken: LocalPiContact[] = [];
+          for (let index = 0; index < 4; index += 1) {
+            if (predicates.every((predicate) => taken.some(predicate))) break;
+            taken.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
+          }
+          return taken;
+        });
+
+      const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
+      const question = initial.find(isQuestion);
       if (!question || question.type !== "contact_parent")
         return yield* new IpcIntegrationTestError({
           message: `Real IPC child did not ask its question: ${stderr}`,
@@ -286,32 +254,11 @@ describe("Local Pi IPC boundary", () => {
         message: "reply-live",
       });
 
-      const responses: LocalPiContact[] = [];
-      for (let index = 0; index < 4; index += 1) {
-        const hasPeer = responses.some(
-          (contact) => contact.type === "contact_parent" && contact.message === "peer:peer-live",
-        );
-        const hasReply = responses.some(
-          (contact) =>
-            contact.type === "contact_parent" &&
-            contact.message === `reply:${question.requestId}:reply-live`,
-        );
-        if (hasPeer && hasReply) break;
-        responses.push(yield* Queue.take(contacts).pipe(Effect.timeout("5 seconds")));
-      }
-
-      expect(
-        responses.some(
-          (contact) => contact.type === "contact_parent" && contact.message === "peer:peer-live",
-        ),
-      ).toBe(true);
-      expect(
-        responses.some(
-          (contact) =>
-            contact.type === "contact_parent" &&
-            contact.message === `reply:${question.requestId}:reply-live`,
-        ),
-      ).toBe(true);
+      const isPeer = hasMessage("peer:peer-live");
+      const isReply = hasMessage(`reply:${question.requestId}:reply-live`);
+      const responses = yield* takeUntil(isPeer, isReply);
+      expect(responses.some(isPeer)).toBe(true);
+      expect(responses.some(isReply)).toBe(true);
       expect(yield* Deferred.await(closed).pipe(Effect.timeout("5 seconds"))).toEqual({
         code: 0,
         signal: null,

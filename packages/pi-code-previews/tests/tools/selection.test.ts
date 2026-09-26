@@ -1,64 +1,39 @@
 // Test/benchmark boundary intentionally exercises native Pi, Node, Promise, timer, and environment APIs.
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { applyPresentationSettings } from "../../testing";
 import {
   codePreviewPerformanceConfig,
   codePreviewToolsEnvironmentValue,
   publishCodePreviewEnvironmentProjection,
 } from "../../src/config/env";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import {
-  formatEnabledCodePreviewTools,
-  getEnabledCodePreviewTools,
-} from "../../src/tools/selection";
+import { setCodePreviewSettings } from "../../src/config/state";
+import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 
 const publishCodePreviewToolsEnvironment = (value: string | undefined): void => {
   publishCodePreviewEnvironmentProjection(codePreviewPerformanceConfig, value);
 };
 
-let previousCodePreviewSettings = { ...codePreviewSettings };
-let previousCodePreviewTools: string | undefined;
-
 beforeEach(() => {
-  previousCodePreviewSettings = { ...codePreviewSettings };
-  previousCodePreviewTools = codePreviewToolsEnvironmentValue;
-});
-
-afterEach(() => {
-  setCodePreviewSettings(previousCodePreviewSettings);
-  publishCodePreviewToolsEnvironment(previousCodePreviewTools);
-});
-
-test("CODE_PREVIEW_TOOLS selects enabled renderers", () => {
-  publishCodePreviewToolsEnvironment("write,edit,grep");
-  assert.deepEqual([...getEnabledCodePreviewTools()], ["write", "edit", "grep"]);
-  assert.equal(formatEnabledCodePreviewTools(), "write, edit, grep");
-});
-
-test("publishing CODE_PREVIEW_TOOLS preserves performance projection values", () => {
-  const previousPerformance = codePreviewPerformanceConfig;
-  const customPerformance = { ...previousPerformance, cacheLimit: 7 };
-  publishCodePreviewEnvironmentProjection(customPerformance, undefined);
-  try {
-    publishCodePreviewToolsEnvironment("grep");
-    assert.equal(codePreviewPerformanceConfig.cacheLimit, 7);
-  } finally {
-    publishCodePreviewEnvironmentProjection(previousPerformance, previousCodePreviewTools);
-  }
+  const restoreSettings = applyPresentationSettings({});
+  const previousTools = codePreviewToolsEnvironmentValue;
+  return () => {
+    restoreSettings();
+    publishCodePreviewToolsEnvironment(previousTools);
+  };
 });
 
 test("settings select enabled renderers when CODE_PREVIEW_TOOLS is unset", () => {
   publishCodePreviewToolsEnvironment(undefined);
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "write", "edit"] });
   assert.deepEqual([...getEnabledCodePreviewTools()], ["bash", "write", "edit"]);
-  assert.equal(formatEnabledCodePreviewTools(), "bash, write, edit");
 });
 
 test("CODE_PREVIEW_TOOLS overrides configured renderer settings", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, tools: ["bash", "write", "edit"] });
-  publishCodePreviewToolsEnvironment("grep");
-  assert.deepEqual([...getEnabledCodePreviewTools()], ["grep"]);
+  publishCodePreviewToolsEnvironment("write,edit,grep");
+  assert.deepEqual([...getEnabledCodePreviewTools()], ["write", "edit", "grep"]);
 });
 
 test("invalid CODE_PREVIEW_TOOLS values fall back to configured renderers", () => {

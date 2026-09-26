@@ -2,7 +2,11 @@ import type { WordChangeConfidence } from "./types";
 
 export type ChangedLineScoreAt = (removedPosition: number, addedPosition: number) => number;
 
-export type TopTwoCandidateValues = { best: number; second: number };
+type ChangedLinePositions = { removedPosition: number; addedPosition: number };
+
+export type ChangedLinePositionMatch = ChangedLinePositions & { confidence: WordChangeConfidence };
+
+type TopTwoCandidateValues = { best: number; second: number };
 
 export const MIN_CHANGED_LINE_PAIR_SCORE = 0.45;
 export const MIN_POSITIONAL_FALLBACK_PAIR_SCORE = 0.28;
@@ -65,7 +69,24 @@ export function linePairConfidence(score: number, competingScore: number): WordC
   return "medium";
 }
 
-export function topTwoCandidateValues<T>(
+export function competingCandidateValues<T extends ChangedLinePositions>(
+  candidates: T[],
+  value: (candidate: T) => number,
+): (candidate: T) => number {
+  const removed = topTwoCandidateValues(
+    candidates,
+    (candidate) => candidate.removedPosition,
+    value,
+  );
+  const added = topTwoCandidateValues(candidates, (candidate) => candidate.addedPosition, value);
+  return (candidate) =>
+    Math.max(
+      competingCandidateValue(removed.get(candidate.removedPosition), value(candidate)),
+      competingCandidateValue(added.get(candidate.addedPosition), value(candidate)),
+    );
+}
+
+function topTwoCandidateValues<T>(
   candidates: T[],
   position: (candidate: T) => number,
   value: (candidate: T) => number,
@@ -83,7 +104,7 @@ export function topTwoCandidateValues<T>(
   return values;
 }
 
-export function competingCandidateValue(
+function competingCandidateValue(
   values: TopTwoCandidateValues | undefined,
   candidateValue: number,
 ): number {

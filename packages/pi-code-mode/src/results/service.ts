@@ -23,7 +23,6 @@ export interface ResultsContract {
     kind?: ResultArtifact["kind"],
   ) => Effect.Effect<string | undefined>;
   readonly get: (id: string) => Effect.Effect<ResultArtifact | undefined>;
-  readonly clear: Effect.Effect<void>;
 }
 export class CodeModeResults extends Context.Service<CodeModeResults, ResultsContract>()(
   "pi-code-mode/results/service/CodeModeResults",
@@ -56,7 +55,6 @@ export class CodeModeResults extends Context.Service<CodeModeResults, ResultsCon
           Ref.get(state).pipe(
             Effect.map((s) => (s.open ? s.entries.find((entry) => entry.id === id) : undefined)),
           ),
-        clear: Ref.update(state, (s) => ({ ...s, open: false, entries: [] })),
       } satisfies ResultsContract;
     }),
   );

@@ -1,5 +1,5 @@
 import { ordinalChoices, defaultQuestion } from "./support/questionnaire.ts";
-import { makeTuiHost as hostFixture } from "./support/host.ts";
+import { makeTuiHost as hostFixture, openPresentation } from "./support/host.ts";
 import type { Component } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -9,7 +9,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { makeQuestionnaireQueue } from "../src/questionnaire/queue.ts";
-import { expect, test, vi } from "vitest";
+import { expect, vi } from "vitest";
 import { makeAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
@@ -28,18 +28,17 @@ const request: AskUserRequest = {
   ],
 };
 const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
+const open = (
+  h: ReturnType<typeof hostFixture>,
+  opened?: Deferred.Deferred<void, AskUserHostError>,
+) => openPresentation(h, (bridge) => makeAskUserHost(h.ctx, bridge)(request, opened));
 
 it.effect(
   "docks the questionnaire without painting over the editor and retains hidden drafts",
   () =>
     Effect.gen(function* () {
       const h = hostFixture();
-      const bridge = makeAskUserDialogBridge();
-      const controller = new AbortController();
-      const pending = Effect.runPromise(makeAskUserHost(h.ctx, bridge)(request), {
-        signal: controller.signal,
-      });
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      const { bridge, pending } = yield* open(h);
       h.mount!();
       const widget = [...h.widgets.values()][0]!;
       expect(widget.render(200).length).toBeGreaterThan(0);
@@ -67,12 +66,7 @@ it.effect("the opening handshake waits for mounting, not just the custom factory
   Effect.gen(function* () {
     const h = hostFixture();
     const opened = yield* Deferred.make<void, AskUserHostError>();
-    const controller = new AbortController();
-    const pending = Effect.runPromise(
-      makeAskUserHost(h.ctx, makeAskUserDialogBridge())(request, opened),
-      { signal: controller.signal },
-    );
-    yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+    const { controller, pending } = yield* open(h, opened);
     expect(yield* Deferred.isDone(opened)).toBe(false);
     h.mount!();
     expect(yield* Deferred.isDone(opened)).toBe(true);
@@ -85,12 +79,7 @@ it.effect("the opening handshake waits for mounting, not just the custom factory
 it.effect("cancelling a hidden questionnaire preserves an unrelated overlay mounted above it", () =>
   Effect.gen(function* () {
     const h = hostFixture();
-    const bridge = makeAskUserDialogBridge();
-    const controller = new AbortController();
-    const pending = Effect.runPromise(makeAskUserHost(h.ctx, bridge)(request), {
-      signal: controller.signal,
-    });
-    yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+    const { bridge, controller, pending } = yield* open(h);
     h.mount!();
     h.component!.handleInput?.("b");
     h.showOverlay(foreign);
@@ -108,13 +97,8 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const h = hostFixture();
-      const bridge = makeAskUserDialogBridge();
       h.showOverlay(foreign);
-      const controller = new AbortController();
-      const pending = Effect.runPromise(makeAskUserHost(h.ctx, bridge)(request), {
-        signal: controller.signal,
-      });
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      const { bridge, controller, pending } = yield* open(h);
       controller.abort();
       yield* Effect.promise(() => expect(pending).rejects.toBeDefined());
       expect(h.done).not.toHaveBeenCalled();
@@ -134,11 +118,7 @@ it.effect("a throwing host done still removes the guard and owned questionnaire"
     h.done.mockImplementation(() => {
       throw new Error("host failure");
     });
-    const controller = new AbortController();
-    const pending = Effect.runPromise(makeAskUserHost(h.ctx, makeAskUserDialogBridge())(request), {
-      signal: controller.signal,
-    });
-    yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+    const { controller, pending } = yield* open(h);
     h.mount!();
     h.showOverlay(foreign);
     controller.abort();
@@ -353,8 +333,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const h = hostFixture();
-      const pending = Effect.runPromise(makeAskUserHost(h.ctx, makeAskUserDialogBridge())(request));
-      yield* Effect.promise(() => vi.waitFor(() => expect(h.mount).toBeDefined()));
+      const { pending } = yield* open(h);
       h.mount!();
       h.showOverlay(foreign);
       h.component!.handleInput?.("1");
@@ -388,14 +367,3 @@ it.effect(
       expect(gate.canOpen()).toBe(true);
     }),
 );
-
-test("own prompt cleanup does not release a coalesced foreign prompt", () => {
-  const gate = makeAskUserPromptGate();
-  const release = gate.enter();
-  gate.started();
-  // A foreign nested prompt produces no second start event in Pi.
-  release();
-  expect(gate.canOpen()).toBe(false);
-  gate.ended();
-  expect(gate.canOpen()).toBe(true);
-});

@@ -4,17 +4,6 @@ import { CODE_MODE_FIELD_SCHEMAS, type CodeModeConfig } from "../config/schema.t
 import { callEntryDetails, type CodeModeToolDetails } from "./format.ts";
 import { clampModelVisibleText, utf8ByteLength } from "./limits.ts";
 
-export type CodeModeEffectiveLimits = Readonly<
-  Pick<
-    CodeModeConfig,
-    | "timeoutMs"
-    | "maxToolCalls"
-    | "maxOutputBytes"
-    | "maxSourceBytes"
-    | "maxCumulativeChildOutputBytes"
-  >
->;
-
 /** Replay checks reuse the configuration's numeric bounds without validating producer output. */
 export const CodeModeStatusSchema = Schema.Struct({
   action: Schema.Literal("status"),
@@ -27,10 +16,7 @@ export const CodeModeStatusSchema = Schema.Struct({
   }),
 });
 
-export interface CodeModeStatus {
-  readonly action: "status";
-  readonly limits: CodeModeEffectiveLimits;
-}
+export type CodeModeStatus = typeof CodeModeStatusSchema.Type;
 
 export type StatusDetails = CodeModeToolDetails & { readonly status: CodeModeStatus };
 

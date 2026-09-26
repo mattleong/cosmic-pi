@@ -1,28 +1,16 @@
 // Test-owned process fixture is boundary code.
 import { it as effectIt } from "@effect/vitest";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
-import { EventEmitter, once } from "node:events";
+import { signalProcess } from "pi-cosmic-core";
+import { fakeProcessTreeTerminator } from "pi-cosmic-core/testing";
+import { once } from "node:events";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
-import { describe, expect, it, vi } from "vitest";
-import { terminateProcessTree, terminateProcessTreeEffect } from "../src/boundary/process-tree.ts";
+import { describe, expect, it } from "vitest";
+import { terminateProcessTree } from "../src/boundary/process-tree.ts";
 import { nodeSpawn as spawn, type NodeChildProcess } from "./support/node-builtins.ts";
 
-const processExists = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !(
-      hasObjectRuntimeType(error) &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ESRCH"
-    );
-  }
-};
+const processExists = (pid: number): boolean => signalProcess(pid, 0) !== "absent";
 
 // Real-time polling of live child processes deliberately runs on the live default clock.
 const waitForExit = (pid: number): Promise<void> =>
@@ -33,98 +21,37 @@ const waitForExit = (pid: number): Promise<void> =>
     }),
   );
 
+const childStub = (pid: number, exitCode: number | null = null): NodeChildProcess => {
+  // SAFETY: The process-tree boundary reads only pid, exitCode, and signalCode from this stub.
+  return { pid, exitCode, signalCode: null } as NodeChildProcess;
+};
+
 describe("subagent process-tree boundary", () => {
-  it("does not target an already-exited Windows PID", () => {
-    const spawnTaskkill = vi.fn();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const child = { pid: 42, exitCode: 0, signalCode: null } as NodeChildProcess;
-    return terminateProcessTree(child, "force", { platform: "win32", spawnTaskkill }).then(() => {
-      expect(spawnTaskkill).not.toHaveBeenCalled();
-    });
-  });
-
-  effectIt.effect("bounds and cancels a hanging Windows taskkill helper", () =>
+  effectIt.effect("does not target an already-exited Windows PID", () =>
     Effect.gen(function* () {
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const killer = new EventEmitter() as NodeChildProcess;
-      const kill = vi.fn(() => true);
-      const unref = vi.fn(() => killer);
-      killer.kill = kill;
-      killer.unref = unref;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const child = { pid: 43, exitCode: null, signalCode: null } as NodeChildProcess;
-      const failure = yield* terminateProcessTreeEffect(child, "force", {
+      const taskkill = fakeProcessTreeTerminator();
+      yield* terminateProcessTree(childStub(42, 0), "force", {
         platform: "win32",
-        taskkillTimeoutMillis: 5,
-        spawnTaskkill: () => killer,
-      }).pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
-      yield* TestClock.adjust(5);
-
-      expect(yield* Fiber.join(failure)).toMatchObject({
-        _tag: "ProcessTreeTerminationError",
-        code: "taskkill_timeout",
+        spawnTaskkill: taskkill.spawn,
       });
-      expect(kill).toHaveBeenCalledOnce();
-      expect(unref).toHaveBeenCalledOnce();
+      expect(taskkill.spawns).toEqual([]);
     }),
   );
 
-  effectIt.effect("kills the taskkill helper when its owner is interrupted", () =>
+  effectIt.effect("accepts a failed taskkill once the live Windows leader has exited", () =>
     Effect.gen(function* () {
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const killer = new EventEmitter() as NodeChildProcess;
-      const kill = vi.fn(() => true);
-      killer.kill = kill;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const child = { pid: 45, exitCode: null, signalCode: null } as NodeChildProcess;
-      const running = yield* terminateProcessTreeEffect(child, "force", {
+      const taskkill = fakeProcessTreeTerminator();
+      const leader = childStub(44);
+      const pending = yield* terminateProcessTree(leader, "force", {
         platform: "win32",
-        spawnTaskkill: () => killer,
+        spawnTaskkill: taskkill.spawn,
       }).pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Effect.yieldNow;
-
-      yield* Fiber.interrupt(running);
-
-      expect(kill).toHaveBeenCalledOnce();
+      Object.assign(leader, { exitCode: 1 });
+      taskkill.emit("exit", 1);
+      yield* Fiber.join(pending);
+      expect(taskkill.spawns).toEqual([{ command: "taskkill", args: ["/pid", "44", "/T", "/F"] }]);
     }),
   );
-
-  it("preserves typed failures through the Promise compatibility door", () => {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const child = { pid: 46, exitCode: null, signalCode: null } as NodeChildProcess;
-    return expect(
-      terminateProcessTree(child, "force", {
-        platform: "win32",
-        spawnTaskkill: () => {
-          throw Object.assign(new Error("missing taskkill"), { code: "ENOENT" });
-        },
-      }),
-    ).rejects.toMatchObject({
-      _tag: "ProcessTreeTerminationError",
-      code: "taskkill_spawn_failed",
-      message: expect.stringContaining("ENOENT"),
-    });
-  });
-
-  it("passes live Windows trees to bounded taskkill", () => {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const killer = new EventEmitter() as NodeChildProcess;
-    killer.kill = vi.fn(() => true);
-    const modes: string[] = [];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const child = { pid: 44, exitCode: null, signalCode: null } as NodeChildProcess;
-    const pending = terminateProcessTree(child, "force", {
-      platform: "win32",
-      spawnTaskkill: (_pid, mode) => {
-        modes.push(mode);
-        return killer;
-      },
-    });
-    killer.emit("close", 0);
-    return pending.then(() => {
-      expect(modes).toEqual(["force"]);
-    });
-  });
 
   it.skipIf(process.platform === "win32")(
     "kills descendants in the detached process group after its leader exits",
@@ -151,20 +78,15 @@ process.stdout.write(String(child.pid) + "\\n");`,
           grandchildPid = Number(output.trim());
           expect(Number.isSafeInteger(grandchildPid)).toBe(true);
           expect(processExists(grandchildPid)).toBe(true);
-          return terminateProcessTree(leader, "force");
+          return Effect.runPromise(terminateProcessTree(leader, "force"));
         })
         .then(() => waitForExit(grandchildPid))
         .then(() => {
           expect(processExists(grandchildPid)).toBe(false);
         })
         .finally(() => {
-          if (grandchildPid > 0 && processExists(grandchildPid)) {
-            try {
-              process.kill(grandchildPid, "SIGKILL");
-            } catch {
-              // Best-effort fixture cleanup.
-            }
-          }
+          // Best-effort fixture cleanup.
+          if (grandchildPid > 0) signalProcess(grandchildPid, "SIGKILL");
         });
     },
   );

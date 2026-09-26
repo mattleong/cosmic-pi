@@ -1,11 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   deserializeMessage,
-  MissingRequiredClientCapabilityError,
-  UnsupportedProtocolVersionError,
-  UrlElicitationRequiredError,
   serializeMessage,
+  type JSONRPCErrorResponse,
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import * as Cause from "effect/Cause";
@@ -19,15 +17,17 @@ import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Core from "pi-cosmic-core";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { pausedScheduler, yieldUntil } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpConnection } from "../../src/client/model.ts";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
-import type { McpEffectiveServer, McpSettings } from "../../src/config/model.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
-import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
+import { McpExecution } from "../../src/tools/service.ts";
+import { optionalFixture, projection } from "../fixtures/optional-features.ts";
+import { protocolResponses } from "../fixtures/sdk-protocol-errors.ts";
+import { stdioDefinition, testServer, testSettings } from "../fixtures/services.ts";
 import {
   makeSdkStdioTransport,
   SdkStdioTransportError,
@@ -43,16 +43,9 @@ const options = {
   requestTimeoutMs: 2_000,
   cleanupTimeoutMs: 1_000,
 };
+const subscribe = { action: "resources.subscribe", server: "fixture", uri: "test://one" };
+const unsubscribe = { ...subscribe, action: "resources.unsubscribe" };
 
-const macOnly = <E, R>(effect: Effect.Effect<void, E, R>) =>
-  process.platform === "darwin" ? effect : Effect.void;
-const withConnection = <E, R>(f: (connection: McpConnection) => Effect.Effect<void, E, R>) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const connection = yield* openSdkStdio(options);
-      yield* f(connection);
-    }),
-  );
 const call = (connection: McpConnection, text: string) =>
   connection.request({ action: "tools.call", tool: "echo", arguments: { text } });
 const foreign = <A>(run: () => Promise<A>) =>
@@ -61,62 +54,24 @@ const foreign = <A>(run: () => Promise<A>) =>
     catch: (error) =>
       error instanceof SdkStdioTransportError ? error : SdkStdioTransportError.of("read"),
   });
-
-const pausedScheduler = () => {
-  const tasks: Array<{ task: () => void; priority: number }> = [];
-  const dispatcher = new Scheduler.MixedScheduler().makeDispatcher();
-  let resumed = false;
-  const scheduler: Scheduler.Scheduler = {
-    executionMode: "async",
-    shouldYield: (fiber) => fiber.currentOpCount >= fiber.maxOpsBeforeYield,
-    makeDispatcher: () => ({
-      scheduleTask: (task, priority) => {
-        if (resumed) dispatcher.scheduleTask(task, priority);
-        else tasks.push({ task, priority });
-      },
-      flush: () => {
-        while (tasks.length) tasks.shift()!.task();
-      },
-    }),
-  };
-  return {
-    scheduler,
-    step: () => tasks.shift()?.task(),
-    resume: () => {
-      resumed = true;
-      for (const { task, priority } of tasks.splice(0)) dispatcher.scheduleTask(task, priority);
-    },
-  };
-};
-
-afterEach(() => vi.restoreAllMocks());
-
-it.live("connects, lists, preserves empty cursors, and calls tools", () =>
-  macOnly(
-    withConnection((connection) =>
-      Effect.gen(function* () {
-        expect(connection.protocolVersion).toBe("2025-11-25");
-        const listed = yield* connection.request({ action: "tools.list", cursor: "" });
-        expect(listed.result).toMatchObject({ nextCursor: "empty-cursor-preserved" });
-        expect((yield* call(connection, "hello")).result).toMatchObject({ isError: false });
-        expect((yield* call(connection, "error")).result).toMatchObject({ isError: true });
-      }),
-    ),
-  ),
-);
-
-it.live.each([600_001, 3_600_000])(
-  "accepts a %i ms request timeout for an immediately completed stdio call",
-  (requestTimeoutMs) =>
-    macOnly(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const connection = yield* openSdkStdio({ ...options, requestTimeoutMs });
-          expect((yield* call(connection, "hello")).outcome).toBe("completed");
+/** Records every real duplex process the SDK stdio boundary acquires. */
+const recordAcquired = (onAcquire?: () => void) => {
+  const acquired: Core.DuplexProcessHandle[] = [];
+  const nativeOpen = Core.openDuplexProcess;
+  vi.spyOn(Core, "openDuplexProcess").mockImplementation((input) =>
+    nativeOpen(input).pipe(
+      Effect.tap((handle) =>
+        Effect.sync(() => {
+          acquired.push(handle);
+          onAcquire?.();
         }),
       ),
     ),
-);
+  );
+  return acquired;
+};
+
+afterEach(() => vi.restoreAllMocks());
 
 it.effect.each([{ requestTimeoutMs: 3_600_001 }, { connectTimeoutMs: 600_001 }])(
   "rejects timeouts beyond the independent request and connect maxima: %j",
@@ -129,144 +84,168 @@ it.effect.each([{ requestTimeoutMs: 3_600_001 }, { connectTimeoutMs: 600_001 }])
     }),
 );
 
-it.live("cancels an admitted request while a concurrent peer completes", () =>
-  macOnly(
-    withConnection((connection) =>
-      Effect.gen(function* () {
-        const slow = yield* call(connection, "wait").pipe(
-          Effect.forkScoped({ startImmediately: true }),
-        );
-        expect((yield* call(connection, "stats")).result).toMatchObject({
-          content: [{ text: "waiting=1,cancelled=0" }],
-        });
-        const peer = yield* call(connection, "wait-peer").pipe(
-          Effect.forkScoped({ startImmediately: true }),
-        );
-        expect((yield* call(connection, "stats")).result).toMatchObject({
-          content: [{ text: "waiting=2,cancelled=0" }],
-        });
-        yield* Fiber.interrupt(slow);
-        expect((yield* call(connection, "stats")).result).toMatchObject({
-          content: [{ text: "waiting=1,cancelled=1" }],
-        });
-        yield* call(connection, "release");
-        expect((yield* Fiber.join(peer)).result).toMatchObject({
-          content: [{ text: "wait-peer" }],
-        });
-      }),
-    ),
-  ),
-);
+describe.skipIf(process.platform !== "darwin")("macOS stdio child processes", () => {
+  it.live("connects, lists, preserves empty cursors, and calls tools", () =>
+    Effect.gen(function* () {
+      const connection = yield* openSdkStdio(options);
+      expect(connection.protocolVersion).toBe("2025-11-25");
+      const listed = yield* connection.request({ action: "tools.list", cursor: "" });
+      expect(listed.result).toMatchObject({ nextCursor: "empty-cursor-preserved" });
+      expect((yield* call(connection, "hello")).result).toMatchObject({ isError: false });
+      expect((yield* call(connection, "error")).result).toMatchObject({ isError: true });
+    }),
+  );
 
-it.live("closes the process before returning and refuses late calls", () =>
-  macOnly(
-    Effect.scoped(
+  it.live.each([600_001, 3_600_000])(
+    "accepts a %i ms request timeout for an immediately completed stdio call",
+    (requestTimeoutMs) =>
       Effect.gen(function* () {
-        const nativeOpen = Core.openDuplexProcess;
-        const acquired: Core.DuplexProcessHandle[] = [];
-        vi.spyOn(Core, "openDuplexProcess").mockImplementation((input) =>
-          nativeOpen(input).pipe(
-            Effect.tap((handle) =>
-              Effect.sync(() => {
-                acquired.push(handle);
-              }),
-            ),
-          ),
-        );
-        const connection = yield* openSdkStdio(options);
-        yield* connection.close;
-        yield* connection.close;
-        expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
-        const late = yield* connection.request({ action: "tools.list" }).pipe(Effect.result);
-        expect(late).toMatchObject({
-          _tag: "Failure",
-          failure: { kind: "connection", outcome: "not-sent" },
-        });
+        const connection = yield* openSdkStdio({ ...options, requestTimeoutMs });
+        expect((yield* call(connection, "hello")).outcome).toBe("completed");
       }),
-    ),
-  ),
-);
+  );
 
-it.live("failed initialization cleans up while the caller scope stays open", () =>
-  macOnly(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const nativeOpen = Core.openDuplexProcess;
-        const acquired: Core.DuplexProcessHandle[] = [];
-        vi.spyOn(Core, "openDuplexProcess").mockImplementation((input) =>
-          nativeOpen(input).pipe(
-            Effect.tap((handle) =>
-              Effect.sync(() => {
-                acquired.push(handle);
-              }),
-            ),
-          ),
-        );
-        const result = yield* openSdkStdio({ ...options, args: [fixture, "fail-init"] }).pipe(
-          Effect.result,
-        );
-        expect(result._tag).toBe("Failure");
-        expect(String(result)).not.toContain("private-fixture");
-        expect(acquired).toHaveLength(1);
-        expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
-      }),
-    ),
-  ),
-);
+  it.live("cancels an admitted request while a concurrent peer completes", () =>
+    Effect.gen(function* () {
+      const connection = yield* openSdkStdio(options);
+      const slow = yield* call(connection, "wait").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect((yield* call(connection, "stats")).result).toMatchObject({
+        content: [{ text: "waiting=1,cancelled=0" }],
+      });
+      const peer = yield* call(connection, "wait-peer").pipe(
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      expect((yield* call(connection, "stats")).result).toMatchObject({
+        content: [{ text: "waiting=2,cancelled=0" }],
+      });
+      yield* Fiber.interrupt(slow);
+      expect((yield* call(connection, "stats")).result).toMatchObject({
+        content: [{ text: "waiting=1,cancelled=1" }],
+      });
+      yield* call(connection, "release");
+      expect((yield* Fiber.join(peer)).result).toMatchObject({
+        content: [{ text: "wait-peer" }],
+      });
+    }),
+  );
 
-it.live("interrupting initialization cleans up before parent scope release", () =>
-  macOnly(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const nativeOpen = Core.openDuplexProcess;
-        const acquired: Core.DuplexProcessHandle[] = [];
-        const spawned = yield* Deferred.make<void>();
-        vi.spyOn(Core, "openDuplexProcess").mockImplementation((input) =>
-          nativeOpen(input).pipe(
-            Effect.tap((handle) =>
-              Effect.sync(() => {
-                acquired.push(handle);
-                Deferred.doneUnsafe(spawned, Effect.void);
-              }),
-            ),
-          ),
-        );
-        const opening = yield* openSdkStdio({ ...options, args: [fixture, "hang-init"] }).pipe(
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(spawned);
-        yield* Fiber.interrupt(opening);
-        expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
-      }),
-    ),
-  ),
-);
+  it.live("closes the process before returning and refuses late calls", () =>
+    Effect.gen(function* () {
+      const acquired = recordAcquired();
+      const connection = yield* openSdkStdio(options);
+      yield* connection.close;
+      yield* connection.close;
+      expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
+      expect(yield* connection.request({ action: "tools.list" }).pipe(Effect.flip)).toMatchObject({
+        kind: "connection",
+        outcome: "not-sent",
+      });
+    }),
+  );
 
-it.live("bounds outbound and inbound messages without exposing child output", () =>
-  macOnly(
-    Effect.scoped(
+  it.live("failed initialization cleans up while the caller scope stays open", () =>
+    Effect.gen(function* () {
+      const acquired = recordAcquired();
+      const result = yield* openSdkStdio({ ...options, args: [fixture, "fail-init"] }).pipe(
+        Effect.result,
+      );
+      expect(result._tag).toBe("Failure");
+      expect(String(result)).not.toContain("private-fixture");
+      expect(acquired).toHaveLength(1);
+      expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
+    }),
+  );
+
+  it.live("interrupting initialization cleans up before parent scope release", () =>
+    Effect.gen(function* () {
+      const spawned = yield* Deferred.make<void>();
+      const acquired = recordAcquired(() => Deferred.doneUnsafe(spawned, Effect.void));
+      const opening = yield* openSdkStdio({ ...options, args: [fixture, "hang-init"] }).pipe(
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(spawned);
+      yield* Fiber.interrupt(opening);
+      expect(yield* acquired[0]!.cleanupState).toBe("confirmed");
+    }),
+  );
+
+  it.live("bounds outbound and inbound messages without exposing child output", () =>
+    Effect.gen(function* () {
+      const connection = yield* openSdkStdio({
+        ...options,
+        requestBytes: 1024,
+        responseBytes: 1024,
+      });
+      expect(yield* call(connection, "private-input".repeat(1024)).pipe(Effect.flip)).toMatchObject(
+        { kind: "invalid-input", outcome: "not-sent" },
+      );
+      expect((yield* call(connection, "alive")).result).toMatchObject({ isError: false });
+      const overflow = yield* call(connection, "oversized").pipe(Effect.result);
+      expect(overflow).toMatchObject({
+        _tag: "Failure",
+        failure: { kind: "output-limit", outcome: "unknown" },
+      });
+      expect(String(overflow)).not.toContain("private-output");
+    }),
+  );
+
+  it.live.each(["explicit close", "scope teardown"])(
+    "modern metadata subscriptions confirm cleanup and allow same-server reopen after %s",
+    (mode) =>
       Effect.gen(function* () {
-        const connection = yield* openSdkStdio({
-          ...options,
-          requestBytes: 1024,
-          responseBytes: 1024,
+        const script = `
+          import readline from "node:readline";
+          const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+          readline.createInterface({ input: process.stdin }).on("line", line => {
+            const m = JSON.parse(line);
+            if (m.method === "server/discover") send({ jsonrpc: "2.0", id: m.id, result: {
+              resultType: "complete", supportedVersions: ["2026-07-28"],
+              capabilities: { tools: { listChanged: true } }
+            } });
+            if (m.method === "subscriptions/listen") send({ jsonrpc: "2.0",
+              method: "notifications/subscriptions/acknowledged", params: {
+                notifications: m.params.notifications,
+                _meta: { "io.modelcontextprotocol/subscriptionId": m.id }
+              }
+            });
+          });
+        `;
+        const connector = yield* McpConnector.pipe(Effect.provide(McpConnector.layer));
+        const server = testServer(`metadata-cleanup-${mode}`, {
+          identity: `metadata-cleanup-${mode}`,
+          directory: process.cwd(),
+          scope: "project",
+          definition: stdioDefinition({
+            command: process.execPath,
+            args: ["--input-type=module", "-e", script],
+          }),
         });
-        const large = yield* call(connection, "private-input".repeat(1024)).pipe(Effect.result);
-        expect(large).toMatchObject({
-          _tag: "Failure",
-          failure: { kind: "invalid-input", outcome: "not-sent" },
+        const settings = testSettings({
+          connectTimeoutMs: 2_000,
+          requestTimeoutMs: 2_000,
+          idleTimeoutMs: 1_000,
         });
-        expect((yield* call(connection, "alive")).result).toMatchObject({ isError: false });
-        const overflow = yield* call(connection, "oversized").pipe(Effect.result);
-        expect(overflow).toMatchObject({
-          _tag: "Failure",
-          failure: { kind: "output-limit", outcome: "unknown" },
-        });
-        expect(String(overflow)).not.toContain("private-output");
+        const cleanup: boolean[] = [];
+        for (let round = 0; round < 2; round++) {
+          const owner = yield* Scope.fork(yield* Effect.scope);
+          const connection = yield* connector
+            .open(server, settings, undefined, (confirmed) => cleanup.push(confirmed))
+            .pipe(Effect.provideService(Scope.Scope, owner));
+          expect(connection.protocolVersion).toBe("2026-07-28");
+          if (mode === "explicit close") yield* connection.close;
+          yield* Scope.close(owner, Exit.void);
+          expect(yield* connection.health).toMatchObject({
+            closed: true,
+            cleanupUnconfirmed: false,
+          });
+          yield* connection.close;
+          expect(cleanup).toEqual(Array.from({ length: round + 1 }, () => true));
+        }
       }),
-    ),
-  ),
-);
+  );
+});
 
 interface ProcessState {
   readers: number;
@@ -276,149 +255,91 @@ interface ProcessState {
   cleanup: Core.DuplexProcessCleanupState;
 }
 
-const makeProcess = Effect.gen(function* () {
-  const output = yield* Queue.unbounded<Uint8Array, Core.DuplexProcessError | Cause.Done>();
-  const writeGate = yield* Deferred.make<void>();
-  const closeGate = yield* Deferred.make<void>();
-  const writeEntered = yield* Deferred.make<void>();
-  const closeEntered = yield* Deferred.make<void>();
-  const writes: JSONRPCMessage[] = [];
-  const state: ProcessState = {
-    readers: 0,
-    holdWrites: false,
-    holdClose: false,
-    closes: 0,
-    cleanup: "pending",
-  };
-  const reader = <E>(stream: Stream.Stream<Uint8Array, E>) =>
-    Stream.fromEffect(
-      Effect.sync(() => {
-        state.readers++;
-      }),
-    ).pipe(
-      Stream.flatMap(() => stream),
-      Stream.ensuring(
+const initializeReply = {
+  result: {
+    protocolVersion: "2025-11-25",
+    capabilities: { tools: {} },
+    serverInfo: { name: "fake-process", version: "1" },
+  },
+};
+
+/** Records writes and answers requests by method; initialize succeeds unless overridden. */
+const makeProcess = (
+  responses: Readonly<Record<string, Pick<JSONRPCErrorResponse, "error">>> = {},
+) =>
+  Effect.gen(function* () {
+    const output = yield* Queue.unbounded<Uint8Array, Core.DuplexProcessError | Cause.Done>();
+    const writeGate = yield* Deferred.make<void>();
+    const closeGate = yield* Deferred.make<void>();
+    const writeEntered = yield* Deferred.make<void>();
+    const closeEntered = yield* Deferred.make<void>();
+    const writes: JSONRPCMessage[] = [];
+    const state: ProcessState = {
+      readers: 0,
+      holdWrites: false,
+      holdClose: false,
+      closes: 0,
+      cleanup: "pending",
+    };
+    const reader = <E>(stream: Stream.Stream<Uint8Array, E>) =>
+      Stream.fromEffect(
         Effect.sync(() => {
-          state.readers--;
+          state.readers++;
         }),
-      ),
-    );
-  const handle: Core.DuplexProcessHandle = {
-    pid: 1,
-    stdout: reader(Stream.fromQueue(output)),
-    stderr: reader(Stream.never),
-    write: (bytes) =>
-      Effect.gen(function* () {
-        if (state.holdWrites) {
-          yield* Deferred.succeed(writeEntered, undefined);
-          yield* Deferred.await(writeGate);
-        }
-        const message = deserializeMessage(new TextDecoder().decode(bytes));
-        writes.push(message);
-        if ("method" in message && message.method === "initialize" && "id" in message) {
+      ).pipe(
+        Stream.flatMap(() => stream),
+        Stream.ensuring(
+          Effect.sync(() => {
+            state.readers--;
+          }),
+        ),
+      );
+    const handle: Core.DuplexProcessHandle = {
+      pid: 1,
+      stdout: reader(Stream.fromQueue(output)),
+      stderr: reader(Stream.never),
+      write: (bytes) =>
+        Effect.gen(function* () {
+          if (state.holdWrites) {
+            yield* Deferred.succeed(writeEntered, undefined);
+            yield* Deferred.await(writeGate);
+          }
+          const message = deserializeMessage(new TextDecoder().decode(bytes));
+          writes.push(message);
+          if (!("method" in message) || !("id" in message)) return;
+          const reply =
+            responses[message.method] ??
+            (message.method === "initialize" ? initializeReply : undefined);
+          if (reply === undefined) return;
           yield* Queue.offer(
             output,
             new TextEncoder().encode(
-              serializeMessage({
-                jsonrpc: "2.0",
-                id: message.id,
-                result: {
-                  protocolVersion: "2025-11-25",
-                  capabilities: { tools: {} },
-                  serverInfo: { name: "fake-process", version: "1" },
-                },
-              }),
+              serializeMessage({ jsonrpc: "2.0", id: message.id, ...reply }),
             ),
           );
-        }
+        }),
+      exit: Effect.never,
+      close: Effect.gen(function* () {
+        state.closes++;
+        yield* Deferred.succeed(closeEntered, undefined);
+        if (state.holdClose) yield* Deferred.await(closeGate);
+        state.cleanup = "confirmed";
       }),
-    exit: Effect.never,
-    close: Effect.gen(function* () {
-      state.closes++;
-      yield* Deferred.succeed(closeEntered, undefined);
-      if (state.holdClose) yield* Deferred.await(closeGate);
-      state.cleanup = "confirmed";
-    }),
-    cleanupState: Effect.sync(() => state.cleanup),
-  };
-  return { handle, state, writes, output, writeGate, writeEntered, closeGate, closeEntered };
-});
-
-const unsupportedErrors = [
-  {
-    name: "URL elicitation",
-    error: new UrlElicitationRequiredError(
-      [
-        {
-          mode: "url",
-          url: "https://private-url.test",
-          elicitationId: "private-id",
-          message: "private-prompt",
-        },
-      ],
-      "private-server-message",
-    ),
-  },
-  {
-    name: "required client capability",
-    error: new MissingRequiredClientCapabilityError(
-      { requiredCapabilities: { experimental: { "private-capability": {} } } },
-      "private-server-message",
-    ),
-  },
-  {
-    name: "protocol version",
-    error: new UnsupportedProtocolVersionError(
-      { requested: "private-version", supported: ["private-supported"] },
-      "private-server-message",
-    ),
-  },
-];
-
-const protocolResponses = [
-  ...unsupportedErrors.map((entry) => ({ ...entry, kind: "unsupported", reason: undefined })),
-  ...protocolErrors,
-].map(({ name, error, kind, reason }) => ({
-  name,
-  kind,
-  reason,
-  response: { error: { code: error.code, message: error.message, data: error.data } },
-}));
+      cleanupState: Effect.sync(() => state.cleanup),
+    };
+    return { handle, state, writes, output, writeGate, writeEntered, closeGate, closeEntered };
+  });
+const startTransport = (fake: { readonly handle: Core.DuplexProcessHandle }) =>
+  makeSdkStdioTransport(fake.handle, { maxBufferSize: 1024, maxWriteBytes: 1024 }).pipe(
+    Effect.tap((transport) => foreign(() => transport.start())),
+  );
 
 it.effect.each(protocolResponses)(
   "classifies and redacts $name without replay",
   ({ response, kind, reason }) =>
     Effect.gen(function* () {
-      const fake = yield* makeProcess;
-      vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
-        Effect.succeed({
-          ...fake.handle,
-          write: (bytes) =>
-            fake.handle.write(bytes).pipe(
-              Effect.andThen(
-                Effect.gen(function* () {
-                  const message = deserializeMessage(new TextDecoder().decode(bytes));
-                  if (
-                    !("id" in message) ||
-                    !("method" in message) ||
-                    message.method !== "tools/call"
-                  )
-                    return;
-                  yield* Queue.offer(
-                    fake.output,
-                    new TextEncoder().encode(
-                      serializeMessage({
-                        jsonrpc: "2.0",
-                        id: message.id,
-                        ...response,
-                      }),
-                    ),
-                  );
-                }),
-              ),
-            ),
-        }),
-      );
+      const fake = yield* makeProcess({ "tools/call": response });
+      vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
       const cleanup: boolean[] = [];
       const connection = yield* openSdkStdio({
         ...options,
@@ -446,29 +367,8 @@ it.effect.each(protocolResponses)(
   "cleans up initialization rejected for $name",
   ({ response, kind, reason }) =>
     Effect.gen(function* () {
-      const fake = yield* makeProcess;
-      vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
-        Effect.succeed({
-          ...fake.handle,
-          write: (bytes) =>
-            Effect.gen(function* () {
-              const message = deserializeMessage(new TextDecoder().decode(bytes));
-              fake.writes.push(message);
-              if (!("id" in message) || !("method" in message) || message.method !== "initialize")
-                return;
-              yield* Queue.offer(
-                fake.output,
-                new TextEncoder().encode(
-                  serializeMessage({
-                    jsonrpc: "2.0",
-                    id: message.id,
-                    ...response,
-                  }),
-                ),
-              );
-            }),
-        }),
-      );
+      const fake = yield* makeProcess({ initialize: response });
+      vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
       const cleanup: boolean[] = [];
       const result = yield* openSdkStdio({
         ...options,
@@ -490,7 +390,7 @@ it.effect.each(protocolResponses)(
 
 it.effect("headless input-required remains incomplete and never exposes private state", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
+    const fake = yield* makeProcess();
     vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
     const connection = yield* openSdkStdio(options);
     // Legacy decoding removes modern discriminators. Inject only an already-accepted
@@ -512,12 +412,8 @@ it.effect("headless input-required remains incomplete and never exposes private 
 
 it.effect("revokes cancelled queued sends before native dispatch", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
-    const transport = yield* makeSdkStdioTransport(fake.handle, {
-      maxBufferSize: 1024,
-      maxWriteBytes: 1024,
-    });
-    yield* foreign(() => transport.start());
+    const fake = yield* makeProcess();
+    const transport = yield* startTransport(fake);
     fake.state.holdWrites = true;
     const first = yield* foreign(() =>
       transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
@@ -525,7 +421,7 @@ it.effect("revokes cancelled queued sends before native dispatch", () =>
     yield* Deferred.await(fake.writeEntered);
     const cancelled = transport.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const result = yield* foreign(() => cancelled).pipe(
-      Effect.result,
+      Effect.flip,
       Effect.forkScoped({ startImmediately: true }),
     );
     yield* foreign(() =>
@@ -535,24 +431,18 @@ it.effect("revokes cancelled queued sends before native dispatch", () =>
         params: { requestId: 2 },
       }),
     );
-    expect(yield* Fiber.join(result)).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "cancelled" },
-    });
+    expect(yield* Fiber.join(result)).toMatchObject({ kind: "cancelled" });
     const signal = new AbortController();
     const third = transport.send(
       { jsonrpc: "2.0", id: 3, method: "tools/list" },
       { requestSignal: signal.signal },
     );
     const thirdResult = yield* foreign(() => third).pipe(
-      Effect.result,
+      Effect.flip,
       Effect.forkScoped({ startImmediately: true }),
     );
     signal.abort();
-    expect(yield* Fiber.join(thirdResult)).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "cancelled" },
-    });
+    expect(yield* Fiber.join(thirdResult)).toMatchObject({ kind: "cancelled" });
     yield* Deferred.succeed(fake.writeGate, undefined);
     yield* Fiber.join(first);
     yield* foreign(() => transport.send({ jsonrpc: "2.0", id: 4, method: "tools/list" }));
@@ -566,27 +456,24 @@ it.effect(
   "explicit transport close joins readers and writer, rejects queued work, and is repeatable",
   () =>
     Effect.gen(function* () {
-      const fake = yield* makeProcess;
-      const transport = yield* makeSdkStdioTransport(fake.handle, {
-        maxBufferSize: 1024,
-        maxWriteBytes: 1024,
-      });
-      yield* foreign(() => transport.start());
+      const fake = yield* makeProcess();
+      const transport = yield* startTransport(fake);
       yield* yieldUntil(() => fake.state.readers === 2);
       fake.state.holdWrites = true;
       const writing = yield* foreign(() =>
         transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-      ).pipe(Effect.result, Effect.forkScoped);
+      ).pipe(Effect.flip, Effect.forkScoped);
       yield* Deferred.await(fake.writeEntered);
       yield* foreign(() => transport.close());
       expect(fake.state.readers).toBe(0);
-      expect(yield* Fiber.join(writing)).toMatchObject({ _tag: "Failure" });
+      expect(yield* Fiber.join(writing)).toBeInstanceOf(SdkStdioTransportError);
       yield* Deferred.succeed(fake.writeGate, undefined);
       yield* foreign(() => transport.close());
-      const late = yield* foreign(() =>
-        transport.send({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
-      ).pipe(Effect.result);
-      expect(late).toMatchObject({ _tag: "Failure", failure: { kind: "closed" } });
+      expect(
+        yield* foreign(() => transport.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })).pipe(
+          Effect.flip,
+        ),
+      ).toMatchObject({ kind: "closed" });
       expect(fake.writes).toHaveLength(0);
     }),
 );
@@ -595,7 +482,7 @@ it.effect.each(["overflow", "read-error", "malformed", "eof"])(
   "%s closes the transport and releases its scope",
   (mode) =>
     Effect.gen(function* () {
-      const fake = yield* makeProcess;
+      const fake = yield* makeProcess();
       const transport = yield* makeSdkStdioTransport(fake.handle, {
         maxBufferSize: 64,
         maxWriteBytes: 1024,
@@ -627,12 +514,8 @@ it.effect.each(["overflow", "read-error", "malformed", "eof"])(
 
 it.effect("cancellation also interrupts waiting inside the owned process writer", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
-    const transport = yield* makeSdkStdioTransport(fake.handle, {
-      maxBufferSize: 1024,
-      maxWriteBytes: 1024,
-    });
-    yield* foreign(() => transport.start());
+    const fake = yield* makeProcess();
+    const transport = yield* startTransport(fake);
     fake.state.holdWrites = true;
     const signal = new AbortController();
     const first = yield* foreign(() =>
@@ -640,13 +523,10 @@ it.effect("cancellation also interrupts waiting inside the owned process writer"
         { jsonrpc: "2.0", id: 1, method: "tools/list" },
         { requestSignal: signal.signal },
       ),
-    ).pipe(Effect.result, Effect.forkScoped({ startImmediately: true }));
+    ).pipe(Effect.flip, Effect.forkScoped({ startImmediately: true }));
     yield* Deferred.await(fake.writeEntered);
     signal.abort();
-    expect(yield* Fiber.join(first)).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "cancelled" },
-    });
+    expect(yield* Fiber.join(first)).toMatchObject({ kind: "cancelled" });
     yield* Deferred.succeed(fake.writeGate, undefined);
     yield* foreign(() => transport.send({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
     expect(fake.writes.map((message) => ("id" in message ? message.id : undefined))).toEqual([2]);
@@ -655,7 +535,7 @@ it.effect("cancellation also interrupts waiting inside the owned process writer"
 
 it.effect("a first close interruption cannot poison cleanup or permit new requests", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
+    const fake = yield* makeProcess();
     vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
     const connection = yield* openSdkStdio(options);
     fake.state.holdClose = true;
@@ -663,10 +543,9 @@ it.effect("a first close interruption cannot poison cleanup or permit new reques
     yield* Deferred.await(fake.closeEntered);
     const interruption = yield* Fiber.interrupt(closing).pipe(Effect.forkScoped);
     const secondClose = yield* connection.close.pipe(Effect.forkScoped);
-    const late = yield* connection.request({ action: "tools.list" }).pipe(Effect.result);
-    expect(late).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "connection", outcome: "not-sent" },
+    expect(yield* connection.request({ action: "tools.list" }).pipe(Effect.flip)).toMatchObject({
+      kind: "connection",
+      outcome: "not-sent",
     });
     expect(fake.state.readers).toBe(0);
     yield* Deferred.succeed(fake.closeGate, undefined);
@@ -682,7 +561,7 @@ it.effect("early first-close interruption cannot strand connection cleanup or sc
   Effect.gen(function* () {
     for (let checkpoint = 0; checkpoint < 24; checkpoint++) {
       const owner = yield* Scope.fork(yield* Effect.scope);
-      const fake = yield* makeProcess;
+      const fake = yield* makeProcess();
       vi.spyOn(Core, "openDuplexProcess").mockReturnValue(Effect.succeed(fake.handle));
       const cleanup: boolean[] = [];
       const connection = yield* openSdkStdio({
@@ -736,7 +615,7 @@ it.effect("failed native readiness with uncertain cleanup is not a safe acquisit
 
 it.effect("initialization interruption survives uncertain cleanup and still releases readers", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
+    const fake = yield* makeProcess();
     const initialized = yield* Deferred.make<void>();
     vi.spyOn(Core, "openDuplexProcess").mockReturnValue(
       Effect.succeed({
@@ -768,7 +647,7 @@ it.effect("initialization interruption survives uncertain cleanup and still rele
 
 it.effect("keeps unconfirmed process cleanup distinct from a request failure", () =>
   Effect.gen(function* () {
-    const fake = yield* makeProcess;
+    const fake = yield* makeProcess();
     const failed: Core.DuplexProcessHandle = {
       ...fake.handle,
       write: () => Effect.fail(Core.duplexProcessError("write", "failed", "private-write")),
@@ -785,74 +664,6 @@ it.effect("keeps unconfirmed process cleanup distinct from a request failure", (
     expect(String(result)).not.toContain("private-");
     expect(fake.state.readers).toBe(0);
   }),
-);
-
-it.live.each(["explicit close", "scope teardown"])(
-  "modern metadata subscriptions confirm cleanup and allow same-server reopen after %s",
-  (mode) =>
-    macOnly(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const script = `
-            import readline from "node:readline";
-            const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
-            readline.createInterface({ input: process.stdin }).on("line", line => {
-              const m = JSON.parse(line);
-              if (m.method === "server/discover") send({ jsonrpc: "2.0", id: m.id, result: {
-                resultType: "complete", supportedVersions: ["2026-07-28"],
-                capabilities: { tools: { listChanged: true } }
-              } });
-              if (m.method === "subscriptions/listen") send({ jsonrpc: "2.0",
-                method: "notifications/subscriptions/acknowledged", params: {
-                  notifications: m.params.notifications,
-                  _meta: { "io.modelcontextprotocol/subscriptionId": m.id }
-                }
-              });
-            });
-          `;
-          const connector = yield* McpConnector.pipe(Effect.provide(McpConnector.layer));
-          const server: McpEffectiveServer = {
-            id: `metadata-cleanup-${mode}`,
-            identity: `metadata-cleanup-${mode}`,
-            directory: process.cwd(),
-            scope: "project",
-            enabled: true,
-            definition: {
-              transport: "stdio",
-              command: process.execPath,
-              args: ["--input-type=module", "-e", script],
-              environment: {},
-              denyTools: [],
-            },
-          };
-          const settings: McpSettings = {
-            enabled: true,
-            connectTimeoutMs: 2_000,
-            requestTimeoutMs: 2_000,
-            idleTimeoutMs: 1_000,
-            maxConcurrent: 8,
-            maxPerServer: 4,
-            maxQueued: 64,
-          };
-          const cleanup: boolean[] = [];
-          for (let round = 0; round < 2; round++) {
-            const owner = yield* Scope.fork(yield* Effect.scope);
-            const connection = yield* connector
-              .open(server, settings, undefined, (confirmed) => cleanup.push(confirmed))
-              .pipe(Effect.provideService(Scope.Scope, owner));
-            expect(connection.protocolVersion).toBe("2026-07-28");
-            if (mode === "explicit close") yield* connection.close;
-            yield* Scope.close(owner, Exit.void);
-            expect(yield* connection.health).toMatchObject({
-              closed: true,
-              cleanupUnconfirmed: false,
-            });
-            yield* connection.close;
-            expect(cleanup).toEqual(Array.from({ length: round + 1 }, () => true));
-          }
-        }),
-      ),
-    ),
 );
 
 it.live(
@@ -887,10 +698,6 @@ it.live(
     });
   `;
     return Effect.gen(function* () {
-      const { optionalFixture, projection } = yield* Effect.promise(
-        () => import("../fixtures/optional-features.ts"),
-      );
-      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
       const seen: number[] = [];
       let asks = 0;
       const f = optionalFixture(undefined, {
@@ -901,7 +708,6 @@ it.live(
         }),
         interaction: {
           resolve: Effect.succeed({
-            generation: "stdio",
             current: Effect.succeed(true),
             ask: () =>
               Effect.sync(() => {
@@ -940,10 +746,7 @@ it.live(
             )
             .pipe(Effect.flip),
         ).toMatchObject({ kind: "unsupported", outcome: "not-sent" });
-        yield* execution.execute(
-          { action: "resources.subscribe", server: "fixture", uri: "test://one" },
-          projection,
-        );
+        yield* execution.execute(subscribe, projection);
         yield* Effect.sleep(80);
         const events = yield* execution.execute(
           { action: "events.read", server: "fixture" },
@@ -954,10 +757,7 @@ it.live(
             /resource-updated/g,
           ),
         ).toHaveLength(1);
-        yield* execution.execute(
-          { action: "resources.unsubscribe", server: "fixture", uri: "test://one" },
-          projection,
-        );
+        yield* execution.execute(unsubscribe, projection);
       }).pipe(Effect.provide(f.layer));
     });
   },
@@ -981,21 +781,12 @@ it.live(
     });
   `;
     return Effect.gen(function* () {
-      const { optionalFixture, projection } = yield* Effect.promise(
-        () => import("../fixtures/optional-features.ts"),
-      );
-      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
       const f = optionalFixture(undefined, {
         open: openSdkStdio({ ...options, args: ["--input-type=module", "-e", script] }),
       });
       yield* Effect.gen(function* () {
         const execution = yield* McpExecution;
-        const subscription = {
-          action: "resources.subscribe",
-          server: "fixture",
-          uri: "test://one",
-        };
-        const opening = yield* Effect.forkScoped(execution.execute(subscription, projection));
+        const opening = yield* Effect.forkScoped(execution.execute(subscribe, projection));
         const barrier = yield* execution.execute(
           { action: "tools.call", server: "fixture", tool: "example" },
           projection,
@@ -1003,13 +794,12 @@ it.live(
         expect(barrier.reply.data).toMatchObject({
           result: { structuredContent: { waiting: true } },
         });
-        expect(
-          yield* execution
-            .execute({ ...subscription, action: "resources.unsubscribe" }, projection)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "cleanup", outcome: "unknown" });
+        expect(yield* execution.execute(unsubscribe, projection).pipe(Effect.flip)).toMatchObject({
+          kind: "cleanup",
+          outcome: "unknown",
+        });
         expect(yield* Fiber.join(opening).pipe(Effect.flip)).toMatchObject({ outcome: "unknown" });
-        expect(yield* execution.execute(subscription, projection).pipe(Effect.flip)).toMatchObject({
+        expect(yield* execution.execute(subscribe, projection).pipe(Effect.flip)).toMatchObject({
           outcome: "not-sent",
         });
         expect(f.opens()).toBe(1);
@@ -1042,10 +832,6 @@ it.live(
     });
   `;
     return Effect.gen(function* () {
-      const { optionalFixture, projection } = yield* Effect.promise(
-        () => import("../fixtures/optional-features.ts"),
-      );
-      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
       const f = optionalFixture(undefined, {
         open: openSdkStdio({
           ...options,
@@ -1054,7 +840,7 @@ it.live(
         }),
         mapConnection: (connection) => ({
           ...connection,
-          remoteEvents: connection.remoteEvents!.pipe(
+          remoteEvents: connection.remoteEvents.pipe(
             Stream.mapEffect((event) =>
               Deferred.succeed(closedInput, undefined).pipe(Effect.as(event)),
             ),
@@ -1063,19 +849,13 @@ it.live(
       });
       yield* Effect.gen(function* () {
         const execution = yield* McpExecution;
-        const subscription = {
-          action: "resources.subscribe",
-          server: "fixture",
-          uri: "test://one",
-        };
-        expect((yield* execution.execute(subscription, projection)).reply.isError).toBe(false);
+        expect((yield* execution.execute(subscribe, projection)).reply.isError).toBe(false);
         yield* Deferred.await(closedInput);
-        expect(
-          yield* execution
-            .execute({ ...subscription, action: "resources.unsubscribe" }, projection)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "cleanup", outcome: "unknown" });
-        expect(yield* execution.execute(subscription, projection).pipe(Effect.flip)).toMatchObject({
+        expect(yield* execution.execute(unsubscribe, projection).pipe(Effect.flip)).toMatchObject({
+          kind: "cleanup",
+          outcome: "unknown",
+        });
+        expect(yield* execution.execute(subscribe, projection).pipe(Effect.flip)).toMatchObject({
           outcome: "not-sent",
         });
         expect(f.opens()).toBe(1);
@@ -1108,15 +888,11 @@ it.live(
       const captured = yield* Deferred.make<void>();
       const delivery = yield* Deferred.make<void>();
       let paused = false;
-      const { optionalFixture, projection } = yield* Effect.promise(
-        () => import("../fixtures/optional-features.ts"),
-      );
-      const { McpExecution } = yield* Effect.promise(() => import("../../src/tools/service.ts"));
       const f = optionalFixture(undefined, {
         open: openSdkStdio({ ...options, args: ["--input-type=module", "-e", script] }),
         mapConnection: (connection) => ({
           ...connection,
-          remoteEvents: connection.remoteEvents!.pipe(
+          remoteEvents: connection.remoteEvents.pipe(
             Stream.mapEffect((event) => {
               if (paused) return Effect.succeed(event);
               paused = true;
@@ -1130,17 +906,12 @@ it.live(
       });
       yield* Effect.gen(function* () {
         const execution = yield* McpExecution;
-        const subscription = {
-          action: "resources.subscribe",
-          server: "fixture",
-          uri: "test://one",
-        };
         const emit = { action: "tools.call", server: "fixture", tool: "example" };
-        yield* execution.execute(subscription, projection);
+        yield* execution.execute(subscribe, projection);
         yield* execution.execute(emit, projection);
         yield* Deferred.await(captured);
-        yield* execution.execute({ ...subscription, action: "resources.unsubscribe" }, projection);
-        yield* execution.execute(subscription, projection);
+        yield* execution.execute(unsubscribe, projection);
+        yield* execution.execute(subscribe, projection);
         yield* Deferred.succeed(delivery, undefined);
         yield* Effect.sleep(10);
         expect(

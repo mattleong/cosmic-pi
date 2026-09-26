@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import { scopedListener } from "pi-cosmic-core";
 import { McpActivity } from "../activity/service.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -48,7 +49,7 @@ const matches = (
   snapshot.owner === operation.owner &&
   snapshot.identity === operation.binding.identity &&
   snapshot.configRevision === operation.binding.configRevision &&
-  (snapshot.authorizationRevision ?? 0) === (operation.binding.authorizationRevision ?? 0);
+  snapshot.authorizationRevision === operation.binding.authorizationRevision;
 const reusable = (state: DiscoveryState, operation: McpOperation, now: number) => {
   const snapshot = state.snapshots.get(operation.binding.server);
   return matches(snapshot, operation) &&
@@ -59,10 +60,15 @@ const reusable = (state: DiscoveryState, operation: McpOperation, now: number) =
 };
 const visibleSnapshots = (state: DiscoveryState, config: McpResolvedConfig) =>
   [...state.snapshots.values()]
-    .filter((snapshot) => {
-      return cacheVisible(snapshot, config);
-    })
+    .filter((snapshot) => cacheVisible(snapshot, config))
     .sort((left, right) => compareDiscoveryText(left.server, right.server));
+const localFailure = (message: string) => (cause: unknown) =>
+  cause instanceof McpBoundaryError ? cause : boundaryError("protocol", "not-sent", message);
+/** The commit fence runs an infallible publication; its Result carries the typed failure. */
+const commitChecked = <A>(
+  operation: McpOperation,
+  publication: Effect.Effect<A, McpBoundaryError>,
+) => operation.commit(Effect.result(publication)).pipe(Effect.flatMap(Effect.fromResult));
 
 const makeDiscovery = Effect.gen(function* () {
   const connections = yield* McpConnections;
@@ -144,7 +150,7 @@ const makeDiscovery = Effect.gen(function* () {
               server: operation.binding.server,
               identity: operation.binding.identity,
               configRevision: operation.binding.configRevision,
-              authorizationRevision: operation.binding.authorizationRevision ?? 0,
+              authorizationRevision: operation.binding.authorizationRevision,
               owner: operation.owner,
               revision: current.revision + 1,
               ...prepared,
@@ -374,10 +380,7 @@ const makeDiscovery = Effect.gen(function* () {
             { ...current, cursors: result.state },
           ];
         },
-        catch: (error) =>
-          error instanceof McpBoundaryError
-            ? error
-            : boundaryError("protocol", "not-sent", "Unable to prepare MCP discovery page."),
+        catch: localFailure("Unable to prepare MCP discovery page."),
       }),
     );
 
@@ -389,23 +392,19 @@ const makeDiscovery = Effect.gen(function* () {
       ) {
         const config = yield* connections.config;
         if (!config.trusted || !config.settings.enabled)
-          return yield* Effect.fail(
-            boundaryError(
-              "denied",
-              "not-sent",
-              "MCP discovery requires an enabled trusted session.",
-            ),
+          return yield* boundaryError(
+            "denied",
+            "not-sent",
+            "MCP discovery requires an enabled trusted session.",
           );
         return yield* page(request, config, yield* metadataTime);
       }
       const server = request.server;
       if (server === undefined || (admitted !== undefined && admitted.binding.server !== server))
-        return yield* Effect.fail(
-          boundaryError(
-            "invalid-input",
-            "not-sent",
-            "MCP discovery server does not match the admitted operation.",
-          ),
+        return yield* boundaryError(
+          "invalid-input",
+          "not-sent",
+          "MCP discovery server does not match the admitted operation.",
         );
       if (request.action !== "tools.describe" && request.cursor !== undefined) {
         // Continuations inspect the one retained revision, not its invocation freshness.
@@ -420,11 +419,7 @@ const makeDiscovery = Effect.gen(function* () {
         )
           return yield* boundaryError("stale", "not-sent", "MCP metadata cursor has expired.");
         const inspection = page(request, config, yield* metadataTime, snapshot);
-        return yield* admitted === undefined
-          ? inspection
-          : admitted
-              .commit(Effect.result(inspection))
-              .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
+        return yield* admitted === undefined ? inspection : commitChecked(admitted, inspection);
       }
       const use = (operation: McpOperation) =>
         Effect.gen(function* () {
@@ -434,35 +429,33 @@ const makeDiscovery = Effect.gen(function* () {
           if (request.action === "tools.describe") {
             const tool = snapshot.tools.find((item) => item.name === request.tool);
             if (tool === undefined)
-              return yield* Effect.fail(
-                boundaryError("not-found", "not-sent", "MCP tool was not found."),
-              );
-            return yield* operation
-              .commit(
-                Effect.gen(function* () {
-                  const current = yield* SynchronizedRef.get(state);
-                  if (current.snapshots.get(snapshot.server) !== snapshot)
-                    return yield* boundaryError(
-                      "stale",
-                      "not-sent",
-                      "MCP metadata changed before the description was published.",
-                    );
-                  return {
-                    data: tool,
-                    notices: gatewayDiscoveryNotices(
-                      [snapshot],
-                      current.evidence,
-                      yield* metadataTime,
-                    ),
-                  };
-                }).pipe(Effect.result),
-              )
-              .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
+              return yield* boundaryError("not-found", "not-sent", "MCP tool was not found.");
+            return yield* commitChecked(
+              operation,
+              Effect.gen(function* () {
+                const current = yield* SynchronizedRef.get(state);
+                if (current.snapshots.get(snapshot.server) !== snapshot)
+                  return yield* boundaryError(
+                    "stale",
+                    "not-sent",
+                    "MCP metadata changed before the description was published.",
+                  );
+                return {
+                  data: tool,
+                  notices: gatewayDiscoveryNotices(
+                    [snapshot],
+                    current.evidence,
+                    yield* metadataTime,
+                  ),
+                };
+              }),
+            );
           }
           const config = yield* connections.config;
-          return yield* operation
-            .commit(Effect.result(page(request, config, yield* metadataTime, snapshot)))
-            .pipe(Effect.flatMap((result) => Effect.fromResult(result)));
+          return yield* commitChecked(
+            operation,
+            page(request, config, yield* metadataTime, snapshot),
+          );
         });
       return yield* admitted === undefined
         ? connections.withOperation(server, {}, use)
@@ -473,16 +466,7 @@ const makeDiscovery = Effect.gen(function* () {
     ensure,
     refresh,
     query,
-    subscribeChanges: (listener) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          listeners.add(listener);
-        }),
-        () =>
-          Effect.sync(() => {
-            listeners.delete(listener);
-          }),
-      ),
+    subscribeChanges: (listener) => scopedListener(listeners, listener),
     cached: (request) =>
       Effect.gen(function* () {
         const config = yield* connections.config;
@@ -501,10 +485,7 @@ const makeDiscovery = Effect.gen(function* () {
               );
               return [result.page, { ...current, cursors: result.cursors }] as const;
             },
-            catch: (error) =>
-              error instanceof McpBoundaryError
-                ? error
-                : boundaryError("protocol", "not-sent", "MCP cached query is unavailable."),
+            catch: localFailure("MCP cached query is unavailable."),
           }),
         );
       }),
@@ -514,10 +495,7 @@ const makeDiscovery = Effect.gen(function* () {
         const current = yield* SynchronizedRef.get(state);
         return yield* Effect.try({
           try: () => describeCached(ref, config, current.snapshots),
-          catch: (error) =>
-            error instanceof McpBoundaryError
-              ? error
-              : boundaryError("protocol", "not-sent", "MCP cached detail is unavailable."),
+          catch: localFailure("MCP cached detail is unavailable."),
         });
       }),
     known: Effect.gen(function* () {

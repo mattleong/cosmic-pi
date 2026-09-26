@@ -1,4 +1,3 @@
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vitest";
@@ -12,72 +11,20 @@ import { acquireNativeLock } from "../src/platform/cross-process-lock-node.ts";
 import {
   nodeFsPromises as fs,
   nodePath as path,
-  nodeSpawn,
   nodeHomeDirectory,
   nodeLockFs,
 } from "../src/platform/node-builtins.ts";
+import { killChild, spawnIpcChild, temporaryDirectory } from "../testing.ts";
 
-const root = Effect.acquireRelease(
-  Effect.tryPromise(() => fs.mkdtemp(path.join(tmpdir(), "cosmic-lock-test-"))),
-  (directory) =>
-    Effect.tryPromise(() => fs.rm(directory, { recursive: true, force: true })).pipe(Effect.orDie),
+const root = temporaryDirectory("cosmic-lock-test-");
+const childScript = fileURLToPath(
+  new URL("./fixtures/cross-process-lock-child.ts", import.meta.url),
 );
-const kill = (child: ReturnType<typeof nodeSpawn>) =>
-  Effect.callback<void>((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resume(Effect.void);
-      return;
-    }
-    const exited = () => resume(Effect.void);
-    child.once("exit", exited);
-    child.kill("SIGKILL");
-    return Effect.sync(() => child.off("exit", exited));
-  });
 const spawn = (directory: string, mode: string, home?: string) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const options: NonNullable<Parameters<typeof nodeSpawn>[2]> = {
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-      };
-      if (home) options.env = { HOME: home };
-      const child = nodeSpawn(
-        process.execPath,
-        [
-          "--import",
-          "jiti/register",
-          fileURLToPath(new URL("./fixtures/cross-process-lock-child.ts", import.meta.url)),
-          directory,
-          mode,
-        ],
-        options,
-      );
-      const messages: unknown[] = [];
-      child.on("message", (message) => messages.push(message));
-      const wait = (expected: string) =>
-        Effect.callback<void>((resume) => {
-          if (messages.includes(expected)) {
-            resume(Effect.void);
-            return;
-          }
-          const receive = (message: string | { home: string }) => {
-            if (message === expected) resume(Effect.void);
-          };
-          child.on("message", receive);
-          return Effect.sync(() => child.off("message", receive));
-        }).pipe(Effect.timeout("10 seconds"));
-      const exited = Effect.callback<void>((resume) => {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          resume(Effect.void);
-          return;
-        }
-        const finish = () => resume(Effect.void);
-        child.once("exit", finish);
-        return Effect.sync(() => child.off("exit", finish));
-      }).pipe(Effect.timeout("10 seconds"));
-      return { child, messages, wait, exited };
-    }),
-    ({ child }) => kill(child),
-  );
+  spawnIpcChild(childScript, [directory, mode], {
+    timeout: "10 seconds",
+    env: home === undefined ? undefined : { HOME: home },
+  });
 
 it.live("excludes a real process, then admits its successor after release", () =>
   Effect.gen(function* () {
@@ -100,7 +47,7 @@ it.live("reclaims a positively dead quiescent owner without a timeout lease", ()
     const directory = yield* root;
     const first = yield* spawn(directory, "hold");
     yield* first.wait("acquired");
-    yield* kill(first.child);
+    yield* killChild(first.child);
     const second = yield* spawn(directory, "once");
     yield* second.wait("finished");
   }).pipe(Effect.scoped),
@@ -111,10 +58,58 @@ it.live("does not equate owner death with native service settlement", () =>
     const directory = yield* root;
     const first = yield* spawn(directory, "pending");
     yield* first.wait("acquired");
-    yield* kill(first.child);
+    yield* killChild(first.child);
     const second = yield* spawn(directory, "once");
     yield* second.wait("recovery-required");
     expect(second.messages).not.toContain("acquired");
+  }).pipe(Effect.scoped),
+);
+
+const tryAcquire = (directory: string) =>
+  CrossProcessLock.use((lock) => lock.tryAcquire("fixture")).pipe(
+    Effect.provide(CrossProcessLock.layer({ directory })),
+  );
+
+it.live("tryAcquire reports a live owner without waiting, then admits after release", () =>
+  Effect.gen(function* () {
+    const directory = yield* root;
+    const first = yield* spawn(directory, "hold");
+    yield* first.wait("acquired");
+    expect(yield* tryAcquire(directory)).toBeUndefined();
+    first.child.send?.("release");
+    yield* first.wait("finished");
+    const lease = yield* tryAcquire(directory);
+    expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
+    lease?.release();
+    expect(nodeLockFs.readdirSync(directory)).toEqual([]);
+  }).pipe(Effect.scoped),
+);
+
+it.live("tryAcquire retires a dead quiescent owner and admits in the same call", () =>
+  Effect.gen(function* () {
+    const directory = yield* root;
+    const first = yield* spawn(directory, "hold");
+    yield* first.wait("acquired");
+    yield* killChild(first.child);
+    const lease = yield* tryAcquire(directory);
+    expect(lease).toBeDefined();
+    expect(acquireNativeLock("fixture", { directory })).toBeUndefined();
+    lease?.release();
+    const next = acquireNativeLock("fixture", { directory });
+    expect(next).toBeDefined();
+    next?.release();
+  }).pipe(Effect.scoped),
+);
+
+it.live("tryAcquire fails closed on a dead native-pending owner", () =>
+  Effect.gen(function* () {
+    const directory = yield* root;
+    const first = yield* spawn(directory, "pending");
+    yield* first.wait("acquired");
+    yield* killChild(first.child);
+    expect(yield* Effect.flip(tryAcquire(directory))).toMatchObject({
+      reason: "recovery-required",
+    });
   }).pipe(Effect.scoped),
 );
 
@@ -392,7 +387,7 @@ it.live(
       const directory = yield* root;
       const deadOwner = yield* spawn(directory, "hold");
       yield* deadOwner.wait("acquired");
-      yield* kill(deadOwner.child);
+      yield* killChild(deadOwner.child);
       const rename = nodeLockFs.renameSync;
       let paused = false;
       let successor: ReturnType<typeof acquireNativeLock>;

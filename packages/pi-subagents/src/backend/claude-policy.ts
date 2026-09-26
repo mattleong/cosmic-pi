@@ -1,5 +1,5 @@
 // Pure Claude CLI policy: writer cwd rule grammar, fixed tool constants, strict sandbox
-// settings, allowed-tool logic, and the local Claude argv builder. This module imports no
+// settings, allowed-tool logic, and the Claude argv builders. This module imports no
 // Effect and no Node process/filesystem APIs; platform cwd validation stays in the boundary
 // path adapter, which passes its prevalidated policy result to these builders.
 import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
@@ -95,8 +95,8 @@ export const claudeAllowedTools = (
   writerPolicy: ClaudeWriterCwdPolicy | undefined,
 ): ReadonlyArray<string> =>
   writeIntent === "writer" && writerPolicy
-    ? [...CLAUDE_INSPECTION_TOOLS, writerPolicy.scopedEditRule]
-    : CLAUDE_INSPECTION_TOOLS;
+    ? [...CLAUDE_INSPECTION_TOOLS, writerPolicy.scopedEditRule, ...CLAUDE_NATIVE_AGENT_TOOLS]
+    : [...CLAUDE_INSPECTION_TOOLS, ...CLAUDE_NATIVE_AGENT_TOOLS];
 
 export interface ClaudePermissionSettings {
   readonly defaultMode: "dontAsk";
@@ -139,7 +139,7 @@ export const claudeSettings = (
 ): ClaudeSettings => ({
   permissions: {
     defaultMode: "dontAsk",
-    allow: [...claudeAllowedTools(launch.writeIntent, writerPolicy), ...CLAUDE_NATIVE_AGENT_TOOLS],
+    allow: claudeAllowedTools(launch.writeIntent, writerPolicy),
     deny: CLAUDE_DENIED_TOOLS,
   },
   sandbox: {
@@ -169,49 +169,51 @@ export interface ClaudeHarnessPaths {
   readonly promptPath: string;
 }
 
+/** The policy flags shared by the local and Herdr Claude launches. */
+export const claudePolicyArgv = (
+  launch: ClaudeLaunchPolicyRequest,
+  harness: ClaudeHarnessPaths,
+  writerPolicy: ClaudeWriterCwdPolicy | undefined,
+): ReadonlyArray<string> => [
+  "--model",
+  launch.model,
+  "--effort",
+  launch.effort,
+  "--disable-slash-commands",
+  "--no-chrome",
+  "--setting-sources",
+  "",
+  "--settings",
+  harness.settingsPath,
+  "--strict-mcp-config",
+  "--mcp-config",
+  harness.mcpPath,
+  "--permission-mode",
+  "dontAsk",
+  "--tools",
+  (launch.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS).join(","),
+  "--allowedTools",
+  claudeAllowedTools(launch.writeIntent, writerPolicy).join(","),
+  "--disallowedTools",
+  CLAUDE_DENIED_TOOLS.join(","),
+  "--system-prompt-file",
+  harness.promptPath,
+];
+
 export const claudeArgv = (
   launch: ClaudeLaunchPolicyRequest,
   harness: ClaudeHarnessPaths,
   writerPolicy: ClaudeWriterCwdPolicy | undefined,
-): ReadonlyArray<string> => {
-  const tools = launch.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
-  const allowedTools = [
-    ...claudeAllowedTools(launch.writeIntent, writerPolicy),
-    ...CLAUDE_NATIVE_AGENT_TOOLS,
-  ];
-  return [
-    "--print",
-    "--input-format",
-    "stream-json",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--replay-user-messages",
-    "--forward-subagent-text",
-    "--model",
-    launch.model,
-    "--effort",
-    launch.effort,
-    "--disable-slash-commands",
-    "--no-chrome",
-    "--no-session-persistence",
-    "--setting-sources",
-    "",
-    "--settings",
-    harness.settingsPath,
-    "--strict-mcp-config",
-    "--mcp-config",
-    harness.mcpPath,
-    "--permission-mode",
-    "dontAsk",
-    "--tools",
-    tools.join(","),
-    "--allowedTools",
-    allowedTools.join(","),
-    "--disallowedTools",
-    CLAUDE_DENIED_TOOLS.join(","),
-    "--system-prompt-file",
-    harness.promptPath,
-  ];
-};
+): ReadonlyArray<string> => [
+  "--print",
+  "--input-format",
+  "stream-json",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--include-partial-messages",
+  "--replay-user-messages",
+  "--forward-subagent-text",
+  "--no-session-persistence",
+  ...claudePolicyArgv(launch, harness, writerPolicy),
+];

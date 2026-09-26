@@ -37,7 +37,7 @@ export const modelSelector = (
   model: Pick<ModelPickerModel, "provider" | "id" | "selector">,
 ): string => model.selector ?? `${model.provider}/${model.id}`;
 
-const boundedMiddle = (value: string, maximum: number): string => {
+export const boundedMiddle = (value: string, maximum: number): string => {
   const characters = [...value];
   if (characters.length <= maximum) return value;
   const left = Math.max(1, Math.floor((maximum - 1) / 2));
@@ -95,25 +95,6 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
     };
   });
 
-export interface ModelPickerAction {
-  readonly id: string;
-  readonly label: string;
-  readonly description?: string | undefined;
-  readonly searchText?: string | undefined;
-  readonly select: () => void;
-}
-
-type ModelPickerPageEntry<M extends ModelPickerModel> =
-  | { readonly _tag: "Model"; readonly model: M }
-  | { readonly _tag: "Action"; readonly action: ModelPickerAction };
-
-export interface ModelPickerCatalogUpdate<M extends ModelPickerModel> {
-  readonly scopedModels: ReadonlyArray<M>;
-  readonly allModels?: ReadonlyArray<M> | undefined;
-  readonly current?: string | undefined;
-  readonly notice?: string | undefined;
-}
-
 export interface ModelPickerPageOptions<
   M extends ModelPickerModel,
 > extends SearchableSelectHostOptions {
@@ -128,7 +109,6 @@ export interface ModelPickerPageOptions<
   readonly initialSearchMode?: boolean | undefined;
   readonly current?: string | undefined;
   readonly notice?: string | undefined;
-  readonly actions?: ReadonlyArray<ModelPickerAction> | undefined;
   readonly select: (model: M) => void;
   readonly cancel: () => void;
 }
@@ -138,15 +118,16 @@ export interface ModelPickerPageOptions<
  * authorization, compatibility policy, validation, persistence, and lifecycle.
  */
 export class ModelPickerPage<M extends ModelPickerModel> implements Component, Focusable {
-  private options: ModelPickerPageOptions<M>;
+  private readonly options: ModelPickerPageOptions<M>;
+  private readonly canScope: boolean;
   private scope: ModelPickerScope;
-  private page: SearchableSelectPage<ModelPickerPageEntry<M>>;
+  private page: SearchableSelectPage<M>;
   private _focused = false;
 
   constructor(options: ModelPickerPageOptions<M>) {
     this.options = options;
-    const canScope = Boolean(options.allModels && options.scopedModels.length > 0);
-    this.scope = canScope ? (options.initialScope ?? "scoped") : "all";
+    this.canScope = Boolean(options.allModels && options.scopedModels.length > 0);
+    this.scope = this.canScope ? (options.initialScope ?? "scoped") : "all";
     this.page = this.buildPage(options.current);
   }
 
@@ -171,42 +152,20 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
 
   private scopeSubtitle(): string {
     const base = this.options.subtitle ? `${this.options.subtitle} · ` : "";
-    if (!this.options.allModels || this.options.scopedModels.length === 0) return base.slice(0, -3);
+    if (!this.canScope) return base.slice(0, -3);
     return `${base}${this.scope === "scoped" ? "Scoped models" : "All authenticated models"} · Tab switch`;
   }
 
   private buildPage(
     selected: string | undefined,
     search?: { readonly query: string; readonly active: boolean },
-  ): SearchableSelectPage<ModelPickerPageEntry<M>> {
-    const modelChoices: Array<SearchableSelectPageChoice<ModelPickerPageEntry<M>>> =
-      createModelPickerChoices(this.models(), this.options.current).map((choice) => ({
-        ...choice,
-        payload: { _tag: "Model", model: choice.payload },
-      }));
-    const actionChoices: Array<SearchableSelectPageChoice<ModelPickerPageEntry<M>>> = (
-      this.options.actions ?? []
-    ).map((entry) => {
-      const value = `action:${entry.id}`;
-      const item = {
-        value,
-        label: sanitizeTerminalLine(entry.label),
-      };
-      return {
-        value,
-        item: entry.description
-          ? { ...item, description: sanitizeTerminalLine(entry.description) }
-          : item,
-        searchText: sanitizeTerminalLine(entry.searchText ?? entry.label),
-        payload: { _tag: "Action", action: entry },
-      };
-    });
+  ): SearchableSelectPage<M> {
     return new SearchableSelectPage({
       theme: this.options.theme,
       breadcrumb: this.options.breadcrumb ?? "/models",
       title: this.options.title ?? "Choose model",
       subtitle: this.scopeSubtitle(),
-      choices: [...modelChoices, ...actionChoices],
+      choices: createModelPickerChoices(this.models(), this.options.current),
       current: selected ?? this.options.current,
       notice: this.options.notice,
       emptyText: "No matching models",
@@ -217,34 +176,13 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,
       keybindingLabel: this.options.keybindingLabel,
-      select: (entry) => {
-        if (entry._tag === "Model") this.options.select(entry.model);
-        else entry.action.select();
-      },
+      select: (model) => this.options.select(model),
       cancel: this.options.cancel,
     });
   }
 
-  /** Replaces caller-owned catalog snapshots while preserving search and stable selection identity. */
-  refreshCatalogs(update: ModelPickerCatalogUpdate<M>): void {
-    const selected = this.page.selectedValue;
-    const search = this.page.searchState;
-    this.options = {
-      ...this.options,
-      scopedModels: update.scopedModels,
-      allModels: update.allModels,
-      current: update.current ?? this.options.current,
-      notice: update.notice,
-    };
-    if (!this.options.allModels || this.options.scopedModels.length === 0) this.scope = "all";
-    this.page = this.buildPage(selected, search);
-    this.page.focused = this._focused;
-    this.options.requestRender();
-  }
-
   handleInput(data: string): void {
-    const canSwitch = Boolean(this.options.allModels && this.options.scopedModels.length > 0);
-    if (canSwitch && (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab")))) {
+    if (this.canScope && (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab")))) {
       const selected = this.page.selectedValue;
       const search = this.page.searchState;
       this.scope = this.scope === "scoped" ? "all" : "scoped";

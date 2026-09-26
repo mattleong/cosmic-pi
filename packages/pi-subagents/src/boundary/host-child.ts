@@ -19,6 +19,7 @@ import {
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
@@ -127,13 +128,11 @@ export function registerSubagentChildBridge(
   const pendingProxy: Correlations<AgentToolResult<unknown>> = new Map();
   let currentSession: ChildSessionInput | undefined;
 
-  const removeProxyNames = (): void => {
-    try {
-      pi.setActiveTools(pi.getActiveTools().filter((name) => !CHILD_PROXY_TOOL_NAME_SET.has(name)));
-    } catch {
-      // A stale host cannot turn lifecycle cleanup into an unhandled callback error.
-    }
-  };
+  const removeProxyNames = (): void =>
+    invokeHostCallback(() => {
+      const kept = pi.getActiveTools().filter((name) => !CHILD_PROXY_TOOL_NAME_SET.has(name));
+      pi.setActiveTools(kept);
+    }, undefined);
 
   const rejectAll = <A>(waiters: Correlations<A>, message: string): void => {
     for (const waiter of waiters.values())
@@ -490,8 +489,7 @@ export function registerSubagentChildBridge(
           scheduleAnimation: (interval, tick) =>
             isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
           environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
-          proxyCall: (toolInput, signal, _onUpdate, _ctx, onInterruption) =>
-            call(toolInput, signal, onInterruption),
+          proxyCall: call,
           run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
         });
         registerContactParent(input, token, (interval, tick) =>
@@ -516,12 +514,8 @@ export function registerSubagentChildBridge(
     deactivate(currentSession);
     const captured = captureSessionHost(ctx);
     if (captured._tag === "Unavailable") return slot.shutdown();
-    let sessionId: string | undefined;
-    try {
-      sessionId = ctx.sessionManager.getSessionId();
-    } catch {
-      /* Questionnaire discovery fails closed without a stable session. */
-    }
+    // Questionnaire discovery fails closed without a stable session.
+    const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), undefined);
     const input: ChildSessionInput = {
       sessionId,
       questionnaires: new Set(),

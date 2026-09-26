@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, type SettingItem } from "@earendil-works/pi-tui";
+import { constVoid } from "effect/Function";
 import type { LoadSettingsOptions } from "../config/document-store";
 import type { CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
@@ -62,9 +63,7 @@ export function createCodePreviewSettingsModel({
   let revision = 0;
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
     if (isSettingsGroupItemId(id)) {
-      syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
-        handleSettingChange(list, nextId, nextValue),
-      );
+      syncSettingsListValues(list, draftSettings);
       return;
     }
 
@@ -73,9 +72,7 @@ export function createCodePreviewSettingsModel({
     const next = updateSetting(draftSettings, id, value);
     const changeRevision = ++revision;
     draftSettings = next;
-    syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
-      handleSettingChange(list, nextId, nextValue),
-    );
+    syncSettingsListValues(list, draftSettings);
     void persistSettingsChange(next, previousTheme, loadOptions)
       .then(() => {
         if (resetRequested) notify("Code preview settings reset to defaults", "info");
@@ -85,9 +82,7 @@ export function createCodePreviewSettingsModel({
         // newer serialized save is still able to publish the complete draft.
         if (revision === changeRevision) {
           draftSettings = cloneCodePreviewSettings(codePreviewSettings);
-          syncSettingsListValues(list, draftSettings, (nextId, nextValue) =>
-            handleSettingChange(list, nextId, nextValue),
-          );
+          syncSettingsListValues(list, draftSettings);
         }
         notify(formatSettingsSaveError(error), "warning");
       });
@@ -112,11 +107,7 @@ export function createCodePreviewSettingsModel({
   };
 }
 
-function syncSettingsListValues(
-  list: SettingsList,
-  settings: typeof codePreviewSettings,
-  onSettingChange: (id: string, value: string) => void,
-): void {
-  for (const item of createSettingsCategoryItems(settings, () => settings, onSettingChange))
+function syncSettingsListValues(list: SettingsList, settings: typeof codePreviewSettings): void {
+  for (const item of createSettingsCategoryItems(settings, () => settings, constVoid))
     list.updateValue(item.id, item.currentValue);
 }

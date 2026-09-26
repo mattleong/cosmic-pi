@@ -1,9 +1,5 @@
 // The registered tool and managed runtime are the Promise-shaped Pi host boundary.
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -17,16 +13,17 @@ import { SubagentService } from "../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { retainedRequest, retainedServiceFixture } from "../run/fixtures/service-harness.ts";
+import { extensionApiFixture } from "../fixtures/pi-host.ts";
 import { step } from "../support/effect-test.ts";
-import { context } from "./fixtures/tool-harness.ts";
+import { executeTool } from "./fixtures/tool-harness.ts";
 
 it.live("returns a parent question in the await result without a second notification", () =>
   Effect.gen(function* () {
-    const fixture = retainedServiceFixture(undefined, {}, { notifications: true });
+    const fixture = retainedServiceFixture();
     const tools = new Map<string, ToolDefinition>();
-    const piFixture = { registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool) };
-    // SAFETY: Registration only uses registerTool; the managed runtime stores this Pi capability.
-    const pi = piFixture as typeof piFixture & ExtensionAPI;
+    const pi = extensionApiFixture({
+      registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+    });
     const runtime = yield* Effect.acquireRelease(
       Effect.sync(() =>
         makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
@@ -40,15 +37,11 @@ it.live("returns a parent question in the await result without a second notifica
     const service = yield* step(() => runtime.run(SubagentService));
     const child = yield* step(() => runtime.run(service.startSessionOwned(retainedRequest())));
     const progress = Deferred.makeUnsafe<void>();
-    const pending = tools
-      .get("subagent_await")!
-      .execute(
-        "question-await",
-        { runIds: [child.id], until: "all_finished" },
-        undefined,
-        () => Deferred.doneUnsafe(progress, Effect.void),
-        context,
-      );
+    const pending = executeTool(
+      tools.get("subagent_await")!,
+      { runIds: [child.id], until: "all_finished" },
+      { callID: "question-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+    );
     yield* Deferred.await(progress);
     fixture.backend.controls[0]!.offer({
       type: "supervisor_contact",
@@ -76,9 +69,9 @@ it.live(
     Effect.gen(function* () {
       const fixture = retainedServiceFixture();
       const tools = new Map<string, ToolDefinition>();
-      const piFixture = { registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool) };
-      // SAFETY: Registration only uses registerTool; the managed runtime stores this Pi capability.
-      const pi = piFixture as typeof piFixture & ExtensionAPI;
+      const pi = extensionApiFixture({
+        registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
+      });
       const runtime = yield* Effect.acquireRelease(
         Effect.sync(() =>
           makePiManagedRuntime(pi, Layer.merge(fixture.layer, fixture.backend.layer)),
@@ -119,15 +112,17 @@ it.live(
       const progress = Deferred.makeUnsafe<void>();
       const updates: AgentToolResult<unknown>[] = [];
       const controller = new AbortController();
-      const pending = tool.execute(
-        "cancelled-await",
+      const pending = executeTool(
+        tool,
         { runIds: [child.id], until: "all_finished" },
-        controller.signal,
-        (result) => {
-          updates.push(result);
-          Deferred.doneUnsafe(progress, Effect.void);
+        {
+          callID: "cancelled-await",
+          signal: controller.signal,
+          update: (result) => {
+            updates.push(result);
+            Deferred.doneUnsafe(progress, Effect.void);
+          },
         },
-        context,
       );
       yield* Deferred.await(progress);
       expect(activePresentations).toBe(1);
@@ -157,14 +152,13 @@ it.live(
 
       // A replacement await must acquire the same report claim immediately after cancellation.
       const replacementProgress = Deferred.makeUnsafe<void>();
-      const replacement = tool.execute(
-        "replacement-await",
+      const replacement = executeTool(
+        tool,
         { runIds: [child.id], until: "all_finished" },
-        undefined,
-        () => {
-          Deferred.doneUnsafe(replacementProgress, Effect.void);
+        {
+          callID: "replacement-await",
+          update: () => Deferred.doneUnsafe(replacementProgress, Effect.void),
         },
-        context,
       );
       yield* Deferred.await(replacementProgress);
       fixture.backend.controls[0]!.offer({

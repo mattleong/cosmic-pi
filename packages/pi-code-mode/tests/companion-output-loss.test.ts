@@ -1,23 +1,8 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import {
-  BACKGROUND_TASK_CODE_MODE_QUERY,
-  BACKGROUND_TASK_CODE_MODE_VERSION,
-  normalizeBackgroundTaskCodeModeQuery,
-} from "pi-background-task/code-mode";
-import {
-  MCP_CODE_MODE_QUERY,
-  MCP_CODE_MODE_VERSION,
-  mcpCodeModeError,
-  normalizeMcpCodeModeQuery,
-} from "pi-mcp/code-mode";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-
-const textOf = (result: { content: readonly { type: string; text?: string }[] }) =>
-  result.content.map((block) => block.text ?? "").join("\n");
+import { mcpCodeModeError } from "pi-mcp/code-mode";
+import { executeHarness, textOf } from "./support/execute.ts";
+import { backgroundTaskProvider, mcpProvider } from "./support/providers.ts";
 
 const expectCompletedLoss = (text: string) => {
   expect(text).toContain("handled");
@@ -34,37 +19,21 @@ describe("companion output loss without presentation evidence", () => {
     { action: "status", text: "wrong action" },
   ])("reports consumer rejection of a legacy background reply: $action", (output) =>
     Effect.gen(function* () {
-      const run = Effect.runPromiseWith(yield* Effect.context<never>());
-      const events = createEventBus();
       let dispatched = 0;
-      events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (query) =>
-        normalizeBackgroundTaskCodeModeQuery(query)?.respond({
-          version: BACKGROUND_TASK_CODE_MODE_VERSION,
-          sessionId: "background-loss",
-          // Older companions return output without supplying the optional presentation callback.
-          execute: () => {
-            dispatched++;
-            return Promise.resolve(output);
-          },
-        }),
-      );
-      const execute = makeCodeModeToolExecute({
-        isCurrent: () => true,
-        getState: () => codeModeStateFixture({ maxCumulativeChildOutputBytes: 1_000 }),
-        runInSession: (effect) => run(effect),
-        definitions: nestedToolDefinitionsFixture({}),
+      // Older companions return output without supplying the optional presentation callback.
+      const events = backgroundTaskProvider(() => {
+        dispatched++;
+        return Promise.resolve(output);
+      });
+      const { run } = executeHarness({
         events,
-        sessionId: "background-loss",
+        runPromise: Effect.runPromiseWith(yield* Effect.context<never>()),
+        cwd: "/workspace",
+        config: { maxCumulativeChildOutputBytes: 1_000 },
       });
       const result = yield* Effect.promise(() =>
-        execute(
-          "legacy",
-          {
-            code: 'try { await tools.session.backgroundTask({action:"list"}); } catch {} return "handled";',
-          },
-          undefined,
-          undefined,
-          extensionContextFixture({ cwd: "/workspace" }),
+        run(
+          'try { await tools.session.backgroundTask({action:"list"}); } catch {} return "handled";',
         ),
       );
       expectCompletedLoss(textOf(result));
@@ -76,37 +45,18 @@ describe("companion output loss without presentation evidence", () => {
     "preserves completed MCP work when %s suppresses provider publication",
     (kind) =>
       Effect.gen(function* () {
-        const run = Effect.runPromiseWith(yield* Effect.context<never>());
-        const events = createEventBus();
         let dispatched = 0;
-        events.on(MCP_CODE_MODE_QUERY, (query) =>
-          normalizeMcpCodeModeQuery(query)?.respond({
-            version: MCP_CODE_MODE_VERSION,
-            sessionId: "mcp-revoked",
-            execute: () => {
-              dispatched++;
-              return Promise.reject(mcpCodeModeError(kind, "completed"));
-            },
-          }),
-        );
-        const execute = makeCodeModeToolExecute({
-          isCurrent: () => true,
-          getState: () => codeModeStateFixture(),
-          runInSession: (effect) => run(effect),
-          definitions: nestedToolDefinitionsFixture({}),
+        const events = mcpProvider(() => {
+          dispatched++;
+          return Promise.reject(mcpCodeModeError(kind, "completed"));
+        });
+        const { run } = executeHarness({
           events,
-          sessionId: "mcp-revoked",
+          runPromise: Effect.runPromiseWith(yield* Effect.context<never>()),
+          cwd: "/workspace",
         });
         const result = yield* Effect.promise(() =>
-          execute(
-            "suppressed",
-            {
-              code: 'try { await tools.mcp.request({action:"status"}); } catch {} return "handled";',
-            },
-            undefined,
-            undefined,
-            extensionContextFixture({ cwd: "/workspace" }),
-          ),
+          run('try { await tools.mcp.request({action:"status"}); } catch {} return "handled";'),
         );
         expectCompletedLoss(textOf(result));
         expect(dispatched).toBe(1);

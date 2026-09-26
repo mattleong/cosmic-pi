@@ -1,16 +1,12 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import type {
-  BackendAssistantTerminal,
-  BackendEvent,
-  BackendReport,
-  BackendHandle,
-} from "../backend/model.ts";
-import type { SubagentNotification } from "../boundary/host-notifier.ts";
-import type { SubagentError } from "./errors.ts";
-import { SubagentProcessError, SubagentProtocolError } from "./errors.ts";
+import type { BackendEvent, BackendHandle } from "../backend/model.ts";
+import { type SubagentError, SubagentProcessError, SubagentProtocolError } from "./errors.ts";
 import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
+import type { RunNotificationDelivery } from "./notification-delivery.ts";
+import type { RunProxyExecution } from "./proxy-execution.ts";
+import type { RunSettlement } from "./settlement.ts";
 import {
   bashCommandMayMutate,
   MAX_OBSERVED_WRITE_PATHS,
@@ -35,60 +31,25 @@ import {
   sanitizeDiagnosticText,
   sanitizeOutputText,
 } from "./state.ts";
-import { projectRunWarning, setRunWarning } from "./warnings.ts";
+import { recordRunWarning } from "./warnings.ts";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
 export interface RunEventDependencies {
-  readonly mutateView: (
-    record: RunRecord,
-    assignmentEpoch: number | undefined,
-    update: (view: SubagentRunView) => SubagentRunView | undefined,
-  ) => Effect.Effect<SubagentRunView | undefined>;
-  readonly mergeLateUsage: (
-    record: RunRecord,
-    assignmentEpoch: number,
-    usage: import("./model.ts").SubagentUsage,
-  ) => Effect.Effect<void>;
-  readonly mergeProcessUsage: (
-    record: RunRecord,
-    source: BackendHandle | undefined,
-    usage: import("./model.ts").SubagentUsage,
-  ) => Effect.Effect<void>;
-  readonly runStarted: (record: RunRecord, assignmentEpoch: number) => Effect.Effect<void>;
-  readonly runSettled: (
-    record: RunRecord,
-    assignmentEpoch: number,
-    terminal?: BackendAssistantTerminal,
-  ) => Effect.Effect<void>;
-  readonly acceptReport: (
-    record: RunRecord,
-    report: BackendReport,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly settle: (
-    record: RunRecord,
-    state: "completed" | "failed" | "stopped",
-    error?: string,
-  ) => Effect.Effect<SubagentRunView>;
+  readonly mutateView: RunSettlement["mutateEventView"];
+  readonly mergeLateUsage: RunSettlement["mergeLateUsage"];
+  readonly mergeProcessUsage: RunSettlement["mergeProcessUsage"];
+  readonly runStarted: RunSettlement["runStartedFromBackend"];
+  readonly runSettled: RunSettlement["runSettledFromBackend"];
+  readonly acceptReport: RunSettlement["acceptBackendReport"];
+  readonly settle: RunSettlement["settle"];
   /** Called inside mutateView's locked transition before projection publication. */
-  readonly queueQuestionLocked: (
-    record: RunRecord,
-    notification: Omit<Extract<SubagentNotification, { type: "question" }>, "generation">,
-  ) => void;
-  readonly failRun: (
-    record: RunRecord,
-    message: string,
-    pendingError?: SubagentError,
-  ) => Effect.Effect<SubagentRunView>;
+  readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
+  readonly failRun: RunSettlement["failRun"];
   /** Starts asynchronous containment after an unambiguous native file-tool violation. */
   readonly onWriteClaimViolation: (record: RunRecord, message: string) => Effect.Effect<void>;
-  readonly onProxyEvent: (
-    record: RunRecord,
-    event: Extract<BackendEvent, { readonly type: "proxy_request" | "proxy_cancel" }>,
-  ) => Effect.Effect<void>;
+  readonly onProxyEvent: RunProxyExecution;
 }
-
-const protocolError = (message: string) => new SubagentProtocolError({ message });
 
 export function makeRunEventHandler(dependencies: RunEventDependencies) {
   const {
@@ -105,106 +66,163 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     onProxyEvent,
   } = dependencies;
 
+  /** Reads the clock before mutateView takes the lock, then passes that time to `update`. */
+  const mutateAt = (
+    record: RunRecord,
+    assignmentEpoch: number | undefined,
+    update: (view: SubagentRunView, now: number) => SubagentRunView | undefined,
+  ) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) => mutateView(record, assignmentEpoch, (view) => update(view, now))),
+    );
+
   const handleContact = (
     record: RunRecord,
     envelope: Extract<BackendEvent, { readonly type: "supervisor_contact" }>,
-  ) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
-      if (envelope.kind === "progress") {
-        yield* mutateView(record, envelope.assignmentEpoch, (current) =>
-          current.state === "paused"
-            ? undefined
-            : {
-                ...current,
-                progress: message,
-                lastActivityAt: now,
-                sessionEvents: appendNoticeSessionEvent(
-                  current.sessionEvents,
-                  "progress",
-                  message,
-                  now,
-                ),
-              },
-        );
-        return;
-      }
-      if (envelope.kind === "warning") {
-        yield* mutateView(record, envelope.assignmentEpoch, (current) => {
-          if (current.state === "paused") return undefined;
-          record.warningSlots = setRunWarning(record.warningSlots, "child", message);
-          return {
-            ...current,
-            ...projectRunWarning(record.warningSlots, "child"),
-            lastActivityAt: now,
-            sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "warning", message, now),
-          };
-        });
-        return;
-      }
-      yield* mutateView(record, envelope.assignmentEpoch, (current) => {
-        if (current.state !== "running") return undefined;
-        if (record.replyPendingRequestId === envelope.requestId) return undefined;
-        record.replyPendingRequestId = undefined;
-        queueQuestionLocked(record, {
-          type: "question",
-          id: current.id,
-          name: current.name,
-          requestId: envelope.requestId,
-          message,
-        });
-        return {
-          ...current,
-          state: "waiting_for_parent",
-          lastActivityAt: now,
-          question: { requestId: envelope.requestId, message, createdAt: now },
-          sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
-        };
+  ) => {
+    const message = sanitizeDiagnosticText(envelope.message, 16 * 1024);
+    return mutateAt(record, envelope.assignmentEpoch, (current, now) => {
+      if (envelope.kind === "progress")
+        return current.state === "paused"
+          ? undefined
+          : {
+              ...current,
+              progress: message,
+              lastActivityAt: now,
+              sessionEvents: appendNoticeSessionEvent(
+                current.sessionEvents,
+                "progress",
+                message,
+                now,
+              ),
+            };
+      if (envelope.kind === "warning")
+        return current.state === "paused"
+          ? undefined
+          : {
+              ...current,
+              ...recordRunWarning(record, current.sessionEvents, "child", message, now),
+              lastActivityAt: now,
+            };
+      if (current.state !== "running") return undefined;
+      if (record.replyPendingRequestId === envelope.requestId) return undefined;
+      record.replyPendingRequestId = undefined;
+      queueQuestionLocked(record, {
+        type: "question",
+        id: current.id,
+        name: current.name,
+        requestId: envelope.requestId,
+        message,
       });
+      return {
+        ...current,
+        state: "waiting_for_parent",
+        lastActivityAt: now,
+        question: { requestId: envelope.requestId, message, createdAt: now },
+        sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
+      };
     });
-
-  const handleInactiveEvent = (record: RunRecord, event: BackendEvent): Effect.Effect<void> => {
-    // A backend may report final cumulative usage/cost only at its native result, after the
-    // accepted report settled the run. That exact epoch's usage still merges into the outcome.
-    if (event.type === "assistant_message")
-      return mergeLateUsage(record, event.assignmentEpoch, event.usage);
-    return Effect.void;
   };
 
   const handleAssistantMessage = (
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "assistant_message" }>,
-  ): Effect.Effect<void> => {
+  ) => {
     const latestAssistantText = event.text
       ? sanitizeOutputText(event.text, MAX_FINAL_TEXT_CHARS)
       : undefined;
-    return Clock.currentTimeMillis.pipe(
-      Effect.flatMap((now) =>
-        mutateView(record, event.assignmentEpoch, (current) => {
-          record.latestAssistantText = latestAssistantText;
-          return {
-            ...current,
-            lastActivityAt: now,
-            ...(latestAssistantText && {
-              sessionEvents: appendAssistantSessionEvent(
-                current.sessionEvents,
-                latestAssistantText,
-                now,
-              ),
-            }),
-            usage: addUsage(current.usage, event.usage),
-          };
+    return mutateAt(record, event.assignmentEpoch, (current, now) => {
+      record.latestAssistantText = latestAssistantText;
+      return {
+        ...current,
+        lastActivityAt: now,
+        ...(latestAssistantText && {
+          sessionEvents: appendAssistantSessionEvent(
+            current.sessionEvents,
+            latestAssistantText,
+            now,
+          ),
         }),
-      ),
-      Effect.asVoid,
-    );
+        usage: addUsage(current.usage, event.usage),
+      };
+    });
   };
+
+  /** Observes paths and claims when the returned effect runs, before the view lock. */
+  const handleToolStarted = (
+    record: RunRecord,
+    event: Extract<BackendEvent, { readonly type: "tool_started" }>,
+  ) =>
+    Effect.suspend(() => {
+      const observed = observeFileWrite(event.toolName, event.args);
+      const observedPaths =
+        observed === undefined
+          ? []
+          : observed.length === 0
+            ? [OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER]
+            : observed.map(
+                (path) =>
+                  workspaceRelativeObservedPath(record.view.cwd, path) ??
+                  OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
+              );
+      const claims = record.view.writeClaims;
+      // A resolved relative path is never the marker, so the marker stands for unresolved paths.
+      const violatingPaths =
+        claims === undefined
+          ? []
+          : observedPaths.filter(
+              (path) =>
+                path === OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER || !writeClaimContains(claims, path),
+            );
+      const bashHint = bashCommandMayMutate(event.toolName, event.args);
+      const violationMessage =
+        violatingPaths.length > 0
+          ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths.join(", ")}. Containment has started, and new writer admission is paused.`
+          : undefined;
+      return mutateAt(record, event.assignmentEpoch, (current, now) => {
+        if (current.state === "paused") return undefined;
+        record.activeTools.set(event.toolCallId, event.toolName);
+        const writeAudit = current.writeAudit && {
+          observedFileWrites: [
+            ...new Set([...current.writeAudit.observedFileWrites, ...observedPaths]),
+          ].slice(-MAX_OBSERVED_WRITE_PATHS),
+          violations: [
+            ...current.writeAudit.violations,
+            ...violatingPaths.map((path) => ({ path, toolName: event.toolName, observedAt: now })),
+          ].slice(-MAX_WRITE_CLAIM_VIOLATIONS),
+          bashWriteHints: Math.min(
+            Number.MAX_SAFE_INTEGER,
+            current.writeAudit.bashWriteHints + (bashHint ? 1 : 0),
+          ),
+        };
+        const sessionEvents = startToolSessionEvent(current.sessionEvents, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
+          startedAt: now,
+        });
+        return {
+          ...current,
+          ...(writeAudit && { writeAudit }),
+          ...(violationMessage
+            ? recordRunWarning(record, sessionEvents, "system", violationMessage, now)
+            : { sessionEvents }),
+          currentTool: [...record.activeTools.values()].at(-1),
+          lastActivityAt: now,
+        };
+      }).pipe(
+        Effect.flatMap((updated) =>
+          updated && violationMessage
+            ? onWriteClaimViolation(record, violationMessage)
+            : Effect.void,
+        ),
+      );
+    });
 
   const handleExit = (
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "exit" }>,
-  ): Effect.Effect<void> => {
+  ) => {
     const processFailure = new SubagentProcessError({
       operation: "run",
       message: sanitizeDiagnosticText(
@@ -216,182 +234,79 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     record.process?.cancelPending(processFailure);
     return isInactiveRunRecord(record)
       ? Effect.void
-      : settle(record, "failed", processFailure.message).pipe(Effect.asVoid);
+      : settle(record, "failed", processFailure.message);
   };
 
-  return (
+  const handleEvent = (
     record: RunRecord,
     event: BackendEvent,
-    source?: BackendHandle,
-  ): Effect.Effect<void, SubagentError> => {
+    source: BackendHandle | undefined,
+  ): Effect.Effect<unknown, SubagentError> => {
     if (event.type === "usage") return mergeProcessUsage(record, source, event.usage);
     if (event.type === "proxy_request" || event.type === "proxy_cancel")
       return onProxyEvent(record, event);
     if (event.type !== "exit" && isInactiveRunRecord(record))
-      return handleInactiveEvent(record, event);
+      // A backend may report final cumulative usage/cost only at its native result, after the
+      // accepted report settled the run. That exact epoch's usage still merges into the outcome.
+      return event.type === "assistant_message"
+        ? mergeLateUsage(record, event.assignmentEpoch, event.usage)
+        : Effect.void;
     switch (event.type) {
       case "run_started":
         return runStarted(record, event.assignmentEpoch);
       case "run_settled":
         return runSettled(record, event.assignmentEpoch, event.terminal);
       case "report":
-        return acceptReport(record, event).pipe(Effect.asVoid);
+        return acceptReport(record, event);
       case "activity":
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            mutateView(record, event.assignmentEpoch, (current) =>
-              now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
-                ? undefined
-                : { ...current, lastActivityAt: now },
-            ),
-          ),
-          Effect.asVoid,
+        return mutateAt(record, event.assignmentEpoch, (current, now) =>
+          now - current.lastActivityAt < ACTIVITY_PUBLISH_INTERVAL_MILLIS
+            ? undefined
+            : { ...current, lastActivityAt: now },
         );
       case "native_agent_activity":
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            mutateView(record, event.assignmentEpoch, (current) => {
-              const activityId = sanitizeDiagnosticText(event.activityId, 256);
-              const kind = sanitizeDiagnosticText(event.kind, 128);
-              if (event.state === "running") {
-                if (!record.nativeAgents.has(activityId) && record.nativeAgents.size < 64) {
-                  record.nativeAgents.set(activityId, { kind });
-                  record.nativeAgentTotal = Math.min(
-                    Number.MAX_SAFE_INTEGER,
-                    record.nativeAgentTotal + 1,
-                  );
-                }
-              } else if (event.state !== "activity") record.nativeAgents.delete(activityId);
-              return {
-                ...current,
-                lastActivityAt: now,
-                nativeActivity: {
-                  active: record.nativeAgents.size,
-                  total: record.nativeAgentTotal,
-                  latest: {
-                    id: activityId,
-                    kind,
-                    state: event.state,
-                    updatedAt: now,
-                  },
-                },
-              };
-            }),
-          ),
-          Effect.asVoid,
-        );
+        return mutateAt(record, event.assignmentEpoch, (current, now) => {
+          const activityId = sanitizeDiagnosticText(event.activityId, 256);
+          const kind = sanitizeDiagnosticText(event.kind, 128);
+          if (event.state === "running") {
+            if (!record.nativeAgents.has(activityId) && record.nativeAgents.size < 64) {
+              record.nativeAgents.set(activityId, { kind });
+              record.nativeAgentTotal = Math.min(
+                Number.MAX_SAFE_INTEGER,
+                record.nativeAgentTotal + 1,
+              );
+            }
+          } else if (event.state !== "activity") record.nativeAgents.delete(activityId);
+          return {
+            ...current,
+            lastActivityAt: now,
+            nativeActivity: {
+              active: record.nativeAgents.size,
+              total: record.nativeAgentTotal,
+              latest: { id: activityId, kind, state: event.state, updatedAt: now },
+            },
+          };
+        });
       case "assistant_message":
         return handleAssistantMessage(record, event);
       case "tool_started":
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) => {
-            const observed = observeFileWrite(event.toolName, event.args);
-            const observedPaths = observed
-              ? observed.paths.length > 0
-                ? observed.paths.map((path) => ({
-                    relative: workspaceRelativeObservedPath(record.view.cwd, path),
-                  }))
-                : [{ relative: undefined }]
-              : [];
-            const violatingPaths =
-              record.view.writeClaims === undefined
-                ? []
-                : observedPaths.filter(
-                    ({ relative }) =>
-                      relative === undefined ||
-                      !writeClaimContains(record.view.writeClaims ?? [], relative),
-                  );
-            const bashHint = bashCommandMayMutate(event.toolName, event.args);
-            const violationMessage =
-              violatingPaths.length > 0
-                ? `Writer ${record.view.id} used ${event.toolName} outside its cooperative claims: ${violatingPaths
-                    .map(({ relative }) => relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER)
-                    .join(", ")}. Containment has started, and new writer admission is paused.`
-                : undefined;
-            return mutateView(record, event.assignmentEpoch, (current) => {
-              if (current.state === "paused") return undefined;
-              record.activeTools.set(event.toolCallId, event.toolName);
-              const writeAudit = current.writeAudit
-                ? {
-                    observedFileWrites: [
-                      ...new Set([
-                        ...current.writeAudit.observedFileWrites,
-                        ...observedPaths.map(
-                          ({ relative }) => relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
-                        ),
-                      ]),
-                    ].slice(-MAX_OBSERVED_WRITE_PATHS),
-                    violations: [
-                      ...current.writeAudit.violations,
-                      ...violatingPaths.map(({ relative }) => ({
-                        path: relative ?? OUTSIDE_WORKSPACE_WRITE_CLAIM_MARKER,
-                        toolName: event.toolName,
-                        observedAt: now,
-                      })),
-                    ].slice(-MAX_WRITE_CLAIM_VIOLATIONS),
-                    bashWriteHints: Math.min(
-                      Number.MAX_SAFE_INTEGER,
-                      current.writeAudit.bashWriteHints + (bashHint ? 1 : 0),
-                    ),
-                  }
-                : undefined;
-              const warning = violationMessage;
-              if (warning)
-                record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
-              const sessionEvents = startToolSessionEvent(current.sessionEvents, {
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                args: event.args,
-                startedAt: now,
-              });
-              return {
-                ...current,
-                ...(writeAudit && { writeAudit }),
-                ...(warning
-                  ? {
-                      ...projectRunWarning(record.warningSlots, "system"),
-                      sessionEvents: appendNoticeSessionEvent(
-                        sessionEvents,
-                        "warning",
-                        warning,
-                        now,
-                      ),
-                    }
-                  : { sessionEvents }),
-                currentTool: [...record.activeTools.values()].at(-1),
-                lastActivityAt: now,
-              };
-            }).pipe(
-              Effect.flatMap((updated) =>
-                updated && violationMessage
-                  ? onWriteClaimViolation(record, violationMessage)
-                  : Effect.void,
-              ),
-            );
-          }),
-          Effect.asVoid,
-        );
+        return handleToolStarted(record, event);
       case "tool_finished":
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) =>
-            mutateView(record, event.assignmentEpoch, (current) => {
-              if (current.state === "paused") return undefined;
-              record.activeTools.delete(event.toolCallId);
-              return {
-                ...current,
-                currentTool: [...record.activeTools.values()].at(-1),
-                lastActivityAt: now,
-                sessionEvents: finishToolSessionEvent(current.sessionEvents, {
-                  toolCallId: event.toolCallId,
-                  toolName: event.toolName,
-                  isError: event.isError,
-                  endedAt: now,
-                }),
-              };
+        return mutateAt(record, event.assignmentEpoch, (current, now) => {
+          if (current.state === "paused") return undefined;
+          record.activeTools.delete(event.toolCallId);
+          return {
+            ...current,
+            currentTool: [...record.activeTools.values()].at(-1),
+            lastActivityAt: now,
+            sessionEvents: finishToolSessionEvent(current.sessionEvents, {
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              isError: event.isError,
+              endedAt: now,
             }),
-          ),
-          Effect.asVoid,
-        );
+          };
+        });
       case "supervisor_contact":
         return handleContact(record, event);
       case "supervisor_question_cancelled":
@@ -405,34 +320,33 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
           return waitingForQuestion
             ? { ...current, state: "running", question: undefined }
             : { ...current };
-        }).pipe(Effect.asVoid);
-      case "warning":
-        return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) => {
-            const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
-            return mutateView(record, undefined, (current) => {
-              record.warningSlots = setRunWarning(record.warningSlots, "system", message);
-              return {
-                ...current,
-                ...projectRunWarning(record.warningSlots, "system"),
-                lastActivityAt: now,
-                sessionEvents: appendNoticeSessionEvent(
-                  current.sessionEvents,
-                  "warning",
-                  `Extension error: ${message}`,
-                  now,
-                ),
-              };
-            });
-          }),
-          Effect.asVoid,
-        );
+        });
+      case "warning": {
+        const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
+        return mutateAt(record, undefined, (current, now) => ({
+          ...current,
+          ...recordRunWarning(
+            record,
+            current.sessionEvents,
+            "system",
+            message,
+            now,
+            `Extension error: ${message}`,
+          ),
+          lastActivityAt: now,
+        }));
+      }
       case "protocol_error": {
-        const error = protocolError(event.message);
-        return failRun(record, error.message, error).pipe(Effect.asVoid);
+        const error = new SubagentProtocolError({ message: event.message });
+        return failRun(record, error.message, error);
       }
       case "exit":
         return handleExit(record, event);
     }
   };
+
+  return (record: RunRecord, event: BackendEvent, source?: BackendHandle) =>
+    handleEvent(record, event, source).pipe(Effect.asVoid);
 }
+
+export type RunEventHandler = ReturnType<typeof makeRunEventHandler>;

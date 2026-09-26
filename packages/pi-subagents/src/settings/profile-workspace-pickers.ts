@@ -1,13 +1,14 @@
 // Cancellable full-page selectors. Runtime and model changes commit together.
-import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../profiles/model.ts";
+import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
+import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
-import type { CandidateUpdate } from "./profile-route-editor.ts";
-import { updateCandidateFromModelChoice } from "./profile-model-catalog.ts";
-import { makeProfileModelPickerPage, type ProfileModelChoice } from "./ui/model-picker.ts";
+import { updateCandidateModel } from "./profile-route-editor.ts";
+import { makeProfileModelPickerPage } from "./ui/model-picker.ts";
 import type { SelectableCandidateField } from "./ui/profile-workspace-model.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
+  shortTargetLabel,
 } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspaceSave } from "./profile-workspace-save.ts";
 export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
@@ -39,10 +40,22 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     this.renderSoon();
   }
 
-  protected selectorTargetLabel(): string {
-    return this.options.target.kind === "session"
-      ? "Session"
-      : `${this.options.target.set.scope === "project" ? "Project" : "Global"}/${this.options.target.set.name}`;
+  /** Host plumbing shared by every full-page selector this editor opens. */
+  protected selectorHost() {
+    const { theme, getHeight, requestRender, matchesKeybinding, keybindingLabel } = this.options;
+    return { theme, getHeight, requestRender, matchesKeybinding, keybindingLabel };
+  }
+
+  protected showSelectPage(page: SearchableSelectPage<string>): void {
+    this.selectPage = page;
+    page.focused = this._focused;
+    this.renderSoon();
+  }
+
+  protected closeSelectPage(): void {
+    this.selectPage = undefined;
+    this.message = undefined;
+    this.renderSoon();
   }
 
   protected showFieldPicker(
@@ -53,51 +66,36 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     notice?: string | undefined,
   ): void {
     const candidateIndex = this.candidateIndex;
-    const selectorBase = {
-      theme: this.options.theme,
-      profile: this.profile(),
-      candidateIndex,
-      candidate,
-      field,
-      target: this.options.target,
-      piModel: this.options.preferredPiModel(),
-      parentModel: this.options.parentModel,
-      parentEffort: this.options.parentEffort,
-      supportedEfforts,
-      fastModeAvailable,
-      getHeight: this.options.getHeight,
-      requestRender: this.options.requestRender,
-      matchesKeybinding: this.options.matchesKeybinding,
-      keybindingLabel: this.options.keybindingLabel,
-      select: (update: CandidateUpdate, description: string) => {
-        this.selectPage = undefined;
-        this.candidateIndex = candidateIndex;
-        if (
-          field === "runWith" &&
-          update.candidate &&
-          update.candidate.runtime !== candidate.runtime
-        ) {
-          this.openModelPicker(
-            update.candidate,
-            true,
-            "Run with and model changed",
-            update.notices,
-          );
-          return;
-        }
-        this.applyCandidateUpdate(update, description);
-      },
-      cancel: () => {
-        this.selectPage = undefined;
-        this.message = undefined;
-        this.renderSoon();
-      },
-    };
-    this.selectPage = makeCandidateFieldSelector(
-      notice ? { ...selectorBase, notice } : selectorBase,
+    this.showSelectPage(
+      makeCandidateFieldSelector({
+        ...this.selectorHost(),
+        profile: this.profile(),
+        candidateIndex,
+        candidate,
+        field,
+        target: this.options.target,
+        piModel: this.options.preferredPiModel(),
+        parentModel: this.options.parentModel,
+        parentEffort: this.options.parentEffort,
+        supportedEfforts,
+        fastModeAvailable,
+        notice,
+        select: (update) => {
+          this.selectPage = undefined;
+          this.candidateIndex = candidateIndex;
+          if (
+            field === "runWith" &&
+            update.candidate &&
+            update.candidate.runtime !== candidate.runtime
+          ) {
+            this.openModelPicker(update.candidate, true, update.notices);
+            return;
+          }
+          this.applyCandidateUpdate(update);
+        },
+        cancel: () => this.closeSelectPage(),
+      }),
     );
-    this.selectPage.focused = this._focused;
-    this.renderSoon();
   }
 
   protected openCapabilityPicker(
@@ -113,11 +111,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return;
-        const current = picker.choices.find((choice) =>
-          fastMode && candidate.model === "parent"
-            ? choice.choice.kind === "parent"
-            : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
-        );
+        const current = picker.choices.find((option) => option.selector === candidate.model);
         this.candidateIndex = candidateIndex;
         this.showFieldPicker(
           candidate,
@@ -146,7 +140,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   protected openModelPicker(
     candidate: ProfileCandidate,
     preferAdvertisedDefault = false,
-    description = "Model changed",
     priorNotices: ReadonlyArray<string> = [],
   ): void {
     const candidateIndex = this.addingCandidate
@@ -168,29 +161,26 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           this.renderSoon();
           return;
         }
-        const pickerBase = {
-          theme: this.options.theme,
+        this.modelPicker = makeProfileModelPickerPage({
+          ...this.selectorHost(),
           choices: picker.choices,
           scopedChoices: picker.scopedChoices,
           initialSelection: preferAdvertisedDefault
             ? (picker.defaultSelector ?? picker.current)
             : picker.current,
           context: picker.context,
-          targetLabel: this.selectorTargetLabel(),
-          getHeight: this.options.getHeight,
-          requestRender: this.options.requestRender,
-          matchesKeybinding: this.options.matchesKeybinding,
-          keybindingLabel: this.options.keybindingLabel,
-          select: (choice: ProfileModelChoice) => {
+          targetLabel: shortTargetLabel(this.options.target),
+          notice: picker.warning,
+          select: (option) => {
             this.modelPicker = undefined;
             if (!this.addingCandidate) this.candidateIndex = candidateIndex;
-            const update = updateCandidateFromModelChoice(candidate, picker, choice);
-            this.applyCandidateUpdate(
-              update.candidate
-                ? { ...update, notices: [...priorNotices, ...update.notices] }
-                : update,
-              description,
+            const update = updateCandidateModel(
+              candidate,
+              option.selector,
+              option.supportedEfforts,
+              option.fastModeAvailable,
             );
+            this.applyCandidateUpdate({ ...update, notices: [...priorNotices, ...update.notices] });
           },
           cancel: () => {
             this.modelPicker = undefined;
@@ -198,10 +188,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
             this.message = undefined;
             this.renderSoon();
           },
-        };
-        this.modelPicker = makeProfileModelPickerPage(
-          picker.warning ? { ...pickerBase, notice: picker.warning } : pickerBase,
-        );
+        });
         this.modelPicker.focused = this._focused;
         this.renderSoon();
       })
@@ -214,32 +201,24 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   }
 
   protected openProfileSearch(): void {
-    this.selectPage = makeProfileSearchSelector({
-      theme: this.options.theme,
-      inspection: this.inspection,
-      current: this.profile(),
-      parentEffort: this.options.parentEffort,
-      parentModel: this.options.parentModel,
-      target: this.options.target,
-      getHeight: this.options.getHeight,
-      requestRender: this.options.requestRender,
-      matchesKeybinding: this.options.matchesKeybinding,
-      keybindingLabel: this.options.keybindingLabel,
-      select: (profile: ProfileId) => {
-        this.selectPage = undefined;
-        this.rememberSelection();
-        this.profileIndex = PROFILE_IDS.indexOf(profile);
-        this.resetSelectionForProfile();
-        this.pane = "fields";
-        this.renderSoon();
-      },
-      cancel: () => {
-        this.selectPage = undefined;
-        this.message = undefined;
-        this.renderSoon();
-      },
-    });
-    this.selectPage.focused = this._focused;
-    this.renderSoon();
+    this.showSelectPage(
+      makeProfileSearchSelector({
+        ...this.selectorHost(),
+        inspection: this.inspection,
+        current: this.profile(),
+        parentEffort: this.options.parentEffort,
+        parentModel: this.options.parentModel,
+        target: this.options.target,
+        select: (profile) => {
+          this.selectPage = undefined;
+          this.rememberSelection();
+          this.profileIndex = PROFILE_IDS.indexOf(profile);
+          this.resetSelectionForProfile();
+          this.pane = "fields";
+          this.renderSoon();
+        },
+        cancel: () => this.closeSelectPage(),
+      }),
+    );
   }
 }

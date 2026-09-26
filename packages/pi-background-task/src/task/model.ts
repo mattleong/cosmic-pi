@@ -1,11 +1,14 @@
-export type BackgroundTaskState =
-  | "starting"
-  | "running"
-  | "stopping"
-  | "exited"
-  | "failed"
-  | "stopped"
-  | "timed_out";
+import type {
+  BackgroundLogMetadataSchema,
+  BackgroundTaskSnapshotSchema,
+  BackgroundTaskStateSchema,
+  BackgroundTaskWaitResultSchema,
+} from "./schema.ts";
+
+export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
+export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
+export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
+export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;
 
 export type BackgroundLogStream = "stdout" | "stderr";
 
@@ -19,29 +22,8 @@ export interface BackgroundLogEvent {
   readonly droppedBefore?: true;
 }
 
-export interface BackgroundTaskSnapshot {
-  readonly id: string;
-  readonly name?: string;
-  readonly command: string;
-  readonly cwd: string;
-  readonly state: BackgroundTaskState;
-  readonly pid?: number;
-  readonly startedAt: number;
-  readonly endedAt?: number;
-  readonly exitCode?: number | null;
-  readonly signal?: string;
-  readonly error?: string;
-  readonly logCursor: number;
-  readonly droppedLogBytes: number;
-}
-
-export interface BackgroundLogSlice {
-  readonly id: string;
+export interface BackgroundLogSlice extends BackgroundLogMetadata {
   readonly events: ReadonlyArray<BackgroundLogEvent>;
-  readonly nextCursor: number;
-  readonly earliestAvailableCursor: number;
-  readonly droppedBytes: number;
-  readonly state: BackgroundTaskState;
 }
 
 export interface BackgroundTaskView extends BackgroundTaskSnapshot {
@@ -67,25 +49,12 @@ export interface ReadBackgroundLogs {
   readonly waitSeconds?: number;
 }
 
-export type BackgroundTaskWaitUntil = "exit" | "output";
-export type BackgroundTaskWaitOutcome = "matched" | "completed" | "timeout";
-
 export interface WaitForBackgroundTask {
   readonly id: string;
-  readonly until: BackgroundTaskWaitUntil;
+  readonly until: "exit" | "output";
   readonly contains?: string;
   readonly afterCursor?: number;
   readonly waitSeconds?: number;
-}
-
-export interface BackgroundTaskWaitResult {
-  readonly id: string;
-  readonly outcome: BackgroundTaskWaitOutcome;
-  readonly snapshot: BackgroundTaskSnapshot;
-  readonly nextCursor: number;
-  readonly earliestAvailableCursor: number;
-  readonly droppedBytes: number;
-  readonly matchCursor?: number;
 }
 
 const ACTIVE_TASK_STATES: ReadonlySet<BackgroundTaskState> = new Set([

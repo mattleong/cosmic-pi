@@ -1,12 +1,11 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "pi-cosmic-core";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import { describe, expect, it, vi } from "vitest";
 import {
   runProfileSetAction,
   type ProfileSetActionHost,
+  type ProfileSetSaveDestination,
 } from "../src/settings/profile-set-actions.ts";
 import { ProfileDashboardDialog } from "../src/settings/profile-dashboard-dialogs.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
@@ -14,18 +13,14 @@ import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
 } from "../src/settings/profile-workspace.ts";
-import type { FleetManagerActions } from "../src/settings/controller.ts";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
-import { extensionContextFixture } from "./fixtures/pi-host.ts";
+import { PROFILE_IDS } from "../src/profiles/model.ts";
+import {
+  fleetManagerActionsFixture,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
+import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { effectTest, eventLoopTurn, step } from "./support/effect-test.ts";
 
-// SAFETY: These components only call the three implemented Theme functions.
-const theme = {
-  fg: (_color: string, value: string) => value,
-  bg: (_color: string, value: string) => value,
-  bold: (value: string) => value,
-  underline: (value: string) => value,
-} as Theme;
 const inspection = () =>
   makeProfileSettingsInspection({
     globalDocument: { version: 6, profileSets: { common: { profiles: {} } } },
@@ -36,36 +31,14 @@ const fixture = () => {
   const value = inspection();
   const calls = {
     inspectProfiles: vi.fn(() => Promise.resolve(value)),
-    replaceSessionProfiles: vi.fn(() => Promise.resolve()),
-    replaceSessionProfilesWithReceipt: vi.fn(() => Promise.resolve(value.session)),
+    replaceSessionProfiles: vi.fn(() => Promise.resolve(value.session)),
     createProfileSetFromSnapshot: vi.fn(() => Promise.resolve()),
     patchDefaultProfileSet: vi.fn(() => Promise.resolve()),
     copyProfileSet: vi.fn(() => Promise.resolve()),
     renameProfileSet: vi.fn(() => Promise.resolve()),
     deleteProfileSet: vi.fn(() => Promise.resolve()),
   };
-  const unused = () => Promise.reject(new Error("Unexpected action"));
-  const actions: FleetManagerActions = {
-    ...calls,
-    isAvailable: () => true,
-    captureModelRefresh: () => ({
-      isCurrent: () => true,
-      run: (effect, signal) => Effect.runPromise(effect, { signal }),
-    }),
-    stop: unused,
-    interrupt: unused,
-    resume: unused,
-    send: unused,
-    reply: unused,
-    rename: unused,
-    patchProfile: unused,
-    patchSessionProfile: unused,
-    patchNesting: unused,
-    patchSessionNesting: unused,
-    inspectWriterWorkspace: unused,
-    setWriterWorkspaceMode: unused,
-    listNativeModels: unused,
-  };
+  const actions = fleetManagerActionsFixture(calls);
   let current = true;
   let trusted = true;
   const host: ProfileSetActionHost = {
@@ -106,108 +79,40 @@ describe("profile dashboard actions", () => {
           target: { scope: "global", name: "common" },
         }),
       );
-      expect(f.calls.replaceSessionProfilesWithReceipt).toHaveBeenCalledWith(
+      expect(f.calls.replaceSessionProfiles).toHaveBeenCalledWith(
         expect.objectContaining({ expectedRevision: f.value.session.revision }),
       );
-      expect(f.calls.replaceSessionProfiles).not.toHaveBeenCalled();
       expect(f.host.used).toHaveBeenCalledWith(f.value, f.value);
       const preview = vi.mocked(f.host.confirm).mock.calls[0]![1];
-      for (const profile of [
-        "scout",
-        "researcher",
-        "planner",
-        "worker",
-        "reviewer",
-        "oracle",
-        "generalist",
-      ])
-        expect(preview).toContain(`${profile}:`);
+      for (const profile of PROFILE_IDS) expect(preview).toContain(`${profile}:`);
     },
   );
-  effectTest("marks fast-mode candidates in the Use confirmation", function* () {
-    const value = makeProfileSettingsInspection({
-      globalDocument: {
-        version: 6,
-        profileSets: {
-          fast: {
-            profiles: {
-              scout: {
-                host: "local",
-                runtime: "codex",
-                model: "gpt-5.6-codex",
-                effort: "default",
-                context: "fresh",
-                writeIntent: "read-only",
-                openaiFastMode: true,
-              },
-              researcher: [
-                {
-                  host: "local",
-                  runtime: "codex",
-                  model: "gpt-5.6-codex-fast",
-                  effort: "default",
-                  context: "fresh",
-                  writeIntent: "read-only",
-                  openaiFastMode: true,
-                },
-                {
-                  host: "local",
-                  runtime: "codex",
-                  model: "gpt-5.6-codex-standard",
-                  effort: "default",
-                  context: "fresh",
-                  writeIntent: "read-only",
-                },
-              ],
+  effectTest(
+    "rechecks trust and lifetime after confirming a replacement or deletion",
+    function* () {
+      for (const action of ["use-current", "delete"] as const)
+        for (const revoke of ["untrust", "revoke"] as const) {
+          const f = fixture();
+          const host = {
+            ...f.host,
+            confirm: () => {
+              f[revoke]();
+              return Promise.resolve(true);
             },
-          },
-        },
-      },
-      projectDocument: undefined,
-      projectTrusted: true,
-    });
-    const f = fixture();
-    const host = { ...f.host, inspection: () => value, refresh: () => Promise.resolve(value) };
-
-    yield* step(() =>
-      runProfileSetAction(host, {
-        action: "use-current",
-        target: { scope: "global", name: "fast" },
-      }),
-    );
-
-    const preview = vi.mocked(f.host.confirm).mock.calls[0]![1];
-    expect(preview).toContain("scout: local/codex gpt-5.6-codex ⚡ · default");
-    expect(preview).toContain(
-      "researcher: local/codex gpt-5.6-codex-fast ⚡ · default → local/codex gpt-5.6-codex-standard · default",
-    );
-  });
-  effectTest("rechecks trust and lifetime after confirmation before replacement", function* () {
-    for (const revoke of ["untrust", "revoke"] as const) {
-      const f = fixture();
-      const host = {
-        ...f.host,
-        confirm: () => {
-          f[revoke]();
-          return Promise.resolve(true);
-        },
-      };
-      yield* step(() =>
-        expect(
-          runProfileSetAction(host, {
-            action: "use-current",
-            target: { scope: "project", name: "common" },
-          }),
-        ).rejects.toThrow(),
-      );
-      expect(f.calls.replaceSessionProfilesWithReceipt).not.toHaveBeenCalled();
-    }
-  });
+          };
+          yield* step(() =>
+            expect(
+              runProfileSetAction(host, { action, target: { scope: "project", name: "common" } }),
+            ).rejects.toThrow(),
+          );
+          expect(f.calls.replaceSessionProfiles).not.toHaveBeenCalled();
+          expect(f.calls.deleteProfileSet).not.toHaveBeenCalled();
+        }
+    },
+  );
   effectTest("snapshot saving keeps defaults and editing target unchanged", function* () {
     const f = fixture();
-    yield* step(() =>
-      runProfileSetAction(f.host, { action: "save-session", preferredScope: "project" }),
-    );
+    yield* step(() => runProfileSetAction(f.host, { action: "save-session" }));
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedDocument: f.value.projectDocument,
@@ -239,26 +144,42 @@ describe("profile dashboard actions", () => {
   );
   effectTest("late mutation settlement cannot refresh or publish after disposal", function* () {
     const f = fixture();
-    const gate = yield* Deferred.make<void>();
-    f.calls.deleteProfileSet.mockImplementation(() => Effect.runPromise(Deferred.await(gate)));
+    const gate = deferredPromise();
+    f.calls.deleteProfileSet.mockImplementation(() => gate.promise);
     const pending = runProfileSetAction(f.host, {
       action: "delete",
       target: { scope: "global", name: "common" },
     });
-    yield* step(() => Promise.resolve());
+    yield* step(eventLoopTurn);
+    expect(f.calls.deleteProfileSet).toHaveBeenCalledOnce();
     f.revoke();
-    yield* Deferred.succeed(gate, undefined);
+    gate.resolve();
     yield* step(() => expect(pending).rejects.toThrow());
     expect(f.host.refresh).not.toHaveBeenCalled();
     expect(f.host.deleted).not.toHaveBeenCalled();
   });
+  effectTest("a declined delete changes nothing and reports the cancellation", function* () {
+    const f = fixture();
+    vi.mocked(f.host.confirm).mockResolvedValue(false);
+    yield* step(() =>
+      runProfileSetAction(f.host, {
+        action: "delete",
+        target: { scope: "global", name: "common" },
+      }),
+    );
+    expect(f.calls.deleteProfileSet).not.toHaveBeenCalled();
+    expect(f.host.refresh).not.toHaveBeenCalled();
+    expect(f.host.deleted).not.toHaveBeenCalled();
+    expect(f.host.notify).toHaveBeenCalledOnce();
+  });
 });
 
 describe("internal dashboard dialogs", () => {
+  const [up, down] = ["\u001b[A", "\u001b[B"];
   it("requires scrolling the complete replacement before confirmation", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      theme,
+      theme: plainTheme,
       kind: "confirm",
       title: "Replace",
       body: Array.from({ length: 20 }, (_, index) => `profile ${index}`).join("\n"),
@@ -274,10 +195,10 @@ describe("internal dashboard dialogs", () => {
     dialog.handleInput("\r");
     expect(close).toHaveBeenCalledWith(true);
   });
-  it("text entry owns printable configured cancel bindings", () => {
-    const close = vi.fn();
+  it("Copy and Rename text entry owns printable cancel bindings and arrows", () => {
+    const close = vi.fn<(value: string | undefined) => void>();
     const dialog = new ProfileDashboardDialog({
-      theme,
+      theme: plainTheme,
       kind: "name",
       title: "Name",
       getHeight: () => 8,
@@ -285,14 +206,39 @@ describe("internal dashboard dialogs", () => {
       matchesKeybinding: (data, id) => data === "q" && id === "tui.select.cancel",
       close,
     });
-    dialog.handleInput("q");
-    dialog.handleInput("\r");
+    for (const key of ["q", up, down, "\r"]) dialog.handleInput(key);
     expect(close).toHaveBeenCalledWith("q");
+  });
+  it.each([
+    ["submits the destination and normalized name", true, [..."  a b  "], "project", "a b"],
+    ["toggles on arrows and keeps the name", true, ["x", down, "y", up, up], "global", "xy"],
+    ["never offers Project without trust", false, [up, "\t", "\u001b[Z", "x"], "global", "x"],
+    ["stays open for an invalid name", true, ["\r", " ", "\r", "x"], "project", "x"],
+    ["keeps shortcuts and Tab in the input", true, [..."sumprjq", "\t"], "project", "sumprjq"],
+  ] as const)("save dialog %s", (_case, projectTrusted, keys, scope, name) => {
+    const close = vi.fn<(value: ProfileSetSaveDestination | undefined) => void>();
+    const dialog = new ProfileDashboardDialog({
+      theme: plainTheme,
+      kind: "name",
+      title: "Save",
+      destination: { projectTrusted },
+      getHeight: () => 4,
+      requestRender: vi.fn(),
+      matchesKeybinding: (data, id) =>
+        (data === "j" && id === "tui.select.down") || (data === "q" && id === "tui.select.cancel"),
+      close,
+    });
+    dialog.focused = true;
+    for (const key of keys) dialog.handleInput(key);
+    // The Input renders first, so its cursor survives small heights.
+    expect(dialog.render(40).some((row) => row.includes(CURSOR_MARKER))).toBe(true);
+    dialog.handleInput("\r");
+    expect(close).toHaveBeenCalledExactlyOnceWith({ scope, name });
   });
   it("raw Escape still cancels when configured matcher returns false", () => {
     const close = vi.fn();
     const dialog = new ProfileDashboardDialog({
-      theme,
+      theme: plainTheme,
       kind: "confirm",
       title: "Confirm",
       getHeight: () => 8,
@@ -325,9 +271,8 @@ const dashboard = () => {
         }),
       ),
     workspace: {
-      theme,
+      theme: plainTheme,
       inspection: f.value,
-      projectTrusted: true,
       target: { kind: "session" },
       initialProfile: "worker",
       initialFocus: "fields",
@@ -376,7 +321,9 @@ describe("persistent dashboard", () => {
       f.component.handleInput("\u001b");
       f.component.handleInput("\t");
       checkBounds();
-      for (const key of ["a", "j", "j", "\r"]) f.component.handleInput(key);
+      f.component.handleInput("a");
+      checkBounds();
+      for (const key of ["j", "j", "\r"]) f.component.handleInput(key);
       yield* step(eventLoopTurn);
       checkBounds();
       expect(f.component.render(40).some((row) => row.includes(CURSOR_MARKER))).toBe(true);
@@ -539,7 +486,6 @@ describe("persistent dashboard", () => {
     f.component.handleInput("\u001b");
     yield* step(eventLoopTurn);
     expect(f.close).toHaveBeenCalledOnce();
-    expect(f.close).toHaveBeenCalledWith(false);
     expect(f.component.render(80)).toEqual([]);
     f.component.handleInput("\r");
     expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
@@ -622,28 +568,32 @@ describe("persistent dashboard", () => {
         expect.anything(),
         undefined,
       );
-      expect(f.calls.replaceSessionProfilesWithReceipt).not.toHaveBeenCalled();
+      expect(f.calls.replaceSessionProfiles).not.toHaveBeenCalled();
       expect(f.close).not.toHaveBeenCalled();
       f.component.dispose();
     }
   });
 
-  it("tab navigation and saved editing never apply a set or close the host", () => {
+  effectTest("More deletes a saved set only after the dashboard confirmation", function* () {
     const f = dashboard();
-    f.component.handleInput("\t");
+    for (const key of ["\t", "a", "G", "\r"]) f.component.handleInput(key);
+    yield* step(eventLoopTurn);
+    f.component.render(100);
+    for (const key of ["x", "\x1b[13;1:2u"]) f.component.handleInput(key);
+    yield* step(eventLoopTurn);
+    expect(f.calls.deleteProfileSet).not.toHaveBeenCalled();
     f.component.handleInput("\r");
-    f.component.handleInput("s");
+    yield* step(eventLoopTurn);
+    expect(f.calls.deleteProfileSet).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "project", profileSet: "common" }),
+    );
     expect(f.close).not.toHaveBeenCalled();
-    expect(f.calls.replaceSessionProfilesWithReceipt).not.toHaveBeenCalled();
-    expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
     f.component.dispose();
   });
   effectTest("serializes snapshot writes and blocks navigation while one is pending", function* () {
     const f = dashboard();
-    const gate = yield* Deferred.make<void>();
-    f.calls.createProfileSetFromSnapshot.mockImplementation(() =>
-      Effect.runPromise(Deferred.await(gate)),
-    );
+    const gate = deferredPromise();
+    f.calls.createProfileSetFromSnapshot.mockImplementation(() => gate.promise);
     f.component.handleInput("s");
     yield* step(eventLoopTurn);
     for (const letter of "snapshot") f.component.handleInput(letter);
@@ -657,7 +607,7 @@ describe("persistent dashboard", () => {
     yield* step(eventLoopTurn);
     expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledTimes(1);
     expect(f.close).not.toHaveBeenCalled();
-    yield* Deferred.succeed(gate, undefined);
+    gate.resolve();
     yield* step(eventLoopTurn);
     f.component.dispose();
   });
@@ -678,7 +628,7 @@ describe("persistent dashboard", () => {
       expect(f.calls.createProfileSetFromSnapshot).not.toHaveBeenCalled();
       expect(f.saveDraft).not.toHaveBeenCalled();
       f.component.handleInput("\u001b");
-      expect(f.close).toHaveBeenCalledWith(false);
+      expect(f.close).toHaveBeenCalled();
       f.component.dispose();
     },
   );
@@ -704,7 +654,21 @@ describe("persistent dashboard", () => {
     },
   );
 
-  effectTest("disposing an internal save form makes its late input inert", function* () {
+  effectTest("an untrusted save cannot toggle away from Global", function* () {
+    const f = dashboard();
+    f.untrust();
+    f.component.handleInput("s");
+    yield* step(eventLoopTurn);
+    // Two toggles would return a trusted dialog to Project.
+    for (const key of [..."snapshot", "\u001b[A", "\u001b[B", "\r"]) f.component.handleInput(key);
+    yield* step(eventLoopTurn);
+    expect(f.calls.createProfileSetFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "global", profileSet: "snapshot" }),
+    );
+    expect(f.close).not.toHaveBeenCalled();
+    f.component.dispose();
+  });
+  effectTest("disposing an internal save dialog makes its late input inert", function* () {
     const f = dashboard();
     f.component.handleInput("s");
     yield* step(() => Promise.resolve());

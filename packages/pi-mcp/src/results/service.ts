@@ -4,7 +4,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback, notifyListeners } from "pi-cosmic-core";
 import { boundaryError } from "../client/errors.ts";
 import {
   MCP_RESULT_LIMITS,
@@ -21,7 +21,6 @@ interface State {
   readonly closed: boolean;
   readonly bytes: number;
   readonly generation: number;
-  readonly serverGenerations: ReadonlyMap<string, number>;
 }
 
 const ceiling = (value: number | undefined, maximum: number): number =>
@@ -39,12 +38,7 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
     const listeners = new Set<() => void>();
     // One signal per committed transition, even when that transition evicts many entries.
     // Consumers clear visible text synchronously and coalesce any subsequent local reads.
-    const notify = () => {
-      const currentListeners = Array.from(listeners);
-      for (const listener of currentListeners) {
-        if (listeners.has(listener)) invokeHostCallback(listener, undefined);
-      }
-    };
+    const notify = () => notifyListeners(listeners);
     const maxEntries = ceiling(options.maxEntries, MCP_RESULT_LIMITS.entries);
     const maxBytes = ceiling(options.maxBytes, MCP_RESULT_LIMITS.retainedBytes);
     const state = yield* Ref.make<State>({
@@ -52,13 +46,11 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
       closed: false,
       bytes: 0,
       generation: 0,
-      serverGenerations: new Map(),
     });
     const current = (prepared: McpPreparedResult, snapshot: State): boolean =>
       !snapshot.closed &&
       prepared.activation === activation &&
-      prepared.generation === snapshot.generation &&
-      prepared.serverGeneration === (snapshot.serverGenerations.get(prepared.server) ?? 0);
+      prepared.generation === snapshot.generation;
     const stale = () =>
       boundaryError("stale", "not-sent", "Result is unavailable or has been revoked.");
 
@@ -82,7 +74,6 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         const candidateId = yield* crypto.randomUUIDv4.pipe(Effect.orElseSucceed(() => undefined));
         const normalized = yield* Effect.sync(() => normalizeResult(input));
         const generation = snapshot.generation;
-        const serverGeneration = snapshot.serverGenerations.get(input.server) ?? 0;
         // Conservative allowance for the UUID, activation marker, and generation metadata.
         const bytes = normalized.bytes + 256;
         let prepared: McpPreparedResult = {
@@ -92,7 +83,6 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
           server: input.server,
           activation,
           generation,
-          serverGeneration,
         };
         if (candidateId !== undefined) prepared = { ...prepared, candidateId };
         return Object.freeze(prepared);
@@ -194,27 +184,13 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         return execution;
       });
 
-    const revoke: McpResultsContract["revoke"] = (server) =>
-      Ref.update(state, (snapshot) => {
-        if (server === undefined)
-          return {
-            ...snapshot,
-            entries: new Map(),
-            bytes: 0,
-            generation: snapshot.generation + 1,
-            serverGenerations: new Map(),
-          };
-        const entries = new Map(snapshot.entries);
-        let bytes = snapshot.bytes;
-        for (const [id, prepared] of entries) {
-          if (prepared.server !== server) continue;
-          entries.delete(id);
-          bytes -= prepared.bytes;
-        }
-        const serverGenerations = new Map(snapshot.serverGenerations);
-        serverGenerations.set(server, (serverGenerations.get(server) ?? 0) + 1);
-        return { ...snapshot, entries, bytes, serverGenerations };
-      }).pipe(Effect.andThen(Effect.sync(notify)), Effect.uninterruptible);
+    const revoke: McpResultsContract["revoke"] = () =>
+      Ref.update(state, (snapshot) => ({
+        ...snapshot,
+        entries: new Map(),
+        bytes: 0,
+        generation: snapshot.generation + 1,
+      })).pipe(Effect.andThen(Effect.sync(notify)), Effect.uninterruptible);
 
     yield* Effect.addFinalizer(() =>
       Ref.update(state, (snapshot) => ({
@@ -222,7 +198,6 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         closed: true,
         entries: new Map(),
         bytes: 0,
-        serverGenerations: new Map(),
       })).pipe(
         Effect.andThen(
           Effect.sync(() => {
@@ -232,6 +207,7 @@ export const makeMcpResults = (options: McpResultsOptions = {}) =>
         ),
       ),
     );
+    // The closed check and registration share one step, so a close cannot land between them.
     const subscribeChanges: McpResultsContract["subscribeChanges"] = (listener) =>
       Effect.acquireRelease(
         Effect.sync(() => {

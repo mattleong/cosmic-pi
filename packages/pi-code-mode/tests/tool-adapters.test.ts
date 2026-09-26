@@ -8,19 +8,24 @@ import {
   makeNestedPiToolDefinitions,
   makeNestedPiToolDispatch,
   nestedResultToGuestData,
+  type NestedDispatchOptions,
 } from "../src/boundary/host-builtin-tools.ts";
-import { extensionContextFixture } from "./support/host.ts";
+import { extensionContextFixture, opaqueFixture } from "pi-cosmic-core/testing";
+import { truncation } from "./support/read.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
-const ctx = extensionContextFixture({
-  cwd: "/project",
-  sessionManager: {
-    getSessionId: () => "test-session",
-    getSessionFile: () => undefined,
-  },
-  model: undefined,
-  thinkingLevel: undefined,
-});
+const ctx = extensionContextFixture({ cwd: "/project" });
+
+const dispatchWith = <Definitions extends object>(
+  definitions: Definitions,
+  extra: Partial<NestedDispatchOptions> = {},
+) =>
+  makeNestedPiToolDispatch({
+    definitions: nestedToolDefinitionsFixture(definitions),
+    ctx,
+    toolCallId: "outer",
+    ...extra,
+  });
 
 const textResult = (text: string) => ({
   content: [{ type: "text" as const, text }],
@@ -43,10 +48,9 @@ describe("nestedResultToGuestData", () => {
 
   it.effect("refuses constructed image content without leaking it into the guest", () =>
     Effect.gen(function* () {
-      // SAFETY: This fixture deliberately supplies the foreign image branch.
       const error = yield* Effect.flip(
         nestedResultToGuestData("read", {
-          content: [{ type: "image", data: "AAAA", mimeType: "image/png" } as never],
+          content: [opaqueFixture({ type: "image", data: "AAAA", mimeType: "image/png" })],
           details: undefined,
         }),
       );
@@ -58,9 +62,8 @@ describe("nestedResultToGuestData", () => {
 
   it.effect("refuses unrecognized result shapes model-safely", () =>
     Effect.gen(function* () {
-      // SAFETY: This fixture deliberately supplies malformed foreign output.
       const error = yield* Effect.flip(
-        nestedResultToGuestData("grep", { content: "not-an-array" } as never),
+        nestedResultToGuestData("grep", opaqueFixture({ content: "not-an-array" })),
       );
       expect(error).toMatchObject({ _tag: "ToolError" });
       expect(error.message).toContain("unrecognized result shape");
@@ -85,11 +88,7 @@ describe("nested dispatch", () => {
           return Promise.resolve(textResult(id));
         },
       };
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({ read: definition, bash: definition }),
-        ctx,
-        toolCallId: "outer",
-      });
+      const dispatch = dispatchWith({ read: definition, bash: definition });
 
       const returned = [
         yield* dispatch("read", { path: "a" }),
@@ -98,11 +97,7 @@ describe("nested dispatch", () => {
       ];
       expect(new Set(ids).size).toBe(3);
       expect(returned).toEqual(ids);
-      const other = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({ read: definition }),
-        ctx,
-        toolCallId: "other-outer",
-      });
+      const other = dispatchWith({ read: definition }, { toolCallId: "other-outer" });
       expect(yield* other("read", { path: "a" })).not.toBe(returned[0]);
       expect(new Set(ids).size).toBe(4);
     }),
@@ -112,18 +107,14 @@ describe("nested dispatch", () => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();
       const seen: AbortSignal[] = [];
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({
-          read: {
-            execute: <Input>(_id: string, _input: Input, signal: AbortSignal) => {
-              seen.push(signal);
-              void Deferred.doneUnsafe(started, Effect.void);
-              return Promise.race([]);
-            },
+      const dispatch = dispatchWith({
+        read: {
+          execute: <Input>(_id: string, _input: Input, signal: AbortSignal) => {
+            seen.push(signal);
+            void Deferred.doneUnsafe(started, Effect.void);
+            return Promise.race([]);
           },
-        }),
-        ctx,
-        toolCallId: "outer",
+        },
       });
 
       const fiber = yield* dispatch("read", { path: "wait" }).pipe(
@@ -139,17 +130,13 @@ describe("nested dispatch", () => {
   it.effect("strips read controls before native dispatch and preserves structured text", () =>
     Effect.gen(function* () {
       const received: Array<{ id: string; input: unknown }> = [];
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({
-          read: {
-            execute: <Input>(id: string, input: Input) => {
-              received.push({ id, input });
-              return Promise.resolve(textResult("complete α"));
-            },
+      const dispatch = dispatchWith({
+        read: {
+          execute: <Input>(id: string, input: Input) => {
+            received.push({ id, input });
+            return Promise.resolve(textResult("complete α"));
           },
-        }),
-        ctx,
-        toolCallId: "outer",
+        },
       });
 
       expect(
@@ -167,17 +154,13 @@ describe("nested dispatch", () => {
   it.effect("rejects scoped complete reads before dispatch without consuming a native id", () =>
     Effect.gen(function* () {
       const received: string[] = [];
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({
-          read: {
-            execute: (id: string) => {
-              received.push(id);
-              return Promise.resolve(textResult("whole"));
-            },
+      const dispatch = dispatchWith({
+        read: {
+          execute: (id: string) => {
+            received.push(id);
+            return Promise.resolve(textResult("whole"));
           },
-        }),
-        ctx,
-        toolCallId: "outer",
+        },
       });
 
       for (const scoped of [{ limit: 1 }, { offset: 2 }]) {
@@ -198,36 +181,31 @@ describe("nested dispatch", () => {
     Effect.gen(function* () {
       const operations: string[] = [];
       const deliveryFailures: Array<number | undefined> = [];
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({
+      const details = {
+        truncation: truncation({
+          content: "partial",
+          totalLines: 2,
+          totalBytes: 15,
+          outputLines: 1,
+          outputBytes: 7,
+        }),
+      };
+      const dispatch = dispatchWith(
+        {
           read: {
             execute: () =>
               Promise.resolve({
                 content: [{ type: "text" as const, text: "partial\n\n[native footer]" }],
-                details: {
-                  truncation: {
-                    content: "partial",
-                    truncated: true,
-                    truncatedBy: "lines",
-                    totalLines: 2,
-                    totalBytes: 15,
-                    outputLines: 1,
-                    outputBytes: 7,
-                    lastLinePartial: false,
-                    firstLineExceedsLimit: false,
-                    maxLines: 2_000,
-                    maxBytes: 51_200,
-                  },
-                },
+                details,
               }),
           },
-        }),
-        ctx,
-        toolCallId: "outer",
-        observationId: () => 41,
-        onOperation: (_id, certainty) => operations.push(certainty),
-        onDeliveryFailure: (id) => deliveryFailures.push(id),
-      });
+        },
+        {
+          observationId: () => 41,
+          onOperation: (_id, certainty) => operations.push(certainty),
+          onDeliveryFailure: (id) => deliveryFailures.push(id),
+        },
+      );
 
       const error = yield* dispatch("read", {
         path: "fixture",
@@ -242,19 +220,15 @@ describe("nested dispatch", () => {
 
   it.effect("contains hostile rejection coercion at the adapter boundary", () =>
     Effect.gen(function* () {
-      const dispatch = makeNestedPiToolDispatch({
-        definitions: nestedToolDefinitionsFixture({
-          read: {
-            execute: () =>
-              Promise.reject({
-                toString: () => {
-                  throw new Error("toString escaped");
-                },
-              }),
-          },
-        }),
-        ctx,
-        toolCallId: "outer",
+      const dispatch = dispatchWith({
+        read: {
+          execute: () =>
+            Promise.reject({
+              toString: () => {
+                throw new Error("toString escaped");
+              },
+            }),
+        },
       });
       const error = yield* dispatch("read", { path: "x" }).pipe(Effect.flip);
       expect(error).toMatchObject({

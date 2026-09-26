@@ -2,6 +2,7 @@ import {
   addUsageComponents,
   componentwiseMax,
   cumulativeUsageDelta,
+  rememberBounded,
   zeroUsageComponents,
   type CumulativeUsageDelta,
   type UsageComponents,
@@ -20,18 +21,13 @@ export const makeLocalClaudeUsage = () => {
   ): CumulativeUsageDelta => {
     const previous = messageId ? assistantUsageByMessage.get(messageId) : undefined;
     const result = cumulativeUsageDelta(previous ?? zeroUsageComponents, usage);
-    if (messageId) {
-      assistantUsageByMessage.delete(messageId);
-      assistantUsageByMessage.set(
+    if (messageId)
+      rememberBounded(
+        assistantUsageByMessage,
         messageId,
         componentwiseMax(previous ?? zeroUsageComponents, usage),
+        ASSISTANT_USAGE_MESSAGE_LIMIT,
       );
-      while (assistantUsageByMessage.size > ASSISTANT_USAGE_MESSAGE_LIMIT) {
-        const oldest = assistantUsageByMessage.keys().next().value;
-        if (oldest === undefined) break;
-        assistantUsageByMessage.delete(oldest);
-      }
-    }
     emittedUsageTotals = addUsageComponents(emittedUsageTotals, result.delta);
     return result;
   };

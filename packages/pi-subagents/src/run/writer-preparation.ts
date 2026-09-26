@@ -1,29 +1,28 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
-import type { WriterLeaseConflictError, WriterLeaseContract } from "../boundary/writer-lease.ts";
+import type { WriterLeaseConflictError } from "../boundary/writer-lease.ts";
 import {
   InvalidSubagentRequestError,
   type SubagentError,
   SubagentProcessError,
   SubagentWriterConflictError,
 } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import type { RunContext, RunRecord } from "./internal.ts";
 
-const mapWriterLeaseConflict = (error: WriterLeaseConflictError): SubagentWriterConflictError =>
+/** Core lock evidence never names another session's run, so the owner stays anonymous. */
+const mapWriterLeaseConflict = ({ message }: WriterLeaseConflictError) =>
   new SubagentWriterConflictError({
-    activeId: error.ownerRunId ?? "unknown-cross-process-writer",
+    activeId: "unknown-cross-process-writer",
     activeName: "cross-process writer",
-    message: error.message,
+    message,
   });
 
-export interface WriterPreparationDependencies {
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly writerLeases: WriterLeaseContract;
-}
-
-/** Claims preparation and installs settlement cleanup before restoring interruption. */
-export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparationDependencies) {
+/**
+ * Durably prepares and token-confirms the writer lease before any driver spawn. Claims
+ * preparation and installs settlement cleanup before restoring interruption.
+ */
+export function makeWriterPreparation({ withLock, writerLeases }: RunContext) {
   const prepareWriterLeaseForSpawn = (record: RunRecord): Effect.Effect<void, SubagentError> => {
     const canonicalCwd = record.canonicalWriterCwd;
     const pool = record.writerPool;
@@ -41,6 +40,12 @@ export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparat
         code: "start_cancelled",
         message: `Subagent ${record.view.id} lost writer-pool membership during startup.`,
       });
+    const stillAttached = withLock(
+      Effect.sync(
+        () =>
+          record.writerPool === pool && pool.members.has(record.view.id) && !record.stoppedByParent,
+      ),
+    );
     // The preparing state owns the shared latch. Keep that claim masked until
     // ensuring is installed, even if the lock yields while returning ownership.
     return Effect.uninterruptibleMask((restore) =>
@@ -76,17 +81,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparat
         if (role.kind === "failed") return yield* role.error;
         if (role.kind === "wait") {
           yield* restore(Deferred.await(pool.preparationSettled));
-          const attached = yield* restore(
-            withLock(
-              Effect.sync(
-                () =>
-                  record.writerPool === pool &&
-                  pool.members.has(record.view.id) &&
-                  !record.stoppedByParent,
-              ),
-            ),
-          );
-          if (!attached) return yield* cancelled();
+          if (!(yield* restore(stillAttached))) return yield* cancelled();
           return;
         }
         if (role.kind === "ready") return;
@@ -94,26 +89,20 @@ export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparat
         let handedOff = false;
         let preparationError: SubagentError | undefined;
         const prepareOwner = Effect.gen(function* () {
-          // Keep acquisition's existing mask: the live lease boundary restores
-          // interruption before ownership and masks its durable handoff.
+          // acquireRelease masks the lease handoff to its finalizer; acquire keeps
+          // only its pre-ownership checks interruptible.
           const lease = yield* Effect.acquireRelease(
-            writerLeases
-              .acquire({
-                cwd: canonicalCwd,
-                sessionId: record.launch.parentSessionId,
-                runId: record.view.id,
-              })
-              .pipe(
-                Effect.mapError((error) =>
-                  error._tag === "WriterLeaseConflictError"
-                    ? mapWriterLeaseConflict(error)
-                    : new SubagentProcessError({
-                        operation: "acquire writer lease",
-                        code: "writer_lease_acquire_failed",
-                        message: error.message,
-                      }),
-                ),
+            writerLeases.acquire({ cwd: canonicalCwd, runId: record.view.id }).pipe(
+              Effect.mapError((error) =>
+                error._tag === "WriterLeaseConflictError"
+                  ? mapWriterLeaseConflict(error)
+                  : new SubagentProcessError({
+                      operation: "acquire writer lease",
+                      code: "writer_lease_acquire_failed",
+                      message: error.message,
+                    }),
               ),
+            ),
             (ownedLease) =>
               !handedOff || pool.releaseState.authorized
                 ? writerLeases.release(ownedLease).pipe(Effect.orDie)
@@ -146,15 +135,7 @@ export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparat
               Deferred.doneUnsafe(pool.preparationSettled, Effect.void);
             }),
           );
-          const ownerStillAttached = yield* withLock(
-            Effect.sync(
-              () =>
-                record.writerPool === pool &&
-                pool.members.has(record.view.id) &&
-                !record.stoppedByParent,
-            ),
-          );
-          if (!ownerStillAttached) return yield* cancelled();
+          if (!(yield* stillAttached)) return yield* cancelled();
         });
         yield* restore(prepareOwner).pipe(
           Effect.tapError((error) =>
@@ -179,3 +160,5 @@ export function makeWriterPreparation({ withLock, writerLeases }: WriterPreparat
   };
   return prepareWriterLeaseForSpawn;
 }
+
+export type WriterPreparation = ReturnType<typeof makeWriterPreparation>;

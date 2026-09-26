@@ -6,8 +6,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import {
   captureCodePreviewSessionCapability,
-  CodePreviewSessionUnavailable,
   hasCodePreviewSessionCapability,
+  rejectInactiveCodePreviewSession,
   runCodePreviewSessionEffect,
 } from "../application/capability";
 import { resolvePreviewPath } from "../paths/resolve";
@@ -117,13 +117,7 @@ export function executeWriteWithPreview(
   ctx?: ExtensionContext,
 ) {
   const owner = captureCodePreviewSessionCapability();
-  if (!owner)
-    return Promise.reject(
-      new CodePreviewSessionUnavailable({
-        operation: "write",
-        message: "Code preview session is not active.",
-      }),
-    );
+  if (!owner) return rejectInactiveCodePreviewSession("write");
   // One native queue only: wrapping native execute in another queue deadlocks.
   // The captured runtime owns its wait and every admitted operation callback.
   return owner.run(executeWriteWithPreviewEffect(toolCallId, path, content, cwd, ctx), signal);

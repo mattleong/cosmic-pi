@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerHerdrBtwCommands } from "../src/btw/controller.ts";
 import { HerdrBtwError } from "../src/btw/errors.ts";
@@ -8,15 +9,10 @@ import type { HerdrBtwResult } from "../src/btw/service.ts";
 
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 
-// SAFETY: Each call supplies every host member read by the command controller.
-const testDouble = <Value>(value: Partial<Value>): Value => value as Value;
-
 const result: HerdrBtwResult = {
   agentName: "btw-agent",
   paneId: "w1:p2",
   mode: "created",
-  prompted: false,
-  direction: "right",
 };
 
 const harness = (
@@ -25,7 +21,7 @@ const harness = (
 ) => {
   const commands = new Map<string, RegisteredCommand>();
   const notify = vi.fn();
-  const pi = testDouble<ExtensionAPI>({
+  const pi = extensionApiFixture({
     registerCommand: (name: string, command: RegisteredCommand) => commands.set(name, command),
   });
   registerHerdrBtwCommands(pi, { open, openNew });
@@ -34,12 +30,7 @@ const harness = (
     if (!command) throw new Error(`Missing command ${name}`);
     return command.handler(
       args,
-      testDouble<ExtensionCommandContext>({
-        mode,
-        hasUI: true,
-        cwd: "/project",
-        ui: testDouble<ExtensionCommandContext["ui"]>({ notify }),
-      }),
+      extensionContextFixture({ mode, hasUI: true, cwd: "/project", ui: { notify } }),
     );
   };
   return { invoke, notify };

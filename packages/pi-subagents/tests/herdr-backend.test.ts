@@ -42,17 +42,15 @@ const baseAgent: HerdrAgent = {
   terminalId: "terminal-1",
   workspaceId: "workspace-1",
   tabId: "tab-1",
-  focused: false,
   agentStatus: "working",
   name: "owned-agent",
   runtime: "claude",
   stateChangeSequence: 1,
   interactiveReady: true,
   agentSession: { source: "fixture", agent: "claude", kind: "id", value: "native-1" },
-  nativeSession: "native-1",
 };
 
-const metadata = supervisorMetadata(request().runId, {
+const metadata = supervisorMetadata({
   port: 31_337,
   stateDirectory: "/private/supervisor",
   connectionConfigPath: "/private/supervisor/connection.json",
@@ -104,16 +102,10 @@ const makeBackendHarness = (options: HerdrBackendHarnessOptions = {}) =>
       preflight: () => Effect.void,
       launch: () =>
         Effect.succeed({
-          runId: request().runId,
-          runtime: "claude",
           agentName: "owned-agent",
           workspaceId: baseAgent.workspaceId,
           tabId: baseAgent.tabId,
           paneId: baseAgent.paneId,
-          terminalId: baseAgent.terminalId,
-          nativeSession: "native-1",
-          agentSession: baseAgent.agentSession!,
-          sessionIdentity: "fixture-session",
           inspect: Effect.sync(() => {
             inspectCalls += 1;
             return remote;
@@ -164,10 +156,6 @@ describe("Herdr prompt settlement", () => {
         const failure = yield* harness.handle.controls.start("Try once.", 1).pipe(Effect.flip);
 
         expect(failure).toBe(exact);
-        expect(failure).toMatchObject({
-          _tag: "SubagentProcessError",
-          code: "fixture_prompt_rejected",
-        });
         expect(harness.assignmentEpochs).toEqual([1]);
         expect(Option.isNone(yield* Queue.poll(harness.handle.events))).toBe(true);
       }),

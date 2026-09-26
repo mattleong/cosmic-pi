@@ -1,31 +1,16 @@
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { afterEach, expect, test, vi } from "vitest";
+import { applyPresentationSettings, captureRegistrations } from "pi-code-previews/testing";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { beforeEach, expect, test, vi } from "vitest";
 import { registerSubagentMessageRenderers } from "../src/application/messages.ts";
 import { makeHostNotifier } from "../src/boundary/host-notifier.ts";
 import { extensionApiFixture } from "./fixtures/pi-host.ts";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../pi-code-previews/src/config/state.ts";
 
-const initial = { ...codePreviewSettings };
-afterEach(() => setCodePreviewSettings(initial));
-// SAFETY: Only text styling is used by these registered render callbacks.
-const theme = { fg: (_color: string, text: string) => text } as Theme;
+beforeEach(() => applyPresentationSettings({ toolCallCollapsedStyle: "compact" }));
 
 test("registered worker notifications hide agent procedures without changing their delivered content", () => {
-  setCodePreviewSettings({ ...initial, toolCallCollapsedStyle: "compact" });
-  const renderers = new Map<string, Parameters<ExtensionAPI["registerMessageRenderer"]>[1]>();
+  const renderers = captureRegistrations(registerSubagentMessageRenderers).messageRenderers;
   const sendMessage = vi.fn();
-  const pi = extensionApiFixture({
-    sendMessage,
-    registerMessageRenderer: (
-      type: string,
-      renderer: Parameters<ExtensionAPI["registerMessageRenderer"]>[1],
-    ) => renderers.set(type, renderer),
-  });
-  registerSubagentMessageRenderers(pi);
-  const notify = makeHostNotifier(pi);
+  const notify = makeHostNotifier(extensionApiFixture({ sendMessage }));
   notify({
     type: "completed",
     runs: [
@@ -55,7 +40,7 @@ test("registered worker notifications hide agent procedures without changing the
       const component = render(
         { ...message, role: "custom", timestamp: 0 },
         { expanded, outputPad: 0 },
-        theme,
+        plainTheme,
       );
       const text = component!.render(180).join("\n");
       expect(text.includes("PRIVATE_RUN_ID")).toBe(expanded);
@@ -72,7 +57,7 @@ test("registered worker notifications hide agent procedures without changing the
     const history = render(
       { ...message, details: undefined, role: "custom", timestamp: 0 },
       { expanded: true, outputPad: 0 },
-      theme,
+      plainTheme,
     );
     expect(history!.render(180).join("\n")).toContain("PRIVATE_RUN_ID");
   }

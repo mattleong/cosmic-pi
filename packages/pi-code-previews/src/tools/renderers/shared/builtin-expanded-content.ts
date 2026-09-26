@@ -164,7 +164,7 @@ function source(
       lang: resolvePreviewLanguage({ path, content, piLanguage: getLanguageFromPath(path) }),
       theme,
       invalidate,
-      lineNumbers: firstLine === undefined ? undefined : { firstLine },
+      firstLine,
       emptyLabel: "",
       skipHighlightLabel: "Syntax highlighting skipped for large content",
     }).text,

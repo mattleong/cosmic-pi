@@ -7,9 +7,9 @@ import {
   Key,
   matchesKey,
   type KeyId,
-  type OverlayHandle,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   FullScreenKeymap,
   type FullScreenSelectionKeybindingId,
@@ -30,6 +30,7 @@ import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import { PreviewPane } from "./preview-pane.ts";
 import { DialogViewport } from "./viewport.ts";
 import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
+import { selectListTheme } from "./layout.ts";
 
 const CHOICE_SHORTCUTS: readonly KeyId[] = Array.from(
   { length: MAX_CHOICES },
@@ -47,18 +48,13 @@ interface AskUserDialogOptions {
   readonly request: AskUserRequest;
   readonly done: (outcome: AskUserOutcome) => void;
   readonly editExternally: (value: string) => Promise<string | undefined>;
-  readonly onCollapse: () => void;
+  /** Hides the docked dialog; the host owns hide/resume. */
+  readonly collapse: () => void;
 }
 
 const editorTheme = (theme: Theme): EditorTheme => ({
   borderColor: (value) => theme.fg("accent", value),
-  selectList: {
-    selectedPrefix: (value) => theme.fg("accent", value),
-    selectedText: (value) => theme.fg("accent", value),
-    description: (value) => theme.fg("muted", value),
-    scrollInfo: (value) => theme.fg("dim", value),
-    noMatch: (value) => theme.fg("warning", value),
-  },
+  selectList: selectListTheme(theme),
 });
 
 export class AskUserDialog implements Focusable {
@@ -75,7 +71,6 @@ export class AskUserDialog implements Focusable {
   private readonly keymap = new FullScreenKeymap();
   private readonly viewport = new DialogViewport();
   private _focused = false;
-  private overlayHandle: OverlayHandle | undefined;
 
   constructor({ request, ...options }: AskUserDialogOptions) {
     this.state = createQuestionnaireState(request);
@@ -93,20 +88,6 @@ export class AskUserDialog implements Focusable {
   set focused(value: boolean) {
     this._focused = value;
     this.editor.focused = value && this.input !== undefined;
-  }
-
-  setOverlayHandle(handle: OverlayHandle): void {
-    this.overlayHandle = handle;
-  }
-
-  resume(): void {
-    this.overlayHandle?.setHidden(false);
-    this.options.tui.requestRender(true);
-  }
-
-  collapse(): void {
-    this.overlayHandle?.setHidden(true);
-    this.options.onCollapse();
   }
 
   private refresh(): void {
@@ -229,11 +210,8 @@ export class AskUserDialog implements Focusable {
       })
       .finally(() => {
         this.externalEditorBusy = false;
-        try {
-          this.refresh();
-        } catch {
-          // The dialog may have been disposed while the external editor was open.
-        }
+        // The dialog may have been disposed while the external editor was open.
+        invokeHostCallback(() => this.refresh(), undefined);
       });
   }
 
@@ -265,7 +243,7 @@ export class AskUserDialog implements Focusable {
       reservedKeys: DIALOG_SHORTCUTS,
     });
     if (resolution?._tag === "Shortcut") {
-      if (resolution.key === "b") this.collapse();
+      if (resolution.key === "b") this.options.collapse();
       else if (
         resolution.key === "n" &&
         this.state.currentTab < this.state.request.questions.length

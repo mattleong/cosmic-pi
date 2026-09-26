@@ -18,7 +18,6 @@ export type McpExchange =
       readonly cleanupUnconfirmed?: boolean;
     };
 export interface McpInteractionProvider {
-  readonly generation: string;
   readonly current: Effect.Effect<boolean>;
   readonly ask: (
     request: OwnedFormRequest,

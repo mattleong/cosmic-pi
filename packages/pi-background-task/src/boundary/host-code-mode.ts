@@ -6,7 +6,6 @@ import {
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback, PiSessionRuntimeError } from "pi-cosmic-core";
 import {
@@ -22,8 +21,8 @@ import {
   projectBackgroundTaskCodeModeOutput,
 } from "../code-mode/output.ts";
 import { InvalidBackgroundCommandError } from "../task/errors.ts";
-import { BackgroundTaskService } from "../task/service.ts";
 import { executeBackgroundTaskCommand } from "../tools/command.ts";
+import type { BackgroundTaskToolRunner } from "../tools/background-task.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 
 const decodeInput = Schema.decodeUnknownEffect(BackgroundTaskCodeModeInputSchema);
@@ -39,10 +38,7 @@ export interface BackgroundTaskCodeModeActivation {
   readonly tokenCurrent: () => boolean;
   readonly toolActive: () => boolean;
   readonly sessionCwd: string;
-  readonly run: <A, E>(
-    effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>,
-    signal?: AbortSignal,
-  ) => Promise<A>;
+  readonly run: BackgroundTaskToolRunner["run"];
 }
 
 export interface BackgroundTaskCodeModeHost {

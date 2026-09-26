@@ -1,21 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
-import type { CodeModeConfig } from "../src/config/schema.ts";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
-import {
-  makeCodeModeToolExecute,
-  type CodeModeExecutionEnvironment,
-} from "../src/tools/execution.ts";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+import { opaqueFixture } from "pi-cosmic-core/testing";
+import { codeModeStateFixture } from "./support/host.ts";
+import { executeHarness, textOf, type ExecuteHarnessOptions } from "./support/execute.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
 import type { CodeModeInput } from "../src/tools/result-read.ts";
@@ -31,62 +23,53 @@ const pageFromJson = Schema.fromJsonString(
     next: Schema.NullOr(Schema.Number),
   }),
 );
-const ctx = extensionContextFixture({ cwd: "/project" });
-const textOf = (value: { content: ReadonlyArray<{ type: string; text?: string }> }) =>
-  value.content.map((block) => block.text ?? "").join("\n");
 function harness(
   results: ResultsContract,
-  options: {
-    readonly config?: Partial<CodeModeConfig>;
-    readonly current?: () => boolean;
+  {
+    config,
+    available,
+    bash,
+    ...environment
+  }: ExecuteHarnessOptions & {
     readonly available?: () => boolean;
-    readonly executeCodeMode?: CodeModeExecutionEnvironment["executeCodeMode"];
-    readonly run?: CodeModeExecutionEnvironment["runInSession"];
     readonly bash?: () => Promise<string>;
   } = {},
 ) {
   let writes = 0;
   let failure: CodeModeToolDetails | undefined;
-  const state = codeModeStateFixture({ maxOutputBytes: 600, ...options.config });
+  const state = codeModeStateFixture({ maxOutputBytes: 600, ...config });
   const write = {
     execute: () => {
       writes++;
       return Promise.resolve({ content: [{ type: "text", text: "written" }], details: {} });
     },
   };
-  const definitions = nestedToolDefinitionsFixture({
-    read: write,
-    write,
-    edit: write,
-    grep: write,
-    find: write,
-    ls: write,
-    bash: {
-      execute: () =>
-        (options.bash?.() ?? Promise.resolve("done")).then((text) => ({
-          content: [{ type: "text", text }],
-          details: {},
-        })),
-    },
-  });
-  const execute = makeCodeModeToolExecute({
+  const { call } = executeHarness({
+    ...environment,
     results,
-    isCurrent: options.current ?? (() => true),
-    getState: () => ({ ...state, available: options.available?.() ?? state.available }),
-    runInSession:
-      options.run ??
-      ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
-    definitions,
-    events: createEventBus(),
-    sessionId: "test",
-    ...(options.executeCodeMode && { executeCodeMode: options.executeCodeMode }),
+    cwd: "/project",
+    getState: () => ({ ...state, available: available?.() ?? state.available }),
+    definitions: nestedToolDefinitionsFixture({
+      read: write,
+      write,
+      edit: write,
+      grep: write,
+      find: write,
+      ls: write,
+      bash: {
+        execute: () =>
+          (bash?.() ?? Promise.resolve("done")).then((text) => ({
+            content: [{ type: "text", text }],
+            details: {},
+          })),
+      },
+    }),
     retainFailureDetails: (_id, details) => {
       failure = details;
     },
   });
   return {
-    run: (params: CodeModeInput, signal?: AbortSignal) =>
-      execute("outer", params, signal, undefined, ctx),
+    run: (params: CodeModeInput, signal?: AbortSignal) => call(params, { signal }),
     writes: () => writes,
     failure: () => failure,
   };
@@ -118,7 +101,7 @@ describe("output recovery without replay", () => {
                     }),
                 },
                 {
-                  current: () => current,
+                  isCurrent: () => current,
                   available: () => available,
                   config: { maxOutputBytes: 3000 },
                 },
@@ -164,7 +147,7 @@ describe("output recovery without replay", () => {
         }
       }).pipe(Effect.provide(CodeModeResults.layer)),
   );
-  it.effect("mutates once and pages exact successful output with original outcome", () =>
+  it.effect("mutates once and continues the initial page exactly with original outcome", () =>
     Effect.gen(function* () {
       const results = yield* CodeModeResults;
       const h = harness(results);
@@ -176,8 +159,10 @@ describe("output recovery without replay", () => {
       const id = initial.details.resultId!;
       expect(id).toBeTruthy();
       expect(utf8ByteLength(textOf(initial))).toBeLessThanOrEqual(600);
-      let offset = 0;
-      let reconstructed = "";
+      const first = yield* Schema.decodeEffect(pageFromJson)(textOf(initial));
+      expect(first.next).not.toBeNull();
+      let offset = first.next ?? 0;
+      let reconstructed = first.text;
       for (let count = 0; count < 100; count++) {
         const result = yield* Effect.promise(() =>
           h.run({ action: "result.read", id, offset, limit: 200 }),
@@ -274,7 +259,7 @@ describe("output recovery without replay", () => {
       const h = harness(results);
       const code = 'await tools.pi.write({path:"x",content:"bad"});';
       for (const extra of [{ id: "old-result" }, { offset: 1 }, { action: "unknown" }]) {
-        const request = opaqueHostFixture({ code, ...extra });
+        const request = opaqueFixture({ code, ...extra });
         yield* Effect.promise(() => expect(h.run(request)).rejects.toThrow("No execution was run"));
       }
       expect(h.writes()).toBe(0);
@@ -305,8 +290,8 @@ describe("output recovery without replay", () => {
         const id = yield* results.put("sensitive old output", "succeeded");
         let current = true;
         const h = harness(results, {
-          current: () => current,
-          run: (effect) =>
+          isCurrent: () => current,
+          runInSession: (effect) =>
             Effect.runPromise(effect).then((value) => {
               current = false;
               return value;
@@ -317,7 +302,7 @@ describe("output recovery without replay", () => {
         expect(textOf(read)).toContain("revoked");
         expect(read.details.resultRead).toEqual({ status: "error", code: "revoked" });
         const safe = harness(results);
-        const request = opaqueHostFixture({
+        const request = opaqueFixture({
           action: "result.read",
           id: id!,
           code: 'await tools.pi.write({path:"x",content:"bad"})',

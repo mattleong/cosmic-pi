@@ -6,7 +6,6 @@ import {
   truncateToWidth,
   wrapTextWithAnsi,
   type Focusable,
-  type OverlayHandle,
   type SelectItem,
   type TUI,
 } from "@earendil-works/pi-tui";
@@ -27,6 +26,7 @@ import {
   validateFormValue,
 } from "../questionnaire/form-validation.ts";
 import { displayFormValue, formIntroduction, formFieldInstructions } from "./form-render.ts";
+import { selectListTheme } from "./layout.ts";
 
 interface Options {
   readonly tui: TUI;
@@ -36,7 +36,8 @@ interface Options {
   readonly request: OwnedFormRequest;
   readonly owner: ExtensionFormOwner;
   readonly done: (outcome: FormOutcome) => void;
-  readonly onCollapse: () => void;
+  /** Hides the docked form; the host owns hide/resume and drops input while hidden. */
+  readonly collapse: () => void;
 }
 
 /** Synchronous private draft state. No answers are published to session history. */
@@ -48,19 +49,17 @@ export class OwnedFormDialog implements Focusable {
   private fieldIndex = 0;
   private editing = false;
   private error: string | undefined;
-  private overlay: OverlayHandle | undefined;
   private closed = false;
-  private hidden = false;
   private readonly viewport = new DialogViewport();
   private readonly keymap = new FullScreenKeymap();
   private _focused = false;
   constructor(options: Options) {
     this.options = options;
     this.values = new Map(initialFormValues(options.request));
-    const theme = this.listTheme();
+    const selectList = selectListTheme(options.theme, SELECTION_MARKER);
     this.editor = new Editor(
       options.tui,
-      { borderColor: (text) => options.theme.fg("accent", text), selectList: theme },
+      { borderColor: (text) => options.theme.fg("accent", text), selectList },
       { paddingX: 1 },
     );
     this.editor.onSubmit = (text) => {
@@ -82,37 +81,12 @@ export class OwnedFormDialog implements Focusable {
     };
     this.list = this.makeList();
   }
-  private listTheme() {
-    const theme = this.options.theme;
-    return {
-      selectedPrefix: (text: string) => theme.fg("accent", text),
-      selectedText: (text: string) => SELECTION_MARKER + theme.fg("accent", text),
-      description: (text: string) => theme.fg("muted", text),
-      scrollInfo: (text: string) => theme.fg("dim", text),
-      noMatch: (text: string) => theme.fg("warning", text),
-    };
-  }
   get focused(): boolean {
     return this._focused;
   }
   set focused(value: boolean) {
     this._focused = value;
     this.editor.focused = value && this.editing;
-  }
-  setOverlayHandle(handle: OverlayHandle): void {
-    this.overlay = handle;
-  }
-  resume(): void {
-    if (this.closed) return;
-    this.hidden = false;
-    this.overlay?.setHidden(false);
-    this.options.tui.requestRender(true);
-  }
-  collapse(): void {
-    if (this.closed) return;
-    this.hidden = true;
-    this.overlay?.setHidden(true);
-    this.options.onCollapse();
   }
   dispose(): void {
     this.closed = true;
@@ -191,7 +165,7 @@ export class OwnedFormDialog implements Focusable {
       { value: "decline", label: "Decline request" },
       { value: "cancel", label: "Cancel" },
     );
-    const list = new SelectList(items, 8, this.listTheme());
+    const list = new SelectList(items, 8, selectListTheme(this.options.theme, SELECTION_MARKER));
     list.setSelectedIndex(selected);
     list.onCancel = () => this.finish("cancel");
     list.onSelect = (item) => {
@@ -245,7 +219,7 @@ export class OwnedFormDialog implements Focusable {
     }
   }
   handleInput(data: string): void {
-    if (this.closed || this.hidden) return;
+    if (this.closed) return;
     if (!this.editing) {
       const resolution = this.keymap.resolve(data, {
         mode: "navigation",
@@ -265,7 +239,7 @@ export class OwnedFormDialog implements Focusable {
         this.error = undefined;
         this.viewport.follow();
       } else this.editor.handleInput(data);
-    } else if (matchesKey(data, "b")) this.collapse();
+    } else if (matchesKey(data, "b")) this.options.collapse();
     else if (matchesKey(data, "tab")) this.advance();
     else if (matchesKey(data, "shift+tab")) {
       this.fieldIndex = Math.max(0, this.fieldIndex - 1);

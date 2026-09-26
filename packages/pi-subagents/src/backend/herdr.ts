@@ -21,8 +21,8 @@ import {
   SUPERVISOR_MCP_TOOL_NAMES,
 } from "../supervisor/mcp-contract.ts";
 import { herdrAssignmentEpochLine } from "./herdr-assignment.ts";
-import { unsupported as unsupportedCapability } from "./driver-shared.ts";
-import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "./model.ts";
+import { supervisorError, unsupported as unsupportedCapability } from "./driver-shared.ts";
+import type { BackendDriver, BackendEvent, BackendExit, BackendLaunchRequest } from "./model.ts";
 
 const EVENT_CAPACITY = 256;
 const RECONCILE_INTERVAL = "500 millis";
@@ -74,10 +74,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   supervisor: SupervisorChannelHandle,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(EVENT_CAPACITY);
-  const exited = yield* Deferred.make<
-    Extract<BackendEvent, { readonly type: "exit" }>,
-    SubagentError
-  >();
+  const exited = yield* Deferred.make<BackendExit, SubagentError>();
   let preparedEpoch = 0;
   let promptIssuingEpoch = 0;
   let confirmedStartedEpoch = 0;
@@ -87,14 +84,15 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   let closed = false;
 
   const offer = (event: BackendEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
-  const finish = (diagnostic: string, exitCode: number | null = null) =>
+  const finish = (diagnostic: string) =>
     Effect.sync(() => {
       if (closed) return;
       closed = true;
-      const exit = { type: "exit" as const, exitCode, diagnostic };
       Queue.endUnsafe(events);
-      Deferred.doneUnsafe(exited, Effect.succeed(exit));
+      Deferred.doneUnsafe(exited, Effect.succeed({ type: "exit", exitCode: null, diagnostic }));
     });
+  const failClosed = (message: string, diagnostic: string) =>
+    offer({ type: "protocol_error", message }).pipe(Effect.andThen(finish(diagnostic)));
   const cancelPending = (error: SubagentError) => supervisor.cancelPending(error.message);
 
   yield* Stream.fromQueue(supervisor.events).pipe(
@@ -137,37 +135,23 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
               // transient unknown does not erase existing missing-report evidence.
               unknownStatusPolls += 1;
               if (unknownStatusPolls < UNKNOWN_STATUS_POLLS) return Effect.void;
-              return offer({
-                type: "protocol_error",
-                message: `${runtime} agent status in Herdr remained unknown beyond the bounded observation grace after a confirmed start.`,
-              }).pipe(
-                Effect.andThen(
-                  finish(`${runtime} agent status in Herdr remained unobservable after start.`),
-                ),
+              return failClosed(
+                `${runtime} agent status in Herdr remained unknown beyond the bounded observation grace after a confirmed start.`,
+                `${runtime} agent status in Herdr remained unobservable after start.`,
               );
             }
             unknownStatusPolls = 0;
             missingReportPolls += 1;
             if (missingReportPolls < MISSING_REPORT_POLLS) return Effect.void;
-            return offer({
-              type: "protocol_error",
-              message: `${runtime} settled in Herdr without an accepted supervisor report.`,
-            }).pipe(
-              Effect.andThen(
-                finish(`${runtime} settled in Herdr without an accepted supervisor report.`),
-              ),
-            );
+            const missing = `${runtime} settled in Herdr without an accepted supervisor report.`;
+            return failClosed(missing, missing);
           }),
         );
       }),
       Effect.catch((error) =>
-        offer({
-          type: "protocol_error",
-          message: `Herdr ownership/topology reconciliation failed closed: ${error.message}`,
-        }).pipe(
-          Effect.andThen(
-            finish("Herdr agent ownership/topology evidence is missing or mismatched."),
-          ),
+        failClosed(
+          `Herdr ownership/topology reconciliation failed closed: ${error.message}`,
+          "Herdr agent ownership/topology evidence is missing or mismatched.",
         ),
       ),
       Effect.andThen(Effect.sleep(RECONCILE_INTERVAL)),
@@ -177,30 +161,16 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
   yield* reconcile.pipe(Effect.forkScoped);
 
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
+    Effect.sync(() =>
       cancelPending(
         processError("close", "herdr_backend_closed", `Herdr ${runtime} backend closed.`),
-      );
-      if (!closed) {
-        closed = true;
-        Queue.endUnsafe(events);
-        Deferred.doneUnsafe(
-          exited,
-          Effect.succeed({
-            type: "exit",
-            exitCode: null,
-            diagnostic: "Herdr backend scope closed.",
-          }),
-        );
-      }
-    }),
+      ),
+    ).pipe(Effect.andThen(finish("Herdr backend scope closed."))),
   );
 
   const initialize = Effect.gen(function* () {
     const remote = yield* hosted.inspect;
-    yield* supervisor.awaitReady.pipe(
-      Effect.mapError((error) => processError("initialize", error.code, error.message)),
-    );
+    yield* supervisor.awaitReady.pipe(Effect.mapError(supervisorError("initialize")));
     return {
       model: request.model,
       effort: request.effort,
@@ -241,7 +211,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
           ),
         );
       return supervisor.hasAcceptedReport(epoch).pipe(
-        Effect.mapError((error) => processError("start", error.code, error.message)),
+        Effect.mapError(supervisorError("start")),
         Effect.flatMap((accepted) => {
           if (accepted) return confirmStarted(epoch);
           return hosted.inspect.pipe(
@@ -266,10 +236,10 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
                 );
                 promptIssuingEpoch = 0;
                 reconcilingEpoch = 0;
-                return offer({ type: "protocol_error", message: error.message }).pipe(
-                  Effect.andThen(finish("Herdr prompt evidence expired without causal execution.")),
-                  Effect.andThen(Effect.fail(error)),
-                );
+                return failClosed(
+                  error.message,
+                  "Herdr prompt evidence expired without causal execution.",
+                ).pipe(Effect.andThen(Effect.fail(error)));
               }
               return Effect.sleep(RECONCILE_INTERVAL).pipe(
                 Effect.andThen(reconcilePromptEvidence(epoch, baseline, remaining - 1)),
@@ -289,7 +259,7 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
         Effect.gen(function* () {
           yield* supervisor
             .setAssignmentEpoch(epoch)
-            .pipe(Effect.mapError((error) => processError("start", error.code, error.message)));
+            .pipe(Effect.mapError(supervisorError("start")));
           preparedEpoch = epoch;
           missingReportPolls = 0;
           unknownStatusPolls = 0;
@@ -312,20 +282,14 @@ const makeHandle = Effect.fn("HerdrBackend.makeHandle")(function* (
       interrupt: Effect.fail(unsupported(runtime, "interrupt")),
       renameDisplay: () => Effect.fail(unsupported(runtime, "rename-display")),
       reply: (requestId: string, message: string) =>
-        supervisor
-          .reply(requestId, message)
-          .pipe(Effect.mapError((error) => processError("reply", error.code, error.message))),
+        supervisor.reply(requestId, message).pipe(Effect.mapError(supervisorError("reply"))),
       notifyPeers: () => Effect.fail(unsupported(runtime, "peer-notice")),
       deliverNotification:
         runtime === "pi"
           ? (message: string) =>
               supervisor
                 .deliverNotification(message)
-                .pipe(
-                  Effect.mapError((error) =>
-                    processError("deliver notification", error.code, error.message),
-                  ),
-                )
+                .pipe(Effect.mapError(supervisorError("deliver notification")))
           : undefined,
     },
     acknowledge: () => {},
@@ -349,11 +313,7 @@ export const makeHerdrBackendDriver = (
       const launch = withHerdrSupervisorInstructions(runtime, request);
       const supervisor = yield* supervisors
         .open({ runId: request.runId, allowPiProxy: runtime === "pi" })
-        .pipe(
-          Effect.mapError((error) =>
-            processError("open Herdr supervisor channel", error.code, error.message),
-          ),
-        );
+        .pipe(Effect.mapError(supervisorError("open Herdr supervisor channel")));
       const hosted = yield* host.launch(runtime, launch, supervisor.metadata);
       return yield* makeHandle(runtime, launch, hosted, supervisor);
     }),

@@ -2,14 +2,14 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  decodeUnknownOrUndefined,
   runBoundedProcessNode,
   sanitizeDiagnosticContent,
   type BoundedProcessError,
 } from "pi-cosmic-core";
-import { HerdrBtwError, type HerdrBtwErrorOutcome } from "../btw/errors.ts";
+import { HerdrBtwError } from "../btw/errors.ts";
 import { herdrBtwParentMarkerArguments } from "../btw/marker.ts";
 
 const HERDR_EXECUTABLE = "herdr";
@@ -91,7 +91,6 @@ const PaneProcessInfoEnvelopeSchema = Schema.Struct({
 });
 
 export type HerdrPane = typeof PaneSchema.Type;
-export type HerdrPaneLayout = typeof LayoutEnvelopeSchema.Type.result.layout;
 export type HerdrPaneProcessInfo = typeof PaneProcessInfoEnvelopeSchema.Type.result.process_info;
 
 export interface HerdrSplitPaneInput {
@@ -128,8 +127,6 @@ interface HerdrCommandRequest {
   readonly confirmedRejectionCodes?: ReadonlyArray<string> | undefined;
 }
 
-type HerdrCommandRunner = (request: HerdrCommandRequest) => Effect.Effect<string, HerdrBtwError>;
-
 export type HerdrProcessRunner = typeof runBoundedProcessNode;
 
 export interface HerdrClientOptions {
@@ -143,40 +140,34 @@ const operationCode = (operation: string, suffix: string): string =>
     .replaceAll(/[^a-z0-9]+/gu, "_")
     .replaceAll(/^_|_$/gu, "")}_${suffix}`;
 
-const parseHerdrCliError = (source: string): typeof HerdrCliErrorEnvelopeSchema.Type | undefined =>
-  Option.getOrUndefined(
-    Schema.decodeUnknownOption(Schema.fromJsonString(HerdrCliErrorEnvelopeSchema))(source),
-  );
-
 const herdrCommandExitFailure = (
   request: HerdrCommandRequest,
   diagnosticSource: string,
 ): HerdrBtwError => {
-  const detail = sanitizeDiagnosticContent(diagnosticSource, {
-    maximumLength: 2_000,
-  }).trim();
-  const cliError = parseHerdrCliError(diagnosticSource);
-  const confirmedRejection =
+  const sanitized = sanitizeDiagnosticContent(diagnosticSource, { maximumLength: 2_000 }).trim();
+  const detail = sanitized ? ` ${sanitized}` : "";
+  const herdrCode = decodeUnknownOrUndefined(
+    Schema.fromJsonString(HerdrCliErrorEnvelopeSchema),
+    diagnosticSource,
+  )?.error.code;
+  const rejected =
     request.mutation &&
-    cliError !== undefined &&
-    request.confirmedRejectionCodes?.includes(cliError.error.code) === true;
-  const outcome: HerdrBtwErrorOutcome =
-    request.mutation && !confirmedRejection ? "uncertain" : "confirmed";
-  const suffix = confirmedRejection
-    ? "rejected"
-    : request.mutation
-      ? "outcome_uncertain"
-      : "failed";
+    herdrCode !== undefined &&
+    request.confirmedRejectionCodes?.includes(herdrCode) === true;
+  const uncertain = request.mutation && !rejected;
   return new HerdrBtwError({
     operation: request.operation,
-    code: operationCode(request.operation, suffix),
-    message: confirmedRejection
-      ? `Herdr ${request.operation} was rejected before it was applied.${detail ? ` ${detail}` : ""}`
-      : request.mutation
-        ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.${detail ? ` ${detail}` : ""}`
-        : `Herdr ${request.operation} failed.${detail ? ` ${detail}` : ""}`,
-    outcome,
-    herdrCode: cliError?.error.code,
+    code: operationCode(
+      request.operation,
+      rejected ? "rejected" : uncertain ? "outcome_uncertain" : "failed",
+    ),
+    message: rejected
+      ? `Herdr ${request.operation} was rejected before it was applied.${detail}`
+      : uncertain
+        ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.${detail}`
+        : `Herdr ${request.operation} failed.${detail}`,
+    outcome: uncertain ? "uncertain" : "confirmed",
+    herdrCode,
   });
 };
 
@@ -210,56 +201,16 @@ const herdrTransportFailure = (
   request: HerdrCommandRequest,
   failure?: BoundedProcessError | undefined,
 ): HerdrBtwError => {
-  const failedBeforeDispatch = failure?.operation === "spawn";
-  const outcome: HerdrBtwErrorOutcome =
-    request.mutation && !failedBeforeDispatch ? "uncertain" : "confirmed";
+  // Only a spawn failure proves that a mutating request was never dispatched.
+  const uncertain = request.mutation && failure?.operation !== "spawn";
   return new HerdrBtwError({
     operation: request.operation,
-    code: operationCode(
-      request.operation,
-      request.mutation && !failedBeforeDispatch ? "outcome_uncertain" : "failed",
-    ),
-    message:
-      request.mutation && !failedBeforeDispatch
-        ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
-        : `Unable to run Herdr ${request.operation}.`,
-    outcome,
+    code: operationCode(request.operation, uncertain ? "outcome_uncertain" : "failed"),
+    message: uncertain
+      ? `Herdr ${request.operation} may have been applied, but its outcome is unconfirmed.`
+      : `Unable to run Herdr ${request.operation}.`,
+    outcome: uncertain ? "uncertain" : "confirmed",
   });
-};
-
-const makeHerdrCommandRunner = (
-  sourceEnvironment: Readonly<NodeJS.ProcessEnv>,
-  options: HerdrClientOptions,
-): HerdrCommandRunner => {
-  const environment = selectHerdrEnvironment(sourceEnvironment);
-  const processRunner = options.processRunner ?? runBoundedProcessNode;
-
-  return (request) =>
-    processRunner({
-      executable: HERDR_EXECUTABLE,
-      args: [...request.args],
-      environment,
-      stdoutLimitBytes: MAX_OUTPUT_BYTES,
-      stderrLimitBytes: MAX_OUTPUT_BYTES,
-      timeoutMillis: request.timeoutMillis ?? COMMAND_TIMEOUT_MILLIS,
-      cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
-      detached: false,
-      windowsHide: true,
-    }).pipe(
-      Effect.mapError((failure) => herdrTransportFailure(request, failure)),
-      Effect.flatMap((output) => {
-        if (output.overflowed || output.timedOut || output.cleanupUnconfirmed)
-          return Effect.fail(herdrTransportFailure(request));
-        if (output.code !== 0) {
-          const killedBySignal = output.code === null && output.signal !== null;
-          const detail = killedBySignal
-            ? `terminated by ${output.signal} signal${output.stderr ? `: ${output.stderr.trim()}` : ""}`
-            : output.stderr || output.stdout;
-          return Effect.fail(herdrCommandExitFailure(request, detail));
-        }
-        return Effect.succeed(output.stdout);
-      }),
-    );
 };
 
 const herdrDecodeFailure = (
@@ -298,7 +249,34 @@ export const makeHerdrClient = (
   sourceEnvironment: Readonly<NodeJS.ProcessEnv>,
   options: HerdrClientOptions = {},
 ) => {
-  const run = makeHerdrCommandRunner(sourceEnvironment, options);
+  const environment = selectHerdrEnvironment(sourceEnvironment);
+  const processRunner = options.processRunner ?? runBoundedProcessNode;
+  const run = (request: HerdrCommandRequest): Effect.Effect<string, HerdrBtwError> =>
+    processRunner({
+      executable: HERDR_EXECUTABLE,
+      args: [...request.args],
+      environment,
+      stdoutLimitBytes: MAX_OUTPUT_BYTES,
+      stderrLimitBytes: MAX_OUTPUT_BYTES,
+      timeoutMillis: request.timeoutMillis ?? COMMAND_TIMEOUT_MILLIS,
+      cleanupTimeoutMillis: PROCESS_CLEANUP_MILLIS,
+      detached: false,
+      windowsHide: true,
+    }).pipe(
+      Effect.mapError((failure) => herdrTransportFailure(request, failure)),
+      Effect.flatMap((output) => {
+        if (output.overflowed || output.timedOut || output.cleanupUnconfirmed)
+          return Effect.fail(herdrTransportFailure(request));
+        if (output.code !== 0) {
+          const killedBySignal = output.code === null && output.signal !== null;
+          const detail = killedBySignal
+            ? `terminated by ${output.signal} signal${output.stderr ? `: ${output.stderr.trim()}` : ""}`
+            : output.stderr || output.stdout;
+          return Effect.fail(herdrCommandExitFailure(request, detail));
+        }
+        return Effect.succeed(output.stdout);
+      }),
+    );
   const decoded = <A>(request: HerdrCommandRequest, schema: Schema.Decoder<A>) =>
     run(request).pipe(Effect.flatMap((stdout) => decodeJson(schema, stdout, request)));
 

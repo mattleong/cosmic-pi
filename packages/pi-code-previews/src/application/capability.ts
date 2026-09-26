@@ -52,19 +52,17 @@ export function deferCodePreview(task: () => void): () => void {
   return activeCapability?.defer(task) ?? inactiveCancellation;
 }
 
-export function scheduleCodePreview(interval: number, task: () => void): () => void {
-  return activeCapability?.schedule(interval, task) ?? inactiveCancellation;
-}
-
 export function runCodePreviewSessionEffect<A, E>(
   effect: Effect.Effect<A, E, SessionRequirements>,
   signal?: AbortSignal,
 ): Promise<A> {
-  const active = activeCapability;
-  if (active) return active.run(effect, signal);
+  return activeCapability?.run(effect, signal) ?? rejectInactiveCodePreviewSession("run");
+}
+
+export function rejectInactiveCodePreviewSession(operation: string): Promise<never> {
   return Promise.reject(
     new CodePreviewSessionUnavailable({
-      operation: "run",
+      operation,
       message: "Code preview session is not active.",
     }),
   );

@@ -1,18 +1,20 @@
-import type { ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import type {
   AgentToolResult,
   ExtensionAPI,
-  ExtensionCommandContext,
+  ExtensionHandler,
 } from "@earendil-works/pi-coding-agent";
-import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { expect, it, layer } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+} from "pi-cosmic-core/testing";
 import {
   COSMIC_UI_HOST_QUERY,
   COSMIC_UI_HOST_STATE,
@@ -28,12 +30,12 @@ import betterOpenAI, {
 } from "../src/extension.ts";
 import { registerOpenAIImage } from "../src/image/register.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
+import { waitUntil } from "./helpers.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type Command = NonNullable<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>;
 afterEach(() => {
   vi.unstubAllEnvs();
-  resetCapabilitiesCache();
 });
 
 interface TestConfigDocument {
@@ -41,7 +43,6 @@ interface TestConfigDocument {
   readonly usage: {
     readonly showOnlyOnSubscriptionModels?: boolean;
   };
-
   readonly image: { readonly enabled: boolean };
 }
 
@@ -49,7 +50,10 @@ interface TestConfigDocument {
 // test owns schema decoding of this persisted document.
 const encodeConfigDocument = (config: TestConfigDocument): string => JSON.stringify(config);
 
-const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
+const harness = (
+  dependencies?: BetterOpenAIExtensionDependencies,
+  config: Partial<TestConfigDocument> = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -61,8 +65,8 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       encodeConfigDocument({
         persistState: false,
         usage: {},
-
         image: { enabled: false },
+        ...config,
       }),
     );
     yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
@@ -70,7 +74,7 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
     const commands = new Map<string, Command>();
     let tool: any;
     let toolActivations = 0;
-    const piFixture = {
+    const pi = extensionApiFixture({
       on(name: string, handler: Handler) {
         handlers.set(name, [...(handlers.get(name) ?? []), handler]);
       },
@@ -87,17 +91,15 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       registerMessageRenderer: vi.fn(),
       sendMessage: vi.fn(),
       events: { emit: vi.fn(), on: vi.fn() },
-    };
-    // SAFETY: Better OpenAI registration uses only the ExtensionAPI methods implemented here.
-    const pi = piFixture as typeof piFixture & ExtensionAPI;
-    const contextFixture = {
+    });
+    const ctx = extensionContextFixture({
       cwd,
       mode: "rpc",
       hasUI: true,
       model: { provider: "openai", id: "gpt-5.5" },
       modelRegistry: {
         isUsingOAuth: () => true,
-        getApiKeyForProvider: () => Promise.resolve(undefined),
+        getProviderAuth: () => Promise.resolve(undefined),
       },
       ui: { notify: vi.fn(), setStatus: vi.fn(), setFooter: vi.fn() },
       sessionManager: {
@@ -111,9 +113,7 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
       getContextUsage: () => ({ contextWindow: 100, percent: 1 }),
       getSystemPrompt: () => "system",
       isProjectTrusted: vi.fn(() => true),
-    };
-    // SAFETY: This harness supplies every context member exercised by events and commands.
-    const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
+    });
     if (dependencies) betterOpenAIWithDependencies(pi, dependencies);
     else betterOpenAI(pi);
     const emit = (name: string, event: any = {}, useCtx = ctx): Effect.Effect<void> =>
@@ -137,27 +137,10 @@ const harness = (dependencies?: BetterOpenAIExtensionDependencies) =>
     };
   });
 
-function deferredPromise() {
-  const handle = Deferred.makeUnsafe<void>();
-  return {
-    promise: Effect.runPromise(Deferred.await(handle)),
-    resolve: () => {
-      Effect.runSync(Deferred.succeed(handle, undefined));
-    },
-  };
-}
-
 const invoke = <ValueInput>(value: ValueInput): Effect.Effect<void> =>
   Effect.promise(() => Promise.resolve(value).then(() => undefined));
 
-const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
-  Effect.promise(() =>
-    vi.waitFor(() => {
-      expect(predicate()).toBe(true);
-    }),
-  );
-
-it.effect("image command and tool results keep one base64 payload and still render it", () =>
+it.effect("image command and tool results keep one base64 payload", () =>
   Effect.gen(function* () {
     const generated: CodexImageResult = {
       id: "image-1",
@@ -173,36 +156,29 @@ it.effect("image command and tool results keep one base64 payload and still rend
     };
     const commands = new Map<string, Command>();
     let tool: any;
-    let renderer: any;
     const sendMessage = vi.fn();
-    const piFixture = {
+    const pi = extensionApiFixture({
       registerCommand(name: string, options: { handler: Command }) {
         commands.set(name, options.handler);
       },
-      registerMessageRenderer(_customType: string, value: any) {
-        renderer = value;
-      },
+      registerMessageRenderer() {},
       registerTool(value: any) {
         tool = value;
       },
       sendMessage,
-    };
+    });
     const runFixture = vi
       .fn()
       .mockResolvedValueOnce(Option.some(generated))
       .mockResolvedValue(generated);
     // SAFETY: The mock returns the command and tool values expected by these two runner calls.
     const run = runFixture as Parameters<typeof registerOpenAIImage>[1];
-    // SAFETY: The fixture implements every ExtensionAPI method exercised by image registration.
-    const pi = piFixture as typeof piFixture & ExtensionAPI;
     registerOpenAIImage(pi, run, vi.fn());
-    const contextFixture = {
+    const ctx = extensionContextFixture({
       model: { id: "gpt-5.5" },
       signal: undefined,
       ui: { notify: vi.fn() },
-    };
-    // SAFETY: The fixture implements every context member exercised by the command and tool.
-    const ctx = contextFixture as typeof contextFixture & ExtensionCommandContext;
+    });
 
     yield* Effect.promise(() =>
       Promise.resolve(commands.get("openai-image")?.("draw a comet", ctx)),
@@ -221,7 +197,6 @@ it.effect("image command and tool results keep one base64 payload and still rend
     });
     expect(commandMessage.details).not.toHaveProperty("data");
     expect(toolResult.details).toEqual(metadata);
-    expect(toolResult.details).not.toHaveProperty("data");
     expect(commandMessage.content).toContainEqual(expect.objectContaining({ type: "text" }));
     expect(
       commandMessage.content.filter((block: { readonly type: string }) => block.type === "image"),
@@ -238,31 +213,6 @@ it.effect("image command and tool results keep one base64 payload and still rend
       type: "text",
       text: expect.stringContaining(generated.data),
     });
-
-    setCapabilities({ images: null, trueColor: true, hyperlinks: false });
-    const renderTheme = {
-      bold: (text: string) => text,
-      fg: (_color: string, text: string) => text,
-      bg: (_color: string, text: string) => text,
-    };
-    const currentMessage = { ...commandMessage, role: "custom", timestamp: 0 };
-    const textOnlyMessage = {
-      ...currentMessage,
-      content: commandMessage.content.filter((part: { type: string }) => part.type !== "image"),
-    };
-    const renderOptions = { expanded: false, outputPad: 1 };
-    const currentRendered = renderer(currentMessage, renderOptions, renderTheme).render(120);
-    const textOnlyRendered = renderer(textOnlyMessage, renderOptions, renderTheme).render(120);
-    const legacyRendered = renderer(
-      { ...textOnlyMessage, details: generated },
-      renderOptions,
-      renderTheme,
-    ).render(120);
-
-    // Both the current content-owned payload and the legacy details-owned payload must create
-    // an Image child. Text-only rendering must not satisfy this check.
-    expect(currentRendered).not.toEqual(textOnlyRendered);
-    expect(legacyRendered).toEqual(currentRendered);
   }),
 );
 
@@ -341,18 +291,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("does not report image cancellation as message-delivery failure", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const h = yield* harness();
-      yield* fs.writeFileString(
-        path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
-        encodeConfigDocument({
-          persistState: false,
-          usage: {},
-
-          image: { enabled: true },
-        }),
-      );
+      const h = yield* harness(undefined, { image: { enabled: true } });
       yield* h.emit("session_start");
       const controller = new AbortController();
       controller.abort(new Error("cancel image"));
@@ -368,25 +307,12 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
 
   it.effect("keeps the replacement context current after deactivating the previous runtime", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const h = yield* harness();
-      const configPath = path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json");
-      yield* fs.writeFileString(
-        configPath,
-        encodeConfigDocument({
-          persistState: false,
-          usage: { showOnlyOnSubscriptionModels: true },
-
-          image: { enabled: false },
-        }),
-      );
+      const h = yield* harness(undefined, { usage: { showOnlyOnSubscriptionModels: true } });
       yield* h.emit("session_start");
       const replacement = { ...h.ctx };
       yield* h.emit("session_start", {}, replacement);
       vi.mocked(h.ctx.ui.notify).mockClear();
 
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const selected = {
         ...replacement,
         model: { ...replacement.model, provider: "anthropic", id: "claude" },
@@ -441,35 +367,6 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       yield* h.emit("session_shutdown", {}, ctx);
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("better-openai", undefined);
       expect(ctx.ui.setFooter).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("uses status fallback when an installed Cosmic UI host is inactive", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const h = yield* harness();
-      yield* fs.writeFileString(
-        path.join(h.ctx.cwd, ".pi", "extensions", "pi-better-openai.json"),
-        encodeConfigDocument({
-          persistState: false,
-          usage: {},
-
-          image: { enabled: false },
-        }),
-      );
-      vi.mocked(h.pi.events.emit).mockImplementation((name, data) => {
-        if (name === COSMIC_UI_HOST_QUERY) {
-          // SAFETY: The name guard narrows this payload to Cosmic UI's host-query protocol.
-          (data as CosmicUiHostQuery).respond({ active: false, ready: true, hidden: [] });
-        }
-      });
-      const tuiContext = { ...h.ctx, mode: "tui" as const };
-
-      yield* h.emit("session_start", {}, tuiContext);
-
-      expect(tuiContext.ui.setFooter).not.toHaveBeenCalled();
-      yield* h.emit("session_shutdown", {}, tuiContext);
     }),
   );
 

@@ -7,9 +7,7 @@ import {
   type CompactChild,
   type CompactNotice,
 } from "../../src/tools/compact-summary";
-import { stripAnsi, testTheme } from "../support/render";
-
-const theme = testTheme();
+import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
 
 describe("compact child selection", () => {
   it.each(["tree", "flat"] as const)(
@@ -20,7 +18,7 @@ describe("compact child selection", () => {
         status: "success",
       }));
       const children = { entries, total: 12 };
-      const expanded = renderCompactChildren(children, theme, 80, 0, true, true, layout).map(
+      const expanded = compactChildren(entries, 80, { total: 12, expanded: true, layout }).map(
         stripAnsi,
       );
       expect(expanded.slice(0, -1).map((row) => row.match(/retained-\d/u)?.[0])).toEqual(
@@ -39,24 +37,19 @@ describe("compact child selection", () => {
     "keeps %s informational hints beneath their child and wraps complete warnings",
     (layout) => {
       const warning = "Sensitive content requires review before sharing with another recipient.";
-      const children = {
-        entries: [
-          {
-            label: "first",
-            status: "success" as const,
-            notices: [
-              { kind: "recovery" as const, text: "Continue at offset=143", expandedOnly: true },
-              { kind: "warning" as const, text: warning, description: warning, expandedOnly: true },
-            ],
-          },
-          { label: "second", status: "success" as const },
-        ],
-        total: 2,
-      } satisfies { entries: CompactChild[]; total: number };
+      const entries: CompactChild[] = [
+        {
+          label: "first",
+          status: "success",
+          notices: [
+            { kind: "recovery", text: "Continue at offset=143", expandedOnly: true },
+            { kind: "warning", text: warning, description: warning, expandedOnly: true },
+          ],
+        },
+        { label: "second", status: "success" },
+      ];
       for (const expanded of [false, true]) {
-        const rows = renderCompactChildren(children, theme, 35, 0, true, expanded, layout).map(
-          stripAnsi,
-        );
+        const rows = compactChildren(entries, 35, { expanded, layout }).map(stripAnsi);
         expect(rows.every((row) => visibleWidth(row) <= 35)).toBe(true);
         const text = rows.join("\n");
         expect(text.includes("offset=143")).toBe(expanded);
@@ -91,11 +84,9 @@ describe("compact child selection", () => {
       },
     ];
     expect(notices.map(isCompactAttention)).toEqual([false, true, true]);
-    const children = renderCompactChildren(
-      { entries: [{ label: "read", status: "success", notices }], total: 1 },
-      theme,
-      100,
-    ).join("\n");
+    const children = compactChildren([{ label: "read", status: "success", notices }], 100).join(
+      "\n",
+    );
     expect(children).not.toContain("offset=143");
     expect(children).toContain("Sensitive content");
     expect(children).toContain("Independent error");
@@ -170,23 +161,16 @@ describe("compact child selection", () => {
     "renders untrusted %s child names as inert width-bounded text",
     (layout) => {
       for (const width of [1, 4, 16, 40, 100]) {
-        const rows = renderCompactChildren(
-          {
-            entries: [
-              {
-                label: "read\n日本語\t\u001b[2J\r".repeat(30),
-                subject: "path\n日本語\t\u001b[2J\r".repeat(30),
-                status: "returned",
-              },
-            ],
-            total: 1,
-          },
-          theme,
+        const rows = compactChildren(
+          [
+            {
+              label: "read\n日本語\t\u001b[2J\r".repeat(30),
+              subject: "path\n日本語\t\u001b[2J\r".repeat(30),
+              status: "returned",
+            },
+          ],
           width,
-          0,
-          true,
-          true,
-          layout,
+          { expanded: true, layout },
         );
         expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
         expect(rows.join("")).not.toContain("\u001b[2J");
@@ -200,50 +184,39 @@ describe("compact child selection", () => {
     (layout) => {
       const recovery =
         "Output was truncated.\nRead /tmp/retained-output-1234567890.txt before deciding whether to retry.";
-      for (const width of [1, 2, 4, 6, 7, 8, 12, 20, 40, 80]) {
-        for (const expanded of [false, true]) {
-          const rows = renderCompactChildren(
-            {
-              total: 1,
-              entries: [
+      // Collapsed rows show only a described recovery; expanded rows show its full text.
+      for (const width of [1, 2, 4, 5, 6, 7, 8, 12, 20, 40, 80])
+        for (const expanded of [false, true])
+          for (const description of [undefined, "abcdefghijklmnopqrstuvwxyz"]) {
+            const rows = compactChildren(
+              [
                 {
                   label: "server.with.a.long.tool.name",
                   subject: "directory/".repeat(40),
                   status: "warning",
-                  notices: [{ kind: "recovery", text: recovery }],
+                  notices: [
+                    { kind: "recovery", text: recovery, ...(description && { description }) },
+                  ],
                 },
               ],
-            },
-            theme,
-            width,
-            0,
-            true,
-            expanded,
-            layout,
-          ).map(stripAnsi);
-          expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-          expect(
-            rows
-              .slice(1)
-              .join("")
-              .replace(/[\s│╰─]/gu, ""),
-          ).toBe(expanded ? recovery.replace(/\s/gu, "") : "");
-        }
-      }
+              width,
+              { expanded, layout },
+            ).map(stripAnsi);
+            expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+            expect(
+              rows
+                .slice(1)
+                .join("")
+                .replace(/[\s│╰─]/gu, ""),
+            ).toBe(expanded ? recovery.replace(/\s/gu, "") : (description ?? ""));
+          }
     },
   );
 
   it("preserves call identity while eliding long targets like standalone headers", () => {
     const subject = `src/${"long-directory/".repeat(20)}target.ts`;
     for (const width of [40, 60, 80]) {
-      const rows = renderCompactChildren(
-        {
-          entries: [{ label: "read", subject, status: "success" }],
-          total: 1,
-        },
-        theme,
-        width,
-      );
+      const rows = compactChildren([{ label: "read", subject, status: "success" }], width);
       expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
       expect(rows.join("")).toContain("read");
       expect(rows.join("")).toContain("src/");
@@ -264,24 +237,17 @@ describe("compact child selection", () => {
       ] as const) {
         for (const durationMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, 123]) {
           for (const timingEnabled of [false, true]) {
-            const rows = renderCompactChildren(
-              {
-                entries: [
-                  {
-                    label: "read",
-                    status,
-                    showTiming: true,
-                    ...(durationMs !== undefined && { durationMs }),
-                  },
-                ],
-                total: 1,
-              },
-              theme,
+            const rows = compactChildren(
+              [
+                {
+                  label: "read",
+                  status,
+                  showTiming: true,
+                  ...(durationMs !== undefined && { durationMs }),
+                },
+              ],
               80,
-              0,
-              timingEnabled,
-              true,
-              layout,
+              { timing: timingEnabled, expanded: true, layout },
             );
             expect(rows.join("").includes("123ms")).toBe(
               timingEnabled && status !== "pending" && durationMs === 123,

@@ -50,21 +50,17 @@ export function findActiveOpenAICompactionCheckpoint(
   branch: readonly SessionEntry[],
   model: Model<Api>,
 ): OpenAICompactionCheckpoint | undefined {
-  const latest = branch.findLast(
-    (candidate): candidate is Extract<SessionEntry, { type: "compaction" }> =>
-      candidate?.type === "compaction",
-  );
-  if (!latest) return undefined;
-  const details = decodeOpenAICompactionDetails(latest.details);
-  if (!details) return undefined;
-  const checkpoint = details.checkpoint;
-  if (
+  const latest = branch.findLast((entry) => entry?.type === "compaction");
+  const checkpoint =
+    latest?.type === "compaction"
+      ? decodeOpenAICompactionDetails(latest.details)?.checkpoint
+      : undefined;
+  return checkpoint &&
     checkpoint.provider === model.provider &&
     checkpoint.api === model.api &&
     checkpoint.model === model.id
-  )
-    return checkpoint;
-  return undefined;
+    ? checkpoint
+    : undefined;
 }
 
 /** Project persisted Pi entries with the same OpenAI Responses converter used by pi-ai. */

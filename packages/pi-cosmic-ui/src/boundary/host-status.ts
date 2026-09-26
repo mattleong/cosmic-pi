@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createCosmicFooterClient } from "../footer/client.ts";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { createCosmicFooterClient, makeHostStateWatch } from "../footer/client.ts";
+import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { CosmicFooterStatusContribution } from "../protocol/protocol.ts";
 import { makeHostUiTickerPool, type HostUiTickerPool } from "./host-ui-ticker-pool.ts";
 
@@ -70,16 +70,13 @@ export function makeFooterStatusDeclaration(options: {
     ...options.placement,
   });
   let declared = false;
-  let stopWatching: (() => void) | undefined;
-  const ensureWatching = () => {
-    if (stopWatching) return;
-    stopWatching = client.onHostStateChange((state) => {
-      if (declared && state.active) client.upsert(contribution);
-    });
-  };
-  const stop = () => {
-    stopWatching?.();
-    stopWatching = undefined;
+  const watch = makeHostStateWatch(client, (state) => {
+    if (declared && state.active) client.upsert(contribution);
+  });
+  const shutdown = () => {
+    declared = false;
+    watch.stop();
+    client.shutdown();
   };
   return {
     activate(ctx) {
@@ -89,22 +86,13 @@ export function makeFooterStatusDeclaration(options: {
       } catch {
         tui = false;
       }
-      if (!tui) {
-        declared = false;
-        stop();
-        client.shutdown();
-        return;
-      }
+      if (!tui) return shutdown();
       declared = true;
-      ensureWatching();
+      watch.start();
       client.query();
       if (client.installed) client.upsert(contribution);
     },
-    shutdown() {
-      declared = false;
-      stop();
-      client.shutdown();
-    },
+    shutdown,
   };
 }
 
@@ -135,13 +123,7 @@ export function makeProjectionBridge<P>(options: ProjectionBridgeOptions<P>): Pr
   const updateFooter = () =>
     setStatusSafely(context, footerEnabled ? options.footerStatus(projection) : undefined);
   const notifyListeners = () => {
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch {
-        // One throwing subscriber must not block the other projection listeners.
-      }
-    }
+    for (const listener of listeners) invokeHostCallback(listener, undefined);
   };
 
   return {

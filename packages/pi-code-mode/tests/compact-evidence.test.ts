@@ -1,75 +1,44 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
-import {
-  BACKGROUND_TASK_CODE_MODE_QUERY,
-  normalizeBackgroundTaskCodeModeQuery,
-  type BackgroundTaskCodeModeCapability,
-} from "pi-background-task/code-mode";
+import type { BackgroundTaskCodeModeCapability } from "pi-background-task/code-mode";
 import * as previews from "pi-code-previews";
-import { renderCodeModeToolResult } from "../src/ui/tool-renderer.ts";
-import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import { makeFailureDetailsRetention } from "../src/tools/retention.ts";
-import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
-import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { makeNestedPiToolDispatch } from "../src/boundary/host-builtin-tools.ts";
 import {
-  codeModeStateFixture,
+  deferredPromise,
   extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
+import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
+import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
+import {
+  makeNestedPiToolDispatch,
+  type NestedPiToolDefinitions,
+} from "../src/boundary/host-builtin-tools.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import type { CodeModeCallEntry, CodeModeToolDetails } from "../src/tools/format.ts";
-import type { NestedPiToolDefinitions } from "../src/boundary/host-builtin-tools.ts";
+import { ledgerDetails, noReplayNotices, summarize } from "./support/compact.ts";
+import { executeHarness } from "./support/execute.ts";
+import { renderResultText } from "./support/presentation.ts";
+import { backgroundTaskProvider } from "./support/providers.ts";
 
 const encode = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-const deferred = <A>() => {
-  let resolve!: (value: A) => void;
-  const promise = Effect.runPromise(
-    Effect.callback<A>((resume) => {
-      resolve = (value) => resume(Effect.succeed(value));
-    }),
-  );
-  return { promise, resolve };
-};
 const result = <Details>(text = "", details?: Details) => ({
   content: [{ type: "text" as const, text }],
   details,
 });
-const project = (details: CodeModeToolDetails) =>
-  codeModeCompactSummary({
-    phase: "settled",
-    args: {},
-    result: result("discarded", details),
-    context: opaqueHostFixture({ isError: false }),
-  });
 const harness = (
   definitions: NestedPiToolDefinitions,
-  options: { budget?: number; events?: ReturnType<typeof createEventBus> } = {},
-) => {
-  const state = codeModeStateFixture({
-    maxToolCalls: 400,
-    maxCumulativeChildOutputBytes: options.budget ?? 1000000,
-  });
-  const retention = makeFailureDetailsRetention();
-  const run = makeCodeModeToolExecute({
-    isCurrent: () => true,
-    getState: () => state,
-    runInSession: (effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined),
+  options: { budget?: number; events?: ExtensionAPI["events"] } = {},
+) =>
+  executeHarness({
     definitions,
-    events: options.events ?? createEventBus(),
-    sessionId: "compact",
-    retainFailureDetails: retention.retain,
+    cwd: "/project",
+    retainFailureDetails: true,
+    config: { maxToolCalls: 400, maxCumulativeChildOutputBytes: options.budget ?? 1000000 },
+    ...(options.events && { events: options.events }),
   });
-  return {
-    retention,
-    run: (code: string, signal?: AbortSignal) =>
-      run("compact", { code }, signal, undefined, extensionContextFixture({ cwd: "/project" })),
-  };
-};
 
 describe("compact semantic evidence", () => {
   it.effect(
@@ -94,7 +63,7 @@ describe("compact semantic evidence", () => {
             }),
           );
           yield* Effect.promise(() => expect(h.run(code)).rejects.toThrow(error));
-          const details = h.retention.consume("compact")!;
+          const details = h.retention.consume("call")!;
           expect(details.compactAttention).toMatchObject({
             observed: 1,
             errors: 1,
@@ -108,12 +77,7 @@ describe("compact semantic evidence", () => {
           const serialized = yield* encode(details);
           expect(serialized).not.toMatch(/SOURCE_MARKER|stack-marker|may already have completed/u);
           const text = `[ToolFailure] Nested tool '${name}' failed: ${error}`;
-          const compact = codeModeCompactSummary({
-            phase: "settled",
-            args: {},
-            result: result(text, details),
-            context: opaqueHostFixture({ isError: true, expanded: false }),
-          });
+          const compact = summarize(details, { isError: true, text });
           expect(compact?.failure?.details).toBe(text);
           expect(compact?.failure?.cause).toBe(details.failurePresentation?.evidence.cause);
           expect(
@@ -128,7 +92,7 @@ describe("compact semantic evidence", () => {
           ).toBe(false);
           const caught = yield* Effect.promise(() => h.run(`try { ${code}; } catch {} return 1;`));
           expect(caught.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(false);
-          expect(project(caught.details!)?.outcome).toBe("error");
+          expect(summarize(caught.details!)?.outcome).toBe("error");
         }
       }),
   );
@@ -148,11 +112,7 @@ describe("compact semantic evidence", () => {
         failure.run('try { await tools.pi.bash({command:"run"}); } catch {} return 1;'),
       );
       expect(clipped.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
-      expect(
-        clipped.details?.compactAttention?.notices.some((notice) =>
-          notice.text.includes("do not replay"),
-        ),
-      ).toBe(true);
+      expect(noReplayNotices(clipped.details?.compactAttention?.notices)).not.toHaveLength(0);
       const h = harness(
         nestedToolDefinitionsFixture({
           write: {
@@ -168,26 +128,21 @@ describe("compact semantic evidence", () => {
         h.run('try { await tools.pi.write({path:"file",content:"private"}); } catch {} return 1;'),
       );
       expect(conversion.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(true);
-      expect(
-        conversion.details?.compactAttention?.notices.some((notice) =>
-          notice.text.includes("do not replay"),
-        ),
-      ).toBe(true);
+      expect(noReplayNotices(conversion.details?.compactAttention?.notices)).not.toHaveLength(0);
     }),
   );
   it.effect(
     "correlates identical concurrent calls in reverse completion order through the real runtime",
     () =>
       Effect.gen(function* () {
-        const started = deferred<void>();
-        const pending: Array<ReturnType<typeof deferred<ReturnType<typeof result>>>> = [];
+        const started = deferredPromise();
+        const pending = [1, 2].map(() => deferredPromise<ReturnType<typeof result>>());
+        let calls = 0;
         const definitions = nestedToolDefinitionsFixture({
           grep: {
             execute: () => {
-              const request = deferred<ReturnType<typeof result>>();
-              pending.push(request);
-              if (pending.length === 2) started.resolve();
-              return request.promise;
+              if (++calls === 2) started.resolve();
+              return pending[calls - 1]!.promise;
             },
           },
         });
@@ -235,12 +190,8 @@ describe("compact semantic evidence", () => {
         }),
       );
       expect(receipt?.counters).not.toContain("new file");
-      expect(project(completed.details!)?.children?.entries[0]?.status).toBe("error");
-      expect(
-        completed.details?.compactAttention?.notices.some((notice) =>
-          notice.text.includes("do not replay"),
-        ),
-      ).toBe(true);
+      expect(summarize(completed.details!)?.children?.entries[0]?.status).toBe("error");
+      expect(noReplayNotices(completed.details?.compactAttention?.notices)).not.toHaveLength(0);
       expect(yield* encode(completed.details)).not.toContain("private body");
     }),
   );
@@ -253,7 +204,7 @@ describe("compact semantic evidence", () => {
         expect(h.run('await tools.pi.read({path:"file",offset:0})')).rejects.toThrow(),
       );
       expect(native).not.toHaveBeenCalled();
-      expect(h.retention.consume("compact")?.compactAttention).toMatchObject({
+      expect(h.retention.consume("call")?.compactAttention).toMatchObject({
         observed: 0,
         started: 0,
       });
@@ -275,29 +226,6 @@ describe("compact semantic evidence", () => {
       expect(yield* dispatch("read", { path: "file" })).toBe("native value");
     }),
   );
-
-  it("keeps warning evidence beyond row eviction and reports bounded overflow", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    for (let id = 0; id < 300; id++) {
-      collector.admit("pi.read");
-      collector.start(id, id);
-      collector.observe(collector.identity(id), () => ({
-        subject: "file",
-        outcome: "warning",
-        notices: [{ kind: "recovery", text: `Recover ${id}` }],
-      }));
-      collector.end(id);
-    }
-    collector.close();
-    expect(collector.snapshot()).toMatchObject({
-      admitted: 300,
-      started: 300,
-      observed: 300,
-      incomplete: true,
-    });
-    expect(collector.snapshot().notices).toHaveLength(32);
-    expect(collector.snapshot().notices[0]?.text).toBe("Recover 0");
-  });
 
   it("retains valid sibling notices when another field exceeds bounds and excludes failure bodies", () => {
     const collector = makeCompactEvidence(() => undefined);
@@ -330,35 +258,30 @@ describe("compact semantic evidence", () => {
       compactAttention: collector.snapshot(),
     };
     expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
-    expect(project(details)?.outcome).toBe("uncertain");
+    expect(summarize(details)?.outcome).toBe("uncertain");
   });
 
   it.effect("retains lost companion replies after observed completion", () =>
     Effect.gen(function* () {
-      const events = createEventBus();
-      events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) =>
-        normalizeBackgroundTaskCodeModeQuery(value)?.respond({
-          version: 1,
-          presentationVersion: 1,
-          sessionId: "compact",
-          execute: (_id, _input, _signal, _budget, observe) => {
-            observe?.({
-              version: 1,
-              incomplete: false,
-              overflow: false,
-              summary: {
-                action: "start",
-                subject: "task",
-                outcome: "success",
-                metadata: [],
-                counters: [],
-                notices: [],
-                detailsOnExpand: true,
-              },
-            });
-            return Promise.reject(new Error("Reply projection failed"));
-          },
-        } satisfies BackgroundTaskCodeModeCapability),
+      const events = backgroundTaskProvider(
+        (_id, _input, _signal, _budget, observe) => {
+          observe?.({
+            version: 1,
+            incomplete: false,
+            overflow: false,
+            summary: {
+              action: "start",
+              subject: "task",
+              outcome: "success",
+              metadata: [],
+              counters: [],
+              notices: [],
+              detailsOnExpand: true,
+            },
+          });
+          return Promise.reject(new Error("Reply projection failed"));
+        },
+        { presentationVersion: 1 },
       );
       const completed = yield* Effect.promise(() =>
         harness(nestedToolDefinitionsFixture({}), { events }).run(
@@ -369,52 +292,43 @@ describe("compact semantic evidence", () => {
         outcome: "success",
         deliveryFailed: true,
       });
-      expect(
-        completed.details?.compactAttention?.notices.some((notice) =>
-          notice.text.includes("do not replay"),
-        ),
-      ).toBe(true);
+      expect(noReplayNotices(completed.details?.compactAttention?.notices)).not.toHaveLength(0);
     }),
   );
 
   it.effect("captures BG presentation before output projection and revokes late callbacks", () =>
     Effect.gen(function* () {
-      const events = createEventBus();
       let late: Parameters<BackgroundTaskCodeModeCapability["execute"]>[4];
-      events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) =>
-        normalizeBackgroundTaskCodeModeQuery(value)?.respond({
-          version: 1,
-          presentationVersion: 1,
-          sessionId: "compact",
-          execute: (_id, _input, _signal, _budget, observe) => {
-            late = observe;
-            observe?.({
-              version: 1,
-              incomplete: false,
-              overflow: false,
-              summary: {
-                action: "logs",
-                subject: "bg-1",
-                outcome: "warning",
-                metadata: [],
-                counters: [],
-                notices: [{ kind: "recovery", text: "Earlier log output is unavailable" }],
-                detailsOnExpand: true,
-              },
-            });
-            return Promise.resolve({
-              action: "logs" as const,
-              text: "private logs",
-              logs: {
-                id: "bg-1",
-                nextCursor: 5,
-                earliestAvailableCursor: 2,
-                droppedBytes: 2,
-                state: "running",
-              },
-            });
-          },
-        } satisfies BackgroundTaskCodeModeCapability),
+      const events = backgroundTaskProvider(
+        (_id, _input, _signal, _budget, observe) => {
+          late = observe;
+          observe?.({
+            version: 1,
+            incomplete: false,
+            overflow: false,
+            summary: {
+              action: "logs",
+              subject: "bg-1",
+              outcome: "warning",
+              metadata: [],
+              counters: [],
+              notices: [{ kind: "recovery", text: "Earlier log output is unavailable" }],
+              detailsOnExpand: true,
+            },
+          });
+          return Promise.resolve({
+            action: "logs" as const,
+            text: "private logs",
+            logs: {
+              id: "bg-1",
+              nextCursor: 5,
+              earliestAvailableCursor: 2,
+              droppedBytes: 2,
+              state: "running",
+            },
+          });
+        },
+        { presentationVersion: 1 },
       );
       const completed = yield* Effect.promise(() =>
         harness(nestedToolDefinitionsFixture({}), { events }).run(
@@ -425,7 +339,7 @@ describe("compact semantic evidence", () => {
         action: "logs",
         outcome: "warning",
       });
-      expect(project(completed.details!)?.children?.entries[0]?.label).toBe("background_task");
+      expect(summarize(completed.details!)?.children?.entries[0]?.label).toBe("background_task");
       const snapshot = yield* encode(completed.details);
       late?.({ version: 1, incomplete: true, overflow: true });
       expect(yield* encode(completed.details)).toBe(snapshot);
@@ -527,85 +441,52 @@ describe("compact semantic evidence", () => {
     }),
   );
 
-  it("keeps overflow and hidden warnings visible in compact and detailed views", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    for (let id = 0; id < 270; id++) {
-      collector.admit("pi.read");
-      collector.start(id, id);
-      collector.observe(id, () => ({
-        subject: "file",
-        outcome: "warning",
-        notices: [{ kind: "recovery", text: `Recovery ${id}` }],
-      }));
-      collector.end(id);
-    }
-    collector.close();
-    const details: CodeModeToolDetails = {
-      toolCalls: [],
-      counts: { total: 270, succeeded: 270, failed: 0, cancelled: 0, running: 0, queued: 0 },
-      totalToolCalls: 270,
-      outputKind: "text",
-      compactAttention: collector.snapshot(),
-    };
-    expect(project(details)?.issues?.entries.some((issue) => issue.cause === "Recovery 0")).toBe(
-      true,
+  it("keeps warning evidence beyond row eviction and overflow visible in compact and detailed views", () => {
+    const ledger = ledgerDetails(
+      Array.from({ length: 300 }, (_, id) => ({
+        tool: "pi.read",
+        summary: {
+          subject: "file",
+          outcome: "warning",
+          notices: [{ kind: "recovery", text: `Recovery ${id}` }],
+        },
+      })),
     );
-    expect(project(details)?.notices?.some((notice) => notice.text.includes("warning limit"))).toBe(
-      true,
-    );
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
+    const details = { ...ledger.details, toolCalls: [] };
+    expect(details.compactAttention).toMatchObject({
+      admitted: 300,
+      started: 300,
+      observed: 300,
+      incomplete: true,
     });
+    expect(details.compactAttention.notices).toHaveLength(32);
+    expect(details.compactAttention.notices[0]?.text).toBe("Recovery 0");
+    expect(summarize(details)?.issues?.entries.some((issue) => issue.cause === "Recovery 0")).toBe(
+      true,
+    );
+    expect(
+      summarize(details)?.notices?.some((notice) => notice.text.includes("warning limit")),
+    ).toBe(true);
     for (const expanded of [false, true]) {
-      const rendered = renderCodeModeToolResult(
-        result("discarded", details),
-        { isPartial: false },
-        theme,
-        { isError: false, expanded },
-      )
-        .component.render(180)
-        .join("\n");
+      const rendered = renderResultText(result("discarded", details), { expanded, width: 180 });
       expect(rendered).toContain("Recovery 0");
       expect(rendered).toContain("warning limit");
     }
   });
 
   it("preserves retained receipt recovery on expansion after aggregate overflow", () => {
-    const calls: CodeModeCallEntry[] = [];
-    const collector = makeCompactEvidence((_id, compact) => {
-      calls.push({ tool: "pi.read", status: "completed", compact });
-    });
-    for (let id = 0; id < 33; id++) {
-      collector.admit("pi.read");
-      collector.start(id, id);
-      collector.observe(id, () => ({
-        subject: "file",
-        outcome: "warning",
-        notices: [{ kind: "recovery", text: `Recovery instruction ${id}.` }],
-      }));
-      collector.end(id);
-    }
-    collector.close();
-    const details: CodeModeToolDetails = {
-      toolCalls: calls.slice(-32),
-      outputKind: "text",
-      counts: { total: 33, succeeded: 33, failed: 0, cancelled: 0, running: 0, queued: 0 },
-      compactAttention: collector.snapshot(),
-    };
-    expect(project(details)?.outcome).toBe("uncertain");
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    });
-    const rendered = renderCodeModeToolResult(
-      result("discarded", details),
-      { isPartial: false },
-      theme,
-      { isError: false, expanded: true },
-    )
-      .component.render(240)
-      .join("\n");
+    const { details } = ledgerDetails(
+      Array.from({ length: 33 }, (_, id) => ({
+        tool: "pi.read",
+        summary: {
+          subject: "file",
+          outcome: "warning",
+          notices: [{ kind: "recovery", text: `Recovery instruction ${id}.` }],
+        },
+      })),
+    );
+    expect(summarize(details)?.outcome).toBe("uncertain");
+    const rendered = renderResultText(result("discarded", details), { expanded: true });
     for (let id = 0; id < 33; id++) {
       expect(rendered.split(`Recovery instruction ${id}.`)).toHaveLength(2);
     }
@@ -614,21 +495,13 @@ describe("compact semantic evidence", () => {
 
   it("rejects aggregate outcome counts contradicted by retained receipts", () => {
     for (const outcome of ["error", "warning", "cancelled", "uncertain"] as const) {
-      const calls: CodeModeCallEntry[] = [];
-      const collector = makeCompactEvidence((_id, compact) => {
-        calls.push({ tool: "session.backgroundTask", status: "completed", compact });
-      });
-      collector.admit("session.backgroundTask");
-      collector.start(1, 1);
-      collector.observe(1, () => ({ subject: "task", outcome }));
-      collector.end(1);
-      collector.close();
-      const details: CodeModeToolDetails = {
-        toolCalls: calls,
-        outputKind: "text",
-        counts: { total: 1, succeeded: 1, failed: 0, cancelled: 0, running: 0, queued: 0 },
+      const ledger = ledgerDetails([
+        { tool: "session.backgroundTask", summary: { subject: "task", outcome } },
+      ]);
+      const details = {
+        ...ledger.details,
         compactAttention: {
-          ...collector.snapshot(),
+          ...ledger.details.compactAttention,
           errors: 0,
           warnings: 0,
           cancelled: 0,
@@ -636,7 +509,7 @@ describe("compact semantic evidence", () => {
         },
       };
       expect(decodeCodeModeRenderDetails(details).compactAttention?.incomplete).toBe(true);
-      expect(project(details)?.outcome).toBe("uncertain");
+      expect(summarize(details)?.outcome).toBe("uncertain");
     }
   });
 
@@ -675,7 +548,7 @@ describe("compact semantic evidence", () => {
           h.run('await tools.pi.read({path:"file"}); return 1'),
         );
         expect(completed.content[0]).toMatchObject({ text: "1" });
-        expect(project(completed.details!)?.outcome).toBe("success");
+        expect(summarize(completed.details!)?.outcome).toBe("success");
         expect(completed.details?.compactAttention).toMatchObject({
           warnings: 0,
           incomplete: false,
@@ -686,26 +559,18 @@ describe("compact semantic evidence", () => {
           yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(serialized),
         );
         expect(replay.toolCalls[0]?.compact?.notices[0]).toMatchObject({ expandedOnly: true });
-        expect(project(completed.details!)?.children?.entries[0]?.notices).toContainEqual(
+        expect(summarize(completed.details!)?.children?.entries[0]?.notices).toContainEqual(
           expect.objectContaining({ expandedOnly: true }),
         );
-        const theme = opaqueHostFixture({
-          fg: (_color: string, text: string) => text,
-          bold: (text: string) => text,
-        });
-        const brokenTheme = opaqueHostFixture({
+        const brokenTheme = opaqueFixture({
           fg: () => {
             throw new Error("theme");
           },
           bold: (text: string) => text,
         });
-        for (const currentTheme of [theme, brokenTheme]) {
+        for (const theme of [plainTheme, brokenTheme]) {
           for (const expanded of [false, true]) {
-            const text = renderCodeModeToolResult(completed, { isPartial: false }, currentTheme, {
-              expanded,
-            })
-              .component.render(240)
-              .join("\n");
+            const text = renderResultText(completed, { expanded, theme });
             expect(text.includes("offset=3")).toBe(expanded);
           }
         }
@@ -716,12 +581,11 @@ describe("compact semantic evidence", () => {
             ),
           ).rejects.toThrow(),
         );
-        const retained = h.retention.consume("compact")!;
-        const summary = codeModeCompactSummary({
-          phase: "settled",
-          args: {},
-          result: result("outer failure", retained),
-          context: opaqueHostFixture({ isError: true, expanded: true }),
+        const retained = h.retention.consume("call")!;
+        const summary = summarize(retained, {
+          isError: true,
+          text: "outer failure",
+          expanded: true,
         });
         expect(summary?.outcome).toBe("error");
         expect(summary?.notices?.filter((notice) => notice.expandedOnly)).toHaveLength(0);
@@ -739,40 +603,29 @@ describe("compact semantic evidence", () => {
   );
 
   it("does not spend attention capacity on routine hints or hide flagged warnings", () => {
-    const collector = makeCompactEvidence(() => undefined);
-    for (let id = 0; id < 72; id++) {
-      collector.admit("pi.read");
-      collector.start(id, id);
-      collector.observe(id, () => ({
-        subject: "file",
-        outcome: id < 40 ? "success" : "warning",
-        notices: [
-          { kind: id < 40 ? "recovery" : "warning", text: `Notice ${id}`, expandedOnly: true },
-        ],
-      }));
-      collector.end(id);
-    }
-    collector.close();
-    expect(collector.snapshot()).toMatchObject({ observed: 72, warnings: 32, incomplete: false });
-    expect(collector.snapshot().notices).toHaveLength(32);
-    expect(collector.snapshot().notices[0]?.text).toBe("Notice 40");
-    const details: CodeModeToolDetails = {
-      toolCalls: [],
-      outputKind: "text",
-      counts: { total: 72, succeeded: 72, failed: 0, cancelled: 0, running: 0, queued: 0 },
-      compactAttention: collector.snapshot(),
-    };
-    expect(project(details)?.outcome).toBe("warning");
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
+    const ledger = ledgerDetails(
+      Array.from({ length: 72 }, (_, id) => ({
+        tool: "pi.read",
+        summary: {
+          subject: "file",
+          outcome: id < 40 ? "success" : "warning",
+          notices: [
+            { kind: id < 40 ? "recovery" : "warning", text: `Notice ${id}`, expandedOnly: true },
+          ],
+        },
+      })),
+    );
+    const details = { ...ledger.details, toolCalls: [] };
+    expect(details.compactAttention).toMatchObject({
+      observed: 72,
+      warnings: 32,
+      incomplete: false,
     });
+    expect(details.compactAttention.notices).toHaveLength(32);
+    expect(details.compactAttention.notices[0]?.text).toBe("Notice 40");
+    expect(summarize(details)?.outcome).toBe("warning");
     for (const expanded of [false, true]) {
-      const text = renderCodeModeToolResult(result("1", details), { isPartial: false }, theme, {
-        expanded,
-      })
-        .component.render(240)
-        .join("\n");
+      const text = renderResultText(result("1", details), { expanded });
       expect(text).toContain("Notice 40");
       expect(text).not.toContain("Notice 0");
     }

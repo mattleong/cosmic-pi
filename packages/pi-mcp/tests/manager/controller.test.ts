@@ -1,39 +1,13 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
 import { mcpCompletions } from "../../src/manager/controller.ts";
-import type { McpManagerServer, McpManagerSnapshot } from "../../src/manager/model.ts";
+import type { McpManagerSnapshot } from "../../src/manager/model.ts";
 import { serverActions } from "../../src/manager/policy.ts";
 import { actionMenu } from "../../src/ui/actions.ts";
-import { McpManagerComponent, type McpViewRequest } from "../../src/ui/manager.ts";
 import { browserCatalogStatus } from "../../src/ui/browser.ts";
-import { managerSelection, type McpManagerClose } from "../../src/ui/manager-state.ts";
 import type { McpCachedEntry, McpCachedPage } from "../../src/discovery/model.ts";
+import { managerHarness, managerRow, requestOf } from "../fixtures/manager.ts";
 
-// SAFETY: The pure component uses only fg, bg and bold from this controlled theme.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-const base: Omit<McpManagerServer, "actions"> = {
-  id: "a",
-  scope: "global",
-  transport: "stdio",
-  enabled: true,
-  invalid: false,
-  diagnostic: undefined,
-  authType: "none",
-  auth: "none",
-  state: "disconnected",
-  blockedReason: undefined,
-  active: 0,
-  queued: 0,
-  operations: 0,
-  metadata: undefined,
-  metadataState: "undiscovered",
-  configRevision: 1,
-  operationRevision: 0,
-};
+const base = managerRow();
 const snapshot: McpManagerSnapshot = {
   revision: 1,
   trusted: true,
@@ -59,30 +33,16 @@ const harness = (
   collideWithMode = false,
 ) => {
   let current = snapshot;
-  const requests: McpViewRequest[] = [];
-  const finishes: Array<McpManagerClose | undefined> = [];
-  const component = new McpManagerComponent({
-    theme,
-    snapshot: () => current,
-    selection: managerSelection(screen, undefined, screen === "result" ? "retained-id" : undefined),
-    height: () => 28,
-    requestRender() {},
-    load: (request) => {
-      requests.push(request);
-    },
-    finish: (close) => {
-      finishes.push(close);
-    },
-    matchesKeybinding: (data) => collideWithMode && data === "v",
-    keybindingLabel: (_id, fallback) => (collideWithMode ? "v" : fallback),
+  const h = managerHarness(() => current, {
+    screen,
+    resultId: screen === "result" ? "retained-id" : undefined,
+    collideWithMode,
   });
   return {
-    component,
-    requests,
-    finishes,
+    ...h,
     replace: (next: McpManagerSnapshot) => {
       current = next;
-      component.update();
+      h.component.update();
     },
   };
 };
@@ -94,8 +54,7 @@ it("dashboard opening/repaint/Enter remain passive and search keeps ordinary tex
   expect(h.requests).toEqual([]);
   expect(h.finishes).toEqual([]);
   h.component.handleInput("b");
-  const request = h.requests.at(-1)!;
-  expect(request.kind).toBe("cached");
+  expect(h.requests.at(-1)?.kind).toBe("cached");
   h.component.handleInput("/");
   h.component.focused = true;
   h.component.handleInput("a");
@@ -156,8 +115,7 @@ it.each(["discover", "browse", "auth", "recovery"] as const)(
   "highlights the useful %s action without running it before confirmation",
   (mode) => {
     const h = harness();
-    const row: Omit<McpManagerServer, "actions"> = {
-      ...base,
+    const row = managerRow({
       authType: mode === "auth" || mode === "recovery" ? "oauth" : "none",
       auth: mode === "auth" ? "required" : "none",
       blockedReason: mode === "recovery" ? "auth-suspended" : undefined,
@@ -175,7 +133,7 @@ it.each(["discover", "browse", "auth", "recovery"] as const)(
               prompts: 0,
             }
           : undefined,
-    };
+    });
     const server = { ...row, actions: serverActions(row, true, true) };
     h.replace({ ...snapshot, servers: [server] });
     expect(actionMenu(server).choices.some((choice) => choice.payload === "inspect")).toBe(false);
@@ -255,28 +213,25 @@ it("renders configuration diagnostics safely and withdraws them with the selecte
 
 it("late cached search/detail replies cannot republish withdrawn or replaced content", () => {
   const h = harness("browse");
-  const old = h.requests[0]!;
+  const old = requestOf(h.requests, "cached", 0);
   h.component.handleInput("/");
   h.component.handleInput("n");
-  const fresh = h.requests.at(-1)!;
-  if (fresh.kind !== "cached" || old.kind !== "cached") throw new Error("fixture");
+  const fresh = requestOf(h.requests, "cached");
   fresh.deliver(page("current-entry"));
   old.deliver(page("revoked-secret"));
   expect(h.component.render(160).join("\n")).not.toContain("revoked-secret");
   h.component.handleInput("\u001b");
   h.component.handleInput("\r");
-  const detail = h.requests.at(-1)!;
-  expect(detail.kind).toBe("detail");
+  const detail = requestOf(h.requests, "detail");
   h.component.update();
   expect(h.component.render(160).join("\n")).not.toContain("current-entry");
-  if (detail.kind === "detail")
-    detail.deliver({
-      ref: entry("current-entry").ref,
-      name: "current-entry",
-      description: "late-secret",
-      metadata: "late-secret",
-      truncated: false,
-    });
+  detail.deliver({
+    ref: entry("current-entry").ref,
+    name: "current-entry",
+    description: "late-secret",
+    metadata: "late-secret",
+    truncated: false,
+  });
   expect(h.component.render(160).join("\n")).not.toContain("late-secret");
   h.component.dispose();
   fresh.deliver(page("after-close-secret"));
@@ -284,8 +239,7 @@ it("late cached search/detail replies cannot republish withdrawn or replaced con
 });
 it("changing selection rejects an old detail delivery without retargeting it", () => {
   const h = harness("browse");
-  const cached = h.requests[0]!;
-  if (cached.kind !== "cached") throw new Error("fixture");
+  const cached = requestOf(h.requests, "cached", 0);
   cached.deliver({
     ...page("first-entry"),
     entries: [entry("first-entry"), entry("second-entry")],
@@ -293,8 +247,7 @@ it("changing selection rejects an old detail delivery without retargeting it", (
   });
   h.component.render(160);
   h.component.handleInput("\r");
-  const oldDetail = h.requests.at(-1)!;
-  if (oldDetail.kind !== "detail") throw new Error("fixture");
+  const oldDetail = requestOf(h.requests, "detail");
   h.component.handleInput("h");
   h.component.handleInput("j");
   oldDetail.deliver({
@@ -312,8 +265,7 @@ it.each(["refreshing", "refresh-failed"] as const)(
   "keeps %s visible alongside a nonempty catalog",
   (state) => {
     const h = harness("browse");
-    const request = h.requests[0]!;
-    if (request.kind !== "cached") throw new Error("fixture");
+    const request = requestOf(h.requests, "cached", 0);
     const catalog = { server: "a", state, count: 1, revision: 1 };
     request.deliver({ ...page("retained-entry"), catalogs: [catalog] });
     for (const width of [90, 160]) {
@@ -325,14 +277,12 @@ it.each(["refreshing", "refresh-failed"] as const)(
 );
 it("reauthorizes expanded metadata after invalidation without losing its viewport", () => {
   const h = harness("browse");
-  const request = h.requests[0]!;
-  if (request.kind !== "cached") throw new Error("fixture");
+  const request = requestOf(h.requests, "cached", 0);
   const cached = page("retained-entry");
   request.deliver(cached);
   h.component.render(160);
   h.component.handleInput("\r");
-  const initial = h.requests.at(-1)!;
-  if (initial.kind !== "detail") throw new Error("fixture");
+  const initial = requestOf(h.requests, "detail");
   const detail = {
     ...entry("retained-entry"),
     metadata: Array.from({ length: 100 }, (_, index) => `expanded-line-${index}-end`).join("\n"),
@@ -344,12 +294,10 @@ it("reauthorizes expanded metadata after invalidation without losing its viewpor
   expect(h.component.render(160).join("\n")).toContain("expanded-line-99-end");
   h.component.update();
   expect(h.component.render(160).join("\n")).not.toContain("expanded-line-");
-  const reread = h.requests.at(-1)!;
-  if (reread.kind !== "cached") throw new Error("fixture");
+  const reread = requestOf(h.requests, "cached");
   reread.deliver(cached);
   expect(h.component.render(160).join("\n")).not.toContain("expanded-line-");
-  const authorized = h.requests.at(-1)!;
-  if (authorized.kind !== "detail") throw new Error("fixture");
+  const authorized = requestOf(h.requests, "detail");
   authorized.deliver(detail);
   const restored = h.component.render(160).join("\n");
   expect(restored).toContain("expanded-line-99-end");
@@ -367,8 +315,7 @@ it("an open action menu returns its displayed row rather than a replacement snap
 });
 it("empty all-server browsing can select a server before explicit discovery", () => {
   const h = harness("browse");
-  const cached = h.requests[0]!;
-  if (cached.kind !== "cached") throw new Error("fixture");
+  const cached = requestOf(h.requests, "cached", 0);
   cached.deliver({
     ...page("unused"),
     entries: [],
@@ -385,16 +332,14 @@ it("empty all-server browsing can select a server before explicit discovery", ()
 });
 it("retained-result navigation uses returned offsets and an unavailable ID never requests source execution", () => {
   const h = harness("result");
-  const first = h.requests[0]!;
-  if (first.kind !== "result") throw new Error("fixture");
+  const first = requestOf(h.requests, "result", 0);
   first.deliver({ offset: 0, next: 7, total: 30, lines: ["a🙂data"] });
   h.component.render(50);
   h.component.render(150);
   expect(h.requests).toHaveLength(1);
   h.component.handleInput("n");
   expect(h.requests.at(-1)).toMatchObject({ kind: "result", id: "retained-id", offset: 7 });
-  const second = h.requests.at(-1)!;
-  if (second.kind !== "result") throw new Error("fixture");
+  const second = requestOf(h.requests, "result");
   second.deliver(undefined);
   h.component.handleInput("n");
   h.component.handleInput("p");
@@ -402,8 +347,7 @@ it("retained-result navigation uses returned offsets and an unavailable ID never
 });
 it("result movements scroll the loaded page without moving a hidden server selection", () => {
   const h = harness("result");
-  const request = h.requests[0]!;
-  if (request.kind !== "result") throw new Error("fixture");
+  const request = requestOf(h.requests, "result", 0);
   const loaded = {
     offset: 0,
     next: undefined,
@@ -417,8 +361,7 @@ it("result movements scroll the loaded page without moving a hidden server selec
   expect(h.requests).toHaveLength(1);
   h.component.update();
   expect(h.component.render(90).join("\n")).not.toContain("result-line-");
-  const authorized = h.requests.at(-1)!;
-  if (authorized.kind !== "result") throw new Error("fixture");
+  const authorized = requestOf(h.requests, "result");
   authorized.deliver(loaded);
   expect(h.component.render(90).join("\n")).not.toContain("result-line-0-end");
   expect(h.component.render(90).join("\n")).toContain("result-line-1-end");
@@ -427,8 +370,7 @@ it("result movements scroll the loaded page without moving a hidden server selec
 });
 it("readable/raw mode is local-only, takes precedence over configured keys, and never activates content", () => {
   const h = harness("result", true);
-  const request = h.requests[0]!;
-  if (request.kind !== "result") throw new Error("fixture");
+  const request = requestOf(h.requests, "result", 0);
   const loaded = {
     offset: 0,
     next: undefined,
@@ -452,8 +394,7 @@ it("readable/raw mode is local-only, takes precedence over configured keys, and 
 
 it("result invalidation withdraws both modes immediately and late callbacks cannot restore either", () => {
   const h = harness("result");
-  const first = h.requests[0]!;
-  if (first.kind !== "result") throw new Error("fixture");
+  const first = requestOf(h.requests, "result", 0);
   const loaded = {
     offset: 0,
     next: undefined,
@@ -468,14 +409,12 @@ it("result invalidation withdraws both modes immediately and late callbacks cann
   expect(h.component.render(120).join("\n")).not.toContain("authorized-");
   first.deliver(loaded);
   expect(h.component.render(120).join("\n")).not.toContain("authorized-");
-  const fresh = h.requests.at(-1)!;
-  if (fresh.kind !== "result") throw new Error("fixture");
+  const fresh = requestOf(h.requests, "result");
   fresh.deliver(loaded);
   expect(h.component.render(120).join("\n")).toContain("authorized-raw");
   expect(h.component.render(120).join("\n")).not.toContain("authorized-readable");
   h.replace({ ...snapshot, trusted: false });
-  const revoked = h.requests.at(-1)!;
-  if (revoked.kind !== "result") throw new Error("fixture");
+  const revoked = requestOf(h.requests, "result");
   revoked.deliver(loaded);
   h.component.handleInput("v");
   expect(h.component.render(120).join("\n")).not.toContain("authorized-");
@@ -488,14 +427,12 @@ it("result invalidation withdraws both modes immediately and late callbacks cann
 
 it("mode keys on a raw-only Unicode page do not alter returned cursor navigation", () => {
   const h = harness("result");
-  const first = h.requests[0]!;
-  if (first.kind !== "result") throw new Error("fixture");
+  const first = requestOf(h.requests, "result", 0);
   first.deliver({ offset: 0, next: 7, total: 15, lines: ["a🙂text"] });
   h.component.handleInput("v");
   expect(h.requests).toHaveLength(1);
   h.component.handleInput("n");
-  const second = h.requests.at(-1)!;
-  if (second.kind !== "result") throw new Error("fixture");
+  const second = requestOf(h.requests, "result");
   expect(second.offset).toBe(7);
   second.deliver({ offset: 7, next: undefined, total: 15, lines: ["🙂tail"] });
   h.component.handleInput("v");

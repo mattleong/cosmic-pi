@@ -1,7 +1,13 @@
 import * as Effect from "effect/Effect";
 import type { UnavailableWorkspaceArtifact, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
-import { checkDirectory, git, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
+import {
+  checkDirectory,
+  git,
+  workspaceFailure,
+  workspaceIO,
+  workspaceIOIfPresent,
+} from "./git-worktree-process.ts";
 import { readWorkspaceRecord, validWorkspaceId, workspaceDirectory } from "./git-worktree-store.ts";
 
 const registrations = (repository: string) =>
@@ -96,12 +102,7 @@ export const removeWorkspaceTrees = (registry: string, record: WorkspaceRecord) 
 const inspectRegistry = (registry: string) =>
   Effect.gen(function* () {
     yield* checkDirectory(registry, true);
-    const stat = yield* workspaceIO("registry", () =>
-      fs.lstat(registry).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      }),
-    );
+    const stat = yield* workspaceIOIfPresent("registry", () => fs.lstat(registry));
     if (!stat) return undefined;
     if (
       !stat.isDirectory() ||

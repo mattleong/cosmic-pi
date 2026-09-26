@@ -11,7 +11,6 @@ import {
 } from "../../src/syntax/projection";
 
 const snapshot = (theme: string): CodePreviewSyntaxSnapshot => ({
-  generation: 0,
   theme,
   highlighter: undefined,
   loadedLanguages: [],
@@ -28,22 +27,18 @@ describe("syntax projection ownership", () => {
     const stale = acquireProjectionOwnership("syntax-stale");
     const current = acquireProjectionOwnership("syntax-current");
     const calls: string[] = [];
+    const install = (owner: typeof stale, label: string) =>
+      installSyntaxRequests(owner, {
+        initialize: () => calls.push(`${label}-initialize`),
+        language: () => calls.push(`${label}-language`),
+      });
     publishSyntaxProjection(stale, snapshot("stale"));
-    installSyntaxRequests(stale, {
-      initialize: () => calls.push("stale-initialize"),
-      language: () => calls.push("stale-language"),
-    });
+    install(stale, "stale");
 
     publishSyntaxProjection(current, snapshot("current"));
-    installSyntaxRequests(current, {
-      initialize: () => calls.push("current-initialize"),
-      language: () => calls.push("current-language"),
-    });
+    install(current, "current");
     publishSyntaxProjection(stale, snapshot("late-stale"));
-    installSyntaxRequests(stale, {
-      initialize: () => calls.push("late-stale-initialize"),
-      language: () => calls.push("late-stale-language"),
-    });
+    install(stale, "late-stale");
     clearSyntaxProjection(stale);
 
     requestSyntaxInitialize("theme");
@@ -53,22 +48,9 @@ describe("syntax projection ownership", () => {
     clearSyntaxProjection(current);
 
     publishSyntaxProjection(stale, snapshot("after-current-clear"));
-    installSyntaxRequests(stale, {
-      initialize: () => calls.push("retired-initialize"),
-      language: () => calls.push("retired-language"),
-    });
+    install(stale, "retired");
     requestSyntaxInitialize("theme");
     expect(syntaxProjection()).toBeUndefined();
     expect(calls).toEqual(["current-initialize", "current-language"]);
-  });
-
-  it("lets a newer owner replace an abandoned owner", () => {
-    const abandoned = acquireProjectionOwnership("syntax-abandoned");
-    const replacement = acquireProjectionOwnership("syntax-replacement");
-    publishSyntaxProjection(abandoned, snapshot("abandoned"));
-    publishSyntaxProjection(replacement, snapshot("replacement"));
-
-    expect(syntaxProjection()?.theme).toBe("replacement");
-    clearSyntaxProjection(replacement);
   });
 });

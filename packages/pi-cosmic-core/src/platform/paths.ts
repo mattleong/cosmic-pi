@@ -8,36 +8,21 @@ export interface PathContainmentAdapter {
   readonly sep: string;
 }
 
-const containmentRelation = (
-  adapter: PathContainmentAdapter,
-  root: string,
-  candidate: string,
-): "equal" | "inside" | "outside" => {
-  const relation = adapter.relative(root, candidate);
-  if (relation === "") return "equal";
-  return relation !== ".." &&
-    !relation.startsWith(`..${adapter.sep}`) &&
-    !adapter.isAbsolute(relation)
-    ? "inside"
-    : "outside";
-};
-
-/** Equal-or-inside containment; unlike prefix matching this is correct on Windows and sibling roots. */
-export const isContainedPathWith = (
-  adapter: PathContainmentAdapter,
-  root: string,
-  candidate: string,
-): boolean => containmentRelation(adapter, root, candidate) !== "outside";
-
-export const isContainedPath = (root: string, candidate: string): boolean =>
-  isContainedPathWith(nodePath, root, candidate);
-
-/** Strict containment: candidate must be inside root, not root itself. */
+/** Strict containment: candidate must be inside root, not root itself. Unlike prefix matching
+ * this is correct on Windows and for sibling roots. */
 export const isStrictlyInsidePathWith = (
   adapter: PathContainmentAdapter,
   root: string,
   candidate: string,
-): boolean => containmentRelation(adapter, root, candidate) === "inside";
+): boolean => {
+  const relation = adapter.relative(root, candidate);
+  return (
+    relation !== "" &&
+    relation !== ".." &&
+    !relation.startsWith(`..${adapter.sep}`) &&
+    !adapter.isAbsolute(relation)
+  );
+};
 
 export const isStrictlyInsidePath = (root: string, candidate: string): boolean =>
   isStrictlyInsidePathWith(nodePath, root, candidate);

@@ -1,29 +1,16 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { afterEach, expect, it } from "vitest";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../../pi-code-previews/src/config/state.ts";
+import { expect, it, onTestFinished } from "vitest";
+import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { buildMcpTool, wrapMcpTool } from "../../src/tools/controller.ts";
 import { makeMcpErrorReceipts } from "../../src/boundary/host-tool-result.ts";
 import { projectMcpCompactSummary } from "../../src/ui/compact-summary.ts";
 
-const settings = { ...codePreviewSettings };
-afterEach(() => setCodePreviewSettings(settings));
-// SAFETY: These are all styling operations used by the registered tool.
-const theme = {
-  fg: (_key: string, text: string) => text,
-  bg: (_key: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
 const registered = (mode: "on" | "off" | "border", style: "compact" | "preview" = "compact") => {
-  setCodePreviewSettings({
-    ...settings,
+  const restore = applyPresentationSettings({
     toolCallBackground: mode,
     toolCallCollapsedStyle: style,
     toolCallTiming: false,
   });
+  onTestFinished(restore);
   return wrapMcpTool(
     buildMcpTool({
       owner: Symbol("presentation"),
@@ -50,7 +37,7 @@ it("renders bounded sanitized arguments without invoking historical accessors", 
   };
   const args = { action: "tools.call", server: "docs", tool: "inspect", arguments: argumentsValue };
   for (const style of ["compact", "preview"] as const) {
-    const harness = createToolPresentationHarness(registered("off", style), { theme });
+    const harness = createToolPresentationHarness(registered("off", style));
     harness.call(args, { expanded: true });
     harness.result(
       {
@@ -95,7 +82,7 @@ it("renders unknown-coverage boundary attention once through the real MCP factor
       const before = structuredClone(result);
       const summary = projectMcpCompactSummary({ phase: "settled", args, result, isError: true })!;
       expect(summary.issues?.coverage).toBe("unknown");
-      const harness = createToolPresentationHarness(registered(mode), { theme });
+      const harness = createToolPresentationHarness(registered(mode));
       for (const expanded of [false, true, false, true]) {
         harness.call(args, { expanded, isPartial: false, isError: true });
         harness.result(result, { expanded, isError: true });
@@ -134,7 +121,7 @@ it("renders a complete remote error once outside labeled raw JSON in all compact
   expect(summary?.issues?.entries.some((issue) => issue.code === "remote-failure")).toBe(true);
   expect(summary?.failure?.ownedIssues).toHaveLength(1);
   for (const mode of ["on", "off", "border"] as const) {
-    const harness = createToolPresentationHarness(registered(mode), { theme });
+    const harness = createToolPresentationHarness(registered(mode));
     for (const expanded of [false, true, false, true]) {
       harness.call(args, { expanded, isError: true });
       harness.result(result, { expanded, isError: true });
@@ -180,7 +167,7 @@ it("keeps readable error ownership when only labeled raw metadata is cut", () =>
   expect(summary?.issues?.coverage).toBe("complete");
   expect(summary?.expandedResultOwnsIssues).toHaveLength(1);
   for (const mode of ["on", "off", "border"] as const) {
-    const harness = createToolPresentationHarness(registered(mode), { theme });
+    const harness = createToolPresentationHarness(registered(mode));
     harness.call(args, { expanded: true, isError: true });
     harness.result(result, { expanded: true, isError: true });
     const [readable, raw] = harness.render(240).join("\n").split("Raw JSON");
@@ -230,7 +217,7 @@ it("preserves retained read delivery and original outcome separately", () => {
   expect(summary?.outcome).toBe("warning");
   expect(summary?.counters?.[0]).toContain("0..12/12");
   expect(summary?.issues?.entries.some((issue) => issue.code === "execution-unknown")).toBe(true);
-  const harness = createToolPresentationHarness(registered("border"), { theme });
+  const harness = createToolPresentationHarness(registered("border"));
   harness.call(args, { expanded: true, isPartial: false });
   harness.result(result);
   const text = harness.render(200).join("\n");
@@ -258,7 +245,7 @@ it("retains unclassified and display-cut recovery through fallback cards", () =>
       ]) {
         const args = { action: "tools.call", server: "server", tool: "tool" };
         const result = { content: [{ type: "text" as const, text: "Historical output" }], details };
-        const harness = createToolPresentationHarness(registered(mode, style), { theme });
+        const harness = createToolPresentationHarness(registered(mode, style));
         for (const expanded of [false, true, false]) {
           harness.call(args, { expanded, isPartial: false, isError: true });
           harness.result(result, { expanded, isError: true });
@@ -267,6 +254,87 @@ it("retains unclassified and display-cut recovery through fallback cards", () =>
             expect(text).toContain("Unclassified recovery instruction");
           expect(result.content[0]?.text).toBe("Historical output");
         }
+      }
+    }
+  }
+});
+
+// Distinct content families share the same shell policy; lifecycle actions add no new renderer.
+const cases = [
+  { args: { action: "status" }, input: "status" },
+  {
+    args: { action: "tools.list", server: "catalog", cursor: "discovery-cursor" },
+    input: "discovery-cursor",
+  },
+  {
+    args: {
+      action: "tools.call",
+      server: "catalog",
+      tool: "inspect",
+      arguments: { query: "input-marker" },
+    },
+    input: "input-marker",
+  },
+  {
+    args: { action: "resources.read", server: "catalog", uri: "resource://input-marker" },
+    input: "resource://input-marker",
+  },
+  {
+    args: {
+      action: "prompts.get",
+      server: "catalog",
+      prompt: "inspect",
+      arguments: { topic: "prompt-input" },
+    },
+    input: "prompt-input",
+  },
+  { args: { action: "result.read", id: "saved", offset: 321 }, input: "321" },
+];
+
+it("keeps registered action results expandable in every shell and preserves attachments and original data", () => {
+  for (const mode of ["on", "off", "border"] as const) {
+    for (const style of ["compact", "preview"] as const) {
+      const tool = registered(mode, style);
+      for (const { args, input } of cases) {
+        const { action } = args;
+        const data =
+          action === "result.read"
+            ? {
+                text: "body-marker",
+                offset: 0,
+                next: null,
+                total: 11,
+                origin: { action: "tools.call", outcome: "completed", isError: false },
+              }
+            : {
+                result: {
+                  value: "body-marker",
+                  attachments: [{ index: 0, mimeType: "image/png" }],
+                },
+              };
+        const result = {
+          content: [{ type: "image" as const, data: "native-image-bytes", mimeType: "image/png" }],
+          details: { action, outcome: "completed", isError: false, notices: [], data },
+        };
+        const before = structuredClone(result);
+        const inputBefore = structuredClone(args);
+        const harness = createToolPresentationHarness(tool);
+        harness.call(args, { executionStarted: false, isPartial: true });
+        expect(harness.render(200).join("\n")).toContain(action);
+        harness.call(args, { executionStarted: true, isPartial: true });
+        harness.result(result, { isPartial: true });
+        for (const expanded of [false, true, false, true]) {
+          harness.call(args, { expanded, isPartial: false });
+          harness.result(result, { expanded });
+          harness.invalidate();
+          const text = harness.render(200).join("\n");
+          if (expanded) {
+            expect(text).toContain("body-marker");
+            expect(text).toContain(input);
+          } else if (style === "compact") expect(text).not.toContain("body-marker");
+        }
+        expect(result).toEqual(before);
+        expect(args).toEqual(inputBefore);
       }
     }
   }

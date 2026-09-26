@@ -26,12 +26,7 @@ import {
   validateAuthAddresses,
   validateAuthUrl,
 } from "../auth/policy.ts";
-import {
-  approveScopes,
-  proposeScopes,
-  validateAuthorizationScopes,
-  type ScopeEvidence,
-} from "../auth/scopes.ts";
+import { approveScopes, proposeScopes, validateAuthorizationScopes } from "../auth/scopes.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpEffectiveServer } from "../config/model.ts";
 import { openAuthCallback } from "./auth-callback.ts";
@@ -140,15 +135,13 @@ export const makeMcpSdkAuth = Effect.gen(function* () {
             policy,
           );
           yield* validateAuthUrl(metadata.token_endpoint, policy);
-          const evidence: ScopeEvidence = { retained: discovery.retained };
-          if (discovery.challenge) Object.assign(evidence, { challenge: discovery.challenge });
-          if (resource.scopes_supported)
-            Object.assign(evidence, { resourceScopes: resource.scopes_supported });
-          if (metadata.scopes_supported)
-            Object.assign(evidence, { serverScopes: metadata.scopes_supported });
-          if (metadata.grant_types_supported)
-            Object.assign(evidence, { grantTypes: metadata.grant_types_supported });
-          const proposal = yield* proposeScopes(config, evidence);
+          const proposal = yield* proposeScopes(config, {
+            retained: discovery.retained,
+            challenge: discovery.challenge,
+            resourceScopes: resource.scopes_supported,
+            serverScopes: metadata.scopes_supported,
+            grantTypes: metadata.grant_types_supported,
+          });
           if (proposal.additions.length > 0)
             yield* authProgress(ui, { phase: "scope-approval", deadline });
           const scopes = yield* approveScopes(ui, proposal, deadline);

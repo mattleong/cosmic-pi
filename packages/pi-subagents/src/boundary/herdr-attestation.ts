@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { processError, SubagentProcessError } from "../run/errors.ts";
-import { MAX_PATH_CHARS, nodeErrorCode } from "./harness-shared.ts";
+import { MAX_PATH_CHARS, nodeErrorCode, shellQuote } from "./harness-shared.ts";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
 const { join } = nodePath;
@@ -14,13 +14,16 @@ const MAX_RECEIPT_BYTES = RECEIPT_TOKEN_BYTES * 2 + 1;
 const DEFAULT_POLL_ATTEMPTS = 51;
 const DEFAULT_POLL_DELAY_MILLIS = 100;
 
-export type HerdrStartupReceiptPhase =
-  | "activation-1"
-  | "activation-2"
-  | "environment-ready"
-  | "post-environment-shell"
-  | "secret-ready"
-  | "post-secret-shell";
+const RECEIPT_PHASES = [
+  "activation-1",
+  "activation-2",
+  "environment-ready",
+  "post-environment-shell",
+  "secret-ready",
+  "post-secret-shell",
+] as const;
+
+export type HerdrStartupReceiptPhase = (typeof RECEIPT_PHASES)[number];
 
 export interface HerdrStartupReceipt {
   readonly phase: HerdrStartupReceiptPhase;
@@ -54,8 +57,6 @@ interface ReceiptPlan {
   readonly temporaryPath: string;
   readonly expected: string;
 }
-
-const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 const atomicReceiptCommand = (plan: ReceiptPlan): string =>
   `(umask 077; set -C; printf '%s%s\\n' ${shellQuote(plan.expected.slice(0, 24))} ${shellQuote(plan.expected.slice(24))} > ${shellQuote(plan.temporaryPath)} && /bin/mv -f ${shellQuote(plan.temporaryPath)} ${shellQuote(plan.path)})`;
@@ -153,11 +154,6 @@ const observeReceipt = (
     );
   });
 
-const boundedPositiveInteger = (value: number | undefined, fallback: number): number =>
-  Number.isSafeInteger(value) && value !== undefined && value > 0 && value <= 10_000
-    ? value
-    : fallback;
-
 /**
  * Allocates unique receipt names/tokens inside one already-owned 0700 run harness and proves that
  * every final and temporary path starts absent before any pane command can be built or observed.
@@ -166,20 +162,9 @@ export const prepareHerdrStartupAttestation = (
   directory: string,
   options: HerdrStartupAttestationOptions = {},
 ): Promise<HerdrStartupAttestation> => {
-  const pollAttempts = boundedPositiveInteger(options.pollAttempts, DEFAULT_POLL_ATTEMPTS);
-  const pollDelayMillis = boundedPositiveInteger(
-    options.pollDelayMillis,
-    DEFAULT_POLL_DELAY_MILLIS,
-  );
-  const phases: ReadonlyArray<HerdrStartupReceiptPhase> = [
-    "activation-1",
-    "activation-2",
-    "environment-ready",
-    "post-environment-shell",
-    "secret-ready",
-    "post-secret-shell",
-  ];
-  const plans = phases.map((phase): ReceiptPlan => {
+  const pollAttempts = options.pollAttempts ?? DEFAULT_POLL_ATTEMPTS;
+  const pollDelayMillis = options.pollDelayMillis ?? DEFAULT_POLL_DELAY_MILLIS;
+  const plans = RECEIPT_PHASES.map((phase): ReceiptPlan => {
     const pathNonce = randomBytes(RECEIPT_PATH_NONCE_BYTES).toString("hex");
     const path = join(directory, `.startup-${phase}-${pathNonce}.receipt`);
     const temporaryPath = join(directory, `.startup-${phase}-${pathNonce}.tmp`);

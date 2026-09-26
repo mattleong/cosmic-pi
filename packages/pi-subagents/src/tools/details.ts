@@ -78,68 +78,57 @@ export type CompactToolDetailsInput =
       readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
     };
 
-/** Per-density caps for every projected field family: full owns the base caps; compact tightens full, minimal tightens compact.
- * Shared caps are inherited rather than duplicated. */
-const BASE_DENSITY_LIMITS = {
-  full: {
-    id: MAX_PROTOCOL_ID_CHARS,
-    model: MAX_CARD_MODEL_CHARS,
-    provenance: MAX_CARD_PROVENANCE_CHARS,
-    skipped: MAX_CARD_SKIPS,
-    currentTool: 256,
-    progress: 512,
-    warning: 512,
-    question: MAX_CARD_QUESTION_CHARS,
-    writeClaims: MAX_WRITE_CLAIMS,
-    observedWrites: 64,
-    writeViolations: 16,
-    shortName: MAX_NAME_CHARS,
-    startProfile: MAX_PROFILE_CHARS,
-    startWarning: MAX_CARD_PROVENANCE_CHARS,
-    startRunId: MAX_PROTOCOL_ID_CHARS,
-    failureMessage: MAX_FAILURE_MESSAGE_CHARS,
-    failureCode: MAX_FAILURE_CODE_CHARS,
-    failureRunId: MAX_PROTOCOL_ID_CHARS,
-    profileDescription: 512,
-    profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
-    profileReason: 1_024,
-    actionFailureMessage: MAX_ACTION_FAILURE_MESSAGE_CHARS,
-    actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
-  },
+/** Per-density caps for projected field families: full owns the base caps; compact tightens full, minimal tightens compact.
+ * Shared caps are inherited rather than duplicated; caps equal at every density use one key or constant. */
+const FULL_LIMITS = {
+  id: MAX_PROTOCOL_ID_CHARS,
+  provenance: MAX_CARD_PROVENANCE_CHARS,
+  skipped: MAX_CARD_SKIPS,
+  currentTool: 256,
+  progress: 512,
+  warning: 512,
+  question: MAX_CARD_QUESTION_CHARS,
+  writeClaims: MAX_WRITE_CLAIMS,
+  observedWrites: 64,
+  writeViolations: 16,
+  shortName: MAX_NAME_CHARS,
+  startProfile: MAX_PROFILE_CHARS,
+  startWarning: MAX_CARD_PROVENANCE_CHARS,
+  failureMessage: MAX_FAILURE_MESSAGE_CHARS,
+  failureCode: MAX_FAILURE_CODE_CHARS,
+  profileDescription: 512,
+  profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
+  profileReason: 1_024,
+  actionFailureMessage: MAX_ACTION_FAILURE_MESSAGE_CHARS,
+  actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
 } as const;
 
-const COMPACT_DENSITY_LIMITS = {
-  compact: {
-    ...BASE_DENSITY_LIMITS.full,
-    id: 256,
-    provenance: 256,
-    skipped: 4,
-    currentTool: 128,
-    progress: 256,
-    warning: 256,
-    question: 1_024,
-    writeClaims: 16,
-    observedWrites: 16,
-    writeViolations: 8,
-    startProfile: 48,
-    startWarning: 512,
-    startRunId: 256,
-    failureMessage: 256,
-    failureCode: 64,
-    failureRunId: 256,
-    profileDescription: 256,
-    profileModel: MAX_PROFILE_MODEL_SELECTOR_CHARS,
-    profileReason: 256,
-    actionFailureMessage: 160,
-    actionFailureId: MAX_ACTION_FAILURE_ID_CHARS,
-  },
+const COMPACT_LIMITS = {
+  ...FULL_LIMITS,
+  id: 256,
+  provenance: 256,
+  skipped: 4,
+  currentTool: 128,
+  progress: 256,
+  warning: 256,
+  question: 1_024,
+  writeClaims: 16,
+  observedWrites: 16,
+  writeViolations: 8,
+  startProfile: 48,
+  startWarning: 512,
+  failureMessage: 256,
+  failureCode: 64,
+  profileDescription: 256,
+  profileReason: 256,
+  actionFailureMessage: 160,
 } as const;
 
 const DENSITY_LIMITS = {
-  full: BASE_DENSITY_LIMITS.full,
-  compact: COMPACT_DENSITY_LIMITS.compact,
+  full: FULL_LIMITS,
+  compact: COMPACT_LIMITS,
   minimal: {
-    ...COMPACT_DENSITY_LIMITS.compact,
+    ...COMPACT_LIMITS,
     id: 128,
     provenance: 96,
     skipped: 0,
@@ -153,10 +142,8 @@ const DENSITY_LIMITS = {
     shortName: 48,
     startProfile: 32,
     startWarning: 160,
-    startRunId: 128,
     failureMessage: 96,
     failureCode: 48,
-    failureRunId: 128,
     profileDescription: 48,
     profileModel: 24,
     profileReason: 24,
@@ -353,7 +340,7 @@ export const projectSubagentRunCard = (
     closeOnReport: run.closeOnReport,
     reportGeneration: nonNegativeInteger(run.reportGeneration),
     ...(run.reportStatus !== undefined && { reportStatus: run.reportStatus }),
-    model: requiredText(run.model, limits.model, "unknown-model"),
+    model: requiredText(run.model, MAX_CARD_MODEL_CHARS, "unknown-model"),
     effort: SUBAGENT_EFFORTS.includes(run.effort) ? run.effort : ("off" as const),
     openaiFastMode: run.openaiFastMode,
     context: run.context,
@@ -397,7 +384,7 @@ const projectFailure = (
   const recovery = failure.admittedRun;
   const admittedRun = recovery
     ? {
-        runId: requiredText(recovery.runId, limits.failureRunId, "unknown-run"),
+        runId: requiredText(recovery.runId, limits.id, "unknown-run"),
         cleanupDisposition: recovery.cleanupDisposition,
         retryDisposition: recovery.retryDisposition,
         remainingCandidateCount: nonNegativeInteger(recovery.remainingCandidateCount),
@@ -446,17 +433,10 @@ const projectStartEntry = (
         ...identity,
         status: "started",
         ...selectedFields,
-        runId: requiredText(entry.runId, limits.startRunId, "unknown-run"),
+        runId: requiredText(entry.runId, limits.id, "unknown-run"),
       }
     : { ...identity, status: "failed", ...selectedFields };
 };
-
-/** Explicit privacy projection for request-ordered start receipts. */
-export const projectSubagentStartEntries = (
-  entries: ReadonlyArray<SubagentStartEntry>,
-  density: DetailDensity = "full",
-): ReadonlyArray<SubagentStartEntry> =>
-  entries.slice(0, MAX_START_BATCH).map((entry) => projectStartEntry(entry, density));
 
 /** Explicit privacy projection for persisted profile-route discovery. */
 export const projectSubagentProfileRoutes = (
@@ -540,7 +520,9 @@ const startDetailsCandidate = (
   return {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "start",
-    startEntries: projectSubagentStartEntries(input.startEntries, density),
+    startEntries: input.startEntries
+      .slice(0, MAX_START_BATCH)
+      .map((entry) => projectStartEntry(entry, density)),
     ...(failures !== undefined && failures.length > 0 && { startFailures: failures }),
   };
 };
@@ -624,21 +606,11 @@ export const makeAwaitDetails = (input: AwaitDetailsInput): SubagentAwaitDetails
     },
   );
 
-interface RunDetailsCandidate {
-  readonly version: typeof SUBAGENT_CARD_DETAILS_VERSION;
-  readonly action: RunDetailsAction;
-  readonly cards: ReadonlyArray<SubagentRunCard>;
-  readonly runCount: number;
-  readonly actionFailures?: ReadonlyArray<CompactToolActionFailure> | undefined;
-  readonly contentOmitted?: true | undefined;
-  readonly reportsOnlyOmitted?: true | undefined;
-}
-
 const runDetailsCandidate = (
   input: Extract<CompactToolDetailsInput, { readonly action: RunDetailsAction }>,
   density: DetailDensity,
   includeReports: boolean,
-): RunDetailsCandidate => {
+): Exclude<CompactSubagentToolDetails, { readonly action: "models" }> => {
   const orderedRuns =
     input.action === "list" ? projectRunCardTree(input.runs).map((row) => row.run) : input.runs;
   const source = orderedRuns.slice(0, MAX_TARGET_RUNS);

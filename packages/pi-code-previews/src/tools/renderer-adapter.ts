@@ -76,10 +76,9 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
     },
     renderers.scheduleAnimation,
   );
-  const renderCall = renderers.renderCall;
-  const renderResult = renderers.renderResult;
-  const expandedCall = renderers.expandedContent?.renderCall;
-  const expandedResult = renderers.expandedContent?.renderResult;
+  const { renderCall, renderResult, expandedContent } = renderers;
+  const expandedCall = expandedContent?.renderCall;
+  const expandedResult = expandedContent?.renderResult;
 
   // SAFETY: The adapter preserves the definition's generic schema, details, and renderer state.
   return {
@@ -87,50 +86,24 @@ export function createCodePreviewToolDefinition<TTool extends AdaptableToolDefin
     execute: renderers.execute ?? tool.execute,
     renderShell: previewShell.renderShell,
     renderCall(args, theme, context) {
+      const call = (render: PreviewRenderCall<TTool>) => (renderContext: ToolRenderContext) =>
+        render(args, theme, asPreviewContext(renderContext));
       return previewShell.renderCall(
         context,
         theme,
-        (renderContext) =>
-          // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
-          renderCall(
-            args,
-            theme,
-            asPreviewContext<WithPreviewState<Parameters<RenderCall<TTool>>[2]>>(renderContext),
-          ),
-        expandedCall
-          ? (renderContext) =>
-              expandedCall(
-                args,
-                theme,
-                asPreviewContext<WithPreviewState<Parameters<RenderCall<TTool>>[2]>>(renderContext),
-              )
-          : undefined,
+        call(renderCall),
+        expandedCall && call(expandedCall),
       );
     },
     renderResult(result, options, theme, context) {
+      const call = (render: PreviewRenderResult<TTool>) => (renderContext: ToolRenderContext) =>
+        render(result, options, theme, asPreviewContext(renderContext));
       return previewShell.renderResult(
         context,
         theme,
-        (renderContext) =>
-          // SAFETY: Pi supplies the same mandatory context shape; only its open renderer state widens.
-          renderResult(
-            result,
-            options,
-            theme,
-            asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(renderContext),
-          ),
+        call(renderResult),
         result,
-        expandedResult
-          ? (renderContext) =>
-              expandedResult(
-                result,
-                options,
-                theme,
-                asPreviewContext<WithPreviewState<Parameters<RenderResult<TTool>>[3]>>(
-                  renderContext,
-                ),
-              )
-          : undefined,
+        expandedResult && call(expandedResult),
       );
     },
   } as TTool;

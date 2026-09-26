@@ -76,14 +76,11 @@ export interface McpAuthContract {
   readonly logout: (server: McpEffectiveServer) => Effect.Effect<void, McpBoundaryError>;
   /** Only a current connection owner may report auth-specific transport rejection. */
   readonly reject: (server: McpEffectiveServer, evidence?: McpAuthRejection) => Effect.Effect<void>;
-  /** Execution publishes these only under its still-current outer auth fence authority. */
-  readonly completeLogin: (
+  /** Execution publishes this only under its still-current outer auth fence authority. */
+  readonly finishLogin: (
     server: McpEffectiveServer,
     receipt: McpAuthStatus,
-  ) => Effect.Effect<void>;
-  readonly finalizationFailed: (
-    server: McpEffectiveServer,
-    receipt: McpAuthStatus,
+    succeeded: boolean,
   ) => Effect.Effect<void>;
   readonly revoke: Effect.Effect<void>;
 }

@@ -69,7 +69,7 @@ export const runtimeEfforts = (
     : supportedByRuntime;
 };
 
-const decodedAt = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
+export const decodedAt = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
   scope === "global" ? inspection.global : inspection.project;
 
 const profileSetAt = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) => {
@@ -86,19 +86,8 @@ const declaredAt = (
   profile: ProfileId,
 ): DeclaredProfileRoute | undefined => profileSetAt(inspection, set)?.profiles[profile];
 
-const resolvedSet = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) =>
-  set.scope === "global"
-    ? resolveNamedProfileSet({ scope: set.scope, name: set.name, global: inspection.global })
-    : resolveNamedProfileSet(
-        inspection.project
-          ? {
-              scope: set.scope,
-              name: set.name,
-              global: inspection.global,
-              project: inspection.project,
-            }
-          : { scope: set.scope, name: set.name, global: inspection.global },
-      );
+export const resolvedSet = (inspection: ProfileSettingsInspection, set: PersistentProfileSetRef) =>
+  resolveNamedProfileSet({ ...set, global: inspection.global, project: inspection.project });
 
 const scopeRouteInvalid = (
   inspection: ProfileSettingsInspection,
@@ -163,16 +152,6 @@ export function loadProfileRouteDraft(
   return { kind: "explicit", candidates: normalizeDeclaredProfileRoute(declared).candidates };
 }
 
-export const resetGlobalDraft = (profile: ProfileId): ProfileRouteDraft => ({
-  kind: "reset",
-  candidates: cloneCandidates(BUILTIN_PROFILE_ROUTES[profile].candidates),
-});
-
-export const inheritProjectDraft = (
-  inspection: ProfileSettingsInspection,
-  profile: ProfileId,
-): ProfileRouteDraft => globalReferenceDraft(inspection, profile);
-
 export const inheritSessionDraft = (
   inspection: ProfileSettingsInspection,
   profile: ProfileId,
@@ -223,13 +202,6 @@ export const moveRouteCandidate = (
   direction: "up" | "down",
 ): ProfileRouteDraft => {
   const target = direction === "up" ? index - 1 : index + 1;
-  if (
-    index < 0 ||
-    target < 0 ||
-    index >= draft.candidates.length ||
-    target >= draft.candidates.length
-  )
-    return draft;
   const current = draft.candidates[index];
   const other = draft.candidates[target];
   if (!current || !other) return draft;
@@ -256,7 +228,7 @@ export const duplicateRouteCandidate = (
 export const defaultRouteCandidate = (profile: ProfileId): ProfileCandidate =>
   cloneCandidate(BUILTIN_PROFILE_ROUTES[profile].candidates[0]!);
 
-const runtimeLabel = (runtime: SubagentRuntime): string =>
+export const runtimeLabel = (runtime: SubagentRuntime): string =>
   runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude" : "Codex";
 
 const candidateIssueMessage = (
@@ -401,9 +373,7 @@ export function declaredRouteForDraft(draft: ProfileRouteDraft): RouteDeclaratio
           ? `A profile can have at most ${MAX_PROFILE_CANDIDATES} Primary/Fallback choices.`
           : "This profile won't run until you fix it, disable it, or undo your changes.",
     };
-  for (let index = 0; index < draft.candidates.length; index += 1) {
-    const candidate = draft.candidates[index];
-    if (!candidate) continue;
+  for (const [index, candidate] of draft.candidates.entries()) {
     const error = candidateValidationError(candidate);
     if (error)
       return {

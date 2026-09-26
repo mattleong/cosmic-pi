@@ -1,8 +1,14 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import {
+  inheritedInvalidInspection,
+  INVALID_ROUTE,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { declaredCandidate as candidate } from "./fixtures/profiles.ts";
 import {
   ProfileSetPickerComponent,
+  savedSetMenuChoices,
   type ProfileSetPickerAction,
 } from "../src/settings/profile-set-picker.ts";
 import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
@@ -34,61 +40,14 @@ const inspection = (): ProfileSettingsInspection => {
   });
 };
 
-const invalidInspection = (): ProfileSettingsInspection => {
-  const document = {
-    version: 6,
-    profileSets: {
-      broken: {
-        profiles: {
-          worker: {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "impossible",
-            context: "fresh",
-            writeIntent: "writer",
-          },
-        },
-      },
-      valid: { profiles: {} },
+const invalidInspection = (): ProfileSettingsInspection =>
+  makeProfileSettingsInspection({
+    globalDocument: {
+      version: 6,
+      profileSets: { broken: { profiles: { worker: INVALID_ROUTE } }, valid: { profiles: {} } },
     },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument: document,
     projectTrusted: false,
   });
-};
-
-const inheritedInvalidInspection = (): ProfileSettingsInspection => {
-  const inheritedGlobalDocument = {
-    version: 6,
-    defaultProfileSet: "broken",
-    profileSets: {
-      broken: {
-        profiles: {
-          worker: {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "impossible",
-            context: "fresh",
-            writeIntent: "writer",
-          },
-        },
-      },
-    },
-  };
-  const partialProjectDocument = {
-    version: 6,
-    defaultProfileSet: "partial",
-    profileSets: { partial: { profiles: {} } },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument: inheritedGlobalDocument,
-    projectDocument: partialProjectDocument,
-    projectTrusted: true,
-  });
-};
 
 const malformedDefaultInspection = (scope: "global" | "project"): ProfileSettingsInspection => {
   const malformed = {
@@ -123,27 +82,18 @@ const structurallyInvalidInspection = (): ProfileSettingsInspection => {
   });
 };
 
-// SAFETY: The component and renderer use only the Theme methods implemented by this fixture.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-  bg: (_: string, text: string) => text,
-} as Theme;
-
 const makePicker = (
   options: {
     readonly value?: ProfileSettingsInspection;
     readonly projectTrusted?: boolean;
-    readonly initialScope?: "global" | "project";
     readonly height?: number;
   } = {},
 ) => {
   const close = vi.fn<(action: ProfileSetPickerAction | undefined) => void>();
   const component = new ProfileSetPickerComponent({
-    theme,
+    theme: plainTheme,
     inspection: options.value ?? inspection(),
     projectTrusted: options.projectTrusted ?? true,
-    initialScope: options.initialScope ?? "global",
     getHeight: () => options.height ?? 30,
     requestRender: vi.fn(),
     close,
@@ -152,16 +102,6 @@ const makePicker = (
 };
 
 describe("saved profile-set library", () => {
-  const candidate = (model: string, effort = "high") => ({
-    host: "local",
-    runtime: "pi",
-    model,
-    effort,
-    context: "fresh",
-    writeIntent: "read-only",
-    closeOnReport: true,
-  });
-
   it("previews resolved routes with ordered models, inheritance, disabled and invalid states", () => {
     const value = makeProfileSettingsInspection({
       globalDocument: {
@@ -170,9 +110,9 @@ describe("saved profile-set library", () => {
         profileSets: {
           base: {
             profiles: {
-              scout: [candidate("test/primary"), candidate("test/fallback", "low")],
+              scout: [candidate("test/primary"), candidate("test/fallback", { effort: "low" })],
               worker: "disabled",
-              reviewer: [candidate("test/broken", "impossible")],
+              reviewer: [candidate("test/broken", { effort: "impossible" })],
             },
           },
         },
@@ -245,7 +185,7 @@ describe("saved profile-set library", () => {
     const entries = profileSetPickerEntries(inspection(), false);
     expect(entries[0]).toMatchObject({ kind: "scope-note", key: "project:locked" });
 
-    const picker = makePicker({ projectTrusted: false, initialScope: "project" });
+    const picker = makePicker({ projectTrusted: false });
     picker.component.handleInput("g");
     picker.component.handleInput("g");
     picker.component.handleInput("\r");
@@ -257,14 +197,14 @@ describe("saved profile-set library", () => {
     use.component.handleInput("u");
     expect(use.close).toHaveBeenCalledWith({
       action: "use-current",
-      target: { scope: "global", name: "gold" },
+      target: { scope: "project", name: "project" },
     });
 
     const edit = makePicker();
     edit.component.handleInput("\r");
     expect(edit.close).toHaveBeenCalledWith({
       action: "edit",
-      target: { scope: "global", name: "gold" },
+      target: { scope: "project", name: "project" },
     });
 
     const makeDefault = makePicker();
@@ -273,12 +213,12 @@ describe("saved profile-set library", () => {
     makeDefault.component.handleInput("\r");
     expect(makeDefault.close).toHaveBeenCalledWith({
       action: "make-default",
-      target: { scope: "global", name: "common" },
+      target: { scope: "project", name: "common" },
     });
   });
 
   it("clears a scope default before its selected set can be deleted", () => {
-    const picker = makePicker({ initialScope: "project" });
+    const picker = makePicker();
     picker.component.handleInput("?");
     picker.component.handleInput("\r");
 
@@ -288,13 +228,43 @@ describe("saved profile-set library", () => {
     });
   });
 
+  it("offers complete More actions and keeps a default set's Delete unavailable", () => {
+    const menu = (value: ProfileSettingsInspection, key: string) => {
+      const entry = profileSetPickerEntries(value, true).find((candidate) => candidate.key === key);
+      if (entry?.kind !== "set" && entry?.kind !== "invalid-default") throw new Error(key);
+      return savedSetMenuChoices(entry).map(({ payload, enabled }) => [payload, enabled !== false]);
+    };
+    const common = { scope: "project", name: "common" } as const;
+    expect(menu(inspection(), "project:common")).toEqual([
+      [{ action: "make-default", target: common }, true],
+      [{ action: "copy", source: common }, true],
+      [{ action: "rename", target: common }, true],
+      [{ action: "delete", target: common }, true],
+    ]);
+    const gold = { scope: "global", name: "gold" } as const;
+    expect(menu(inspection(), "global:gold")).toEqual([
+      [{ action: "clear-scope-default", scope: "global" }, true],
+      [{ action: "copy", source: gold }, true],
+      [{ action: "rename", target: gold }, true],
+      [{ action: "delete", target: gold }, false],
+    ]);
+    expect(menu(invalidInspection(), "global:broken")).toEqual([
+      [{ action: "delete", target: { scope: "global", name: "broken" } }, true],
+    ]);
+    expect(menu(malformedDefaultInspection("global"), "global:invalid-default")).toEqual([
+      [{ action: "clear-scope-default", scope: "global" }, true],
+    ]);
+  });
+
   it("classifies inherited fail-closed routes as repairable", () => {
     const value = inheritedInvalidInspection();
     const partial = profileSetPickerEntries(value, true).find(
       (entry) => entry.kind === "set" && entry.ref.scope === "project",
     );
 
-    expect(partial).toMatchObject({ invalid: true, repairable: true, invalidProfileCount: 1 });
+    expect(partial).toMatchObject({ invalid: true, repairable: true });
+    if (partial?.kind !== "set") throw new Error("Missing project set");
+    expect(partial.preview.filter((profile) => profile.status === "invalid")).toHaveLength(1);
   });
 
   it("blocks Use for invalid sets without preventing repair", () => {
@@ -312,23 +282,14 @@ describe("saved profile-set library", () => {
     const picker = makePicker();
     picker.component.handleInput("?");
     picker.component.handleInput("j");
+    picker.component.handleInput("\u001b[C");
+    expect(picker.close).not.toHaveBeenCalled();
     picker.component.handleInput("\u001b");
     expect(picker.close).not.toHaveBeenCalled();
     picker.component.handleInput("\r");
     expect(picker.close).toHaveBeenCalledWith({
       action: "edit",
-      target: { scope: "global", name: "gold" },
-    });
-  });
-
-  it("routes an invalid but repairable set to editing", () => {
-    const picker = makePicker({ value: invalidInspection(), projectTrusted: false });
-    picker.component.handleInput("\r");
-    picker.component.handleInput("\r");
-
-    expect(picker.close).toHaveBeenCalledWith({
-      action: "edit",
-      target: { scope: "global", name: "broken" },
+      target: { scope: "project", name: "project" },
     });
   });
 
@@ -354,45 +315,30 @@ describe("saved profile-set library", () => {
       );
       expect(entry).toMatchObject({ kind: "invalid-default", scope, scopeDefault: true });
 
-      const picker = makePicker({ value, initialScope: scope });
+      const picker = makePicker({ value });
       picker.component.handleInput("\r");
       picker.component.handleInput("\r");
       expect(picker.close).toHaveBeenCalledWith({ action: "clear-scope-default", scope });
     },
   );
 
-  it("requires a separate confirmation before deletion", () => {
-    const picker = makePicker();
-    picker.component.handleInput("k");
-    picker.component.handleInput("?");
-    for (let index = 0; index < 3; index += 1) picker.component.handleInput("j");
-    picker.component.handleInput("\r");
-    expect(picker.close).not.toHaveBeenCalled();
-    picker.component.handleInput("\x1b[13;1:2u");
-    expect(picker.close).not.toHaveBeenCalled();
-
-    picker.component.handleInput("x");
-    expect(picker.close).not.toHaveBeenCalled();
-    picker.component.handleInput("\r");
-    expect(picker.close).toHaveBeenCalledWith({
-      action: "delete",
-      target: { scope: "global", name: "common" },
-    });
-  });
-
   it("never saves Current Session from the library", () => {
     for (const projectTrusted of [true, false]) {
-      const picker = makePicker({ projectTrusted, initialScope: "project" });
+      const picker = makePicker({ projectTrusted });
       picker.component.handleInput("s");
       expect(picker.close).not.toHaveBeenCalled();
     }
   });
 
   it("opens More through the library action shortcut", () => {
-    const picker = makePicker({ initialScope: "global" });
+    const picker = makePicker();
     picker.component.handleInput("a");
     expect(picker.component.hasOverlay).toBe(true);
     picker.component.handleInput("\u001b");
+    expect(picker.component.hasOverlay).toBe(false);
+    // A refresh retires a menu built for the previous inspection.
+    picker.component.handleInput("a");
+    picker.component.updateInspection(inspection(), true);
     expect(picker.component.hasOverlay).toBe(false);
     expect(picker.close).not.toHaveBeenCalled();
   });

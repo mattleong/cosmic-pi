@@ -1,25 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { activityKey, type ActivityItem } from "../src/activity/protocol.ts";
+import { activityKey } from "../src/activity/protocol.ts";
 import { retainActivity, type ActivityRow } from "../src/activity/model.ts";
 import { activityPath, activityTree, needsYou } from "../src/activity/tree.ts";
-const row = (
-  id: string,
-  status: ActivityItem["status"] = "running",
-  parent?: string,
-): ActivityRow => {
-  const value: ActivityRow = {
-    key: activityKey("agents", id),
-    id,
-    title: id,
-    kind: "agent",
-    ...(status === "needs-input" ? { status, inputTarget: "user" as const } : { status }),
-    providerId: "agents",
-    generation: 1,
-    revision: "1",
-  };
-  if (parent) Object.assign(value, { parent: { providerId: "agents", itemId: parent } });
-  return value;
-};
+import { activityRow as row } from "./support/activity.ts";
 describe("activity ownership", () => {
   it("keeps an explicitly awaited finished run visible only while its lease remains live", () => {
     const awaited = { ...row("finished", "done"), awaited: true };
@@ -53,12 +36,7 @@ describe("activity ownership", () => {
   it("counts human input separately from parent waits and blocked descendants", () => {
     const owner = row("owner");
     const human = row("human", "needs-input", owner.id);
-    const parent: ActivityRow = {
-      ...row("parent", "needs-input", owner.id),
-      status: "needs-input",
-      inputTarget: "parent",
-      blockedReason: undefined,
-    };
+    const parent = row("parent", "needs-input", owner.id, { inputTarget: "parent" });
     const blocked = row("blocked", "blocked", owner.id);
     const values = [owner, parent, blocked, human];
     expect(needsYou(values)).toEqual([human]);

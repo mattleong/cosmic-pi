@@ -11,17 +11,18 @@ import {
   type Component,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
-import { createToolPresentationHarness } from "../../testing";
-import { afterEach, test } from "vitest";
+import {
+  applyPresentationSettings,
+  createToolPresentationHarness,
+  renderContextFixture,
+} from "../../testing";
+import { beforeEach, test } from "vitest";
 import { createCodePreviewToolShell } from "../../src/preview/tool-shell";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { renderComponent, testTheme } from "../support/render";
+import { setCodePreviewSettings } from "../../src/config/state";
+import { plainTheme as theme, renderComponent, textResult } from "../support/render";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 
-const originalSettings = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
-const theme = testTheme();
 const compactProvider = () => ({ subject: "compact-subject", outcome: "success" as const });
 
 type ReadDefinition = ReturnType<typeof createReadToolDefinition>;
@@ -32,33 +33,7 @@ interface State {
   codePreviewTimingOnlyRenderToken?: number;
 }
 
-afterEach(() => setCodePreviewSettings(originalSettings));
-
-function renderContext(
-  args: ReadToolInput,
-  state: State,
-  overrides: Partial<ToolRenderContext<State, ReadToolInput>> = {},
-): ToolRenderContext<State, ReadToolInput> {
-  return {
-    args,
-    toolCallId: "tool-call",
-    invalidate: () => undefined,
-    lastComponent: undefined,
-    state,
-    cwd: "/project",
-    executionStarted: false,
-    argsComplete: true,
-    isPartial: true,
-    expanded: false,
-    showImages: true,
-    isError: false,
-    ...overrides,
-  };
-}
-
-function result(text: string): ReadResult {
-  return { content: [{ type: "text", text }], details: undefined };
-}
+beforeEach(() => applyPresentationSettings({}));
 
 test("cooperative adapter forwards renderer values and preserves tool identity fields", () => {
   setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: false });
@@ -66,7 +41,7 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   const state: State = {};
   const callLast = new Text("old call", 0, 0);
   const resultLast = new Text("old result", 0, 0);
-  const resultValue = result("done");
+  const resultValue = textResult("done");
   const resultOptions: ToolRenderResultOptions = { expanded: true, isPartial: false };
   const execute = () => Promise.resolve(resultValue);
   const parameters = createReadToolDefinition("/project").parameters;
@@ -113,9 +88,11 @@ test("cooperative adapter forwards renderer values and preserves tool identity f
   };
 
   const wrapped = withCodePreviewShell(tool, { mode: "off" });
-  const callContext = renderContext(args, state, { lastComponent: callLast });
+  const callContext = renderContextFixture({ args, state, lastComponent: callLast });
   const renderedCall = wrapped.renderCall?.(args, theme, callContext);
-  const resultContext = renderContext(args, state, {
+  const resultContext = renderContextFixture({
+    args,
+    state,
     executionStarted: true,
     isPartial: false,
     expanded: true,
@@ -175,30 +152,24 @@ test("border shell keeps independent last components for call and result slots",
   const resultLast: Array<Component | undefined> = [];
   const firstCallSlot = new Text("first call", 0, 0);
   const firstResultSlot = new Text("first result", 0, 0);
-  shell.renderCall(renderContext(args, state, { lastComponent: unrelated }), theme, (context) => {
+  const slotContext = (isPartial: boolean) =>
+    renderContextFixture({ args, state, isPartial, lastComponent: unrelated });
+  shell.renderCall(slotContext(true), theme, (context) => {
     callLast.push(context.lastComponent);
     return firstCallSlot;
   });
-  shell.renderResult(
-    renderContext(args, state, { isPartial: false, lastComponent: unrelated }),
-    theme,
-    (context) => {
-      resultLast.push(context.lastComponent);
-      return firstResultSlot;
-    },
-  );
-  shell.renderCall(renderContext(args, state, { lastComponent: unrelated }), theme, (context) => {
+  shell.renderResult(slotContext(false), theme, (context) => {
+    resultLast.push(context.lastComponent);
+    return firstResultSlot;
+  });
+  shell.renderCall(slotContext(true), theme, (context) => {
     callLast.push(context.lastComponent);
     return new Text("second call", 0, 0);
   });
-  shell.renderResult(
-    renderContext(args, state, { isPartial: false, lastComponent: unrelated }),
-    theme,
-    (context) => {
-      resultLast.push(context.lastComponent);
-      return new Text("second result", 0, 0);
-    },
-  );
+  shell.renderResult(slotContext(false), theme, (context) => {
+    resultLast.push(context.lastComponent);
+    return new Text("second result", 0, 0);
+  });
 
   assert.deepEqual(callLast, [undefined, firstCallSlot]);
   assert.deepEqual(resultLast, [undefined, firstResultSlot]);
@@ -213,10 +184,10 @@ test("fallback result rendering sanitizes terminal controls", () => {
   const wrapped = withCodePreviewShell(tool, { mode: "off" });
   const args: ReadToolInput = { path: "README.md" };
   const component = wrapped.renderResult?.(
-    result("unsafe\u001b[2J\rtext"),
+    textResult("unsafe\u001b[2J\rtext"),
     { expanded: false, isPartial: false },
     theme,
-    renderContext(args, {}, { isPartial: false, isError: true }),
+    renderContextFixture({ args, isPartial: false, isError: true }),
   );
 
   assert.ok(component);
@@ -242,10 +213,10 @@ test("preview shell does not hide semantic updates during timing invalidation", 
         )) satisfies ReadRenderResult,
     };
     const wrapped = withCodePreviewShell(tool, { mode });
-    const context = renderContext(args, state, { executionStarted: true });
+    const context = renderContextFixture({ args, state, executionStarted: true });
     const firstCall = wrapped.renderCall(args, theme, context);
     const firstResult = wrapped.renderResult(
-      result("old"),
+      textResult("old"),
       { expanded: false, isPartial: true },
       theme,
       context,
@@ -259,7 +230,7 @@ test("preview shell does not hide semantic updates during timing invalidation", 
       lastComponent: firstCall,
     });
     const secondResult = wrapped.renderResult(
-      result("fresh"),
+      textResult("fresh"),
       { expanded: true, isPartial: true },
       theme,
       { ...context, args: nextArgs, expanded: true, lastComponent: firstResult },
@@ -287,16 +258,16 @@ test("tools without providers stay compact and retain domain failure output on e
       )) satisfies ReadRenderResult,
   };
   const wrapped = withCodePreviewShell(tool, { mode: "off" });
-  const context = renderContext({ path: "file" }, {}, { isPartial: false });
+  const context = renderContextFixture({ args: { path: "file" }, isPartial: false });
   const output = wrapped.renderResult(
-    result("invocation completed"),
+    textResult("invocation completed"),
     { expanded: false, isPartial: false },
     theme,
     context,
   );
   assert.doesNotMatch(renderComponent(output), /background work failed/u);
   const expanded = wrapped.renderResult(
-    result("invocation completed"),
+    textResult("invocation completed"),
     { expanded: true, isPartial: false },
     theme,
     { ...context, expanded: true },
@@ -331,7 +302,7 @@ test("compact style is captured and wraps self shells without changing execution
     toolCallCollapsedStyle: "preview",
     toolCallTiming: false,
   });
-  const context = renderContext({ path: "file" }, {});
+  const context = renderContextFixture({ args: { path: "file" } });
   const component = compact.renderCall?.(context.args, theme, context);
   assert.ok(component);
   assert.equal(component.render(100).length, 1);
@@ -371,11 +342,10 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
       { mode },
     );
     const h = createToolPresentationHarness(tool, {
-      theme,
       state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
     });
     const args = { path: "file" };
-    const value = result("output");
+    const value = textResult("output");
     for (const timing of [true, false, true]) {
       setCodePreviewSettings({ ...defaultCodePreviewSettings, toolCallTiming: timing });
       const call = h.call(args, { isPartial: false });
@@ -442,7 +412,7 @@ test("fallback rendering preserves attachment evidence without taking native ima
               details: undefined,
             };
             const before = JSON.stringify(value);
-            const h = createToolPresentationHarness(tool, { theme });
+            const h = createToolPresentationHarness(tool);
             h.call({ path: "image.png" }, { expanded: true, showImages });
             h.result(value);
             const text = h.render().join("\n");

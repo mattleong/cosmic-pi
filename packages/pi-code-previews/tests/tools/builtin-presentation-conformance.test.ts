@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, test } from "vitest";
-import type {
-  ExtensionAPI,
-  ToolDefinition,
-  AgentToolResult,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { extensionApiFixture } from "pi-cosmic-core/testing";
 import { createToolPresentationHarness } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
 import { registerToolRenderers } from "../../src/tools/renderers/registration";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../src/tools/names";
-import { stripAnsi, testTheme } from "../support/render";
+import { previewBodiesDisabled, stripAnsi } from "../support/render";
 
 const cases = [
   {
@@ -68,25 +65,18 @@ function registered(
     toolCallBackground: mode,
     toolCallCollapsedStyle: style,
     toolCallTiming: false,
-    readContentPreview: false,
-    writeContentPreview: false,
-    editDiffPreview: false,
-    grepResultPreview: false,
-    findResultPreview: false,
-    lsResultPreview: false,
+    ...previewBodiesDisabled,
   });
   const tools = new Map<string, ToolDefinition>();
-  // SAFETY: This fixture implements the two registration boundary methods used here.
-  const api = {
+  const api = extensionApiFixture({
     getAllTools: () => [],
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-  };
-  // SAFETY: Registration only calls getAllTools and registerTool on this fixture.
-  registerToolRenderers(api as typeof api & ExtensionAPI, "/project", { toolOptions: {} });
+  });
+  registerToolRenderers(api, "/project", { toolOptions: {} });
   return tools;
 }
-function result(text: string): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details: {} };
+function result(...texts: string[]): AgentToolResult<unknown> {
+  return { content: texts.map((text) => ({ type: "text" as const, text })), details: {} };
 }
 function plain(lines: string[]) {
   return stripAnsi(lines.join("\n"));
@@ -98,17 +88,16 @@ describe("registered builtin presentation", () => {
     test(`${fixture.name} retains expanded content across toggles and narrow widths`, () => {
       for (const mode of ["off", "on", "border"] as const) {
         const tool = registered(mode).get(fixture.name)!;
-        const harness = createToolPresentationHarness(tool, {
-          theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),
-          cwd: "/project",
-        });
+        const harness = createToolPresentationHarness(tool);
         harness.call(fixture.args);
+        harness.result(result(fixture.output), { isPartial: true });
+        expect(plain(harness.render(100)).includes(fixture.retained)).toBe(false);
         harness.result(result(fixture.output));
         for (const expanded of [true, false, true]) {
           harness.call(fixture.args, { expanded });
           harness.result(result(fixture.output), { expanded });
           const text = plain(harness.render(100));
-          expect(!expanded || text.includes(fixture.retained)).toBe(true);
+          expect(text.includes(fixture.retained)).toBe(expanded);
           for (const width of [16, 40])
             expect(harness.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
           harness.invalidate();
@@ -116,29 +105,29 @@ describe("registered builtin presentation", () => {
       }
     });
     test(`${fixture.name} retains raw unknown errors once and keeps failure call source`, () => {
-      const harness = createToolPresentationHarness(registered().get(fixture.name)!, {
-        theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),
-      });
-      harness.call(fixture.args, { expanded: true });
-      harness.result(result("UNCLASSIFIED_FAILURE\nInspect destination before retrying."), {
-        expanded: true,
-        isError: true,
-      });
-      const text = plain(harness.render(160));
-      expect(text.match(/UNCLASSIFIED_FAILURE/gu)).toHaveLength(1);
-      expect(text.match(/Inspect destination before retrying/gu)).toHaveLength(1);
       const sourceMarkers =
         fixture.name === "bash"
           ? ["LAST_COMMAND"]
           : fixture.name === "edit"
             ? ["OLD_4", "NEW_4"]
             : [];
-      expect(sourceMarkers.every((marker) => text.includes(marker))).toBe(true);
+      for (const mode of ["off", "on", "border"] as const) {
+        const harness = createToolPresentationHarness(registered(mode).get(fixture.name)!);
+        const failure = result("UNCLASSIFIED_FAILURE", "Inspect destination before retrying.");
+        for (const expanded of [false, true, false, true]) {
+          harness.call(fixture.args, { expanded });
+          harness.result(failure, { expanded, isError: true });
+          const text = plain(harness.render(160));
+          expect(text.match(/UNCLASSIFIED_FAILURE/gu) ?? []).toHaveLength(expanded ? 1 : 0);
+          expect(text.match(/Inspect destination before retrying/gu) ?? []).toHaveLength(
+            expanded ? 1 : 0,
+          );
+          expect(!expanded || sourceMarkers.every((marker) => text.includes(marker))).toBe(true);
+        }
+      }
     });
     test(`${fixture.name} tolerates malformed arguments and cancellation`, () => {
-      const harness = createToolPresentationHarness(registered().get(fixture.name)!, {
-        theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),
-      });
+      const harness = createToolPresentationHarness(registered().get(fixture.name)!);
       harness.call({ path: 17, command: false, edits: [null] }, { expanded: true });
       harness.result(result("Operation aborted"), { expanded: true, isError: true });
       expect(() => harness.render(20)).not.toThrow();
@@ -146,7 +135,6 @@ describe("registered builtin presentation", () => {
   }
   test("write diff retains independent raw-result instructions", () => {
     const harness = createToolPresentationHarness(registered().get("write")!, {
-      theme: testTheme(),
       state: { codePreviewWriteBeforeSnapshot: { content: "OLD_SOURCE" } },
     });
     harness.call({ path: "source.ts", content: "NEW_SOURCE" }, { expanded: true });
@@ -160,9 +148,7 @@ describe("registered builtin presentation", () => {
     expect(text).toContain("Verify the remote copy before retrying.");
   });
   test("unverified write size evidence retains attention and raw result on expansion", () => {
-    const harness = createToolPresentationHarness(registered().get("write")!, {
-      theme: testTheme(),
-    });
+    const harness = createToolPresentationHarness(registered().get("write")!);
     const args = { path: "source.ts", content: "NEW_SOURCE" };
     const output = result("WRITE_RECEIPT\nVerify destination before retrying.");
     output.details = {
@@ -185,20 +171,9 @@ describe("registered builtin presentation", () => {
     expect(text).toContain("Verify destination before retrying.");
     expect(text).not.toMatch(/new file/iu);
   });
-  test("unknown write history never asserts a new file", () => {
-    const harness = createToolPresentationHarness(registered().get("write")!, {
-      theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),
-    });
-    const fixture = cases[2];
-    harness.call(fixture.args, { expanded: true });
-    harness.result(result(fixture.output), { expanded: true });
-    expect(plain(harness.render())).not.toMatch(/new file/iu);
-  });
   test("read leaves image bytes native and retains companion text in both styles", () => {
     for (const style of ["compact", "preview"] as const) {
-      const harness = createToolPresentationHarness(registered("off", style).get("read")!, {
-        theme: Object.assign(testTheme(), { bg: (_color: string, text: string) => text }),
-      });
+      const harness = createToolPresentationHarness(registered("off", style).get("read")!);
       const image = { type: "image" as const, data: "NATIVE_IMAGE_BYTES", mimeType: "image/png" };
       const value = {
         content: [{ type: "text" as const, text: "image companion" }, image],

@@ -6,26 +6,29 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer, signalProcess, type ProcessTreeTerminatorSpawn } from "pi-cosmic-core";
+import { fakeProcessTreeTerminator } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
   makeWindowsTreeTermination,
-  terminateWindowsTree,
-  type WindowsTreeTerminatorSpawn,
+  type LocalProcessHandle,
+  type LocalProcessRequest,
 } from "../src/boundary/local-process.ts";
 
 const withLocalProcess = <A, E>(effect: Effect.Effect<A, E, LocalProcess | Scope.Scope>) =>
   effect.pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
+const spawnProcess = (command: string, overrides: Partial<LocalProcessRequest> = {}) =>
+  LocalProcess.use((processes) =>
+    processes.spawn({ command, cwd: ".", ingressBufferBytes: 64 * 1024, ...overrides }),
+  );
+const collectUntilExit = (handle: LocalProcessHandle) =>
+  Effect.all(
+    { events: handle.output.pipe(Stream.runCollect), exit: handle.awaitExit },
+    { concurrency: "unbounded" },
+  );
 
-const processAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
+const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
 
 const awaitProcessDeath = (pid: number) =>
   Effect.gen(function* () {
@@ -36,48 +39,14 @@ const awaitProcessDeath = (pid: number) =>
     return !processAlive(pid);
   });
 
-type TerminatorListener = (result: Error | number | null) => void;
-
-/** Platform-neutral fake taskkill child so terminator semantics are testable everywhere. */
-const fakeTerminator = () => {
-  const listeners = new Map<"exit" | "error", TerminatorListener[]>();
-  const spawns: Array<{ command: string; args: ReadonlyArray<string> }> = [];
-  const killed: string[] = [];
-  let unrefed = false;
-  const spawn: WindowsTreeTerminatorSpawn = (command, args) => {
-    spawns.push({ command, args });
-    return {
-      on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
-      removeListener: (event, listener) =>
-        listeners.set(
-          event,
-          (listeners.get(event) ?? []).filter((item) => item !== listener),
-        ),
-      kill: (signal) => killed.push(signal),
-      unref: () => {
-        unrefed = true;
-      },
-    };
-  };
-  return {
-    spawn,
-    spawns,
-    killed,
-    isUnrefed: () => unrefed,
-    emit: (event: "exit" | "error", result: Error | number | null) => {
-      for (const listener of listeners.get(event) ?? []) listener(result);
-    },
-    listenerCounts: () => ({
-      exit: listeners.get("exit")?.length ?? 0,
-      error: listeners.get("error")?.length ?? 0,
-    }),
-  };
-};
+/** One bounded force `taskkill` through the boundary's graceful/force owner. */
+const forceTaskkill = (spawn: ProcessTreeTerminatorSpawn) =>
+  makeWindowsTreeTermination(42, spawn).pipe(Effect.flatMap((terminate) => terminate("force")));
 
 describe("windows tree terminator", () => {
   it.effect("maps synchronous helper spawn failure without preventing later escalation", () =>
     Effect.gen(function* () {
-      const fake = fakeTerminator();
+      const fake = fakeProcessTreeTerminator();
       const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) => {
         if (!args.includes("/F")) throw new Error("private spawn details");
         return fake.spawn(command, args, options);
@@ -88,7 +57,7 @@ describe("windows tree terminator", () => {
       );
       fake.emit("exit", 0);
       yield* Fiber.join(stopping);
-      const failed = yield* terminateWindowsTree(42, () => {
+      const failed = yield* forceTaskkill(() => {
         throw new Error("private spawn details");
       }).pipe(Effect.flip);
       expect(failed).toMatchObject({ _tag: "LocalProcessError", reason: "terminate" });
@@ -98,8 +67,8 @@ describe("windows tree terminator", () => {
 
   it.effect("cleans a partially installed helper despite throwing listener removal", () =>
     Effect.gen(function* () {
-      const fake = fakeTerminator();
-      const failed = yield* terminateWindowsTree(42, (command, args, options) => {
+      const fake = fakeProcessTreeTerminator();
+      const failed = yield* forceTaskkill((command, args, options) => {
         const child = fake.spawn(command, args, options);
         return {
           ...child,
@@ -117,12 +86,12 @@ describe("windows tree terminator", () => {
       expect(fake.killed).toEqual(["SIGKILL"]);
       expect(fake.isUnrefed()).toBe(true);
       expect(fake.listenerCounts()).toEqual({ exit: 0, error: 0 });
-    }),
+    }).pipe(Effect.scoped),
   );
   it.effect("still escalates after the graceful helper times out", () =>
     Effect.gen(function* () {
-      const graceful = fakeTerminator();
-      const force = fakeTerminator();
+      const graceful = fakeProcessTreeTerminator();
+      const force = fakeProcessTreeTerminator();
       const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
         (args.includes("/F") ? force : graceful).spawn(command, args, options),
       );
@@ -139,8 +108,8 @@ describe("windows tree terminator", () => {
   );
   it.effect("joins a hanging graceful helper before force, once, and contains late errors", () =>
     Effect.gen(function* () {
-      const graceful = fakeTerminator();
-      const force = fakeTerminator();
+      const graceful = fakeProcessTreeTerminator();
+      const force = fakeProcessTreeTerminator();
       const terminate = yield* makeWindowsTreeTermination(42, (command, args, options) =>
         (args.includes("/F") ? force : graceful).spawn(command, args, options),
       );
@@ -167,7 +136,7 @@ describe("windows tree terminator", () => {
 
   it.effect("scope closure interrupts a hanging graceful helper without awaiting exit", () =>
     Effect.gen(function* () {
-      const fake = fakeTerminator();
+      const fake = fakeProcessTreeTerminator();
       yield* Effect.scoped(
         Effect.gen(function* () {
           const terminate = yield* makeWindowsTreeTermination(42, fake.spawn);
@@ -181,8 +150,8 @@ describe("windows tree terminator", () => {
   );
   it.effect("confirms a zero-exit taskkill and removes its listeners", () =>
     Effect.gen(function* () {
-      const fake = fakeTerminator();
-      const fiber = yield* terminateWindowsTree(42, fake.spawn).pipe(
+      const fake = fakeProcessTreeTerminator();
+      const fiber = yield* forceTaskkill(fake.spawn).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       expect(fake.spawns).toEqual([{ command: "taskkill", args: ["/pid", "42", "/T", "/F"] }]);
@@ -195,16 +164,16 @@ describe("windows tree terminator", () => {
 
   it.effect("maps nonzero exit and spawn error to redacted typed failures", () =>
     Effect.gen(function* () {
-      const nonzero = fakeTerminator();
-      const nonzeroFiber = yield* terminateWindowsTree(42, nonzero.spawn).pipe(
+      const nonzero = fakeProcessTreeTerminator();
+      const nonzeroFiber = yield* forceTaskkill(nonzero.spawn).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       nonzero.emit("exit", 1);
       const nonzeroFailure = yield* Fiber.join(nonzeroFiber).pipe(Effect.flip);
       expect(nonzeroFailure).toMatchObject({ _tag: "LocalProcessError" });
 
-      const errored = fakeTerminator();
-      const erroredFiber = yield* terminateWindowsTree(42, errored.spawn).pipe(
+      const errored = fakeProcessTreeTerminator();
+      const erroredFiber = yield* forceTaskkill(errored.spawn).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       errored.emit("error", new Error("taskkill exposed FAKE_SECRET_123"));
@@ -217,8 +186,8 @@ describe("windows tree terminator", () => {
 
   it.effect("bounds a never-exiting taskkill with synchronous kill/unref/listener cleanup", () =>
     Effect.gen(function* () {
-      const fake = fakeTerminator();
-      const fiber = yield* terminateWindowsTree(42, fake.spawn).pipe(
+      const fake = fakeProcessTreeTerminator();
+      const fiber = yield* forceTaskkill(fake.spawn).pipe(
         Effect.forkScoped({ startImmediately: true }),
       );
       expect(fake.killed).toEqual([]);
@@ -305,19 +274,10 @@ describe("local process boundary", () => {
   it.live("captures stdout, stderr, and exit", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "process.stdout.write('out'); process.stderr.write('err')"`,
-          cwd: ".",
-          ingressBufferBytes: 64 * 1024,
-        });
-        const result = yield* Effect.all(
-          {
-            events: handle.output.pipe(Stream.runCollect),
-            exit: handle.awaitExit,
-          },
-          { concurrency: "unbounded" },
+        const handle = yield* spawnProcess(
+          `node -e "process.stdout.write('out'); process.stderr.write('err')"`,
         );
+        const result = yield* collectUntilExit(handle);
         expect(result.exit.exitCode).toBe(0);
         const output = [...result.events].map((event) => `${event.stream}:${event.text}`).join("|");
         expect(output).toContain("stdout:out");
@@ -329,12 +289,7 @@ describe("local process boundary", () => {
   it.live("returns only exit code and signal data after a successful spawn", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "process.exitCode = 7"`,
-          cwd: ".",
-          ingressBufferBytes: 64 * 1024,
-        });
+        const handle = yield* spawnProcess(`node -e "process.exitCode = 7"`);
         expect(yield* handle.awaitExit).toEqual({ exitCode: 7 });
       }),
     ),
@@ -343,13 +298,8 @@ describe("local process boundary", () => {
   it.live("rejects a missing working directory", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
         const result = yield* Effect.result(
-          processes.spawn({
-            command: 'node -e ""',
-            cwd: "/definitely/missing/pi-bg-dir",
-            ingressBufferBytes: 64 * 1024,
-          }),
+          spawnProcess('node -e ""', { cwd: "/definitely/missing/pi-bg-dir" }),
         );
         expect(result._tag).toBe("Failure");
       }),
@@ -359,13 +309,9 @@ describe("local process boundary", () => {
   it.live("redacts the command when Effect reports a spawn failure", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
         const result = yield* Effect.result(
-          processes.spawn({
-            command: "echo api_key=FAKE_SECRET_123",
-            cwd: ".",
+          spawnProcess("echo api_key=FAKE_SECRET_123", {
             shellPath: "/definitely/missing/pi-background-shell",
-            ingressBufferBytes: 64 * 1024,
           }),
         );
         expect(result._tag).toBe("Failure");
@@ -380,12 +326,10 @@ describe("local process boundary", () => {
   it.live("bounds ingress when a producer outruns log consumption", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "for(let i=0;i<20000;i++) process.stdout.write('noisy-output-'+i+'\\n')"`,
-          cwd: ".",
-          ingressBufferBytes: 1024,
-        });
+        const handle = yield* spawnProcess(
+          `node -e "for(let i=0;i<20000;i++) process.stdout.write('noisy-output-'+i+'\\n')"`,
+          { ingressBufferBytes: 1024 },
+        );
         yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
         expect(handle.droppedOutputBytes()).toBeGreaterThan(0);
       }),
@@ -395,20 +339,11 @@ describe("local process boundary", () => {
   it.live("keeps a chunk whole when it fits in the remaining byte budget", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
         const content = "A".repeat(512);
-        const handle = yield* processes.spawn({
-          command: `node -e "process.stdout.write('A'.repeat(512))"`,
-          cwd: ".",
+        const handle = yield* spawnProcess(`node -e "process.stdout.write('A'.repeat(512))"`, {
           ingressBufferBytes: 1_024,
         });
-        const result = yield* Effect.all(
-          {
-            events: handle.output.pipe(Stream.runCollect),
-            exit: handle.awaitExit,
-          },
-          { concurrency: "unbounded" },
-        );
+        const result = yield* collectUntilExit(handle);
         const stdout = [...result.events]
           .filter((event) => event.stream === "stdout")
           .map((event) => event.text)
@@ -422,21 +357,13 @@ describe("local process boundary", () => {
   it.live("keeps queued output within the configured byte budget", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
         const producedBytes = 2_000;
         const ingressBufferBytes = 1_024;
-        const handle = yield* processes.spawn({
-          command: `node -e "process.stdout.write('A'.repeat(${producedBytes}))"`,
-          cwd: ".",
-          ingressBufferBytes,
-        });
-        const result = yield* Effect.all(
-          {
-            events: handle.output.pipe(Stream.runCollect),
-            exit: handle.awaitExit,
-          },
-          { concurrency: "unbounded" },
+        const handle = yield* spawnProcess(
+          `node -e "process.stdout.write('A'.repeat(${producedBytes}))"`,
+          { ingressBufferBytes },
         );
+        const result = yield* collectUntilExit(handle);
         expect(result.exit.exitCode).toBe(0);
         const deliveredBytes = [...result.events]
           .filter((event) => event.stream === "stdout")
@@ -450,19 +377,10 @@ describe("local process boundary", () => {
   it.live("settles after killing descendants that retain inherited pipes", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "const {spawn}=require('child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}); child.unref();"`,
-          cwd: ".",
-          ingressBufferBytes: 64 * 1024,
-        });
-        const result = yield* Effect.all(
-          {
-            events: handle.output.pipe(Stream.runCollect),
-            exit: handle.awaitExit,
-          },
-          { concurrency: "unbounded" },
-        ).pipe(Effect.timeout("5 seconds"));
+        const handle = yield* spawnProcess(
+          `node -e "const {spawn}=require('child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}); child.unref();"`,
+        );
+        const result = yield* collectUntilExit(handle).pipe(Effect.timeout("5 seconds"));
         expect(result.exit.exitCode).toBe(0);
       }),
     ),
@@ -471,12 +389,9 @@ describe("local process boundary", () => {
   it.live("scope release terminates a running leader and descendant", () =>
     Effect.gen(function* () {
       const pids = yield* Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); process.stdout.write(String(child.pid)); setInterval(()=>{},1000)"`,
-          cwd: ".",
-          ingressBufferBytes: 64 * 1024,
-        });
+        const handle = yield* spawnProcess(
+          `node -e "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); process.stdout.write(String(child.pid)); setInterval(()=>{},1000)"`,
+        );
         const events = yield* handle.output.pipe(
           Stream.take(1),
           Stream.runCollect,
@@ -495,12 +410,7 @@ describe("local process boundary", () => {
   it.live("force-terminates a running process", () =>
     withLocalProcess(
       Effect.gen(function* () {
-        const processes = yield* LocalProcess;
-        const handle = yield* processes.spawn({
-          command: `node -e "setInterval(() => {}, 1000)"`,
-          cwd: ".",
-          ingressBufferBytes: 64 * 1024,
-        });
+        const handle = yield* spawnProcess(`node -e "setInterval(() => {}, 1000)"`);
         yield* handle.terminate("force");
         const exit = yield* handle.awaitExit.pipe(Effect.timeout("5 seconds"));
         expect(exit).toMatchObject({ exitCode: null, signal: "SIGKILL" });

@@ -4,11 +4,10 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
-import type { BackendLaunchRequest } from "../backend/model.ts";
 import {
-  InvalidSubagentRequestError,
-  processCauseError,
-  SubagentProcessError,
+  invalidRequest as preflightError,
+  type InvalidSubagentRequestError,
+  type SubagentProcessError,
 } from "../run/errors.ts";
 import {
   subagentRuntimeEfforts,
@@ -30,17 +29,15 @@ import {
   type ProbeResult,
   sanitizeLocalCliEnvironment,
   type LocalCliHarnessOptions,
+  type LocalCliHarnessRequest,
 } from "./local-cli-harness.ts";
-import { acquireLocalCliTransport, type LocalCliHandle } from "./local-cli-transport.ts";
-import type { SupervisorConnectionMetadata } from "./supervisor-channel.ts";
+import {
+  acquireLocalCliTransport,
+  processError,
+  type LocalCliHandle,
+} from "./local-cli-transport.ts";
 
 export type LocalCliRuntime = Extract<SubagentRuntime, "claude" | "codex">;
-
-export interface LocalCliSpawnRequest {
-  readonly runtime: LocalCliRuntime;
-  readonly launch: BackendLaunchRequest;
-  readonly supervisor: SupervisorConnectionMetadata;
-}
 
 export interface LocalCliPreflightRequest {
   readonly runtime: LocalCliRuntime;
@@ -63,7 +60,7 @@ export interface LocalCliProcessContract {
     request: LocalCliPreflightRequest,
   ) => Effect.Effect<void, InvalidSubagentRequestError>;
   readonly spawn: (
-    request: LocalCliSpawnRequest,
+    request: LocalCliHarnessRequest,
   ) => Effect.Effect<LocalCliProcessHandle, SubagentProcessError, Scope.Scope>;
 }
 
@@ -71,16 +68,6 @@ export interface LocalCliProcessLayerOptions extends LocalCliHarnessOptions {
   /** Package-test seam only. */
   readonly platform?: NodeJS.Platform | undefined;
 }
-
-const processError = <ErrorInput>(
-  operation: string,
-  error?: ErrorInput,
-  code?: string,
-): SubagentProcessError =>
-  processCauseError(operation, error, code, `Unable to ${operation} local CLI process.`);
-
-const preflightError = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
 
 const validateLocalPreflightRequest = (
   options: LocalCliProcessLayerOptions,
@@ -232,7 +219,7 @@ const validateLocalProbeResult = (
 
 const acquireLocalCli = Effect.fn("LocalCliProcess.acquire")(function* (
   options: LocalCliProcessLayerOptions,
-  request: LocalCliSpawnRequest,
+  request: LocalCliHarnessRequest,
 ) {
   // Keep acquisition masked through finalizer registration. Preparation owns a unique private
   // directory before its final writes, so exposing interruption between return and registration

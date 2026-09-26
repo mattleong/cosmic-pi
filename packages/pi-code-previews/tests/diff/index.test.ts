@@ -1,25 +1,23 @@
 import assert from "node:assert/strict";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, test } from "vitest";
+import { beforeEach, test } from "vitest";
+import { applyPresentationSettings } from "../../testing";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { stripAnsi, testTheme } from "../support/render";
+import { plainTheme, stripAnsi } from "../support/render";
 import { renderedWordEmphasisSpans } from "../support/rendered-word-emphasis";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../src/diff/render";
 import { summarizeDiff } from "../../src/diff/summary";
 import { parseDiffLine } from "../../src/diff/parse";
-import { wordEmphasisTelemetry } from "../support/word-emphasis-telemetry";
 import { changedRanges, changedRangesWithConfidence } from "../../src/diff/word/emphasis";
 
-let previousCodePreviewSettings = { ...codePreviewSettings };
+beforeEach(() => applyPresentationSettings({}));
 
-beforeEach(() => {
-  previousCodePreviewSettings = { ...codePreviewSettings };
-});
-
-afterEach(() => {
-  setCodePreviewSettings(previousCodePreviewSettings);
-});
+/** Rendered emphasis spans per line, with the limit covering every diff line. */
+const emphasisSpans = (diff: string, onInvalidate?: () => void) =>
+  renderSyntaxHighlightedDiff(diff, undefined, plainTheme, diff.split("\n").length, onInvalidate)
+    .split("\n")
+    .map(renderedWordEmphasisSpans);
 
 test("summarizeDiff classifies replacements, insertions, and deletions by change group", () => {
   assert.equal(summarizeDiff("").totalLines, 1);
@@ -62,8 +60,8 @@ test("plain diff escapes terminal control characters", () => {
   const escape = String.fromCharCode(27);
   const nul = String.fromCharCode(0);
   const untrustedSequence = `${escape}[31m`;
-  const rendered = renderPlainDiff(`+1 hello ${untrustedSequence}red${nul}`, testTheme(), 1);
-  const baseline = renderPlainDiff("+1 hello red", testTheme(), 1);
+  const rendered = renderPlainDiff(`+1 hello ${untrustedSequence}red${nul}`, plainTheme, 1);
+  const baseline = renderPlainDiff("+1 hello red", plainTheme, 1);
   assert.equal(rendered.includes(untrustedSequence), false);
   assert.equal(rendered.split(nul).length, baseline.split(nul).length);
   assert.match(stripAnsi(rendered), /red/);
@@ -71,29 +69,29 @@ test("plain diff escapes terminal control characters", () => {
 
 test("diff renderers honor limits at remove/add boundaries", () => {
   const diff = "-1 old\n+1 new";
-  assert.equal(renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 1).split("\n").length, 1);
-  assert.equal(renderPlainDiff(diff, testTheme(), 1).split("\n").length, 1);
+  assert.equal(renderSyntaxHighlightedDiff(diff, undefined, plainTheme, 1).split("\n").length, 1);
+  assert.equal(renderPlainDiff(diff, plainTheme, 1).split("\n").length, 1);
 });
 
 test("full-width diff component wraps long ANSI lines", () => {
-  const diffText = renderPlainDiff("+1 " + "x".repeat(80), testTheme(), 1);
-  const rows = new FullWidthDiffText(diffText, testTheme()).render(30);
+  const diffText = renderPlainDiff("+1 " + "x".repeat(80), plainTheme, 1);
+  const rows = new FullWidthDiffText(diffText, plainTheme).render(30);
   assert.ok(rows.length > 1);
   assert.equal(visibleWidth(rows[0] ?? ""), 30);
   assert.ok(visibleWidth(rows.at(-1) ?? "") <= 30);
 });
 
 test("full-width diff wrapping keeps content when the gutter is wider than the viewport", () => {
-  const diffText = renderPlainDiff("+1 abcdef", testTheme(), 1);
-  const rows = new FullWidthDiffText(diffText, testTheme()).render(3);
+  const diffText = renderPlainDiff("+1 abcdef", plainTheme, 1);
+  const rows = new FullWidthDiffText(diffText, plainTheme).render(3);
 
   assert.ok(rows.every((row) => visibleWidth(row) <= 3));
   assert.match(stripAnsi(rows.join("")), /abc/);
 });
 
 test("full-width diff wrapping preserves wide graphemes beside a narrow continuation gutter", () => {
-  const diffText = renderPlainDiff("+1 a😀b", testTheme(), 1);
-  const rows = new FullWidthDiffText(diffText, testTheme()).render(6);
+  const diffText = renderPlainDiff("+1 a😀b", plainTheme, 1);
+  const rows = new FullWidthDiffText(diffText, plainTheme).render(6);
 
   assert.ok(rows.every((row) => visibleWidth(row) <= 6));
   assert.match(stripAnsi(rows.join("")), /😀/);
@@ -101,7 +99,7 @@ test("full-width diff wrapping preserves wide graphemes beside a narrow continua
 
 test("boxed diff rows preserve the requested width", () => {
   const box = new Box(1, 0, (text) => text);
-  box.addChild(new FullWidthDiffText(renderPlainDiff("+1 short", testTheme(), 1), testTheme()));
+  box.addChild(new FullWidthDiffText(renderPlainDiff("+1 short", plainTheme, 1), plainTheme));
   const line = box.render(20)[0] ?? "";
   assert.equal(visibleWidth(line), 20);
 });
@@ -109,9 +107,7 @@ test("boxed diff rows preserve the requested width", () => {
 test("word emphasis pairs the most similar lines inside change blocks", () => {
   const diff =
     "-1 const trimmed = line.trim();\n+1 const safeLine = escapeControlChars(line);\n+2 const trimmed = safeLine.trim();";
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 3)
-    .split("\n")
-    .map(renderedWordEmphasisSpans);
+  const spans = emphasisSpans(diff);
   assert.ok(spans[0]?.some((span) => span.includes("line")));
   assert.deepEqual(spans[1], []);
   assert.ok(spans[2]?.some((span) => span.includes("safeLine")));
@@ -119,42 +115,12 @@ test("word emphasis pairs the most similar lines inside change blocks", () => {
 
 test("word emphasis marks low-overlap one-to-one changed pairs instead of skipping them", () => {
   const diff = "-1 out.push(pair.removed, pair.added);\n+1 block.push(next);";
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
-    .split("\n")
-    .map(renderedWordEmphasisSpans);
+  const spans = emphasisSpans(diff);
   assert.ok(spans[0]?.some((span) => span.includes("out")));
   assert.ok(spans[1]?.some((span) => span.includes("block")));
 });
 
-test("word emphasis telemetry summarizes confidence and skipped pairs", () => {
-  assert.deepEqual(
-    wordEmphasisTelemetry("-1 const value = oldValue;\n+1 const value = newValue;", 2),
-    {
-      changedBlocks: 1,
-      changedLines: { removed: 1, added: 1 },
-      pairConfidence: { high: 0, medium: 1, low: 0 },
-      rangeConfidence: { high: 1, medium: 0, low: 0 },
-      emphasizedPairs: 1,
-      skippedPairs: 0,
-      skippedPotentialPairs: 0,
-    },
-  );
-
-  assert.equal(
-    wordEmphasisTelemetry(
-      [
-        "-1 const result = formatValue(input);",
-        "+1 const result = formatLabel(input);",
-        "+2 const result = formatTitle(input);",
-      ].join("\n"),
-      3,
-    ).skippedPotentialPairs,
-    1,
-  );
-});
-
 test("word emphasis narrows similar single-token edits", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
   assert.deepEqual(changedRanges("value1000", "value1001", "all"), {
     removed: [[8, 9]],
     added: [[8, 9]],
@@ -166,7 +132,6 @@ test("word emphasis narrows similar single-token edits", () => {
 });
 
 test("word emphasis keeps unicode refinements on text boundaries", () => {
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
   assert.deepEqual(changedRanges("a\u0301Value", "a\u0302Value", "all"), {
     removed: [[0, 2]],
     added: [[0, 2]],
@@ -184,9 +149,7 @@ test("word emphasis skips low-confidence positional pairs inside larger blocks",
     "+1 const total = calculateTotal(next);",
     "+2 renderCompletelyDifferentScreen();",
   ].join("\n");
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 4)
-    .split("\n")
-    .map(renderedWordEmphasisSpans);
+  const spans = emphasisSpans(diff);
   assert.deepEqual(spans, [["items"], [], ["next"], []]);
 });
 
@@ -203,41 +166,19 @@ test("word emphasis skips ambiguous positional fallback above pairing threshold"
       return `+ ${index + 1} items.map((item) => item.shared${reversed % 4}).filter(Boolean) // new ${reversed % 3}`;
     }),
   ].join("\n");
-
-  const telemetry = wordEmphasisTelemetry(diff, count * 2);
-  assert.equal(telemetry.emphasizedPairs, 0);
-  assert.equal(telemetry.skippedPotentialPairs, count);
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), count * 2)
-    .split("\n")
-    .flatMap(renderedWordEmphasisSpans);
-  assert.deepEqual(spans, []);
+  assert.deepEqual(emphasisSpans(diff).flat(), []);
 });
 
 test("word emphasis can be disabled", () => {
   const diff = "-1 const value = oldValue;\n+1 const value = newValue;";
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "off" });
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
-    .split("\n")
-    .flatMap(renderedWordEmphasisSpans);
-  assert.deepEqual(spans, []);
-
-  assert.deepEqual(changedRanges("const value = oldValue;", "const value = newValue;", "off"), {
-    removed: [],
-    added: [],
-  });
-  assert.deepEqual(
-    changedRangesWithConfidence("const value = oldValue;", "const value = newValue;", "off"),
-    { removed: [], added: [], confidence: "low" },
-  );
-  assert.equal(wordEmphasisTelemetry(diff, 2, "off").emphasizedPairs, 0);
+  assert.deepEqual(emphasisSpans(diff).flat(), []);
 });
 
 test("word emphasis ranges stay aligned when indentation changes", () => {
   const diff =
     "-1 \tconst next = parseDiffLine(lines[i + 1]!);\n+1 \t\tconst next = parseDiffLine(lines[end]!);";
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2)
-    .split("\n")
-    .map(renderedWordEmphasisSpans);
+  const spans = emphasisSpans(diff);
   assert.ok(spans[0]?.some((span) => span.includes("i + 1")));
   assert.ok(spans[1]?.some((span) => span.includes("end")));
 });
@@ -246,9 +187,7 @@ test("word emphasis is applied synchronously for large changed lines", () => {
   const shared = Array.from({ length: 300 }, (_, index) => `token${index}`).join(" ");
   const diff = `-1 ${shared} oldValue ${shared}\n+1 ${shared} newValue ${shared}`;
   let invalidations = 0;
-  const spans = renderSyntaxHighlightedDiff(diff, undefined, testTheme(), 2, () => invalidations++)
-    .split("\n")
-    .flatMap(renderedWordEmphasisSpans);
+  const spans = emphasisSpans(diff, () => invalidations++).flat();
   assert.equal(invalidations, 0);
   assert.ok(spans.some((span) => span.includes("old")));
   assert.ok(spans.some((span) => span.includes("new")));

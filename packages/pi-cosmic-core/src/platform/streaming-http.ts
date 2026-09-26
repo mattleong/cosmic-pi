@@ -31,9 +31,6 @@ export type StreamingJsonBodyCodec<A, E, R> =
       : Schema.ConstraintCodec<A, E, unknown, R>;
 
 export interface StreamingHttpClientContract {
-  readonly requestRawBytes: (
-    request: StreamingHttpRequest,
-  ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>;
   readonly requestJsonRawBytes: <A, E, R>(
     request: StreamingHttpRequest,
     bodySchema: StreamingJsonBodyCodec<A, E, R>,
@@ -43,6 +40,25 @@ export interface StreamingHttpClientContract {
 
 const streamingHttpError = (operation: StreamingHttpError["operation"], message: string) => () =>
   new StreamingHttpError({ operation, message });
+
+/** Schema-encodes a JSON request body once for the live and test streaming transports. */
+export const withStreamingJsonBody =
+  (
+    execute: (
+      input: StreamingHttpRequest,
+      body: Schema.Json,
+    ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>,
+  ): StreamingHttpClientContract["requestJsonRawBytes"] =>
+  (input, bodySchema, body) =>
+    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
+      Effect.mapError(
+        streamingHttpError(
+          "encode",
+          "Streaming HTTP request body did not match the expected schema.",
+        ),
+      ),
+      Effect.flatMap((encodedBody) => execute(input, encodedBody)),
+    );
 
 export class StreamingHttpClient extends Context.Service<
   StreamingHttpClient,
@@ -54,18 +70,16 @@ export class StreamingHttpClient extends Context.Service<
       const client = yield* HttpClient.HttpClient;
       const execute = Effect.fn("StreamingHttpClient.execute")(function* (
         input: StreamingHttpRequest,
-        body?: Schema.Json,
+        body: Schema.Json,
       ) {
-        let outgoing = HttpClientRequest.make(input.method ?? "GET")(input.url, {
-          headers: input.headers,
-        });
-        if (body !== undefined) {
-          outgoing = yield* HttpClientRequest.bodyJson(outgoing, body).pipe(
-            Effect.mapError(
-              streamingHttpError("encode", "Streaming HTTP request body could not be encoded."),
-            ),
-          );
-        }
+        const outgoing = yield* HttpClientRequest.bodyJson(
+          HttpClientRequest.make(input.method ?? "GET")(input.url, { headers: input.headers }),
+          body,
+        ).pipe(
+          Effect.mapError(
+            streamingHttpError("encode", "Streaming HTTP request body could not be encoded."),
+          ),
+        );
         const response = yield* client.execute(outgoing).pipe(
           Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
           Effect.mapError(streamingHttpError("request", "Streaming HTTP request failed.")),
@@ -87,23 +101,7 @@ export class StreamingHttpClient extends Context.Service<
           ),
         } satisfies StreamingHttpResponse;
       });
-      const requestRawBytes: StreamingHttpClientContract["requestRawBytes"] = (input) =>
-        execute(input);
-      const requestJsonRawBytes: StreamingHttpClientContract["requestJsonRawBytes"] = (
-        input,
-        bodySchema,
-        body,
-      ) =>
-        Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
-          Effect.mapError(
-            streamingHttpError(
-              "encode",
-              "Streaming HTTP request body did not match the expected schema.",
-            ),
-          ),
-          Effect.flatMap((encodedBody) => execute(input, encodedBody)),
-        );
-      return StreamingHttpClient.of({ requestRawBytes, requestJsonRawBytes });
+      return StreamingHttpClient.of({ requestJsonRawBytes: withStreamingJsonBody(execute) });
     }),
   );
 }

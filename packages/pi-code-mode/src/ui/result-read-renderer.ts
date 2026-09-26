@@ -8,6 +8,7 @@ import {
 } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { decodeOption } from "../tools/format.ts";
 import { codeModeOutputText } from "./result-output.ts";
 
@@ -41,17 +42,34 @@ export function renderCodeModeResultRead(
       : summary?.outcome === undefined
         ? "Read outcome unavailable"
         : "Page read succeeded";
-  const lines: Array<{ text: string; color: "muted" | "error" | "warning" | "toolOutput" }> = [
-    { text: [status, ...(summary?.counters ?? [])].join(" · "), color: failed ? "error" : "muted" },
-  ];
-  if (contentOnly && summary) lines.length = 0;
-  const issues = summary && !contentOnly ? summaryCompactIssues(summary, expanded) : undefined;
-  if (expanded && !isPartial && raw.length) {
+  const counters = summary?.counters ?? [];
+  const view = { isPartial, failed, expanded, contentOnly };
+  return renderPlainResultView([status, ...counters].join(" · "), raw, summary, view, theme);
+}
+
+/** Plain status line and raw page shared by the read and status views. */
+export function renderPlainResultView(
+  status: string,
+  raw: string,
+  summary: CompactSummary | undefined,
+  view: {
+    readonly isPartial: boolean;
+    readonly failed: boolean;
+    readonly expanded: boolean;
+    readonly contentOnly: boolean;
+  },
+  theme: Theme,
+): Component {
+  const { isPartial, expanded, contentOnly } = view;
+  const lines: Array<{ text: string; color: "muted" | "error" | "toolOutput" }> =
+    contentOnly && summary ? [] : [{ text: status, color: view.failed ? "error" : "muted" }];
+  if (expanded && !isPartial && raw.length > 0) {
     lines.push(
       { text: "Raw output", color: "muted" },
       { text: codeModeOutputText(raw), color: "toolOutput" },
     );
   }
+  const issues = summary && !contentOnly ? summaryCompactIssues(summary, expanded) : undefined;
   // A hostile host theme cannot hide retained recovery evidence.
   return {
     render(width) {
@@ -59,11 +77,7 @@ export function renderCodeModeResultRead(
       const text = lines
         .map(({ text, color }) => {
           const safe = codeModeOutputText(text);
-          try {
-            return theme.fg(color, safe);
-          } catch {
-            return safe;
-          }
+          return invokeHostCallback(() => theme.fg(color, safe), safe);
         })
         .join("\n");
       const body = new Text(text, 0, 0).render(Math.floor(width));

@@ -1,8 +1,9 @@
 import { diffLines } from "diff";
 import * as Predicate from "effect/Predicate";
-import { getObjectValue } from "../shared/helpers";
+import { countLabel, getObjectValue } from "../shared/helpers";
 import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
 import { codePreviewPerformanceConfig } from "../config/env";
+import { getEditPreviewOperations } from "./data/args";
 import { isTruncated } from "./data/results";
 
 const writeCounts = new WeakMap<
@@ -19,20 +20,12 @@ const writeCounts = new WeakMap<
 /** Never turn partially validated operations into a successful operation total. */
 export function editResultDetail<Args>(args: Args): string | undefined {
   const edits = getObjectValue(args, "edits");
-  const operations = Array.isArray(edits) ? edits : [args];
-  if (!operations.length || operations.length > 64) return undefined;
-  for (const operation of operations) {
-    const oldText = getObjectValue(operation, "oldText") ?? getObjectValue(operation, "old_text");
-    const newText = getObjectValue(operation, "newText") ?? getObjectValue(operation, "new_text");
-    if (
-      !Predicate.isString(oldText) ||
-      !oldText ||
-      !Predicate.isString(newText) ||
-      oldText === newText
-    )
-      return undefined;
-  }
-  return `${operations.length} ${operations.length === 1 ? "edit" : "edits"}`;
+  const count = Array.isArray(edits) ? edits.length : 1;
+  if (!count || count > 64) return undefined;
+  const operations = getEditPreviewOperations(args);
+  if (operations.length !== count || operations.some((operation) => !operation.oldText))
+    return undefined;
+  return countLabel(count, "edit");
 }
 
 /** Count matching lines, not occurrences; unfamiliar or incomplete output has no total. */
@@ -56,7 +49,7 @@ export function grepResultDetail<Details>(output: string, details: Details): str
     if (match) count++;
     else if (!context) return undefined;
   }
-  return count ? `${count} matching ${count === 1 ? "line" : "lines"}` : undefined;
+  return count ? countLabel(count, "matching line") : undefined;
 }
 
 /** Snapshot-keyed, bounded diff work is reused across redraws. */

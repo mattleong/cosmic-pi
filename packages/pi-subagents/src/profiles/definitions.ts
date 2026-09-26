@@ -1,4 +1,9 @@
-import type { ProfileDefinition, ProfileId, ProfileRoute } from "./model.ts";
+import {
+  mapProfileIds,
+  type ProfileDefinition,
+  type ProfileId,
+  type ProfileRoute,
+} from "./model.ts";
 
 export const PROFILE_DEFINITIONS = {
   scout: {
@@ -87,14 +92,7 @@ const builtinRoute = (id: ProfileId): ProfileRoute => {
     ],
   };
 };
-export const BUILTIN_PROFILE_ROUTES = {
-  scout: builtinRoute("scout"),
-  researcher: builtinRoute("researcher"),
-  planner: builtinRoute("planner"),
-  worker: builtinRoute("worker"),
-  reviewer: builtinRoute("reviewer"),
-  oracle: builtinRoute("oracle"),
-  generalist: builtinRoute("generalist"),
-} satisfies Readonly<Record<ProfileId, ProfileRoute>>;
+export const BUILTIN_PROFILE_ROUTES: Readonly<Record<ProfileId, ProfileRoute>> =
+  mapProfileIds(builtinRoute);
 
 export const profileDefinition = (id: ProfileId): ProfileDefinition => PROFILE_DEFINITIONS[id];

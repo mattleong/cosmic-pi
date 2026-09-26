@@ -9,7 +9,7 @@ import {
   resolveProfileStart,
   type SubagentSessionEnvironment,
 } from "../boundary/host-profile-resolution.ts";
-import { normalizeProfileId, type SubagentSelectionProvenance } from "../profiles/model.ts";
+import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
 import {
@@ -63,10 +63,7 @@ const startSpecs = (
           message: disallowedLaunchOverrideMessage(disallowedField),
         });
     }
-    return agents.map((agent) => {
-      const profile = agent.profile ? normalizeProfileId(agent.profile) : undefined;
-      return profile ? { ...agent, profile } : agent;
-    });
+    return agents;
   });
 
 const entryName = (spec: SubagentStartSpec, index: number): string =>

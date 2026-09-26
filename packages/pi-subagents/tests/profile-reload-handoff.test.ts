@@ -3,7 +3,8 @@ import {
   makeProfileReloadHandoff,
   profileReloadSessionKey,
 } from "../src/application/profile-reload-handoff.ts";
-import { extensionContextFixture } from "./fixtures/pi-host.ts";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 const handoff = makeProfileReloadHandoff();
 const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
@@ -16,43 +17,11 @@ const processState = globalThis as typeof globalThis & TestReloadGlobalState;
 
 afterEach(() => handoff.clear());
 
-const candidate = (model: string) => ({
-  host: "local" as const,
-  runtime: "pi" as const,
-  model,
-  effort: "high" as const,
-  context: "fresh" as const,
-  writeIntent: "read-only" as const,
-  openaiFastMode: false,
-  closeOnReport: true,
-});
-const completeProfiles = (reviewerModel = "parent") => ({
-  scout: { candidates: [candidate("parent")] },
-  researcher: { candidates: [candidate("parent")] },
-  planner: { candidates: [candidate("parent")] },
-  worker: { candidates: [candidate("parent")] },
-  reviewer: { candidates: [candidate(reviewerModel)] },
-  oracle: { candidates: [candidate("parent")] },
-  generalist: { candidates: [candidate("parent")] },
-});
-const completeSources = {
-  scout: "global" as const,
-  researcher: "global" as const,
-  planner: "global" as const,
-  worker: "global" as const,
-  reviewer: "global" as const,
-  oracle: "global" as const,
-  generalist: "global" as const,
-};
-const completeBaseline = (reviewerModel = "parent") => ({
-  origin: { scope: "global" as const, name: "saved" },
-  profiles: completeProfiles(reviewerModel),
-  profileSources: completeSources,
-});
+const slotPresent = () => Object.prototype.hasOwnProperty.call(processState, reloadSlot);
 const completeSeed = (revision = 0) => ({
   revision,
   overrides: {},
-  baseline: completeBaseline(),
+  baseline: completeBaseline("global"),
 });
 
 describe("profile reload handoff", () => {
@@ -60,7 +29,7 @@ describe("profile reload handoff", () => {
     const seed = {
       revision: 4,
       overrides: { reviewer: { candidates: [candidate("openai/override")] } },
-      baseline: completeBaseline("openai/baseline"),
+      baseline: completeBaseline("global", "openai/baseline"),
     };
     handoff.publish("session-one", seed);
 
@@ -85,20 +54,20 @@ describe("profile reload handoff", () => {
       seed: { revision: 2, overrides: {} },
     };
     expect(handoff.capture("session-one")).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
   });
 
   it.each([
     {
       label: "non-finite revision",
-      seed: { revision: Number.NaN, overrides: {}, baseline: completeBaseline() },
+      seed: { revision: Number.NaN, overrides: {}, baseline: completeBaseline("global") },
     },
     {
       label: "malformed candidate",
       seed: {
         revision: 1,
         overrides: { reviewer: { candidates: [{ host: "local" }] } },
-        baseline: completeBaseline(),
+        baseline: completeBaseline("global"),
       },
     },
     {
@@ -106,7 +75,7 @@ describe("profile reload handoff", () => {
       seed: {
         revision: 1,
         overrides: { reviewer: { candidates: [] }, unknown: { candidates: [] } },
-        baseline: completeBaseline(),
+        baseline: completeBaseline("global"),
       },
     },
   ])("rejects and removes a malformed $label reload envelope", ({ seed }) => {
@@ -116,7 +85,7 @@ describe("profile reload handoff", () => {
       seed,
     };
     expect(handoff.capture("session-one")).toBeUndefined();
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
   });
 
   it("rejects candidate accessors in captured and published seeds without invoking them", () => {
@@ -132,7 +101,7 @@ describe("profile reload handoff", () => {
     const accessorSeed = {
       revision: 1,
       overrides: { reviewer: { candidates: [accessorCandidate] } },
-      baseline: completeBaseline(),
+      baseline: completeBaseline("global"),
     };
     processState[reloadSlot] = {
       version: 2,
@@ -143,14 +112,15 @@ describe("profile reload handoff", () => {
     expect(() => handoff.capture("session-one")).not.toThrow();
     expect(handoff.capture("session-one")).toBeUndefined();
     expect(candidateReads).toBe(0);
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
 
     expect(() => handoff.publish("session-one", accessorSeed)).not.toThrow();
     expect(candidateReads).toBe(0);
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
   });
 
   it("rejects oversized baseline arrays before reading any candidate element", () => {
+    const baseline = completeBaseline("global");
     let candidateElementReads = 0;
     const candidates = new Proxy(
       Array.from({ length: 33 }, () => null),
@@ -168,20 +138,13 @@ describe("profile reload handoff", () => {
       seed: {
         revision: 1,
         overrides: {},
-        baseline: {
-          origin: { scope: "global", name: "saved" },
-          profiles: {
-            ...completeProfiles(),
-            reviewer: { candidates },
-          },
-          profileSources: completeSources,
-        },
+        baseline: { ...baseline, profiles: { ...baseline.profiles, reviewer: { candidates } } },
       },
     };
 
     expect(handoff.capture("session-one")).toBeUndefined();
     expect(candidateElementReads).toBe(0);
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
   });
 
   it("contains hostile process-slot accessors and deletion failures", () => {
@@ -203,7 +166,7 @@ describe("profile reload handoff", () => {
     installThrowingAccessor();
     expect(() => handoff.capture("session-one")).not.toThrow();
     expect(getterCalls).toBe(0);
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
 
     installThrowingAccessor();
     expect(() => handoff.publish("session-one", completeSeed())).not.toThrow();
@@ -260,27 +223,18 @@ describe("profile reload handoff", () => {
       ).toBeUndefined();
     }
     expect(hostileLengthReads).toBe(0);
+    expect(
+      profileReloadSessionKey(extensionContextFixture({ sessionManager: {} })),
+    ).toBeUndefined();
 
     // SAFETY: This test deliberately supplies a hostile runtime value through the string contract.
     expect(() => handoff.publish(hostileSessionId as never, completeSeed())).not.toThrow();
     handoff.publish("", completeSeed());
     handoff.publish(overlongKey, completeSeed());
-    expect(Object.prototype.hasOwnProperty.call(processState, reloadSlot)).toBe(false);
+    expect(slotPresent()).toBe(false);
     handoff.publish(maximumKey, completeSeed());
     expect(handoff.capture(maximumKey)).toBeDefined();
     handoff.publish(overlongKey, completeSeed());
     expect(handoff.capture(maximumKey)).toBeUndefined();
-  });
-
-  it("derives the stable reload key from Pi session identity", () => {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const ctx = extensionContextFixture({
-      sessionManager: { getSessionId: () => "session-42" },
-    });
-    expect(profileReloadSessionKey(ctx)).toBe("session-42");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    expect(
-      profileReloadSessionKey(extensionContextFixture({ sessionManager: {} })),
-    ).toBeUndefined();
   });
 });

@@ -16,7 +16,6 @@ import {
   withSettingsCoordinator,
 } from "./coordinator";
 import {
-  defaultSettingsSaveContext,
   loadSettingsSaveContextEffect,
   saveSettingsStateEffect,
   type LoadSettingsOptions,
@@ -63,7 +62,7 @@ export class CodePreviewSettingsService extends Context.Service<
       };
       // The Ref starts private. Layer construction must not publish settings from an unstarted runtime.
       const state = yield* Ref.make(
-        freezeSnapshot(defaultSettingsSaveContext(environment.defaults)),
+        freezeSnapshot({ baseline: environment.defaults, loaded: environment.defaults }),
       );
       const readFromDisk = (options: LoadSettingsOptions) =>
         loadSettingsSaveContextEffect(deps, options);

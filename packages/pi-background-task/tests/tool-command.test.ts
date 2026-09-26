@@ -30,4 +30,33 @@ describe("shared background task command", () => {
       expect(error._tag).toBe("InvalidBackgroundCommandError");
     }),
   );
+
+  it.effect("persists only log metadata and truncation fields, never log text", () =>
+    Effect.gen(function* () {
+      const logs = { id: "bg-1", nextCursor: 2, earliestAvailableCursor: 1, droppedBytes: 0 };
+      const text = "private line\n".repeat(10);
+      const event = { cursor: 1, stream: "stdout" as const, text, timestamp: 1, bytes: 130 };
+      const slice = { ...logs, state: "running" as const, events: [event] };
+      const result = yield* executeBackgroundTaskCommand({ action: "logs", id: "bg-1" }, "/", {
+        maxTextBytes: 64,
+      }).pipe(
+        Effect.provideService(BackgroundTaskService, {
+          ...service,
+          logs: () => Effect.succeed(slice),
+        }),
+        Effect.provide(Path.layer),
+      );
+      expect(result.details).toEqual({
+        action: "logs",
+        logs: { ...logs, state: "running" },
+        truncation: {
+          truncated: true,
+          outputBytes: expect.any(Number),
+          totalBytes: 130,
+          outputLines: expect.any(Number),
+          totalLines: expect.any(Number),
+        },
+      });
+    }),
+  );
 });

@@ -1,21 +1,14 @@
 import * as codePreviews from "pi-code-previews";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../pi-code-previews/src/config/state.ts";
+import { applyPresentationSettings, renderContextFixture } from "pi-code-previews/testing";
+import { opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
 import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
-import { MAX_PROGRESS_ENTRIES } from "../src/tools/format.ts";
 import { renderCodeModeToolResult } from "../src/ui/tool-renderer.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { ledgerDetails } from "./support/compact.ts";
+import { applyCollapsedStyle, restorePresentationSettings } from "./support/presentation.ts";
 
-const { withCodePreviewShell } = codePreviews;
-const theme = {
-  bold: (text: string) => text,
-  fg: (_color: string, text: string) => text,
-};
 type StartUiTicker = (intervalMs: number, tick: () => void) => () => void;
 const definition = (startUiTicker: StartUiTicker = () => () => undefined) =>
   buildCodeModeToolDefinition({
@@ -27,7 +20,7 @@ const definition = (startUiTicker: StartUiTicker = () => () => undefined) =>
 const result = (status: "running" | "completed" = "completed") => ({
   content: [{ type: "text" as const, text: "safe output" }],
   details: {
-    toolCalls: [{ tool: "pi.read", status, activity: "Read safe" }],
+    toolCalls: [{ tool: "pi.read", status }],
     counts: {
       total: 1,
       queued: 0,
@@ -38,6 +31,8 @@ const result = (status: "running" | "completed" = "completed") => ({
     },
   },
 });
+
+afterEach(restorePresentationSettings);
 
 describe("code mode render detail normalization", () => {
   it("repairs contradictory exact counts without understating valid visible rows", () => {
@@ -55,7 +50,6 @@ describe("code mode render detail normalization", () => {
         cancelled: 0,
       },
     });
-    expect(details.hasExactCounts).toBe(true);
     expect(details.counts).toEqual({
       total: 5,
       queued: 0,
@@ -66,43 +60,16 @@ describe("code mode render detail normalization", () => {
     });
   });
 
-  it("ignores malformed rows and accepts only a valid explicit legacy total", () => {
+  it("ignores malformed rows and counts only visible rows without exact counts", () => {
     const toolCalls = [
       { tool: "pi.read", status: "completed" },
       null,
       { tool: "pi.write" },
       { tool: "pi.grep", status: "unknown" },
     ];
-    const malformedTotal = decodeCodeModeRenderDetails({ toolCalls, totalToolCalls: "4" });
-    expect(malformedTotal.toolCalls).toHaveLength(1);
-    expect(malformedTotal.totalToolCalls).toBe(1);
-    expect(malformedTotal.counts.succeeded).toBe(1);
-
-    const explicitTotal = decodeCodeModeRenderDetails({ toolCalls, totalToolCalls: 4 });
-    expect(explicitTotal.toolCalls).toHaveLength(1);
-    expect(explicitTotal.totalToolCalls).toBe(4);
-    expect(explicitTotal.counts.succeeded).toBe(4);
-  });
-
-  it("preserves the legacy array total beyond the visible row bound", () => {
-    const total = MAX_PROGRESS_ENTRIES + 8;
-    const details = decodeCodeModeRenderDetails({
-      toolCalls: Array.from({ length: total }, (_, index) => ({
-        tool: `pi.read-${index}`,
-        status: "completed",
-      })),
-    });
-
-    expect(details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
-    expect(details.totalToolCalls).toBe(total);
-    expect(details.counts).toEqual({
-      total,
-      queued: 0,
-      running: 0,
-      succeeded: total,
-      failed: 0,
-      cancelled: 0,
-    });
+    const details = decodeCodeModeRenderDetails({ toolCalls, totalToolCalls: 4 });
+    expect(details.toolCalls).toHaveLength(1);
+    expect(details.counts).toMatchObject({ total: 1, succeeded: 1 });
   });
 });
 
@@ -134,17 +101,18 @@ describe("registered code mode renderers", () => {
     };
     expect(() =>
       definition().renderResult?.(
-        opaqueHostFixture(hostileResult),
+        opaqueFixture(hostileResult),
         options,
-        opaqueHostFixture(theme),
-        opaqueHostFixture(context),
+        plainTheme,
+        opaqueFixture(context),
       ),
     ).not.toThrow();
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("starts and cleans up normal and hostile tickers exactly once", () => {
-    for (const hostile of [false, true]) {
+  it.each(["normal", "throwing-call", "missing", "throwing-getter"] as const)(
+    "starts and settles an owned ticker exactly once with %s invalidation",
+    (kind) => {
       const stop = vi.fn();
       let tick: (() => void) | undefined;
       const start = vi.fn((_interval: number, callback: () => void) => {
@@ -152,109 +120,65 @@ describe("registered code mode renderers", () => {
         return stop;
       });
       const tool = definition(start);
-      const invalidate = hostile
-        ? () => {
-            throw new Error("hostile invalidation");
-          }
-        : vi.fn();
-      const context = opaqueHostFixture({
-        expanded: false,
-        isError: false,
-        state: {},
-        invalidate,
-      });
-      for (let index = 0; index < 2; index += 1)
+      const render = <Context extends object>(status: "running" | "completed", context: Context) =>
         tool.renderResult?.(
-          result("running"),
-          { isPartial: true, expanded: false },
-          opaqueHostFixture(theme),
-          context,
+          result(status),
+          { isPartial: status === "running", expanded: false },
+          plainTheme,
+          opaqueFixture(context),
         );
+      const state = {};
+      const invalidate = vi.fn(() => {
+        if (kind === "throwing-call") throw new Error("hostile invalidation");
+      });
+      const running = { expanded: false, isError: false, state, invalidate };
+      const settled =
+        kind === "missing"
+          ? { state }
+          : kind === "throwing-getter"
+            ? {
+                state,
+                get invalidate(): never {
+                  throw new Error("hostile invalidate getter");
+                },
+              }
+            : running;
+      for (let index = 0; index < 2; index += 1) render("running", running);
       expect(start).toHaveBeenCalledOnce();
       expect(() => tick?.()).not.toThrow();
-      if (!hostile) expect(invalidate).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
 
-      for (let index = 0; index < 2; index += 1)
-        tool.renderResult?.(
-          result("completed"),
-          { isPartial: false, expanded: false },
-          opaqueHostFixture(theme),
-          context,
-        );
-      expect(stop, String(hostile)).toHaveBeenCalledOnce();
-    }
-  });
-
-  it.each(["missing", "throwing"])("settles an owned ticker with %s invalidation", (kind) => {
-    const stop = vi.fn();
-    const start = vi.fn(() => stop);
-    const tool = definition(start);
-    const state = {};
-    tool.renderResult?.(
-      result("running"),
-      { isPartial: true, expanded: false },
-      opaqueHostFixture(theme),
-      opaqueHostFixture({ state, invalidate: vi.fn() }),
-    );
-    expect(start).toHaveBeenCalledOnce();
-    expect(state).toHaveProperty("piCodeModeProgressTicker", expect.any(Function));
-
-    const context =
-      kind === "missing"
-        ? { state }
-        : {
-            state,
-            get invalidate(): never {
-              throw new Error("hostile invalidate getter");
-            },
-          };
-    for (let index = 0; index < 2; index += 1) {
-      expect(() =>
-        tool.renderResult?.(
-          result("completed"),
-          { isPartial: false, expanded: false },
-          opaqueHostFixture(theme),
-          opaqueHostFixture(context),
-        ),
-      ).not.toThrow();
-      expect(stop).toHaveBeenCalledOnce();
-      expect(state).toHaveProperty("piCodeModeProgressTicker", undefined);
-      expect(state).toHaveProperty("piCodeModeProgressInvalidate", undefined);
-    }
-  });
+      for (let index = 0; index < 2; index += 1) {
+        expect(() => render("completed", settled)).not.toThrow();
+        expect(stop).toHaveBeenCalledOnce();
+        expect(state).toHaveProperty("piCodeModeProgressTicker", undefined);
+        expect(state).toHaveProperty("piCodeModeProgressInvalidate", undefined);
+      }
+    },
+  );
 
   it("keeps registered output terminal-safe under hostile content and keybindings", () => {
     const getKeys = vi.fn(() => ["ctrl+o", "\u001b[2Jhostile", "x".repeat(100)]);
-    setKeybindings(opaqueHostFixture({ getKeys }));
+    setKeybindings(opaqueFixture({ getKeys }));
     const tool = definition();
-    const context = opaqueHostFixture({
-      expanded: false,
-      isError: false,
-      state: {},
-      invalidate: vi.fn(),
-    });
+    const context = renderContextFixture({ isPartial: false, invalidate: vi.fn() });
     const collapsed = tool.renderResult?.(
-      opaqueHostFixture({
+      opaqueFixture({
         content: [{ type: "text", text: "safe\u001b[2J output" }],
         details: {},
       }),
       { isPartial: false, expanded: false },
-      opaqueHostFixture(theme),
+      plainTheme,
       context,
     );
-    tool.renderResult?.(
-      result(),
-      { isPartial: false, expanded: false },
-      opaqueHostFixture(theme),
-      context,
-    );
+    tool.renderResult?.(result(), { isPartial: false, expanded: false }, plainTheme, context);
     expect(collapsed?.render(80).join("\n")).not.toContain("\u001b");
 
     expect(() =>
       tool.renderCall?.(
         { intent: "inspect\u001b]0;title\u0007", code: "return '\u001b[2J';" },
-        opaqueHostFixture(theme),
-        opaqueHostFixture({
+        plainTheme,
+        opaqueFixture({
           get expanded(): boolean {
             throw new Error("hostile expanded");
           },
@@ -266,132 +190,109 @@ describe("registered code mode renderers", () => {
 
 describe("expanded retained presentation", () => {
   it.each(["off", "on", "border"] as const)(
-    "owns one expanded source/header in %s mode and keeps every bounded child before the result",
+    "renders one expanded source/header in %s mode and keeps every bounded child before the result",
     (mode) => {
-      const previous = codePreviewSettings;
-      try {
-        setCodePreviewSettings({
-          ...previous,
-          toolCallCollapsedStyle: "compact",
-          toolCallTiming: false,
-        });
-        const owned = definition();
-        const tool = withCodePreviewShell(owned, {
-          mode,
-          compactSummary: owned.compactSummary,
-        });
-        const args = {
-          code: "const marker = 1; return {answer: marker};",
-          intent: "Inspect retained calls",
-        };
-        const context = opaqueHostFixture({
-          args,
-          state: {},
-          expanded: true,
-          isPartial: false,
-          isError: false,
-          executionStarted: true,
-          argsComplete: true,
-          invalidate() {},
-        });
-        const hostTheme = opaqueHostFixture({
-          ...theme,
-          bg: (_color: string, text: string) => text,
-        });
-        const call = tool.renderCall?.(args, hostTheme, context);
-        const value = {
-          content: [{ type: "text" as const, text: '{"answer":1}' }],
-          details: {
-            outputKind: "structured",
-            toolCalls: Array.from({ length: 8 }, (_, id) => ({
-              tool: "pi.read",
+      applyCollapsedStyle("compact");
+      const owned = definition();
+      const tool = codePreviews.withCodePreviewShell(owned, {
+        mode,
+        compactSummary: owned.compactSummary,
+        expandedContent: owned.expandedContent,
+      });
+      const args = {
+        code: "const marker = 1; return {answer: marker};",
+        intent: "Inspect retained calls",
+      };
+      const context = renderContextFixture({
+        args,
+        expanded: true,
+        isPartial: false,
+        executionStarted: true,
+      });
+      const call = tool.renderCall?.(args, plainTheme, context);
+      const value = {
+        content: [{ type: "text" as const, text: '{"answer":1}' }],
+        details: {
+          outputKind: "structured",
+          toolCalls: Array.from({ length: 8 }, (_, id) => ({
+            tool: "pi.read",
+            subject: `file-${id}`,
+            status: "completed",
+            durationMs: 25000,
+            compact: {
+              version: 2,
+              issues: { coverage: "complete", entries: [] },
               subject: `file-${id}`,
-              status: "completed",
-              durationMs: 25000,
-              compact: {
-                version: 1,
-                subject: `file-${id}`,
-                outcome: "success",
-                deliveryFailed: false,
-                notices: [{ kind: "recovery", text: `CONTINUE_${id}`, expandedOnly: true }],
-              },
-            })),
-            totalToolCalls: 8,
-            counts: { total: 8, succeeded: 8, failed: 0, cancelled: 0, running: 0, queued: 0 },
+              outcome: "success",
+              deliveryFailed: false,
+              notices: [{ kind: "recovery", text: `CONTINUE_${id}`, expandedOnly: true }],
+            },
+          })),
+          counts: { total: 8, succeeded: 8, failed: 0, cancelled: 0, running: 0, queued: 0 },
+          compactAttention: {
+            version: 2,
+            issues: { coverage: "complete", entries: [] },
+            admitted: 8,
+            started: 8,
+            unsupported: 0,
+            observed: 8,
+            errors: 0,
+            warnings: 0,
+            cancelled: 0,
+            uncertain: 0,
+            incomplete: false,
+            notices: [],
           },
-        };
-        expect(
-          owned.compactSummary({ phase: "settled", args, result: value, context })
-            ?.expandedResultOwnsCall,
-        ).toBe(true);
-        tool.renderResult?.(
-          opaqueHostFixture(value),
-          { isPartial: false, expanded: true },
-          hostTheme,
-          context,
-        );
-        const text = call!.render(160).join("\n");
-        expect(text.split("const marker")).toHaveLength(2);
-        expect(text.split("Inspect retained calls")).toHaveLength(2);
-        expect(text.indexOf("const marker")).toBeLessThan(text.indexOf("file-0"));
-        expect(text.indexOf("file-7")).toBeLessThan(text.indexOf('"answer"'));
-        expect(text).not.toMatch(/\b25(?:\.0)?s\b/u);
-        expect(text).toContain('  "answer": 1');
-        for (let id = 0; id < 8; id += 1) {
-          // Legacy notices carry no semantic identity; preserve both historical copies.
-          expect(text).toContain(`CONTINUE_${id}`);
-          expect(text.indexOf(`CONTINUE_${id}`)).toBeGreaterThan(text.indexOf(`file-${id}`));
-        }
-        for (const width of [8, 16, 80]) {
-          expect(call!.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
-        }
-      } finally {
-        setCodePreviewSettings(previous);
+        },
+      };
+      const options = { isPartial: false, expanded: true };
+      tool.renderResult?.(opaqueFixture(value), options, plainTheme, context);
+      const text = call!.render(160).join("\n");
+      expect(text.split("const marker")).toHaveLength(2);
+      expect(text.split("Inspect retained calls")).toHaveLength(2);
+      expect(text.indexOf("const marker")).toBeLessThan(text.indexOf("file-0"));
+      expect(text.indexOf("file-7")).toBeLessThan(text.indexOf('"answer"'));
+      expect(text).not.toMatch(/\b25(?:\.0)?s\b/u);
+      expect(text).toContain('  "answer": 1');
+      for (let id = 0; id < 8; id += 1) {
+        // Each expanded-only continuation hint follows its own child row.
+        expect(text).toContain(`CONTINUE_${id}`);
+        expect(text.indexOf(`CONTINUE_${id}`)).toBeGreaterThan(text.indexOf(`file-${id}`));
+      }
+      for (const width of [8, 16, 80]) {
+        expect(call!.render(width).every((line) => visibleWidth(line) <= width)).toBe(true);
       }
     },
   );
-  it("declines expanded ownership when presentation capture fails", () => {
-    const previous = codePreviewSettings;
+  it("leaves program source to the call slot and survives a failed policy capture", () => {
+    const restore = applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
     let policy: ReturnType<typeof vi.spyOn> | undefined;
     try {
-      setCodePreviewSettings({ ...previous, toolCallCollapsedStyle: "compact" });
       const owned = definition();
-      const tool = withCodePreviewShell(owned, {
-        mode: "off",
-        compactSummary: owned.compactSummary,
-      });
-      const args = { code: "return 'SOURCE_OWNERSHIP';", intent: "Capture failure" };
-      const context = opaqueHostFixture({
-        args,
-        state: {},
-        expanded: true,
-        isPartial: false,
-        isError: false,
-        executionStarted: true,
-        argsComplete: true,
-        invalidate() {},
-      });
+      const args = { code: "return 'SOURCE_MARKER';", intent: "Inspect" };
+      const context = opaqueFixture({ args, state: {}, expanded: true, invalidate() {} });
       const value = {
-        ...result(),
-        details: { ...result().details, outputKind: "text", truncated: true },
+        content: [{ type: "text" as const, text: "safe output" }],
+        details: ledgerDetails([]).details,
       };
-      const summary = owned.compactSummary({ phase: "settled", args, result: value, context });
-      expect(summary?.expandedResultOwnsCall).toBe(true);
-      const hostTheme = opaqueHostFixture({ ...theme, bg: (_color: string, text: string) => text });
-      const call = tool.renderCall?.(args, hostTheme, context);
-      tool.renderResult?.(value, { isPartial: false, expanded: true }, hostTheme, context);
-      policy = vi
-        .spyOn(codePreviews, "captureCodePreviewPresentationPolicy")
-        .mockImplementation(() => {
-          throw new Error("policy capture");
-        });
-      const text = call!.render(240).join("\n");
-      expect(text.split("SOURCE_OWNERSHIP")).toHaveLength(2);
-      expect(text).toContain("safe output");
-      for (const notice of summary?.notices ?? []) expect(text).toContain(notice.text);
+      for (const failingPolicy of [false, true]) {
+        if (failingPolicy)
+          policy = vi
+            .spyOn(codePreviews, "captureCodePreviewPresentationPolicy")
+            .mockImplementation(() => {
+              throw new Error("policy capture");
+            });
+        for (const slot of [owned.renderResult!, owned.expandedContent.renderResult!]) {
+          const text = slot(value, { isPartial: false, expanded: true }, plainTheme, context)
+            .render(160)
+            .join("\n");
+          expect(text).toContain("safe output");
+          expect(text).not.toContain("SOURCE_MARKER");
+        }
+      }
     } finally {
       policy?.mockRestore();
-      setCodePreviewSettings(previous);
+      restore();
     }
   });
 
@@ -410,7 +311,7 @@ describe("expanded retained presentation", () => {
         },
       },
     };
-    const text = renderCodeModeToolResult(value, { isPartial: false }, opaqueHostFixture(theme), {
+    const text = renderCodeModeToolResult(value, { isPartial: false }, plainTheme, {
       expanded: true,
     })
       .component.render(120)
@@ -427,7 +328,7 @@ describe("expanded retained presentation", () => {
       const text = renderCodeModeToolResult(
         value,
         { isPartial: false },
-        opaqueHostFixture({
+        opaqueFixture({
           fg: () => {
             throw new Error("theme");
           },
@@ -441,7 +342,7 @@ describe("expanded retained presentation", () => {
     }
   });
 
-  it("preserves raw text and errors and retains source/recovery when expanded drawing fails", () => {
+  it("preserves raw text and errors and retains recovery when expanded drawing fails", () => {
     const raw = '{"answer":1}';
     for (const [outputKind, isError, truncated, cancelled] of [
       ["text", false, false, false],
@@ -455,7 +356,7 @@ describe("expanded retained presentation", () => {
           details: { ...result().details, outputKind, truncated, cancelled },
         },
         { isPartial: false },
-        opaqueHostFixture(theme),
+        plainTheme,
         { expanded: true, isError },
       );
       const text = rendered.component.render(120).join("\n");
@@ -465,8 +366,8 @@ describe("expanded retained presentation", () => {
     const rendered = renderCodeModeToolResult(
       result(),
       { isPartial: false },
-      opaqueHostFixture({
-        ...theme,
+      opaqueFixture({
+        ...plainTheme,
         fg: () => {
           throw new Error("theme failed");
         },
@@ -475,8 +376,6 @@ describe("expanded retained presentation", () => {
       0,
       [],
       {
-        ownsCall: true,
-        source: "return 'SOURCE_RECOVERY';",
         summary: {
           subject: "Inspect",
           notices: [{ kind: "recovery", text: "Check state first.\nNever replay automatically." }],
@@ -484,7 +383,6 @@ describe("expanded retained presentation", () => {
       },
     );
     const text = rendered.component.render(120).join("\n");
-    expect(text).toContain("SOURCE_RECOVERY");
     expect(text).toContain("safe output");
     expect(text).toMatch(/\braw\b/i);
     expect(text).toContain("Never replay automatically.");

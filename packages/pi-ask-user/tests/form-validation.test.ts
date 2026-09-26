@@ -71,63 +71,55 @@ it("validates fixed field constraints and never includes private values in error
 });
 
 it.each([
-  "",
-  "@example.test",
-  "a@",
-  "a@.",
-  "a..b@example.test",
-  ".a@example.test",
-  "a.@example.test",
-  "a@.example.test",
-  "a@example.test.",
-  "a@example..test",
-  "a@-example.test",
-  "a@example-.test",
-  "a@exam_ple.test",
-  "a b@example.test",
-  "a\n@example.test",
-  "a@example.test\n",
-  "a@example.test\u2028",
-  "a\t@example.test",
-  "a\u0000@example.test",
-  "a\u007f@example.test",
-  "a\u0085@example.test",
-  "a(b)@example.test",
-  '"a"@example.test',
-  "a<b>@example.test",
-  "a\\b@example.test",
-  "a@@example.test",
-  `${"a".repeat(65)}@example.test`,
-  `a@${"b".repeat(64)}.test`,
-  `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}`,
-])("rejects malformed required email answers and defaults: %j", (value) => {
-  const field = { key: "email", type: "string", format: "email", required: true } as const;
+  ...[
+    "",
+    "@example.test",
+    "a@",
+    "a@.",
+    "a..b@example.test",
+    ".a@example.test",
+    "a.@example.test",
+    "a@.example.test",
+    "a@example.test.",
+    "a@example..test",
+    "a@-example.test",
+    "a@example-.test",
+    "a@exam_ple.test",
+    "a b@example.test",
+    "a\n@example.test",
+    "a@example.test\n",
+    "a@example.test\u2028",
+    "a\t@example.test",
+    "a\u0000@example.test",
+    "a\u007f@example.test",
+    "a\u0085@example.test",
+    "a(b)@example.test",
+    '"a"@example.test',
+    "a<b>@example.test",
+    "a\\b@example.test",
+    "a@@example.test",
+    `${"a".repeat(65)}@example.test`,
+    `a@${"b".repeat(64)}.test`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}`,
+  ].map((value) => ["email", value] as const),
+  ...[
+    "\u0000https://example.test",
+    "https://example.test\u0000",
+    "https://example.test/\u0001path",
+    "https://example.test/\u007fpath",
+    "https://example.test/\u0085path",
+    "https://exam\nple.test",
+    "https://example.test/\tpath",
+    "https://example.test\r",
+    " https://example.test",
+    "https://example.test/path with spaces",
+    "https://example.test/\u00a0path",
+    "/relative/path",
+  ].map((value) => ["uri", value] as const),
+])("rejects malformed required %s answers and defaults: %j", (format, value) => {
+  const field = { key: "value", type: "string", format, required: true } as const;
   const request: OwnedFormRequest = { kind: "form", message: "", fields: [field] };
-  expect(
-    validateFormOutcome(request, { action: "accept", content: { email: value } }),
-  ).toBeUndefined();
-  expect(validateFormRequest({ ...request, fields: [{ ...field, default: value }] })).toBeDefined();
-});
-
-it.each([
-  "\u0000https://example.test",
-  "https://example.test\u0000",
-  "https://example.test/\u0001path",
-  "https://example.test/\u007fpath",
-  "https://example.test/\u0085path",
-  "https://exam\nple.test",
-  "https://example.test/\tpath",
-  "https://example.test\r",
-  " https://example.test",
-  "https://example.test/path with spaces",
-  "https://example.test/\u00a0path",
-  "/relative/path",
-])("rejects malformed required URI answers and defaults before normalization: %j", (value) => {
-  const field = { key: "uri", type: "string", format: "uri", required: true } as const;
-  const request: OwnedFormRequest = { kind: "form", message: "", fields: [field] };
-  expect(
-    validateFormOutcome(request, { action: "accept", content: { uri: value } }),
-  ).toBeUndefined();
+  expect(validateFormOutcome(request, { action: "accept", content: { value } })).toBeUndefined();
   expect(validateFormRequest({ ...request, fields: [{ ...field, default: value }] })).toBeDefined();
 });
 

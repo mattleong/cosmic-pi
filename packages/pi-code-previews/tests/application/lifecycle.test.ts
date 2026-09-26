@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import {
   withFileMutationQueue,
-  type ExtensionAPI,
   type ToolDefinition,
   type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -13,7 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { makePiManagedRuntime, nodeFilePlatformLayer, provideBuiltLayer } from "pi-cosmic-core";
-import { makeLifecycleProbe } from "pi-cosmic-core/testing";
+import { extensionApiFixture, makeLifecycleProbe, opaqueFixture } from "pi-cosmic-core/testing";
 import { afterEach } from "vitest";
 import {
   captureCodePreviewSessionCapability,
@@ -43,8 +42,7 @@ for (const cancellation of ["abort", "replacement", "shutdown"] as const) {
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-queue-" });
       const path = `${directory}/target.txt`;
       yield* fs.writeFileString(path, "before");
-      const h = harness();
-      yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+      const h = yield* registered();
       yield* step(() => start(h));
       const predecessorEntered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -116,8 +114,7 @@ for (const closing of ["replacement", "shutdown"] as const) {
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-closing-write-" });
       const path = `${directory}/target.txt`;
       yield* fs.writeFileString(path, "before");
-      const h = harness();
-      yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+      const h = yield* registered();
       yield* step(() => start(h));
       const owner = captureCodePreviewSessionCapability();
       assert.ok(owner);
@@ -158,8 +155,7 @@ for (const closing of ["replacement", "shutdown"] as const) {
 }
 
 effectTest("captured capability cannot execute through a replacement slot", function* () {
-  const h = harness();
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  const h = yield* registered();
   yield* step(() => start(h));
   const old = captureCodePreviewSessionCapability();
   assert.ok(old);
@@ -193,6 +189,8 @@ type HarnessOptions = {
     projectTrusted: boolean,
   ) => Effect.Effect<CodePreviewSettings>;
   readonly initializeSyntax?: (theme: string) => Effect.Effect<void>;
+  /** Uses the real tool-renderer registration instead of recording a startup event. */
+  readonly realRenderers?: true;
 };
 
 const settings = { ...defaultCodePreviewSettings, syntaxHighlighting: false, tools: [] };
@@ -211,17 +209,18 @@ function harness(options: HarnessOptions = {}) {
   const syntaxThemes: string[] = [];
   const probe = makeLifecycleProbe("runtime-acquired", "runtime-released");
   let loadCalls = 0;
-  const piFixture = {
+  const pi = extensionApiFixture({
     on: (name: string, handler: Handler) => handlers.set(name, handler),
-  };
-  // SAFETY: Lifecycle tests invoke only on from this ExtensionAPI fixture.
-  const pi = piFixture as typeof piFixture & ExtensionAPI;
+  });
   const dependencies: CodePreviewExtensionDependencies = {
     registerHealth: () => undefined,
     registerSettings: () => undefined,
-    registerRenderers: () => {
-      startupEvents.push("renderers");
-    },
+    registerRenderers: options.realRenderers
+      ? (rendererPi, cwd, rendererOptions) =>
+          registerToolRenderers(rendererPi, cwd, { ...rendererOptions, toolOptions: {} })
+      : () => {
+          startupEvents.push("renderers");
+        },
     loadSettings: (_admission, cwd, projectTrusted) =>
       Effect.suspend(() => {
         startupEvents.push("settings");
@@ -284,6 +283,22 @@ function harness(options: HarnessOptions = {}) {
   };
 }
 
+/** Builds a harness and registers the extension without starting a session. */
+function registered(options: HarnessOptions = {}) {
+  const h = harness(options);
+  return step(() => codePreviewsWithDependencies(h.pi, h.dependencies)).pipe(Effect.as(h));
+}
+
+/** Makes one host-context property throw whenever it is read. */
+function throwingGetter<Target extends object>(target: Target, property: string): Target {
+  return Object.defineProperty(target, property, {
+    configurable: true,
+    get() {
+      throw new Error(`host ${property} failure`);
+    },
+  });
+}
+
 function start(h: ReturnType<typeof harness>, ctx = h.context()): Promise<void> {
   // SAFETY: The extension registers session_start before this helper is called.
   return Promise.resolve(h.handlers.get("session_start")?.({}, ctx));
@@ -298,8 +313,7 @@ function builtinToolInfo(name: string): ToolInfo {
   return {
     name,
     description: `${name} tool`,
-    // SAFETY: Lifecycle discovery reads only the tool name and source metadata.
-    parameters: {} as ToolInfo["parameters"],
+    parameters: opaqueFixture({}),
     sourceInfo: {
       path: "builtin",
       source: "builtin",
@@ -319,8 +333,7 @@ effectTest("factory registers callbacks without acquiring the application Layer"
 });
 
 effectTest("startup loads settings before renderers and activates the scheduler", function* () {
-  const h = harness();
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  const h = yield* registered();
 
   yield* step(() => start(h));
 
@@ -335,7 +348,7 @@ effectTest("startup loads settings before renderers and activates the scheduler"
 effectTest("replacement interrupts startup and releases each application Layer once", function* () {
   let interrupted = 0;
   const firstStarted = Deferred.makeUnsafe<void>();
-  const h = harness({
+  const h = yield* registered({
     load: (call) =>
       call === 0
         ? Effect.sync(() => Deferred.doneUnsafe(firstStarted, Effect.void)).pipe(
@@ -344,7 +357,6 @@ effectTest("replacement interrupts startup and releases each application Layer o
           )
         : Effect.succeed(settings),
   });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const first = start(h);
   yield* Deferred.await(firstStarted);
 
@@ -361,14 +373,13 @@ effectTest("replacement interrupts startup and releases each application Layer o
 effectTest("abort interrupts pending startup and awaits its application finalizer", function* () {
   let interrupted = 0;
   const pending = Deferred.makeUnsafe<void>();
-  const h = harness({
+  const h = yield* registered({
     load: () =>
       Effect.sync(() => Deferred.doneUnsafe(pending, Effect.void)).pipe(
         Effect.andThen(Effect.never),
         Effect.ensuring(Effect.sync(() => interrupted++)),
       ),
   });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const controller = new AbortController();
   const startup = start(h, h.context(controller.signal));
   yield* Deferred.await(pending);
@@ -382,8 +393,7 @@ effectTest("abort interrupts pending startup and awaits its application finalize
 });
 
 effectTest("shutdown releases exactly once and remains idempotent", function* () {
-  const h = harness();
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  const h = yield* registered();
   yield* step(() => start(h));
 
   yield* step(() => Promise.all([shutdown(h), shutdown(h), shutdown(h)]));
@@ -399,11 +409,10 @@ effectTest("syntax activation uses the loaded theme and captured session signal"
     syntaxHighlighting: true,
     shikiTheme: "github-dark" as const,
   };
-  const h = harness({
+  const h = yield* registered({
     load: () => Effect.succeed(syntaxSettings),
     initializeSyntax: () => Effect.sync(() => Deferred.doneUnsafe(syntaxStarted, Effect.void)),
   });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const context = h.context();
   const captured = new AbortController().signal;
   const stale = new AbortController().signal;
@@ -452,7 +461,7 @@ effectTest("partial renderer registration keeps the session runtime live", funct
     ...settings,
     tools: ["bash", "read", "write"],
   } satisfies CodePreviewSettings;
-  const h = harness({ load: () => Effect.succeed(partialSettings) });
+  const h = harness({ load: () => Effect.succeed(partialSettings), realRenderers: true });
   const attempts: string[] = [];
   Object.assign(h.pi, {
     getAllTools: () => ["bash", "read", "write"].map(builtinToolInfo),
@@ -461,12 +470,7 @@ effectTest("partial renderer registration keeps the session runtime live", funct
       if (tool.name === "read") throw new Error("host mutation failed");
     },
   });
-  const dependencies: CodePreviewExtensionDependencies = {
-    ...h.dependencies,
-    registerRenderers: (pi, cwd, options) =>
-      registerToolRenderers(pi, cwd, { ...options, toolOptions: {} }),
-  };
-  yield* step(() => codePreviewsWithDependencies(h.pi, dependencies));
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
   yield* step(() => start(h));
 
@@ -482,7 +486,7 @@ effectTest("lifecycle retries a tool left visible by mutate-then-refresh failure
     ...settings,
     tools: ["read"],
   } satisfies CodePreviewSettings;
-  const h = harness({ load: () => Effect.succeed(retrySettings) });
+  const h = harness({ load: () => Effect.succeed(retrySettings), realRenderers: true });
   let visible = builtinToolInfo("read");
   let attempts = 0;
   Object.assign(h.pi, {
@@ -501,12 +505,7 @@ effectTest("lifecycle retries a tool left visible by mutate-then-refresh failure
       if (attempts === 1) throw new Error("refresh failed after registry mutation");
     },
   });
-  const dependencies: CodePreviewExtensionDependencies = {
-    ...h.dependencies,
-    registerRenderers: (pi, cwd, options) =>
-      registerToolRenderers(pi, cwd, { ...options, toolOptions: {} }),
-  };
-  yield* step(() => codePreviewsWithDependencies(h.pi, dependencies));
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
   yield* step(() => start(h));
   yield* step(() => start(h));
@@ -520,18 +519,14 @@ effectTest("lifecycle retries a tool left visible by mutate-then-refresh failure
 effectTest("getAllTools discovery failure reaches lifecycle startup handling", function* () {
   const h = harness({
     load: () => Effect.succeed({ ...settings, tools: ["bash"] }),
+    realRenderers: true,
   });
   Object.assign(h.pi, {
     getAllTools: () => {
       throw new Error("host discovery failed");
     },
   });
-  const dependencies: CodePreviewExtensionDependencies = {
-    ...h.dependencies,
-    registerRenderers: (pi, cwd, options) =>
-      registerToolRenderers(pi, cwd, { ...options, toolOptions: {} }),
-  };
-  yield* step(() => codePreviewsWithDependencies(h.pi, dependencies));
+  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
 
   yield* step(() => start(h));
 
@@ -540,17 +535,17 @@ effectTest("getAllTools discovery failure reaches lifecycle startup handling", f
   assert.deepEqual(h.notifications, ["Code previews failed to start."]);
 });
 
-for (const property of ["cwd", "signal"] as const) {
-  effectTest(`throwing session ${property} getters fail before runtime acquisition`, function* () {
-    const h = harness();
-    yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+const captureFailures: ReadonlyArray<readonly [string, (context: HostContext) => void]> = [
+  ["cwd getters", (context) => throwingGetter(context, "cwd")],
+  ["signal getters", (context) => throwingGetter(context, "signal")],
+  ["AbortSignal.aborted getters", (context) => (context.signal = throwingGetter({}, "aborted"))],
+];
+
+for (const [name, sabotage] of captureFailures)
+  effectTest(`throwing session ${name} fail before runtime acquisition`, function* () {
+    const h = yield* registered();
     const context = h.context();
-    Object.defineProperty(context, property, {
-      configurable: true,
-      get() {
-        throw new Error(`host ${property} failure`);
-      },
-    });
+    sabotage(context);
 
     assert.doesNotThrow(() => h.handlers.get("session_start")?.({}, context));
     yield* settle(() => h.handlers.get("session_shutdown")?.({}, context));
@@ -558,33 +553,15 @@ for (const property of ["cwd", "signal"] as const) {
     assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
     assert.deepEqual(h.notifications, ["Code previews failed to start."]);
   });
-}
-
-effectTest("throwing AbortSignal.aborted getters fail before runtime acquisition", function* () {
-  const h = harness();
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
-  const context = h.context();
-  context.signal = Object.defineProperty({}, "aborted", {
-    get() {
-      throw new Error("host aborted failure");
-    },
-  });
-
-  yield* step(() => start(h, context));
-
-  assert.deepEqual(h.counts(), { acquisitions: 0, releases: 0, loads: 0 });
-  assert.deepEqual(h.notifications, ["Code previews failed to start."]);
-});
 
 effectTest("project trust fails closed unless the callback returns literal true", function* () {
   const observedTrust: boolean[] = [];
-  const h = harness({
+  const h = yield* registered({
     load: (_call, _cwd, projectTrusted) => {
       observedTrust.push(projectTrusted);
       return Effect.succeed(settings);
     },
   });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
   const trustValues: unknown[] = [
     undefined,
     true,
@@ -602,43 +579,16 @@ effectTest("project trust fails closed unless the callback returns literal true"
     else context.isProjectTrusted = trust;
     yield* step(() => start(h, context));
   }
+  yield* step(() => start(h, throwingGetter(h.context(), "isProjectTrusted")));
 
-  assert.deepEqual(observedTrust, [false, false, false, false, false, true]);
+  assert.deepEqual(observedTrust, [false, false, false, false, false, true, false]);
   assert.deepEqual(h.notifications, []);
   yield* step(() => shutdown(h));
 });
 
-effectTest("throwing project trust getters fail closed", function* () {
-  const observedTrust: boolean[] = [];
-  const h = harness({
-    load: (_call, _cwd, projectTrusted) => {
-      observedTrust.push(projectTrusted);
-      return Effect.succeed(settings);
-    },
-  });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
-  const context = h.context();
-  Object.defineProperty(context, "isProjectTrusted", {
-    get() {
-      throw new Error("host trust getter failure");
-    },
-  });
-
-  yield* step(() => start(h, context));
-
-  assert.deepEqual(observedTrust, [false]);
-  yield* step(() => shutdown(h, context));
-});
-
 effectTest("throwing notification callbacks cannot escape host capture failure", function* () {
-  const h = harness();
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
-  const context = h.context();
-  Object.defineProperty(context, "cwd", {
-    get() {
-      throw new Error("host cwd failure");
-    },
-  });
+  const h = yield* registered();
+  const context = throwingGetter(h.context(), "cwd");
   context.ui.notify = () => {
     throw new Error("host notify failure");
   };
@@ -649,8 +599,7 @@ effectTest("throwing notification callbacks cannot escape host capture failure",
 });
 
 effectTest("rejecting notification thenables are contained", function* () {
-  const h = harness({ load: () => Effect.die("settings failed") });
-  yield* step(() => codePreviewsWithDependencies(h.pi, h.dependencies));
+  const h = yield* registered({ load: () => Effect.die("settings failed") });
   const context = h.context();
   let notifications = 0;
   context.ui.notify = () => {

@@ -7,37 +7,33 @@ import * as Schema from "effect/Schema";
 export class ModelRegistryAuthError extends Schema.TaggedError<ModelRegistryAuthError>()(
   "ModelRegistryAuthError",
   {
-    operation: Schema.Literals(["lookup", "oauth-status"]),
+    operation: Schema.Literal("lookup"),
     message: Schema.String,
   },
 ) {}
 
 type Registry = Pick<ExtensionContext, "modelRegistry">["modelRegistry"];
-type Model = NonNullable<ExtensionContext["model"]>;
 
-/** Named Pi boundary for the model registry's Promise-returning credential lookup. */
+/**
+ * Named Pi boundary for the model registry's credential lookup. Pi resolves, refreshes under its
+ * lock, and persists xAI OAuth credentials; a blank key is absent and a rejection is typed.
+ */
 export class ModelRegistryAuth extends Context.Service<ModelRegistryAuth>()(
   "pi-better-xai/boundary/model-registry-auth/ModelRegistryAuth",
   {
     make: (getRegistry: () => Registry) =>
       Effect.succeed({
         getApiKey: Effect.tryPromise({
-          try: () => getRegistry().getApiKeyForProvider("xai"),
+          try: () =>
+            getRegistry()
+              .getProviderAuth("xai")
+              .then((result) => result?.auth.apiKey?.trim() || undefined),
           catch: () =>
             new ModelRegistryAuthError({
               operation: "lookup",
               message: "Unable to read xAI credentials.",
             }),
         }),
-        isUsingOAuth: (model: Model) =>
-          Effect.try({
-            try: () => getRegistry().isUsingOAuth(model),
-            catch: () =>
-              new ModelRegistryAuthError({
-                operation: "oauth-status",
-                message: "Unable to inspect xAI authentication status.",
-              }),
-          }),
       }),
   },
 ) {

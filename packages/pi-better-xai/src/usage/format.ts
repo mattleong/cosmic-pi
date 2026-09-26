@@ -115,10 +115,9 @@ export function formatUsageSnapshot(
         label: "mo",
         leftPercent: snapshot.monthlyLeftPercent,
         resetInSeconds: snapshot.monthlyResetInSeconds,
-        includeDate: true,
       },
     ],
-    { ...options, resetStyle: "short" },
+    options,
     now,
     snapshot.capturedAt,
   );

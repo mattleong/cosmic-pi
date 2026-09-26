@@ -8,7 +8,9 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import { registerQuestionnaireCapability } from "../src/boundary/host-proxy.ts";
+import { deferredPromise } from "pi-cosmic-core/testing";
+import { makeEventBus } from "./support/host.ts";
+import { registerQuestionnaireCapability } from "../src/boundary/host-owned-calls.ts";
 import { askAtQuestionnaireBoundary } from "../src/boundary/host-relay.ts";
 import { AskUserService } from "../src/questionnaire/service.ts";
 import {
@@ -16,7 +18,9 @@ import {
   decodeQuestionnaireOutcome,
   queryQuestionnaireCapability,
   QUESTIONNAIRE_RELAY_QUERY,
+  type QuestionnaireCapability,
   type QuestionnaireEvents,
+  type QuestionnaireOwner,
   type QuestionnaireRelay,
   type AskUserOutcome,
 } from "../src/protocol.ts";
@@ -26,22 +30,13 @@ const answer: AskUserOutcome = {
   answers: [{ key: "route", kind: "choices", values: ["a"], labels: ["A"] }],
 };
 const owner = { runId: "run-1", assignmentEpoch: 0, requestId: "request-1" };
-const events = (): QuestionnaireEvents => {
-  const callbacks = new Map<string, Set<Parameters<QuestionnaireEvents["on"]>[1]>>();
-  return {
-    on: (name, listener) => {
-      const listeners = callbacks.get(name) ?? new Set();
-      listeners.add(listener);
-      callbacks.set(name, listeners);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    emit: (name, data) => {
-      for (const callback of callbacks.get(name) ?? []) callback(data);
-    },
-  };
-};
+const askFails = (
+  capability: QuestionnaireCapability,
+  askOwner: QuestionnaireOwner,
+): Effect.Effect<boolean> =>
+  Effect.exit(Effect.tryPromise((signal) => capability.ask(request, askOwner, signal))).pipe(
+    Effect.map(Exit.isFailure),
+  );
 const attachRelay = (bus: QuestionnaireEvents, relay: QuestionnaireRelay) =>
   bus.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
     const query = Schema.decodeUnknownSync(Schema.Struct({ respond: Schema.Unknown }))(data);
@@ -51,29 +46,25 @@ afterEach(() => vi.unstubAllEnvs());
 it("decodes bounded structured transport data and rejects hostile or semantically invalid requests", () => {
   expect(decodeQuestionnaireRequest(request)).toEqual(request);
   expect(decodeQuestionnaireOutcome(answer)).toEqual(answer);
-  expect(
-    decodeQuestionnaireRequest({ questions: Array(10000).fill(request.questions[0]) }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireRequest({ questions: [request.questions[0], request.questions[0]] }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireRequest({
+  for (const input of [
+    { questions: Array(10000).fill(request.questions[0]) },
+    { questions: [request.questions[0], request.questions[0]] },
+    {
       get questions() {
         throw new Error("private");
       },
-    }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireOutcome({ outcome: "cancelled", answers: answer.answers }),
-  ).toBeUndefined();
-  expect(
-    decodeQuestionnaireOutcome({
+    },
+  ])
+    expect(decodeQuestionnaireRequest(input)).toBeUndefined();
+  for (const input of [
+    { outcome: "cancelled", answers: answer.answers },
+    {
       get answers() {
         throw new Error("private");
       },
-    }),
-  ).toBeUndefined();
+    },
+  ])
+    expect(decodeQuestionnaireOutcome(input)).toBeUndefined();
 });
 it("round-trips six questions and answers without relaxing the four-choice bound", () => {
   const choices = Array.from({ length: 4 }, (_, index) => ({
@@ -121,21 +112,19 @@ it("decodes detached text requests and rejects incompatible choices and malforme
   expect(decoded).toEqual(input);
   question.prompt = "changed";
   expect(decoded?.questions[0]?.prompt).toBe("Explain?");
-  for (const choices of [[], undefined, [{ value: "a", label: "A", description: "A" }]]) {
-    expect(decodeQuestionnaireRequest({ questions: [{ ...question, choices }] })).toBeUndefined();
-  }
-  expect(
-    decodeQuestionnaireRequest({
-      questions: [
-        {
-          ...question,
-          get choices() {
-            throw new Error("hostile");
-          },
-        },
-      ],
-    }),
-  ).toBeUndefined();
+  for (const incompatible of [
+    ...[[], undefined, [{ value: "a", label: "A", description: "A" }]].map((choices) => ({
+      ...question,
+      choices,
+    })),
+    {
+      ...question,
+      get choices() {
+        throw new Error("hostile");
+      },
+    },
+  ])
+    expect(decodeQuestionnaireRequest({ questions: [incompatible] })).toBeUndefined();
   let reads = 0;
   expect(
     decodeQuestionnaireRequest({
@@ -149,14 +138,19 @@ it("decodes detached text requests and rejects incompatible choices and malforme
       ],
     })?.questions[0]?.mode,
   ).toBe("text");
-  for (const text of ["", " \n ", "x".repeat(4001), 42]) {
+  for (const malformed of [
+    ...["", " \n ", "x".repeat(4001), 42].map((text) => ({ key: "text", kind: "text", text })),
+    {
+      key: "text",
+      kind: "text",
+      get text() {
+        throw new Error("hostile");
+      },
+    },
+  ])
     expect(
-      decodeQuestionnaireOutcome({
-        outcome: "submitted",
-        answers: [{ key: "text", kind: "text", text }],
-      }),
+      decodeQuestionnaireOutcome({ outcome: "submitted", answers: [malformed] }),
     ).toBeUndefined();
-  }
   expect(
     decodeQuestionnaireOutcome({
       outcome: "submitted",
@@ -166,27 +160,14 @@ it("decodes detached text requests and rejects incompatible choices and malforme
     outcome: "submitted",
     answers: [{ key: "text", kind: "text", text: "bq12\nanswer", note: "context" }],
   });
-  expect(
-    decodeQuestionnaireOutcome({
-      outcome: "submitted",
-      answers: [
-        {
-          key: "text",
-          kind: "text",
-          get text() {
-            throw new Error("hostile");
-          },
-        },
-      ],
-    }),
-  ).toBeUndefined();
 });
 it.effect(
-  "root capabilities are session-bound, validate owner input and revoke captured handles",
+  "root capabilities are session-bound, refuse aborted or stale calls and revoke captured handles",
   () =>
     Effect.gen(function* () {
-      const bus = events();
+      const bus = makeEventBus();
       let calls = 0;
+      let current = () => true;
       const layer = AskUserService.layer(() =>
         Effect.sync(() => {
           calls++;
@@ -197,7 +178,7 @@ it.effect(
         events: bus,
         sessionId: "root",
         generation: "generation",
-        isCurrent: () => true,
+        isCurrent: () => current(),
         run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(layer)), { signal }),
       });
       expect(queryQuestionnaireCapability(bus, "other")).toBeUndefined();
@@ -205,22 +186,59 @@ it.effect(
       expect(yield* Effect.tryPromise((signal) => capability.ask(request, owner, signal))).toEqual(
         answer,
       );
-      expect(
-        Exit.isFailure(
-          yield* Effect.exit(
-            Effect.tryPromise((signal) => capability.ask(request, { ...owner, runId: "" }, signal)),
-          ),
-        ),
-      ).toBe(true);
+      expect(yield* askFails(capability, { ...owner, runId: "" })).toBe(true);
+      yield* Effect.promise(() =>
+        expect(capability.ask(request, owner, AbortSignal.abort())).rejects.toMatchObject({
+          _tag: "AskUserRuntimeClosedError",
+        }),
+      );
+      current = () => {
+        throw new Error("stale host");
+      };
+      yield* Effect.promise(() =>
+        expect(capability.ask(request, owner, new AbortController().signal)).rejects.toMatchObject({
+          _tag: "AskUserRuntimeClosedError",
+        }),
+      );
+      expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
+      current = () => true;
       dispose();
-      expect(
-        Exit.isFailure(
-          yield* Effect.exit(Effect.tryPromise((signal) => capability.ask(request, owner, signal))),
-        ),
-      ).toBe(true);
+      expect(yield* askFails(capability, owner)).toBe(true);
       expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
       expect(calls).toBe(1);
     }),
+);
+it.effect("root revocation contains a throwing unsubscribe and still aborts owned calls", () =>
+  Effect.gen(function* () {
+    const bus = makeEventBus();
+    const completion = deferredPromise<AskUserOutcome>();
+    const signals: AbortSignal[] = [];
+    const dispose = registerQuestionnaireCapability({
+      events: {
+        ...bus,
+        on: (name, listener) => {
+          bus.on(name, listener);
+          return () => {
+            throw new Error("unsubscribe");
+          };
+        },
+      },
+      sessionId: "root",
+      generation: "one",
+      isCurrent: () => true,
+      run: (_effect, signal) => {
+        signals.push(signal);
+        return completion.promise;
+      },
+    });
+    const signal = yield* Effect.abortSignal;
+    const asking = queryQuestionnaireCapability(bus, "root")!.ask(request, owner, signal);
+    expect(dispose).not.toThrow();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(queryQuestionnaireCapability(bus, "root")).toBeUndefined();
+    completion.resolve(answer);
+    yield* Effect.promise(() => asking);
+  }),
 );
 it.effect(
   "marked Pi children fail closed without a relay and route answers without opening child dialogs",
@@ -228,7 +246,7 @@ it.effect(
     Effect.gen(function* () {
       vi.stubEnv("PI_SUBAGENT_CHILD", "1");
       vi.stubEnv("PI_SUBAGENT_RUN_ID", "not-authentication");
-      const bus = events();
+      const bus = makeEventBus();
       let local = 0;
       let forwarded = 0;
       const layer = AskUserService.layer(() =>
@@ -260,7 +278,7 @@ it.effect(
   "root cancel synchronously aborts its owner and acknowledges only after owned cleanup",
   () =>
     Effect.gen(function* () {
-      const bus = events();
+      const bus = makeEventBus();
       const entered = yield* Deferred.make<void>();
       const cleanupEntered = yield* Deferred.make<void>();
       const cleanup = yield* Deferred.make<void>();
@@ -300,13 +318,7 @@ it.effect(
       expect(signal?.aborted).toBe(true);
       yield* Deferred.await(cleanupEntered);
       expect(acknowledged).toBe(false);
-      expect(
-        Exit.isFailure(
-          yield* Effect.exit(
-            Effect.tryPromise((callerSignal) => capability.ask(request, owner, callerSignal)),
-          ),
-        ),
-      ).toBe(true);
+      expect(yield* askFails(capability, owner)).toBe(true);
       yield* Deferred.succeed(cleanup, undefined);
       yield* Effect.tryPromise(() => cancelling);
       yield* Effect.tryPromise(() => asking);
@@ -319,7 +331,7 @@ it.effect(
 
 it.effect("caller cancellation reaches a relayed questionnaire", () =>
   Effect.gen(function* () {
-    const bus = events();
+    const bus = makeEventBus();
     const ready = yield* Deferred.make<void>();
     const cancelled = yield* Deferred.make<void>();
     const off = attachRelay(bus, {

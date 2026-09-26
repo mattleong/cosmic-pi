@@ -1,6 +1,7 @@
 // Fixed-target Pi editor. State, saves, and cancellable pickers have separate owners.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { pageSteps, type FullScreenResolution } from "pi-cosmic-ui/manager/keymap";
 import { isMovementMotion, movementOffset } from "pi-cosmic-ui/manager/list-navigation";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
@@ -39,21 +40,9 @@ export type ProfileWorkspaceSaveResult =
     }
   | { readonly refreshError: string };
 
-export type ProfileWorkspaceCloseResult =
-  | false
-  | {
-      readonly action: "sets" | "select-target" | "save-session" | "use-current";
-      readonly profile: ProfileId;
-      readonly field?: ProfileWorkspaceField | undefined;
-      readonly candidateIndex?: number | undefined;
-      readonly pane?: ProfileWorkspacePane | undefined;
-      readonly advancedExpanded?: boolean | undefined;
-    };
-
 export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
-  readonly projectTrusted: boolean;
   readonly target: ProfileWorkspaceTarget;
   readonly initialProfile?: ProfileId | undefined;
   readonly initialField?: ProfileWorkspaceField | undefined;
@@ -65,7 +54,8 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly preferredPiModel: () => string | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
-  readonly close: (result: ProfileWorkspaceCloseResult) => void;
+  readonly close: () => void;
+  readonly saveSession?: (() => void) | undefined;
   readonly saveDraft: (
     target: ProfileWorkspaceTarget,
     profile: ProfileId,
@@ -84,7 +74,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly fastModeAvailable: (candidate: ProfileCandidate) => boolean;
   readonly onDispose?: (() => void) | undefined;
   readonly editVisit?: ProfileEditVisit | undefined;
-  readonly backLabel?: string | undefined;
   readonly onInspection?: ((inspection: ProfileSettingsInspection) => void) | undefined;
 }
 
@@ -96,29 +85,21 @@ export class ProfileWorkspaceComponent
     if (this.pane === "profiles" && this.saveFocused) return;
     if (!this.draft().candidates[this.candidateIndex]) return;
     if (this.pane === "fields" && this.rows()[this.fieldIndex]?.scope !== "candidate") return;
-    this.selectPage = makeRouteActionsSelector({
-      theme: this.options.theme,
-      profile: this.profile(),
-      candidateIndex: this.candidateIndex,
-      draft: this.draft(),
-      target: this.options.target,
-      getHeight: this.options.getHeight,
-      requestRender: this.options.requestRender,
-      matchesKeybinding: this.options.matchesKeybinding,
-      keybindingLabel: this.options.keybindingLabel,
-      select: (action, destructive) => {
-        this.selectPage = undefined;
-        if (destructive && (action === "remove" || action === "reset")) this.arm(action);
-        else this.performDraftAction(action);
-      },
-      cancel: () => {
-        this.selectPage = undefined;
-        this.message = undefined;
-        this.renderSoon();
-      },
-    });
-    this.selectPage.focused = this._focused;
-    this.renderSoon();
+    this.showSelectPage(
+      makeRouteActionsSelector({
+        ...this.selectorHost(),
+        profile: this.profile(),
+        candidateIndex: this.candidateIndex,
+        draft: this.draft(),
+        target: this.options.target,
+        select: (action) => {
+          this.selectPage = undefined;
+          if (action === "remove") this.arm(action);
+          else this.performDraftAction(action);
+        },
+        cancel: () => this.closeSelectPage(),
+      }),
+    );
   }
 
   protected arm(action: "remove" | "reset"): void {
@@ -190,7 +171,7 @@ export class ProfileWorkspaceComponent
     this.pendingAction = undefined;
     this.keymap.resetChord();
     if (this.pane === "fields") this.pane = "profiles";
-    else this.options.close(false);
+    else this.options.close();
     this.renderSoon();
   }
 
@@ -212,15 +193,7 @@ export class ProfileWorkspaceComponent
   }
 
   protected saveSession(): void {
-    if (this.options.target.kind !== "session") return;
-    this.options.close({
-      action: "save-session",
-      profile: this.profile(),
-      candidateIndex: this.candidateIndex,
-      field: this.rows()[this.fieldIndex]?.field,
-      pane: this.pane,
-      advancedExpanded: this.advancedExpanded,
-    });
+    if (this.options.target.kind === "session") this.options.saveSession?.();
   }
 
   /** One Shortcut press; returns whether it fully consumed the input. */
@@ -284,9 +257,7 @@ export class ProfileWorkspaceComponent
     }
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
-      matchesKeybinding: isWorkspaceNavigationKey(data)
-        ? undefined
-        : this.options.matchesKeybinding,
+      matchesKeybinding: this.options.matchesKeybinding,
       reservedKeys: PROFILE_WORKSPACE_SHORTCUTS,
     });
     if (!resolution) return;
@@ -315,7 +286,8 @@ export class ProfileWorkspaceComponent
   }
 
   protected handleHelpInput(resolution: FullScreenResolution): void {
-    if (resolution._tag === "Action" && isMovementMotion(resolution.action)) {
+    if (resolution._tag !== "Action") return;
+    if (isMovementMotion(resolution.action)) {
       this.helpScroll = Math.max(
         0,
         Math.min(
@@ -325,16 +297,10 @@ export class ProfileWorkspaceComponent
         ),
       );
       this.renderSoon();
-    } else if (
-      resolution._tag === "Action" &&
-      (resolution.action === "first" || resolution.action === "last")
-    ) {
+    } else if (resolution.action === "first" || resolution.action === "last") {
       this.helpScroll = resolution.action === "first" ? 0 : this.helpMaximum;
       this.renderSoon();
-    } else if (
-      resolution._tag === "Action" &&
-      ["help", "cancel", "back", "quit", "confirm"].includes(resolution.action)
-    ) {
+    } else if (["help", "cancel", "back", "quit", "confirm"].includes(resolution.action)) {
       this.helpOpen = false;
       this.renderSoon();
     }
@@ -366,14 +332,10 @@ export class ProfileWorkspaceComponent
       case "help":
         this.helpOpen = true;
         return true;
-      case "next-pane":
-      case "previous-pane":
-        // The dashboard owns tab switching; standalone editors have no tab target.
-        return false;
       case "pending-first":
         return true;
     }
-    return false;
+    return false; // The dashboard owns next-pane/previous-pane tab switching.
   }
 
   render(width: number): string[] {
@@ -397,7 +359,6 @@ export class ProfileWorkspaceComponent
           }
         : this.pendingAction
           ? profileWorkspaceConfirmation({
-              action: this.pendingAction,
               profile,
               candidateIndex: this.candidateIndex,
               candidateCount: draft.candidates.length,
@@ -408,8 +369,6 @@ export class ProfileWorkspaceComponent
       {
         inspection: this.inspection,
         target: this.options.target,
-        scope: this.scope,
-        projectTrusted: this.options.projectTrusted,
         parentEffort: this.options.parentEffort,
         parentModel: this.options.parentModel,
         pane: this.pane,
@@ -418,11 +377,9 @@ export class ProfileWorkspaceComponent
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,
         draft,
-        advancedExpanded: this.advancedExpanded,
         expandedCandidates: this.selection().expanded,
         helpOpen: this.helpOpen,
         helpScroll: this.helpScroll,
-        backLabel: this.options.backLabel,
         editedProfiles: new Set(
           PROFILE_IDS.filter((id) =>
             this.editVisit.isEdited(this.options.target, id, this.inspection),
@@ -455,10 +412,6 @@ export class ProfileWorkspaceComponent
     this.catalogLoad = undefined;
     this.modelPicker = undefined;
     this.selectPage = undefined;
-    try {
-      this.options.onDispose?.();
-    } catch {
-      // Host disposal is best effort and cannot reactivate a closed settings surface.
-    }
+    invokeHostCallback(() => this.options.onDispose?.(), undefined);
   }
 }

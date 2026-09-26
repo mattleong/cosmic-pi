@@ -45,6 +45,12 @@ export type UsageVisibilityFields = {
   readonly statusText: string;
 };
 
+/** Status-text overrides accepted alongside an eligibility decision. */
+export interface UsageEligibilityStatusTexts {
+  readonly hiddenStatusText: string;
+  readonly unavailableStatusText?: string;
+}
+
 /**
  * Apply eligibility to a usage projection.
  * When hidden or cleared, drops status/error/snapshot fields that must not linger on screen.
@@ -53,10 +59,7 @@ export function withUsageEligibility<T extends UsageVisibilityFields>(
   current: T,
   eligible: boolean,
   clearUsage: boolean,
-  options: {
-    readonly hiddenStatusText: string;
-    readonly unavailableStatusText?: string;
-  },
+  options: UsageEligibilityStatusTexts,
 ): T {
   const unavailable = options.unavailableStatusText ?? "Usage unavailable.";
   const statusText = eligible ? unavailable : options.hiddenStatusText;
@@ -100,12 +103,6 @@ export function resetFrozenUsageProjection<Resolved, Snapshot, Extra extends obj
   );
 }
 
-/** Status-text overrides accepted alongside an eligibility decision. */
-export interface UsageEligibilityStatusTexts {
-  hiddenStatusText: string;
-  unavailableStatusText?: string;
-}
-
 /** Provider-specific eligibility decision for the current host context. */
 export interface UsageEligibilityDecision {
   readonly eligible: boolean;
@@ -124,14 +121,7 @@ export function synchronizeUsageProjectionContext<Projection extends UsageVisibi
 ): void {
   const current = MutableRef.get(projection);
   const decision = evaluateEligibility(current);
-  const texts: UsageEligibilityStatusTexts = {
-    hiddenStatusText:
-      decision.statusTexts?.hiddenStatusText === undefined
-        ? "Usage hidden."
-        : decision.statusTexts.hiddenStatusText,
-  };
-  if (decision.statusTexts?.unavailableStatusText !== undefined)
-    texts.unavailableStatusText = decision.statusTexts.unavailableStatusText;
+  const texts = { hiddenStatusText: "Usage hidden.", ...decision.statusTexts };
   MutableRef.set(
     projection,
     freezeSnapshot(withUsageEligibility(current, decision.eligible, decision.clearUsage, texts)),

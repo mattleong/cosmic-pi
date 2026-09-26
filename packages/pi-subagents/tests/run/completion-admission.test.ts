@@ -6,6 +6,7 @@ import * as Semaphore from "effect/Semaphore";
 import { makeRunCompletionObservations } from "../../src/run/completion-observations.ts";
 import type { RunRecord } from "../../src/run/internal.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
+import { makeRunContext } from "./fixtures/run-context.ts";
 
 describe("completion admission", () => {
   for (const operation of ["await", "status"] as const)
@@ -38,8 +39,10 @@ describe("completion admission", () => {
         const record = recordFields as RunRecord;
         let token = 0;
         const observations = makeRunCompletionObservations({
-          records: new Map([[record.view.id, record]]),
-          withLock: runLock.withPermits(1),
+          ...(yield* makeRunContext({
+            records: new Map([[record.view.id, record]]),
+            withLock: runLock.withPermits(1),
+          })),
           withCompletionGate: (effect) =>
             completionGate.withPermits(1)(
               Deferred.succeed(enteredGate, undefined).pipe(Effect.andThen(effect)),

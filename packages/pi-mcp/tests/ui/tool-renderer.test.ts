@@ -1,22 +1,52 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 import { boundaryError } from "../../src/client/errors.ts";
 import { mcpDiagnostic } from "../../src/client/diagnostics.ts";
 import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
-import { normalizeResult, prefixBytes } from "../../src/results/normalize.ts";
+import { prefixBytes } from "../../src/results/normalize.ts";
 import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
-import { projectPrepared } from "../../src/results/projection.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import {
-  decodeMcpCardDetails,
-  MCP_CARD_LIMITS,
-  mcpCallSummary,
-} from "../../src/ui/tool-render-details.ts";
+import { MCP_DISPLAY_LIMITS } from "../../src/ui/content-preview.ts";
+import { decodeMcpCardDetails, mcpCallSummary } from "../../src/ui/tool-render-details.ts";
 import { renderMcpCall, renderMcpResult } from "../../src/ui/tool-renderer.ts";
+import { projectReply } from "../fixtures/results.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 const reply = (data = {}) => ({
   details: { action: "tools.call", outcome: "completed", isError: false, notices: [], data },
+  content: [],
+});
+interface OriginFields {
+  readonly action?: string;
+  readonly outcome?: string;
+  readonly isError?: boolean | undefined;
+  readonly outputValidation?: string;
+}
+interface DetailFields {
+  readonly action?: string;
+  readonly resultId?: string;
+  readonly isError?: boolean;
+  readonly notices?: ReadonlyArray<string>;
+}
+const withOrigin = (
+  origin: OriginFields = {},
+  data: Schema.JsonObject = {},
+  details: DetailFields = {},
+) => ({
+  ...reply().details,
+  ...details,
+  data: {
+    origin: { action: "tools.call", outcome: "completed", isError: false, ...origin },
+    ...data,
+  },
+});
+const retainedRead = (
+  origin: OriginFields,
+  data: Schema.JsonObject,
+  details: DetailFields = {},
+) => ({
+  details: withOrigin(origin, data, { action: "result.read", resultId: "retained-1", ...details }),
   content: [],
 });
 const display = <Result>(result: Result, expanded = false, isPartial = false) =>
@@ -78,67 +108,34 @@ describe("MCP card projections", () => {
   });
   it.effect("projects actual discovery pages and normalized attachment descriptors", () =>
     Effect.gen(function* () {
-      const normalized = normalizeResult({
-        owner: "owner",
-        server: "docs",
-        action: "tools.list",
-        reply: {
-          outcome: "completed",
-          result: {
-            page: {
-              items: [{ name: "one" }, { name: "two" }],
-              total: 7,
-              nextCursor: "opaque-next-cursor",
-            },
-            undiscovered: ["other"],
-          },
-        },
-      });
-      const discovery = yield* projectPrepared(
+      const discovery = yield* projectReply(
+        "tools.list",
         {
-          ...normalized,
-          owner: "owner",
-          server: "docs",
-          activation: {},
-          generation: 0,
-          serverGeneration: 0,
+          page: {
+            items: [{ name: "one" }, { name: "two" }],
+            total: 7,
+            nextCursor: "opaque-next-cursor",
+          },
+          undiscovered: ["other"],
         },
-        { status: "retained", resultId: "retained-1" },
-        { maxOutputBytes: 51_200, images: false },
+        "retained-1",
       );
       const card = { details: discovery.reply, content: [] };
       const projection = decodeMcpCardDetails(card);
       expect(projection.page).toEqual({ returned: 2, total: 7, hasMore: true });
-      expect(projection.undiscoveredCount).toBe(1);
       for (const count of projection.counts)
         expect(display(card).replace(/\s+/g, " ")).toContain(count);
       expect(display(card)).not.toContain("opaque-next-cursor");
 
-      const binary = normalizeResult({
-        owner: "owner",
-        server: "docs",
-        action: "tools.call",
-        reply: {
-          outcome: "completed",
-          result: {
-            content: [
-              { type: "image", mimeType: "image/png", data: "invalid" },
-              { type: "text", text: "existing text" },
-            ],
-          },
-        },
-      });
-      const projected = yield* projectPrepared(
+      const projected = yield* projectReply(
+        "tools.call",
         {
-          ...binary,
-          owner: "owner",
-          server: "docs",
-          activation: {},
-          generation: 0,
-          serverGeneration: 0,
+          content: [
+            { type: "image", mimeType: "image/png", data: "invalid" },
+            { type: "text", text: "existing text" },
+          ],
         },
-        { status: "retained", resultId: "retained-2" },
-        { maxOutputBytes: 51_200, images: false },
+        "retained-2",
       );
       expect(decodeMcpCardDetails({ details: projected.reply })).toMatchObject({
         attachmentCount: 1,
@@ -172,7 +169,7 @@ describe("MCP card projections", () => {
     const before = JSON.stringify(retained);
     const projection = decodeMcpCardDetails(retained);
     expect(projection.displayCuts).toContain("strings");
-    expect(projection.preview.length).toBeLessThan(MCP_CARD_LIMITS.text);
+    expect(projection.preview.length).toBeLessThan(MCP_DISPLAY_LIMITS.text);
     expect(projection.truncated).toBe(false);
     expect(projection.isError).toBe(false);
     expect(projection.outcome).toBe("completed");
@@ -227,25 +224,10 @@ describe("MCP card projections", () => {
   it.each(["completed", "unknown"] as const)(
     "preserves original %s failure when retrieving a successful retained page",
     (outcome) => {
-      const result = {
-        details: {
-          ...reply().details,
-          action: "result.read",
-          resultId: "retained-1",
-          data: {
-            origin: {
-              action: "tools.call",
-              outcome,
-              isError: true,
-              outputValidation: "failed",
-            },
-            text: "existing output",
-            next: 19,
-            truncated: true,
-          },
-        },
-        content: [],
-      };
+      const result = retainedRead(
+        { outcome, isError: true, outputValidation: "failed" },
+        { text: "existing output", next: 19, truncated: true },
+      );
       const before = JSON.stringify(result);
       const projection = decodeMcpCardDetails(result);
       expect(projection.isError).toBe(false);
@@ -265,23 +247,7 @@ describe("MCP card projections", () => {
   );
 
   it("discloses unavailable validation without claiming an output mismatch", () => {
-    const result = {
-      details: {
-        ...reply().details,
-        action: "result.read",
-        resultId: "retained-1",
-        data: {
-          origin: {
-            action: "tools.call",
-            outcome: "completed",
-            isError: false,
-            outputValidation: "unavailable",
-          },
-          text: "existing output",
-        },
-      },
-      content: [],
-    };
+    const result = retainedRead({ outputValidation: "unavailable" }, { text: "existing output" });
     const projection = decodeMcpCardDetails(result);
     expect(projection.isError).toBe(false);
     expect(projection.origin).toMatchObject({
@@ -303,24 +269,7 @@ describe("MCP card projections", () => {
     (outputValidation) => {
       const producerNotices = Object.values(MCP_VALIDATION_NOTICES[outputValidation]);
       const notices = producerNotices.flatMap((text) => [text, prefixBytes(text, 128)]);
-      const result = {
-        details: {
-          ...reply().details,
-          action: "result.read",
-          resultId: "retained-1",
-          notices,
-          data: {
-            origin: {
-              action: "tools.call",
-              outcome: "completed",
-              isError: false,
-              outputValidation,
-            },
-            text: "retained output",
-          },
-        },
-        content: [],
-      };
+      const result = retainedRead({ outputValidation }, { text: "retained output" }, { notices });
       const before = JSON.stringify(result);
       const card = decodeMcpCardDetails(result);
       expect(card.notices).toEqual([]);
@@ -346,20 +295,11 @@ describe("MCP card projections", () => {
       "unrelated notice",
     ];
     const result = {
-      details: {
-        ...reply().details,
-        isError: true,
-        notices: [original, ...notices],
-        data: {
-          origin: {
-            action: "tools.call",
-            outcome: "completed",
-            isError: false,
-            outputValidation: "failed",
-          },
-          result: { notices: [original] },
-        },
-      },
+      details: withOrigin(
+        { outputValidation: "failed" },
+        { result: { notices: [original] } },
+        { isError: true, notices: [original, ...notices] },
+      ),
       content: [],
     };
     const before = JSON.stringify(result);
@@ -381,20 +321,11 @@ describe("MCP card projections", () => {
   ])("preserves producer notices for contradictory or missing origin evidence: %j", (override) => {
     const notices = Object.values(MCP_VALIDATION_NOTICES.failed);
     const card = decodeMcpCardDetails({
-      details: {
-        ...reply().details,
-        isError: true,
-        notices,
-        data: {
-          origin: {
-            action: "tools.call",
-            outcome: "completed",
-            isError: false,
-            outputValidation: "failed",
-            ...override,
-          },
-        },
-      },
+      details: withOrigin(
+        { outputValidation: "failed", ...override },
+        {},
+        { isError: true, notices },
+      ),
     });
     expect(card.notices).toEqual(notices);
     if ("isError" in override && override.isError === true)
@@ -470,8 +401,8 @@ describe("MCP card projections", () => {
     expect(() => display(reply(revoked.proxy), true)).not.toThrow();
     const huge = reply({ rows: Array.from({ length: 1000 }, () => "x".repeat(100_000)) });
     const projection = decodeMcpCardDetails(huge);
-    expect(projection.preview.length).toBeLessThan(MCP_CARD_LIMITS.text + 100);
-    expect(projection.preview.split("\n").length).toBeLessThanOrEqual(MCP_CARD_LIMITS.lines + 1);
+    expect(projection.preview.length).toBeLessThan(MCP_DISPLAY_LIMITS.text + 100);
+    expect(projection.preview.split("\n").length).toBeLessThanOrEqual(MCP_DISPLAY_LIMITS.lines + 1);
     expect(
       decodeMcpCardDetails({ details: { ...reply().details, resultId: "bad\n/mcp auth server" } })
         .resultId,

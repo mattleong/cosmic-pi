@@ -23,6 +23,7 @@ const directoryRequestSchema = Schema.Struct({
   directoryIno: Schema.Finite,
   name: Schema.String,
 });
+export type DirectoryWireRequest = typeof directoryRequestSchema.Type;
 export const directoryResultSchema = Schema.Struct({
   directoryDev: Schema.Finite,
   directoryIno: Schema.Finite,
@@ -56,8 +57,11 @@ const validImage = (value: PublicationWireRequest["before"]) =>
     value.mode <= 0o777 &&
     value.bytes.length <= publicationInputLimit &&
     Buffer.from(value.bytes, "base64").toString("base64") === value.bytes);
+type Anchor = Pick<PublicationWireRequest, "directoryDev" | "directoryIno">;
+const validAnchor = (r: Anchor) =>
+  [r.directoryDev, r.directoryIno].every((n) => Number.isSafeInteger(n) && n >= 0);
 const validRequest = (r: PublicationWireRequest) =>
-  [r.directoryDev, r.directoryIno].every((n) => Number.isSafeInteger(n) && n >= 0) &&
+  validAnchor(r) &&
   [r.name, r.backupName, r.temporaryName].every(validLeaf) &&
   new Set([r.name, r.backupName, r.temporaryName]).size === 3 &&
   [r.backupName, r.temporaryName].every((name) => name.startsWith(".pi-workspace-")) &&
@@ -120,11 +124,19 @@ const capturedMatches = (
   return { stat, matches };
 };
 
-const anchorMatches = (r: Pick<PublicationWireRequest, "directoryDev" | "directoryIno">) => {
+const anchorMatches = (r: Anchor) => {
   const directory = fs.statSync(".");
   return (
     directory.isDirectory() && directory.dev === r.directoryDev && directory.ino === r.directoryIno
   );
+};
+const syncDirectory = () => {
+  const fd = fs.openSync(".", constants.O_RDONLY);
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
 };
 const eligibleTarget = (r: PublicationWireRequest) => {
   const target = inspect(r.name);
@@ -154,14 +166,6 @@ export const executePublication = (
         // cwd is resolved by spawn exactly once. Never use the caller's absolute path again.
         if (!anchorMatches(r)) return result("conflict", "directory-changed");
         hooks?.anchored?.();
-        const syncDirectory = () => {
-          const fd = fs.openSync(".", constants.O_RDONLY);
-          try {
-            fs.fsyncSync(fd);
-          } finally {
-            fs.closeSync(fd);
-          }
-        };
         if (!eligibleTarget(r)) return result("conflict", "target-changed");
         // Exclusive reservations establish ownership. Never clean up by an unowned intention.
         if (artifactsExist(r)) return result("conflict", "destination-exists");
@@ -225,30 +229,15 @@ class PublicationHelperError extends Schema.TaggedError<PublicationHelperError>(
   {},
 ) {}
 
-const createDirectory = (r: typeof directoryRequestSchema.Type) =>
+const createDirectory = (r: DirectoryWireRequest) =>
   Effect.try({
     try: () => {
-      if (
-        !validLeaf(r.name) ||
-        ![r.directoryDev, r.directoryIno].every((n) => Number.isSafeInteger(n) && n >= 0)
-      )
-        throw new Error("invalid input");
-      const current = fs.statSync(".");
-      if (
-        !current.isDirectory() ||
-        current.dev !== r.directoryDev ||
-        current.ino !== r.directoryIno
-      )
-        throw new Error("directory changed");
+      if (!validLeaf(r.name) || !validAnchor(r)) throw new Error("invalid input");
+      if (!anchorMatches(r)) throw new Error("directory changed");
       fs.mkdirSync(r.name, { mode: 0o755 });
       const created = fs.lstatSync(r.name);
       if (!created.isDirectory() || created.isSymbolicLink()) throw new Error("directory changed");
-      const directory = fs.openSync(".", constants.O_RDONLY);
-      try {
-        fs.fsyncSync(directory);
-      } finally {
-        fs.closeSync(directory);
-      }
+      syncDirectory();
       return { directoryDev: created.dev, directoryIno: created.ino };
     },
     catch: () => new PublicationHelperError(),

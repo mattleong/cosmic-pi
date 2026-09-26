@@ -104,6 +104,11 @@ const AssignedPayload = {
   ...AuthenticatedPayload,
   assignmentEpoch: SupervisorAssignmentEpochSchema,
 };
+const MessagePayload = {
+  ...AssignedPayload,
+  requestId: SupervisorChannelIdSchema,
+  message: SupervisorMessageSchema,
+};
 
 export class SupervisorRpcFailure extends Schema.TaggedError<SupervisorRpcFailure>()(
   "SupervisorRpcFailure",
@@ -155,32 +160,13 @@ export const SupervisorAcknowledgeAssignmentRpc = Rpc.make("SupervisorAcknowledg
   error: SupervisorRpcFailure,
 });
 
-export const SupervisorProgressRpc = Rpc.make("SupervisorProgress", {
-  payload: {
-    ...AssignedPayload,
-    requestId: SupervisorChannelIdSchema,
-    message: SupervisorMessageSchema,
-  },
-  success: Schema.String,
-  error: SupervisorRpcFailure,
-});
-
-export const SupervisorWarningRpc = Rpc.make("SupervisorWarning", {
-  payload: {
-    ...AssignedPayload,
-    requestId: SupervisorChannelIdSchema,
-    message: SupervisorMessageSchema,
-  },
-  success: Schema.String,
-  error: SupervisorRpcFailure,
-});
+const contactRpc = <const Tag extends string>(tag: Tag) =>
+  Rpc.make(tag, { payload: MessagePayload, success: Schema.String, error: SupervisorRpcFailure });
+export const SupervisorProgressRpc = contactRpc("SupervisorProgress");
+export const SupervisorWarningRpc = contactRpc("SupervisorWarning");
 
 export const SupervisorQuestionRpc = Rpc.make("SupervisorQuestion", {
-  payload: {
-    ...AssignedPayload,
-    requestId: SupervisorChannelIdSchema,
-    message: SupervisorMessageSchema,
-  },
+  payload: MessagePayload,
   success: Schema.Struct({
     questionId: SupervisorChannelIdSchema,
     message: SupervisorReplySchema,

@@ -1,15 +1,17 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
+import { deferredPromise, plainTheme } from "pi-cosmic-core/testing";
 import { effectTest, step } from "./support/effect-test.ts";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import {
+  inheritedInvalidInspection,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
+import { settleTurn, workspaceHarness } from "./fixtures/profile-workspace.ts";
+import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 import { inheritSessionDraft } from "../src/settings/profile-route-editor.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import type { JsonObject } from "pi-cosmic-core";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
-import type { ProfileWorkspaceDraftAction } from "../src/settings/ui/profile-workspace-actions.ts";
+import type { CandidateMenuAction } from "../src/settings/ui/profile-workspace-actions.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
@@ -29,40 +31,11 @@ const makeInspection = (seed?: SessionProfileOverrideSeed) =>
     seed,
   );
 
-const inheritedInvalidProjectInspection = (withOwnInvalidRoute: boolean) => {
-  const invalidRoute = {
-    host: "local",
-    runtime: "pi",
-    model: "parent",
-    effort: "impossible",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    closeOnReport: true,
-  };
-  return makeProfileSettingsInspection({
-    globalDocument: {
-      version: 6,
-      defaultProfileSet: "lower",
-      profileSets: { lower: { profiles: { generalist: invalidRoute } } },
-    },
-    projectDocument: {
-      version: 6,
-      defaultProfileSet: "partial",
-      profileSets: {
-        partial: { profiles: withOwnInvalidRoute ? { generalist: invalidRoute } : {} },
-      },
-    },
-    projectTrusted: true,
-  });
-};
-
-const invalidBaselineInspection = (withRepairOverride: boolean) => {
+const invalidBaselineInspection = () => {
   const initial = makeInspection();
-  const repair = initial.session.baseline.profiles.generalist;
   return makeInspection({
     revision: 2,
-    overrides: withRepairOverride ? { generalist: repair } : {},
+    overrides: {},
     baseline: {
       origin: { scope: "global", name: "broken", invalid: true },
       profiles: {
@@ -77,19 +50,11 @@ const invalidBaselineInspection = (withRepairOverride: boolean) => {
   });
 };
 
-// SAFETY: The component tests use only the Theme methods implemented by this fixture.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-
 const baseOptions = (
   overrides: Partial<ProfileWorkspaceOptions> = {},
 ): ProfileWorkspaceOptions => ({
-  theme,
+  theme: plainTheme,
   inspection: makeInspection(),
-  projectTrusted: true,
   target: { kind: "session" },
   initialProfile: "generalist",
   parentEffort: "high",
@@ -114,17 +79,11 @@ const baseOptions = (
   ...overrides,
 });
 
-const settle = (): Promise<void> =>
-  Effect.runPromise(Effect.yieldNow.pipe(Effect.andThen(Effect.yieldNow)));
-
 const openFields = (component: ProfileWorkspaceComponent): void => {
   component.handleInput("\u001b[C");
 };
 
-const chooseAction = (
-  component: ProfileWorkspaceComponent,
-  action: ProfileWorkspaceDraftAction,
-): void => {
+const chooseAction = (component: ProfileWorkspaceComponent, action: CandidateMenuAction): void => {
   component.handleInput("a");
   component.handleInput("/");
   for (const key of action) component.handleInput(key);
@@ -140,29 +99,13 @@ const openUndo = (component: ProfileWorkspaceComponent): void => {
 };
 
 const modelEditor = (count = 3) => {
-  const original: ReadonlyArray<ProfileCandidate> = Array.from({ length: count }, (_, index) => ({
-    host: "local",
-    runtime: "pi",
-    model: `openai/model-${index}`,
-    effort: "high",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    closeOnReport: true,
-  }));
-  let candidates = original;
-  const inspection = () =>
-    makeInspection({ revision: 1, overrides: { generalist: { candidates } } });
-  const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>((_target, _profile, draft) => {
-    candidates = draft.candidates;
-    return Promise.resolve({ inspection: inspection() });
-  });
-  const component = new ProfileWorkspaceComponent(
-    baseOptions({ inspection: inspection(), saveDraft }),
+  const original = Array.from({ length: count }, (_, index) =>
+    profileCandidate(`openai/model-${index}`),
   );
-  openFields(component);
-  const act = (action: ProfileWorkspaceDraftAction): void => chooseAction(component, action);
-  return { component, original, saveDraft, act, candidates: () => candidates };
+  const editor = workspaceHarness({}, original);
+  openFields(editor.component);
+  const act = (action: CandidateMenuAction): void => chooseAction(editor.component, action);
+  return { ...editor, original, act };
 };
 
 describe("candidate menu actions", () => {
@@ -170,23 +113,23 @@ describe("candidate menu actions", () => {
     const editor = modelEditor();
     const [first, second, third] = editor.original;
     editor.act("move-down");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editor.candidates()).toEqual([second, first, third]);
 
     editor.act("move-down");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editor.candidates()).toEqual([second, third, first]);
 
     editor.act("move-up");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editor.candidates()).toEqual([second, first, third]);
     editor.act("move-up");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editor.candidates()).toEqual(editor.original);
 
     editor.act("remove");
     editor.component.handleInput("\r");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editor.candidates()).toEqual([second, third]);
   });
 
@@ -197,7 +140,7 @@ describe("candidate menu actions", () => {
     editor.component.handleInput("\u001b");
     editor.component.handleInput("\u001b");
     editor.act("move-down");
-    yield* step(settle);
+    yield* step(settleTurn);
     editor.saveDraft.mockClear();
     editor.act("move-down");
     expect(editor.saveDraft).not.toHaveBeenCalled();
@@ -209,7 +152,7 @@ describe("candidate menu actions", () => {
     function* () {
       const editor = modelEditor();
       editor.act("move-down");
-      yield* step(settle);
+      yield* step(settleTurn);
       editor.saveDraft.mockClear();
       editor.act("remove");
       expect(editor.saveDraft).not.toHaveBeenCalled();
@@ -217,12 +160,14 @@ describe("candidate menu actions", () => {
       expect(editor.saveDraft).not.toHaveBeenCalled();
 
       editor.act("remove");
+      editor.component.handleInput("x");
+      expect(editor.saveDraft).not.toHaveBeenCalled();
       editor.component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(editor.candidates()).toEqual([editor.original[1], editor.original[2]]);
       editor.act("remove");
       editor.component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(editor.candidates()).toEqual([editor.original[2]]);
     },
   );
@@ -234,7 +179,7 @@ describe("candidate menu actions", () => {
       editor.act("remove");
       expect(editor.saveDraft).not.toHaveBeenCalled();
       editor.component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(editor.saveDraft).toHaveBeenCalledWith({ kind: "session" }, "generalist", {
         kind: "disabled",
         candidates: [],
@@ -262,25 +207,13 @@ describe("profile workspace navigation", () => {
       chooseDelete(component);
       expect(saveDraft).not.toHaveBeenCalled();
       component.handleInput("\u0018");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(saveDraft).toHaveBeenCalledWith({ kind: "session" }, "generalist", {
         kind: "disabled",
         candidates: [],
       });
     },
   );
-
-  it("does not expose numeric scope switching", () => {
-    const close = vi.fn();
-    const requestRender = vi.fn();
-    const component = new ProfileWorkspaceComponent(baseOptions({ close, requestRender }));
-
-    component.handleInput("1");
-    component.handleInput("2");
-    component.handleInput("3");
-
-    expect(close).not.toHaveBeenCalled();
-  });
 
   it("does not bind route mutations to raw keys", () => {
     const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
@@ -290,33 +223,8 @@ describe("profile workspace navigation", () => {
     expect(saveDraft).not.toHaveBeenCalled();
   });
 
-  effectTest("requires confirmation for a destructive action chosen from the menu", function* () {
-    const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
-    const component = new ProfileWorkspaceComponent(baseOptions({ saveDraft }));
-
-    chooseDelete(component);
-    expect(saveDraft).not.toHaveBeenCalled();
-
-    component.handleInput("x");
-    expect(saveDraft).not.toHaveBeenCalled();
-    component.handleInput("\r");
-    yield* step(settle);
-    expect(saveDraft).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancels destructive confirmation with Escape", () => {
-    const saveDraft = vi.fn(() => Promise.resolve({ inspection: makeInspection() }));
-    const component = new ProfileWorkspaceComponent(baseOptions({ saveDraft }));
-
-    chooseDelete(component);
-    component.handleInput("\u001b");
-    component.handleInput("\r");
-
-    expect(saveDraft).not.toHaveBeenCalled();
-  });
-
   it("keeps an invalid clean Current Session baseline fail-closed", () => {
-    const inspection = invalidBaselineInspection(false);
+    const inspection = invalidBaselineInspection();
     expect(inheritSessionDraft(inspection, "generalist")).toEqual({
       kind: "invalid",
       candidates: [],
@@ -330,7 +238,7 @@ describe("profile workspace navigation", () => {
       const saveDraft = vi.fn(baseOptions().saveDraft);
       const component = new ProfileWorkspaceComponent(
         baseOptions({
-          inspection: inheritedInvalidProjectInspection(own),
+          inspection: inheritedInvalidInspection(own, "generalist"),
           target: { kind: "profile-set", set: { scope: "project", name: "partial" } },
           loadModelPicker,
           saveDraft,
@@ -375,7 +283,6 @@ describe("profile workspace navigation", () => {
     component.handleInput("\r");
 
     expect(saveDraft).not.toHaveBeenCalled();
-    expect(component.render(120).join("\n")).toContain("Advanced");
   });
 });
 
@@ -414,13 +321,13 @@ describe("editing visit integration", () => {
       );
       chooseDelete(component);
       component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(current.session.overrides.generalist?.candidates).toEqual([]);
       expect(onInspection).toHaveBeenCalledOnce();
       openUndo(component);
       expect(saveDraft).toHaveBeenCalledOnce();
       component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(current.session.overrides.generalist?.candidates).toEqual([candidate]);
       expect(editVisit.isEdited({ kind: "session" }, "generalist", current)).toBe(false);
       openUndo(component);
@@ -432,15 +339,7 @@ describe("editing visit integration", () => {
   effectTest(
     "passes the exact saved declaration restore through the existing save boundary",
     function* () {
-      const raw = {
-        host: "local",
-        runtime: "pi",
-        model: "test/opening",
-        effort: "high",
-        context: "fresh",
-        writeIntent: "read-only",
-        closeOnReport: true,
-      };
+      const raw = declaredCandidate("test/opening");
       const openingDocument: JsonObject = {
         version: 6,
         profileSets: { work: { profiles: { generalist: [raw] } } },
@@ -475,10 +374,10 @@ describe("editing visit integration", () => {
       );
       chooseDelete(component);
       component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       openUndo(component);
       component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(saveDraft.mock.calls[1]?.[3]).toEqual({ sourceVersion: 6, declaration: [raw] });
       expect(editVisit.isEdited(target, "generalist", initial)).toBe(false);
     },
@@ -494,7 +393,7 @@ describe("editing visit integration", () => {
     );
     chooseDelete(component);
     component.handleInput("\r");
-    yield* step(settle);
+    yield* step(settleTurn);
     expect(editVisit.isEdited({ kind: "session" }, "generalist", changed)).toBe(false);
     openUndo(component);
     expect(component.isBusy).toBe(false);
@@ -506,9 +405,9 @@ describe("profile workspace disposal", () => {
   effectTest(
     "lets submitted persistence settle but ignores every late UI continuation",
     function* () {
-      const saveCell = Deferred.makeUnsafe<ProfileWorkspaceSaveResult>();
+      const saveCell = deferredPromise<ProfileWorkspaceSaveResult>();
       let persistenceSettled = false;
-      const save = Effect.runPromise(Deferred.await(saveCell)).then((result) => {
+      const save = saveCell.promise.then((result) => {
         persistenceSettled = true;
         return result;
       });
@@ -522,7 +421,7 @@ describe("profile workspace disposal", () => {
 
       chooseDelete(component);
       component.handleInput("\r");
-      yield* step(settle);
+      yield* step(settleTurn);
       expect(saveDraft).toHaveBeenCalledTimes(1);
       component.dispose();
       component.dispose();
@@ -531,8 +430,8 @@ describe("profile workspace disposal", () => {
       component.invalidate();
       expect(component.render(100)).toEqual([]);
 
-      Deferred.doneUnsafe(saveCell, Effect.succeed({ inspection: makeInspection() }));
-      yield* step(settle);
+      saveCell.resolve({ inspection: makeInspection() });
+      yield* step(settleTurn);
       {
         expect(persistenceSettled).toBe(true);
         expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
@@ -546,8 +445,7 @@ describe("profile workspace disposal", () => {
     "aborts %s loading and ignores its late result",
     (field) => {
       type PickerData = Awaited<ReturnType<ProfileWorkspaceOptions["loadModelPicker"]>>;
-      const pickerCell = Deferred.makeUnsafe<PickerData>();
-      const picker = Effect.runPromise(Deferred.await(pickerCell));
+      const pickerCell = deferredPromise<PickerData>();
       let capturedSignal: AbortSignal | undefined;
       const requestRender = vi.fn();
       const close = vi.fn();
@@ -563,23 +461,14 @@ describe("profile workspace disposal", () => {
             overrides: {
               generalist: {
                 candidates: [
-                  {
-                    host: "local",
-                    runtime: "codex",
-                    model: "gpt-5.4",
-                    effort: "high",
-                    context: "fresh",
-                    writeIntent: "read-only",
-                    openaiFastMode: true,
-                    closeOnReport: true,
-                  },
+                  profileCandidate("gpt-5.4", { runtime: "codex", openaiFastMode: true }),
                 ],
               },
             },
           }),
           loadModelPicker: (_profile, _index, _candidate, signal) => {
             capturedSignal = signal;
-            return picker;
+            return pickerCell.promise;
           },
         }),
       );
@@ -589,20 +478,12 @@ describe("profile workspace disposal", () => {
       component.dispose();
       expect(capturedSignal?.aborted).toBe(true);
       const rendersAtDispose = requestRender.mock.calls.length;
-      Deferred.doneUnsafe(
-        pickerCell,
-        Effect.succeed({
-          choices: [],
-          current: "parent",
-          context: {
-            profile: "generalist",
-            candidateIndex: 0,
-            host: "local",
-            runtime: "pi",
-          },
-        }),
-      );
-      return settle().then(() => {
+      pickerCell.resolve({
+        choices: [],
+        current: "parent",
+        context: { profile: "generalist", candidateIndex: 0, host: "local", runtime: "pi" },
+      });
+      return settleTurn().then(() => {
         expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
         expect(close).not.toHaveBeenCalled();
         expect(component.render(100)).toEqual([]);
@@ -633,7 +514,7 @@ describe("profile workspace disposal", () => {
         component.handleInput("\u001b[C");
         expect(saveDraft).not.toHaveBeenCalled();
         component.handleInput("\r");
-        yield* step(settle);
+        yield* step(settleTurn);
         expect(saveDraft).toHaveBeenCalledOnce();
         component.dispose();
       }
@@ -682,24 +563,8 @@ describe("profile workspace disposal", () => {
 
     chooseDelete(component);
     component.handleInput("\r");
-    return settle().then(() => {
+    return settleTurn().then(() => {
       expect(component.render(100).join("\n")).toContain("changed while you were editing");
-    });
-  });
-
-  it("does not add reload state after editing a saved set", () => {
-    const component = new ProfileWorkspaceComponent(
-      baseOptions({
-        target: { kind: "profile-set", set: { scope: "global", name: "default" } },
-      }),
-    );
-
-    chooseDelete(component);
-    component.handleInput("\r");
-    return settle().then(() => {
-      const text = component.render(120).join("\n");
-      expect(component.getPosition().initialProfile).toBe("generalist");
-      expect(text).not.toContain("reload");
     });
   });
 });

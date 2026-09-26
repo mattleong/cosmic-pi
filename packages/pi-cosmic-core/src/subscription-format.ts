@@ -16,6 +16,8 @@ function formatResetCountdown(seconds: number | null): string | null {
   return `${secs}s`;
 }
 
+const LOCAL_DAY = { year: "numeric", month: "2-digit", day: "2-digit" } as const;
+
 function formatResetClock(
   seconds: number | null,
   options: { readonly includeDate?: boolean } | undefined,
@@ -27,16 +29,8 @@ function formatResetClock(
   const current = DateTime.make(now);
   if (Option.isNone(reset) || Option.isNone(current)) return null;
   const time = DateTime.formatLocal(reset.value, { hour: "numeric", minute: "2-digit" });
-  const resetDay = DateTime.formatLocal(reset.value, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  const currentDay = DateTime.formatLocal(current.value, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
+  const resetDay = DateTime.formatLocal(reset.value, LOCAL_DAY);
+  const currentDay = DateTime.formatLocal(current.value, LOCAL_DAY);
   if (!options?.includeDate && resetDay === currentDay) return time;
   const weekday = DateTime.formatLocal(reset.value, { weekday: "short" });
   if (!options?.includeDate) return `${weekday} ${time}`;
@@ -58,7 +52,6 @@ export function formatCompactReset(
 export function formatShortReset(
   label: string,
   seconds: number | null,
-  _options: { readonly includeDate?: boolean } | undefined,
   now: number,
 ): string | null {
   if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
@@ -126,7 +119,6 @@ export type UsageWindowLine = {
   readonly label: string;
   readonly leftPercent: number | null;
   readonly resetInSeconds: number | null;
-  readonly includeDate?: boolean;
 };
 
 /**
@@ -135,7 +127,7 @@ export type UsageWindowLine = {
  */
 export function formatWindowedUsageLine(
   windows: readonly UsageWindowLine[],
-  options: { readonly showResetTimes: boolean; readonly resetStyle?: "compact" | "short" },
+  options: { readonly showResetTimes: boolean },
   now: number,
   capturedAt: number,
 ): string {
@@ -146,19 +138,11 @@ export function formatWindowedUsageLine(
   const resets = options.showResetTimes
     ? visible
         .map((window) =>
-          options.resetStyle === "short"
-            ? formatShortReset(
-                window.label,
-                remainingResetSeconds(window.resetInSeconds, capturedAt, now),
-                window.includeDate ? { includeDate: true } : undefined,
-                now,
-              )
-            : formatCompactReset(
-                window.label,
-                remainingResetSeconds(window.resetInSeconds, capturedAt, now),
-                window.includeDate ? { includeDate: true } : undefined,
-                now,
-              ),
+          formatShortReset(
+            window.label,
+            remainingResetSeconds(window.resetInSeconds, capturedAt, now),
+            now,
+          ),
         )
         .filter((value): value is string => value !== null)
     : [];

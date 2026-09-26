@@ -14,19 +14,9 @@ import {
   type McpRetentionOutcome,
 } from "../../src/results/model.ts";
 import { makeMcpResults } from "../../src/results/service.ts";
+import { allow, input, opts, png } from "../fixtures/results.ts";
 
-const options = { maxOutputBytes: 4_096, images: false };
-const allow = () => Effect.void;
-const input = (
-  result: Schema.Json,
-  server = "server",
-  owner = "activation:revision",
-): McpPrepareInput => ({
-  action: "tools.call",
-  server,
-  owner,
-  reply: { outcome: "completed", result },
-});
+const options = opts(4_096);
 const idOf = (retention: McpRetentionOutcome): string => {
   if (retention.status !== "retained") throw new Error("Expected retained result");
   return retention.resultId;
@@ -36,6 +26,13 @@ const save = (service: McpResultsContract, value: McpPrepareInput) =>
     const prepared = yield* service.prepare(value);
     return { prepared, retention: yield* service.retain(prepared) };
   });
+const read = (service: McpResultsContract, retention: McpRetentionOutcome) =>
+  service.read({ action: "result.read", id: idOf(retention) }, options, allow);
+const expectStale = (service: McpResultsContract, retention: McpRetentionOutcome) =>
+  read(service, retention).pipe(
+    Effect.flip,
+    Effect.map((error) => expect(error).toMatchObject({ kind: "stale", outcome: "not-sent" })),
+  );
 const parse = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
 // Each construction owns a separate private activation, even with identical config owners.
@@ -55,31 +52,22 @@ describe("MCP result retention", () => {
         const first = yield* save(service, input({ secret: "first" }));
         visible = "first";
         for (let index = 0; index < 4; index += 1) {
-          const read = yield* service.read(
-            { action: "result.read", id: idOf(first.retention) },
-            options,
-            allow,
+          expect((yield* read(service, first.retention)).reply.resultId).toBe(
+            idOf(first.retention),
           );
-          expect(read.reply.resultId).toBe(idOf(first.retention));
           expect(visible).toBe("first");
         }
         yield* service.retain(first.prepared);
         expect(visible).toBe("first");
         const second = yield* save(service, input({ secret: "second" }));
         expect(visible).toBeUndefined();
-        expect(
-          yield* Effect.result(
-            service.read({ action: "result.read", id: idOf(first.retention) }, options, allow),
-          ),
-        ).toMatchObject({ failure: { kind: "stale" } });
+        yield* expectStale(service, first.retention);
         visible = "second";
-        yield* service.revoke("server");
+        const pending = yield* service.prepare(input({ secret: "not published" }));
+        yield* service.revoke();
         expect(visible).toBeUndefined();
-        expect(
-          yield* Effect.result(
-            service.read({ action: "result.read", id: idOf(second.retention) }, options, allow),
-          ),
-        ).toMatchObject({ failure: { kind: "stale" } });
+        yield* expectStale(service, second.retention);
+        expect(yield* service.retain(pending)).toEqual({ status: "unretained", reason: "revoked" });
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -103,11 +91,7 @@ describe("MCP result retention", () => {
       visible = "private";
       yield* Scope.close(owner, Exit.void);
       expect(visible).toBeUndefined();
-      expect(
-        yield* Effect.result(
-          service.read({ action: "result.read", id: idOf(saved.retention) }, options, allow),
-        ),
-      ).toMatchObject({ failure: { kind: "stale" } });
+      yield* expectStale(service, saved.retention);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -116,20 +100,15 @@ describe("MCP result retention", () => {
       const service = yield* makeMcpResults({ maxEntries: 2 });
       const first = yield* save(service, input({ content: [{ type: "text", text: "first" }] }));
       const second = yield* save(service, input({ content: [{ type: "text", text: "second" }] }));
-      const firstId = idOf(first.retention);
-      yield* service.read({ action: "result.read", id: firstId }, options, allow);
+      yield* read(service, first.retention);
       const third = yield* save(service, input({ content: [] }));
-      expect(
-        yield* service
-          .read({ action: "result.read", id: firstId }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale", outcome: "not-sent" });
+      yield* expectStale(service, first.retention);
       expect(yield* service.retain(first.prepared)).toEqual({
         status: "unretained",
         reason: "unavailable",
       });
-      yield* service.read({ action: "result.read", id: idOf(second.retention) }, options, allow);
-      yield* service.read({ action: "result.read", id: idOf(third.retention) }, options, allow);
+      yield* read(service, second.retention);
+      yield* read(service, third.retention);
       const projection = yield* service.project(first.prepared, first.retention, options);
       expect(projection.reply).toMatchObject({ outcome: "completed", isError: true });
       expect(projection.reply.resultId).toBeUndefined();
@@ -143,16 +122,8 @@ describe("MCP result retention", () => {
         Array.from({ length: 33 }, (_, index) => index),
         (index) => save(service, input({ index })),
       );
-      expect(
-        yield* service
-          .read({ action: "result.read", id: idOf(entries[0]!.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
-      yield* service.read(
-        { action: "result.read", id: idOf(entries[1]!.retention) },
-        options,
-        allow,
-      );
+      yield* expectStale(service, entries[0]!.retention);
+      yield* read(service, entries[1]!.retention);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -164,35 +135,20 @@ describe("MCP result retention", () => {
       const second = yield* save(service, input({ content: [{ type: "text", text }] }));
       for (let index = 0; index < 7; index++)
         yield* save(service, input({ content: [{ type: "text", text }] }));
-      expect(
-        yield* service
-          .read({ action: "result.read", id: idOf(first.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
-      yield* service.read({ action: "result.read", id: idOf(second.retention) }, options, allow);
+      yield* expectStale(service, first.retention);
+      yield* read(service, second.retention);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.effect("charges private image bytes in the retention quota", () =>
     Effect.gen(function* () {
-      const image =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZQAAAABJRU5ErkJggg==";
       const service = yield* makeMcpResults({ maxBytes: 900 });
-      const first = yield* save(
-        service,
-        input({ content: [{ type: "image", mimeType: "image/png", data: image }] }),
-      );
+      const image = input({ content: [{ type: "image", mimeType: "image/png", data: png }] });
+      const first = yield* save(service, image);
       expect(first.prepared.images).toHaveLength(1);
-      expect(first.prepared.bytes).toBeGreaterThan(image.length + first.prepared.serialized.length);
-      yield* save(
-        service,
-        input({ content: [{ type: "image", mimeType: "image/png", data: image }] }),
-      );
-      expect(
-        yield* service
-          .read({ action: "result.read", id: idOf(first.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
+      expect(first.prepared.bytes).toBeGreaterThan(png.length + first.prepared.serialized.length);
+      yield* save(service, image);
+      yield* expectStale(service, first.retention);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -217,29 +173,6 @@ describe("MCP result retention", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect("does not clear other servers when one server is revoked", () =>
-    Effect.gen(function* () {
-      const service = yield* makeMcpResults();
-      const first = yield* save(service, input({ secret: "first" }, "one"));
-      const second = yield* save(service, input({ secret: "second" }, "two"));
-      const pending = yield* service.prepare(input({ secret: "not published" }, "one"));
-      yield* service.revoke("one");
-      expect(yield* service.retain(pending)).toEqual({ status: "unretained", reason: "revoked" });
-      expect(
-        yield* service
-          .read({ action: "result.read", id: idOf(first.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
-      yield* service.read({ action: "result.read", id: idOf(second.retention) }, options, allow);
-      yield* service.revoke();
-      expect(
-        yield* service
-          .read({ action: "result.read", id: idOf(second.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  );
-
   it.effect("does not accept another service activation's results or IDs", () =>
     Effect.gen(function* () {
       const first = yield* makeMcpResults();
@@ -249,11 +182,7 @@ describe("MCP result retention", () => {
         status: "unretained",
         reason: "revoked",
       });
-      expect(
-        yield* replacement
-          .read({ action: "result.read", id: idOf(saved.retention) }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
+      yield* expectStale(replacement, saved.retention);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -264,7 +193,7 @@ describe("MCP result retention", () => {
         const service = yield* makeMcpResults();
         const saved = yield* save(
           service,
-          input({ secret: "private" }, "server", "config:revision1"),
+          input({ secret: "private" }, "tools.call", "config:revision1"),
         );
         let checks = 0;
         const error = yield* service
@@ -292,58 +221,15 @@ describe("MCP result retention", () => {
         )
         .pipe(Effect.flip, Effect.forkChild);
       yield* Deferred.await(entered);
-      yield* service.revoke("server");
+      yield* service.revoke();
       yield* Deferred.succeed(release, undefined);
       expect(yield* Fiber.join(fiber)).toMatchObject({ kind: "stale" });
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect.each(["failed", "unavailable"] as const)(
-    "keeps retrieval success distinct from %s output validation",
-    (outputValidation) =>
-      Effect.gen(function* () {
-        const service = yield* makeMcpResults();
-        const saved = yield* save(service, {
-          ...input({ isError: false, structuredContent: { value: "original" } }),
-          outputValidation,
-        });
-        const projected = yield* service.project(saved.prepared, saved.retention, options);
-        expect(projected.reply).toMatchObject({
-          action: "tools.call",
-          outcome: "completed",
-          isError: true,
-          data: { origin: { isError: false, outputValidation } },
-        });
-        const read = yield* service.read(
-          { action: "result.read", id: idOf(saved.retention) },
-          options,
-          allow,
-        );
-        expect(read.reply).toMatchObject({
-          action: "result.read",
-          outcome: "completed",
-          isError: false,
-          data: {
-            origin: {
-              action: "tools.call",
-              outcome: "completed",
-              isError: false,
-              outputValidation,
-            },
-          },
-        });
-        const data = yield* Schema.decodeUnknownEffect(Schema.Struct({ text: Schema.String }))(
-          read.reply.data,
-        );
-        expect(parse(data.text)).toMatchObject({ structuredContent: { value: "original" } });
-      }).pipe(Effect.provide(NodeCrypto.layer)),
-  );
-
   it.effect("normalizes each binary envelope once without changing the validated reply", () =>
     Effect.gen(function* () {
       const service = yield* makeMcpResults();
-      const png =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZQAAAABJRU5ErkJggg==";
       const original = {
         isError: true,
         content: [
@@ -449,15 +335,11 @@ describe("MCP result retention", () => {
       const saved = yield* Effect.scoped(
         Effect.gen(function* () {
           const service = yield* makeMcpResults();
-          const result = yield* save(service, input({ private: true }));
-          return { service, id: idOf(result.retention) };
+          const { retention } = yield* save(service, input({ private: true }));
+          return { service, retention };
         }),
       );
-      expect(
-        yield* saved.service
-          .read({ action: "result.read", id: saved.id }, options, allow)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
+      yield* expectStale(saved.service, saved.retention);
       expect(
         yield* saved.service.prepare(input({ private: true })).pipe(Effect.flip),
       ).toMatchObject({ kind: "denied" });

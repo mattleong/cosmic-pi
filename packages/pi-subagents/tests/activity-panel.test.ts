@@ -1,7 +1,7 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import type { SubagentProjection, SubagentRunView } from "../src/run/model.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
+import type { SubagentRunView } from "../src/run/model.ts";
 import {
   emptyActivityPresentation,
   hasSubagentActivityPanelContent,
@@ -10,24 +10,7 @@ import {
   subagentActivityPanelCadence,
   type SubagentActivityPresentationSnapshot,
 } from "../src/ui/activity-panel.ts";
-import { view } from "./tools/fixtures/tool-harness.ts";
-
-// SAFETY: This fixture implements the Theme methods consumed by the panel renderer.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-
-const projection = (runs: ReadonlyArray<SubagentRunView>): SubagentProjection => ({
-  revision: 1,
-  root: {
-    id: "root",
-    depth: 0,
-    directChildCount: runs.filter((run) => !run.parentRunId || run.parentRunId === "root").length,
-    descendantCount: runs.length,
-  },
-  runs,
-});
+import { projectionOf, view } from "./fixtures/run-view.ts";
 
 const presentation = (
   overrides: Partial<SubagentActivityPresentationSnapshot> = {},
@@ -44,9 +27,9 @@ const render = (
   width = 120,
 ) =>
   renderProjectedSubagentActivityPanel(
-    projectSubagentActivityPanel(projection(runs), live),
+    projectSubagentActivityPanel(projectionOf(runs), live),
     width,
-    theme,
+    plainTheme,
     10_001,
   );
 
@@ -74,7 +57,7 @@ describe("persistent subagent activity panel", () => {
     const unrelated = view({ id: "done", state: "completed" });
 
     const panel = projectSubagentActivityPanel(
-      projection([child, unrelated, retained, parent, waiting, paused]),
+      projectionOf([child, unrelated, retained, parent, waiting, paused]),
     );
 
     expect(panel.trackedRuns.map((run) => run.id)).toEqual(["child", "waiting", "paused"]);
@@ -87,7 +70,7 @@ describe("persistent subagent activity panel", () => {
     const tiedEarlier = view({ id: "agent-r1-2", startedAt: 20 });
     const tiedLater = view({ id: "agent-r1-10", startedAt: 20 });
 
-    const panel = projectSubagentActivityPanel(projection([tiedLater, tiedEarlier, older]));
+    const panel = projectSubagentActivityPanel(projectionOf([tiedLater, tiedEarlier, older]));
 
     expect(panel.rows.map((row) => row.run.id)).toEqual([
       "agent-r1-1",
@@ -98,7 +81,7 @@ describe("persistent subagent activity panel", () => {
 
   it("does not cap matching runs", () => {
     const runs = Array.from({ length: 32 }, (_, index) => view({ id: `run-${index}` }));
-    const panel = projectSubagentActivityPanel(projection(runs));
+    const panel = projectSubagentActivityPanel(projectionOf(runs));
 
     expect(panel.trackedRuns).toHaveLength(runs.length);
     expect(panel.rows).toHaveLength(runs.length);
@@ -115,7 +98,7 @@ describe("persistent subagent activity panel", () => {
       ],
     });
 
-    const panel = projectSubagentActivityPanel(projection([running, finished, other]), live);
+    const panel = projectSubagentActivityPanel(projectionOf([running, finished, other]), live);
 
     expect([...panel.awaitedRunIds]).toEqual([running.id, finished.id, other.id]);
     expect(panel.awaitedRuns.map((run) => run.id)).toEqual([running.id, finished.id, other.id]);
@@ -128,19 +111,15 @@ describe("persistent subagent activity panel", () => {
 
   it("keeps launch intent visible before the fleet projection catches up", () => {
     const live = presentation({ starts: [{ requestedCount: 3 }] });
-    expect(hasSubagentActivityPanelContent(projection([]), live)).toBe(true);
+    expect(hasSubagentActivityPanelContent(projectionOf([]), live)).toBe(true);
   });
 
   it("derives ticker cadence only from rows with clock-dependent presentation", () => {
     const cadence = (runs: ReadonlyArray<SubagentRunView>, live = emptyActivityPresentation()) =>
-      subagentActivityPanelCadence(projectSubagentActivityPanel(projection(runs), live));
+      subagentActivityPanelCadence(projectSubagentActivityPanel(projectionOf(runs), live));
 
-    expect(cadence([view({ state: "running" })])).toBe(160);
-    expect(cadence([view({ state: "starting" })])).toBe(160);
-    expect(cadence([view({ state: "waiting_for_parent" })])).toBe(1_000);
+    // The base state mapping is covered with subagentUiRefreshCadence; the panel adds paused elapsed.
     expect(cadence([view({ state: "paused" })])).toBe(1_000);
-    expect(cadence([view({ state: "stopping" })])).toBe(1_000);
-    expect(cadence([view({ state: "completed" })])).toBeUndefined();
     expect(cadence([], presentation({ starts: [{ requestedCount: 2 }] }))).toBeUndefined();
     expect(
       cadence(
@@ -177,7 +156,7 @@ describe("persistent subagent activity panel", () => {
       view({ id: "complete", state: "completed" }),
       view({ id: "failed", state: "failed" }),
     ];
-    expect(hasSubagentActivityPanelContent(projection(runs))).toBe(false);
+    expect(hasSubagentActivityPanelContent(projectionOf(runs))).toBe(false);
     expect(render(runs)).toEqual([]);
   });
 });

@@ -11,11 +11,8 @@ export interface JsonHttpRequest<S extends Schema.ConstraintDecoder<unknown, unk
   readonly url: string;
   readonly method?: "GET" | "POST";
   readonly headers?: Readonly<Record<string, string>>;
-  readonly formBody?: Readonly<Record<string, string>>;
   /** The provider-local decoder for successful response bodies. */
   readonly responseSchema: S;
-  /** Defaults to the inclusive 200-299 range. */
-  readonly acceptStatus?: (status: number) => boolean;
   /** Optional hard cap applied before buffering the response body. */
   readonly maxResponseBytes?: number;
 }
@@ -55,7 +52,6 @@ export interface JsonHttpClientContract {
   ) => Effect.Effect<JsonHttpResponse<A>, JsonHttpError, R | BodySchema["EncodingServices"]>;
 }
 
-const acceptsSuccessStatus = (status: number) => status >= 200 && status < 300;
 const jsonHttpError = (operation: JsonHttpError["operation"], message: string) => () =>
   new JsonHttpError({ operation, message });
 const responseReadError = jsonHttpError("response", "Unable to read HTTP response.");
@@ -92,7 +88,6 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
         let outgoing = HttpClientRequest.make(input.method ?? "GET")(input.url, {
           headers: input.headers,
         });
-        if (input.formBody) outgoing = HttpClientRequest.bodyUrlParams(outgoing, input.formBody);
         if (jsonBody !== undefined) {
           outgoing = yield* HttpClientRequest.bodyJson(outgoing, jsonBody).pipe(
             Effect.mapError(
@@ -115,7 +110,7 @@ export class JsonHttpClient extends Context.Service<JsonHttpClient, JsonHttpClie
             : Number.isSafeInteger(maximumBytes) && maximumBytes > 0
               ? readBoundedResponseText(response.stream, maximumBytes)
               : Effect.fail(responseTooLarge());
-        if (!(input.acceptStatus ?? acceptsSuccessStatus)(response.status)) {
+        if (response.status < 200 || response.status >= 300) {
           const errorBody = yield* readText;
           return {
             _tag: "Rejected",

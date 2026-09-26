@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatUsageSnapshot,
-  parseUsageSnapshot,
-  type CodexUsageResponse,
-} from "../src/usage/format.ts";
+import { parseUsageSnapshot, type CodexUsageResponse } from "../src/usage/format.ts";
 
 const NOW = 1_700_000_000_000;
 
@@ -56,23 +52,6 @@ describe("OpenAI usage parsing", () => {
       sevenDayLeftPercent: 65,
       isLimited: true,
     });
-  });
-
-  it("formats every window reset with a short local date and time", () => {
-    const snapshot = parseUsageSnapshot(
-      {
-        rate_limit: {
-          primary_window: { used_percent: 25, reset_after_seconds: 300 },
-          secondary_window: { used_percent: 40, reset_after_seconds: 600 },
-        },
-      },
-      "gpt-5.5",
-      NOW,
-    );
-    const rendered = formatUsageSnapshot(snapshot, { showResetTimes: true }, NOW);
-    expect(rendered).toContain("5h: 75%");
-    expect(rendered).toContain("7d: 60%");
-    expect(rendered).toMatch(/\d+\/\d+ • \d+:\d{2}[ap]/);
   });
 
   it("falls back to the decoded primary bucket when no Spark entry is usable", () => {

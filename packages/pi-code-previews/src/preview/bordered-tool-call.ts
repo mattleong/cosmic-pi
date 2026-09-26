@@ -158,42 +158,13 @@ export class BorderedToolCall implements Component {
     if (width < 4) return this.renderBody(Math.max(1, width));
     const innerWidth = Math.max(1, width - 4);
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);
+    const timing = this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
+    const expand = this.expandLabel ? ` ${this.expandLabel} ` : "";
     return [
-      this.renderTopBorder(width, border),
+      renderBorder(width, border, "╭", "╮", timing),
       ...this.renderBody(innerWidth).map((line) => this.frameLine(line, innerWidth, border)),
-      this.renderBottomBorder(width, border),
+      renderBorder(width, border, "╰", "╯", expand),
     ];
-  }
-
-  private renderTopBorder(width: number, border: (value: string) => string): string {
-    return this.renderBorderWithRightLabel(width, border, "top", this.topRightLabel());
-  }
-
-  private renderBottomBorder(width: number, border: (value: string) => string): string {
-    return this.renderBorderWithRightLabel(width, border, "bottom", this.bottomRightLabel());
-  }
-
-  private renderBorderWithRightLabel(
-    width: number,
-    border: (value: string) => string,
-    position: "top" | "bottom",
-    label: string,
-  ): string {
-    const innerWidth = width - 2;
-    const open = position === "top" ? "╭" : "╰";
-    const close = position === "top" ? "╮" : "╯";
-    const labelWidth = visibleWidth(label);
-    if (labelWidth === 0 || labelWidth > innerWidth)
-      return border(`${open}${"─".repeat(innerWidth)}${close}`);
-    return `${border(open)}${border("─".repeat(innerWidth - labelWidth))}${label}${border(close)}`;
-  }
-
-  private topRightLabel(): string {
-    return this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
-  }
-
-  private bottomRightLabel(): string {
-    return this.expandLabel ? ` ${this.expandLabel} ` : "";
   }
 
   private renderBody(width: number): string[] {
@@ -215,6 +186,20 @@ export class BorderedToolCall implements Component {
     }
     return `${border("│")} ${truncated}${RESET_ANSI}${padding} ${border("│")}`;
   }
+}
+
+function renderBorder(
+  width: number,
+  border: (value: string) => string,
+  open: string,
+  close: string,
+  label: string,
+): string {
+  const innerWidth = width - 2;
+  const labelWidth = visibleWidth(label);
+  if (labelWidth === 0 || labelWidth > innerWidth)
+    return border(`${open}${"─".repeat(innerWidth)}${close}`);
+  return `${border(open)}${border("─".repeat(innerWidth - labelWidth))}${label}${border(close)}`;
 }
 
 /** True when the line opens with a truecolor background sequence (`ESC [48;2;r;g;bm`). */

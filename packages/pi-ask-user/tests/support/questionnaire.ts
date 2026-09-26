@@ -1,4 +1,9 @@
-import type { AskUserRequest, AskUserChoiceQuestion } from "../../src/questionnaire/schema.ts";
+import type { AskUserAnswer, AskUserOutcome } from "../../src/questionnaire/model.ts";
+import type {
+  AskUserAsyncRequest,
+  AskUserChoiceQuestion,
+  AskUserRequest,
+} from "../../src/questionnaire/schema.ts";
 
 export const defaultQuestion: AskUserChoiceQuestion = {
   key: "choice",
@@ -27,3 +32,25 @@ export const routeRequest: AskUserRequest = {
     },
   ],
 };
+
+export const asyncRequest: AskUserAsyncRequest = {
+  questions: [defaultQuestion],
+  independentWork: "Inspect",
+  blockedWork: "Choose",
+};
+
+export const formOwner = {
+  extensionId: "pi-mcp",
+  operationId: "operation",
+  requestId: "request",
+  label: "MCP",
+};
+
+export const emptyForm = { kind: "form", message: "private", fields: [] } as const;
+
+export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
+  outcome: "submitted",
+  answers,
+});
+
+export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };

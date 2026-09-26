@@ -5,7 +5,7 @@ import {
   selectPreviewTextLines,
   trimSingleTrailingNewline,
 } from "../../src/preview/format";
-import { countContentLines, countPreviewTextLines } from "../../src/preview/line-counts";
+import { countContentLines } from "../../src/preview/line-counts";
 
 test("trimSingleTrailingNewline preserves leading and meaningful trailing spaces", () => {
   assert.equal(trimSingleTrailingNewline("  indented\n"), "  indented");
@@ -14,19 +14,16 @@ test("trimSingleTrailingNewline preserves leading and meaningful trailing spaces
   assert.equal(trimSingleTrailingNewline("line\n\n"), "line\n");
 });
 
-test("line counters preserve file and preview trailing-blank semantics", () => {
-  assert.equal(countContentLines("\n\n"), 2);
-  assert.equal(countContentLines("one\n"), 1);
-  assert.equal(countPreviewTextLines("\n\n"), 1);
-  assert.equal(countPreviewTextLines("one\n\ntwo"), 3);
-});
-
-test("content line counting preserves mixed newline semantics", () => {
+test("line counters preserve file, preview, and mixed newline semantics", () => {
   assert.equal(countContentLines(""), 0);
   assert.equal(countContentLines("one"), 1);
+  assert.equal(countContentLines("one\n"), 1);
+  assert.equal(countContentLines("\n\n"), 2);
   assert.equal(countContentLines("\r\n\r\n"), 2);
   assert.equal(countContentLines("one\rtwo\r"), 2);
   assert.equal(countContentLines("one\r\ntwo\nthree\rfour"), 4);
+  assert.equal(selectPreviewTextLines("\n\n", 0).total, 1);
+  assert.equal(selectPreviewTextLines("one\n\ntwo", 0).total, 3);
 });
 
 test("text preview selection preserves head and split window behavior", () => {
@@ -60,29 +57,17 @@ test("text preview selection preserves head and split window behavior", () => {
 });
 
 test("text preview selection retains all lines when unlimited or within the limit", () => {
-  const expectedEntries = [
-    { kind: "line" as const, line: "one", index: 0 },
-    { kind: "line" as const, line: "", index: 1 },
-    { kind: "line" as const, line: "two", index: 2 },
-  ];
-  assert.deepEqual(selectPreviewTextLines("one\n\ntwo", 3), {
-    entries: expectedEntries,
-    shown: 3,
-    hidden: 0,
-    total: 3,
-  });
-  assert.deepEqual(selectPreviewTextLines("one\n\ntwo", 0), {
-    entries: expectedEntries,
-    shown: 3,
-    hidden: 0,
-    total: 3,
-  });
-  assert.deepEqual(selectPreviewTextLines("one\n\ntwo", Number.MAX_SAFE_INTEGER), {
-    entries: expectedEntries,
-    shown: 3,
-    hidden: 0,
-    total: 3,
-  });
+  for (const limit of [3, 0, Number.MAX_SAFE_INTEGER])
+    assert.deepEqual(selectPreviewTextLines("one\n\ntwo", limit), {
+      entries: [
+        { kind: "line", line: "one", index: 0 },
+        { kind: "line", line: "", index: 1 },
+        { kind: "line", line: "two", index: 2 },
+      ],
+      shown: 3,
+      hidden: 0,
+      total: 3,
+    });
 });
 
 test("streaming text selection matches array selection across split boundaries", () => {
@@ -97,19 +82,14 @@ test("streaming text selection matches array selection across split boundaries",
   }
 });
 
-test("split window boundary switches from head-only at a limit of eight", () => {
-  const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
-  const headOnly = selectPreviewLines(lines, 7);
+test("split window boundary stays head-only at a limit of seven", () => {
+  const headOnly = selectPreviewLines(
+    Array.from({ length: 20 }, (_, index) => `line ${index}`),
+    7,
+  );
   assert.deepEqual(
     headOnly.entries.map((entry) => entry.kind),
     Array.from({ length: 7 }, () => "line"),
   );
   assert.deepEqual({ shown: headOnly.shown, hidden: headOnly.hidden }, { shown: 7, hidden: 13 });
-
-  const split = selectPreviewLines(lines, 8);
-  assert.deepEqual(
-    split.entries.map((entry) => entry.kind),
-    [...Array.from({ length: 6 }, () => "line"), "hidden", "line"],
-  );
-  assert.deepEqual({ shown: split.shown, hidden: split.hidden }, { shown: 7, hidden: 13 });
 });

@@ -9,7 +9,6 @@ import {
 import type { QuestionnaireActivity } from "../questionnaire/service.ts";
 import type { AskUserRequest, QuestionnaireOwner } from "../questionnaire/protocol.ts";
 import type { OwnedFormRequest, ExtensionFormOwner } from "../questionnaire/form-protocol.ts";
-import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 interface Row {
@@ -43,15 +42,8 @@ export function makeQuestionnaireActivity(options: {
     publish();
   };
   const transition = (operation: () => void) =>
-    Effect.try({
-      try: () => {
-        if (current()) operation();
-      },
-      catch: () =>
-        new AskUserHostError({
-          operation: "activity",
-          message: "Unable to update questionnaire activity.",
-        }),
+    Effect.try(() => {
+      if (current()) operation();
     }).pipe(Effect.ignore);
   const admitted = (
     id: string,
@@ -94,7 +86,6 @@ export function makeQuestionnaireActivity(options: {
     });
   const observer: QuestionnaireActivity = {
     admitted,
-    admittedForm: admitted,
     presenting: (id) =>
       transition(() => {
         options.bridge.setRequest(id);

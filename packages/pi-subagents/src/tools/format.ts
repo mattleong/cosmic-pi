@@ -13,11 +13,11 @@ import {
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import type { SubagentRunObservation } from "../run/service.ts";
 import { clipWithMarker } from "../run/state.ts";
-import { formatUsage } from "../ui/metrics.ts";
+import { aggregateUsage } from "../ui/metrics.ts";
 import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
-import type { SubagentToolInput } from "./schema.ts";
+import type { SubagentToolAction } from "./schema.ts";
 
 export const selectionSourceLabel = (
   run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
@@ -287,7 +287,7 @@ const activityStatusFields = (run: SubagentRunView): ReadonlyArray<string | unde
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt) || undefined;
   const activityAge = formatSessionAge(now, run.lastActivityAt);
   const activity = activityAge ? `${activityAge} ago` : undefined;
-  const usage = formatUsage(run.usage);
+  const usage = aggregateUsage([run]);
   const native = run.nativeActivity;
   return [
     run.pid ? statusField("Process", `pid ${run.pid}`) : undefined,
@@ -321,7 +321,7 @@ const finalReportStatus = (run: SubagentRunView): string | undefined => {
 };
 
 export const formatRun = (run: SubagentRunView, detailed = false): string => {
-  const route = formatRunRoute(run.host, run.runtime, run.model, run.effort, run.openaiFastMode);
+  const route = formatRunRoute(run);
   const header = formatRunHeader(run, route);
   if (!detailed) return header;
   return [
@@ -414,21 +414,16 @@ export const formatStartFailures = (failures: ReadonlyArray<SubagentStartFailure
         }),
       ].join("\n");
 
-export const formatStartResultDetails = (
+export const formatStartResult = (
   runs: ReadonlyArray<SubagentRunView>,
   failures: ReadonlyArray<SubagentStartFailure>,
-): DetailedRunsFormat => {
+): string => {
   const failureText = formatStartFailures(failures);
   return formatDetailedRuns(
     runs,
     failureText ? `${failureText}${runs.length > 0 ? "\n\n" : ""}` : "",
-  );
+  ).text;
 };
-
-export const formatStartResult = (
-  runs: ReadonlyArray<SubagentRunView>,
-  failures: ReadonlyArray<SubagentStartFailure>,
-): string => formatStartResultDetails(runs, failures).text;
 
 export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailure>): string =>
   failures.length === 0
@@ -442,7 +437,7 @@ export const formatActionFailures = (failures: ReadonlyArray<SubagentActionFailu
       ].join("\n");
 
 export const managementAcknowledgement = (
-  action: Exclude<SubagentToolInput["action"], "models" | "start">,
+  action: Exclude<SubagentToolAction, "models" | "start">,
   runs: ReadonlyArray<SubagentRunView>,
   claimsAction?: "list" | "grant" | "revoke" | "resume_admission",
 ): string => {

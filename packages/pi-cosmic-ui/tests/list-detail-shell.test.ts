@@ -246,40 +246,19 @@ describe("frame helpers", () => {
     expect(clipped.every((line) => visibleWidth(line) === 6)).toBe(true);
   });
 
-  it("composes the screen with degenerate-size fallbacks and the remaining body height", () => {
-    const body = (height: number) => lines(height);
-    expect(framedScreen(frame, { width: 0, height: 5, top: "t", bottom: "b", body })).toEqual([]);
-    expect(framedScreen(frame, { width: 10, height: 0, top: "t", bottom: "b", body })).toEqual([]);
-    const oneRow = framedScreen(frame, {
-      width: 10,
-      height: 1,
-      top: "top",
-      bottom: "b",
-      body,
-    });
-    expect(oneRow).toHaveLength(1);
-    expect(oneRow.every((line) => visibleWidth(line) <= 10)).toBe(true);
+  it.each([
+    [0, 5, 0],
+    [10, 0, 0],
+    [10, 1, 1],
+    [1, 1, 1],
+    [1, 3, 3],
+  ])("composes a %i×%i screen as %i bounded rows", (width, height, count) => {
+    const screen = framedScreen(frame, { width, height, top: "top", bottom: "b", body: lines });
+    expect(screen).toHaveLength(count);
+    expect(screen.every((line) => visibleWidth(line) <= width)).toBe(true);
+  });
 
-    const singleCell = framedScreen(frame, {
-      width: 1,
-      height: 1,
-      top: "t",
-      bottom: "b",
-      body,
-    });
-    expect(singleCell).toHaveLength(1);
-    expect(singleCell.every((line) => visibleWidth(line) <= 1)).toBe(true);
-
-    const oneColumn = framedScreen(frame, {
-      width: 1,
-      height: 3,
-      top: "t",
-      bottom: "b",
-      body,
-    });
-    expect(oneColumn).toHaveLength(3);
-    expect(oneColumn.every((line) => visibleWidth(line) <= 1)).toBe(true);
-
+  it("gives the body the height remaining between the top and bottom rows", () => {
     const seen: number[] = [];
     const rows = framedScreen(frame, {
       width: 10,

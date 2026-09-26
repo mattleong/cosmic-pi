@@ -6,15 +6,10 @@ import {
   renderCompactChildren,
   renderExpandedAttention,
   summaryCompactIssues,
-  renderCompactRow,
   type CompactSummary,
 } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core";
-import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
-import { truncateDisplay } from "../tools/format.ts";
 import type { CodeModeCallEntry } from "../tools/format.ts";
 import { codeModeCallRows } from "./call-rows.ts";
-import { formatCodeModeProgram } from "./program-source.ts";
 import { codeModeOutputText, formatStructuredCodeModeOutput } from "./result-output.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 import { addCodeModeSection } from "./sections.ts";
@@ -23,9 +18,7 @@ export interface ExpandedPresentation {
   /** Common shell supplies heading and attention around this body. */
   readonly contentOnly?: boolean;
   readonly readRequest?: { readonly id: string };
-  readonly source?: string | undefined;
   readonly summary?: CompactSummary | undefined;
-  readonly ownsCall?: boolean;
   readonly fallbackStatus?: string;
   readonly timingEnabled?: boolean;
   readonly liveElapsed?: ((call: CodeModeCallEntry) => number | undefined) | undefined;
@@ -42,7 +35,7 @@ export const renderExpandedCodeModeResult = (
 ): Component => {
   const phase = isPartial ? "running" : "settled";
   const children = {
-    total: details.totalToolCalls,
+    total: details.counts.total,
     entries: codeModeCallRows(details, phase, presentation.liveElapsed),
   };
   const { summary } = planCompactPresentation({
@@ -57,40 +50,7 @@ export const renderExpandedCodeModeResult = (
   const claims =
     !isPartial && raw === summary?.failure?.details ? summary.failure.ownedIssues : undefined;
   const body = new Container();
-  if (presentation.ownsCall) {
-    if (summary && !presentation.contentOnly)
-      body.addChild({
-        render: (width) => [
-          renderCompactRow(
-            {
-              name: "Code Mode",
-              phase,
-              summary,
-              animationFrame,
-              timingEnabled: presentation.timingEnabled !== false,
-            },
-            theme,
-            width,
-          ),
-        ],
-        invalidate() {},
-      });
-    else if (!presentation.contentOnly) body.addChild(new Text("Code Mode", 0, 0));
-    const program = addCodeModeSection(body, "Program", theme);
-    program.addChild(
-      new Text(
-        truncateDisplay(
-          stripTerminalControls(
-            formatCodeModeProgram(presentation.source ?? "(program not available)"),
-          ),
-          CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum,
-        ),
-        0,
-        0,
-      ),
-    );
-  }
-  const fallbackStatus = !presentation.ownsCall ? presentation.fallbackStatus : undefined;
+  const { fallbackStatus } = presentation;
   if (children.total > 0 || children.entries.length > 0 || fallbackStatus) {
     const calls = addCodeModeSection(body, "Calls", theme);
     calls.addChild({

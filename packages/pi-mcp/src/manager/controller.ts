@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { invokeHostCallback, makeSynchronousIngress, notifyAtHostBoundary } from "pi-cosmic-core";
-import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { makeMcpLoginUi } from "../boundary/host-auth.ts";
 import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
@@ -20,51 +20,26 @@ import { resultPage } from "../ui/result-view.ts";
 import type { McpGatewayReply } from "../tools/model.ts";
 import { McpExecution } from "../tools/service.ts";
 import { McpManager } from "./service.ts";
-import { MCP_DISCOVERY_LIMITS, type McpMetadataSummary } from "../discovery/model.ts";
+import type { McpMetadataSummary } from "../discovery/model.ts";
 
 const CommandFailure = Schema.Struct({
   kind: McpBoundaryError.fields.kind,
   reason: McpBoundaryError.fields.reason,
 });
-const RefreshFeedback = Schema.Struct({
-  result: Schema.Struct({
-    tools: Schema.Int.check(
-      Schema.isBetween({ minimum: 0, maximum: MCP_DISCOVERY_LIMITS.entriesPerFamily }),
-    ),
-    support: Schema.Struct({ tools: Schema.Boolean }),
-    diagnostics: Schema.optionalKey(
-      Schema.Array(
-        Schema.Struct({
-          family: Schema.Literals(["tools", "resources", "templates", "prompts"]),
-        }),
-      ),
-    ),
-  }),
-});
-export const readableMcpOutcome = (reply: McpGatewayReply): string => {
-  if (reply.isError) {
-    const fields = Option.getOrElse(Schema.decodeUnknownOption(CommandFailure)(reply.data), () => ({
-      kind: "unavailable" as const,
-    }));
-    const diagnostic = mcpDiagnostic(
-      { ...fields, outcome: reply.outcome },
-      { action: reply.action },
-    );
-    return `${diagnostic.title}. ${diagnostic.explanation}`;
-  }
-  switch (reply.action) {
+/** Success text reads typed discovery metadata; gateway reply data never reaches it. */
+export const successfulMcpOutcome = (action: string, metadata?: McpMetadataSummary): string => {
+  switch (action) {
     case "connect":
       return "Connected. Metadata was not discovered. This is not a health check.";
     case "disconnect":
       return "Disconnected. Completed results remain available until eviction or authority revocation.";
     case "refresh": {
-      const decoded = Schema.decodeUnknownOption(RefreshFeedback)(reply.data);
-      if (Option.isNone(decoded)) return "Metadata refreshed. No tools were invoked.";
-      const { tools, support, diagnostics } = decoded.value.result;
+      if (!metadata) return "Metadata refreshed. No tools were invoked.";
+      const { tools, support, diagnostics } = metadata;
       const summary = support.tools
         ? `${tools} ${tools === 1 ? "tool" : "tools"} loaded.`
         : "Metadata refreshed. Tools catalog unavailable.";
-      return `${summary} No tools were invoked.${diagnostics?.length ? " Some catalogs are unavailable." : ""}`;
+      return `${summary} No tools were invoked.${diagnostics.length ? " Some catalogs are unavailable." : ""}`;
     }
     case "auth":
       return "Credentials verified locally. Connect separately when ready.";
@@ -73,6 +48,14 @@ export const readableMcpOutcome = (reply: McpGatewayReply): string => {
     default:
       return "MCP command completed.";
   }
+};
+export const readableMcpOutcome = (reply: McpGatewayReply): string => {
+  if (!reply.isError) return successfulMcpOutcome(reply.action);
+  const fields = Option.getOrElse(Schema.decodeUnknownOption(CommandFailure)(reply.data), () => ({
+    kind: "unavailable" as const,
+  }));
+  const diagnostic = mcpDiagnostic({ ...fields, outcome: reply.outcome }, { action: reply.action });
+  return `${diagnostic.title}. ${diagnostic.explanation}`;
 };
 
 /** One outer session Effect owns subscriptions, local read workers, overlays and confirmation. */
@@ -105,41 +88,33 @@ export const runMcpManager = (
                 capacity: 1,
                 overflow: "coalesce-latest",
                 handle: (request) => {
-                  const deliver = <A>(value: A, callback: (input: A) => void) =>
-                    Effect.sync(() => {
-                      if (opening && invokeHostCallback(current, false))
-                        invokeHostCallback(() => callback(value), undefined);
-                    });
+                  const deliver = <A, E>(
+                    load: Effect.Effect<A | undefined, E>,
+                    callback: (value: A | undefined) => void,
+                  ) =>
+                    load.pipe(
+                      Effect.orElseSucceed(() => undefined),
+                      Effect.flatMap((value) =>
+                        Effect.sync(() => {
+                          if (opening && invokeHostCallback(current, false))
+                            invokeHostCallback(() => callback(value), undefined);
+                        }),
+                      ),
+                    );
                   if (request.kind === "cached")
-                    return manager.cached(request.request).pipe(
-                      Effect.matchEffect({
-                        onSuccess: (page) => deliver(page, request.deliver),
-                        onFailure: () => deliver(undefined, request.deliver),
-                      }),
-                    );
+                    return deliver(manager.cached(request.request), request.deliver);
                   if (request.kind === "detail")
-                    return manager.cachedDetail(request.ref).pipe(
-                      Effect.matchEffect({
-                        onSuccess: (detail) => deliver(detail, request.deliver),
-                        onFailure: () => deliver(undefined, request.deliver),
-                      }),
-                    );
-                  return execution
-                    .execute(
-                      {
-                        action: "result.read",
-                        id: request.id,
-                        offset: request.offset,
-                        limit: 8192,
-                      },
-                      { maxOutputBytes: 16_384, images: false },
-                    )
-                    .pipe(
-                      Effect.matchEffect({
-                        onSuccess: (result) => deliver(resultPage(result.reply), request.deliver),
-                        onFailure: () => deliver(undefined, request.deliver),
-                      }),
-                    );
+                    return deliver(manager.cachedDetail(request.ref), request.deliver);
+                  const { id, offset } = request;
+                  return deliver(
+                    execution
+                      .execute(
+                        { action: "result.read", id, offset, limit: 8192 },
+                        { maxOutputBytes: 16_384, images: false },
+                      )
+                      .pipe(Effect.map((result) => resultPage(result.reply))),
+                    request.deliver,
+                  );
                 },
               }).pipe(Effect.orDie);
               yield* manager.subscribe(() =>
@@ -165,9 +140,7 @@ export const runMcpManager = (
                     load: (request) => {
                       ingress.offer(request);
                     },
-                    matchesKeybinding: (data, id) => keybindings.matches(data, id),
-                    keybindingLabel: (id, fallback) =>
-                      fullScreenKeybindingLabel(id, fallback, (key) => keybindings.getKeys(key)),
+                    ...fullScreenKeybindingOptions(keybindings),
                   });
                   return component;
                 },
@@ -195,25 +168,7 @@ export const runMcpManager = (
                 );
               } else metadata = yield* manager.dispatch(ticket);
               if (current())
-                notifyAtHostBoundary(
-                  ctx,
-                  readableMcpOutcome({
-                    action: ticket.action,
-                    outcome: "completed",
-                    isError: false,
-                    data: metadata
-                      ? {
-                          result: {
-                            tools: metadata.tools,
-                            support: { tools: metadata.support.tools },
-                            diagnostics: metadata.diagnostics.map(({ family }) => ({ family })),
-                          },
-                        }
-                      : null,
-                    notices: [],
-                  }),
-                  "info",
-                );
+                notifyAtHostBoundary(ctx, successfulMcpOutcome(ticket.action, metadata), "info");
             }),
           );
           if (result._tag === "Failure" && current()) {

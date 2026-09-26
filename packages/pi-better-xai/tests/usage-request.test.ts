@@ -7,231 +7,72 @@ import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   jsonHttpRawResponse,
   jsonHttpTestLayer,
-  makeInMemoryDocuments,
   type JsonHttpTestResponse,
 } from "pi-cosmic-core/testing";
-import { readXaiCredentials } from "../src/auth/auth.ts";
-import { registryEffectLayer, registryLayer, serializedSnapshot } from "./support/fixtures.ts";
+import { registryLayer, registryLookupLayer, serializedSnapshot } from "./support/fixtures.ts";
 import { requestXaiUsage } from "../src/usage/request.ts";
 
-const authPath = "/agent/auth.json";
+const emptyBilling = JSON.stringify({ config: {} });
 
-const provideRequest = (http: ReturnType<typeof jsonHttpTestLayer>) =>
-  Layer.mergeAll(makeInMemoryDocuments().layer, registryLayer("registry-owned-test-token"), http);
-
-describe("requestXaiUsage resources", () => {
-  it.effect("refreshes a file token with unknown expiry once after a 401", () => {
-    const expiredAccess = "expired-access-secret";
-    const refreshSecret = "refresh-secret";
-    const refreshedAccess = "refreshed-access-secret";
-    const documents = makeInMemoryDocuments({
-      [authPath]: {
-        other: "preserved-root-field",
-        xai: {
-          type: "oauth",
-          access: expiredAccess,
-          refresh: refreshSecret,
-          future: "preserved-entry-field",
-        },
-      },
-    });
-    let initialBillingResponses = 0;
-    const http = jsonHttpTestLayer((request) => {
-      if (request.method === "POST")
-        return Effect.succeed(
-          jsonHttpRawResponse(
-            200,
-            JSON.stringify({ access_token: refreshedAccess, expires_in: 3_600 }),
-          ),
-        );
-      initialBillingResponses++;
-      return Effect.succeed(
-        initialBillingResponses <= 2
-          ? jsonHttpRawResponse(401, "expired")
-          : jsonHttpRawResponse(200, JSON.stringify({ config: {} })),
-      );
-    });
-    // Pi's registry commonly returns the same stored OAuth token without file provenance.
-    const layer = Layer.mergeAll(documents.layer, registryLayer(expiredAccess), http);
-
-    return Effect.gen(function* () {
-      const result = yield* requestXaiUsage(authPath);
-      expect(result?.snapshot.monthlyUsed).toBeNull();
-      const persisted = yield* readXaiCredentials(authPath);
-      expect(persisted?.expires).toBeGreaterThan(0);
-      expect(documents.updateCount).toBe(1);
-      expect(documents.documents.get(authPath)).toMatchObject({
-        other: "preserved-root-field",
-        xai: {
-          future: "preserved-entry-field",
-          access: refreshedAccess,
-          refresh: refreshSecret,
-        },
-      });
-      expect(serializedSnapshot(result)).not.toContain(expiredAccess);
-      expect(serializedSnapshot(result)).not.toContain(refreshSecret);
-      expect(serializedSnapshot(result)).not.toContain(refreshedAccess);
-    }).pipe(provideBuiltLayer(layer));
-  });
-
-  it.effect(
-    "falls back to a changed registry token when the rejected file token cannot refresh",
-    () => {
-      const rejectedAccess = "rejected-file-access-secret";
-      const refreshSecret = "failed-refresh-secret";
-      const registryAccess = "replacement-registry-secret";
-      const documents = makeInMemoryDocuments({
-        [authPath]: {
-          xai: {
-            type: "oauth",
-            access: rejectedAccess,
-            refresh: refreshSecret,
-          },
-        },
-      });
-      let registryLookups = 0;
-      let refreshAttempts = 0;
-      let monthlyRequests = 0;
-      const registry = registryEffectLayer(
-        Effect.sync(() => {
-          registryLookups++;
-          return registryLookups === 1 ? rejectedAccess : registryAccess;
-        }),
-      );
-      const http = jsonHttpTestLayer((request) => {
-        if (request.method === "POST") {
-          refreshAttempts++;
-          return Effect.succeed(jsonHttpRawResponse(503, "refresh unavailable"));
-        }
-        if (request.url.includes("format=credits"))
-          return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
-        monthlyRequests++;
-        return Effect.succeed(
-          request.headers?.Authorization === `Bearer ${registryAccess}`
-            ? jsonHttpRawResponse(200, JSON.stringify({ config: {} }))
-            : jsonHttpRawResponse(401, "rejected"),
-        );
-      });
-      const layer = Layer.mergeAll(documents.layer, registry, http);
-
-      return Effect.gen(function* () {
-        const result = yield* requestXaiUsage(authPath);
-        expect(result?.snapshot.monthlyUsed).toBeNull();
-        expect(refreshAttempts).toBe(1);
-        expect(registryLookups).toBe(2);
-        expect(monthlyRequests).toBe(2);
-        for (const secret of [rejectedAccess, refreshSecret, registryAccess])
-          expect(serializedSnapshot(result)).not.toContain(secret);
-      }).pipe(provideBuiltLayer(layer));
-    },
+/**
+ * Registry lookups answer in order (the last answer repeats). Monthly billing accepts only
+ * `acceptedToken` and rejects every other token with a 401; weekly credits always succeed.
+ */
+const rejectedUsage = (
+  registryAnswers: readonly [string, ...Array<string | Error>],
+  acceptedToken?: string,
+) => {
+  const counts = { registry: 0, monthly: 0 };
+  const registry = registryLookupLayer(
+    () => registryAnswers[Math.min(counts.registry++, registryAnswers.length - 1)],
   );
-
-  it.effect("does not retry when the registry still returns the rejected token", () => {
-    const rejectedAccess = "unchanged-rejected-secret";
-    const documents = makeInMemoryDocuments({
-      [authPath]: {
-        xai: {
-          type: "oauth",
-          access: rejectedAccess,
-        },
-      },
-    });
-    let registryLookups = 0;
-    let refreshAttempts = 0;
-    let monthlyRequests = 0;
-    const registry = registryEffectLayer(
-      Effect.sync(() => {
-        registryLookups++;
-        return rejectedAccess;
-      }),
+  const http = jsonHttpTestLayer((request) => {
+    if (request.url.includes("format=credits"))
+      return Effect.succeed(jsonHttpRawResponse(200, emptyBilling));
+    counts.monthly++;
+    const accepted =
+      acceptedToken !== undefined && request.headers?.Authorization === `Bearer ${acceptedToken}`;
+    return Effect.succeed(
+      accepted ? jsonHttpRawResponse(200, emptyBilling) : jsonHttpRawResponse(401, "rejected"),
     );
-    const http = jsonHttpTestLayer((request) => {
-      if (request.method === "POST") {
-        refreshAttempts++;
-        return Effect.succeed(jsonHttpRawResponse(500, "unexpected refresh"));
-      }
-      if (request.url.includes("format=credits"))
-        return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
-      monthlyRequests++;
-      return Effect.succeed(jsonHttpRawResponse(401, "rejected"));
-    });
-    const layer = Layer.mergeAll(documents.layer, registry, http);
+  });
+  return { counts, layer: Layer.merge(registry, http) };
+};
 
+describe("requestXaiUsage", () => {
+  it.effect("retries a 401 once with the changed token the registry re-resolves", () => {
+    const rejected = "rejected-access-secret";
+    const replacement = "replacement-registry-secret";
+    const usage = rejectedUsage([rejected, replacement], replacement);
     return Effect.gen(function* () {
-      const result = yield* requestXaiUsage(authPath).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.operation).toBe("monthly");
-      expect(refreshAttempts).toBe(0);
-      expect(registryLookups).toBe(2);
-      expect(monthlyRequests).toBe(1);
-      expect(serializedSnapshot(result)).not.toContain(rejectedAccess);
-    }).pipe(provideBuiltLayer(layer));
+      const result = yield* requestXaiUsage();
+      expect(result?.snapshot.monthlyUsed).toBeNull();
+      expect(usage.counts).toEqual({ registry: 2, monthly: 2 });
+      expect(serializedSnapshot(result)).not.toMatch(/rejected-access|replacement-registry/);
+    }).pipe(provideBuiltLayer(usage.layer));
   });
 
-  it.effect("does not overwrite credentials replaced while a rejected request is in flight", () => {
-    const rejectedAccess = "raced-rejected-access-secret";
-    const rejectedRefresh = "raced-rejected-refresh-secret";
-    const replacementAccess = "concurrent-replacement-access-secret";
-    const replacementRefresh = "concurrent-replacement-refresh-secret";
-    const documents = makeInMemoryDocuments({
-      [authPath]: {
-        xai: {
-          type: "oauth",
-          access: rejectedAccess,
-          refresh: rejectedRefresh,
-        },
-      },
-    });
-    let refreshAttempts = 0;
-    let registryLookups = 0;
-
+  it.effect("never resends a token the provider rejected", () => {
+    const rejected = "unchanged-rejected-secret";
+    const usage = rejectedUsage([rejected]);
     return Effect.gen(function* () {
-      const monthlyStarted = yield* Deferred.make<void>();
-      const releaseMonthly = yield* Deferred.make<void>();
-      const registry = registryEffectLayer(
-        Effect.sync(() => {
-          registryLookups++;
-          return rejectedAccess;
-        }),
-      );
-      const http = jsonHttpTestLayer((request) => {
-        if (request.method === "POST") {
-          refreshAttempts++;
-          return Effect.succeed(jsonHttpRawResponse(500, "unexpected refresh"));
-        }
-        if (request.url.includes("format=credits"))
-          return Effect.succeed(jsonHttpRawResponse(200, JSON.stringify({ config: {} })));
-        return Deferred.succeed(monthlyStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseMonthly)),
-          Effect.as(jsonHttpRawResponse(401, "rejected")),
-        );
-      });
-      const layer = Layer.mergeAll(documents.layer, registry, http);
-      const fiber = yield* requestXaiUsage(authPath).pipe(
-        Effect.result,
-        provideBuiltLayer(layer),
-        Effect.forkScoped,
-      );
-      yield* Deferred.await(monthlyStarted);
-      yield* documents.service.updateObject(authPath, (document) => ({
-        ...document,
-        xai: {
-          type: "oauth",
-          access: replacementAccess,
-          refresh: replacementRefresh,
-        },
-      }));
-      yield* Deferred.succeed(releaseMonthly, undefined);
-      const result = yield* Fiber.join(fiber);
+      const error = yield* Effect.flip(requestXaiUsage());
+      expect(error.operation).toBe("monthly");
+      expect(usage.counts).toEqual({ registry: 2, monthly: 1 });
+      expect(serializedSnapshot(error)).not.toContain(rejected);
+    }).pipe(provideBuiltLayer(usage.layer));
+  });
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.operation).toBe("monthly");
-      expect(refreshAttempts).toBe(0);
-      expect(registryLookups).toBe(2);
-      expect(documents.documents.get(authPath)).toMatchObject({
-        xai: { access: replacementAccess, refresh: replacementRefresh },
-      });
-    });
+  it.effect("keeps the 401 usage error when the registry re-resolve fails", () => {
+    const rejected = "rejected-before-refresh-secret";
+    const usage = rejectedUsage([rejected, new Error("refresh failed: error_description")]);
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(requestXaiUsage());
+      expect(error.operation).toBe("monthly");
+      expect(error.message).toContain("(HTTP 401)");
+      expect(usage.counts).toEqual({ registry: 2, monthly: 1 });
+      expect(serializedSnapshot(error)).not.toMatch(/rejected-before-refresh|error_description/);
+    }).pipe(provideBuiltLayer(usage.layer));
   });
 
   it.effect("releases both concurrent HTTP resources when the usage request is interrupted", () => {
@@ -253,8 +94,8 @@ describe("requestXaiUsage resources", () => {
             }),
         ),
       );
-      const fiber = yield* requestXaiUsage(authPath).pipe(
-        provideBuiltLayer(provideRequest(http)),
+      const fiber = yield* requestXaiUsage().pipe(
+        provideBuiltLayer(Layer.merge(registryLayer("registry-owned-test-token"), http)),
         Effect.forkScoped,
       );
       yield* Deferred.await(bothStarted);

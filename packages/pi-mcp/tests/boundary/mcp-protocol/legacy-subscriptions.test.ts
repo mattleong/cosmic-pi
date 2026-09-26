@@ -5,6 +5,7 @@ import { legacyProtocol } from "../../../src/boundary/mcp-protocol/legacy/adapte
 import { makeSdkClient } from "../../../src/boundary/sdk-client.ts";
 import { makeSdkEvents, type SdkSubscriptionTraffic } from "../../../src/boundary/sdk-events.ts";
 import { boundaryError } from "../../../src/client/errors.ts";
+import { legacyInitialized } from "../../fixtures/json-rpc.ts";
 
 const legacyClient = (traffic?: SdkSubscriptionTraffic) =>
   Effect.gen(function* () {
@@ -23,11 +24,7 @@ const legacyClient = (traffic?: SdkSubscriptionTraffic) =>
         clientTransport.onmessage?.({
           jsonrpc: "2.0",
           id: message.id,
-          result: {
-            protocolVersion: "2025-11-25",
-            capabilities: { resources: { subscribe: true } },
-            serverInfo: { name: "fixture", version: "1" },
-          },
+          result: legacyInitialized({ resources: { subscribe: true } }),
         });
       else if (message.method === "resources/subscribe")
         clientTransport.onmessage?.({

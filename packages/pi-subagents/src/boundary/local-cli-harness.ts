@@ -14,8 +14,10 @@ import { claudeArgv, claudeSettings } from "../backend/claude-policy.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import {
+  codexFeatureLines,
   ensurePrivateDirectory,
   readValidatedCodexAuth,
+  removePrivateDirectory,
   safeAgentDirectory,
   writeExclusive,
 } from "./harness-shared.ts";
@@ -55,7 +57,7 @@ export interface LocalCliHarnessOptions {
   /** Package-test seam only. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
   /** Package-test seam only: fail after a sensitive harness file was published. */
-  readonly harnessFault?: "after-claude-settings" | "after-codex-auth" | undefined;
+  readonly harnessFault?: "after-claude-settings" | undefined;
   /** Package-test seam only: model an unconfirmable partial-harness cleanup. */
   readonly harnessCleanupFault?: boolean | undefined;
   /** Package-test seam only: pause after unique-directory ownership is established. */
@@ -120,25 +122,19 @@ export const sanitizeLocalCliEnvironment = (
   launch?: BackendLaunchRequest,
 ): NodeJS.ProcessEnv => {
   const codexApiKey = runtime === "codex" ? approvedCodexApiKey(source) : undefined;
-  return (() => {
-    const baseResult = Object.fromEntries(
+  return {
+    ...Object.fromEntries(
       Object.entries(source).filter(
         ([key, value]) => value !== undefined && SAFE_ENV_KEYS.has(key),
       ),
-    );
-    const withOpenAiApiKey = codexApiKey
-      ? { ...baseResult, OPENAI_API_KEY: codexApiKey }
-      : baseResult;
-    const withSubagentLaunchEnvironment = launch
-      ? {
-          ...withOpenAiApiKey,
-          PI_SUBAGENT_CHILD: "1",
-          PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
-          PI_SUBAGENT_RUN_ID: launch.runId,
-        }
-      : withOpenAiApiKey;
-    return withSubagentLaunchEnvironment;
-  })();
+    ),
+    ...(codexApiKey && { OPENAI_API_KEY: codexApiKey }),
+    ...(launch && {
+      PI_SUBAGENT_CHILD: "1",
+      PI_SUBAGENT_PARENT_SESSION: launch.parentSessionId,
+      PI_SUBAGENT_RUN_ID: launch.runId,
+    }),
+  };
 };
 
 export const codexArgv = (): ReadonlyArray<string> => ["app-server", "--stdio", "--strict-config"];
@@ -153,25 +149,7 @@ const codexBaseConfig = (openaiFastMode = false): ReadonlyArray<string> => [
   'exclude = ["OPENAI_API_KEY", "CODEX_HOME", "PI_SUBAGENT_CHILD", "PI_SUBAGENT_PARENT_SESSION", "PI_SUBAGENT_RUN_ID"]',
   "[agents]",
   "enabled = true",
-  "[features]",
-  "apps = false",
-  "auth_elicitation = false",
-  "browser_use = false",
-  "computer_use = false",
-  `fast_mode = ${openaiFastMode}`,
-  "goals = false",
-  "guardian_approval = false",
-  "hooks = false",
-  "image_generation = false",
-  "in_app_browser = false",
-  "memories = false",
-  "multi_agent = true",
-  "plugins = false",
-  "remote_plugin = false",
-  "skill_search = false",
-  "standalone_web_search = false",
-  "tool_suggest = false",
-  "workspace_dependencies = false",
+  ...codexFeatureLines(openaiFastMode, false),
 ];
 
 const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: boolean): string =>
@@ -179,121 +157,124 @@ const codexConfig = (supervisor: SupervisorConnectionMetadata, openaiFastMode: b
 
 const codexCatalogConfig = (): string => [...codexBaseConfig(), ""].join("\n");
 
-export const prepareLocalCliHarness = (
-  options: LocalCliHarnessOptions,
-  request: LocalCliHarnessRequest,
-): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
+export const removeLocalCliHarness = (
+  directory: string,
+): Effect.Effect<void, LocalCliHarnessError> =>
+  Effect.tryPromise({ try: () => removePrivateDirectory(directory), catch: harnessCleanupFailed });
+
+/**
+ * Owns one unique private harness directory: root preparation stays interruptible, the exclusive
+ * directory and its build stay masked, and a failed build is cleaned up before it is reported.
+ */
+const prepareOwnedHarness = <Harness>(
+  agentDirectory: string,
+  rootName: string,
+  namePrefix: string,
+  build: (directory: string) => Effect.Effect<Harness, LocalCliHarnessError>,
+  cleanup: (directory: string) => Effect.Effect<void, LocalCliHarnessError> = removeLocalCliHarness,
+): Effect.Effect<Harness, LocalCliHarnessError> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const agentDirectory = yield* restore(
-        prepareStep(() => safeAgentDirectory(options.agentDirectory)),
-      );
-      const packageRoot = join(agentDirectory, "subagents");
-      const root = join(packageRoot, HARNESS_ROOT);
-      const directory = join(
-        root,
-        `${request.runtime}-${request.launch.runId}-${randomBytes(12).toString("hex")}`,
-      );
+      const safeDirectory = yield* restore(prepareStep(() => safeAgentDirectory(agentDirectory)));
+      const packageRoot = join(safeDirectory, "subagents");
+      const root = join(packageRoot, rootName);
+      const directory = join(root, `${namePrefix}-${randomBytes(12).toString("hex")}`);
       yield* restore(prepareStep(() => ensurePrivateDirectory(packageRoot)));
       yield* restore(prepareStep(() => ensurePrivateDirectory(root)));
       yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
-
-      const buildHarness = (): Promise<LocalCliHarness> =>
-        fs.lstat(directory).then((directoryStat) => {
-          if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
-            throw new Error("unsafe-harness-directory");
-          const executable = options.executables?.[request.runtime] ?? request.runtime;
-          const sourceEnvironment = options.environment ?? process.env;
-          const env = sanitizeLocalCliEnvironment(
-            sourceEnvironment,
-            request.runtime,
-            request.launch,
-          );
-
-          if (request.runtime === "claude") {
-            const settingsPath = join(directory, "settings.json");
-            const mcpPath = join(directory, "mcp.json");
-            const promptPath = join(directory, "system-prompt.md");
-            const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
-            return writeExclusive(
-              settingsPath,
-              `${JSON.stringify(claudeSettings(request.launch, writerPolicy))}\n`,
-            )
-              .then(() => {
-                if (options.harnessFault === "after-claude-settings")
-                  throw new Error("fixture-after-claude-settings");
-                return writeExclusive(mcpPath, `${JSON.stringify(request.supervisor.claudeMcp)}\n`);
-              })
-              .then(() => writeExclusive(promptPath, request.launch.systemPrompt))
-              .then(() => ({
-                directory,
-                executable,
-                args: claudeArgv(
-                  request.launch,
-                  { settingsPath, mcpPath, promptPath },
-                  writerPolicy,
-                ),
-                env,
-              }));
-          }
-
-          const codexHome = join(directory, "codex-home");
-          return fs
-            .mkdir(codexHome, { mode: 0o700 })
-            .then(() =>
-              writeExclusive(
-                join(codexHome, "config.toml"),
-                codexConfig(request.supervisor, request.launch.openaiFastMode),
-              ),
-            )
-            .then(() => readValidatedCodexAuth(sourceEnvironment))
-            .then((auth) => {
-              if (auth)
-                return writeExclusive(join(codexHome, "auth.json"), auth).then(() => {
-                  if (options.harnessFault === "after-codex-auth")
-                    throw new Error("fixture-after-codex-auth");
-                });
-              if (!approvedCodexApiKey(sourceEnvironment))
-                throw new Error("codex-auth-unavailable");
-              return undefined;
-            })
-            .then(() => ({
-              directory,
-              executable,
-              args: codexArgv(),
-              env: { ...env, CODEX_HOME: codexHome },
-            }));
-        });
-
-      const built = yield* Effect.exit(
-        Effect.gen(function* () {
-          if (options.afterHarnessDirectoryCreated)
-            yield* prepareStep(options.afterHarnessDirectoryCreated);
-          return yield* prepareStep(buildHarness);
-        }),
-      );
+      const built = yield* Effect.exit(build(directory));
       if (built._tag === "Success") return built.value;
-      const cleanup = yield* Effect.exit(
-        options.harnessCleanupFault
-          ? Effect.fail(harnessCleanupFailed())
-          : removeLocalCliHarness(directory),
-      );
-      if (cleanup._tag === "Failure") return yield* harnessCleanupFailed();
+      const cleaned = yield* Effect.exit(cleanup(directory));
+      if (cleaned._tag === "Failure") return yield* harnessCleanupFailed();
       return yield* Effect.failCause(built.cause);
     }),
   );
 
-export const removeLocalCliHarness = (
+/** Creates a private CODEX_HOME with the given config and only bounded, validated auth. */
+const prepareCodexHome = (
   directory: string,
-): Effect.Effect<void, LocalCliHarnessError> =>
-  Effect.tryPromise({
-    try: () =>
-      fs.lstat(directory).then((stat) => {
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-        return fs.rm(directory, { recursive: true, force: false });
-      }),
-    catch: harnessCleanupFailed,
+  config: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string> => {
+  const codexHome = join(directory, "codex-home");
+  return fs
+    .mkdir(codexHome, { mode: 0o700 })
+    .then(() => writeExclusive(join(codexHome, "config.toml"), config))
+    .then(() => readValidatedCodexAuth(environment))
+    .then((auth) => {
+      if (auth) return writeExclusive(join(codexHome, "auth.json"), auth);
+      if (!approvedCodexApiKey(environment)) throw new Error("codex-auth-unavailable");
+      return undefined;
+    })
+    .then(() => codexHome);
+};
+
+const buildLocalCliHarness = (
+  options: LocalCliHarnessOptions,
+  request: LocalCliHarnessRequest,
+  directory: string,
+): Promise<LocalCliHarness> =>
+  fs.lstat(directory).then((directoryStat) => {
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
+      throw new Error("unsafe-harness-directory");
+    const executable = options.executables?.[request.runtime] ?? request.runtime;
+    const sourceEnvironment = options.environment ?? process.env;
+    const env = sanitizeLocalCliEnvironment(sourceEnvironment, request.runtime, request.launch);
+
+    if (request.runtime === "claude") {
+      const settingsPath = join(directory, "settings.json");
+      const mcpPath = join(directory, "mcp.json");
+      const promptPath = join(directory, "system-prompt.md");
+      const writerPolicy = claudeWriterCwdPolicy(request.launch.cwd);
+      return writeExclusive(
+        settingsPath,
+        `${JSON.stringify(claudeSettings(request.launch, writerPolicy))}\n`,
+      )
+        .then(() => {
+          if (options.harnessFault === "after-claude-settings")
+            throw new Error("fixture-after-claude-settings");
+          return writeExclusive(mcpPath, `${JSON.stringify(request.supervisor.claudeMcp)}\n`);
+        })
+        .then(() => writeExclusive(promptPath, request.launch.systemPrompt))
+        .then(() => ({
+          directory,
+          executable,
+          args: claudeArgv(request.launch, { settingsPath, mcpPath, promptPath }, writerPolicy),
+          env,
+        }));
+    }
+
+    return prepareCodexHome(
+      directory,
+      codexConfig(request.supervisor, request.launch.openaiFastMode),
+      sourceEnvironment,
+    ).then((codexHome) => ({
+      directory,
+      executable,
+      args: codexArgv(),
+      env: { ...env, CODEX_HOME: codexHome },
+    }));
   });
+
+export const prepareLocalCliHarness = (
+  options: LocalCliHarnessOptions,
+  request: LocalCliHarnessRequest,
+): Effect.Effect<LocalCliHarness, LocalCliHarnessError> =>
+  prepareOwnedHarness(
+    options.agentDirectory,
+    HARNESS_ROOT,
+    `${request.runtime}-${request.launch.runId}`,
+    (directory) =>
+      Effect.gen(function* () {
+        if (options.afterHarnessDirectoryCreated)
+          yield* prepareStep(options.afterHarnessDirectoryCreated);
+        return yield* prepareStep(() => buildLocalCliHarness(options, request, directory));
+      }),
+    (directory) =>
+      options.harnessCleanupFault
+        ? Effect.fail(harnessCleanupFailed())
+        : removeLocalCliHarness(directory),
+  );
 
 export interface CodexCatalogHarness {
   readonly args: ReadonlyArray<string>;
@@ -306,46 +287,17 @@ export const prepareCodexCatalogHarness = (options: {
   readonly agentDirectory: string;
   readonly environment: NodeJS.ProcessEnv;
 }): Effect.Effect<CodexCatalogHarness, LocalCliHarnessError> =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.gen(function* () {
-      const agentDirectory = yield* restore(
-        prepareStep(() => safeAgentDirectory(options.agentDirectory)),
-      );
-      const packageRoot = join(agentDirectory, "subagents");
-      const root = join(packageRoot, CATALOG_HARNESS_ROOT);
-      const directory = join(root, `codex-${randomBytes(12).toString("hex")}`);
-      yield* restore(prepareStep(() => ensurePrivateDirectory(packageRoot)));
-      yield* restore(prepareStep(() => ensurePrivateDirectory(root)));
-      yield* prepareStep(() => fs.mkdir(directory, { mode: 0o700 }));
-
-      const buildHarness = (): Promise<CodexCatalogHarness> => {
-        const codexHome = join(directory, "codex-home");
-        return fs
-          .mkdir(codexHome, { mode: 0o700 })
-          .then(() => writeExclusive(join(codexHome, "config.toml"), codexCatalogConfig()))
-          .then(() => readValidatedCodexAuth(options.environment))
-          .then((auth) => {
-            if (auth) return writeExclusive(join(codexHome, "auth.json"), auth);
-            if (!approvedCodexApiKey(options.environment))
-              throw new Error("codex-auth-unavailable");
-            return undefined;
-          })
-          .then(() => ({
-            args: codexArgv(),
-            env: {
-              ...sanitizeLocalCliEnvironment(options.environment, "codex"),
-              CODEX_HOME: codexHome,
-            },
-            release: removeLocalCliHarness(directory),
-          }));
-      };
-
-      const built = yield* Effect.exit(prepareStep(buildHarness));
-      if (built._tag === "Success") return built.value;
-      const cleanup = yield* Effect.exit(removeLocalCliHarness(directory));
-      if (cleanup._tag === "Failure") return yield* harnessCleanupFailed();
-      return yield* Effect.failCause(built.cause);
-    }),
+  prepareOwnedHarness(options.agentDirectory, CATALOG_HARNESS_ROOT, "codex", (directory) =>
+    prepareStep(() =>
+      prepareCodexHome(directory, codexCatalogConfig(), options.environment).then((codexHome) => ({
+        args: codexArgv(),
+        env: {
+          ...sanitizeLocalCliEnvironment(options.environment, "codex"),
+          CODEX_HOME: codexHome,
+        },
+        release: removeLocalCliHarness(directory),
+      })),
+    ),
   );
 
 export interface ProbeResult {
@@ -382,7 +334,6 @@ export const runProbeEffect = (
     detached: process.platform !== "win32",
     windowsHide: true,
   }).pipe(
-    Effect.map(({ dispatched: _dispatched, ...result }) => result),
     Effect.catch((error) =>
       Effect.succeed({
         code: null,

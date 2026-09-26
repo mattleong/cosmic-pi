@@ -14,7 +14,7 @@ export const SUPERVISOR_MCP_PROXY_TOOL_NAME = "supervisor_pi_proxy" as const;
 
 export const SUPERVISOR_MCP_MESSAGE_ARGUMENT_KEYS = ["message"] as const;
 export const SUPERVISOR_MCP_REPORT_ARGUMENT_KEYS = ["delivery_id", "report"] as const;
-export const SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS = ["tool", "arguments_json"] as const;
+const SUPERVISOR_MCP_PROXY_ARGUMENT_KEYS = ["tool", "arguments_json"] as const;
 
 export interface SupervisorMcpMessageArguments {
   readonly message: string;

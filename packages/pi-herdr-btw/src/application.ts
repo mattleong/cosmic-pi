@@ -10,12 +10,7 @@ import { notifyHerdrBtw } from "./boundary/host-notifier.ts";
 import { registerHerdrBtwParentReference } from "./boundary/host-parent-reference.ts";
 import { captureHerdrBtwSession, type HerdrBtwSessionInput } from "./boundary/host-session.ts";
 import { registerHerdrBtwCommands } from "./btw/controller.ts";
-import {
-  HerdrBtwService,
-  type HerdrBtwResult,
-  type HerdrBtwServiceContract,
-} from "./btw/service.ts";
-import type { HerdrBtwError } from "./btw/errors.ts";
+import { HerdrBtwService } from "./btw/service.ts";
 import { makeHerdrBtwLayer } from "./layer.ts";
 import type { HerdrBtwParentReference } from "./parent-link/policy.ts";
 
@@ -42,13 +37,9 @@ export const registerHerdrBtwApplication = (pi: ExtensionAPI): void => {
     },
   });
 
-  const runCommand = (
-    use: (service: HerdrBtwServiceContract) => Effect.Effect<HerdrBtwResult, HerdrBtwError>,
-  ): Promise<HerdrBtwResult> => slot.run(HerdrBtwService.use(use));
-
   registerHerdrBtwCommands(pi, {
-    open: (prompt) => runCommand((service) => service.open(prompt)),
-    openNew: (prompt) => runCommand((service) => service.openNew(prompt)),
+    open: (prompt) => slot.run(HerdrBtwService.use((service) => service.open(prompt))),
+    openNew: (prompt) => slot.run(HerdrBtwService.use((service) => service.openNew(prompt))),
   });
 
   pi.on("session_start", (_event, ctx) => {

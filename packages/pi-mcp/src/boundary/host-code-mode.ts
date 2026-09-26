@@ -1,8 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import {
   MCP_CODE_MODE_MAX_INPUT_BYTES,
   MCP_CODE_MODE_MAX_OUTPUT_BYTES,
@@ -96,9 +95,7 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
                 throw mcpCodeModeError("invalid-input", "not-sent");
               if (!mcpCodeModeJsonFits(input, MCP_CODE_MODE_MAX_INPUT_BYTES))
                 throw mcpCodeModeError("invalid-input", "not-sent");
-              const decoded = Option.getOrUndefined(
-                Schema.decodeUnknownOption(McpCodeModeInputSchema)(input),
-              );
+              const decoded = decodeUnknownOrUndefined(McpCodeModeInputSchema, input);
               if (!decoded) throw mcpCodeModeInputError(input);
               if (!available()) throw mcpCodeModeError("unavailable", "not-sent");
               const allowance = Math.min(maxOutputBytes, MCP_CODE_MODE_MAX_OUTPUT_BYTES);
@@ -109,10 +106,9 @@ export const makeMcpCodeModeHost = (events: ExtensionAPI["events"]): McpCodeMode
                 if (signal.aborted) throw mcpCodeModeError("cancelled", outcome);
                 if (!mcpCodeModeJsonFits(output, allowance))
                   throw mcpCodeModeError("output-limit", outcome);
-                const reply = Option.getOrUndefined(
-                  Schema.decodeUnknownOption(Schema.fromJsonString(McpCodeModeOutputSchema))(
-                    JSON.stringify(output),
-                  ),
+                const reply = decodeUnknownOrUndefined(
+                  Schema.fromJsonString(McpCodeModeOutputSchema),
+                  JSON.stringify(output),
                 );
                 if (
                   !reply ||

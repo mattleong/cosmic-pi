@@ -9,17 +9,22 @@ import {
   makeByteBoundedQueueRoom,
 } from "../src/boundary/bounded-line-parser.ts";
 
+const collect = (maxLineBytes: number, maxQueuedBytes: number) => {
+  const stream = new PassThrough();
+  const lines: string[] = [];
+  const overflow = vi.fn();
+  const detach = attachBoundedLineParser(stream, {
+    maxLineBytes,
+    maxQueuedBytes,
+    onLine: (line) => lines.push(line),
+    onOverflow: overflow,
+  });
+  return { stream, lines, overflow, detach };
+};
+
 describe("bounded child line parser", () => {
   it("flushes split UTF-8 and the final unterminated Pi RPC frame", () => {
-    const stream = new PassThrough();
-    const lines: string[] = [];
-    const overflow = vi.fn();
-    attachBoundedLineParser(stream, {
-      maxLineBytes: 1_024,
-      maxQueuedBytes: 2_048,
-      onLine: (line) => lines.push(line),
-      onOverflow: overflow,
-    });
+    const { stream, lines, overflow } = collect(1_024, 2_048);
     const frame = Buffer.from('{"type":"message_end","text":"café 🌌"}', "utf8");
     const split = frame.indexOf(Buffer.from("é", "utf8")) + 1;
     stream.write(frame.subarray(0, split));
@@ -33,15 +38,7 @@ describe("bounded child line parser", () => {
   });
 
   it("preserves CRLF, suppresses empty lines, and flushes a final frame", () => {
-    const stream = new PassThrough();
-    const lines: string[] = [];
-    const overflow = vi.fn();
-    attachBoundedLineParser(stream, {
-      maxLineBytes: 1_024,
-      maxQueuedBytes: 2_048,
-      onLine: (line) => lines.push(line),
-      onOverflow: overflow,
-    });
+    const { stream, lines, overflow } = collect(1_024, 2_048);
     const ended = once(stream, "end");
     stream.end("\r\nfirst\r\n\nsecond\r");
     return ended.then(() => {
@@ -51,14 +48,7 @@ describe("bounded child line parser", () => {
   });
 
   it("detaches input listeners idempotently", () => {
-    const stream = new PassThrough();
-    const lines: string[] = [];
-    const detach = attachBoundedLineParser(stream, {
-      maxLineBytes: 64,
-      maxQueuedBytes: 128,
-      onLine: (line) => lines.push(line),
-      onOverflow: vi.fn(),
-    });
+    const { stream, lines, detach } = collect(64, 128);
     stream.emit("data", Buffer.from("before\n", "utf8"));
     detach();
     detach();

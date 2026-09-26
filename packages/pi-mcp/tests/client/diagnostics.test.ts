@@ -36,44 +36,29 @@ const reasons = [
   "rpc-error",
 ] as const;
 describe("fixed diagnostic recovery policy", () => {
-  it("never copies exception text into diagnostics or gateway failures", () => {
-    for (const reason of reasons) {
-      const error = boundaryError(
-        "unavailable",
-        "not-sent",
-        "https://issuer.example/authorize?state=PRIVATE_STATE PRIVATE_CODE PRIVATE_TOKEN",
-        reason,
-      );
-      const diagnostic = mcpDiagnostic(error);
-      expect(JSON.stringify([diagnostic, mcpFailureReply("auth", error)])).not.toMatch(
-        /PRIVATE_|issuer\.example/,
-      );
-      expect(diagnostic.recovery.length).toBeGreaterThan(0);
-    }
-  });
   it.each([
+    "protocol-negotiation-rejected",
+    "auth-not-configured",
+    "auth-env-required",
+    "auth-env-sign-in-unsupported",
+    "oauth-insufficient-scope",
+    "oauth-scope-approval-required",
+    "oauth-scope-invalid",
+    "oauth-resource-metadata-missing",
+    "oauth-resource-metadata-invalid",
     "oauth-pkce-unsupported",
     "oauth-client-auth-method-unsupported",
     "oauth-client-auth-method-ambiguous",
-  ] as const)("keeps %s actionable without automatically retrying sign-in", (reason) => {
-    const error = boundaryError("unsupported", "not-sent", "private-registration-response", reason);
+  ] as const)("routes %s to settings review without automatically retrying sign-in", (reason) => {
+    const error = boundaryError("auth-required", "not-sent", "PRIVATE", reason);
     expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
     expect(mcpFailureReply("auth", error)).toMatchObject({
       isError: true,
       outcome: "not-sent",
       data: { reason },
     });
-    expect(mcpDiagnostic({ ...error, outcome: "unknown" }).recovery).toEqual(["inspect-operation"]);
   });
-  it("requires permission review rather than unchanged sign-in for insufficient scopes", () => {
-    for (const reason of [
-      "oauth-insufficient-scope",
-      "oauth-scope-approval-required",
-      "oauth-scope-invalid",
-    ] as const) {
-      const error = boundaryError("auth-required", "not-sent", "PRIVATE_SCOPE", reason);
-      expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
-    }
+  it("routes sign-in recovery by configured mode, not sign-in availability alone", () => {
     const refresh = boundaryError("auth-required", "not-sent", "", "oauth-refresh-unresolved");
     expect(mcpDiagnostic(refresh, { canSignIn: true }).recovery).toEqual([
       "check-storage",
@@ -82,20 +67,40 @@ describe("fixed diagnostic recovery policy", () => {
     const token = boundaryError("auth-required", "not-sent", "", "oauth-token-rejected");
     expect(mcpDiagnostic(token, { canSignIn: true }).recovery).toEqual(["sign-in"]);
     expect(mcpDiagnostic(token).recovery).toEqual(["inspect-status"]);
-  });
-  it("routes authentication recovery by configured mode, not sign-in availability alone", () => {
-    for (const reason of [
-      "auth-not-configured",
-      "auth-env-required",
-      "auth-env-sign-in-unsupported",
-    ] as const) {
-      const error = boundaryError("auth-required", "not-sent", "private-token", reason);
-      expect(mcpDiagnostic(error, { canSignIn: true }).recovery).toEqual(["inspect-settings"]);
-    }
     const oauth = boundaryError("auth-required", "not-sent", "", "auth-oauth-required");
     expect(mcpDiagnostic(oauth, { canSignIn: true }).recovery).toEqual(["sign-in"]);
     expect(mcpDiagnostic(oauth).recovery).not.toContain("sign-in");
   });
+  it.each(["not-sent", "unknown", "completed"] as const)(
+    "keeps fixed causes private and never suggests replay or retention for %s failures",
+    (outcome) => {
+      for (const reason of reasons) {
+        const error = boundaryError(
+          "protocol",
+          outcome,
+          "https://issuer.example/authorize?state=PRIVATE_STATE PRIVATE_CODE PRIVATE_TOKEN",
+          reason,
+        );
+        const actions = { action: "tools.list", canReopen: true, canSignIn: true };
+        const diagnostic = mcpDiagnostic(error, actions);
+        const reply = mcpFailureReply("tools.list", error);
+        expect(JSON.stringify([diagnostic, reply])).not.toMatch(/PRIVATE_|issuer\.example/);
+        if (outcome === "not-sent") {
+          expect(diagnostic.recovery.length).toBeGreaterThan(0);
+          continue;
+        }
+        expect(diagnostic.recovery).toEqual(["inspect-operation"]);
+        const cause = mcpDiagnostic({ ...error, outcome: "not-sent" });
+        expect(diagnostic.explanation).toContain(cause.explanation);
+        if (outcome === "unknown") continue;
+        expect(diagnostic.explanation).not.toMatch(
+          /existing result|retained (?:output|result)|no .*dispatched/i,
+        );
+        expect(reply).toMatchObject({ outcome, isError: true, data: { kind: "protocol", reason } });
+        expect(reply.resultId).toBeUndefined();
+      }
+    },
+  );
   it("keeps auth configuration evidence with unknown discovery without authorizing replay", () => {
     const error = boundaryError("auth-required", "unknown", "private-token", "auth-not-configured");
     const cause = mcpDiagnostic({ ...error, outcome: "not-sent" });
@@ -130,21 +135,6 @@ describe("fixed diagnostic recovery policy", () => {
       expect(detail.recovery).toEqual(["inspect-operation"]);
     }
   });
-  it("preserves fixed non-auth reasons alongside unknown-outcome warnings", () => {
-    for (const reason of reasons) {
-      const error = boundaryError("protocol", "unknown", "private-server-message", reason);
-      const detail = mcpDiagnostic({ ...error, outcome: "not-sent" });
-      const unknown = mcpDiagnostic(error, { action: "tools.list" });
-      expect(unknown.explanation).toContain(detail.explanation);
-      expect(unknown.recovery).toEqual(["inspect-operation"]);
-      expect(JSON.stringify(mcpFailureReply("tools.list", error))).not.toContain("private-");
-    }
-    const negotiation = mcpDiagnostic(
-      boundaryError("protocol", "not-sent", "", "protocol-negotiation-rejected"),
-      { canSignIn: true },
-    );
-    expect(negotiation.recovery).toEqual(["inspect-settings"]);
-  });
   it("gives only local prompt argument rejections a fixed discovery hint", () => {
     const privateText = "private-prompt-argument-value";
     const rejection = boundaryError("invalid-input", "not-sent", privateText);
@@ -175,36 +165,6 @@ describe("fixed diagnostic recovery policy", () => {
     expect(mcpDiagnostic(expired).recovery).not.toContain("sign-in");
     expect(mcpDiagnostic(expired, { canSignIn: true }).recovery).toContain("sign-in");
   });
-  it("never suggests replay for completed or unknown operations", () => {
-    for (const outcome of ["completed", "unknown"] as const)
-      for (const reason of reasons)
-        expect(
-          mcpDiagnostic(boundaryError("unavailable", outcome, "", reason), {
-            canReopen: true,
-            canSignIn: true,
-          }).recovery,
-        ).toEqual(["inspect-operation"]);
-  });
-  it("preserves safe causes without inventing retained results for completed failures", () => {
-    for (const reason of reasons) {
-      const error = boundaryError("protocol", "completed", "private-server-message", reason);
-      const detail = mcpDiagnostic({ ...error, outcome: "not-sent" });
-      const completed = mcpDiagnostic(error, { canReopen: true, canSignIn: true });
-      expect(completed.explanation).toContain(detail.explanation);
-      expect(completed.recovery).toEqual(["inspect-operation"]);
-      expect(completed.explanation).not.toMatch(
-        /existing result|retained (?:output|result)|no .*dispatched/i,
-      );
-      const reply = mcpFailureReply("tools.search", error);
-      expect(reply).toMatchObject({
-        outcome: "completed",
-        isError: true,
-        data: { kind: "protocol", reason },
-      });
-      expect(reply.resultId).toBeUndefined();
-      expect(JSON.stringify(reply)).not.toContain("private-");
-    }
-  });
   it.each(["invalid-input", "output-limit", "cleanup", "transport", "protocol"] as const)(
     "does not invent non-dispatch or retention for completed %s failures",
     (kind) => {
@@ -217,16 +177,6 @@ describe("fixed diagnostic recovery policy", () => {
       expect(mcpFailureReply("tools.call", error).resultId).toBeUndefined();
     },
   );
-  it("directs missing and invalid resource metadata to configuration review", () => {
-    const missing = mcpDiagnostic(
-      boundaryError("denied", "not-sent", "", "oauth-resource-metadata-missing"),
-    );
-    const invalid = mcpDiagnostic(
-      boundaryError("denied", "not-sent", "", "oauth-resource-metadata-invalid"),
-    );
-    expect(missing.recovery).toEqual(["inspect-settings"]);
-    expect(invalid.recovery).toEqual(["inspect-settings"]);
-  });
   it.each(["not-sent", "completed", "unknown"] as const)(
     "does not interpret a cancelled %s operation as an authentication event",
     (outcome) => {

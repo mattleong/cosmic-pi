@@ -222,31 +222,23 @@ export const makeAsyncQuestionnaires = Effect.fn("AskUserService.makeAsync")(fun
             cancel: yield* Deferred.make<void>(),
             deliveryAttempts: 0,
           };
-          const admitted = yield* Ref.modify(
-            state,
-            (
-              entries,
-            ): readonly [
-              { readonly evicted: string | undefined } | undefined,
-              ReadonlyArray<Entry>,
-            ] => {
-              const evict =
-                entries.length >= MAX_RETAINED_REQUESTS
-                  ? entries.find(
-                      (item) =>
-                        !item.waiter &&
-                        item.snapshot.status !== "pending" &&
-                        ["sent", "waiter"].includes(item.snapshot.delivery),
-                    )
-                  : undefined;
-              if (entries.length >= MAX_RETAINED_REQUESTS && !evict)
-                return [undefined, entries] as const;
-              return [
-                { evicted: evict?.snapshot.requestId },
-                [...entries.filter((item) => item !== evict), entry],
-              ] as const;
-            },
-          );
+          const admitted = yield* Ref.modify(state, (entries) => {
+            const evict =
+              entries.length >= MAX_RETAINED_REQUESTS
+                ? entries.find(
+                    (item) =>
+                      !item.waiter &&
+                      item.snapshot.status !== "pending" &&
+                      ["sent", "waiter"].includes(item.snapshot.delivery),
+                  )
+                : undefined;
+            if (entries.length >= MAX_RETAINED_REQUESTS && !evict)
+              return [undefined, entries] as const;
+            return [
+              { evicted: evict?.snapshot.requestId },
+              [...entries.filter((item) => item !== evict), entry],
+            ] as const;
+          });
           if (!admitted) {
             yield* ticket.close;
             return yield* asyncBusy();

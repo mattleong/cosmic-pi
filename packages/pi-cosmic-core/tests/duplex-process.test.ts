@@ -23,7 +23,8 @@ import {
   closeDuplexProcess,
   type DuplexProcessChild,
 } from "../src/platform/duplex-process-close.ts";
-import { yieldUntil } from "../testing.ts";
+import { pausedScheduler, yieldUntil } from "../testing.ts";
+import { scopedSpy } from "./support/spies.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/duplex-child.mjs", import.meta.url));
 const options = (
@@ -39,6 +40,14 @@ const options = (
   pollIntervalMs: 5,
   ...overrides,
 });
+/** Options whose cleanup observer records every report. */
+const tracked = (mode: string, overrides: Partial<DuplexProcessOptions> = {}) => {
+  const cleanup: boolean[] = [];
+  return {
+    cleanup,
+    options: options(mode, { ...overrides, onCleanup: (value) => cleanup.push(value) }),
+  };
+};
 const encode = (text: string) => new TextEncoder().encode(text);
 const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 const ready = (handle: DuplexProcessHandle) =>
@@ -68,43 +77,20 @@ const collectUntil = (stream: Stream.Stream<Uint8Array, DuplexProcessError>, len
 // The raw Node door is owned by core. Keep real OS handles while controlling
 // acquisition handoff or observing native buffer retention at that boundary.
 const observeChildren = (observe: (child: DuplexProcessChild) => void) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const spawn = NodeBuiltins.nodeSpawn;
-      return vi.spyOn(NodeBuiltins, "nodeSpawn").mockImplementation((command, args, options) => {
-        const child = spawn(command, args ?? [], { ...options, stdio: ["pipe", "pipe", "pipe"] });
-        observe(child);
-        return child;
-      });
-    }),
-    (spy) => Effect.sync(() => spy.mockRestore()),
+  scopedSpy(() => {
+    const spawn = NodeBuiltins.nodeSpawn;
+    return vi.spyOn(NodeBuiltins, "nodeSpawn").mockImplementation((command, args, options) => {
+      const child = spawn(command, args ?? [], { ...options, stdio: ["pipe", "pipe", "pipe"] });
+      observe(child);
+      return child;
+    });
+  });
+/** Withholds the listed native events, e.g. spawn readiness, from the owned boundary. */
+const suppressEvents = (child: DuplexProcessChild, ...events: Array<string | symbol>) => {
+  const emit = child.emit.bind(child);
+  vi.spyOn(child, "emit").mockImplementation((event, ...args) =>
+    events.includes(event) ? true : emit(event, ...args),
   );
-
-const pausedScheduler = () => {
-  const tasks: Array<{ task: () => void; priority: number }> = [];
-  const dispatcher = new Scheduler.MixedScheduler().makeDispatcher();
-  let resumed = false;
-  const scheduler: Scheduler.Scheduler = {
-    executionMode: "async",
-    shouldYield: (fiber) => fiber.currentOpCount >= fiber.maxOpsBeforeYield,
-    makeDispatcher: () => ({
-      scheduleTask: (task, priority) => {
-        if (resumed) dispatcher.scheduleTask(task, priority);
-        else tasks.push({ task, priority });
-      },
-      flush: () => {
-        while (tasks.length) tasks.shift()!.task();
-      },
-    }),
-  };
-  return {
-    scheduler,
-    step: () => tasks.shift()?.task(),
-    resume: () => {
-      resumed = true;
-      for (const { task, priority } of tasks.splice(0)) dispatcher.scheduleTask(task, priority);
-    },
-  };
 };
 
 const expectFailure = <A>(
@@ -157,15 +143,14 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
   it.live("makes concurrent and repeated close calls idempotent", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cleanup: boolean[] = [];
-        const handle = yield* openDuplexProcess(
-          options("ignore-term", { onCleanup: (value) => cleanup.push(value) }),
-        );
+        const run = tracked("ignore-term");
+        const handle = yield* openDuplexProcess(run.options);
         yield* ready(handle);
         yield* Effect.all([handle.close, handle.close], { concurrency: "unbounded" });
         yield* handle.close;
         expect(yield* handle.cleanupState).toBe("confirmed");
-        expect(cleanup).toEqual([true]);
+        expect((yield* handle.exit).signal).toBe("SIGKILL");
+        expect(run.cleanup).toEqual([true]);
       }),
     ),
   );
@@ -176,24 +161,21 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const owner = yield* Scope.fork(yield* Effect.scope);
-          const cleanup: boolean[] = [];
-          const handle = yield* openDuplexProcess(
-            options("ignore-term", { onCleanup: (value) => cleanup.push(value) }),
-          ).pipe(Effect.provideService(Scope.Scope, owner));
+          const run = tracked("ignore-term");
+          const handle = yield* openDuplexProcess(run.options).pipe(
+            Effect.provideService(Scope.Scope, owner),
+          );
           yield* ready(handle);
           const terminated = yield* Deferred.make<void>();
-          yield* Effect.acquireRelease(
-            Effect.sync(() => {
-              const kill = process.kill.bind(process);
-              return vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-                const result = kill(pid, signal);
-                if (pid === -handle.pid && signal === "SIGTERM")
-                  Deferred.doneUnsafe(terminated, Effect.void);
-                return result;
-              });
-            }),
-            (spy) => Effect.sync(() => spy.mockRestore()),
-          );
+          yield* scopedSpy(() => {
+            const kill = process.kill.bind(process);
+            return vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+              const result = kill(pid, signal);
+              if (pid === -handle.pid && signal === "SIGTERM")
+                Deferred.doneUnsafe(terminated, Effect.void);
+              return result;
+            });
+          });
           const closing = yield* handle.close.pipe(Effect.forkScoped);
           yield* Deferred.await(terminated);
           yield* Fiber.interrupt(closing);
@@ -205,7 +187,7 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
           expect((yield* handle.exit).signal).toBe("SIGKILL");
           expect(yield* handle.close.pipe(Effect.exit)).toEqual(Exit.void);
           expect(yield* Scope.close(owner, Exit.void).pipe(Effect.exit)).toEqual(Exit.void);
-          expect(cleanup).toEqual([true]);
+          expect(run.cleanup).toEqual([true]);
         }),
       ),
   );
@@ -216,10 +198,10 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const owner = yield* Scope.fork(yield* Effect.scope);
-          const cleanup: boolean[] = [];
-          const handle = yield* openDuplexProcess(
-            options("ignore-term", { onCleanup: (value) => cleanup.push(value) }),
-          ).pipe(Effect.provideService(Scope.Scope, owner));
+          const run = tracked("ignore-term");
+          const handle = yield* openDuplexProcess(run.options).pipe(
+            Effect.provideService(Scope.Scope, owner),
+          );
           yield* ready(handle);
           const paused = pausedScheduler();
           const closing = yield* handle.close.pipe(
@@ -235,30 +217,20 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
           expect(yield* Scope.close(owner, Exit.void).pipe(Effect.exit)).toEqual(Exit.void);
           expect(yield* handle.cleanupState).toBe("confirmed");
           expect((yield* handle.exit).signal).toBe("SIGKILL");
-          expect(cleanup).toEqual([true]);
+          expect(run.cleanup).toEqual([true]);
         }),
       ),
   );
 
   it.live("scope release joins process cleanup and revokes the returned handle", () =>
     Effect.gen(function* () {
-      const cleanup: boolean[] = [];
-      const handle = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const handle = yield* openDuplexProcess(
-            options("ignore-term", {
-              onCleanup: (value) => cleanup.push(value),
-            }),
-          );
-          yield* ready(handle);
-          return handle;
-        }),
-      );
-      expect(cleanup).toEqual([true]);
+      const run = tracked("ignore-term");
+      const handle = yield* Effect.scoped(openDuplexProcess(run.options).pipe(Effect.tap(ready)));
+      expect(run.cleanup).toEqual([true]);
       expect(yield* handle.cleanupState).toBe("confirmed");
       expect((yield* handle.exit).signal).toBe("SIGKILL");
       yield* handle.close;
-      expect(cleanup).toEqual([true]);
+      expect(run.cleanup).toEqual([true]);
       expectFailure(yield* handle.write(encode("late")).pipe(Effect.result), "closed");
     }),
   );
@@ -266,23 +238,20 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
   it.live("reports a failed spawn without exposing native errors", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cleanup: boolean[] = [];
         const secret = "/missing-private-command-token";
-        const result = yield* openDuplexProcess(
-          options("echo", {
-            command: secret,
-            args: ["private-argument"],
-            environment: { SECRET: "private-value" },
-            onCleanup: (value) => cleanup.push(value),
-          }),
-        ).pipe(Effect.result);
+        const run = tracked("echo", {
+          command: secret,
+          args: ["private-argument"],
+          environment: { SECRET: "private-value" },
+        });
+        const result = yield* openDuplexProcess(run.options).pipe(Effect.result);
         expectFailure(result, "failed");
         if (result._tag === "Failure") {
           expect(String(result.failure)).not.toContain(secret);
           expect(String(result.failure)).not.toContain("private-argument");
           expect(String(result.failure)).not.toContain("private-value");
         }
-        expect(cleanup).toEqual([true]);
+        expect(run.cleanup).toEqual([true]);
       }),
     ),
   );
@@ -291,28 +260,20 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const fixtureReady = yield* Deferred.make<void>();
-        const cleanup: boolean[] = [];
         let child: DuplexProcessChild | undefined;
         yield* observeChildren((value) => {
           child = value;
-          const emit = value.emit.bind(value);
-          vi.spyOn(value, "emit").mockImplementation((event, ...args) =>
-            event === "spawn" ? true : emit(event, ...args),
-          );
+          suppressEvents(value, "spawn");
           value.stdout.once("data", () => Deferred.doneUnsafe(fixtureReady, Effect.void));
         });
-        const pending = yield* openDuplexProcess(
-          options("ignore-term", {
-            startTimeoutMs: 60_000,
-            onCleanup: (value) => cleanup.push(value),
-          }),
-        ).pipe(Effect.forkScoped);
+        const run = tracked("ignore-term", { startTimeoutMs: 60_000 });
+        const pending = yield* openDuplexProcess(run.options).pipe(Effect.forkScoped);
         // The child has installed its TERM handler, but the owned boundary has not
         // delivered spawn readiness. An acquireRelease mask would hang here.
         yield* Deferred.await(fixtureReady);
         expect(pending.pollUnsafe()).toBeUndefined();
         yield* Fiber.interrupt(pending);
-        expect(cleanup).toEqual([true]);
+        expect(run.cleanup).toEqual([true]);
         expect(child?.signalCode).toBe("SIGKILL");
       }),
     ),
@@ -321,21 +282,11 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
   it.live("releases failed startup immediately and reports its deadline", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const cleanup: boolean[] = [];
-        yield* observeChildren((child) => {
-          const emit = child.emit.bind(child);
-          vi.spyOn(child, "emit").mockImplementation((event, ...args) =>
-            event === "spawn" ? true : emit(event, ...args),
-          );
-        });
-        const result = yield* openDuplexProcess(
-          options("ignore-term", {
-            startTimeoutMs: 50,
-            onCleanup: (value) => cleanup.push(value),
-          }),
-        ).pipe(Effect.result);
+        yield* observeChildren((child) => suppressEvents(child, "spawn"));
+        const run = tracked("ignore-term", { startTimeoutMs: 50 });
+        const result = yield* openDuplexProcess(run.options).pipe(Effect.result);
         expectFailure(result, "timeout");
-        expect(cleanup).toEqual([true]);
+        expect(run.cleanup).toEqual([true]);
       }),
     ),
   );
@@ -346,23 +297,17 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const fixtureReady = yield* Deferred.make<void>();
-          const cleanup: boolean[] = [];
           let child: DuplexProcessChild | undefined;
           yield* observeChildren((value) => {
             child = value;
-            const emit = value.emit.bind(value);
-            vi.spyOn(value, "emit").mockImplementation((event, ...args) =>
-              event === "spawn" || event === "close" ? true : emit(event, ...args),
-            );
+            suppressEvents(value, "spawn", "close");
             value.stdout.once("data", () => Deferred.doneUnsafe(fixtureReady, Effect.void));
           });
-          const pending = yield* openDuplexProcess(
-            options("ignore-term", {
-              startTimeoutMs: mode === "timeout" ? 100 : 60_000,
-              cleanupTimeoutMs: 150,
-              onCleanup: (value) => cleanup.push(value),
-            }),
-          ).pipe(Effect.forkScoped);
+          const run = tracked("ignore-term", {
+            startTimeoutMs: mode === "timeout" ? 100 : 60_000,
+            cleanupTimeoutMs: 150,
+          });
+          const pending = yield* openDuplexProcess(run.options).pipe(Effect.forkScoped);
           if (mode !== "timeout") yield* Deferred.await(fixtureReady);
           if (mode === "failure") child!.emit("error", new Error("private-native-readiness"));
           if (mode === "interruption") {
@@ -377,7 +322,7 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
             });
             expect(String(result)).not.toContain("private-");
           }
-          expect(cleanup).toEqual([false]);
+          expect(run.cleanup).toEqual([false]);
           if (mode === "timeout") expect(child?.signalCode).toBeTruthy();
           else expect(child?.signalCode).toBe("SIGKILL");
         }),
@@ -438,18 +383,6 @@ describe.skipIf(process.platform !== "darwin")("macOS duplex processes", () => {
           expect(yield* handle.cleanupState).toBe("confirmed");
         }),
       ),
-  );
-
-  it.live("escalates from TERM only after the leader installs its handler", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const handle = yield* openDuplexProcess(options("ignore-term"));
-        yield* ready(handle);
-        yield* handle.close;
-        expect((yield* handle.exit).signal).toBe("SIGKILL");
-        expect(yield* handle.cleanupState).toBe("confirmed");
-      }),
-    ),
   );
 
   it.live("confirms descendant cleanup after ready and after the leader exits", () =>
@@ -526,17 +459,14 @@ it.effect("uses one total cleanup deadline instead of sequential wait budgets", 
       stderr: new PassThrough(),
     };
     const signals: Array<string | number | undefined> = [];
-    yield* Effect.acquireRelease(
-      Effect.sync(() => {
-        const kill = process.kill.bind(process);
-        return vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-          if (pid !== -child.pid!) return kill(pid, signal);
-          signals.push(signal);
-          return true;
-        });
-      }),
-      (spy) => Effect.sync(() => spy.mockRestore()),
-    );
+    yield* scopedSpy(() => {
+      const kill = process.kill.bind(process);
+      return vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid !== -child.pid!) return kill(pid, signal);
+        signals.push(signal);
+        return true;
+      });
+    });
     const closing = yield* closeDuplexProcess(child, {
       gracefulTimeoutMs: 80,
       forceTimeoutMs: 80,

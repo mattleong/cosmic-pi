@@ -1,17 +1,16 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback, isProjectTrusted, makeSynchronousIngress } from "pi-cosmic-core";
-import { createInputDock } from "pi-cosmic-ui/boundary/host-input-dock";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
+import { openOwnedSurface } from "pi-cosmic-ui/boundary/host-surface";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import type { McpAuthAttempt } from "../auth/flow.ts";
 import { authPhaseTerminal } from "../auth/progress.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { McpAuthPanel } from "../ui/auth-panel.ts";
 
-const inert = (): Component => ({ render: () => [], invalidate() {} });
 const failed = () => boundaryError("unavailable", "not-sent", "The sign-in panel is unavailable.");
 
 /** One private TUI presentation. Closing it cancels the exact flow, never logout. */
@@ -29,45 +28,15 @@ export const presentMcpAuthPanel = (
         )
       )
         return yield* failed();
-      const dock = createInputDock(ctx.ui);
       const cancellation = yield* Deferred.make<void>();
       let closing = false;
       let cancelled = false;
       let reopening = false;
-      let factoryInvoked = false;
-      let doneInvoked = false;
-      let requested = false;
-      let hostDone: (() => void) | undefined;
       let tui: TUI | undefined;
       let overlay: OverlayHandle | undefined;
-      let rejectCompletion: (() => void) | undefined;
-      const finish = () => {
-        requested = true;
-        if (doneInvoked || !hostDone || !tui || !overlay) return;
-        doneInvoked = true;
-        try {
-          // Pinned Pi done() pops the global overlay stack. Remove only our handle,
-          // then provide an inert guard for that pop so a newer questionnaire survives.
-          overlay.hide();
-          const guard = tui.showOverlay(inert(), { nonCapturing: true });
-          try {
-            hostDone();
-          } finally {
-            guard.hide();
-          }
-        } catch {
-          rejectCompletion?.();
-        }
-      };
-      const close = () => {
-        closing = true;
-        try {
-          finish();
-        } finally {
-          invokeHostCallback(() => dock.dispose(), undefined);
-        }
-      };
-      const active = () => !closing && invokeHostCallback(current, false) && isProjectTrusted(ctx);
+      let close = () => {};
+      const trusted = () => invokeHostCallback(current, false) && isProjectTrusted(ctx);
+      const active = () => !closing && trusted();
       const repaint = () => {
         if (!active()) return;
         const value = attempt.snapshot();
@@ -89,7 +58,7 @@ export const presentMcpAuthPanel = (
       yield* Effect.forkScoped(
         Deferred.await(cancellation).pipe(
           Effect.andThen(attempt.cancel),
-          Effect.andThen(Effect.sync(close)),
+          Effect.andThen(Effect.sync(() => close())),
         ),
       );
       const reopens = yield* makeSynchronousIngress({
@@ -105,65 +74,47 @@ export const presentMcpAuthPanel = (
             ),
           ),
       }).pipe(Effect.orDie);
-      yield* Effect.callback<void, McpBoundaryError>((resume) => {
-        const fail = () => resume(Effect.fail(failed()));
-        rejectCompletion = fail;
-        try {
-          ctx.ui
-            .custom<void>(
-              (hostTui, theme, keybindings, done) => {
-                if (factoryInvoked) {
+      yield* openOwnedSurface<void>(ctx, {
+        placement: "dock",
+        closedValue: undefined,
+        isCurrent: trusted,
+        onControl: (control) => {
+          close = control;
+        },
+        onClose: () => {
+          closing = true;
+        },
+        onMounted: (handle) => {
+          overlay = handle;
+          repaint();
+        },
+        create: (host) => {
+          tui = host.tui;
+          const keys = fullScreenKeybindingOptions(host.keybindings);
+          return new McpAuthPanel({
+            snapshot: attempt.snapshot,
+            now: attempt.now,
+            theme: host.theme,
+            matchesKeybinding: keys.matchesKeybinding,
+            keyLabel: keys.keybindingLabel,
+            act: (action) => {
+              if (!active() || cancelled) return;
+              if (action === "cancel") {
+                if (authPhaseTerminal(attempt.snapshot().phase)) {
                   close();
-                  return inert();
+                  return;
                 }
-                factoryInvoked = true;
-                hostDone = () => done(undefined);
-                tui = hostTui;
-                if (!active() || requested) {
-                  close();
-                  return inert();
-                }
-                const panel = new McpAuthPanel({
-                  snapshot: attempt.snapshot,
-                  now: attempt.now,
-                  theme,
-                  matchesKeybinding: (data, id) => keybindings.matches(data, id),
-                  keyLabel: (id, fallback) =>
-                    fullScreenKeybindingLabel(id, fallback, (key) => keybindings.getKeys(key)),
-                  act: (action) => {
-                    if (!active() || cancelled) return;
-                    if (action === "cancel") {
-                      if (authPhaseTerminal(attempt.snapshot().phase)) {
-                        close();
-                        return;
-                      }
-                      cancelled = true;
-                      Deferred.doneUnsafe(cancellation, Effect.void);
-                    } else if (!reopening) {
-                      // Latch before ingress so repeated clicks cannot queue a later launch.
-                      reopening = true;
-                      reopens.offer(undefined);
-                    }
-                    repaint();
-                  },
-                });
-                dock.mount(hostTui, panel);
-                return dock.input;
-              },
-              {
-                overlay: true,
-                overlayOptions: { anchor: "top-left", width: 1, maxHeight: 0 },
-                onHandle: (handle) => {
-                  overlay = dock.handle(handle);
-                  if (closing || requested || !active()) close();
-                  else repaint();
-                },
-              },
-            )
-            .then(() => resume(Effect.void), fail);
-        } catch {
-          fail();
-        }
-      }).pipe(Effect.ensuring(Effect.sync(close)));
+                cancelled = true;
+                Deferred.doneUnsafe(cancellation, Effect.void);
+              } else if (!reopening) {
+                // Latch before ingress so repeated clicks cannot queue a later launch.
+                reopening = true;
+                reopens.offer(undefined);
+              }
+              repaint();
+            },
+          });
+        },
+      }).pipe(Effect.mapError(failed));
     }),
   );

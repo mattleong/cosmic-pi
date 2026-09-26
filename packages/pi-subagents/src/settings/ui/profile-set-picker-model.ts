@@ -1,4 +1,3 @@
-import { resolveNamedProfileSet } from "../../config/options.ts";
 import {
   PROFILE_IDS,
   type ProfileId,
@@ -6,9 +5,11 @@ import {
   type ProfileRouteSource,
 } from "../../profiles/model.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
-import type {
-  ProfileSettingsInspection,
-  PersistentProfileSetRef,
+import {
+  decodedAt,
+  resolvedSet,
+  type ProfileSettingsInspection,
+  type PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
 
 export interface ProfileSetPreviewProfile {
@@ -28,8 +29,6 @@ export type ProfileSetPickerEntry =
       readonly scopeDefault: boolean;
       readonly invalid: boolean;
       readonly repairable: boolean;
-      readonly invalidProfileCount: number;
-      readonly profileCount: number;
       readonly preview: ReadonlyArray<ProfileSetPreviewProfile>;
       readonly label: string;
       readonly description: string;
@@ -48,32 +47,15 @@ export type ProfileSetPickerEntry =
       readonly scope: SubagentConfigScope;
       readonly label: string;
       readonly description: string;
-      readonly unavailable: boolean;
     };
 
 const setKey = (scope: SubagentConfigScope, name: string): string => `${scope}:${name}`;
-
-const decodedForScope = (inspection: ProfileSettingsInspection, scope: SubagentConfigScope) =>
-  scope === "global" ? inspection.global : inspection.project;
-
-const resolvedSet = (
-  inspection: ProfileSettingsInspection,
-  scope: SubagentConfigScope,
-  name: string,
-) =>
-  scope === "global"
-    ? resolveNamedProfileSet({ scope, name, global: inspection.global })
-    : resolveNamedProfileSet(
-        inspection.project
-          ? { scope, name, global: inspection.global, project: inspection.project }
-          : { scope, name, global: inspection.global },
-      );
 
 const scopeEntries = (
   inspection: ProfileSettingsInspection,
   scope: SubagentConfigScope,
 ): ReadonlyArray<ProfileSetPickerEntry> => {
-  const decoded = decodedForScope(inspection, scope);
+  const decoded = decodedAt(inspection, scope);
   if (!decoded) return [];
   const names = new Set([
     ...Object.keys(decoded.file.profileSets ?? {}),
@@ -84,7 +66,7 @@ const scopeEntries = (
     .sort((left, right) => left.localeCompare(right))
     .map((name): ProfileSetPickerEntry => {
       const profileSet = decoded.file.profileSets?.[name];
-      const resolved = resolvedSet(inspection, scope, name);
+      const resolved = resolvedSet(inspection, { scope, name });
       const structurallyInvalid =
         resolved.status === "structurally-invalid" || resolved.status === "missing";
       const invalid = resolved.status !== "resolved";
@@ -108,8 +90,6 @@ const scopeEntries = (
         scopeDefault,
         invalid,
         repairable,
-        invalidProfileCount,
-        profileCount,
         preview: PROFILE_IDS.map((id) => {
           const source = resolved.profileSources[id];
           const candidates = resolved.profiles[id].candidates;
@@ -144,72 +124,49 @@ const scopeEntries = (
     : sets;
 };
 
+const emptyScopeNote = (scope: SubagentConfigScope): ProfileSetPickerEntry => ({
+  kind: "scope-note",
+  key: `${scope}:empty`,
+  scope,
+  label: `No ${scope === "project" ? "Project" : "Global"} sets saved`,
+  description: "Save Current Session here to add one",
+});
+
 export const profileSetPickerEntries = (
   inspection: ProfileSettingsInspection,
   projectTrusted: boolean,
 ): ReadonlyArray<ProfileSetPickerEntry> => {
-  const project = projectTrusted
-    ? scopeEntries(inspection, "project")
-    : [
-        {
-          kind: "scope-note" as const,
-          key: "project:locked" as const,
-          scope: "project" as const,
-          label: "Project sets unavailable",
-          description: "Trust this project to view or edit its saved profile sets",
-          unavailable: true,
-        },
-      ];
-  const projectRows =
-    projectTrusted && project.length === 0
-      ? [
-          {
-            kind: "scope-note" as const,
-            key: "project:empty" as const,
-            scope: "project" as const,
-            label: "No Project sets saved",
-            description: "Save Current Session here to add one",
-            unavailable: false,
-          },
-        ]
-      : project;
+  const project = projectTrusted ? scopeEntries(inspection, "project") : [];
   const global = scopeEntries(inspection, "global");
-  const globalRows =
-    global.length === 0
+  return [
+    ...(!projectTrusted
       ? [
           {
-            kind: "scope-note" as const,
-            key: "global:empty" as const,
-            scope: "global" as const,
-            label: "No Global sets saved",
-            description: "Save Current Session here to add one",
-            unavailable: false,
-          },
+            kind: "scope-note",
+            key: "project:locked",
+            scope: "project",
+            label: "Project sets unavailable",
+            description: "Trust this project to view or edit its saved profile sets",
+          } as const,
         ]
-      : global;
-  return [...projectRows, ...globalRows];
+      : project.length === 0
+        ? [emptyScopeNote("project")]
+        : project),
+    ...(global.length === 0 ? [emptyScopeNote("global")] : global),
+  ];
 };
 
-export const initialProfileSetPickerIndex = (
-  entries: ReadonlyArray<ProfileSetPickerEntry>,
-  preferredScope?: SubagentConfigScope,
-): number => {
+/** Selects the first scope default, else the first set. */
+export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) => {
   const defaultEntry = entries.findIndex(
-    (entry) =>
-      (entry.kind === "set" || entry.kind === "invalid-default") &&
-      entry.scopeDefault &&
-      (preferredScope === undefined || entry.scope === preferredScope),
+    (entry) => entry.kind !== "scope-note" && entry.scopeDefault,
   );
-  if (defaultEntry >= 0) return defaultEntry;
-  const preferred = entries.findIndex(
-    (entry) =>
-      entry.scope === preferredScope && (entry.kind === "set" || entry.kind === "invalid-default"),
-  );
-  if (preferred >= 0) return preferred;
-  return Math.max(
-    0,
-    entries.findIndex((entry) => entry.kind === "set" || entry.kind === "invalid-default"),
-  );
+  return defaultEntry >= 0
+    ? defaultEntry
+    : Math.max(
+        0,
+        entries.findIndex((entry) => entry.kind !== "scope-note"),
+      );
 };
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>

@@ -1,75 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withCodePreviewShell, type CompactSummary } from "pi-code-previews";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../pi-code-previews/src/config/state.ts";
-import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
-import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
-import type { CodeModeCallEntry } from "../src/tools/format.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { applyPresentationSettings } from "pi-code-previews/testing";
+import { ledgerDetails } from "./support/compact.ts";
+import { presentationView, restorePresentationSettings } from "./support/presentation.ts";
+import { EMPTY_RECEIPTS } from "./support/results.ts";
 
-const initial = codePreviewSettings;
-afterEach(() => setCodePreviewSettings(initial));
-const theme = opaqueHostFixture({
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-});
+afterEach(restorePresentationSettings);
 const source = 'const retainedSource = "FULL_PROGRAM_SOURCE";\nthrow new Error(retainedSource);';
 const args = { code: source, intent: "Inspect nested operations" };
-
-const create = (
-  mode: "on" | "off" | "border",
-  style: "compact" | "preview",
-  startUiTicker: NonNullable<
-    Parameters<typeof buildCodeModeToolDefinition>[0]["startUiTicker"]
-  > = () => () => undefined,
-) => {
-  setCodePreviewSettings({ ...initial, toolCallCollapsedStyle: style, toolCallTiming: false });
-  const execute = vi.fn(() => Promise.reject(new Error("Rendering must not execute")));
-  const owned = buildCodeModeToolDefinition({
-    catalogBudget: 0,
-    includePowerShell: false,
-    execute,
-    startUiTicker,
-  });
-  const tool = withCodePreviewShell(owned, {
-    mode,
-    compactSummary: owned.compactSummary,
-    expandedContent: owned.expandedContent,
-  });
-  return { view: createToolPresentationHarness(tool, { theme, width: 500 }), execute };
-};
-
-const nestedDetails = (entries: readonly { tool: string; summary: CompactSummary }[]) => {
-  const calls: CodeModeCallEntry[] = [];
-  const ledger = makeCompactEvidence((id, compact) => {
-    calls.push({ tool: entries[id - 1]!.tool, status: "completed", compact });
-  });
-  for (const [index, entry] of entries.entries()) {
-    const id = index + 1;
-    ledger.admit(entry.tool);
-    ledger.start(id, id);
-    ledger.observe(id, () => entry.summary);
-    ledger.end(id);
-  }
-  ledger.close();
-  return {
-    toolCalls: calls,
-    counts: {
-      total: calls.length,
-      succeeded: calls.length,
-      failed: 0,
-      cancelled: 0,
-      running: 0,
-      queued: 0,
-    },
-    compactAttention: ledger.snapshot(),
-    outputKind: "text" as const,
-  };
-};
 
 describe("Code Mode shared presentation conformance", () => {
   it("repaints expanded partial calls and releases their ticker on collapse and settlement", () => {
@@ -80,7 +17,7 @@ describe("Code Mode shared presentation conformance", () => {
       return stop;
     });
     const invalidate = vi.fn();
-    const { view } = create("off", "compact", start);
+    const { view } = presentationView("off", "compact", start);
     const partial = {
       content: [],
       details: {
@@ -104,7 +41,10 @@ describe("Code Mode shared presentation conformance", () => {
     view.result(partial, { expanded: true, isPartial: true });
     view.render();
     expect(start).toHaveBeenCalledTimes(2);
-    view.result({ content: [], details: nestedDetails([]) }, { expanded: true, isPartial: false });
+    view.result(
+      { content: [], details: ledgerDetails([]).details },
+      { expanded: true, isPartial: false },
+    );
     view.render();
     expect(stop).toHaveBeenCalledTimes(2);
     tick();
@@ -115,7 +55,7 @@ describe("Code Mode shared presentation conformance", () => {
     "keeps retained read identity and origin separate in %s mode",
     (mode) => {
       for (const originalOutcome of ["succeeded", "failed", "cancelled"] as const) {
-        const { view } = create(mode, "compact");
+        const { view } = presentationView(mode, "compact");
         const result = {
           content: [{ type: "text" as const, text: "RETAINED_PAGE" }],
           details: {
@@ -147,7 +87,7 @@ describe("Code Mode shared presentation conformance", () => {
         { status: "error", code: "unavailable" },
         { status: "page", originalOutcome: "succeeded" },
       ]) {
-        const { view } = create(mode, "compact");
+        const { view } = presentationView(mode, "compact");
         view.call({ action: "result.read", id: "read-1" }, { expanded: true });
         view.result(
           { content: [{ type: "text", text: "UNVERIFIED_PAGE" }], details: { resultRead } },
@@ -163,7 +103,7 @@ describe("Code Mode shared presentation conformance", () => {
   it.each(["on", "off", "border"] as const)(
     "preserves initial saved-page output and shows paging only on expansion in %s mode",
     (mode) => {
-      const { view, execute } = create(mode, "compact");
+      const { view, execute } = presentationView(mode, "compact");
       const pageText = JSON.stringify({
         id: "cm-current",
         outcome: "succeeded",
@@ -176,17 +116,10 @@ describe("Code Mode shared presentation conformance", () => {
       const result = {
         content: [{ type: "text" as const, text: pageText }],
         details: {
-          ...nestedDetails([]),
+          ...ledgerDetails([]).details,
           truncated: true,
           resultId: "cm-current",
-          executionReceipts: {
-            total: 0,
-            completed: 0,
-            unknown: 0,
-            notSent: 0,
-            omitted: 0,
-            calls: [],
-          },
+          executionReceipts: EMPTY_RECEIPTS,
           initialPreview: {
             status: "page",
             id: "cm-current",
@@ -216,7 +149,7 @@ describe("Code Mode shared presentation conformance", () => {
   );
 
   it("keeps malformed initial-page history conservative without trusting raw page text", () => {
-    const { view } = create("off", "compact");
+    const { view } = presentationView("off", "compact");
     const result = {
       content: [
         {
@@ -230,7 +163,7 @@ describe("Code Mode shared presentation conformance", () => {
         },
       ],
       details: {
-        ...nestedDetails([]),
+        ...ledgerDetails([]).details,
         truncated: true,
         resultId: "cm-history",
         initialPreview: {
@@ -269,11 +202,11 @@ describe("Code Mode shared presentation conformance", () => {
         { text: '{"answer":1,"answer":2}', outputKind: "structured", raw: true },
         { text: '{"answer":1}', outputKind: "structured", truncated: true, raw: true },
       ]) {
-        const { view, execute } = create("border", style);
+        const { view, execute } = presentationView("border", style);
         const result = {
           content: [{ type: "text" as const, text: sample.text }],
           details: {
-            ...nestedDetails([]),
+            ...ledgerDetails([]).details,
             outputKind: sample.outputKind,
             truncated: sample.truncated,
           },
@@ -303,13 +236,13 @@ describe("Code Mode shared presentation conformance", () => {
   it.each(["on", "off", "border"] as const)(
     "keeps parent and child durations distinct in %s mode",
     (mode) => {
-      const { view } = create(mode, "compact");
-      setCodePreviewSettings({ ...codePreviewSettings, toolCallTiming: true });
+      const { view } = presentationView(mode, "compact");
+      applyPresentationSettings({ toolCallTiming: true });
       Object.assign(view.context.state, {
         codePreviewTimingStartedAt: 1000,
         codePreviewTimingEndedAt: 7200,
       });
-      const details = nestedDetails([
+      const { details } = ledgerDetails([
         { tool: "pi.read", summary: { subject: "file.ts", outcome: "success" } },
       ]);
       const result = {
@@ -332,8 +265,8 @@ describe("Code Mode shared presentation conformance", () => {
   it.each(["on", "off", "border"] as const)(
     "keeps program source and one failure body in %s mode",
     (mode) => {
-      const { view, execute } = create(mode, "compact");
-      const details = nestedDetails([]);
+      const { view, execute } = presentationView(mode, "compact");
+      const details = ledgerDetails([]).details;
       const result = {
         content: [{ type: "text" as const, text: "ROOT_CAUSE\nINDEPENDENT_DIAGNOSTIC" }],
         details,
@@ -379,10 +312,10 @@ describe("Code Mode shared presentation conformance", () => {
       }));
       const result = {
         content: [{ type: "text" as const, text: "RAW_RESULT" }],
-        details: nestedDetails(entries),
+        details: ledgerDetails(entries).details,
       };
       const before = JSON.stringify(result);
-      const { view, execute } = create("off", style);
+      const { view, execute } = presentationView("off", style);
       for (const expanded of [false, true, false, true]) {
         view.call(args, { expanded });
         view.result(result, { expanded });

@@ -33,6 +33,10 @@ const configError = () =>
   boundaryError("config", "not-sent", "Unable to read or persist MCP configuration.");
 const invalidInput = () =>
   boundaryError("invalid-input", "not-sent", "Invalid MCP configuration change.");
+const mutableRecord = (value: JsonObject[string] | undefined) =>
+  Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.MutableJson))(value).pipe(
+    Effect.mapError(configError),
+  );
 const freezeConfig = (config: McpResolvedConfig) =>
   Effect.try({ try: () => freezeSnapshot(config), catch: configError });
 
@@ -128,63 +132,53 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               ? Effect.fail(invalidInput())
               : Effect.void;
 
+        // Every caller guards its scope before validation; project writes still require trust.
         const applyChange = (
           scope: McpConfigScope,
           mutate: (document: JsonObject) => Effect.Effect<JsonObject, McpBoundaryError>,
         ): Effect.Effect<McpResolvedConfig, McpBoundaryError> =>
-          guardScope(scope).pipe(
-            Effect.andThen(
-              updates.withPermit(
-                Effect.gen(function* () {
-                  const modify = documents.modifyObject;
-                  if (modify === undefined)
-                    return yield* Effect.fail(
-                      boundaryError(
-                        "config",
-                        "not-sent",
-                        "Atomic MCP config writes are unavailable.",
-                      ),
-                    );
-                  const current = yield* Ref.get(state);
-                  const target = scope === "global" ? globalSource : projectSource;
-                  const projectRoot = options.projectTrusted
-                    ? yield* readSource(projectRootSource)
+          updates.withPermit(
+            Effect.gen(function* () {
+              const current = yield* Ref.get(state);
+              const target = scope === "global" ? globalSource : projectSource;
+              const projectRoot = options.projectTrusted
+                ? yield* readSource(projectRootSource)
+                : undefined;
+              const other =
+                scope === "project"
+                  ? yield* readSource(globalSource)
+                  : options.projectTrusted
+                    ? yield* readSource(projectSource)
                     : undefined;
-                  const other =
-                    scope === "project"
-                      ? yield* readSource(globalSource)
-                      : options.projectTrusted
-                        ? yield* readSource(projectSource)
-                        : undefined;
-                  return yield* modify(
-                    target.path,
-                    (document) =>
-                      Effect.gen(function* () {
-                        // Explicit writes initialize missing files and empty objects alike.
-                        // Reads remain strict; nonempty invalid documents are never repaired.
-                        const base =
-                          Object.keys(document).length === 0 ? { mcpServers: {} } : document;
-                        yield* decodeMcpDocument(base);
-                        const nextDocument = yield* mutate(base);
-                        const decoded = yield* decodeMcpDocument(nextDocument);
-                        const nextSource = { ...target, document: decoded };
-                        const next = yield* resolve(
-                          current.revision + 1,
-                          scope === "global" ? nextSource : other!,
-                          projectRoot,
-                          scope === "project" ? nextSource : other,
-                        );
-                        return { document: nextDocument, value: next, afterCommit: commit(next) };
-                      }),
-                    readLimits,
-                  ).pipe(
-                    Effect.mapError((error) =>
-                      error._tag === "McpBoundaryError" ? error : configError(),
-                    ),
-                  );
-                }),
-              ),
-            ),
+              return yield* documents
+                .modifyObject(
+                  target.path,
+                  (document) =>
+                    Effect.gen(function* () {
+                      // Explicit writes initialize missing files and empty objects alike.
+                      // Reads remain strict; nonempty invalid documents are never repaired.
+                      const base =
+                        Object.keys(document).length === 0 ? { mcpServers: {} } : document;
+                      yield* decodeMcpDocument(base);
+                      const nextDocument = yield* mutate(base);
+                      const decoded = yield* decodeMcpDocument(nextDocument);
+                      const nextSource = { ...target, document: decoded };
+                      const next = yield* resolve(
+                        current.revision + 1,
+                        scope === "global" ? nextSource : other!,
+                        projectRoot,
+                        scope === "project" ? nextSource : other,
+                      );
+                      return { document: nextDocument, value: next, afterCommit: commit(next) };
+                    }),
+                  readLimits,
+                )
+                .pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "McpBoundaryError" ? error : configError(),
+                  ),
+                );
+            }),
           );
 
         const setServer: McpConfigStoreContract["setServer"] = (scope, id, value) =>
@@ -201,12 +195,9 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               ),
             );
             return yield* applyChange(scope, (document) =>
-              Effect.gen(function* () {
-                const servers = yield* Schema.decodeUnknownEffect(
-                  Schema.Record(Schema.String, Schema.MutableJson),
-                )(document.mcpServers).pipe(Effect.mapError(configError));
-                return { ...document, mcpServers: { ...servers, [id]: entry } };
-              }),
+              mutableRecord(document.mcpServers).pipe(
+                Effect.map((servers) => ({ ...document, mcpServers: { ...servers, [id]: entry } })),
+              ),
             );
           });
         const removeServer: McpConfigStoreContract["removeServer"] = (scope, id) =>
@@ -216,14 +207,13 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               Effect.mapError(invalidInput),
             );
             return yield* applyChange(scope, (document) =>
-              Effect.gen(function* () {
-                const servers = yield* Schema.decodeUnknownEffect(
-                  Schema.Record(Schema.String, Schema.MutableJson),
-                )(document.mcpServers).pipe(Effect.mapError(configError));
-                const next = { ...servers };
-                delete next[id];
-                return { ...document, mcpServers: next };
-              }),
+              mutableRecord(document.mcpServers).pipe(
+                Effect.map((servers) => {
+                  const next = { ...servers };
+                  delete next[id];
+                  return { ...document, mcpServers: next };
+                }),
+              ),
             );
           });
         const setSettings: McpConfigStoreContract["setSettings"] = (scope, value) =>
@@ -234,12 +224,9 @@ export class McpConfigStore extends Context.Service<McpConfigStore, McpConfigSto
               onExcessProperty: "error",
             }).pipe(Effect.mapError(invalidInput));
             return yield* applyChange(scope, (document) =>
-              Effect.gen(function* () {
-                const previous = yield* Schema.decodeUnknownEffect(
-                  Schema.Record(Schema.String, Schema.MutableJson),
-                )(document.settings ?? {}).pipe(Effect.mapError(configError));
-                return { ...document, settings: { ...previous, ...patch } };
-              }),
+              mutableRecord(document.settings ?? {}).pipe(
+                Effect.map((previous) => ({ ...document, settings: { ...previous, ...patch } })),
+              ),
             );
           });
         const reload = updates.withPermit(

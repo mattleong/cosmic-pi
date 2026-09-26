@@ -19,12 +19,6 @@ export interface SynchronousIngressOptions<A, E, R, FailureR = never> {
   readonly handle: (value: A) => Effect.Effect<void, E, R>;
   /** Failure observation is isolated too; failure of this callback never terminates the worker. */
   readonly onFailure?: (error: E) => Effect.Effect<void, never, FailureR>;
-  /**
-   * Defect observation runs when a handler violates an invariant; the worker continues
-   * either way. Defaults to a fixed-string diagnostic that never includes the cause,
-   * so unexpected defects can no longer disappear without any trace.
-   */
-  readonly onDefect?: (cause: Cause.Cause<E>) => void;
 }
 
 export interface SynchronousIngress<A> {
@@ -54,25 +48,17 @@ export const makeSynchronousIngress = <A, E, R, FailureR = never>(
     const queue = yield* Queue.dropping<A>(capacity);
     let closed = false;
     let coalesced: { readonly value: A } | undefined;
-    const reportDefect = options.onDefect;
 
     const handle = (value: A) =>
       Effect.suspend(() => options.handle(value)).pipe(
         Effect.catch((error) => options.onFailure?.(error) ?? Effect.void),
+        // A defect never terminates the worker; the fixed diagnostic never includes its cause.
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
-            : reportDefect
-              ? Effect.sync(() => {
-                  try {
-                    reportDefect(cause);
-                  } catch {
-                    // Failure observation must never terminate the ingress worker.
-                  }
-                })
-              : Effect.logWarning(
-                  "Synchronous ingress handler raised an unexpected defect; the worker continues.",
-                ),
+            : Effect.logWarning(
+                "Synchronous ingress handler raised an unexpected defect; the worker continues.",
+              ),
         ),
       );
 

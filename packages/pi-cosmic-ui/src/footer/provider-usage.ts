@@ -7,18 +7,14 @@ import { progressBar, remainingCapacityTone } from "./meter.ts";
 const WINDOW_PATTERN = /^([A-Za-z0-9][A-Za-z0-9_-]*):\s*(?:(\d+(?:\.\d+)?)%|--)$/u;
 const RESET_PATTERN = /^([A-Za-z0-9][A-Za-z0-9_-]*)\s+↺(?:\s+(.*))?$/u;
 
-type ProviderEntry =
-  | {
-      kind: "window";
-      label: string;
-      percent: number | null;
-      raw: string;
-      resetText?: string;
-    }
-  | {
-      kind: "text";
-      text: string;
-    };
+interface WindowEntry {
+  kind: "window";
+  label: string;
+  percent: number | null;
+  raw: string;
+  resetText?: string;
+}
+type ProviderEntry = WindowEntry | { kind: "text"; text: string };
 
 function resetDisplay(segment: string, body: string | undefined): string {
   const reset = body?.trim();
@@ -28,60 +24,39 @@ function resetDisplay(segment: string, body: string | undefined): string {
 
 function providerEntries(body: string): ProviderEntry[] {
   const entries: ProviderEntry[] = [];
-  const byLabel = new Map<string, Extract<ProviderEntry, { kind: "window" }>>();
+  const byLabel = new Map<string, WindowEntry>();
+  // Windows and resets merge by case-insensitive label, keeping the first-seen label and order.
+  const windowFor = (label: string): WindowEntry => {
+    const key = label.toLowerCase();
+    const existing = byLabel.get(key);
+    if (existing) return existing;
+    const entry: WindowEntry = { kind: "window", label, percent: null, raw: "" };
+    byLabel.set(key, entry);
+    entries.push(entry);
+    return entry;
+  };
   for (const segment of body.split(/\s*\|\s*/u).filter(Boolean)) {
     const window = WINDOW_PATTERN.exec(segment);
     if (window) {
-      const label = window[1] ?? segment;
-      const key = label.toLowerCase();
-      const existing = byLabel.get(key);
-      if (existing) {
-        existing.raw = segment;
-        existing.percent = window[2] === undefined ? null : Number(window[2]);
-      } else {
-        const entry: Extract<ProviderEntry, { kind: "window" }> = {
-          kind: "window",
-          label,
-          percent: window[2] === undefined ? null : Number(window[2]),
-          raw: segment,
-        };
-        byLabel.set(key, entry);
-        entries.push(entry);
-      }
+      const entry = windowFor(window[1] ?? segment);
+      entry.raw = segment;
+      entry.percent = window[2] === undefined ? null : Number(window[2]);
       continue;
     }
-
     const reset = RESET_PATTERN.exec(segment);
-    if (reset) {
-      const label = reset[1] ?? segment;
-      const existing = byLabel.get(label.toLowerCase());
-      if (existing) {
-        existing.resetText = resetDisplay(segment, reset[2]);
-      } else {
-        const entry: Extract<ProviderEntry, { kind: "window" }> = {
-          kind: "window",
-          label,
-          percent: null,
-          raw: "",
-          resetText: resetDisplay(segment, reset[2]),
-        };
-        byLabel.set(label.toLowerCase(), entry);
-        entries.push(entry);
-      }
-      continue;
-    }
-
-    entries.push({ kind: "text", text: segment });
+    if (reset) windowFor(reset[1] ?? segment).resetText = resetDisplay(segment, reset[2]);
+    else entries.push({ kind: "text", text: segment });
   }
   return entries;
 }
 
-function windowText(
-  entry: Extract<ProviderEntry, { kind: "window" }>,
+function entryText(
+  entry: ProviderEntry,
   theme: CosmicFooterTheme,
   compact: boolean,
   withMeter: boolean,
 ): string {
+  if (entry.kind === "text") return theme.fg("text", entry.text);
   if (entry.percent === null) return theme.fg("text", entry.raw || entry.label);
   const label = entry.label.toLowerCase();
   const color = remainingCapacityTone(entry.percent);
@@ -97,11 +72,7 @@ function simpleEntry(
   compact: boolean,
   withMeter: boolean,
 ): string | undefined {
-  const left =
-    entry.kind === "window"
-      ? windowText(entry, theme, compact, withMeter)
-      : theme.fg("text", entry.text);
-  const fullLeft = `${prefix}${left}`;
+  const fullLeft = `${prefix}${entryText(entry, theme, compact, withMeter)}`;
   const right = entry.kind === "window" ? entry.resetText : undefined;
   if (right && visibleWidth(fullLeft) + visibleWidth(right) + 2 > width) return undefined;
   if (!right && visibleWidth(fullLeft) > width) return undefined;
@@ -118,12 +89,8 @@ function wrappedEntry(
   theme: CosmicFooterTheme,
   compact: boolean,
 ): string[] {
-  const left =
-    entry.kind === "window"
-      ? windowText(entry, theme, compact, false)
-      : theme.fg("text", entry.text);
   const available = Math.max(1, width - visibleWidth(prefix));
-  const wrappedLeft = wrapTextWithAnsi(left, available);
+  const wrappedLeft = wrapTextWithAnsi(entryText(entry, theme, compact, false), available);
   const lines = wrappedLeft.map((part, index) =>
     truncateToWidth(`${index === 0 ? prefix : continuation}${part}`, width, ""),
   );

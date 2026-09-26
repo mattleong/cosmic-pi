@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import { registerChildPiFastModeHook } from "../src/boundary/host-child-pi.ts";
 import registerSupervisorBridge from "../src/boundary/host-pi-supervisor-extension.ts";
-import { extensionApiFixture, extensionContextFixture, modelFixture } from "./fixtures/pi-host.ts";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, modelFixture } from "./fixtures/pi-host.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type FastModeFlag = boolean | string | undefined;

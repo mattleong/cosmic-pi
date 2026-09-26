@@ -21,7 +21,7 @@ import {
   projectMcpFailurePresentation,
   type McpPresentation,
 } from "pi-mcp/code-mode";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { invokeHostCallback, querySessionCapability } from "pi-cosmic-core";
 import { toolError, type ToolError } from "./codemode-runtime.ts";
 
 const decodeInput = Schema.decodeUnknownEffect(McpCodeModeInputSchema);
@@ -104,27 +104,19 @@ export const makeMcpDispatch = (options: {
               const sessionId = options.sessionId;
               if (sessionId === undefined)
                 return Effect.fail(failed(decoded, mcpCodeModeError("unavailable", "not-sent")));
-              const candidates: Array<
-                NonNullable<ReturnType<typeof normalizeMcpCodeModeCapability>>
-              > = [];
-              let accepting = true;
-              const emitted = invokeHostCallback(() => {
-                options.events.emit(MCP_CODE_MODE_QUERY, {
-                  version: MCP_CODE_MODE_VERSION,
-                  sessionId,
-                  respond: <Candidate>(candidate: Candidate) => {
-                    if (!accepting) return;
-                    const normalized = normalizeMcpCodeModeCapability(candidate);
-                    if (normalized?.sessionId === sessionId && candidates.length < 2)
-                      candidates.push(normalized);
-                  },
-                });
-                return true;
-              }, false);
-              accepting = false;
-              if (!emitted || candidates.length !== 1)
+              const discovery = querySessionCapability(
+                options.events,
+                MCP_CODE_MODE_QUERY,
+                { version: MCP_CODE_MODE_VERSION, sessionId },
+                (candidate) => {
+                  const normalized = normalizeMcpCodeModeCapability(candidate);
+                  return normalized?.sessionId === sessionId ? normalized : undefined;
+                },
+                2,
+              );
+              if (discovery.failed || discovery.candidates.length !== 1)
                 return Effect.fail(failed(decoded, mcpCodeModeError("unavailable", "not-sent")));
-              const capability = candidates[0]!;
+              const capability = discovery.candidates[0]!;
               nestedCalls += 1;
               const callId = `${options.toolCallId}/mcp.request/${nestedCalls}`;
               const maxOutputBytes = options.maxOutputBytes();

@@ -2,10 +2,12 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Config from "effect/Config";
 import * as Schema from "effect/Schema";
+import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { createForkedSession, type ChildLaunchRequest } from "../src/boundary/child-process.ts";
-import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.ts";
+import { nodeFsPromises as fs } from "./support/node-builtins.ts";
+
+const toJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const tool = {
   name: "parent_only",
@@ -35,11 +37,7 @@ describe("forked Pi transcript", () => {
     "restores plaintext from encrypted checkpoints without reviving ordinary compacted history",
     () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.string("TMPDIR").pipe(Config.withDefault("/tmp"));
-        const directory = yield* Effect.acquireRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-fork-encrypted-"))),
-          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-        );
+        const directory = yield* temporaryDirectory("pi-fork-encrypted-");
         const parent = SessionManager.create(directory, directory);
         parent.appendMessage({
           role: "system",
@@ -83,9 +81,7 @@ describe("forked Pi transcript", () => {
         const original = yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"));
         const childFile = yield* createForkedSession(forkRequest(directory, parent), directory);
         const child = SessionManager.open(childFile);
-        const context = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
-          child.buildSessionContext().messages,
-        );
+        const context = toJson(child.buildSessionContext().messages);
         for (const content of [
           "ordinary summary",
           "retained question",
@@ -100,9 +96,7 @@ describe("forked Pi transcript", () => {
         expect(child.getEntry(encrypted)).toMatchObject({ type: "custom", id: encrypted });
         expect(child.getEntry(newest)).toMatchObject({ type: "custom", id: newest });
         expect(child.getLeafId()).toBe(newest);
-        expect(
-          Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(child.getBranch()),
-        ).not.toContain("encrypted_content");
+        expect(toJson(child.getBranch())).not.toContain("encrypted_content");
         expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(
           original,
         );
@@ -111,11 +105,7 @@ describe("forked Pi transcript", () => {
   for (const version of [3, 2]) {
     it.live(`preserves version ${version} parent bytes without a final newline`, () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.string("TMPDIR").pipe(Config.withDefault("/tmp"));
-        const directory = yield* Effect.acquireRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-fork-"))),
-          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-        );
+        const directory = yield* temporaryDirectory("pi-fork-");
         const parent = SessionManager.create(directory, directory);
         const retainedId = parent.appendMessage({
           role: "user",
@@ -163,7 +153,7 @@ describe("forked Pi transcript", () => {
             },
             ...fixtureEntries,
           ]
-            .map((entry) => Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(entry))
+            .map((entry) => toJson(entry))
             .join("\n"),
         );
         yield* Effect.promise(() => fs.writeFile(parent.getSessionFile()!, original));
@@ -187,26 +177,19 @@ describe("forked Pi transcript", () => {
           "custom",
           "assistant",
         ]);
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(context)).toContain(
+        for (const text of [
           "retained conversation",
-        );
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(context)).toContain(
           "retained answer",
-        );
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(context)).toContain(
           "retained custom conversation",
-        );
+        ])
+          expect(toJson(context)).toContain(text);
       }),
     );
   }
   for (const anchor of ["system", "label"] as const) {
     it.live(`removes parent prompt authority without losing a ${anchor} compaction anchor`, () =>
       Effect.gen(function* () {
-        const temporaryRoot = yield* Config.string("TMPDIR").pipe(Config.withDefault("/tmp"));
-        const directory = yield* Effect.acquireRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(temporaryRoot, "pi-fork-"))),
-          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
-        );
+        const directory = yield* temporaryDirectory("pi-fork-");
         const parent = SessionManager.create(directory, directory);
         parent.appendMessage({
           role: "system",
@@ -277,13 +260,9 @@ describe("forked Pi transcript", () => {
           "user",
           "assistant",
         ]);
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(context)).toContain(
-          "retained conversation",
-        );
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(context)).toContain(
-          "retained answer",
-        );
-        expect(Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(entries)).not.toMatch(
+        for (const text of ["retained conversation", "retained answer"])
+          expect(toJson(context)).toContain(text);
+        expect(toJson(entries)).not.toMatch(
           /parent secret|parent section secret|parent_only|signed private reasoning|signature/,
         );
         expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(

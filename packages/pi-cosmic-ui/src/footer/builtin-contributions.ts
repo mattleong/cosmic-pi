@@ -26,39 +26,29 @@ const DEFAULT_STATUS_REGION = "details" as const;
 const DEFAULT_STATUS_PRIORITY = 20;
 const DEFAULT_STATUS_ORDER = 1020;
 
-const THINKING_COLORS = {
-  off: "thinkingOff",
-  minimal: "thinkingMinimal",
-  low: "thinkingLow",
-  medium: "thinkingMedium",
-  high: "thinkingHigh",
-  xhigh: "thinkingXhigh",
-  max: "thinkingMax",
-} satisfies Readonly<Record<string, CosmicFooterColor>>;
-
-const thinkingColor = (level: string): CosmicFooterColor => {
-  switch (level) {
-    case "off":
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-    case "max":
-      return THINKING_COLORS[level];
-    default:
-      return "thinkingText";
-  }
-};
+const THINKING_COLORS: ReadonlyMap<string, CosmicFooterColor> = new Map([
+  ["off", "thinkingOff"],
+  ["minimal", "thinkingMinimal"],
+  ["low", "thinkingLow"],
+  ["medium", "thinkingMedium"],
+  ["high", "thinkingHigh"],
+  ["xhigh", "thinkingXhigh"],
+  ["max", "thinkingMax"],
+]);
 
 export type FooterStatusPlacements = ReadonlyMap<string, CosmicFooterStatusContribution>;
 
+/** Session values that built-in contributions read at render time. */
+export interface FooterRepositoryProjection {
+  readonly totals: FooterTotals;
+  readonly gitStatus: FooterGitStatus | undefined;
+  readonly pullRequestNumber: number | undefined;
+  readonly homeDirectory: string | undefined;
+}
+
 export function builtinContributions(
   host: FooterHostProjection,
-  totals: FooterTotals,
-  gitStatus: FooterGitStatus | undefined,
-  pullRequestNumber: number | undefined,
-  homeDirectory: string | undefined,
+  { totals, gitStatus, pullRequestNumber, homeDirectory }: FooterRepositoryProjection,
   statusPlacements: FooterStatusPlacements,
 ): CosmicFooterTextContribution[] {
   const { model, branch, sessionName, subscription } = host;
@@ -87,7 +77,7 @@ export function builtinContributions(
             region: "identity" as const,
             text: thinking === "off" ? "thinking off" : thinking,
             tone: "normal" as const,
-            color: thinkingColor(thinking),
+            color: THINKING_COLORS.get(thinking) ?? "thinkingText",
             priority: 95,
             order: 100,
           },
@@ -175,39 +165,25 @@ export function builtinContributions(
       priority: 80,
       order: 100,
     });
-  const metricValues = [
-    totals.input
-      ? { id: "metrics.input", text: `↑${formatTokens(totals.input)}`, order: 200 }
-      : undefined,
-    totals.output
-      ? { id: "metrics.output", text: `↓${formatTokens(totals.output)}`, order: 210 }
-      : undefined,
-    totals.cacheRead
-      ? { id: "metrics.cacheRead", text: `r${formatTokens(totals.cacheRead)}`, order: 220 }
-      : undefined,
-    totals.cacheWrite
-      ? { id: "metrics.cacheWrite", text: `w${formatTokens(totals.cacheWrite)}`, order: 230 }
-      : undefined,
-    totals.cost || subscription
-      ? {
-          id: "metrics.cost",
-          text: `$${totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`,
-          order: 240,
-        }
-      : undefined,
-  ].filter((value): value is { id: string; text: string; order: number } => Boolean(value));
-  for (const metric of metricValues) {
+  const metric = (id: string, text: string, order: number): CosmicFooterTextContribution => {
     const contribution: CosmicFooterTextContribution = {
       kind: "text",
-      id: metric.id,
+      id,
       region: "metrics",
-      text: metric.text,
+      text,
       priority: 90,
-      order: metric.order,
+      order,
     };
-    if (metric.id === "metrics.cost") contribution.align = "right";
     result.push(contribution);
-  }
+    return contribution;
+  };
+  if (totals.input) metric("metrics.input", `↑${formatTokens(totals.input)}`, 200);
+  if (totals.output) metric("metrics.output", `↓${formatTokens(totals.output)}`, 210);
+  if (totals.cacheRead) metric("metrics.cacheRead", `r${formatTokens(totals.cacheRead)}`, 220);
+  if (totals.cacheWrite) metric("metrics.cacheWrite", `w${formatTokens(totals.cacheWrite)}`, 230);
+  if (totals.cost || subscription)
+    metric("metrics.cost", `$${totals.cost.toFixed(3)}${subscription ? " (sub)" : ""}`, 240).align =
+      "right";
   for (const status of host.extensionStatuses) {
     const placement = statusPlacements.get(status.id);
     const contribution: CosmicFooterTextContribution = {

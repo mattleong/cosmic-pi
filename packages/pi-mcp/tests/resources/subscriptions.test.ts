@@ -13,7 +13,9 @@ import { McpExecution } from "../../src/tools/service.ts";
 import type { ConnectionOwner } from "../../src/connection/registry.ts";
 import type { McpConnection } from "../../src/client/model.ts";
 import { makeResourceSubscriptions } from "../../src/resources/subscriptions.ts";
-import { optionalFixture, projection } from "../fixtures/optional-features.ts";
+import { rpcError, sseFrames, sseResponse, type FixtureRequest } from "../fixtures/json-rpc.ts";
+import { legacyInitialize, optionalFixture, projection } from "../fixtures/optional-features.ts";
+import { fakeConnection, testServer } from "../fixtures/services.ts";
 
 const resourceOwner = (
   check: (opened: number) => Effect.Effect<void> = () => Effect.void,
@@ -22,13 +24,7 @@ const resourceOwner = (
   Effect.gen(function* () {
     const owner: ConnectionOwner = {
       id: "owner",
-      server: {
-        id: "fixture",
-        identity: "fixture",
-        enabled: true,
-        scope: "global",
-        directory: "/fixture",
-      },
+      server: testServer("fixture", { identity: "fixture" }),
       scope: yield* Scope.fork(yield* Effect.scope),
       ready: Deferred.makeUnsafe(),
       cleaned: Deferred.makeUnsafe(),
@@ -57,14 +53,9 @@ const resourceOwner = (
         }),
     });
     yield* subscriptions.own(owner);
-    const connection: McpConnection = {
+    const connection = yield* fakeConnection({
       capabilities: { tools: false, resources: true, prompts: false, resourceSubscriptions: true },
-      changes: Stream.empty,
-      terminal: Effect.never,
-      health: Effect.succeed({ closed: false, cleanupUnconfirmed: false }),
-      setToken: () => Effect.void,
       request: () => Effect.die("unused"),
-      close: Effect.void,
       subscribeResource: (_, identity = Symbol("owned resource")) =>
         Effect.gen(function* () {
           identities.push(identity);
@@ -79,7 +70,7 @@ const resourceOwner = (
           yield* Effect.addFinalizer(() => close);
           return { identity, close, closed: Deferred.await(closed) };
         }),
-    };
+    });
     return { owner, counts, identities, subscriptions, connection };
   });
 
@@ -197,6 +188,31 @@ const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const subscribe = { action: "resources.subscribe", server: "fixture", uri: "test://one" };
 const status = { action: "resources.subscriptions", server: "fixture" };
 const unsubscribe = { action: "resources.unsubscribe", server: "fixture", uri: "test://one" };
+const updated = (id: FixtureRequest["id"], uri = "test://one") => ({
+  jsonrpc: "2.0",
+  method: "notifications/resources/updated",
+  params: { uri, _meta: { [SUBSCRIPTION_ID_META_KEY]: id } },
+});
+const expectNoEvents = McpExecution.use((execution) =>
+  execution.execute({ action: "events.read", server: "fixture" }, projection),
+).pipe(Effect.map(({ reply }) => expect(reply.data).toMatchObject({ result: { events: [] } })));
+/** Pauses the first remote event across every connection until `delivery` completes. */
+const pauseFirstEvent = (captured: Deferred.Deferred<void>, delivery: Deferred.Deferred<void>) => {
+  let paused = false;
+  return (connection: McpConnection): McpConnection => ({
+    ...connection,
+    remoteEvents: connection.remoteEvents.pipe(
+      Stream.mapEffect((event) => {
+        if (paused) return Effect.succeed(event);
+        paused = true;
+        return Deferred.succeed(captured, undefined).pipe(
+          Effect.andThen(Deferred.await(delivery)),
+          Effect.as(event),
+        );
+      }),
+    ),
+  });
+};
 const awaitResourceEvents = (count: number) =>
   Effect.gen(function* () {
     const execution = yield* McpExecution;
@@ -237,15 +253,20 @@ const streams = (
     (request) => {
       if (request.method !== "subscriptions/listen") return undefined;
       ids.push(request.id!);
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
             controllers.push(controller);
             if (ack && ids.length - 1 !== pendingIndex)
               controller.enqueue(
-                new TextEncoder().encode(
-                  `data: ${serialize({ jsonrpc: "2.0", method: "notifications/subscriptions/acknowledged", params: { notifications: request.params?.notifications, _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id } } })}\n\n`,
-                ),
+                sseFrames({
+                  jsonrpc: "2.0",
+                  method: "notifications/subscriptions/acknowledged",
+                  params: {
+                    notifications: request.params?.notifications,
+                    _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id },
+                  },
+                }),
               );
           },
           cancel() {
@@ -253,7 +274,6 @@ const streams = (
             return cancel?.();
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     },
     { settings: { idleTimeoutMs: 20 }, ...extra },
@@ -267,33 +287,10 @@ it.live(
     Effect.gen(function* () {
       const captured = yield* Deferred.make<void>();
       const delivery = yield* Deferred.make<void>();
-      let paused = false;
-      const owned = streams(
-        true,
-        undefined,
-        {
-          mapConnection: (connection) => ({
-            ...connection,
-            remoteEvents: connection.remoteEvents!.pipe(
-              Stream.mapEffect((event) => {
-                if (paused) return Effect.succeed(event);
-                paused = true;
-                return Deferred.succeed(captured, undefined).pipe(
-                  Effect.andThen(Deferred.await(delivery)),
-                  Effect.as(event),
-                );
-              }),
-            ),
-          }),
-        },
-        2,
-      );
+      const mapConnection = pauseFirstEvent(captured, delivery);
+      const owned = streams(true, undefined, { mapConnection }, 2);
       const emit = (index: number, uri: string) =>
-        owned.controllers[index]!.enqueue(
-          new TextEncoder().encode(
-            `data: ${serialize({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri, _meta: { [SUBSCRIPTION_ID_META_KEY]: owned.ids[index] } } })}\n\n`,
-          ),
-        );
+        owned.controllers[index]!.enqueue(sseFrames(updated(owned.ids[index], uri)));
       yield* Effect.gen(function* () {
         const execution = yield* McpExecution;
         yield* execution.execute(subscribe, projection);
@@ -327,13 +324,8 @@ const adjacentStream = (
   optionalFixture(
     (request) => {
       if (request.method !== "subscriptions/listen") return undefined;
-      const update = (id: string | number, uri = "test://one") => ({
-        jsonrpc: "2.0",
-        method: "notifications/resources/updated",
-        params: { uri, _meta: { [SUBSCRIPTION_ID_META_KEY]: id } },
-      });
       const messages = [
-        update(request.id!), // Pre-ACK data must not be staged.
+        updated(request.id), // Pre-ACK data must not be staged.
         {
           jsonrpc: "2.0",
           method: "notifications/subscriptions/acknowledged",
@@ -344,21 +336,16 @@ const adjacentStream = (
             _meta: { [SUBSCRIPTION_ID_META_KEY]: request.id },
           },
         },
-        update("never-owned"),
-        update(request.id!, "test://unrequested"),
-        ...Array.from({ length: burst }, () => update(request.id!)),
+        updated("never-owned"),
+        updated(request.id, "test://unrequested"),
+        ...Array.from({ length: burst }, () => updated(request.id)),
       ];
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                messages.map((message) => `data: ${serialize(message)}\n\n`).join(""),
-              ),
-            );
+            controller.enqueue(sseFrames(...messages));
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     },
     mapConnection ? { mapConnection } : {},
@@ -374,11 +361,15 @@ for (const cancel of [false, true])
         const fixture = adjacentStream(true, 1, (connection) => ({
           ...connection,
           subscribeResource: (uri, identity) =>
-            connection.subscribeResource!(uri, identity).pipe(
-              Effect.tap(() =>
-                Deferred.succeed(captured, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            connection
+              .subscribeResource(uri, identity)
+              .pipe(
+                Effect.tap(() =>
+                  Deferred.succeed(captured, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                  ),
+                ),
               ),
-            ),
         }));
         yield* Effect.gen(function* () {
           const execution = yield* McpExecution;
@@ -387,19 +378,13 @@ for (const cancel of [false, true])
           );
           yield* Deferred.await(captured);
           yield* Effect.sleep(10);
-          expect(
-            (yield* execution.execute({ action: "events.read", server: "fixture" }, projection))
-              .reply.data,
-          ).toMatchObject({ result: { events: [] } });
+          yield* expectNoEvents;
           if (cancel) yield* execution.execute(unsubscribe, projection);
           else yield* Deferred.succeed(release, undefined);
           expect(Exit.isSuccess(yield* Fiber.join(opening))).toBe(!cancel);
           if (cancel) {
             yield* Effect.sleep(10);
-            expect(
-              (yield* execution.execute({ action: "events.read", server: "fixture" }, projection))
-                .reply.data,
-            ).toMatchObject({ result: { events: [] } });
+            yield* expectNoEvents;
           } else {
             expect(yield* awaitResourceEvents(1)).toMatchObject({
               events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],
@@ -420,14 +405,7 @@ for (const [code, kind, reason] of [
     const secret = "private-server-message-and-data";
     const fixture = optionalFixture((request) =>
       request.method === "subscriptions/listen"
-        ? new Response(
-            serialize({
-              jsonrpc: "2.0",
-              id: request.id,
-              error: { code, message: secret, data: { secret } },
-            }),
-            { headers: { "content-type": "application/json" } },
-          )
+        ? rpcError(request.id!, { code, message: secret, data: { secret } })
         : undefined,
     );
     return Effect.gen(function* () {
@@ -454,10 +432,7 @@ it.live("rejected honored filters discard ACK-adjacent updates", () => {
       outcome: "completed",
     });
     yield* Effect.sleep(10);
-    expect(
-      (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-        .data,
-    ).toMatchObject({ result: { events: [] } });
+    yield* expectNoEvents;
     expect((yield* execution.execute(status, projection)).reply.data).toMatchObject({
       result: { subscriptions: [] },
     });
@@ -496,11 +471,7 @@ it.live(
       expect((yield* execution.execute(status, projection)).reply.data).toMatchObject({
         result: { subscriptions: [{ uri: "test://one", state: "active" }] },
       });
-      owned.controllers[0]!.enqueue(
-        new TextEncoder().encode(
-          `data: ${serialize({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { [SUBSCRIPTION_ID_META_KEY]: owned.ids[0] } } })}\n\n`,
-        ),
-      );
+      owned.controllers[0]!.enqueue(sseFrames(updated(owned.ids[0])));
       expect(yield* awaitResourceEvents(1)).toMatchObject({
         events: [expect.objectContaining({ kind: "resource-updated", uri: "test://one" })],
       });
@@ -562,10 +533,7 @@ it.live("connection revocation closes all resource streams and rejects late obse
     expect((yield* execution.execute(status, projection)).reply.data).toMatchObject({
       result: { subscriptions: [] },
     });
-    expect(
-      (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-        .data,
-    ).toMatchObject({ result: { events: [] } });
+    yield* expectNoEvents;
   }).pipe(Effect.provide(owned.fixture.layer));
 });
 
@@ -627,21 +595,9 @@ it.live(
     let cancelled = 0;
     const fixture = optionalFixture(
       (request) => {
-        if (request.method === "initialize")
-          return new Response(
-            serialize({
-              jsonrpc: "2.0",
-              id: request.id,
-              result: {
-                protocolVersion: "2025-11-25",
-                capabilities: { resources: { subscribe: true } },
-                serverInfo: { name: "fixture", version: "1" },
-              },
-            }),
-            { headers: { "content-type": "application/json" } },
-          );
+        if (request.method === "initialize") return legacyInitialize(request.id!);
         if (request.method !== "resources/subscribe") return undefined;
-        return new Response(
+        return sseResponse(
           new ReadableStream<Uint8Array>({
             start() {
               Deferred.doneUnsafe(opened, Effect.void);
@@ -650,7 +606,6 @@ it.live(
               cancelled++;
             },
           }),
-          { headers: { "content-type": "text/event-stream" } },
         );
       },
       { protocol: "legacy" },
@@ -678,16 +633,9 @@ it.live("drops wrong subscription IDs before SDK metadata stripping", () => {
   return Effect.gen(function* () {
     const execution = yield* McpExecution;
     yield* execution.execute(subscribe, projection);
-    owned.controllers[0]!.enqueue(
-      new TextEncoder().encode(
-        `data: ${serialize({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { [SUBSCRIPTION_ID_META_KEY]: "listen:never-existed" } } })}\n\n`,
-      ),
-    );
+    owned.controllers[0]!.enqueue(sseFrames(updated("listen:never-existed")));
     yield* Effect.sleep(20);
-    expect(
-      (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-        .data,
-    ).toMatchObject({ result: { events: [] } });
+    yield* expectNoEvents;
   }).pipe(Effect.provide(owned.fixture.layer));
 });
 
@@ -695,28 +643,9 @@ it.live("a queued old subscription generation cannot revive after same-URI repla
   Effect.gen(function* () {
     const captured = yield* Deferred.make<void>();
     const delivery = yield* Deferred.make<void>();
-    let paused = false;
-    const owned = streams(true, undefined, {
-      mapConnection: (connection) => ({
-        ...connection,
-        remoteEvents: connection.remoteEvents!.pipe(
-          Stream.mapEffect((event) => {
-            if (paused) return Effect.succeed(event);
-            paused = true;
-            return Deferred.succeed(captured, undefined).pipe(
-              Effect.andThen(Deferred.await(delivery)),
-              Effect.as(event),
-            );
-          }),
-        ),
-      }),
-    });
+    const owned = streams(true, undefined, { mapConnection: pauseFirstEvent(captured, delivery) });
     const emit = (index: number) =>
-      owned.controllers[index]!.enqueue(
-        new TextEncoder().encode(
-          `data: ${serialize({ jsonrpc: "2.0", method: "notifications/resources/updated", params: { uri: "test://one", _meta: { [SUBSCRIPTION_ID_META_KEY]: owned.ids[index] } } })}\n\n`,
-        ),
-      );
+      owned.controllers[index]!.enqueue(sseFrames(updated(owned.ids[index])));
     yield* Effect.gen(function* () {
       const execution = yield* McpExecution;
       yield* execution.execute(subscribe, projection);
@@ -726,10 +655,7 @@ it.live("a queued old subscription generation cannot revive after same-URI repla
       yield* execution.execute(subscribe, projection);
       yield* Deferred.succeed(delivery, undefined);
       yield* Effect.sleep(10);
-      expect(
-        (yield* execution.execute({ action: "events.read", server: "fixture" }, projection)).reply
-          .data,
-      ).toMatchObject({ result: { events: [] } });
+      yield* expectNoEvents;
       emit(1);
       expect(yield* awaitResourceEvents(1)).toMatchObject({
         events: [{ kind: "resource-updated", uri: "test://one", cursor: expect.any(String) }],

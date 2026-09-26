@@ -1,19 +1,9 @@
 /** Pure progress/count transitions shared by one execution. */
-import type { CompactReceipt } from "./compact-evidence.ts";
-import type { CodeModeCallCounts, CodeModeCallEntry, LiveChildTiming } from "./format.ts";
+import type * as Types from "effect/Types";
+import type { CodeModeCallCounts, CodeModeCallEntry } from "./format.ts";
 
-export type MutableCallCounts = {
-  -readonly [Key in keyof CodeModeCallCounts]: CodeModeCallCounts[Key];
-};
-
-export interface MutableCallEntry {
-  compact?: CompactReceipt;
-  tool: string;
-  status: CodeModeCallEntry["status"];
-  subject?: string;
-  durationMs?: number;
-  liveTiming?: LiveChildTiming;
-}
+export type MutableCallCounts = Types.Mutable<CodeModeCallCounts>;
+export type MutableCallEntry = Types.Mutable<CodeModeCallEntry>;
 
 export const snapshotCalls = (
   calls: ReadonlyMap<number, MutableCallEntry>,

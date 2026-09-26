@@ -9,109 +9,53 @@ import { sanitizeTerminalLine } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import type {
+  BackgroundLogMetadata,
+  BackgroundTaskSnapshot,
+  BackgroundTaskState,
+} from "../task/model.ts";
+import { BACKGROUND_TASK_STATES, BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 
-const states = [
-  "starting",
-  "running",
-  "stopping",
-  "exited",
-  "failed",
-  "stopped",
-  "timed_out",
-] as const;
-const State = Schema.Literals(states);
-const Text = Schema.String.check(Schema.isMaxLength(8192));
-const Snapshot = Schema.Struct({
-  id: Text,
-  name: Schema.optionalKey(Text),
-  command: Text,
-  cwd: Text,
-  state: State,
-  startedAt: Schema.Natural,
-  logCursor: Schema.Natural,
-  droppedLogBytes: Schema.Natural,
-  exitCode: Schema.optionalKey(Schema.NullOr(Schema.Int)),
-  signal: Schema.optionalKey(Text),
-  error: Schema.optionalKey(Text),
-});
-const cursorFields = {
-  nextCursor: Schema.Natural,
-  earliestAvailableCursor: Schema.Natural,
-  droppedBytes: Schema.Natural,
-};
-const Cursors = Schema.Struct(cursorFields);
-// These are display projections of BackgroundTaskToolDetails, without defaults or output text.
-const Details = Schema.Union([
-  Schema.Struct({ action: Schema.Literals(["start", "status", "stop"]), snapshot: Snapshot }),
-  Schema.Struct({
-    action: Schema.Literals(["list", "stop_all"]),
-    tasks: Schema.Array(Snapshot).check(Schema.isMaxLength(600)),
-  }),
-  Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),
-  Schema.Struct({
-    action: Schema.Literal("wait"),
-    wait: Schema.Struct({
-      id: Text,
-      outcome: Schema.Literals(["matched", "completed", "timeout"]),
-      snapshot: Snapshot,
-      ...cursorFields,
-    }),
-  }),
-  Schema.Struct({
-    action: Schema.Literal("logs"),
-    logs: Schema.Struct({ id: Text, state: State, ...cursorFields }),
-    truncation: Schema.optionalKey(
-      Schema.Struct({
-        truncated: Schema.Boolean,
-        outputBytes: Schema.Natural,
-        totalBytes: Schema.Natural,
-        outputLines: Schema.Natural,
-        totalLines: Schema.Natural,
-      }),
-    ),
-  }),
-]);
+const decodeDetails = Schema.decodeUnknownOption(BackgroundTaskDetailsSchema);
 
-function compactTaskState(state: typeof State.Type): string {
+function compactTaskState(state: BackgroundTaskState): string {
   return state === "timed_out" ? "timed out" : state;
 }
 
-function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: CompactOutcome } {
+const logLossNotice = (id: string, bytes: number): CompactNotice => ({
+  code: `${id}:log-loss`,
+  description: "Some task output was discarded and cannot be recovered.",
+  kind: "warning",
+  text: `${bytes} log bytes discarded; discarded output cannot be recovered.`,
+});
+const cleanupUnconfirmedNotice = (id: string): CompactNotice => ({
+  code: `${id}:cleanup-unconfirmed`,
+  description: "Some task processes may still be running.",
+  kind: "recovery",
+  text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
+});
+const runtimeTimeoutNotice = (id: string): CompactNotice => ({
+  code: `${id}:runtime-timeout`,
+  description: "The task exceeded its time limit.",
+  kind: "error",
+  text: "Task exceeded its runtime timeout.",
+});
+
+function taskSummary(value: BackgroundTaskSnapshot): CompactSummary & { outcome: CompactOutcome } {
   const notices: CompactNotice[] = [];
+  const nonZeroExit = value.exitCode != null && value.exitCode !== 0;
   let outcome: CompactOutcome = "success";
   if (value.state === "failed" || value.state === "timed_out" || value.error) outcome = "error";
   else if (value.state === "stopped") outcome = "cancelled";
-  else if (
-    (value.exitCode !== undefined && value.exitCode !== null && value.exitCode !== 0) ||
-    value.signal
-  )
-    outcome = "error";
+  else if (nonZeroExit || value.signal) outcome = "error";
   else if (value.state === "stopping" || (value.state === "exited" && value.exitCode !== 0))
     outcome = "uncertain";
-  if (value.droppedLogBytes > 0)
-    notices.push({
-      code: `${value.id}:log-loss`,
-      description: "Some task output was discarded and cannot be recovered.",
-      kind: "warning",
-      text: `${value.droppedLogBytes} log bytes discarded; discarded output cannot be recovered.`,
-    });
-  if (value.state === "stopping")
-    notices.push({
-      code: `${value.id}:cleanup-unconfirmed`,
-      description: "Some task processes may still be running.",
-      kind: "recovery",
-      text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
-    });
-  if (value.state === "timed_out")
-    notices.push({
-      code: `${value.id}:runtime-timeout`,
-      description: "The task exceeded its time limit.",
-      kind: "error",
-      text: "Task exceeded its runtime timeout.",
-    });
+  if (value.droppedLogBytes > 0) notices.push(logLossNotice(value.id, value.droppedLogBytes));
+  if (value.state === "stopping") notices.push(cleanupUnconfirmedNotice(value.id));
+  if (value.state === "timed_out") notices.push(runtimeTimeoutNotice(value.id));
   if (outcome === "error") {
-    if (value.exitCode !== undefined && value.exitCode !== null && value.exitCode !== 0)
+    if (nonZeroExit)
       notices.push({
         code: `${value.id}:exit-code`,
         description: `The task exited with code ${value.exitCode}.`,
@@ -171,17 +115,10 @@ function taskSummary(value: typeof Snapshot.Type): CompactSummary & { outcome: C
   };
 }
 
-function cursors(value: typeof Cursors.Type, notices: CompactNotice[], id: string): void {
+function cursors(value: Omit<BackgroundLogMetadata, "state">, notices: CompactNotice[]): void {
   if (value.droppedBytes > 0)
-    notices.push({
-      code: `${id}:log-loss`,
-      description: "Some task output was discarded and cannot be recovered.",
-      kind: "warning",
-      text: `${value.droppedBytes} log bytes discarded; discarded output cannot be recovered.`,
-    });
-  if (value.droppedBytes > 0)
-    notices.push({
-      code: `${id}:retained-cursors`,
+    notices.push(logLossNotice(value.id, value.droppedBytes), {
+      code: `${value.id}:retained-cursors`,
       kind: "recovery",
       text: `Retained output: earliest cursor ${value.earliestAvailableCursor}, next cursor ${value.nextCursor}; use logs with afterCursor to continue.`,
     });
@@ -209,7 +146,7 @@ const projectTaskSummary = ({
   if (phase !== "settled")
     return { action, subject, ...(args.action !== "start" && { compactSubject: "" }) };
   if (isError) return undefined;
-  const decoded = Schema.decodeUnknownOption(Details)(result?.details);
+  const decoded = decodeDetails(result?.details);
   if (Option.isNone(decoded)) return undefined;
   const details = decoded.value;
   if (details.action !== args.action) return undefined;
@@ -249,7 +186,7 @@ const projectTaskSummary = ({
           })),
         );
       }
-      for (const state of states) {
+      for (const state of BACKGROUND_TASK_STATES) {
         const n = details.tasks.filter((task) => task.state === state).length;
         if (n) counters.push(`${n} ${compactTaskState(state)}`);
       }
@@ -267,7 +204,7 @@ const projectTaskSummary = ({
       const task = taskSummary(details.wait.snapshot);
       if (details.wait.id !== details.wait.snapshot.id) return undefined;
       const notices = [...(task.notices ?? [])];
-      cursors(details.wait, notices, details.wait.id);
+      cursors(details.wait, notices);
       const timeout = details.wait.outcome === "timeout";
       if (timeout)
         notices.push({
@@ -293,24 +230,22 @@ const projectTaskSummary = ({
     case "logs": {
       const logs = details.logs;
       const notices: CompactNotice[] = [];
-      cursors(logs, notices, logs.id);
-      if (details.truncation !== undefined) {
-        const cut = details.truncation;
-        if (cut.truncated)
-          notices.push(
-            {
-              code: `${logs.id}:slice-truncated`,
-              description: "Only part of the requested logs was returned.",
-              kind: "warning",
-              text: `Output truncated: ${cut.outputLines}/${cut.totalLines} lines, ${cut.outputBytes}/${cut.totalBytes} bytes.`,
-            },
-            {
-              code: `${logs.id}:request-log-slice`,
-              kind: "recovery",
-              text: "Request a smaller log slice; expansion shows only fetched output.",
-            },
-          );
-      }
+      cursors(logs, notices);
+      const cut = details.truncation;
+      if (cut?.truncated)
+        notices.push(
+          {
+            code: `${logs.id}:slice-truncated`,
+            description: "Only part of the requested logs was returned.",
+            kind: "warning",
+            text: `Output truncated: ${cut.outputLines}/${cut.totalLines} lines, ${cut.outputBytes}/${cut.totalBytes} bytes.`,
+          },
+          {
+            code: `${logs.id}:request-log-slice`,
+            kind: "recovery",
+            text: "Request a smaller log slice; expansion shows only fetched output.",
+          },
+        );
       // Success here describes log retrieval, not a clean process exit. Log slices omit
       // exit codes by contract; snapshot-based status checks still classify exit evidence.
       const outcome: CompactOutcome =
@@ -325,27 +260,21 @@ const projectTaskSummary = ({
                 : "success";
       if (logs.state === "failed" || logs.state === "timed_out")
         notices.push(
-          {
-            code: `${logs.id}:${logs.state === "timed_out" ? "runtime-timeout" : "failed"}`,
-            description:
-              logs.state === "timed_out" ? "The task exceeded its time limit." : "The task failed.",
-            kind: "error",
-            text:
-              logs.state === "timed_out" ? "Task exceeded its runtime timeout." : "Task failed.",
-          },
+          logs.state === "timed_out"
+            ? runtimeTimeoutNotice(logs.id)
+            : {
+                code: `${logs.id}:failed`,
+                description: "The task failed.",
+                kind: "error",
+                text: "Task failed.",
+              },
           {
             code: `${logs.id}:read-task-status`,
             kind: "recovery",
             text: "Read task status for the failure cause and details.",
           },
         );
-      if (logs.state === "stopping")
-        notices.push({
-          code: `${logs.id}:cleanup-unconfirmed`,
-          description: "Some task processes may still be running.",
-          kind: "recovery",
-          text: "Process-tree cleanup is not confirmed; inspect status before retrying work.",
-        });
+      if (logs.state === "stopping") notices.push(cleanupUnconfirmedNotice(logs.id));
       return {
         action,
         subject: sanitizeTerminalLine(logs.id),

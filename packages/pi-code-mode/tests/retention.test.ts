@@ -3,20 +3,16 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import { callEntryDetails } from "../src/tools/format.ts";
-import { makeResultResponse } from "../src/tools/result-response.ts";
-import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { executeHarness } from "./support/execute.ts";
+import { resultResponseFixture } from "./support/results.ts";
 import {
   applyRetainedCodeModeFailureDetails,
   makeFailureDetailsRetention,
 } from "../src/tools/retention.ts";
 
 const details = (tool: string) => ({
-  toolCalls: [{ tool, status: "error" as const, activity: `Call ${tool}` }],
+  toolCalls: [{ tool, status: "error" as const }],
   counts: {
     total: 1,
     queued: 0,
@@ -41,9 +37,8 @@ describe("failure details retention", () => {
           const results: ResultsContract = {
             put: () => Effect.succeed("cm-held"),
             get: () => Effect.void.pipe(Effect.as(undefined)),
-            clear: Effect.void,
           };
-          const response = makeResultResponse({
+          const response = resultResponseFixture({
             maxBytes: 500,
             results,
             run: (effect) =>
@@ -59,17 +54,6 @@ describe("failure details retention", () => {
             current: () => current,
             aborted: () => aborted,
             capture: () => ({ status: "captured", text: "x".repeat(2_000) }),
-            settle: () => callEntryDetails([]),
-            receipts: () => ({
-              total: 0,
-              completed: 0,
-              unknown: 0,
-              notSent: 0,
-              omitted: 0,
-              calls: [],
-            }),
-            nestedOutputLost: () => false,
-            retain: () => undefined,
           });
           const pending = yield* Effect.promise(() =>
             response.success({
@@ -110,27 +94,16 @@ describe("failure details retention", () => {
         expect(id).toBeDefined();
         const caller = new AbortController();
         const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-        const execute = makeCodeModeToolExecute({
+        const { call } = executeHarness({
           results,
-          isCurrent: () => true,
-          getState: () => codeModeStateFixture(),
           runInSession: (effect) =>
             runPromise(effect).then((value) => {
               caller.abort();
               return value;
             }),
-          definitions: nestedToolDefinitionsFixture({}),
-          events: createEventBus(),
-          sessionId: "retention-race",
         });
         const result = yield* Effect.promise(() =>
-          execute(
-            "read",
-            { action: "result.read", id: id! },
-            caller.signal,
-            undefined,
-            extensionContextFixture({}),
-          ),
+          call({ action: "result.read", id: id! }, { signal: caller.signal }),
         );
         expect(result.details).toMatchObject({ cancelled: true });
         expect(result.details.resultRead).toBeUndefined();

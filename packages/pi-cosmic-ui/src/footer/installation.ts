@@ -3,50 +3,66 @@ import * as MutableRef from "effect/MutableRef";
 import type { HostCallbackBoundaryContract } from "../boundary/host-callback.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { createFooterComponent } from "./component.ts";
-import type { FooterRegistryBridge } from "./registry.ts";
+import type { FooterRegistry } from "./registry.ts";
 import type { CosmicUiProjection } from "../protocol/service.ts";
 
 interface FooterInstallationOptions {
   readonly pi: ExtensionAPI;
   readonly callbacks: HostCallbackBoundaryContract;
-  readonly bridge: FooterRegistryBridge;
+  readonly registry: Pick<FooterRegistry, "snapshot">;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly config: () => ResolvedCosmicUiConfig;
   readonly currentContext: () => ExtensionContext | undefined;
-  readonly clearRenderRequest: (expected: () => void) => void;
-  readonly installRenderRequest: (
-    request: () => void,
-    isCurrent: () => boolean,
-    ctx: ExtensionContext,
-  ) => void;
   readonly refreshAfterBranchChange: (ctx: ExtensionContext) => void;
   readonly onActiveChange: (active: boolean) => void;
 }
 
-/** Owns the synchronous Pi footer installation generation and exact-once disposal state. */
+type FooterInstance = ReturnType<typeof createFooterComponent> & { readonly dispose: () => void };
+
+const inertFooter = (): FooterInstance => ({
+  render: () => [],
+  invalidate: () => undefined,
+  invalidateContextUsage: () => undefined,
+  dispose: () => undefined,
+});
+
+/** One setFooter call: pending while Pi installs it, then active once installation succeeds. */
+interface FooterAttempt {
+  instance: object | undefined;
+  renderRequest: (() => void) | undefined;
+  component: ReturnType<typeof createFooterComponent> | undefined;
+  readonly disposers: Set<() => void>;
+}
+
+const disposeAttempt = (attempt: FooterAttempt | undefined) => {
+  for (const dispose of attempt?.disposers ?? []) dispose();
+};
+
+/**
+ * Owns the synchronous Pi footer installation attempts, exact-once disposal state, and the render
+ * request: only the newest instance of the active attempt receives render requests.
+ */
 export const createFooterInstallation = (options: FooterInstallationOptions) => {
-  const { pi, callbacks, bridge, projection, config } = options;
+  const { pi, callbacks, registry, projection, config } = options;
   let installedContext: ExtensionContext | undefined;
-  let footerComponent: ReturnType<typeof createFooterComponent> | undefined;
-  let footerInstallGeneration = 0;
-  let pendingFooterGeneration: number | undefined;
-  let activeFooterGeneration: number | undefined;
-  let activeFooterInstance: object | undefined;
-  let activeFooterRenderRequest: (() => void) | undefined;
-  let activeFooterDisposeAll: (() => void) | undefined;
+  let pending: FooterAttempt | undefined;
+  let active: FooterAttempt | undefined;
   let publishedActive = false;
-  const publishActive = (active: boolean) => {
-    if (active === publishedActive) return;
-    publishedActive = active;
-    options.onActiveChange(active);
+  const publishActive = (next: boolean) => {
+    if (next === publishedActive) return;
+    publishedActive = next;
+    options.onActiveChange(next);
+  };
+
+  const requestRender = () => {
+    const request = active?.renderRequest;
+    if (request) callbacks.invoke("request-render", request, undefined);
   };
 
   const uninstall = () => {
     const ctx = installedContext;
     if (!ctx) return;
-    const generation = activeFooterGeneration;
-    const disposeAll = activeFooterDisposeAll;
-    const renderRequest = activeFooterRenderRequest;
+    const attempt = active;
     const removed = callbacks.invoke(
       "footer-remove",
       () => {
@@ -55,19 +71,13 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
       },
       false,
     );
-    if (!removed) return;
-    if (activeFooterGeneration !== generation) return;
-    disposeAll?.();
-    if (activeFooterGeneration !== generation) return;
-    activeFooterGeneration = undefined;
-    activeFooterInstance = undefined;
-    activeFooterRenderRequest = undefined;
-    activeFooterDisposeAll = undefined;
+    if (!removed || active !== attempt) return;
+    disposeAttempt(attempt);
+    if (active !== attempt) return;
+    active = undefined;
     if (installedContext === ctx) installedContext = undefined;
-    footerComponent = undefined;
-    pendingFooterGeneration = undefined;
+    pending = undefined;
     publishActive(false);
-    if (renderRequest) options.clearRenderRequest(renderRequest);
   };
 
   const update = (fallback: ExtensionContext) => {
@@ -82,73 +92,40 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
       return;
     }
     if (installedContext) {
-      bridge.requestRenderNow();
+      requestRender();
       return;
     }
-    const generation = ++footerInstallGeneration;
-    pendingFooterGeneration = generation;
-    type FooterInstance = ReturnType<typeof createFooterComponent> & {
-      readonly dispose: () => void;
+    const attempt: FooterAttempt = {
+      instance: undefined,
+      renderRequest: undefined,
+      component: undefined,
+      disposers: new Set(),
     };
-    const inertFooter = (): FooterInstance => ({
-      render: () => [],
-      invalidate: () => undefined,
-      invalidateContextUsage: () => undefined,
-      dispose: () => undefined,
-    });
-    let stagedComponent: ReturnType<typeof createFooterComponent> | undefined;
-    let stagedInstance: object | undefined;
-    let stagedRenderRequest: (() => void) | undefined;
-    const attemptDisposers = new Set<() => void>();
-    const ownsGeneration = () =>
-      pendingFooterGeneration === generation || activeFooterGeneration === generation;
-    const disposeAll = () => {
-      for (const dispose of attemptDisposers) dispose();
-    };
+    pending = attempt;
+    const ownsAttempt = () => pending === attempt || active === attempt;
     const installed = callbacks.invoke(
       "footer-install",
       () => {
         ctx.ui.setFooter((tui, theme, footerData) => {
-          if (!ownsGeneration()) return inertFooter();
+          if (!ownsAttempt()) return inertFooter();
           return callbacks.invoke<FooterInstance>(
             "footer-install",
             () => {
               const instance = Object.freeze({});
-              const renderRequest = () => tui.requestRender();
               const component = createFooterComponent({
                 pi,
                 ctx: () => options.currentContext() ?? ctx,
                 footerData,
                 theme,
-                registry: {
-                  snapshot: () => bridge.snapshot,
-                  invalidate: () => bridge.invalidate(),
-                },
+                registry,
                 callbacks,
                 config,
-                totals: () => MutableRef.get(projection).totals,
-                gitStatus: () => MutableRef.get(projection).gitStatus,
-                pullRequestNumber: () => MutableRef.get(projection).pullRequestNumber,
-                homeDirectory: () => MutableRef.get(projection).homeDirectory,
+                projection: () => MutableRef.get(projection),
               });
-              const isCurrentInstance = () =>
-                activeFooterGeneration === generation
-                  ? activeFooterInstance === instance
-                  : pendingFooterGeneration === generation && stagedInstance === instance;
-              if (activeFooterGeneration === generation) {
-                activeFooterInstance = instance;
-                activeFooterRenderRequest = renderRequest;
-                footerComponent = component;
-              } else {
-                stagedInstance = instance;
-                stagedRenderRequest = renderRequest;
-                stagedComponent = component;
-              }
-              options.installRenderRequest(
-                renderRequest,
-                isCurrentInstance,
-                options.currentContext() ?? ctx,
-              );
+              const isCurrentInstance = () => ownsAttempt() && attempt.instance === instance;
+              attempt.instance = instance;
+              attempt.renderRequest = () => tui.requestRender();
+              attempt.component = component;
               const onBranchChange = () => {
                 if (!isCurrentInstance()) return;
                 callbacks.invoke(
@@ -169,28 +146,23 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
               const dispose = () => {
                 if (disposed) return;
                 disposed = true;
-                attemptDisposers.delete(dispose);
+                attempt.disposers.delete(dispose);
                 const currentInstance = isCurrentInstance();
                 callbacks.invoke("branch-unsubscribe", unsubscribeBranch, undefined);
                 if (!currentInstance) return;
-                options.clearRenderRequest(renderRequest);
-                if (activeFooterGeneration === generation) {
-                  activeFooterGeneration = undefined;
-                  activeFooterInstance = undefined;
-                  activeFooterRenderRequest = undefined;
-                  activeFooterDisposeAll = undefined;
+                if (active === attempt) {
+                  active = undefined;
                   installedContext = undefined;
-                  if (footerComponent === component) footerComponent = undefined;
                   publishActive(false);
-                  disposeAll();
-                } else if (pendingFooterGeneration === generation) {
-                  stagedInstance = undefined;
-                  stagedRenderRequest = undefined;
-                  if (stagedComponent === component) stagedComponent = undefined;
-                  disposeAll();
-                }
+                } else if (pending === attempt) {
+                  // Promotion must not revive this disposed instance or its render request.
+                  attempt.instance = undefined;
+                  attempt.renderRequest = undefined;
+                  if (attempt.component === component) attempt.component = undefined;
+                } else return;
+                disposeAttempt(attempt);
               };
-              attemptDisposers.add(dispose);
+              attempt.disposers.add(dispose);
               return { ...component, dispose };
             },
             inertFooter(),
@@ -200,30 +172,23 @@ export const createFooterInstallation = (options: FooterInstallationOptions) => 
       },
       false,
     );
-    if (installed && pendingFooterGeneration === generation) {
-      pendingFooterGeneration = undefined;
-      activeFooterGeneration = generation;
-      activeFooterInstance = stagedInstance;
-      activeFooterRenderRequest = stagedRenderRequest;
-      activeFooterDisposeAll = disposeAll;
+    if (installed && pending === attempt) {
+      pending = undefined;
+      active = attempt;
       installedContext = ctx;
-      if (stagedComponent) footerComponent = stagedComponent;
       publishActive(true);
     } else {
-      if (pendingFooterGeneration === generation) pendingFooterGeneration = undefined;
-      const failedRenderRequest = stagedRenderRequest;
-      disposeAll();
-      if (failedRenderRequest) options.clearRenderRequest(failedRenderRequest);
-      stagedComponent = undefined;
-      stagedInstance = undefined;
-      stagedRenderRequest = undefined;
+      if (pending === attempt) pending = undefined;
+      // The attempt is now neither pending nor active, so its disposers only unsubscribe.
+      disposeAttempt(attempt);
     }
   };
 
   return {
     update,
     uninstall,
+    requestRender,
     isActive: () => installedContext !== undefined,
-    invalidateContextUsage: () => footerComponent?.invalidateContextUsage(),
+    invalidateContextUsage: () => active?.component?.invalidateContextUsage(),
   };
 };

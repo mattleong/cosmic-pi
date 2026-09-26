@@ -4,15 +4,14 @@ import * as Schema from "effect/Schema";
 import type { CodeModeSuccess } from "../src/boundary/codemode-runtime.ts";
 import type { ResultArtifact } from "../src/results/model.ts";
 import { projectResultPage } from "../src/results/projection.ts";
-import type { ResultsContract } from "../src/results/service.ts";
 import {
   ExecutionReceiptsSchema,
   projectInitialReceipts,
   type ExecutionReceipts,
 } from "../src/tools/execution-receipts.ts";
-import { callEntryDetails, formatCodeModeSuccess } from "../src/tools/format.ts";
+import { formatCodeModeSuccess } from "../src/tools/format.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
-import { makeResultResponse } from "../src/tools/result-response.ts";
+import { EMPTY_RECEIPTS, recordingResults, resultResponseFixture } from "./support/results.ts";
 
 const PageSchema = Schema.fromJsonString(
   Schema.Struct({
@@ -34,15 +33,6 @@ const PageSchema = Schema.fromJsonString(
   }),
 );
 const parsePage = Schema.decodeUnknownSync(PageSchema);
-
-const emptyReceipts: ExecutionReceipts = {
-  total: 0,
-  completed: 0,
-  unknown: 0,
-  notSent: 0,
-  omitted: 0,
-  calls: [],
-};
 
 const readReceipts = (count: number): ExecutionReceipts => ({
   total: count,
@@ -81,37 +71,22 @@ const writeReceipts: ExecutionReceipts = {
 const execute = (
   result: CodeModeSuccess,
   maxBytes: number,
-  receipts: ExecutionReceipts = emptyReceipts,
+  receipts: ExecutionReceipts = EMPTY_RECEIPTS,
 ) =>
   Effect.gen(function* () {
-    let stored: ResultArtifact | undefined;
-    const results: ResultsContract = {
-      put: (text, outcome, kind = "output") =>
-        Effect.sync(() => {
-          stored = { id: "cm-preview-1", text, outcome, kind, cost: 0 };
-          return stored.id;
-        }),
-      get: () => Effect.succeed(stored),
-      clear: Effect.void,
-    };
+    const { results, stored } = recordingResults("cm-preview-1");
     const exact = formatCodeModeSuccess(result);
-    const response = makeResultResponse({
+    const response = resultResponseFixture({
       maxBytes,
       results,
-      run: Effect.runPromise,
-      current: () => true,
-      aborted: () => false,
       capture: () => ({ status: "captured", text: exact }),
-      settle: () => callEntryDetails([]),
       receipts: () => receipts,
-      nestedOutputLost: () => false,
-      retain: () => undefined,
     });
     const delivered = yield* Effect.promise(() => response.success(result));
     return {
       delivered,
       exact,
-      stored,
+      stored: stored(),
       text: delivered.content.map((part) => (part.type === "text" ? part.text : "")).join("\n"),
     };
   });
@@ -209,7 +184,7 @@ describe("initial retained-output pages", () => {
   it("reduces no incomplete, uncertain, failed, mutating, shell, MCP, or background receipt", () => {
     const completeRead = readReceipts(1);
     const variants: ExecutionReceipts[] = [
-      { ...emptyReceipts, calls: writeReceipts.calls },
+      { ...EMPTY_RECEIPTS, calls: writeReceipts.calls },
       { ...completeRead, omitted: 1 },
       {
         ...readReceipts(2),

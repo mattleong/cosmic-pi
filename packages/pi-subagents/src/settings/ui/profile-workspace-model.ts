@@ -7,11 +7,12 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../../profiles/model.ts";
-import type { SubagentEffort, SubagentHost, SubagentRuntime } from "../../domain/routing.ts";
+import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   loadProfileRouteDraft,
   profileWorkspaceScope,
   runtimeEfforts,
+  runtimeLabel,
   updateCandidateControls,
   type CandidateUpdate,
   type ProfileRouteDraft,
@@ -20,7 +21,7 @@ import {
   type ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 
-export type ProfileWorkspacePane = "profiles" | "candidates" | "fields";
+export type ProfileWorkspacePane = "profiles" | "fields";
 export type ProfileWorkspaceField =
   | "model"
   | "effort"
@@ -59,9 +60,6 @@ export interface CandidateFieldChoice {
 export const profileRouteOptionLabel = (index: number): string =>
   index <= 0 ? "Primary" : `Fallback ${index}`;
 
-const routeOptionCountLabel = (count: number): string =>
-  count === 1 ? "Primary only" : `Primary + ${count - 1} fallback${count === 2 ? "" : "s"}`;
-
 export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsScope): string => {
   switch (draft.kind) {
     case "explicit":
@@ -77,16 +75,18 @@ export const draftKindLabel = (draft: ProfileRouteDraft, scope: ProfileSettingsS
   }
 };
 
+const profileDefaultEffort = (profile: ProfileId): SubagentEffort | undefined => {
+  const definition = PROFILE_DEFINITIONS[profile];
+  return "defaultEffort" in definition ? definition.defaultEffort : undefined;
+};
+
 export const effectiveCandidateEffort = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   parentEffort: SubagentEffort,
 ): SubagentEffort =>
   candidate.effort === "default"
-    ? (() => {
-        const definition = PROFILE_DEFINITIONS[profile];
-        return "defaultEffort" in definition ? definition.defaultEffort : parentEffort;
-      })()
+    ? (profileDefaultEffort(profile) ?? parentEffort)
     : candidate.effort;
 
 export const candidateEffortLabel = (
@@ -98,60 +98,38 @@ export const candidateEffortLabel = (
   return candidate.effort === "default" ? `${effective} (profile default)` : effective;
 };
 
-export const candidateFastModeApplied = (
+const candidateFastModeAvailable = (
   candidate: ProfileCandidate,
-  parentModel?: string | undefined,
+  parentModel: string | undefined,
 ): boolean => {
-  if (!candidate.openaiFastMode) return false;
   const model =
     candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
   return model !== undefined && supportsSubagentFastMode(candidate.runtime, model);
 };
 
+export const candidateFastModeApplied = (
+  candidate: ProfileCandidate,
+  parentModel?: string | undefined,
+): boolean =>
+  candidate.openaiFastMode === true && candidateFastModeAvailable(candidate, parentModel);
+
 export const runWithValue = (candidate: ProfileCandidate): string =>
   `${candidate.host}/${candidate.runtime}`;
 
-export const runWithLabel = (candidate: ProfileCandidate): string => {
-  const runtime =
-    candidate.runtime === "pi" ? "Pi" : candidate.runtime === "claude" ? "Claude" : "Codex";
-  return `${candidate.host === "local" ? "Local" : "Herdr"} ${runtime}`;
-};
-
-export const targetProfileRouteDraft = (
-  inspection: ProfileSettingsInspection,
-  target: ProfileWorkspaceTarget,
-  profile: ProfileId,
-): ProfileRouteDraft => loadProfileRouteDraft(inspection, target, profile);
-
-export const profileRouteDraftSummary = (
-  profile: ProfileId,
-  draft: ProfileRouteDraft,
-  parentEffort: SubagentEffort,
-  parentModel?: string | undefined,
-): string => {
-  if (draft.kind === "invalid")
-    return `${managerNoticeGlyph("error")} invalid, won't run until fixed`;
-  const first = draft.candidates[0];
-  if (!first) return "disabled";
-  const effort = candidateEffortLabel(profile, first, parentEffort);
-  const fast = candidateFastModeApplied(first, parentModel) ? " ⚡" : "";
-  return `${routeOptionCountLabel(draft.candidates.length)} · ${first.model} · ${runWithLabel(first)} · ${effort}${fast}`;
-};
+export const runWithLabel = (candidate: Pick<ProfileCandidate, "host" | "runtime">): string =>
+  `${candidate.host === "local" ? "Local" : "Herdr"} ${runtimeLabel(candidate.runtime)}`;
 
 export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
   profile: ProfileId,
-  draft: ProfileRouteDraft = targetProfileRouteDraft(inspection, target, profile),
+  draft: ProfileRouteDraft = loadProfileRouteDraft(inspection, target, profile),
 ): string => {
   const kind = draftKindLabel(draft, profileWorkspaceScope(target));
   const primary = draft.candidates[0];
   if (primary) return `${kind} · ${primary.model}`;
   return draft.kind === "disabled" || draft.kind === "invalid" ? kind : `${kind} · disabled`;
 };
-
-export const profileDescription = (profile: ProfileId): string =>
-  PROFILE_DEFINITIONS[profile].description;
 
 const advancedSummaryValues = (
   candidate: ProfileCandidate,
@@ -165,37 +143,14 @@ const advancedSummaryValues = (
     !candidate.closeOnReport ? "stays open after reporting" : undefined,
   ].filter((value): value is string => value !== undefined);
 
-const fastModeFieldRow = (
-  candidate: ProfileCandidate,
-  parentModel: string | undefined,
-  fastAvailable: boolean,
-): ProfileWorkspaceFieldRow => ({
-  field: "openaiFastMode",
-  label: "  OpenAI fast mode",
-  value: fastAvailable
-    ? candidateFastModeApplied(candidate, parentModel)
-      ? "on, priority"
-      : "off, standard"
-    : candidate.openaiFastMode
-      ? "on, but unavailable"
-      : "off, unavailable",
-  fixed: !fastAvailable && !candidate.openaiFastMode,
-  ...(!fastAvailable &&
-    !candidate.openaiFastMode && {
-      fixedReason: "The selected model does not support OpenAI fast mode.",
-    }),
-});
-
 const advancedCandidateRows = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const localPi = isLocalPiProfileCandidate(candidate);
   const retainedAllowed = isRetainableProfileCandidate(candidate);
-  const fastModel =
-    candidate.runtime === "pi" && candidate.model === "parent" ? parentModel : candidate.model;
-  const fastAvailable =
-    fastModel !== undefined && supportsSubagentFastMode(candidate.runtime, fastModel);
+  const fastAvailable = candidateFastModeAvailable(candidate, parentModel);
+  const fastFixed = !fastAvailable && !candidate.openaiFastMode;
   return [
     {
       field: "context",
@@ -204,7 +159,19 @@ const advancedCandidateRows = (
       fixed: !localPi,
       ...(!localPi && { fixedReason: "Fork is available only with Local Pi." }),
     },
-    fastModeFieldRow(candidate, parentModel, fastAvailable),
+    {
+      field: "openaiFastMode",
+      label: "  OpenAI fast mode",
+      value: fastAvailable
+        ? candidate.openaiFastMode
+          ? "on, priority"
+          : "off, standard"
+        : candidate.openaiFastMode
+          ? "on, but unavailable"
+          : "off, unavailable",
+      fixed: fastFixed,
+      ...(fastFixed && { fixedReason: "The selected model does not support OpenAI fast mode." }),
+    },
     {
       field: "closeOnReport",
       label: "  After reporting",
@@ -223,11 +190,10 @@ export const candidateFieldRows = (
   parentEffort: SubagentEffort = "high",
   parentModel?: string | undefined,
   advancedExpanded = false,
-  position: { readonly index: number; readonly count: number } = { index: 0, count: 1 },
+  candidateIndex = 0,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
-  const advanced = advancedCandidateRows(candidate, parentModel);
   const advancedValues = advancedSummaryValues(candidate, parentModel);
-  const essential: ReadonlyArray<ProfileWorkspaceFieldRow> = [
+  return [
     { field: "model", label: "Model", value: candidate.model, fixed: false },
     {
       field: "effort",
@@ -237,27 +203,20 @@ export const candidateFieldRows = (
     },
     { field: "writeIntent", label: "File access", value: candidate.writeIntent, fixed: false },
     { field: "runWith", label: "Run with", value: runWithLabel(candidate), fixed: false },
-    ...(advanced.length > 0
-      ? [
-          {
-            field: "advanced" as const,
-            label: advancedExpanded ? "Advanced ▾" : "Advanced ▸",
-            value: advancedExpanded
-              ? ""
-              : advancedValues.length > 0
-                ? advancedValues.join(", ")
-                : "all standard",
-            fixed: false,
-          },
-        ]
-      : []),
-  ];
-  return [
-    ...essential,
-    ...(advancedExpanded ? advanced : []),
+    {
+      field: "advanced",
+      label: advancedExpanded ? "Advanced ▾" : "Advanced ▸",
+      value: advancedExpanded
+        ? ""
+        : advancedValues.length > 0
+          ? advancedValues.join(", ")
+          : "all standard",
+      fixed: false,
+    },
+    ...(advancedExpanded ? advancedCandidateRows(candidate, parentModel) : []),
     {
       field: "actions",
-      label: `Manage ${profileRouteOptionLabel(position.index)}…`,
+      label: `Manage ${profileRouteOptionLabel(candidateIndex)}…`,
       value: "",
       fixed: false,
     },
@@ -269,52 +228,15 @@ export type SelectableCandidateField = Exclude<
   "model" | "advanced" | "actions" | "add" | "reset"
 >;
 
-const RUN_WITH_CHOICES: ReadonlyArray<
-  CandidateFieldChoice & { readonly host: SubagentHost; readonly runtime: SubagentRuntime }
-> = [
-  {
-    value: "local/pi",
-    label: "Local Pi",
-    description: "Run Pi locally on this computer",
-    host: "local",
-    runtime: "pi",
-  },
-  {
-    value: "local/claude",
-    label: "Local Claude",
-    description: "Run Claude Code locally on this computer",
-    host: "local",
-    runtime: "claude",
-  },
-  {
-    value: "local/codex",
-    label: "Local Codex",
-    description: "Run Codex locally on this computer",
-    host: "local",
-    runtime: "codex",
-  },
-  {
-    value: "herdr/pi",
-    label: "Herdr Pi",
-    description: "Run Pi in a Herdr pane",
-    host: "herdr",
-    runtime: "pi",
-  },
-  {
-    value: "herdr/claude",
-    label: "Herdr Claude",
-    description: "Run Claude Code in a Herdr pane",
-    host: "herdr",
-    runtime: "claude",
-  },
-  {
-    value: "herdr/codex",
-    label: "Herdr Codex",
-    description: "Run Codex in a Herdr pane",
-    host: "herdr",
-    runtime: "codex",
-  },
-];
+const RUN_WITH_CHOICES = (["local", "herdr"] as const).flatMap((host) =>
+  (["pi", "claude", "codex"] as const).map((runtime) => ({
+    value: `${host}/${runtime}`,
+    label: runWithLabel({ host, runtime }),
+    description: `Run ${runtime === "pi" ? "Pi" : runtime === "claude" ? "Claude Code" : "Codex"} ${host === "local" ? "locally on this computer" : "in a Herdr pane"}`,
+    host,
+    runtime,
+  })),
+);
 
 export const candidateFieldChoices = (
   candidate: ProfileCandidate,
@@ -323,10 +245,8 @@ export const candidateFieldChoices = (
 ): ReadonlyArray<CandidateFieldChoice> => {
   if (field === "runWith") return RUN_WITH_CHOICES;
   if (field === "effort") {
-    const definition = options.profile ? PROFILE_DEFINITIONS[options.profile] : undefined;
-    const defaultEffort =
-      definition && "defaultEffort" in definition ? definition.defaultEffort : undefined;
-    const effectiveDefault = defaultEffort ?? options.parentEffort;
+    const effectiveDefault =
+      (options.profile ? profileDefaultEffort(options.profile) : undefined) ?? options.parentEffort;
     return [
       {
         value: "default",
@@ -341,12 +261,12 @@ export const candidateFieldChoices = (
     ];
   }
   if (field === "context")
-    return isLocalPiProfileCandidate(candidate)
-      ? [
-          { value: "fresh", label: "Fresh", description: "Start without earlier context" },
-          { value: "fork", label: "Fork", description: "Copy the current Pi context" },
-        ]
-      : [{ value: "fresh", label: "Fresh", description: "Start without earlier context" }];
+    return [
+      { value: "fresh", label: "Fresh", description: "Start without earlier context" },
+      ...(isLocalPiProfileCandidate(candidate)
+        ? [{ value: "fork", label: "Fork", description: "Copy the current Pi context" }]
+        : []),
+    ];
   if (field === "writeIntent")
     return [
       {

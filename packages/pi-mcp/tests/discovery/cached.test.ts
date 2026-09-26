@@ -1,37 +1,24 @@
 import { expect, it } from "vitest";
 import type { McpResolvedConfig } from "../../src/config/model.ts";
-import { DEFAULT_MCP_SETTINGS } from "../../src/config/schema.ts";
-import { describeCached, queryCached } from "../../src/discovery/cached.ts";
-import type { McpMetadataSnapshot } from "../../src/discovery/model.ts";
-import { emptyCursorState } from "../../src/discovery/pagination.ts";
+import { describeCached, type McpCacheEvidence, queryCached } from "../../src/discovery/cached.ts";
+import type { McpCachedRequest, McpMetadataSnapshot } from "../../src/discovery/model.ts";
+import { emptyCursorState, type McpCursorState } from "../../src/discovery/pagination.ts";
+import { stdioDefinition, testConfig, testServer } from "../fixtures/services.ts";
 
-const config: McpResolvedConfig = {
-  revision: 1,
-  trusted: true,
-  settings: { ...DEFAULT_MCP_SETTINGS, enabled: true },
-  diagnostics: [],
+const config = testConfig({
   servers: {
-    a: {
-      id: "a",
+    a: testServer("a", {
       identity: "identity",
-      directory: "/private",
-      enabled: true,
-      scope: "global",
-      definition: {
-        transport: "stdio",
-        command: "private",
-        args: [],
-        environment: {},
-        denyTools: ["denied"],
-      },
-    },
+      definition: stdioDefinition({ denyTools: ["denied"] }),
+    }),
   },
-};
+});
 const snapshot: McpMetadataSnapshot = {
   server: "a",
   owner: "owner",
   identity: "identity",
   configRevision: 1,
+  authorizationRevision: 0,
   revision: 2,
   expiresAt: 60_000,
   cacheScope: "private",
@@ -50,202 +37,105 @@ const snapshot: McpMetadataSnapshot = {
   prompts: [{ name: "prompt", arguments: [{ name: "arg", required: true }] }],
 };
 const snapshots = new Map([["a", snapshot]]);
+const query = (
+  request: McpCachedRequest,
+  o: {
+    at?: McpResolvedConfig;
+    stored?: ReadonlyMap<string, McpMetadataSnapshot>;
+    evidence?: ReadonlyMap<string, McpCacheEvidence>;
+    cursors?: McpCursorState;
+  } = {},
+) =>
+  queryCached(
+    request,
+    o.at ?? config,
+    o.stored ?? snapshots,
+    o.evidence ?? new Map(),
+    o.cursors ?? emptyCursorState(),
+    "test",
+  );
 it("family diagnostics follow the visible snapshot and retain refresh-state precedence", () => {
   const partial: McpMetadataSnapshot = {
     ...snapshot,
     diagnostics: [{ family: "resources", reason: "rpc-method-not-found" }],
   };
   const stored = new Map([["a", partial]]);
-  const resources = queryCached(
-    { family: "resources" },
-    config,
-    stored,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const resources = query({ family: "resources" }, { stored });
   expect(resources.page.catalogs[0]).toMatchObject({
     state: "unsupported",
     reason: "rpc-method-not-found",
   });
-  const tools = queryCached(
-    { family: "tools" },
-    config,
-    stored,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const tools = query({ family: "tools" }, { stored });
   expect(tools.page.catalogs[0]).toMatchObject({ state: "ready" });
   expect(tools.page.catalogs[0]?.reason).toBeUndefined();
-  const refreshing = queryCached(
+  const refreshing = query(
     { family: "resources" },
-    config,
-    stored,
-    new Map([["a", { owner: "owner", state: "refreshing" as const }]]),
-    emptyCursorState(),
-    "test",
+    { stored, evidence: new Map([["a", { owner: "owner", state: "refreshing" as const }]]) },
   );
   expect(refreshing.page.catalogs[0]?.state).toBe("refreshing");
-  const revoked = queryCached(
-    { family: "resources" },
-    { ...config, revision: 2 },
-    stored,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const revoked = query({ family: "resources" }, { at: { ...config, revision: 2 }, stored });
   expect(revoked.page.catalogs[0]).toMatchObject({ state: "undiscovered" });
   expect(revoked.page.catalogs[0]?.reason).toBeUndefined();
 });
 it("search covers the catalog beyond its visible page and tool policy still applies", () => {
-  const found = queryCached(
-    { family: "tools", server: "a", query: "needle", limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const found = query({ family: "tools", server: "a", query: "needle", limit: 1 });
   expect(found.page.entries[0]?.ref.id).toBe("tool-149");
   expect(found.page.total).toBe(1);
-  expect(
-    queryCached(
-      { family: "tools", query: "denied" },
-      config,
-      snapshots,
-      new Map(),
-      emptyCursorState(),
-      "test",
-    ).page.entries,
-  ).toEqual([]);
+  expect(query({ family: "tools", query: "denied" }).page.entries).toEqual([]);
 });
 it("catalog-only reads keep full permitted counts without consuming browser cursors", () => {
-  const first = queryCached(
-    { family: "tools", limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const first = query({ family: "tools", limit: 1 });
   let cursors = first.cursors;
   for (let index = 0; index < 1050; index++) {
-    const observed = queryCached(
-      { family: "tools", catalogsOnly: true },
-      config,
-      snapshots,
-      new Map(),
-      cursors,
-      "test",
-    );
+    const observed = query({ family: "tools", catalogsOnly: true }, { cursors });
     expect(observed.page.entries).toEqual([]);
     expect(observed.page.next).toBeUndefined();
     expect(observed.page.catalogs[0]).toMatchObject({ state: "ready", count: 150 });
     cursors = observed.cursors;
   }
-  const next = queryCached(
-    { family: "tools", cursor: first.page.next!, limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    cursors,
-    "test",
-  );
+  const next = query({ family: "tools", cursor: first.page.next!, limit: 1 }, { cursors });
   expect(next.page.entries[0]?.ref.id).toBe("tool-1");
 });
 
 it("cursor binding rejects changed query, config and metadata revisions", () => {
-  const first = queryCached(
-    { family: "tools", limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const first = query({ family: "tools", limit: 1 });
   const cursor = first.page.next!;
-  const second = queryCached(
-    { family: "tools", cursor, limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    first.cursors,
-    "test",
-  );
+  const second = query({ family: "tools", cursor, limit: 1 }, { cursors: first.cursors });
   expect(second.page.entries[0]?.ref.id).toBe("tool-1");
   expect(() =>
-    queryCached(
-      { family: "tools", cursor, query: "needle" },
-      config,
-      snapshots,
-      new Map(),
-      first.cursors,
-      "test",
-    ),
+    query({ family: "tools", cursor, query: "needle" }, { cursors: first.cursors }),
   ).toThrow();
   expect(() =>
-    queryCached(
-      { family: "tools", cursor },
-      { ...config, revision: 2 },
-      snapshots,
-      new Map(),
-      first.cursors,
-      "test",
-    ),
+    query({ family: "tools", cursor }, { at: { ...config, revision: 2 }, cursors: first.cursors }),
   ).toThrow();
   expect(() =>
-    queryCached(
+    query(
       { family: "tools", cursor },
-      config,
-      new Map([["a", { ...snapshot, revision: 3 }]]),
-      new Map(),
-      first.cursors,
-      "test",
+      { stored: new Map([["a", { ...snapshot, revision: 3 }]]), cursors: first.cursors },
     ),
   ).toThrow();
 });
 it("unsupported, undiscovered, failed refresh and invalidated states remain distinct", () => {
+  expect(query({ family: "resources" }).page.catalogs[0]?.state).toBe("unsupported");
+  expect(query({ family: "tools" }, { stored: new Map() }).page.catalogs[0]?.state).toBe(
+    "undiscovered",
+  );
   expect(
-    queryCached({ family: "resources" }, config, snapshots, new Map(), emptyCursorState(), "test")
-      .page.catalogs[0]?.state,
-  ).toBe("unsupported");
-  expect(
-    queryCached({ family: "tools" }, config, new Map(), new Map(), emptyCursorState(), "test").page
-      .catalogs[0]?.state,
-  ).toBe("undiscovered");
-  expect(
-    queryCached(
+    query(
       { family: "tools" },
-      config,
-      snapshots,
-      new Map([["a", { owner: "owner", state: "refresh-failed" }]]),
-      emptyCursorState(),
-      "test",
+      { evidence: new Map([["a", { owner: "owner", state: "refresh-failed" }]]) },
     ).page.catalogs[0]?.state,
   ).toBe("refresh-failed");
 });
 it("catalog-only reads distinguish withdrawn metadata from first discovery and hide untrusted catalogs", () => {
   const evidence = new Map([["a", { owner: "owner", state: "invalidated" as const }]]);
   expect(
-    queryCached(
-      { family: "tools", catalogsOnly: true },
-      config,
-      new Map(),
-      evidence,
-      emptyCursorState(),
-      "test",
-    ).page.catalogs[0]?.state,
+    query({ family: "tools", catalogsOnly: true }, { stored: new Map(), evidence }).page.catalogs[0]
+      ?.state,
   ).toBe("invalidated");
   expect(
-    queryCached(
-      { family: "tools", catalogsOnly: true },
-      { ...config, trusted: false },
-      snapshots,
-      evidence,
-      emptyCursorState(),
-      "test",
-    ).page.catalogs,
+    query({ family: "tools", catalogsOnly: true }, { at: { ...config, trusted: false }, evidence })
+      .page.catalogs,
   ).toEqual([]);
 });
 
@@ -261,14 +151,7 @@ it("details preserve exact identifiers but bound descriptions and schemas withou
     ],
   };
   const values = new Map([["a", long]]);
-  const entry = queryCached(
-    { family: "tools" },
-    config,
-    values,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  ).page.entries[0]!;
+  const entry = query({ family: "tools" }, { stored: values }).page.entries[0]!;
   expect(entry.ref.id).toBe("exact\u001b[2J");
   const detail = describeCached(entry.ref, config, values);
   expect(detail.name).toBe("exact");
@@ -297,63 +180,34 @@ it("ranks cached resources and templates by full metadata while retaining URI se
       },
     ],
   ]);
-  const first = queryCached(
-    { family: "resources", query: "read file", limit: 1 },
-    config,
-    stored,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const first = query({ family: "resources", query: "read file", limit: 1 }, { stored });
   expect(first.page.total).toBe(3);
   expect(first.page.entries[0]?.ref.id).toBe("mcp://host/read_file");
-  const second = queryCached(
+  const second = query(
     { family: "resources", query: "read file", limit: 1, cursor: first.page.next! },
-    config,
-    stored,
-    new Map(),
-    first.cursors,
-    "test",
+    { stored, cursors: first.cursors },
   );
   expect(second.page.entries[0]?.ref.id).toBe("mcp://host/title");
-  for (const [family, query, id] of [
+  for (const [family, text, id] of [
     ["resources", "archived data", "mcp://host/read_file"],
     ["resources", "mcp://host/read_file", "mcp://host/read_file"],
     ["templates", "read file", "mcp://host/read_file/{id}"],
   ] as const) {
-    const found = queryCached(
-      { family, query },
-      config,
-      stored,
-      new Map(),
-      emptyCursorState(),
-      "test",
-    );
+    const found = query({ family, query: text }, { stored });
     expect(found.page.entries[0]?.ref.id).toBe(id);
   }
 });
 
 it("cached cursor identity includes owner, refresh evidence and camel-case query tokenization", () => {
-  const first = queryCached(
-    { family: "tools", query: "tool", limit: 1 },
-    config,
-    snapshots,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const first = query({ family: "tools", query: "tool", limit: 1 });
   for (const [stored, evidence] of [
     [new Map([["a", { ...snapshot, owner: "replacement" }]]), new Map()],
     [snapshots, new Map([["a", { owner: snapshot.owner, state: "refreshing" as const }]])],
   ] as const) {
     expect(() =>
-      queryCached(
+      query(
         { family: "tools", query: "tool", cursor: first.page.next! },
-        config,
-        stored,
-        evidence,
-        first.cursors,
-        "test",
+        { stored, evidence, cursors: first.cursors },
       ),
     ).toThrowError(expect.objectContaining({ kind: "stale" }));
   }
@@ -369,22 +223,11 @@ it("cached cursor identity includes owner, refresh evidence and camel-case query
       },
     ],
   ]);
-  const page = queryCached(
-    { family: "tools", query: "readFile", limit: 1 },
-    config,
-    stored,
-    new Map(),
-    emptyCursorState(),
-    "test",
-  );
+  const page = query({ family: "tools", query: "readFile", limit: 1 }, { stored });
   expect(() =>
-    queryCached(
+    query(
       { family: "tools", query: "readfile", cursor: page.page.next! },
-      config,
-      stored,
-      new Map(),
-      page.cursors,
-      "test",
+      { stored, cursors: page.cursors },
     ),
   ).toThrowError(expect.objectContaining({ kind: "stale" }));
 });

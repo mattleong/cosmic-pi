@@ -1,18 +1,12 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { SearchableSelectPage } from "../src/manager/searchable-select.ts";
-
-// SAFETY: The pure selector renderer uses only these Theme methods.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
 
 const page = (height = 14, notice?: string) => {
   const select = vi.fn();
   const baseOptions = {
-    theme,
+    theme: plainTheme,
     breadcrumb: "/profiles › reviewer › Primary › Model",
     title: "Choose model",
     subtitle: "[G] global · Local Pi",
@@ -123,7 +117,7 @@ describe("searchable selector state", () => {
   it("keeps disabled rows visible without selecting them", () => {
     const select = vi.fn();
     const component = new SearchableSelectPage({
-      theme,
+      theme: plainTheme,
       breadcrumb: "/models",
       title: "Choose model",
       subtitle: "",

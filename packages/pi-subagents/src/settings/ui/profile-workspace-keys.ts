@@ -46,5 +46,3 @@ export const profileWorkspaceKeys = (
     cancel: key("tui.select.cancel", "Esc"),
   };
 };
-
-export type ProfileWorkspaceKeys = ReturnType<typeof profileWorkspaceKeys>;

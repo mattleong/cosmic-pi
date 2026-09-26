@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture, opaqueFixture } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { setCodePreviewSettings } from "../../src/config/state";
@@ -32,8 +33,7 @@ function toolInfo(name: string, sourceInfo: SourceInfo = builtinSource): ToolInf
   return {
     name,
     description: `${name} tool`,
-    // SAFETY: Registration discovery reads only the tool name and source metadata.
-    parameters: {} as ToolInfo["parameters"],
+    parameters: opaqueFixture({}),
     sourceInfo,
   };
 }
@@ -42,23 +42,19 @@ function piFixture(
   options: {
     getAllTools?: () => ToolInfo[];
     registerTool?: (tool: ToolDefinition) => void;
-    activeNames?: string[];
   } = {},
 ): ExtensionAPI {
-  const activeNames = options.activeNames ?? ["read", "custom-tool"];
-  const fixture = {
+  return extensionApiFixture({
     getAllTools:
       options.getAllTools ?? (() => ALL_CODE_PREVIEW_TOOLS.map((tool) => toolInfo(tool))),
     registerTool: options.registerTool ?? (() => undefined),
     getActiveTools: () => {
-      throw new Error(`active tool API called: ${activeNames.join(",")}`);
+      throw new Error("active tool API called");
     },
     setActiveTools: () => {
       throw new Error("active tool API called");
     },
-  };
-  // SAFETY: Registration tests invoke only the four ExtensionAPI methods in this fixture.
-  return fixture as typeof fixture & ExtensionAPI;
+  });
 }
 
 function enableOnly(...tools: CodePreviewToolName[]): void {
@@ -67,35 +63,26 @@ function enableOnly(...tools: CodePreviewToolName[]): void {
 
 test("registration leaves active tool names untouched and never calls active-tool APIs", () => {
   enableOnly("bash", "read");
-  const activeNames = ["read", "custom-tool"];
   const installed: string[] = [];
-  const pi = piFixture({
-    activeNames,
-    registerTool: (tool) => installed.push(tool.name),
-  });
+  const pi = piFixture({ registerTool: (tool) => installed.push(tool.name) });
 
   registerToolRenderers(pi, "/project", { toolOptions: {} });
 
   assert.deepEqual(installed, ["bash", "read"]);
-  assert.deepEqual(activeNames, ["read", "custom-tool"]);
 });
 
-test("a later definition construction failure occurs before the first registration mutation", () => {
+const setupFailure = () => {
+  throw new Error("setup failure");
+};
+
+test.each([
+  ["later definition construction", Object.defineProperty({}, "read", { get: setupFailure }), {}],
+  ["mandatory tool discovery", {}, { getAllTools: setupFailure }],
+] as const)("%s failures escape before the first registration mutation", (_, toolOptions, api) => {
   enableOnly("bash", "read");
   let mutations = 0;
-  const toolOptions = Object.defineProperty({}, "read", {
-    get() {
-      throw new Error("prebuild failure");
-    },
-  });
-
-  assert.throws(
-    () =>
-      registerToolRenderers(piFixture({ registerTool: () => mutations++ }), "/project", {
-        toolOptions,
-      }),
-    /prebuild failure/,
-  );
+  const pi = piFixture({ ...api, registerTool: () => mutations++ });
+  assert.throws(() => registerToolRenderers(pi, "/project", { toolOptions }), /setup failure/);
   assert.equal(mutations, 0);
 });
 
@@ -184,21 +171,4 @@ test("registration skips conflicts without constructing or tracking them", () =>
     state: "skipped-conflict",
     owner: extensionSource,
   });
-});
-
-test("getAllTools is mandatory and discovery failures escape before mutation", () => {
-  enableOnly("bash");
-  let mutations = 0;
-  const pi = piFixture({
-    getAllTools: () => {
-      throw new Error("tool discovery failed");
-    },
-    registerTool: () => mutations++,
-  });
-
-  assert.throws(
-    () => registerToolRenderers(pi, "/project", { toolOptions: {} }),
-    /tool discovery failed/,
-  );
-  assert.equal(mutations, 0);
 });

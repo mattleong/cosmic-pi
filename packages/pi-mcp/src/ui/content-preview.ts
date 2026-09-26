@@ -1,7 +1,11 @@
 /** Pure, display-only copies. No getters, toJSON, links, roles, or content gain authority. */
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
-import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
+import { safeTextPrefix, sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core";
+import {
+  ownPresentationField as own,
+  presentationArrayLength as arrayLength,
+} from "../code-mode/presentation-evidence.ts";
 
 export const MCP_DISPLAY_LIMITS = Object.freeze({
   text: 12_000,
@@ -42,42 +46,10 @@ export interface McpContentPreview {
   readonly readableCuts: readonly McpDisplayCut[];
 }
 
-/** UTF-16 limits match retained cursors, without emitting half a surrogate pair. */
-const prefix = (text: string, maximum: number): string => {
-  let end = Math.max(0, maximum);
-  const last = text.charCodeAt(end - 1);
-  const next = text.charCodeAt(end);
-  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
-  return text.slice(0, end);
-};
-
 /** Strip controls before redaction, so escape sequences cannot split secret labels. */
 export const sanitizeMcpDisplayText = (text: string): string =>
   sanitizeDiagnosticContent(stripTerminalControls(text), { maximumLength: Infinity });
 
-interface DisplayField {
-  readonly value: unknown;
-}
-const own = <Value>(value: Value, key: string): DisplayField => {
-  if (!Predicate.isObjectOrArray(value)) return { value: undefined };
-  try {
-    const field = Object.getOwnPropertyDescriptor(value, key);
-    return { value: field && "value" in field ? field.value : undefined };
-  } catch {
-    return { value: undefined };
-  }
-};
-const arrayLength = <Value>(value: Value): number | undefined => {
-  try {
-    if (!Array.isArray(value)) return undefined;
-    const length = own(value, "length").value;
-    return Predicate.isNumber(length) && Number.isSafeInteger(length) && length >= 0
-      ? length
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
 const sensitiveKey = (key: string): boolean =>
   /(?:token|apikey|accesskey|password|passwd|secret|privatekey|credentials?|accountid|teamid|pkce|authorization|authorizationurl|codeverifier|codechallenge|oauthstate|oauthcode|authorizationcode|callbackurl)$/.test(
     stripTerminalControls(key)
@@ -92,7 +64,8 @@ const bound = (
   cuts: Set<McpDisplayCut>,
 ): string => {
   if (text.length > characters) cuts.add("characters");
-  const clipped = prefix(text, characters);
+  // UTF-16 limits match retained cursors, without emitting half a surrogate pair.
+  const clipped = safeTextPrefix(text, characters);
   const rows = clipped.split("\n");
   if (rows.length > lines) cuts.add("lines");
   return rows.slice(0, lines).join("\n");
@@ -104,9 +77,9 @@ const omission = (cuts: ReadonlySet<McpDisplayCut>, page = false): string =>
 
 const displayString = (value: string, maximum: number, cuts: Set<McpDisplayCut>): string => {
   if (value.length > maximum) cuts.add("strings");
-  const sanitized = sanitizeMcpDisplayText(prefix(value, maximum));
+  const sanitized = sanitizeMcpDisplayText(safeTextPrefix(value, maximum));
   if (sanitized.length > maximum) cuts.add("strings");
-  return prefix(sanitized, maximum);
+  return safeTextPrefix(sanitized, maximum);
 };
 
 /** Only exact source content locations qualify, before sanitization can alter keys or types. */

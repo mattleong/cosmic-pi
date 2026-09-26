@@ -9,7 +9,6 @@ import {
   encodeCredentialRecord,
   type McpCredentialRecord,
 } from "../auth/credential-record.ts";
-import type { McpGrant, McpRegistrationReceipt } from "../auth/credentials.ts";
 import type { McpCredentialMutation } from "../auth/progress.ts";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import { makeKeychainStore, type KeychainOptions } from "./keychain.ts";
@@ -20,16 +19,6 @@ import type {
 } from "../auth/credential-transaction.ts";
 export interface McpCredentialStoreContract {
   readonly mutation: (identity: string) => Effect.Effect<McpCredentialMutation>;
-  readonly readRegistration: (
-    identity: string,
-  ) => Effect.Effect<McpRegistrationReceipt | undefined, McpBoundaryError>;
-  readonly writeRegistration: (
-    identity: string,
-    registration: McpRegistrationReceipt,
-  ) => Effect.Effect<void, McpBoundaryError>;
-  readonly read: (identity: string) => Effect.Effect<McpGrant | undefined, McpBoundaryError>;
-  readonly write: (identity: string, grant: McpGrant) => Effect.Effect<void, McpBoundaryError>;
-  readonly remove: (identity: string) => Effect.Effect<void, McpBoundaryError>;
   /** Acquires ownership before rereading and holds it through the complete callback. */
   readonly withTransaction: <A>(
     identity: string,
@@ -92,9 +81,7 @@ export class McpCredentialStore extends Context.Service<
                   check,
                   Effect.suspend(() => (current() ? Effect.void : Effect.fail(stale()))),
                 );
-                const owner = lease
-                  ? { lease, isCurrent: current, checkCurrent: checked }
-                  : { isCurrent: current, checkCurrent: checked };
+                const owner = { lease, isCurrent: current, checkCurrent: checked };
                 const readRecord = Effect.andThen(checked, store.read(identity, owner)).pipe(
                   Effect.flatMap((raw) =>
                     raw === undefined
@@ -139,16 +126,7 @@ export class McpCredentialStore extends Context.Service<
                   );
             return withCredentialPermit(permitFor(options, identity), coordinated, check, options);
           });
-        return {
-          withTransaction,
-          read: (identity) => withTransaction(identity, (tx) => tx.read),
-          readRegistration: (identity) => withTransaction(identity, (tx) => tx.readRegistration),
-          write: (identity, grant) => withTransaction(identity, (tx) => tx.write(grant)),
-          writeRegistration: (identity, registration) =>
-            withTransaction(identity, (tx) => tx.writeRegistration(registration)),
-          remove: (identity) => withTransaction(identity, (tx) => tx.remove),
-          mutation: store.mutation,
-        } satisfies McpCredentialStoreContract;
+        return { withTransaction, mutation: store.mutation } satisfies McpCredentialStoreContract;
       }),
     ).pipe(
       Layer.provide(

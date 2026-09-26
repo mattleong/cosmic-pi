@@ -9,8 +9,11 @@ import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import type { SubagentError } from "../../src/run/errors.ts";
 import type { RunRecord } from "../../src/run/internal.ts";
 import { makeRunRecordCleanup } from "../../src/run/record-cleanup.ts";
+import { makeWriterPreparation } from "../../src/run/writer-preparation.ts";
 import type { WriterPoolEntry } from "../../src/run/writer-pool.ts";
 import { emptyRunWarningSlots } from "../../src/run/warnings.ts";
+import { testBackendDriver, view } from "../tools/fixtures/tool-harness.ts";
+import { makeRunContext } from "./fixtures/run-context.ts";
 import { fakeWriterLeaseLayer } from "./fixtures/service-harness.ts";
 
 it.effect(
@@ -35,37 +38,17 @@ it.effect(
       };
       pools.set(cwd.digest, pool);
       const record: RunRecord = {
-        view: {
+        view: view({
           id: "writer",
           name: "writer",
           task: "write",
           cwd: cwd.path,
-          selection: { source: "profile-candidate", reason: "test", skippedCandidates: [] },
           state: "starting",
-          context: "fresh",
           writeIntent: "writer",
-          openaiFastMode: false,
-          host: "local",
-          runtime: "pi",
-          closeOnReport: true,
-          reportGeneration: 0,
           capabilities: [],
-          model: "test/model",
-          effort: "high",
-          startedAt: 0,
-          lastActivityAt: 0,
-          sessionEvents: [],
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
-        },
+        }),
         scope: yield* Scope.make(),
-        driver: {
-          host: "local",
-          runtime: "pi",
-          capabilities: [],
-          supportsContext: () => true,
-          preflight: () => Effect.void,
-          spawn: () => Effect.die("Unexpected spawn"),
-        },
+        driver: testBackendDriver,
         launch: {
           runId: "writer",
           name: "writer",
@@ -111,23 +94,21 @@ it.effect(
         nextAssignmentEpoch: 2,
       };
       let pauseClaim = true;
-      const cleanup = makeRunRecordCleanup({
-        writerLeases,
-        writerPools: pools,
-        publish: Effect.void,
-        withLock: (effect) =>
-          lock.withPermit(effect).pipe(
-            Effect.tap(() => {
-              // Pause after pending → preparing, before the caller installs its handler.
-              if (!pauseClaim || pool.state !== "preparing") return Effect.void;
-              pauseClaim = false;
-              return Deferred.succeed(claimed, undefined).pipe(
-                Effect.andThen(Deferred.await(continueClaim)),
-              );
-            }),
-          ),
-      });
-      const preparing = yield* cleanup.prepareWriterLeaseForSpawn(record).pipe(Effect.forkScoped);
+      const withLock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        lock.withPermit(effect).pipe(
+          Effect.tap(() => {
+            // Pause after pending → preparing, before the caller installs its handler.
+            if (!pauseClaim || pool.state !== "preparing") return Effect.void;
+            pauseClaim = false;
+            return Deferred.succeed(claimed, undefined).pipe(
+              Effect.andThen(Deferred.await(continueClaim)),
+            );
+          }),
+        );
+      const context = yield* makeRunContext({ withLock, writerLeases, writerPools: pools });
+      const prepareWriterLeaseForSpawn = makeWriterPreparation(context);
+      const cleanup = makeRunRecordCleanup(context);
+      const preparing = yield* prepareWriterLeaseForSpawn(record).pipe(Effect.forkScoped);
       yield* Deferred.await(claimed);
       preparing.interruptUnsafe();
       yield* Deferred.succeed(continueClaim, undefined);
@@ -151,7 +132,7 @@ it.effect(
       record.writerPool = replacement;
       record.scope = yield* Scope.make();
       pools.set(cwd.digest, replacement);
-      yield* cleanup.prepareWriterLeaseForSpawn(record);
+      yield* prepareWriterLeaseForSpawn(record);
       expect(replacement.state).toBe("held");
       yield* cleanup.closeRecordScope(record);
       expect(pools.has(cwd.digest)).toBe(false);

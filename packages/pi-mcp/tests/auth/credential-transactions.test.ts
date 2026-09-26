@@ -1,66 +1,24 @@
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import { killChild, spawnIpcChild, temporaryDirectory } from "pi-cosmic-core/testing";
 import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
-import type { KeychainEntryFactory } from "../../src/boundary/keychain.ts";
-import {
-  nodeFsPromises as fs,
-  nodePath as path,
-  nodeSpawn,
-} from "../../../pi-cosmic-core/src/platform/node-builtins.ts";
+import { memoryKeychain } from "../fixtures/keychain.ts";
 
-const root = Effect.acquireRelease(
-  Effect.tryPromise(() => fs.mkdtemp(path.join(tmpdir(), "mcp-transactions-"))),
-  (directory) =>
-    Effect.tryPromise(() => fs.rm(directory, { recursive: true, force: true })).pipe(Effect.orDie),
+const root = temporaryDirectory("mcp-transactions-");
+const childScript = fileURLToPath(
+  new URL("../fixtures/credential-transaction-child.ts", import.meta.url),
 );
-const kill = (child: ReturnType<typeof nodeSpawn>) =>
-  Effect.callback<void>((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resume(Effect.void);
-      return;
-    }
-    const exited = () => resume(Effect.void);
-    child.once("exit", exited);
-    child.kill("SIGKILL");
-    return Effect.sync(() => child.off("exit", exited));
-  });
 const launch = (directory: string, mode: string) =>
-  Effect.acquireRelease(
-    Effect.sync(() => {
-      const child = nodeSpawn(
-        process.execPath,
-        [
-          "--import",
-          "jiti/register",
-          fileURLToPath(new URL("../fixtures/credential-transaction-child.ts", import.meta.url)),
-          directory,
-          mode,
-          path.join(directory, `agent-${mode}`),
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-      );
-      const messages: unknown[] = [];
-      child.on("message", (message) => messages.push(message));
-      const wait = (expected: string) =>
-        Effect.callback<void>((resume) => {
-          if (messages.includes(expected)) {
-            resume(Effect.void);
-            return;
-          }
-          const receive = (message: string | { token: string }) => {
-            if (message === expected) resume(Effect.void);
-          };
-          child.on("message", receive);
-          return Effect.sync(() => child.off("message", receive));
-        }).pipe(Effect.timeout("15 seconds"));
-      return { child, messages, wait };
-    }),
-    ({ child }) => kill(child),
-  );
+  spawnIpcChild(childScript, [directory, mode, `${directory}/agent-${mode}`], {
+    timeout: "15 seconds",
+  });
 const run = (directory: string, mode: string) =>
   Effect.flatMap(launch(directory, mode), (child) => child.wait("finished"));
+const files = <A, E>(use: (fs: FileSystem.FileSystem) => Effect.Effect<A, E>) =>
+  FileSystem.FileSystem.use(use).pipe(Effect.provide(NodeFileSystem.layer), Effect.orDie);
 
 it.live(
   "rereads after another process refreshes and consumes a rotating token only once",
@@ -80,9 +38,7 @@ it.live(
       });
       expect(first.messages).toContainEqual({ token: "fresh" });
       expect(second.messages).toContainEqual({ token: "fresh" });
-      expect(
-        yield* Effect.tryPromise(() => fs.readFile(path.join(directory, "refreshes"), "utf8")),
-      ).toBe("refresh\n");
+      expect(yield* files((fs) => fs.readFileString(`${directory}/refreshes`))).toBe("refresh\n");
     }).pipe(Effect.scoped),
   30_000,
 );
@@ -102,11 +58,7 @@ it.live(
       yield* Effect.all([writer.wait("finished"), logout.wait("finished")], {
         concurrency: "unbounded",
       });
-      expect(
-        yield* Effect.tryPromise(() => fs.readFile(path.join(directory, "credential.json"))).pipe(
-          Effect.isFailure,
-        ),
-      ).toBe(true);
+      expect(yield* files((fs) => fs.exists(`${directory}/credential.json`))).toBe(false);
       const access = yield* launch(directory, "access");
       yield* access.wait("failed");
     }).pipe(Effect.scoped),
@@ -121,12 +73,10 @@ it.live(
       yield* run(directory, "seed");
       const first = yield* launch(directory, "refresh-hold");
       yield* first.wait("refresh-started");
-      yield* kill(first.child);
+      yield* killChild(first.child);
       const second = yield* launch(directory, "access");
       yield* second.wait("failed");
-      expect(
-        yield* Effect.tryPromise(() => fs.readFile(path.join(directory, "refreshes"), "utf8")),
-      ).toBe("refresh\n");
+      expect(yield* files((fs) => fs.readFileString(`${directory}/refreshes`))).toBe("refresh\n");
       yield* run(directory, "logout");
     }).pipe(Effect.scoped),
   30_000,
@@ -148,11 +98,7 @@ it.live(
       writer.child.send?.("release");
       yield* writer.wait("native-completed");
       yield* logout.wait("finished");
-      expect(
-        yield* Effect.tryPromise(() => fs.readFile(path.join(directory, "credential.json"))).pipe(
-          Effect.isFailure,
-        ),
-      ).toBe(true);
+      expect(yield* files((fs) => fs.exists(`${directory}/credential.json`))).toBe(false);
     }).pipe(Effect.scoped),
   30_000,
 );
@@ -184,7 +130,7 @@ it.live(
       const directory = yield* root;
       const first = yield* launch(directory, "write-hold");
       yield* first.wait("native-started");
-      yield* kill(first.child);
+      yield* killChild(first.child);
       const logout = yield* launch(directory, "logout");
       yield* logout.wait("failed");
       expect(logout.messages).not.toContain("deleted");
@@ -197,25 +143,10 @@ it.live(
   () =>
     Effect.gen(function* () {
       const directory = yield* root;
-      let value: string | undefined;
-      const entryFactory: KeychainEntryFactory = () =>
-        Promise.resolve({
-          getPassword: () => Promise.resolve(value),
-          setPassword: (next) => {
-            value = next;
-            return Promise.resolve();
-          },
-          deleteCredential: () => {
-            value = undefined;
-            return Promise.resolve(true);
-          },
-        });
+      const native = memoryKeychain();
       const store = yield* McpCredentialStore.pipe(
         Effect.provide(
-          McpCredentialStore.layer({
-            entryFactory,
-            lockDirectory: directory,
-          }),
+          McpCredentialStore.layer({ entryFactory: native.factory, lockDirectory: directory }),
         ),
       );
       const identity = "f".repeat(64);
@@ -236,8 +167,8 @@ it.live(
           }),
         );
       }
-      expect(value).toBeUndefined();
-      expect(yield* Effect.tryPromise(() => fs.readdir(directory))).toEqual([]);
+      expect(native.value()).toBeUndefined();
+      expect(yield* files((fs) => fs.readDirectory(directory))).toEqual([]);
     }).pipe(Effect.scoped),
   15_000,
 );

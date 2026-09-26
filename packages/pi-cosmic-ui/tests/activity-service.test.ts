@@ -1,23 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
 import { ActivityService, type ActivityActionRequest } from "../src/activity/service.ts";
 import { activityKey, type ActivityEnvelope, type ActivityItem } from "../src/activity/protocol.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-const promiseGate = <A>() => {
-  const deferred = Deferred.makeUnsafe<A>();
-  return {
-    promise: Effect.runPromise(Deferred.await(deferred)),
-    resolve: (value: A) => {
-      Effect.runSync(Deferred.succeed(deferred, value));
-    },
-  };
-};
 const item = (revision = "1"): ActivityItem => ({
   id: "one",
   title: "Work",
@@ -47,25 +37,34 @@ const action = (row: ActivityRow): ActivityActionRequest => ({
   revision: row.revision,
   actionId: "stop",
 });
+/** A service whose publications and clock-driven widget renders are recorded. */
+const recordingService = Effect.gen(function* () {
+  let rows: readonly ActivityRow[] = [];
+  let starting = 0;
+  let rendered: readonly string[] = [];
+  const service = yield* ActivityService.make({
+    publish: (next, count) => {
+      rows = next;
+      starting = count;
+    },
+    tick: (now) => {
+      rendered = renderActivityWidget(rows, 80, 8, { now, starting });
+    },
+  });
+  return { service, rows: () => rows, starting: () => starting, rendered: () => rendered };
+});
 describe("activity service", () => {
   it.effect(
     "publishes starting counts without rows and clears stale or invalid metadata atomically",
     () =>
       Effect.gen(function* () {
-        let rows: readonly ActivityRow[] = [];
-        let starting = 0;
-        const service = yield* ActivityService.make({
-          publish: (next, count) => {
-            rows = next;
-            starting = count;
-          },
-        });
+        const { service, rows, starting } = yield* recordingService;
         const event = { ...registration({}, undefined, []), starting: 2 };
         yield* service.receive(event);
-        expect(rows).toEqual([]);
-        expect(starting).toBe(2);
+        expect(rows()).toEqual([]);
+        expect(starting()).toBe(2);
         yield* service.receive({ ...event, operation: "publish", starting: 3 });
-        expect(starting).toBe(3);
+        expect(starting()).toBe(3);
         const pending: ActivityItem[] = ["a", "b", "c"].map((id) => ({
           ...item(),
           id,
@@ -75,40 +74,32 @@ describe("activity service", () => {
           blockedReason: undefined,
         }));
         yield* service.receive({ ...event, operation: "publish", items: pending });
-        expect(starting).toBe(2); // Lease counts are requested work, not additional pending rows.
+        expect(starting()).toBe(2); // Lease counts are requested work, not additional pending rows.
         yield* service.receive({ ...event, operation: "publish", items: pending, starting: 0 });
-        expect(starting).toBe(3); // Resume/start rows still count without a start-tool lease.
+        expect(starting()).toBe(3); // Resume/start rows still count without a start-tool lease.
         for (const invalid of [-1, 1.5, Infinity, 16385, "2", null]) {
           yield* service.receive({ ...event, operation: "publish", items: pending });
-          const result = yield* Effect.exit(
+          yield* Effect.flip(
             service.receive({ ...event, operation: "publish", starting: invalid }),
           );
-          expect(Exit.isFailure(result)).toBe(true);
-          expect(rows).toEqual([]);
-          expect(starting).toBe(0);
+          expect(rows()).toEqual([]);
+          expect(starting()).toBe(0);
         }
         const replacement = { ...event, token: {}, starting: 1 };
         yield* service.receive(replacement);
         yield* service.receive({ ...event, operation: "publish", starting: 8 });
         yield* service.receive({ ...event, operation: "revoke" });
-        expect(starting).toBe(1);
+        expect(starting()).toBe(1);
         yield* service.receive({ ...replacement, operation: "revoke" });
-        expect(starting).toBe(0);
+        expect(starting()).toBe(0);
         yield* service.receive({ ...replacement, operation: "publish", starting: 8 });
-        expect(starting).toBe(0);
+        expect(starting()).toBe(0);
       }),
   );
   it.effect("withdraws invalid attention metadata and restores valid publication and actions", () =>
     Effect.gen(function* () {
-      let rows: readonly ActivityRow[] = [];
-      let starting = 0;
+      const { service, rows, starting } = yield* recordingService;
       let available = false;
-      const service = yield* ActivityService.make({
-        publish: (next, count) => {
-          rows = next;
-          starting = count;
-        },
-      });
       const valid = { ...item(), status: "needs-input", inputTarget: "user" };
       const event = {
         ...registration({}),
@@ -127,82 +118,50 @@ describe("activity service", () => {
       ]) {
         yield* service.receive(event);
         expect(available).toBe(true);
-        expect(rows[0]?.inputTarget).toBe("user");
-        const result = yield* Effect.exit(
+        expect(rows()[0]?.inputTarget).toBe("user");
+        yield* Effect.flip(
           service.receive({ ...event, operation: "publish", items: [{ ...item(), ...metadata }] }),
         );
-        expect(Exit.isFailure(result)).toBe(true);
-        expect(rows).toEqual([]);
-        expect(starting).toBe(0);
+        expect(rows()).toEqual([]);
+        expect(starting()).toBe(0);
         expect(available).toBe(false);
       }
       yield* service.receive({ ...event, items: [{ ...valid, inputTarget: "parent" }] });
       expect(available).toBe(true);
-      expect(rows[0]?.inputTarget).toBe("parent");
-      expect(starting).toBe(2);
-      yield* service.invoke(action(rows[0]!));
+      expect(rows()[0]?.inputTarget).toBe("parent");
+      expect(starting()).toBe(2);
+      yield* service.invoke(action(rows()[0]!));
     }),
   );
-  it.effect("animates metadata-only startup and settles once the launch clears", () =>
-    Effect.gen(function* () {
-      let rows: readonly ActivityRow[] = [];
-      let starting = 0;
-      let rendered: readonly string[] = [];
-      const service = yield* ActivityService.make({
-        publish: (next, count) => {
-          rows = next;
-          starting = count;
-        },
-        tick: (now) => {
-          rendered = renderActivityWidget(rows, 80, 8, { now, starting });
-        },
-      });
-      const event = { ...registration({}, undefined, []), starting: 2 };
-      yield* service.receive(event);
-      yield* TestClock.adjust("1 second");
-      const first = rendered;
-      expect(first).toHaveLength(1);
-      yield* TestClock.adjust("100 millis");
-      expect(rendered).not.toEqual(first);
-      yield* service.receive({ ...event, operation: "publish", starting: 0 });
-      yield* TestClock.adjust("1 second");
-      expect(rendered).toEqual([]);
-      yield* TestClock.adjust("1 second");
-      expect(rendered).toEqual([]);
-    }),
-  );
-  it.effect("animates running work between elapsed-second updates", () =>
-    Effect.gen(function* () {
-      let rows: readonly ActivityRow[] = [];
-      let rendered: readonly string[] = [];
-      const service = yield* ActivityService.make({
-        publish: (next) => {
-          rows = next;
-        },
-        tick: (now) => {
-          rendered = renderActivityWidget(rows, 80, 8, { now });
-        },
-      });
-      yield* service.receive(registration({}));
-      yield* TestClock.adjust("1 second");
-      const first = rendered.join("\n");
-      yield* TestClock.adjust("100 millis");
-      expect(rendered.join("\n")).not.toBe(first);
-      yield* service.receive({ ...registration({}), items: [{ ...item(), status: "done" }] });
-      yield* TestClock.adjust("1 second");
-      const finished = rendered.join("\n");
-      yield* TestClock.adjust("1 second");
-      expect(rendered.join("\n")).toBe(finished);
-    }),
+  const startup = { ...registration({}, undefined, []), starting: 2 };
+  it.effect.each([
+    ["metadata-only startup", startup, { ...startup, operation: "publish", starting: 0 }],
+    [
+      "running work",
+      registration({}),
+      { ...registration({}), items: [{ ...item(), status: "done" }] },
+    ],
+  ] as const)(
+    "animates %s between elapsed-second updates and settles once it clears",
+    ([, started, cleared]) =>
+      Effect.gen(function* () {
+        const { service, rendered } = yield* recordingService;
+        yield* service.receive(started);
+        yield* TestClock.adjust("1 second");
+        const first = rendered();
+        expect(first).not.toEqual([]);
+        yield* TestClock.adjust("100 millis");
+        expect(rendered()).not.toEqual(first);
+        yield* service.receive(cleared);
+        yield* TestClock.adjust("1 second");
+        expect(rendered()).toEqual([]);
+        yield* TestClock.adjust("1 second");
+        expect(rendered()).toEqual([]);
+      }),
   );
   it.effect("detaches summaries and withdraws invalid snapshots before restoring valid ones", () =>
     Effect.gen(function* () {
-      let projection: readonly ActivityRow[] = [];
-      const service = yield* ActivityService.make({
-        publish: (rows) => {
-          projection = rows;
-        },
-      });
+      const { service, rows } = yield* recordingService;
       const token = {};
       const source = { ...item(), title: "safe\u001b[2J", profile: "scout\u001b[2J" };
       const availability: boolean[] = [];
@@ -213,18 +172,17 @@ describe("activity service", () => {
         },
       });
       source.title = "mutated";
-      expect(projection[0]?.title).toBe("safe");
-      expect(projection[0]?.profile).toBe("scout");
-      expect(Object.isFrozen(projection[0])).toBe(true);
-      const invalid = yield* service
-        .receive({
+      expect(rows()[0]?.title).toBe("safe");
+      expect(rows()[0]?.profile).toBe("scout");
+      expect(Object.isFrozen(rows()[0])).toBe(true);
+      yield* Effect.flip(
+        service.receive({
           ...registration(token),
           operation: "publish",
           items: [{ ...item(), status: "bogus" }],
-        })
-        .pipe(Effect.exit);
-      expect(Exit.isFailure(invalid)).toBe(true);
-      expect(projection).toEqual([]);
+        }),
+      );
+      expect(rows()).toEqual([]);
       expect(availability).toEqual([true, false]);
       yield* service.receive({ ...registration(token), operation: "publish" });
       expect(availability).toEqual([true, false, true]);
@@ -243,7 +201,7 @@ describe("activity service", () => {
       );
       const old = action((yield* service.snapshot)[0]!);
       yield* service.receive({ ...registration(token), operation: "publish", items: [item("2")] });
-      expect(Exit.isFailure(yield* service.invoke(old).pipe(Effect.exit))).toBe(true);
+      yield* Effect.flip(service.invoke(old));
       const second = action((yield* service.snapshot)[0]!);
       yield* service.receive(
         registration(
@@ -255,7 +213,7 @@ describe("activity service", () => {
           [item("2")],
         ),
       );
-      expect(Exit.isFailure(yield* service.invoke(second).pipe(Effect.exit))).toBe(true);
+      yield* Effect.flip(service.invoke(second));
       yield* service.receive(registration(token));
       yield* service.invoke(action((yield* service.snapshot)[0]!));
       expect(calls).toEqual(["new"]);
@@ -287,9 +245,7 @@ describe("activity service", () => {
       expect(availability).toEqual([true, false]);
       expect(releases).toBe(1);
       expect(yield* owned.service.snapshot).toEqual([]);
-      expect(Exit.isFailure(yield* owned.service.invoke(owned.request).pipe(Effect.exit))).toBe(
-        true,
-      );
+      yield* Effect.flip(owned.service.invoke(owned.request));
     }),
   );
   it.effect("loads bounded redacted details lazily and rejects late stale results", () =>
@@ -310,7 +266,7 @@ describe("activity service", () => {
       expect(detail.length).toBeLessThanOrEqual(16384);
       expect(detail).not.toContain("private-value");
       expect(calls).toBe(1);
-      const pending = promiseGate<string>();
+      const pending = deferredPromise<string>();
       let started = false;
       yield* service.receive({
         ...registration({}),
@@ -351,7 +307,7 @@ describe("activity service", () => {
     Effect.gen(function* () {
       const service = yield* ActivityService.make({ publish: () => undefined });
       let signal: AbortSignal | undefined;
-      const pending = promiseGate<void>();
+      const pending = deferredPromise<void>();
       yield* service.receive({
         ...registration({}),
         invoke: (_item, _action, _revision, value) => {
@@ -375,8 +331,7 @@ describe("activity service", () => {
       yield* service.receive(
         registration(token, () => Promise.reject(new Error("private producer error"))),
       );
-      const result = yield* service.invoke(action((yield* service.snapshot)[0]!)).pipe(Effect.exit);
-      expect(Exit.isFailure(result)).toBe(true);
+      yield* Effect.flip(service.invoke(action((yield* service.snapshot)[0]!)));
       yield* service.receive({ ...registration(token), operation: "revoke" });
       yield* service.receive(registration(token));
       expect(yield* service.snapshot).toEqual([]);

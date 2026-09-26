@@ -1,39 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeProfileOverrideHandoff } from "../src/application/profile-override-handoff.ts";
-import type { ProfileCandidate } from "../src/profiles/model.ts";
-
-const candidate = (model: string): ProfileCandidate => ({
-  host: "local",
-  runtime: "pi",
-  model,
-  effort: "high",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  closeOnReport: true,
-});
-
-const baseline = (reviewerModel: string) => ({
-  origin: { scope: "project" as const, name: "saved" },
-  profiles: {
-    scout: { candidates: [candidate("parent")] },
-    researcher: { candidates: [candidate("parent")] },
-    planner: { candidates: [candidate("parent")] },
-    worker: { candidates: [candidate("parent")] },
-    reviewer: { candidates: [candidate(reviewerModel)] },
-    oracle: { candidates: [candidate("parent")] },
-    generalist: { candidates: [candidate("parent")] },
-  },
-  profileSources: {
-    scout: "builtin" as const,
-    researcher: "builtin" as const,
-    planner: "builtin" as const,
-    worker: "builtin" as const,
-    reviewer: "project" as const,
-    oracle: "builtin" as const,
-    generalist: "builtin" as const,
-  },
-});
+import { completeBaseline, profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 describe("session profile override handoff", () => {
   it("survives an internal tree generation and rejects stale runtime publication", () => {
@@ -42,7 +9,7 @@ describe("session profile override handoff", () => {
     handoff.publish(1, 1, {
       revision: 1,
       overrides: { reviewer: { candidates: [candidate("openai/tree")] } },
-      baseline: baseline("openai/tree-baseline"),
+      baseline: completeBaseline("project", "openai/tree-baseline", "builtin"),
     });
 
     const treeSeed = handoff.capture();
@@ -53,14 +20,14 @@ describe("session profile override handoff", () => {
     handoff.publish(1, 2, {
       revision: 2,
       overrides: { reviewer: { candidates: [candidate("openai/stale")] } },
-      baseline: baseline("openai/stale-baseline"),
+      baseline: completeBaseline("project", "openai/stale-baseline", "builtin"),
     });
     expect(handoff.capture()).toEqual(treeSeed);
 
     handoff.publish(2, 2, {
       revision: 2,
       overrides: { reviewer: { candidates: [candidate("openai/after-tree")] } },
-      baseline: baseline("openai/after-tree-baseline"),
+      baseline: completeBaseline("project", "openai/after-tree-baseline", "builtin"),
     });
     expect(handoff.capture().overrides.reviewer?.candidates[0]?.model).toBe("openai/after-tree");
     expect(handoff.capture().baseline?.profiles.reviewer.candidates[0]?.model).toBe(

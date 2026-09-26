@@ -66,7 +66,6 @@ export interface McpPreparedResult extends McpNormalizedResult {
   readonly server: string;
   readonly activation: object;
   readonly generation: number;
-  readonly serverGeneration: number;
   readonly candidateId?: string;
 }
 
@@ -103,7 +102,7 @@ export interface McpResultsContract {
     options: McpProjectionOptions,
     authorize: McpResultAuthorize,
   ) => Effect.Effect<McpGatewayExecution, McpBoundaryError>;
-  readonly revoke: (server?: string) => Effect.Effect<void>;
+  readonly revoke: () => Effect.Effect<void>;
   /** Synchronous withdrawal signal after a committed store change; reads never signal. */
   readonly subscribeChanges: (listener: () => void) => Effect.Effect<void, never, Scope.Scope>;
 }

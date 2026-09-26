@@ -12,8 +12,7 @@ import { HostCallbackBoundary } from "../boundary/host-callback.ts";
 import type { PiExecContract } from "../boundary/host-exec.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { type CosmicUiConfigError, CosmicUiConfigStore } from "../config/store.ts";
-import type { FooterTotals } from "../footer/component.ts";
-import type { FooterGitStatus } from "../footer/git.ts";
+import type { FooterRepositoryProjection, FooterTotals } from "../footer/builtin-contributions.ts";
 import { makeRepositoryProbe } from "../probe/repository-probe.ts";
 
 const PULL_REQUEST_REFRESH_INTERVAL_MS = 30_000;
@@ -24,14 +23,10 @@ export const emptyTotals = (): FooterTotals => ({
   cacheWrite: 0,
   cost: 0,
 });
-export interface CosmicUiProjection {
+export interface CosmicUiProjection extends FooterRepositoryProjection {
   readonly config: ResolvedCosmicUiConfig | undefined;
-  readonly totals: FooterTotals;
-  readonly gitStatus: FooterGitStatus | undefined;
-  readonly pullRequestNumber: number | undefined;
   readonly pullRequestCheckedAt: number;
   readonly probeRevision: number;
-  readonly homeDirectory: string | undefined;
 }
 interface CosmicUiLiveState extends CosmicUiProjection {
   readonly config: ResolvedCosmicUiConfig;
@@ -65,15 +60,6 @@ export interface CosmicUiServiceContract {
     visible: boolean,
   ) => Effect.Effect<ResolvedCosmicUiConfig, CosmicUiConfigError>;
 }
-
-type PullValue = {
-  readonly checkedAt: number;
-  readonly number: number | undefined;
-};
-type ProbeRequest = { readonly force?: boolean };
-const mergeRequest = (current: ProbeRequest | undefined, next: ProbeRequest): ProbeRequest => ({
-  force: current?.force === true || next.force === true,
-});
 
 export interface CosmicUiServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -110,10 +96,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
       );
       const updateState = (f: (current: CosmicUiLiveState) => CosmicUiLiveState) =>
         state
-          .transition((current) => {
-            const next = f(current);
-            return Effect.succeed([undefined, next] as const);
-          })
+          .transition((current) => Effect.succeed([undefined, f(current)] as const))
           .pipe(Effect.orDie);
       // `onChange` is total by construction (invoke-wrapped render requests), so a throw
       // would be a violated invariant, not an expected failure.
@@ -134,14 +117,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
       const currentKey = state.getState.pipe(
         Effect.map((current) => `${currentCwd()}\u0000${current.probeRevision}`),
       );
-      const gitRefresh = yield* makeSubscriptionRefresh<
-        ProbeRequest,
-        string,
-        FooterGitStatus | undefined,
-        never,
-        never
-      >({
-        mergeRequest,
+      const gitRefresh = yield* makeSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(2_000),
         fetch: () =>
@@ -167,14 +143,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService, CosmicUiSe
           updateState((current) => ({ ...current, gitStatus })).pipe(Effect.andThen(notifyChanged)),
         spanName: "pi-cosmic-ui.refresh.git",
       });
-      const pullRefresh = yield* makeSubscriptionRefresh<
-        ProbeRequest,
-        string,
-        PullValue | undefined,
-        never,
-        never
-      >({
-        mergeRequest,
+      const pullRefresh = yield* makeSubscriptionRefresh({
         currentKey,
         interval: Effect.succeed(PULL_REQUEST_REFRESH_INTERVAL_MS),
         fetch: (request) =>

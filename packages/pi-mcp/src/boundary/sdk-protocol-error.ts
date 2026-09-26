@@ -1,7 +1,12 @@
 import {
+  MissingRequiredClientCapabilityError,
+  ProtocolError,
   ProtocolErrorCode,
   ResourceNotFoundError,
-  type ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  UnsupportedProtocolVersionError,
+  UrlElicitationRequiredError,
 } from "@modelcontextprotocol/client";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 
@@ -69,5 +74,42 @@ export const mapSdkProtocolError = (
         "MCP server returned a JSON-RPC error.",
         "rpc-error",
       );
+  }
+};
+
+/**
+ * Classify public SDK client errors shared by HTTP and stdio. Undefined, including an
+ * unrecognized SDK error code, leaves the fallback to each transport.
+ */
+export const mapSdkClientError = <Failure>(
+  error: Failure,
+  outcome: McpBoundaryError["outcome"],
+  unavailable: string,
+): McpBoundaryError | undefined => {
+  if (
+    error instanceof UrlElicitationRequiredError ||
+    error instanceof MissingRequiredClientCapabilityError ||
+    error instanceof UnsupportedProtocolVersionError
+  ) {
+    return boundaryError(
+      "unsupported",
+      outcome,
+      "MCP server requires an unsupported interaction, capability, or protocol version.",
+    );
+  }
+  if (error instanceof ProtocolError) return mapSdkProtocolError(error, outcome);
+  if (!(error instanceof SdkError)) return undefined;
+  switch (error.code) {
+    case SdkErrorCode.RequestTimeout:
+      return boundaryError("timeout", "unknown", "MCP request timed out.");
+    case SdkErrorCode.InvalidResult:
+    case SdkErrorCode.UnsupportedResultType:
+      return boundaryError("protocol", "completed", "MCP returned an invalid result.");
+    case SdkErrorCode.NotConnected:
+    case SdkErrorCode.NotInitialized:
+    case SdkErrorCode.AlreadyConnected:
+      return boundaryError("connection", "not-sent", unavailable);
+    default:
+      return undefined;
   }
 };

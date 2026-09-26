@@ -1,45 +1,20 @@
-import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { renderSubagentSessionOutput } from "../../src/ui/session-output.ts";
 import { runStateGlyph, runStateLabel } from "../../src/ui/run-state.ts";
+import { view } from "../fixtures/run-view.ts";
 
-// SAFETY: The session output projection consumes fg/bold directly; markdown uses the global theme.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-
-const baseRun = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
-  id: "agent-1",
-  name: "auth-review",
-  task: "Review auth flows.",
-  selection: {
-    source: "profile-candidate",
-    reason: "Selected in configured order.",
-    skippedCandidates: [],
-  },
-  cwd: "/repo",
-  state: "running",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  host: "local",
-  runtime: "pi",
-  closeOnReport: true,
-  reportGeneration: 1,
-  capabilities: ["resume", "interrupt"],
-  model: "provider/model",
-  effort: "high",
-  startedAt: 1_000,
-  lastActivityAt: 61_000,
-  sessionEvents: [],
-  usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: 0.25 },
-  ...overrides,
-});
+const baseRun = (overrides: Partial<SubagentRunView> = {}): SubagentRunView =>
+  view({
+    model: "provider/model",
+    selection: { ...view().selection, reason: "Selected in configured order." },
+    ...overrides,
+  });
 
 const render = (run: SubagentRunView, showTechnicalDetails = false): string => {
-  const component = renderSubagentSessionOutput(run, theme, {
+  const component = renderSubagentSessionOutput(run, plainTheme, {
     now: 61_000,
     showTechnicalDetails,
   });

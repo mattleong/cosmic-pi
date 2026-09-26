@@ -2,125 +2,57 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { authorityFor, withCredentialPermit } from "../../src/auth/authority.ts";
 import { makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
 import { McpSdkAuth } from "../../src/boundary/sdk-auth.ts";
-import type { McpEffectiveServer } from "../../src/config/model.ts";
-import {
-  encodeGrant,
-  type McpGrant,
-  type McpRegistrationReceipt,
-} from "../../src/auth/credentials.ts";
 import { decodeCredentialRecord } from "../../src/auth/credential-record.ts";
 import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
 import type { KeychainEntryFactory } from "../../src/boundary/keychain.ts";
 import { boundaryError } from "../../src/client/errors.ts";
+import { manualUi, oauthServer, testGrant, testRegistration } from "../fixtures/auth.ts";
+import { flat } from "../fixtures/credential-store.ts";
+import { heldKeychain, memoryKeychain } from "../fixtures/keychain.ts";
 
+const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const identity = "c".repeat(64);
-const grant: McpGrant = {
-  version: 1,
-  identity,
-  issuer: "https://issuer.example",
-  resource: "https://resource.example/mcp",
-  clientId: "public",
-  registration: "dynamic",
-  redirectUri: "http://127.0.0.1:9000/callback",
-  discovery: {},
-  resourceMetadata: {},
-  clientInformation: { client_id: "public" },
-  tokens: { access_token: "private-access", refresh_token: "private-refresh" },
-  receivedAt: 0,
-};
-const registration: McpRegistrationReceipt = {
-  identity,
-  issuer: grant.issuer,
-  resource: grant.resource,
-  registration: "dynamic",
-  redirectUri: grant.redirectUri,
-  clientInformation: { client_id: "replacement" },
-  scopes: ["read"],
-};
-const native = (initial?: string) => {
-  let password = initial;
-  const accounts = new Set<string>();
-  const factory: KeychainEntryFactory = (service, account) => {
-    accounts.add(`${service}/${account}`);
-    return Promise.resolve({
-      getPassword: () => Promise.resolve(password),
-      setPassword: (value) => {
-        password = value;
-        return Promise.resolve();
-      },
-      deleteCredential: () => {
-        password = undefined;
-        return Promise.resolve(true);
-      },
-    });
-  };
-  return { factory, accounts, value: () => password };
-};
+const grant = testGrant(identity);
+const registration = testRegistration(grant, { clientInformation: { client_id: "replacement" } });
 
-it.effect("does not read Keychain after trust is lost while creating the native entry", () =>
-  Effect.gen(function* () {
-    let trusted = true;
-    let reads = 0;
-    const factory: KeychainEntryFactory = () => {
-      trusted = false;
-      return Promise.resolve({
-        getPassword: () => {
-          reads++;
-          return Promise.resolve(undefined);
-        },
-        setPassword: () => Promise.resolve(),
-        deleteCredential: () => Promise.resolve(true),
-      });
-    };
-    const store = yield* McpCredentialStore.pipe(
-      Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
-    );
-    expect(
-      yield* store
-        .withTransaction(identity, (tx) => tx.read, { isCurrent: () => trusted })
-        .pipe(Effect.isFailure),
-    ).toBe(true);
-    expect(reads).toBe(0);
-  }),
-);
-
-for (const operation of ["read", "write", "remove"] as const)
-  it.effect(`rechecks full configuration after entry acquisition before native ${operation}`, () =>
-    Effect.gen(function* () {
-      let valid = true;
-      let factories = 0;
-      let reads = 0;
-      let writes = 0;
-      let deletes = 0;
-      const factory: KeychainEntryFactory = () => {
-        if (++factories === (operation === "write" ? 2 : 1)) valid = false;
-        return Promise.resolve({
-          getPassword: () => {
-            reads++;
-            return Promise.resolve(undefined);
-          },
-          setPassword: () => {
-            writes++;
-            return Promise.resolve();
-          },
-          deleteCredential: () => {
-            deletes++;
-            return Promise.resolve(true);
-          },
-        });
-      };
-      const store = yield* McpCredentialStore.pipe(
-        Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
-      );
-      const checkCurrent = Effect.suspend(() =>
-        valid ? Effect.void : Effect.fail(boundaryError("stale", "not-sent", "Config revoked")),
-      );
-      expect(
-        yield* store
+for (const guard of ["trust", "configuration"] as const)
+  for (const operation of ["read", "write", "remove"] as const)
+    it.effect(`rechecks ${guard} after entry acquisition before native ${operation}`, () =>
+      Effect.gen(function* () {
+        let valid = true;
+        let factories = 0;
+        let reads = 0;
+        let writes = 0;
+        let deletes = 0;
+        const factory: KeychainEntryFactory = () => {
+          if (++factories === (operation === "write" ? 2 : 1)) valid = false;
+          return Promise.resolve({
+            getPassword: () => {
+              reads++;
+              return Promise.resolve(undefined);
+            },
+            setPassword: () => {
+              writes++;
+              return Promise.resolve();
+            },
+            deleteCredential: () => {
+              deletes++;
+              return Promise.resolve(true);
+            },
+          });
+        };
+        const store = yield* McpCredentialStore.pipe(
+          Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
+        );
+        const checkCurrent = Effect.suspend(() =>
+          valid ? Effect.void : Effect.fail(boundaryError("stale", "not-sent", "Config revoked")),
+        );
+        const failure = yield* store
           .withTransaction(
             identity,
             (tx) =>
@@ -129,23 +61,25 @@ for (const operation of ["read", "write", "remove"] as const)
                 : operation === "read"
                   ? Effect.asVoid(tx.read)
                   : tx.remove,
-            { checkCurrent, isCurrent: () => true },
+            guard === "trust"
+              ? { isCurrent: () => valid }
+              : { checkCurrent, isCurrent: () => true },
           )
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
-      expect(reads).toBe(operation === "write" ? 1 : 0);
-      expect(writes).toBe(0);
-      expect(deletes).toBe(0);
-    }),
-  );
+          .pipe(Effect.flip);
+        if (guard === "configuration") expect(failure).toMatchObject({ kind: "stale" });
+        expect(reads).toBe(operation === "write" ? 1 : 0);
+        expect(writes).toBe(0);
+        expect(deletes).toBe(0);
+      }),
+    );
 
 it.effect(
   "uses one existing Keychain account for legacy grants, checkpoints, rotation, and logout",
   () =>
     Effect.gen(function* () {
-      const storage = native(yield* encodeGrant(grant));
+      const storage = memoryKeychain(serialize(grant));
       yield* Effect.gen(function* () {
-        const store = yield* McpCredentialStore;
+        const store = flat(yield* McpCredentialStore);
         expect(yield* store.read(identity)).toEqual(grant);
         expect(yield* store.readRegistration(identity)).toBeUndefined();
         yield* store.writeRegistration(identity, registration);
@@ -171,7 +105,7 @@ it.effect(
       }).pipe(Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })));
       expect([...storage.accounts]).toEqual([`com.cosmic-pi.mcp.oauth.v1/${identity}`]);
       yield* Effect.gen(function* () {
-        const restarted = yield* McpCredentialStore;
+        const restarted = flat(yield* McpCredentialStore);
         expect(yield* restarted.readRegistration(identity)).toEqual(registration);
         expect(yield* restarted.read(identity)).toBeUndefined();
       }).pipe(Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })));
@@ -182,47 +116,26 @@ it.effect(
   "serializes envelope updates across service instances without dropping either receipt",
   () =>
     Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      let release: () => void = () => undefined;
-      let password: string | undefined;
-      let first = true;
-      const factory: KeychainEntryFactory = () =>
-        Promise.resolve({
-          getPassword: () => Promise.resolve(password),
-          setPassword: (raw) => {
-            if (!first) {
-              password = raw;
-              return Promise.resolve();
-            }
-            first = false;
-            const completion = Promise.withResolvers<void>();
-            release = () => {
-              password = raw;
-              completion.resolve();
-            };
-            Deferred.doneUnsafe(entered, Effect.void);
-            return completion.promise;
-          },
-          deleteCredential: () => {
-            password = undefined;
-            return Promise.resolve(true);
-          },
-        });
-      const firstStore = yield* McpCredentialStore.pipe(
-        Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
+      const native = yield* heldKeychain({ firstOnly: true });
+      const firstStore = flat(
+        yield* McpCredentialStore.pipe(
+          Effect.provide(McpCredentialStore.layer({ entryFactory: native.factory })),
+        ),
       );
-      const secondStore = yield* McpCredentialStore.pipe(
-        Effect.provide(McpCredentialStore.layer({ entryFactory: factory })),
+      const secondStore = flat(
+        yield* McpCredentialStore.pipe(
+          Effect.provide(McpCredentialStore.layer({ entryFactory: native.factory })),
+        ),
       );
       const checkpoint = yield* firstStore
         .writeRegistration(identity, registration)
         .pipe(Effect.forkScoped);
-      yield* Deferred.await(entered);
+      yield* Deferred.await(native.entered);
       const replacement = yield* secondStore
         .write(identity, { ...grant, quarantine: "refresh" })
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
-      release();
+      native.release();
       yield* Fiber.join(checkpoint);
       yield* Fiber.join(replacement);
       expect(yield* firstStore.read(identity)).toEqual({ ...grant, quarantine: "refresh" });
@@ -232,14 +145,14 @@ it.effect(
 
 it.effect("rejects cross-account receipts before mutating the existing grant", () =>
   Effect.gen(function* () {
-    const storage = native(yield* encodeGrant(grant));
+    const storage = memoryKeychain(serialize(grant));
     yield* Effect.gen(function* () {
-      const store = yield* McpCredentialStore;
+      const store = flat(yield* McpCredentialStore);
       expect(
-        (yield* store
+        yield* store
           .writeRegistration(identity, { ...registration, identity: "d".repeat(64) })
-          .pipe(Effect.result))._tag,
-      ).toBe("Failure");
+          .pipe(Effect.isFailure),
+      ).toBe(true);
       expect(yield* store.read(identity)).toEqual(grant);
       expect(yield* store.readRegistration(identity)).toBeUndefined();
     }).pipe(Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })));
@@ -249,7 +162,7 @@ it.effect("rejects cross-account receipts before mutating the existing grant", (
 for (const stop of ["timeout", "cancel", "trust"] as const)
   it.effect(`ends local credential admission on ${stop} without ending the admitted callback`, () =>
     Effect.gen(function* () {
-      const storage = native();
+      const storage = memoryKeychain();
       const store = yield* McpCredentialStore.pipe(
         Effect.provide(
           McpCredentialStore.layer({
@@ -287,28 +200,17 @@ for (const stop of ["timeout", "cancel", "trust"] as const)
       yield* TestClock.adjust(10_000);
       yield* Deferred.succeed(finish, undefined);
       yield* Fiber.join(holder);
-      expect(yield* store.read(identity)).toBeUndefined();
+      expect(yield* flat(store).read(identity)).toBeUndefined();
     }),
   );
 
 for (const operation of ["access", "login", "logout"] as const)
   it.effect(`bounds the upstream auth authority permit for ${operation}`, () =>
     Effect.gen(function* () {
-      const configured: McpEffectiveServer = {
-        id: "owned",
-        identity: (operation === "access" ? "1" : operation === "login" ? "2" : "3").repeat(64),
-        enabled: true,
-        scope: "global",
-        directory: "/fixture",
-        definition: {
-          transport: "http",
-          url: grant.resource,
-          headers: {},
-          denyTools: [],
-          auth: { type: "oauth", registration: "pre-registered", clientId: "public", scopes: [] },
-        },
-      };
-      const storage = native();
+      const configured = oauthServer(
+        (operation === "access" ? "1" : operation === "login" ? "2" : "3").repeat(64),
+      );
+      const storage = memoryKeychain();
       const store = yield* McpCredentialStore.pipe(
         Effect.provide(McpCredentialStore.layer({ entryFactory: storage.factory })),
       );
@@ -333,11 +235,7 @@ for (const operation of ["access", "login", "logout"] as const)
       yield* Deferred.await(entered);
       const work =
         operation === "login"
-          ? auth.login(configured, {
-              mode: "manual",
-              openBrowser: () => Effect.void,
-              readCallback: () => Effect.succeed(undefined),
-            })
+          ? auth.login(configured, manualUi)
           : operation === "logout"
             ? auth.logout(configured)
             : auth.access(configured);

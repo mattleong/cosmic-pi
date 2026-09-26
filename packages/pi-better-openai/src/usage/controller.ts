@@ -48,7 +48,6 @@ interface OpenAIUsageServiceOptions {
   readonly onChange: () => void;
   readonly startPolling?: boolean;
   readonly isUsageVisible?: () => boolean;
-  readonly agentDir?: string;
   readonly projectTrusted?: boolean;
 }
 
@@ -73,34 +72,29 @@ export class OpenAIUsageService extends Context.Service<OpenAIUsageService>()(
         onChange: options.onChange,
         startPolling: options.startPolling,
         backgroundEnabled: options.isUsageVisible,
-        agentDir: options.agentDir,
         projectTrusted: options.projectTrusted,
         initialProjection,
         hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT,
         missingCredentialsMessage: (authPath) =>
           `Missing openai-codex OAuth credentials in ${authPath}. Run /login openai-codex.`,
-        clearAuthPatch: { authFound: false, authSource: undefined, accountId: undefined },
+        clearAuthPatch: { authFound: false, accountId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate: prepareSettingUpdate,
         eligibility: (ctx, cfg) => Effect.succeed(isOpenAISubscriptionModel(ctx, cfg)),
         synchronizeState: (current, ctx, clearUsage) =>
           Effect.succeed(synchronizedProjection(current, ctx, clearUsage)),
         refreshKeyScope: (ctx) => usageScopeForModel(ctx.model?.id),
-        fetchOutcome: ({ ctx, authPath }) =>
+        fetchOutcome: ({ ctx }) =>
           Effect.gen(function* () {
             const authAttempt = yield* timedDiagnosticResult(
-              getCodexCredentials(authPath, ctx),
+              getCodexCredentials(ctx),
               "Codex credential lookup timed out.",
             );
             if (Result.isFailure(authAttempt))
               return { _tag: "Failure", message: authAttempt.failure } as const;
             const credentials = authAttempt.success;
             if (credentials === undefined) return { _tag: "Missing" } as const;
-            const authPatch = {
-              authFound: true,
-              authSource: credentials.source,
-              accountId: credentials.accountId,
-            } as const;
+            const authPatch = { authFound: true, accountId: credentials.accountId } as const;
             const usage = yield* timedDiagnosticResult(
               requestCodexUsageWithCredentials(credentials, ctx.model?.id),
               "Codex usage request timed out.",

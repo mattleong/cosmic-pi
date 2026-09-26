@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import { captureHostSignal, invokeHostCallback } from "pi-cosmic-core";
+import * as Option from "effect/Option";
+import { captureHostSignal, invokeHostCallback, sanitizeDiagnosticError } from "pi-cosmic-core";
 
 /** Best-effort Effect adapter for synchronous Pi UI callbacks. */
 export const ignoreHostUi = <Result>(callback: () => Result) =>
@@ -18,3 +20,30 @@ export function safeHostSignal(ctx: ExtensionContext): AbortSignal | undefined {
   const captured = captureHostSignal(ctx);
   return captured._tag === "Captured" ? captured.signal : undefined;
 }
+
+/** Contains a host command: typed failures and defects warn, interrupts stay silent. */
+export const containCommandFailure = <A, E extends { readonly message: string }, R>(
+  effect: Effect.Effect<A, E, R>,
+  ctx: ExtensionContext,
+  messages: {
+    readonly failed: (sanitized: string) => string;
+    readonly unexpected: string;
+    readonly defect: string;
+  },
+): Effect.Effect<Option.Option<A>, never, R> =>
+  effect.pipe(
+    Effect.asSome,
+    Effect.catch((error) =>
+      ignoreHostUi(() =>
+        ctx.ui.notify(messages.failed(sanitizeDiagnosticError(error.message)), "warning"),
+      ).pipe(Effect.as(Option.none())),
+    ),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.succeedNone
+        : Effect.logError(messages.defect).pipe(
+            Effect.andThen(ignoreHostUi(() => ctx.ui.notify(messages.unexpected, "warning"))),
+            Effect.as(Option.none()),
+          ),
+    ),
+  );

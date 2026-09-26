@@ -1,6 +1,7 @@
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createToolPresentationHarness } from "pi-code-previews/testing";
 import { describe, expect, it, vi } from "vitest";
+import { opaqueFixture } from "pi-cosmic-core/testing";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { AskUserParameters, type AskUserRequest } from "../src/questionnaire/schema.ts";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
@@ -20,61 +21,28 @@ const request: AskUserRequest = {
   ],
 };
 
-const opaqueHostFixture = <Value>(value: Value): never => {
-  // SAFETY: Tests supply every opaque Pi host member exercised by the subject.
-  return value as never;
-};
-
-const theme: Theme = opaqueHostFixture({
-  bold: (value: string) => value,
-  fg: (_color: string, value: string) => value,
-  bg: (_color: string, value: string) => value,
-});
-const renderContext = () =>
-  opaqueHostFixture({
-    args: {},
-    toolCallId: "call",
-    invalidate: vi.fn(),
-    lastComponent: undefined,
-    state: {},
-    cwd: process.cwd(),
-    executionStarted: true,
-    argsComplete: true,
-    isPartial: false,
-    expanded: false,
-    showImages: false,
-    isError: false,
-  });
-
 type AskUserTool = ToolDefinition<typeof AskUserParameters, AskUserOutcome>;
-type CapturedTool = Pick<AskUserTool, "execute"> & {
-  readonly renderCall: NonNullable<AskUserTool["renderCall"]>;
-  readonly renderResult: NonNullable<AskUserTool["renderResult"]>;
-};
 
 const captureTool = (
   ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
-): CapturedTool => {
+) => {
   const tools: AskUserTool[] = [];
   registerAskUserTool(
-    opaqueHostFixture({ registerTool: (tool: AskUserTool) => tools.push(tool) }),
+    opaqueFixture({ registerTool: (tool: AskUserTool) => tools.push(tool) }),
     ask,
   );
-  const tool = tools[0];
-  if (!tool?.renderCall || !tool.renderResult) throw new Error("ask_user was not registered.");
-  return { execute: tool.execute, renderCall: tool.renderCall, renderResult: tool.renderResult };
+  return tools[0]!;
 };
 
-const output = (component: Component): string => component.render(240).join("\n");
-const resultOutput = <Details, Content>(tool: CapturedTool, details: Details, content: Content) =>
-  output(
-    tool.renderResult(
-      opaqueHostFixture({ details, content }),
-      { expanded: false, isPartial: false },
-      theme,
-      renderContext(),
-    ),
-  );
+// Renders the registered, shell-wrapped call or settled result under default preview settings.
+const render = <Value extends object>(tool: AskUserTool, kind: "call" | "result", value: Value) => {
+  const harness = createToolPresentationHarness(tool, { width: 240 });
+  if (kind === "call") harness.call(value, { executionStarted: true, isPartial: false });
+  else harness.result(opaqueFixture(value));
+  return harness.render().join("\n");
+};
+const resultOutput = <Details, Content>(tool: AskUserTool, details: Details, content: Content) =>
+  render(tool, "result", { details, content });
 
 describe("ask_user tool", () => {
   it("returns first-class text with notes and replays text alongside historical answer tags", () => {
@@ -87,7 +55,7 @@ describe("ask_user tool", () => {
     };
     const tool = captureTool(() => Promise.resolve(outcome));
     return tool
-      .execute("text-call", input, undefined, undefined, opaqueHostFixture({}))
+      .execute("text-call", input, undefined, undefined, opaqueFixture({}))
       .then((result) => {
         expect(result.details).toEqual(outcome);
         expect(result.content[0]).toMatchObject({
@@ -130,22 +98,6 @@ describe("ask_user tool", () => {
     expect(resultOutput(tool, null, "string fallback")).not.toContain("string fallback");
   });
 
-  it("isolates throwing content parts from valid siblings", () => {
-    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-    const hostile = Object.defineProperty({ type: "text" }, "text", {
-      get() {
-        throw new Error("hostile text");
-      },
-    });
-    const rendered = resultOutput(tool, null, [
-      { type: "text", text: "before" },
-      hostile,
-      { type: "text", text: "after" },
-    ]);
-    expect(rendered).toContain("before");
-    expect(rendered).toContain("after");
-  });
-
   it("executes the callback and renders valid submitted, custom, cancelled, and emoji data", () => {
     const outcome: AskUserOutcome = {
       outcome: "submitted",
@@ -155,13 +107,7 @@ describe("ask_user tool", () => {
     const tool = captureTool(ask);
     const signal = new AbortController().signal;
     const title = "😀".repeat(16);
-    const call = output(
-      tool.renderCall(
-        opaqueHostFixture({ questions: [{ ...request.questions[0], title }] }),
-        theme,
-        renderContext(),
-      ),
-    );
+    const call = render(tool, "call", { questions: [{ ...request.questions[0], title }] });
     const submitted = resultOutput(
       tool,
       {
@@ -180,17 +126,20 @@ describe("ask_user tool", () => {
     expect(submitted).toContain("other");
     expect(submitted).toContain("A custom answer");
     expect(resultOutput(tool, { outcome: "cancelled", answers: [] }, [])).toContain("cancelled");
-    return tool
-      .execute("call", request, signal, undefined, opaqueHostFixture({}))
-      .then((result) => {
-        expect(ask).toHaveBeenCalledWith(request, signal);
-        expect(result.details).toEqual(outcome);
-        expect(result.content[0]).toMatchObject({ text: expect.stringContaining("safe (Safe)") });
-      });
+    return tool.execute("call", request, signal, undefined, opaqueFixture({})).then((result) => {
+      expect(ask).toHaveBeenCalledWith(request, signal);
+      expect(result.details).toEqual(outcome);
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining("safe (Safe)") });
+    });
   });
 
-  it("ignores malformed parts and sanitizes fallback text", () => {
+  it("ignores malformed and throwing parts and sanitizes fallback text", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
+    const hostile = Object.defineProperty({ type: "text" }, "text", {
+      get() {
+        throw new Error("hostile text");
+      },
+    });
     const rendered = resultOutput(
       tool,
       { outcome: "submitted", answers: [{ key: "missing-text", kind: "custom" }] },
@@ -199,6 +148,7 @@ describe("ask_user tool", () => {
         { type: "text", text: 123 },
         { type: "image", data: "private" },
         null,
+        hostile,
         { type: "text", text: "second" },
       ],
     );
@@ -210,38 +160,22 @@ describe("ask_user tool", () => {
     expect(rendered).not.toContain("\u001b");
   });
 
-  it("renders all six questions and submitted answers", () => {
+  it("renders six questions and answers but uses neutral or text fallbacks beyond them", () => {
     const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
-    const answers = Array.from({ length: 6 }, (_, index) => ({
-      key: `answer-${index + 1}`,
-      kind: "custom",
-      text: `value-${index + 1}`,
-    }));
-    expect(
-      output(tool.renderCall(opaqueHostFixture({ questions }), theme, renderContext())),
-    ).toContain("Question 6");
-    expect(resultOutput(tool, { outcome: "submitted", answers }, [])).toContain("value-6");
-  });
-
-  it("uses neutral or text fallbacks for malformed and oversized arrays", () => {
-    const tool = captureTool(() => Promise.resolve({ outcome: "cancelled", answers: [] }));
-    const call = (questions: ReadonlyArray<{ readonly title: string }>) =>
-      output(tool.renderCall(opaqueHostFixture({ questions }), theme, renderContext()));
+    const questions = Array.from({ length: 7 }, (_, index) => ({ title: `private-${index + 1}` }));
     const answers = Array.from({ length: 7 }, (_, index) => ({
       key: `key-${index}`,
       kind: "custom",
-      text: "value",
+      text: `value-${index + 1}`,
     }));
     const labels = ["one", "two", "three", "four", "five"];
-    const oversized = call(
-      Array.from({ length: 7 }, (_, index) => ({ title: `private-${index}` })),
-    );
 
-    expect(() =>
-      output(tool.renderCall(opaqueHostFixture({ questions: "invalid" }), theme, renderContext())),
-    ).not.toThrow();
-    expect(oversized).not.toContain("private-0");
+    expect(render(tool, "call", { questions: questions.slice(0, 6) })).toContain("private-6");
+    expect(
+      resultOutput(tool, { outcome: "submitted", answers: answers.slice(0, 6) }, []),
+    ).toContain("value-6");
+    expect(() => render(tool, "call", { questions: "invalid" })).not.toThrow();
+    expect(render(tool, "call", { questions })).not.toContain("private-1");
     expect(
       resultOutput(tool, { outcome: "submitted", answers }, [
         { type: "text", text: "answer fallback" },

@@ -1,4 +1,3 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,6 +5,7 @@ import {
   makeCompactToolDetails,
   makeStartDetails,
 } from "../../src/tools/details.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { renderSubagentResult } from "../../src/tools/render.ts";
 import { renderResponsiveRunRows } from "../../src/tools/render-run-rows.ts";
 import {
@@ -13,12 +13,6 @@ import {
   renderSubagentStartCall,
 } from "../../src/tools/render-start.ts";
 import { view } from "./fixtures/tool-harness.ts";
-
-// SAFETY: This fixture implements the Theme methods consumed by semantic result rendering.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
 
 const target = view({ id: "parent", name: "Hierarchy Parent", parentRunId: "root", depth: 1 });
 const child = view({
@@ -30,10 +24,28 @@ const child = view({
 
 type HierarchyDetails =
   | ReturnType<typeof makeAwaitDetails>
-  | ReturnType<typeof makeCompactToolDetails>;
+  | ReturnType<typeof makeCompactToolDetails>
+  | ReturnType<typeof makeStartDetails>;
+type RenderOptions = {
+  readonly partial?: boolean;
+  readonly expanded?: boolean;
+  readonly width?: number;
+  readonly panel?: boolean;
+};
 
-const render = (details: HierarchyDetails, partial: boolean, width: number) =>
-  renderSubagentResult({ content: [], details }, partial, false, theme).render(width);
+const render = (
+  details: HierarchyDetails,
+  { partial = false, expanded = false, width = 120, panel = false }: RenderOptions = {},
+) =>
+  renderSubagentResult(
+    { content: [], details },
+    partial,
+    expanded,
+    plainTheme,
+    ...(panel ? [{ panelOwnsLiveHierarchy: true }] : []),
+  ).render(width);
+const text = (details: HierarchyDetails, options?: RenderOptions) =>
+  render(details, options).join("\n");
 
 describe("hierarchical tool result rendering", () => {
   it("moves from live rows to a settled summary while preserving expanded run data", () => {
@@ -58,9 +70,9 @@ describe("hierarchical tool result rendering", () => {
       awaitUntil: "all_finished",
     });
 
-    const awaiting = render(details, true, 160);
-    const completed = render(details, false, 160);
-    const expanded = renderSubagentResult({ content: [], details }, false, true, theme).render(160);
+    const awaiting = render(details, { partial: true, width: 160 });
+    const completed = render(details, { width: 160 });
+    const expanded = render(details, { expanded: true, width: 160 });
 
     expect(completed.length).toBeLessThan(awaiting.length);
     expect(expanded.join("\n")).toContain(settledTarget.name);
@@ -74,13 +86,7 @@ describe("hierarchical tool result rendering", () => {
       awaitedRunIds: [target.id],
       awaitUntil: "all_finished",
     });
-    const hiddenAwait = renderSubagentResult(
-      { content: [], details: awaitDetails },
-      true,
-      false,
-      theme,
-      { panelOwnsLiveHierarchy: true },
-    ).render(120);
+    const hiddenAwait = render(awaitDetails, { partial: true, panel: true });
 
     const startDetails = makeStartDetails({
       startEntries: [
@@ -93,28 +99,10 @@ describe("hierarchical tool result rendering", () => {
         },
       ],
     });
-    const hiddenStart = renderSubagentResult(
-      { content: [], details: startDetails },
-      true,
-      false,
-      theme,
-      { panelOwnsLiveHierarchy: true },
-    ).render(120);
+    const hiddenStart = render(startDetails, { partial: true, panel: true });
 
-    const replayedAwait = renderSubagentResult(
-      { content: [], details: awaitDetails },
-      false,
-      false,
-      theme,
-      { panelOwnsLiveHierarchy: true },
-    ).render(120);
-    const replayedStart = renderSubagentResult(
-      { content: [], details: startDetails },
-      false,
-      false,
-      theme,
-      { panelOwnsLiveHierarchy: true },
-    ).render(120);
+    const replayedAwait = render(awaitDetails, { panel: true });
+    const replayedStart = render(startDetails, { panel: true });
 
     expect(hiddenAwait).toEqual([]);
     expect(hiddenStart).toEqual([]);
@@ -150,10 +138,8 @@ describe("hierarchical tool result rendering", () => {
       awaitUntil: "all_finished",
     });
 
-    const collapsed = render(details, false, 160).join("\n");
-    const expanded = renderSubagentResult({ content: [], details }, false, true, theme)
-      .render(160)
-      .join("\n");
+    const collapsed = text(details, { width: 160 });
+    const expanded = text(details, { expanded: true, width: 160 });
 
     expect(collapsed).not.toContain(first.finalText);
     expect(collapsed).not.toContain(second.finalText);
@@ -178,24 +164,10 @@ describe("hierarchical tool result rendering", () => {
       awaitedRunIds: [active.id, failure.id],
       awaitUntil: "all_finished" as const,
     };
-    const ordinary = renderSubagentResult(
-      { content: [], details: makeAwaitDetails(input) },
-      false,
-      true,
-      theme,
-    )
-      .render(120)
-      .join("\n");
+    const ordinary = text(makeAwaitDetails(input), { expanded: true });
 
     for (const outcome of ["timedOut", "cancelled", "attentionRequired"] as const) {
-      const expanded = renderSubagentResult(
-        { content: [], details: makeAwaitDetails({ ...input, [outcome]: true }) },
-        false,
-        true,
-        theme,
-      )
-        .render(120)
-        .join("\n");
+      const expanded = text(makeAwaitDetails({ ...input, [outcome]: true }), { expanded: true });
 
       expect(expanded).not.toEqual(ordinary);
       expect(expanded).toContain(active.progress);
@@ -204,11 +176,9 @@ describe("hierarchical tool result rendering", () => {
   });
 
   it.each([20, 50, 100])("keeps list and await lines within width %i", (width) => {
-    const list = render(
-      makeCompactToolDetails({ action: "list", runs: [child, target] }),
-      false,
+    const list = render(makeCompactToolDetails({ action: "list", runs: [child, target] }), {
       width,
-    );
+    });
     const awaitProgress = render(
       makeAwaitDetails({
         runs: [target],
@@ -216,8 +186,7 @@ describe("hierarchical tool result rendering", () => {
         awaitedRunIds: [target.id],
         awaitUntil: "all_finished",
       }),
-      true,
-      width,
+      { partial: true, width },
     );
     expect([...list, ...awaitProgress].every((line) => visibleWidth(line) <= width)).toBe(true);
   });
@@ -243,7 +212,7 @@ describe("hierarchical tool result rendering", () => {
         awaitedRunIds: [busyTarget.id],
         awaitUntil: "all_finished",
       });
-      const rows = renderResponsiveRunRows(details.cards, width, theme, {
+      const rows = renderResponsiveRunRows(details.cards, width, plainTheme, {
         hierarchy: { awaitedRunIds: new Set([busyTarget.id]) },
       });
 
@@ -256,8 +225,8 @@ describe("hierarchical tool result rendering", () => {
     const agents = [
       { task: "Inspect the renderer.", name: "Renderer scout", profile: "scout" },
     ] as const;
-    const collapsed = renderSubagentStartCall(agents, theme, false).render(120).join("\n");
-    const expanded = renderSubagentStartCall(agents, theme, true).render(120).join("\n");
+    const collapsed = renderSubagentStartCall(agents, plainTheme, false).render(120).join("\n");
+    const expanded = renderSubagentStartCall(agents, plainTheme, true).render(120).join("\n");
 
     expect(collapsed).not.toContain(agents[0].task);
     expect(expanded).toContain(agents[0].task);
@@ -277,10 +246,10 @@ describe("hierarchical tool result rendering", () => {
       status: "failed" as const,
       routeStatus: "unavailable" as const,
     };
-    const collapsed = renderStartReceiptComponent([failure], [entry], false, theme)
+    const collapsed = renderStartReceiptComponent([failure], [entry], false, plainTheme)
       .render(120)
       .join("\n");
-    const expanded = renderStartReceiptComponent([failure], [entry], true, theme)
+    const expanded = renderStartReceiptComponent([failure], [entry], true, plainTheme)
       .render(120)
       .join("\n");
 
@@ -295,12 +264,8 @@ describe("hierarchical tool result rendering", () => {
       runs: [],
       actionFailures: [{ id: "agent-failed", code: "stop_failed", message }],
     });
-    const collapsed = renderSubagentResult({ content: [], details }, false, false, theme)
-      .render(60)
-      .join("\n");
-    const expanded = renderSubagentResult({ content: [], details }, false, true, theme)
-      .render(60)
-      .join("\n");
+    const collapsed = text(details, { width: 60 });
+    const expanded = text(details, { expanded: true, width: 60 });
 
     expect(collapsed).not.toContain("failure tail");
     expect(expanded).toContain("failure tail");
@@ -312,11 +277,16 @@ describe("hierarchical tool result rendering", () => {
       { content: [{ type: "text", text }] },
       false,
       false,
-      theme,
+      plainTheme,
     )
       .render(120)
       .join("\n");
-    const expanded = renderSubagentResult({ content: [{ type: "text", text }] }, false, true, theme)
+    const expanded = renderSubagentResult(
+      { content: [{ type: "text", text }] },
+      false,
+      true,
+      plainTheme,
+    )
       .render(120)
       .join("\n");
 

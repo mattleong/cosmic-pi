@@ -1,11 +1,9 @@
 // Fault injection stays at owned Node/process-tree boundaries; no provider executable runs.
 import { EventEmitter } from "node:events";
-import { nodeFsPromises, nodePath, type NodeChildProcess } from "./support/node-builtins.ts";
+import type { NodeChildProcess } from "./support/node-builtins.ts";
 import { PassThrough, Writable } from "node:stream";
-import { tmpdir } from "node:os";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
-import { processCauseError } from "../src/run/errors.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { beforeEach, vi } from "vitest";
 import * as Effect from "effect/Effect";
@@ -15,7 +13,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import { ChildProcess, type ChildLaunchRequest } from "../src/boundary/child-process.ts";
 import { acquireLocalCliTransport } from "../src/boundary/local-cli-transport.ts";
 import {
@@ -23,8 +21,6 @@ import {
   type ProcessTransportRuntime,
 } from "../src/boundary/process-transport.ts";
 
-const { mkdtemp, rm } = nodeFsPromises;
-const { join } = nodePath;
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
   terminate: vi.fn<ProcessTransportRuntime["terminate"]>(),
@@ -128,7 +124,7 @@ const closeScope = (scope: Scope.Closeable) => finishTimed(Scope.close(scope, Ex
 beforeEach(() => {
   boundary.spawn.mockReset();
   boundary.terminate.mockReset();
-  boundary.force.mockReset().mockResolvedValue(undefined);
+  boundary.force.mockReset().mockReturnValue(Effect.void);
 });
 
 describe("shared process transport", () => {
@@ -244,6 +240,21 @@ describe("shared process transport", () => {
     }),
   );
 
+  it.effect("applies a caller line bound and reports each line's byte length", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const handle = yield* start(
+        f.child,
+        acquireLocalCliTransport({ ...nativeRequest, maxLineBytes: 16 }, boundary),
+      );
+      f.stdout.emit("data", Buffer.from('{"a":"é"}\n'));
+      expect(yield* Queue.take(handle.events)).toMatchObject({ type: "message", bytes: 10 });
+      f.stdout.emit("data", Buffer.from(`"${"x".repeat(16)}"\n`));
+      expect(yield* Queue.take(handle.events)).toMatchObject({ type: "protocol_error" });
+      yield* finishTimed(handle.release);
+    }),
+  );
+
   it.effect("keeps dequeued bytes owned until acknowledged and fails an excessive backlog", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -341,17 +352,7 @@ describe("Pi transport policy", () => {
         const foreign = () => {};
         f.child.on("message", foreign);
         const scope = yield* Scope.make();
-        const agentDirectory = yield* Effect.acquireRelease(
-          Effect.tryPromise({
-            try: () => mkdtemp(join(tmpdir(), "pi-transport-test-")),
-            catch: (error) => processCauseError("create fixture", error),
-          }),
-          (directory) =>
-            Effect.tryPromise({
-              try: () => rm(directory, { recursive: true, force: true }),
-              catch: (error) => processCauseError("remove fixture", error),
-            }).pipe(Effect.orDie),
-        );
+        const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
         const context = yield* Layer.build(
           ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
         );

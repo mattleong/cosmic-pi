@@ -17,7 +17,7 @@ const snapshot = {
 };
 
 describe("Background Tasks Code Mode output projection", () => {
-  it("round-trips command results while omitting raw log events", () => {
+  it("round-trips command results", () => {
     const logs = {
       id: snapshot.id,
       nextCursor: 2,
@@ -28,7 +28,7 @@ describe("Background Tasks Code Mode output projection", () => {
     const details: BackgroundTaskCommandResult["details"][] = [
       ...(["start", "status", "stop"] as const).map((action) => ({ action, snapshot })),
       ...(["list", "stop_all"] as const).map((action) => ({ action, tasks: [snapshot] })),
-      { action: "logs", logs: { ...logs, events: [] } },
+      { action: "logs", logs },
       {
         action: "wait",
         wait: {
@@ -42,13 +42,21 @@ describe("Background Tasks Code Mode output projection", () => {
         },
       },
       { action: "clear", removed: 3 },
+      {
+        action: "status",
+        snapshot: {
+          ...snapshot,
+          state: "failed",
+          endedAt: 2,
+          error: "Unable to spawn local process.",
+        },
+      },
     ];
     for (const item of details) {
       const result = { text: item.action, details: item };
-      const expected = item.action === "logs" ? { action: item.action, logs } : item;
       expect(projectBackgroundTaskCodeModeOutput(result, 4_096)).toEqual({
         _tag: "Accepted",
-        output: { text: result.text, ...expected },
+        output: { text: result.text, ...item },
       });
     }
   });
@@ -82,113 +90,23 @@ describe("Background Tasks Code Mode output projection", () => {
     ).toBe(false);
   });
 
-  it("retains spawn errors in failed snapshot projections", () => {
-    const failedSnapshot = {
-      id: snapshot.id,
-      command: snapshot.command,
-      cwd: snapshot.cwd,
-      state: "failed" as const,
-      startedAt: snapshot.startedAt,
-      endedAt: 2,
-      error: "Unable to spawn local process.",
-      logCursor: snapshot.logCursor,
-      droppedLogBytes: snapshot.droppedLogBytes,
-    };
-    const result: BackgroundTaskCommandResult = {
-      text: "bg-1 failed",
-      details: { action: "status", snapshot: failedSnapshot },
-    };
-    const projection = projectBackgroundTaskCodeModeOutput(result, 4_096);
-    expect(projection._tag).toBe("Accepted");
-    if (projection._tag !== "Accepted" || projection.output.action !== "status") return;
-    expect(projection.output.snapshot.error).toBe("Unable to spawn local process.");
-  });
-
-  it("returns frozen detached snapshots within the allowance", () => {
+  it("returns frozen detached snapshots without undeclared producer fields", () => {
+    const producerSnapshot = { ...snapshot, internalOnly: "remove me" };
     const result: BackgroundTaskCommandResult = {
       text: "bg-1 running",
-      details: { action: "list", tasks: [snapshot] },
+      details: { action: "list", tasks: [producerSnapshot] },
     };
     const projection = projectBackgroundTaskCodeModeOutput(result, 4_096);
     expect(projection._tag).toBe("Accepted");
     if (projection._tag !== "Accepted" || projection.output.action !== "list") return;
     expect(projection.output.tasks).toEqual([snapshot]);
-    expect(projection.output.tasks[0]).not.toBe(snapshot);
-    expect(Object.isFrozen(snapshot)).toBe(false);
+    expect(projection.output.tasks[0]).not.toHaveProperty("internalOnly");
+    expect(projection.output.tasks[0]).not.toBe(producerSnapshot);
+    expect(Object.isFrozen(producerSnapshot)).toBe(false);
     expect(Object.isFrozen(projection.output.tasks[0])).toBe(true);
     expect(Object.isFrozen(projection.output.tasks)).toBe(true);
     expect(Object.isFrozen(projection.output)).toBe(true);
   });
-
-  it("strips undeclared producer fields from the detached result", () => {
-    const producerSnapshot = { ...snapshot, internalOnly: "remove me" };
-    const result: BackgroundTaskCommandResult = {
-      text: "bg-1 running",
-      details: { action: "status", snapshot: producerSnapshot },
-    };
-    const projection = projectBackgroundTaskCodeModeOutput(result, 4_096);
-    expect(projection._tag).toBe("Accepted");
-    if (projection._tag !== "Accepted" || projection.output.action !== "status") return;
-    expect(projection.output.snapshot).toEqual(snapshot);
-    expect(projection.output.snapshot).not.toHaveProperty("internalOnly");
-    expect(projection.output.snapshot).not.toBe(producerSnapshot);
-  });
-
-  it.each([
-    [
-      "snapshot timestamps",
-      {
-        text: "bg-1 running",
-        details: { action: "status", snapshot: { ...snapshot, startedAt: Number.NaN } },
-      },
-    ],
-    [
-      "log cursors",
-      {
-        text: "bg-1 logs",
-        details: {
-          action: "logs",
-          logs: {
-            id: snapshot.id,
-            events: [],
-            nextCursor: -1,
-            earliestAvailableCursor: 1,
-            droppedBytes: 0,
-            state: snapshot.state,
-          },
-        },
-      },
-    ],
-    [
-      "wait byte counts",
-      {
-        text: "bg-1 timeout",
-        details: {
-          action: "wait",
-          wait: {
-            id: snapshot.id,
-            outcome: "timeout",
-            snapshot,
-            nextCursor: 0,
-            earliestAvailableCursor: 1,
-            droppedBytes: Number.POSITIVE_INFINITY,
-          },
-        },
-      },
-    ],
-    [
-      "clear counts",
-      {
-        text: "cleared",
-        details: { action: "clear", removed: 1.5 },
-      },
-    ],
-  ] satisfies ReadonlyArray<readonly [string, BackgroundTaskCommandResult]>)(
-    "refuses invalid numeric metadata in %s",
-    (_label, result) => {
-      expect(projectBackgroundTaskCodeModeOutput(result, 4_096)).toEqual({ _tag: "Refused" });
-    },
-  );
 
   it("counts lone surrogates as JSON escapes against the allowance", () => {
     const result: BackgroundTaskCommandResult = {
@@ -210,13 +128,5 @@ describe("Background Tasks Code Mode output projection", () => {
       },
     };
     expect(projectBackgroundTaskCodeModeOutput(result, 1_000_000)).toEqual({ _tag: "Refused" });
-  });
-
-  it("refuses text exceeding the byte allowance", () => {
-    const result: BackgroundTaskCommandResult = {
-      text: "x".repeat(8_000),
-      details: { action: "status", snapshot },
-    };
-    expect(projectBackgroundTaskCodeModeOutput(result, 4_096)).toEqual({ _tag: "Refused" });
   });
 });

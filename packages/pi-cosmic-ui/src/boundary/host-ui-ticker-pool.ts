@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
+import { invokeHostCallback } from "pi-cosmic-core";
 
 export type HostUiTickerScheduler = (intervalMs: number, tick: () => void) => Fiber.Fiber<void>;
 
@@ -44,22 +45,13 @@ export const makeHostUiTickerPool = (
   let disposed = false;
   let disposal: Promise<void> | undefined;
 
-  const stopGroup = (group: HostUiTickerGroup): void => {
-    try {
-      group.fiber?.interruptUnsafe();
-    } catch {
-      // Presentation timer cleanup is best effort during component teardown.
-    }
-  };
+  const stopGroup = (group: HostUiTickerGroup): void =>
+    invokeHostCallback(() => group.fiber?.interruptUnsafe(), undefined);
   const invokeGroup = (group: HostUiTickerGroup): void => {
     if (groups.get(group.intervalMs) !== group) return;
     for (const subscription of Array.from(group.subscriptions)) {
       if (!group.subscriptions.has(subscription)) continue;
-      try {
-        subscription.tick();
-      } catch {
-        // One tearing-down host component never starves the other consumers in this frame.
-      }
+      invokeHostCallback(() => subscription.tick(), undefined);
     }
   };
 

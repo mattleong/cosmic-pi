@@ -5,6 +5,8 @@ import { createHash, randomBytes } from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import type { ClaudeLeadingTagDiagnostic } from "../backend/local-claude-correlation.ts";
+import type { ClaudeProtocolEvent } from "../backend/local-claude-protocol.ts";
 import { nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 import { ensurePrivateDirectory, safeAgentDirectory, writeExclusive } from "./harness-shared.ts";
 
@@ -31,14 +33,7 @@ export type LocalClaudeDebugEntry =
   | {
       readonly kind: "inbound";
       readonly sequence: number;
-      readonly protocolType:
-        | "init"
-        | "user"
-        | "assistant"
-        | "activity"
-        | "result"
-        | "control_response"
-        | "ignored";
+      readonly protocolType: ClaudeProtocolEvent["type"];
       readonly epoch: number;
     }
   | {
@@ -65,15 +60,7 @@ export type LocalClaudeDebugEntry =
       readonly content: "probe" | "assignment" | "steer" | "multiple" | "other";
       readonly contentForm: "text" | "blocks";
       readonly length: "empty" | "1-64" | "65-1024" | "1025-16384" | "over-16384";
-      readonly tag:
-        | "none"
-        | "other"
-        | "task-notification"
-        | "system-reminder"
-        | "teammate-message"
-        | "local-command-stdout"
-        | "local-command-stderr"
-        | "local-command-caveat";
+      readonly tag: ClaudeLeadingTagDiagnostic;
       readonly parentTool: boolean;
       readonly toolResults: boolean;
       readonly origin: boolean;

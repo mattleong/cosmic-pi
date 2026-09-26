@@ -17,12 +17,8 @@ import {
 import { addAssistantUsage, decodeAssistantUsage } from "./boundary/host-usage.ts";
 import { shutdownHostUiTickers, startHostUiTicker } from "./boundary/host-status.ts";
 import { makeDefaultResolvedCosmicUiConfig, type ResolvedCosmicUiConfig } from "./config/schema.ts";
-import type { FooterTotals } from "./footer/component.ts";
-import {
-  emptyFooterRegistrySnapshot,
-  FooterRegistryService,
-  type FooterRegistryBridge,
-} from "./footer/registry.ts";
+import type { FooterTotals } from "./footer/builtin-contributions.ts";
+import { makeFooterRegistry } from "./footer/registry.ts";
 import {
   makeCosmicUiApplicationLayer,
   type CosmicUiApplication,
@@ -35,13 +31,6 @@ import {
   makeProjection,
   resetProjection,
 } from "./protocol/service.ts";
-import {
-  makeFooterProtocolBuffer,
-  protocolInvalidate,
-  protocolRemove,
-  protocolUpsert,
-  type FooterProtocolEvent,
-} from "./protocol/host.ts";
 import {
   COSMIC_UI_FOOTER_INVALIDATE,
   COSMIC_UI_FOOTER_REMOVE,
@@ -56,43 +45,32 @@ import {
 } from "./protocol/protocol.ts";
 import { registerSettingsCommand } from "./settings/controller.ts";
 import { createFooterInstallation } from "./footer/installation.ts";
-import { WorkingTimerService, type WorkingTimerServiceContract } from "./working/service.ts";
-import { makeWorkingRunOwnerState } from "./working/owner.ts";
+import { makeWorkingRow } from "./working/row.ts";
 import { ActivityService, type ActivityServiceContract } from "./activity/service.ts";
 import { makeActivityHost } from "./boundary/host-activity.ts";
+
+const TOTAL_KEYS = ["input", "output", "cacheRead", "cacheWrite", "cost"] as const;
 
 export interface CosmicUiApplicationDependencies {
   readonly shutdownHostUiTickers?: () => Promise<void>;
 }
 
-export function registerCosmicUiApplication(pi: ExtensionAPI): void {
-  cosmicUiWithDependencies(pi, {});
-}
-
-/** Internal seam for host-lifecycle cleanup tests. */
-export function cosmicUiWithDependencies(
+/** `dependencies` is an internal seam for host-lifecycle cleanup tests. */
+export function registerCosmicUiApplication(
   pi: ExtensionAPI,
-  dependencies: CosmicUiApplicationDependencies,
+  dependencies: CosmicUiApplicationDependencies = {},
 ): void {
   const callbacks = makeHostCallbackBoundary();
   const shutdownTickers = dependencies.shutdownHostUiTickers ?? shutdownHostUiTickers;
-  const protocolBuffer = makeFooterProtocolBuffer();
-  const bridge: FooterRegistryBridge = {
-    snapshot: emptyFooterRegistrySnapshot(),
-    requestRenderNow: () => undefined,
-    invalidate: () => {
-      protocolBuffer.offer(protocolInvalidate());
-    },
-  };
+  let activatedToken: number | undefined;
+  const registry = makeFooterRegistry({
+    requestRender: () => footerInstallation.requestRender(),
+    sessionActive: () => activatedToken !== undefined,
+  });
   const projection = makeProjection();
-  interface SessionHostRead {
-    readonly cwd: string;
-    readonly signal: AbortSignal | undefined;
-    readonly aborted: boolean;
-    readonly releaseSignal: () => void;
-  }
-  const sessionHostFrom = (ctx: ExtensionContext): SessionHostRead | undefined => {
-    const cwd = callbacks.invoke<string | undefined>(
+  const workingRow = makeWorkingRow({ callbacks });
+  const sessionCwd = (ctx: ExtensionContext) =>
+    callbacks.invoke<string | undefined>(
       "host-query",
       () => {
         const value = ctx.cwd;
@@ -102,25 +80,10 @@ export function cosmicUiWithDependencies(
       },
       undefined,
     );
-    if (cwd === undefined) return undefined;
-    const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
-    return abort === undefined
-      ? undefined
-      : {
-          cwd,
-          signal: abort.signal,
-          aborted: abort.aborted,
-          releaseSignal: abort.release,
-        };
-  };
   let lifecycleGeneration = 0;
   let stopUsageTicker: (() => void) | undefined;
   let lastCompleteTotals = emptyTotals();
   let usageSessionManager: ExtensionContext["sessionManager"] | undefined;
-  const rememberTotals = (totals: FooterTotals) => {
-    lastCompleteTotals = totals;
-    return totals;
-  };
   const resetTotals = () => {
     usageSessionManager = undefined;
     lastCompleteTotals = emptyTotals();
@@ -157,9 +120,9 @@ export function cosmicUiWithDependencies(
       },
       undefined,
     );
-    return read === undefined || generation !== lifecycleGeneration
-      ? lastCompleteTotals
-      : rememberTotals(read);
+    if (read === undefined || generation !== lifecycleGeneration) return lastCompleteTotals;
+    lastCompleteTotals = read;
+    return read;
   };
   let currentContext: MutableRef.MutableRef<ExtensionContext> | undefined;
   let subscriptions: Array<() => void> = [];
@@ -180,39 +143,43 @@ export function cosmicUiWithDependencies(
   };
   let footerInstallation!: ReturnType<typeof createFooterInstallation>;
   let publishedHostState: string | undefined;
+  const hostState = () => ({
+    active: footerInstallation.isActive(),
+    ready: currentContext !== undefined,
+    hidden: [...config().footer.hidden],
+  });
   const publishHostState = () => {
     if (!footerInstallation) return;
-    const state = {
-      version: COSMIC_UI_PROTOCOL_VERSION,
-      active: footerInstallation.isActive(),
-      ready: currentContext !== undefined,
-      hidden: [...config().footer.hidden],
-    };
+    const state = { version: COSMIC_UI_PROTOCOL_VERSION, ...hostState() };
     const key = JSON.stringify(state);
     if (publishedHostState === key) return;
     publishedHostState = key;
     callbacks.invoke("host-query", () => pi.events.emit(COSMIC_UI_HOST_STATE, state), undefined);
   };
   const requestRender = () => {
-    bridge.requestRenderNow();
+    footerInstallation.requestRender();
     publishHostState();
   };
+  const notifyStartFailure = (ctx: ExtensionContext) =>
+    callbacks.invoke(
+      "notify",
+      () => ctx.ui.notify("Cosmic UI failed to start.", "warning"),
+      undefined,
+    );
 
   const slot = makePiSessionRuntimeSlot<
     CosmicUiSessionInput,
     CosmicUiApplication,
     never,
     CosmicUiRuntimeError,
-    { readonly timer: WorkingTimerServiceContract; readonly activity: ActivityServiceContract }
+    ActivityServiceContract
   >({
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
         makeCosmicUiApplicationLayer(input, {
           callbacks,
-          bridge,
           projection,
-          protocolBuffer,
           requestRender,
           activityHost,
         }),
@@ -221,17 +188,13 @@ export function cosmicUiWithDependencies(
     startup: () =>
       Effect.gen(function* () {
         yield* CosmicUiService;
-        yield* FooterRegistryService;
-        return { timer: yield* WorkingTimerService, activity: yield* ActivityService };
+        return yield* ActivityService;
       }),
-    onActivated: ({ ctx, context, signal }, token, activeWorkingTimer) => {
+    onActivated: ({ ctx, context, signal }, token, activity) => {
+      activatedToken = token;
       currentContext = context;
-      workingOwners.activate({ token, timer: activeWorkingTimer.timer });
-      callbacks.invoke(
-        "host-query",
-        () => activityHost.activate(ctx, activeWorkingTimer.activity),
-        undefined,
-      );
+      workingRow.activate(context);
+      callbacks.invoke("host-query", () => activityHost.activate(ctx, activity), undefined);
       footerInstallation.update(ctx);
       publishHostState();
       slot.fork(
@@ -242,18 +205,19 @@ export function cosmicUiWithDependencies(
     onDeactivated: ({ context, releaseSignal }, token) => {
       releaseSignal();
       if (currentContext === context) currentContext = undefined;
-      workingOwners.deactivate(token);
+      workingRow.deactivate();
       activityHost.deactivate();
       footerInstallation.uninstall();
+      // A start that never activated keeps pre-session contributions for the next start.
+      if (activatedToken === token) {
+        activatedToken = undefined;
+        registry.clear();
+      }
       publishHostState();
     },
     onStartFailure: ({ ctx, releaseSignal }) => {
       releaseSignal();
-      callbacks.invoke(
-        "notify",
-        () => ctx.ui.notify("Cosmic UI failed to start.", "warning"),
-        undefined,
-      );
+      notifyStartFailure(ctx);
     },
   });
 
@@ -270,46 +234,20 @@ export function cosmicUiWithDependencies(
     const result = slot.run(effect, abort?.signal);
     return abort ? result.finally(abort.release) : result;
   };
-  const forkFrom = <A, E>(
-    effect: Effect.Effect<A, E, CosmicUiService | FooterRegistryService>,
-    ctx: ExtensionContext,
-  ) => {
+  const forkFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) => {
     const abort = snapshotHostAbortSignal(callbacks, () => ctx.signal);
     const guarded = abort ? effect.pipe(Effect.ensuring(Effect.sync(abort.release))) : effect;
     const fiber = slot.fork(guarded, abort?.signal);
     if (!fiber) abort?.release();
     return fiber;
   };
-  const workingOwners = makeWorkingRunOwnerState({
-    isCurrent: (token) => slot.isCurrent(token),
-    fork: (effect) => slot.fork(effect),
-  });
-
   footerInstallation = createFooterInstallation({
     pi,
     callbacks,
-    bridge,
+    registry,
     projection,
     config,
     currentContext: () => (currentContext ? MutableRef.get(currentContext) : undefined),
-    clearRenderRequest: (expected) => {
-      callbacks.invoke(
-        "footer-remove",
-        () =>
-          slot.fork(
-            FooterRegistryService.use((registry) => registry.setRenderRequest(undefined, expected)),
-          ),
-        undefined,
-      );
-    },
-    installRenderRequest: (request, isCurrent, ctx) => {
-      forkFrom(
-        FooterRegistryService.use((registry) =>
-          Effect.suspend(() => (isCurrent() ? registry.setRenderRequest(request) : Effect.void)),
-        ),
-        ctx,
-      );
-    },
     refreshAfterBranchChange: (ctx) => {
       forkFrom(
         CosmicUiService.use((service) =>
@@ -325,11 +263,11 @@ export function cosmicUiWithDependencies(
     event: string,
     operation: HostCallbackOperation,
     normalize: <Raw>(raw: Raw) => E | undefined,
-    build: (event: E) => FooterProtocolEvent,
+    apply: (event: E) => void,
   ): (() => void) =>
     pi.events.on(event, (data) => {
       const parsed = callbacks.invoke(operation, () => normalize(data), undefined);
-      if (parsed) protocolBuffer.offer(build(parsed));
+      if (parsed) apply(parsed);
     });
 
   const ensureSubscriptions = () => {
@@ -341,35 +279,25 @@ export function cosmicUiWithDependencies(
           () => normalizeCosmicUiHostQuery(data),
           undefined,
         );
-        if (query)
-          callbacks.invoke(
-            "host-query",
-            () =>
-              query.respond({
-                active: footerInstallation.isActive(),
-                ready: currentContext !== undefined,
-                hidden: [...config().footer.hidden],
-              }),
-            undefined,
-          );
+        if (query) callbacks.invoke("host-query", () => query.respond(hostState()), undefined);
       }),
       onProtocolEvent(
         COSMIC_UI_FOOTER_UPSERT,
         "protocol-upsert",
         normalizeCosmicFooterUpsertEvent,
-        (event) => protocolUpsert(event.owner, event.contribution),
+        (event) => registry.upsert(event.owner, event.contribution),
       ),
       onProtocolEvent(
         COSMIC_UI_FOOTER_REMOVE,
         "protocol-remove",
         normalizeCosmicFooterRemoveEvent,
-        (event) => protocolRemove(event.owner, event.id),
+        (event) => registry.remove(event.owner, event.id),
       ),
       onProtocolEvent(
         COSMIC_UI_FOOTER_INVALIDATE,
         "protocol-invalidate",
         normalizeCosmicFooterInvalidateEvent,
-        (event) => protocolInvalidate(event.owner, event.id),
+        () => registry.invalidate(),
       ),
     ];
   };
@@ -398,10 +326,12 @@ export function cosmicUiWithDependencies(
         resetTotals();
         resetProjection(projection);
       });
-    const host = sessionHostFrom(ctx);
-    if (host === undefined) return shutdownFailedStart();
-    if (host.aborted) {
-      host.releaseSignal();
+    const cwd = sessionCwd(ctx);
+    const abort =
+      cwd === undefined ? undefined : snapshotHostAbortSignal(callbacks, () => ctx.signal);
+    if (cwd === undefined || abort === undefined) return shutdownFailedStart();
+    if (abort.aborted) {
+      abort.release();
       return shutdownFailedStart();
     }
     const projectTrusted = isProjectTrusted(ctx);
@@ -418,37 +348,33 @@ export function cosmicUiWithDependencies(
         {
           ctx,
           context,
-          cwd: host.cwd,
-          signal: host.signal,
-          releaseSignal: host.releaseSignal,
+          cwd,
+          signal: abort.signal,
+          releaseSignal: abort.release,
           initialTotals,
           projectTrusted,
         },
-        host.signal,
+        abort.signal,
       )
       .then(
         (token) => {
           if (token !== undefined && generation === lifecycleGeneration) {
             stopUsageTicker = startHostUiTicker(1_000, () => {
               if (generation === lifecycleGeneration && currentContext === context)
-                void refreshTotals(MutableRef.get(context), true);
+                void refreshUsage(MutableRef.get(context), "idle");
             });
           }
           if (token === undefined) {
             // A superseded start never activates: stop publishing this dead context
             // unless a newer start already replaced it.
             if (currentContext === context) currentContext = undefined;
-            host.releaseSignal();
+            abort.release();
           }
         },
         () => {
           if (currentContext === context) currentContext = undefined;
-          host.releaseSignal();
-          callbacks.invoke(
-            "notify",
-            () => ctx.ui.notify("Cosmic UI failed to start.", "warning"),
-            undefined,
-          );
+          abort.release();
+          notifyStartFailure(ctx);
         },
       );
   });
@@ -458,15 +384,7 @@ export function cosmicUiWithDependencies(
     if (kind === "turn") updateContext(ctx);
     const previous = lastCompleteTotals;
     const totals = totalsFromSession(ctx);
-    if (
-      kind === "idle" &&
-      totals.input === previous.input &&
-      totals.output === previous.output &&
-      totals.cacheRead === previous.cacheRead &&
-      totals.cacheWrite === previous.cacheWrite &&
-      totals.cost === previous.cost
-    )
-      return;
+    if (kind === "idle" && TOTAL_KEYS.every((key) => totals[key] === previous[key])) return;
     if (kind !== "turn") updateContext(ctx);
     footerInstallation.invalidateContextUsage();
     requestRender();
@@ -482,12 +400,10 @@ export function cosmicUiWithDependencies(
       ctx,
     ).catch(() => undefined);
   };
-  const refreshTotals = (ctx: ExtensionContext, idle = false) =>
-    refreshUsage(ctx, idle ? "idle" : "rescan");
   pi.on("turn_end", (_event, ctx) => refreshUsage(ctx, "turn"));
-  pi.on("session_compact", (_event, ctx) => refreshTotals(ctx));
-  pi.on("session_tree", (_event, ctx) => refreshTotals(ctx));
-  pi.on("agent_settled", (_event, ctx) => refreshTotals(ctx));
+  pi.on("session_compact", (_event, ctx) => refreshUsage(ctx, "rescan"));
+  pi.on("session_tree", (_event, ctx) => refreshUsage(ctx, "rescan"));
+  pi.on("agent_settled", (_event, ctx) => refreshUsage(ctx, "rescan"));
   const invalidateContextUsage = <Event>(_event: Event, ctx: ExtensionContext) => {
     updateContext(ctx);
     footerInstallation.invalidateContextUsage();
@@ -496,7 +412,7 @@ export function cosmicUiWithDependencies(
   pi.on("model_select", invalidateContextUsage);
   pi.on("tool_execution_start", (_event, ctx) => {
     updateContext(ctx);
-    workingOwners.pauseOutputForActiveRun();
+    workingRow.pauseOutput();
   });
   pi.on("tool_execution_end", (event, ctx) => {
     updateContext(ctx);
@@ -514,22 +430,21 @@ export function cosmicUiWithDependencies(
   pi.on("session_info_changed", renderUpdatedContext);
   pi.on("agent_start", (event, ctx) => {
     invalidateContextUsage(event, ctx);
-    workingOwners.startAgentRun();
+    workingRow.agentStart();
   });
   pi.on("agent_end", (_event, ctx) => {
     updateContext(ctx);
-    workingOwners.settleAgentRun();
+    workingRow.agentEnd();
   });
   pi.on("ui_prompt_start", (_event, ctx) => {
-    if (!workingOwners.promptIdle()) return;
+    if (!workingRow.canPrompt()) return;
     updateContext(ctx);
-    workingOwners.beginPrompt();
+    workingRow.promptStart();
   });
   pi.on("ui_prompt_end", (_event, ctx) => {
-    const resume = workingOwners.releasePrompt();
-    if (!resume) return;
+    if (!workingRow.isPrompting()) return;
     updateContext(ctx);
-    resume();
+    workingRow.promptEnd();
   });
   pi.on("message_start", invalidateContextUsage);
   pi.on("message_update", (event, ctx) => {
@@ -542,25 +457,24 @@ export function cosmicUiWithDependencies(
         update.type !== "toolcall_delta")
     )
       return;
-    workingOwners.noteOutputCharacters(update.delta.length);
+    workingRow.output(update.delta.length);
   });
   pi.on("message_end", (event, ctx) => {
     invalidateContextUsage(event, ctx);
-    workingOwners.pauseOutputForActiveRun();
+    workingRow.pauseOutput();
   });
   pi.on("session_shutdown", () => {
     const generation = ++lifecycleGeneration;
     stopUsageTicker?.();
     stopUsageTicker = undefined;
     usageSessionManager = undefined;
-    workingOwners.clearRun();
     footerInstallation.uninstall();
     disposeSubscriptions();
     return Promise.all([slot.shutdown(), shutdownTickers()]).then(() => {
       if (generation !== lifecycleGeneration) return;
       currentContext = undefined;
       resetTotals();
-      protocolBuffer.reset();
+      registry.clear();
       resetProjection(projection);
     });
   });

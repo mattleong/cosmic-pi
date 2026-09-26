@@ -12,6 +12,10 @@ import {
 } from "../run/errors.ts";
 import { claudeUserFrame } from "./local-claude-protocol.ts";
 
+/** Digest identity of stream-input text, compared against native replays. */
+export const userContentDigest = (text: string): string =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+
 export interface PendingUserReplay {
   readonly uuid: string;
   readonly operation: "initialize" | "start" | "steer";
@@ -67,7 +71,7 @@ export const makeLocalClaudeInputDelivery = (
           operation,
           epoch,
           emitRunStarted: operation === "start",
-          contentDigest: createHash("sha256").update(text, "utf8").digest("hex"),
+          contentDigest: userContentDigest(text),
           resultKind:
             operation === "initialize"
               ? "initialization"

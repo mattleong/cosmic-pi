@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { renderComponent, testTheme } from "../support/render";
+import { plainTheme, renderComponent, textResult } from "../support/render";
 import {
   renderPathListResult,
   type PathListResultConfig,
@@ -19,16 +18,12 @@ const config: PathListResultConfig = {
   footerNoun: "paths",
 };
 
-function result(text: string): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details: undefined };
-}
-
 function renderCollapsed(text: string): string {
   return renderComponent(
     renderPathListResult(
-      result(text),
+      textResult(text),
       { expanded: false, isPartial: false },
-      testTheme(),
+      plainTheme,
       { isError: false, state: {} },
       config,
     ),

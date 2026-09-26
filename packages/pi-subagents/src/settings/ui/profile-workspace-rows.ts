@@ -25,7 +25,7 @@ export const profileWorkspaceRows = (
       parentEffort,
       parentModel,
       expanded.has(candidateIndex),
-      { index: candidateIndex, count: draft.candidates.length },
+      candidateIndex,
     ).map((row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex })),
   ),
   {

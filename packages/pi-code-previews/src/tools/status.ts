@@ -33,22 +33,13 @@ export function getCodePreviewToolStatuses(): Map<CodePreviewToolName, CodePrevi
   return new Map(toolStatuses);
 }
 
-export function formatInstalledCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {
-  return formatToolsWithState(statuses, "installed");
-}
-
-export function formatRegistrationErrorCodePreviewTools(
+export function formatCodePreviewToolsWithState(
+  state: CodePreviewToolStatus["state"],
   statuses = getCodePreviewToolStatuses(),
 ): string {
-  return formatToolsWithState(statuses, "registration-error");
-}
-
-export function formatDisabledCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {
-  return formatToolsWithState(statuses, "disabled-by-config");
-}
-
-export function formatPendingCodePreviewTools(statuses = getCodePreviewToolStatuses()): string {
-  return formatToolsWithState(statuses, "pending");
+  return formatToolsSettingValue(
+    ALL_CODE_PREVIEW_TOOLS.filter((tool) => statuses.get(tool)?.state === state),
+  );
 }
 
 export function formatSkippedCodePreviewToolLines(
@@ -67,13 +58,4 @@ export function formatToolOwner(sourceInfo: SourceInfo): string {
   const scope = sourceInfo.scope && sourceInfo.scope !== "temporary" ? ` ${sourceInfo.scope}` : "";
   const source = `${sourceInfo.source || "unknown"}${scope}`;
   return sourceInfo.path ? `${source} (${sourceInfo.path})` : source;
-}
-
-function formatToolsWithState(
-  statuses: Map<CodePreviewToolName, CodePreviewToolStatus>,
-  state: CodePreviewToolStatus["state"],
-): string {
-  return formatToolsSettingValue(
-    ALL_CODE_PREVIEW_TOOLS.filter((tool) => statuses.get(tool)?.state === state),
-  );
 }

@@ -1,27 +1,11 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  MCP_CODE_MODE_QUERY,
-  MCP_CODE_MODE_VERSION,
-  normalizeMcpCodeModeQuery,
-  type McpCodeModeOutput,
-} from "pi-mcp/code-mode";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import { CodeMode } from "../src/boundary/codemode-runtime.ts";
+import type { McpCodeModeOutput } from "pi-mcp/code-mode";
 import { makeCompactEvidence, type CompactReceipt } from "../src/tools/compact-evidence.ts";
-import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
-import { renderCodeModeToolResult } from "../src/ui/tool-renderer.ts";
-import type { CodeModeToolDetails } from "../src/tools/format.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-
-const recovery = (receipt: CompactReceipt) =>
-  receipt.notices.filter((notice) => notice.text.includes("do not replay"));
+import { ledgerDetails, noReplayNotices, summarize } from "./support/compact.ts";
+import { executeHarness } from "./support/execute.ts";
+import { renderResultText } from "./support/presentation.ts";
+import { mcpProvider } from "./support/providers.ts";
 
 describe("interpreter delivery evidence", () => {
   it.effect(
@@ -30,112 +14,58 @@ describe("interpreter delivery evidence", () => {
       Effect.gen(function* () {
         let data: McpCodeModeOutput["data"] = null;
         for (let depth = 0; depth < 40; depth++) data = { child: data };
-        const events = createEventBus();
-        events.on(MCP_CODE_MODE_QUERY, (value) =>
-          normalizeMcpCodeModeQuery(value)?.respond({
-            version: MCP_CODE_MODE_VERSION,
-            sessionId: "delivery",
-            execute: () =>
-              Promise.resolve({
-                action: "status",
-                outcome: "completed",
-                isError: false,
-                data,
-                notices: [],
-              }),
+        const events = mcpProvider(() =>
+          Promise.resolve({
+            action: "status",
+            outcome: "completed",
+            isError: false,
+            data,
+            notices: [],
           }),
         );
-        const state = codeModeStateFixture({ maxCumulativeChildOutputBytes: 1000000 });
-        for (const legacy of [false, true]) {
-          const execute = makeCodeModeToolExecute({
-            executeCodeMode: (options) => {
-              if (!legacy) return CodeMode.execute(options);
-              const { onToolCallLifecycle: _ignored, ...legacyOptions } = options;
-              return CodeMode.execute(legacyOptions);
-            },
-            isCurrent: () => true,
-            getState: () => state,
-            runInSession: (effect) => Effect.runPromise(effect),
-            definitions: nestedToolDefinitionsFixture({}),
-            events,
-            sessionId: "delivery",
-          });
-          const completed = yield* Effect.promise(() =>
-            execute(
-              "depth",
-              {
-                code: 'let message=""; try { await tools.mcp.request({action:"status"}); } catch(e) { message=e.message; } return message;',
-              },
-              undefined,
-              undefined,
-              extensionContextFixture({}),
-            ),
-          );
-          expect(completed.content[0]).toMatchObject({
-            text: expect.stringContaining("Invalid output"),
-          });
-          expect(completed.content[0]).toMatchObject({
-            text: expect.stringContaining("Do not replay completed or uncertain operations"),
-          });
-          const receipt = completed.details!.toolCalls[0]!.compact!;
-          expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
-          expect(recovery(receipt)).toHaveLength(1);
-          expect(completed.details!.compactAttention).toMatchObject({
-            observed: 1,
-            errors: 0,
-            incomplete: false,
-          });
-          expect(completed.details!.compactAttention!.notices).toContainEqual(recovery(receipt)[0]);
-        }
+        const completed = yield* Effect.promise(() =>
+          executeHarness({ events, config: { maxCumulativeChildOutputBytes: 1000000 } }).run(
+            'let message=""; try { await tools.mcp.request({action:"status"}); } catch(e) { message=e.message; } return message;',
+          ),
+        );
+        expect(completed.content[0]).toMatchObject({
+          text: expect.stringContaining("Invalid output"),
+        });
+        expect(completed.content[0]).toMatchObject({
+          text: expect.stringContaining("Do not replay completed or uncertain operations"),
+        });
+        const receipt = completed.details!.toolCalls[0]!.compact!;
+        expect(receipt).toMatchObject({ outcome: "success", deliveryFailed: true });
+        expect(noReplayNotices(receipt.notices)).toHaveLength(1);
+        expect(completed.details!.compactAttention).toMatchObject({
+          observed: 1,
+          errors: 0,
+          incomplete: false,
+        });
+        expect(completed.details!.compactAttention!.notices).toContainEqual(
+          noReplayNotices(receipt.notices)[0],
+        );
       }),
   );
 
   it("keeps individual loss explanations on visible children and hidden or evicted calls in the parent", () => {
-    const receipts = new Map<number, CompactReceipt>();
-    const collector = makeCompactEvidence((id, receipt) => receipts.set(id, receipt));
-    for (let id = 0; id < 36; id++) {
-      collector.admit("pi.read");
-      collector.start(id, id);
-      collector.observe(id, () => ({ subject: "same file", outcome: "success" }));
-      collector.deliveryFailure(id);
-      collector.deliveryFailure(id);
-      collector.end(id);
-    }
-    collector.close();
-    expect(collector.snapshot().notices).toHaveLength(32);
-    expect(collector.snapshot().incomplete).toBe(true);
-    for (const receipt of receipts.values()) expect(recovery(receipt)).toHaveLength(1);
-    const details: CodeModeToolDetails = {
-      toolCalls: [...receipts.values()]
-        .slice(-32)
-        .map((compact) => ({ tool: "pi.read", status: "error", compact })),
-      outputKind: "text",
-      totalToolCalls: 36,
-      counts: { total: 36, succeeded: 0, failed: 36, cancelled: 0, running: 0, queued: 0 },
-      compactAttention: collector.snapshot(),
-    };
+    const { calls, details } = ledgerDetails(
+      Array.from({ length: 36 }, () => ({
+        tool: "pi.read",
+        summary: { subject: "same file", outcome: "success" },
+      })),
+      { status: "error", deliveryFailures: 2 },
+    );
+    const receipts = calls.map((call) => call.compact!);
+    expect(details.compactAttention.notices).toHaveLength(32);
+    expect(details.compactAttention.incomplete).toBe(true);
+    for (const receipt of receipts) expect(noReplayNotices(receipt.notices)).toHaveLength(1);
     const result = { content: [{ type: "text" as const, text: "discarded" }], details };
-    const summary = codeModeCompactSummary({
-      phase: "settled",
-      args: {},
-      result,
-      context: opaqueHostFixture({ isError: false }),
-    })!;
-    expect(
-      summary.issues?.entries.some((issue) => issue.cause === recovery(receipts.get(0)!)[0]!.text),
-    ).toBe(true);
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    });
-    const expanded = renderCodeModeToolResult(result, { isPartial: false }, theme, {
-      isError: false,
-      expanded: true,
-    })
-      .component.render(240)
-      .join("\n");
-    for (const receipt of receipts.values()) {
-      expect(expanded.split(recovery(receipt)[0]!.text)).toHaveLength(2);
+    const first = noReplayNotices(receipts[0]!.notices)[0]!.text;
+    expect(summarize(details)?.issues?.entries.some((issue) => issue.cause === first)).toBe(true);
+    const expanded = renderResultText(result, { expanded: true });
+    for (const receipt of receipts) {
+      expect(expanded.split(noReplayNotices(receipt.notices)[0]!.text)).toHaveLength(2);
     }
   });
 

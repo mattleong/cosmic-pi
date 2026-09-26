@@ -6,26 +6,15 @@ import {
   QuestionnaireRequestSchema,
   type AskUserRequest,
 } from "pi-ask-user/protocol";
-import type { Static, TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import type { SubagentToolName } from "../run/tool-policy.ts";
 import {
-  AwaitParameters,
-  claimsOperationError,
-  ClaimsParameters,
-  LifecycleParameters,
-  ListParameters,
-  ModelsParameters,
-  RenameParameters,
-  ReplyParameters,
-  SendParameters,
-  StartParameters,
-  StatusParameters,
-  WorkspaceParameters,
-  workspaceOperationError,
+  SUBAGENT_TOOL_SCHEMAS,
+  type SubagentToolArgs,
   type SubagentToolInput,
+  type SubagentToolParameters,
 } from "./schema.ts";
 
 export interface SubagentProxyRequest {
@@ -33,25 +22,10 @@ export interface SubagentProxyRequest {
   readonly argumentsJson: string;
 }
 
-export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProxyRequest => {
-  switch (input.action) {
-    case "interrupt":
-    case "resume":
-    case "retry":
-    case "stop":
-      return { tool: SUBAGENT_TOOL_NAME.lifecycle, argumentsJson: JSON.stringify(input) };
-    case "claims":
-    case "workspace":
-      return {
-        tool: SUBAGENT_TOOL_NAME[input.action],
-        argumentsJson: JSON.stringify(input.operation),
-      };
-    default: {
-      const { action, ...args } = input;
-      return { tool: SUBAGENT_TOOL_NAME[action], argumentsJson: JSON.stringify(args) };
-    }
-  }
-};
+export const encodeSubagentProxyInput = (input: SubagentToolInput): SubagentProxyRequest => ({
+  tool: input.tool,
+  argumentsJson: JSON.stringify(input.args),
+});
 
 const MAX_PROXY_JSON_CHARS = 2 * 1024 * 1024;
 const decodeQuestionnaireJson = Schema.decodeUnknownOption(
@@ -103,26 +77,26 @@ export const decodeSubagentProxyResult = (source: string): AgentToolResult<unkno
 const invalid = (message: string) =>
   new InvalidSubagentRequestError({ code: "proxy_request_invalid", message });
 
-const decodeTaggedArguments = <
-  S extends TSchema,
-  A extends SubagentToolInput["action"],
-  ValueInput,
->(
-  tool: string,
-  schema: S,
-  action: A,
-  args: ValueInput,
-): (Static<S> & { readonly action: A }) | InvalidSubagentRequestError =>
-  Check(schema, args)
-    ? { ...args, action }
-    : invalid(`Nested ${tool} arguments failed strict validation.`);
+/** The catalog by tool name, so a generic name keeps its schema and validator correlated. */
+type ToolSchemas = {
+  readonly [N in SubagentToolName]: {
+    readonly parameters: SubagentToolParameters<N>;
+    readonly validate?: (args: SubagentToolArgs<N>) => string | undefined;
+  };
+};
+const TOOL_SCHEMAS: ToolSchemas = SUBAGENT_TOOL_SCHEMAS;
 
-const decodeWorkspaceArguments = <ValueInput>(
+// Own keys only: an inherited name such as "constructor" is an unknown tool, never a lookup.
+const isSubagentToolName = (tool: string): tool is SubagentToolName =>
+  Object.hasOwn(TOOL_SCHEMAS, tool);
+
+const decodeToolArguments = <N extends SubagentToolName, ValueInput>(
+  tool: N,
   args: ValueInput,
-): SubagentToolInput | InvalidSubagentRequestError =>
-  Check(WorkspaceParameters, args) && workspaceOperationError(args) === undefined
-    ? { action: "workspace", operation: args }
-    : invalid("Nested subagent_workspace arguments failed strict validation.");
+): SubagentToolInput<N> | undefined => {
+  const { parameters, validate } = TOOL_SCHEMAS[tool];
+  return Check(parameters, args) && validate?.(args) === undefined ? { tool, args } : undefined;
+};
 
 /** Strict server-side decode for authenticated private Pi proxy calls. */
 export const decodeSubagentProxyRequest = (
@@ -133,36 +107,10 @@ export const decodeSubagentProxyRequest = (
   const decoded = decodeProxyArgumentsJson(request.argumentsJson);
   if (Option.isNone(decoded))
     return invalid("Nested subagent request arguments were not bounded JSON.");
-  const args = decoded.value;
-  switch (request.tool) {
-    case SUBAGENT_TOOL_NAME.models:
-      return decodeTaggedArguments(request.tool, ModelsParameters, "models", args);
-    case SUBAGENT_TOOL_NAME.start:
-      return decodeTaggedArguments(request.tool, StartParameters, "start", args);
-    case SUBAGENT_TOOL_NAME.list:
-      return decodeTaggedArguments(request.tool, ListParameters, "list", args);
-    case SUBAGENT_TOOL_NAME.status:
-      return decodeTaggedArguments(request.tool, StatusParameters, "status", args);
-    case SUBAGENT_TOOL_NAME.await:
-      return decodeTaggedArguments(request.tool, AwaitParameters, "await", args);
-    case SUBAGENT_TOOL_NAME.send:
-      return decodeTaggedArguments(request.tool, SendParameters, "send", args);
-    case SUBAGENT_TOOL_NAME.reply:
-      return decodeTaggedArguments(request.tool, ReplyParameters, "reply", args);
-    case SUBAGENT_TOOL_NAME.lifecycle:
-      return Check(LifecycleParameters, args) &&
-        (args.action === "resume" || args.message === undefined)
-        ? args
-        : invalid("Nested subagent_lifecycle arguments failed strict validation.");
-    case SUBAGENT_TOOL_NAME.rename:
-      return decodeTaggedArguments(request.tool, RenameParameters, "rename", args);
-    case SUBAGENT_TOOL_NAME.claims:
-      return Check(ClaimsParameters, args) && claimsOperationError(args) === undefined
-        ? { action: "claims", operation: args }
-        : invalid("Nested subagent_claims arguments failed strict validation.");
-    case SUBAGENT_TOOL_NAME.workspace:
-      return decodeWorkspaceArguments(args);
-    default:
-      return invalid("Nested Pi requested an unknown coordinator tool.");
-  }
+  const { tool } = request;
+  if (!isSubagentToolName(tool)) return invalid("Nested Pi requested an unknown coordinator tool.");
+  return (
+    decodeToolArguments(tool, decoded.value) ??
+    invalid(`Nested ${tool} arguments failed strict validation.`)
+  );
 };

@@ -8,7 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as codePreviews from "pi-code-previews";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
+import { invokeHostCallback, sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core";
 import * as Schema from "effect/Schema";
 import {
   managerActivityColor,
@@ -17,7 +17,6 @@ import {
 } from "pi-cosmic-ui/manager";
 import { expandKeyHint, renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import { codeModeVisibleNotices } from "./notices.ts";
-import { CODE_MODE_INTEGER_BOUNDS } from "../config/schema.ts";
 import {
   decodeOption,
   MAX_INTENT_LENGTH,
@@ -35,8 +34,6 @@ import { decodeCodeModeRenderDetails, type CodeModeRenderDetails } from "./tool-
 const CODE_MODE_FALLBACK_INTENT = "Tool orchestration";
 const visibleNotices = (details: CodeModeRenderDetails, expanded: boolean): readonly string[] =>
   codeModeVisibleNotices(details, expanded).map((notice) => notice.text);
-
-const MAX_SOURCE_DISPLAY_LENGTH = CODE_MODE_INTEGER_BOUNDS.maxSourceBytes.maximum;
 
 export const describeCodeModeIntent = <Intent>(intent: Intent): string => {
   if (!Predicate.isString(intent)) return CODE_MODE_FALLBACK_INTENT;
@@ -70,7 +67,7 @@ const intentHeadline = <Args>(args: Args, theme: Theme): string => {
   return renderToolHeader({ title: "Code Mode", subtitle: `· ${intent}` }, theme);
 };
 
-export const codeModeSource = <Args>(args: Args): string | undefined => {
+const codeModeSource = <Args>(args: Args): string | undefined => {
   const code = decodeOption(CodeModeArgumentsInputSchema, args)?.code;
   return Predicate.isString(code) ? code : undefined;
 };
@@ -78,10 +75,7 @@ export const codeModeSource = <Args>(args: Args): string | undefined => {
 /** Content-only call slot survives shared failure-body rendering. */
 export const renderCodeModeProgramContent = <Args>(args: Args): Component => {
   if (codeModeReadRequest(args)) return new Container();
-  const source = truncateDisplay(
-    stripTerminalControls(formatCodeModeProgram(codeModeSource(args) ?? "(program not available)")),
-    MAX_SOURCE_DISPLAY_LENGTH,
-  );
+  const source = formatCodeModeProgram(codeModeSource(args) ?? "(program not available)");
   return new Text(`Program\n${source}`, 0, 0);
 };
 
@@ -109,13 +103,7 @@ export const renderCodeModeToolCall = <Args>(
       0,
     );
   const header = new Text(intentHeadline(args, theme), 0, 0);
-  let expanded = false;
-  try {
-    expanded = context?.expanded === true;
-  } catch {
-    // Hostile render context falls back to the collapsed call.
-  }
-  if (!expanded) return header;
+  if (!invokeHostCallback(() => context?.expanded === true, false)) return header;
   const container = new Container();
   container.addChild(header);
   const program = addCodeModeSection(container, "Program", theme);
@@ -124,11 +112,7 @@ export const renderCodeModeToolCall = <Args>(
     program.addChild(new Text(theme.fg("dim", "(program not available)"), 0, 0));
     return container;
   }
-  const sanitized = truncateDisplay(
-    stripTerminalControls(formatCodeModeProgram(source)),
-    MAX_SOURCE_DISPLAY_LENGTH,
-  );
-  const body = sanitized
+  const body = formatCodeModeProgram(source)
     .split("\n")
     .map((line) => theme.fg("toolOutput", line))
     .join("\n");
@@ -255,18 +239,17 @@ const renderCodeModeToolResultUnsafe = (
       animationFrame,
       {
         ...presentation,
-        fallbackStatus:
-          presentation.ownsCall || presentation.contentOnly
-            ? ""
-            : footerLine(details, isPartial, isError, theme),
+        fallbackStatus: presentation.contentOnly
+          ? ""
+          : footerLine(details, isPartial, isError, theme),
         summary: presentation.summary ?? {
           subject: "Tool orchestration",
-          counters: [`${details.totalToolCalls} tools`],
+          counters: [`${details.counts.total} tools`],
           outcome: isError
             ? "error"
             : details.cancelled
               ? "cancelled"
-              : details.mcpEvidence?.unknown || details.compactAttention?.incomplete
+              : details.compactAttention?.incomplete
                 ? "uncertain"
                 : details.counts.failed || details.truncated
                   ? "warning"
@@ -276,15 +259,10 @@ const renderCodeModeToolResultUnsafe = (
       },
     );
   const container = new Container();
-  const hidden = details.totalToolCalls - details.toolCalls.length;
-  if (hidden > 0 && details.hasExactCounts) {
-    container.addChild(new Text(theme.fg("dim", `+${hidden} earlier`), 0, 0));
-  }
+  const hidden = details.counts.total - details.toolCalls.length;
+  if (hidden > 0) container.addChild(new Text(theme.fg("dim", `+${hidden} earlier`), 0, 0));
   for (const entry of details.toolCalls) {
     container.addChild(new Text(activityRow(entry, theme, animationFrame), 0, 0));
-  }
-  if (hidden > 0 && !details.hasExactCounts) {
-    container.addChild(new Text(theme.fg("dim", `+${hidden} more`), 0, 0));
   }
   container.addChild(new Text(footerLine(details, isPartial, isError, theme), 0, 0));
   for (const notice of visibleNotices(details, expanded))
@@ -296,13 +274,8 @@ const renderCodeModeToolResultUnsafe = (
   return container;
 };
 
-const emergencyResultText = (result: AgentToolResult<unknown>): string => {
-  try {
-    return codeModeOutputText(textContentOf(result));
-  } catch {
-    return "";
-  }
-};
+const emergencyResultText = (result: AgentToolResult<unknown>): string =>
+  invokeHostCallback(() => codeModeOutputText(textContentOf(result)), "");
 
 // Pi's generic fallback can expose unframed JSON, so this renderer always returns a component.
 export interface CodeModeResultRender {
@@ -319,13 +292,8 @@ export const renderCodeModeToolResult = (
   expandKeys: ReadonlyArray<string> = [],
   presentation: ExpandedPresentation = {},
 ): CodeModeResultRender => {
-  const guarded = <Value>(read: () => Value): boolean => {
-    try {
-      return read() === true;
-    } catch {
-      return false;
-    }
-  };
+  const guarded = <Value>(read: () => Value): boolean =>
+    invokeHostCallback(() => read() === true, false);
   const isPartial = guarded(() => options.isPartial);
   const isError = guarded(() => context?.isError);
   const expanded = guarded(() => context?.expanded);
@@ -353,21 +321,6 @@ export const renderCodeModeToolResult = (
   const emergency = (): Component => {
     const output = emergencyResultText(result);
     const component = new Container();
-    if (expanded && presentation.ownsCall) {
-      component.addChild(new Text("Program", 0, 0));
-      component.addChild(
-        new Text(
-          truncateDisplay(
-            stripTerminalControls(
-              formatCodeModeProgram(presentation.source ?? "(program not available)"),
-            ),
-            MAX_SOURCE_DISPLAY_LENGTH,
-          ),
-          0,
-          0,
-        ),
-      );
-    }
     if (!presentation.contentOnly)
       component.addChild(
         new Text(

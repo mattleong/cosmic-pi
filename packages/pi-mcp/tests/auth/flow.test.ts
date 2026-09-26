@@ -14,6 +14,7 @@ import { authProgress, type McpAuthPhase, type McpAuthProgress } from "../../src
 import { approveScopes } from "../../src/auth/scopes.ts";
 import { boundaryError } from "../../src/client/errors.ts";
 import { McpExecution, type McpExecutionContract } from "../../src/tools/service.ts";
+import { blockingProbe } from "../fixtures/probes.ts";
 
 const serialize = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const ui: McpLoginUi = {
@@ -30,14 +31,30 @@ const make = (login: McpExecutionContract["login"]) =>
         login,
         logout: () => Effect.die("Cancellation called logout"),
         execute: () => Effect.die("Auth invoked a gateway operation"),
-        available: Effect.succeed(true),
         isAvailable: () => true,
       }),
     );
-    return { ...flow, activity };
+    let latest: McpAuthProgress | undefined;
+    yield* flow.subscribe((progress) => {
+      latest = progress;
+    });
+    return { ...flow, activity, snapshot: () => latest };
   });
 const capture = (target: Deferred.Deferred<McpAuthAttempt>) => (attempt: McpAuthAttempt) =>
   Deferred.succeed(target, attempt).pipe(Effect.andThen(Effect.never));
+const ready = { state: "ready" } as const;
+const awaitCallback = (
+  owned: McpLoginUi,
+  deadline: number,
+  response: Effect.Effect<string | undefined>,
+) =>
+  owned.waitForCallback!("https://issuer.example/PRIVATE", deadline, response).pipe(
+    Effect.as(ready),
+  );
+const openFailed = () =>
+  Effect.fail(
+    boundaryError("unavailable", "not-sent", "PRIVATE_ERROR", "oauth-browser-open-failed"),
+  );
 
 describe("session-owned explicit-user auth flow", () => {
   for (const consent of [true, false])
@@ -195,16 +212,7 @@ describe("session-owned explicit-user auth flow", () => {
                 Effect.suspend(() => {
                   expect(url).toBe(secretUrl);
                   browserOpens++;
-                  return browserOpens === 1
-                    ? Effect.fail(
-                        boundaryError(
-                          "unavailable",
-                          "not-sent",
-                          "PRIVATE_ERROR",
-                          "oauth-browser-open-failed",
-                        ),
-                      )
-                    : Effect.void;
+                  return browserOpens === 1 ? openFailed() : Effect.void;
                 }),
             },
             capture(captured),
@@ -235,11 +243,7 @@ describe("session-owned explicit-user auth flow", () => {
       let opens = 0;
       const deadline = (yield* Clock.currentTimeMillis) + 1_000;
       const flow = yield* make((_server, ui) =>
-        ui.waitForCallback!(
-          "https://issuer.example/PRIVATE",
-          deadline,
-          Deferred.await(response),
-        ).pipe(Effect.as({ state: "ready" } as const)),
+        awaitCallback(ui, deadline, Deferred.await(response)),
       );
       const running = yield* flow
         .run(
@@ -273,57 +277,31 @@ describe("session-owned explicit-user auth flow", () => {
     () =>
       Effect.gen(function* () {
         const response = yield* Deferred.make<string>();
-        const waiting = yield* Deferred.make<void>();
+        const dialog = yield* blockingProbe;
         let opens = 0;
         let dialogs = 0;
-        let closed = false;
         const deadline = (yield* Clock.currentTimeMillis) + 1_000;
         const flow = yield* make((_server, ui) =>
-          ui.waitForCallback!(
-            "https://issuer.example/PRIVATE",
-            deadline,
-            Deferred.await(response),
-          ).pipe(Effect.as({ state: "ready" } as const)),
+          awaitCallback(ui, deadline, Deferred.await(response)),
         );
         const running = yield* flow
           .run("owned", {
             ...ui,
-            openBrowser: () =>
-              Effect.suspend(() =>
-                ++opens === 1
-                  ? Effect.fail(
-                      boundaryError(
-                        "unavailable",
-                        "not-sent",
-                        "PRIVATE_ERROR",
-                        "oauth-browser-open-failed",
-                      ),
-                    )
-                  : Effect.void,
-              ),
+            openBrowser: () => Effect.suspend(() => (++opens === 1 ? openFailed() : Effect.void)),
             nextAction: (receivedDeadline, failedOpen) =>
               Effect.suspend(() => {
                 expect(receivedDeadline).toBe(deadline);
                 dialogs++;
                 expect(failedOpen).toBe(dialogs === 1);
-                return dialogs === 1
-                  ? Effect.succeed("reopen" as const)
-                  : Deferred.succeed(waiting, undefined).pipe(
-                      Effect.andThen(Effect.never),
-                      Effect.ensuring(
-                        Effect.sync(() => {
-                          closed = true;
-                        }),
-                      ),
-                    );
+                return dialogs === 1 ? Effect.succeed("reopen" as const) : dialog.block;
               }),
           })
           .pipe(Effect.forkScoped);
-        yield* Deferred.await(waiting);
+        yield* Deferred.await(dialog.entered);
         expect(opens).toBe(2);
         yield* Deferred.succeed(response, "PRIVATE_CALLBACK");
         yield* Fiber.join(running);
-        expect(closed).toBe(true);
+        expect(dialog.released()).toBe(true);
         expect(dialogs).toBe(2);
         expect(yield* serialize([flow.snapshot(), flow.activity.snapshot()])).not.toMatch(
           /PRIVATE_|issuer\.example/,
@@ -333,32 +311,18 @@ describe("session-owned explicit-user auth flow", () => {
 
   it.effect("local RPC cancel stops this attempt and joins callback cleanup", () =>
     Effect.gen(function* () {
-      const receiving = yield* Deferred.make<void>();
-      let closed = false;
+      const receiving = yield* blockingProbe;
       const deadline = (yield* Clock.currentTimeMillis) + 1_000;
-      const flow = yield* make((_server, ui) =>
-        ui.waitForCallback!(
-          "https://issuer.example/PRIVATE",
-          deadline,
-          Deferred.succeed(receiving, undefined).pipe(
-            Effect.andThen(Effect.never),
-            Effect.ensuring(
-              Effect.sync(() => {
-                closed = true;
-              }),
-            ),
-          ),
-        ).pipe(Effect.as({ state: "ready" } as const)),
-      );
+      const flow = yield* make((_server, ui) => awaitCallback(ui, deadline, receiving.block));
       expect(
         yield* flow
           .run("owned", {
             ...ui,
-            nextAction: () => Deferred.await(receiving).pipe(Effect.as("cancel" as const)),
+            nextAction: () => Deferred.await(receiving.entered).pipe(Effect.as("cancel" as const)),
           })
           .pipe(Effect.flip),
       ).toMatchObject({ kind: "cancelled" });
-      expect(closed).toBe(true);
+      expect(receiving.released()).toBe(true);
       expect(flow.snapshot()?.phase).toBe("cancelled");
     }),
   );
@@ -386,8 +350,7 @@ describe("session-owned explicit-user auth flow", () => {
       const deadline = (yield* Clock.currentTimeMillis) + 1_000;
       let opens = 0;
       const flow = yield* make((_server, ui) =>
-        ui.waitForCallback!("https://issuer.example/PRIVATE", deadline, Effect.never).pipe(
-          Effect.as({ state: "ready" } as const),
+        awaitCallback(ui, deadline, Effect.never).pipe(
           Effect.timeoutOrElse({
             duration: 1_000,
             orElse: () =>
@@ -492,29 +455,21 @@ describe("session-owned explicit-user auth flow", () => {
     "an interrupted waiter joins its worker and delayed observers cannot overwrite a replacement",
     () =>
       Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
+        const worker = yield* blockingProbe;
         let observer: McpLoginUi["progress"];
         let first = true;
-        let cleaned = false;
         const flow = yield* make((_server, ui) =>
           Effect.suspend(() => {
-            if (!first) return Effect.succeed({ state: "ready" } as const);
+            if (!first) return Effect.succeed(ready);
             first = false;
             observer = ui.progress;
-            return Deferred.succeed(entered, undefined).pipe(
-              Effect.andThen(Effect.never),
-              Effect.ensuring(
-                Effect.sync(() => {
-                  cleaned = true;
-                }),
-              ),
-            );
+            return worker.block;
           }),
         );
         const running = yield* flow.run("owned", ui).pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
+        yield* Deferred.await(worker.entered);
         yield* Fiber.interrupt(running);
-        expect(cleaned).toBe(true);
+        expect(worker.released()).toBe(true);
         expect(flow.snapshot()?.phase).toBe("cancelled");
         yield* flow.run("replacement", ui);
         yield* observer!({ phase: "finalizing", credentialsSaved: true });

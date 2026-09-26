@@ -1,3 +1,4 @@
+import { renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { createParentCompactSummary } from "../../src/tools/compact-parent-summary.ts";
 
@@ -8,14 +9,14 @@ interface ParentArguments {
   report?: string;
 }
 
-function summarize(name: string, args: ParentArguments, text?: string, isError = false) {
+function summarize(name: string, args: ParentArguments, text?: string | string[], isError = false) {
   const provider = createParentCompactSummary(name);
+  const content = [text ?? []].flat().map((part) => ({ type: "text" as const, text: part }));
   return provider({
     args,
     phase: text === undefined ? "running" : "settled",
-    result: text === undefined ? undefined : { content: [{ type: "text", text }], details: {} },
-    // SAFETY: This pure provider reads only the host error flag.
-    context: { isError } as Parameters<typeof provider>[0]["context"],
+    result: text === undefined ? undefined : { content, details: {} },
+    context: renderContextFixture({ isError }),
   });
 }
 
@@ -85,21 +86,11 @@ describe("child compact acknowledgement policy", () => {
   });
 
   it("does not discard additional content even beside a recognized acknowledgement", () => {
-    const provider = createParentCompactSummary("supervisor_progress");
     expect(
-      provider({
-        args: { message: "working" },
-        phase: "settled",
-        result: {
-          content: [
-            { type: "text", text: "Progress delivered to the parent projection." },
-            { type: "text", text: "Recovery evidence" },
-          ],
-          details: {},
-        },
-        // SAFETY: This pure provider reads only the host error flag.
-        context: { isError: false } as Parameters<typeof provider>[0]["context"],
-      }),
+      summarize("supervisor_progress", { message: "working" }, [
+        "Progress delivered to the parent projection.",
+        "Recovery evidence",
+      ]),
     ).toBeUndefined();
   });
 });

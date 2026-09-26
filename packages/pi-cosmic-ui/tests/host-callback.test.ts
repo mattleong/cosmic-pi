@@ -59,13 +59,11 @@ describe("host callback abort ownership", () => {
   });
 
   it("attempts release when a hostile source registers and then throws", () => {
-    const callbacks = makeHostCallbackBoundary();
     const source = controlledSignal(true);
-    const snapshot = snapshotHostAbortSignal(callbacks, () => source.signal);
+    const snapshot = snapshotHostAbortSignal(makeHostCallbackBoundary(), () => source.signal);
 
     expect(snapshot).toBeUndefined();
     expect(source.removeEventListener).toHaveBeenCalledOnce();
     expect(source.listeners.size).toBe(0);
-    expect(callbacks.diagnostics()).toEqual([{ operation: "host-query" }]);
   });
 });

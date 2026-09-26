@@ -2,8 +2,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
-import { renderHiddenPreviewExpandHint } from "../../../preview/bordered-tool-call";
-import type { RendererState } from "./types";
 
 export function renderResultPrelude(options: {
   isPartial: boolean;
@@ -20,16 +18,5 @@ export function renderResultPrelude(options: {
       0,
       0,
     );
-  return undefined;
-}
-
-export function renderHiddenPreviewPrelude(options: {
-  expanded: boolean;
-  hidePreview: boolean;
-  state: RendererState;
-  theme: Theme;
-}): Component | undefined {
-  if (!options.expanded && options.hidePreview)
-    return renderHiddenPreviewExpandHint(options.state, options.theme);
   return undefined;
 }

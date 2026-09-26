@@ -1,4 +1,5 @@
 import * as Predicate from "effect/Predicate";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   decodeFormOutcome,
   type FormField,
@@ -43,11 +44,7 @@ function validFormat(value: string, format: "email" | "uri" | "date" | "date-tim
         })
       )
         return false;
-      try {
-        return Boolean(new URL(value).protocol);
-      } catch {
-        return false;
-      }
+      return invokeHostCallback(() => Boolean(new URL(value).protocol), false);
     case "date":
       return validDate(value);
     case "date-time": {

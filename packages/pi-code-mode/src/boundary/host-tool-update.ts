@@ -7,7 +7,7 @@
  * stale progress ever reaches a replaced session.
  */
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback, synchronousNow } from "pi-cosmic-core";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -90,13 +90,8 @@ export const makeGuardedToolUpdatePublisher = (
     if (!current) return;
     lastDeliveredAt = readNow();
     try {
-      // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-      const outcome = onUpdate(partial) as unknown;
-      if (
-        outcome !== null &&
-        (hasObjectRuntimeType(outcome) || Predicate.isFunction(outcome)) &&
-        Predicate.isFunction((outcome as { then?: unknown }).then)
-      ) {
+      const outcome = onUpdate(partial);
+      if (Predicate.isPromiseLike(outcome)) {
         // A hostile thenable's rejection (or a throwing `then` getter/implementation)
         // is absorbed by promise assimilation; it never surfaces synchronously here.
         void Promise.resolve(outcome).then(
@@ -119,11 +114,7 @@ export const makeGuardedToolUpdatePublisher = (
     const cancel = cancelScheduled;
     cancelScheduled = undefined;
     if (cancel === undefined) return;
-    try {
-      cancel();
-    } catch {
-      // Timer cleanup is best effort while a newer semantic snapshot supersedes it.
-    }
+    invokeHostCallback(cancel, undefined);
   };
 
   const schedulePendingFlush = (delayMs: number): void => {

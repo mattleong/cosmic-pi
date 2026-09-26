@@ -1,18 +1,17 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
 import { expect } from "vitest";
-import { boundaryError } from "../../src/client/errors.ts";
 import type { McpRequest } from "../../src/client/model.ts";
-import type { McpOperation } from "../../src/connection/model.ts";
-import type { McpDiscoveryContract, McpMetadataSnapshot } from "../../src/discovery/model.ts";
+import type { McpMetadataSnapshot } from "../../src/discovery/model.ts";
 import { getPrompt } from "../../src/prompts/operations.ts";
+import { fakeDiscovery, fakeOperation } from "../fixtures/services.ts";
 
 const snapshot: McpMetadataSnapshot = {
   server: "selected",
   identity: "identity",
   owner: "connection",
   configRevision: 1,
+  authorizationRevision: 0,
   revision: 1,
   support: { tools: false, resources: false, templates: false, prompts: true },
   diagnostics: [],
@@ -21,50 +20,21 @@ const snapshot: McpMetadataSnapshot = {
   templates: [],
   prompts: [{ name: "review", arguments: [{ name: "text", required: true }, { name: "style" }] }],
 };
-const discovery: McpDiscoveryContract = {
-  cached: (request) =>
-    Effect.succeed({
-      family: request.family,
-      entries: [],
-      catalogs: [],
-      total: 0,
-      next: undefined,
-    }),
-  cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
-  subscribeChanges: () => Effect.void,
-  ensure: () => Effect.succeed(snapshot),
-  refresh: () => Effect.succeed(snapshot),
-  query: () => Effect.succeed({ data: {}, notices: [] }),
-  known: Effect.succeed([]),
-};
+const discovery = fakeDiscovery(() => snapshot);
 const fixture = () => {
   const sent: Array<McpRequest> = [];
   const messages = [
     { role: "user", content: { type: "text", text: "Do not execute this template" } },
     { role: "assistant", content: { type: "text", text: "Untrusted assistant template" } },
   ];
-  const operation: McpOperation = {
-    binding: { server: "selected", identity: "identity", configRevision: 1 },
-    owner: "connection",
-    server: {
-      id: "selected",
-      scope: "global",
-      directory: "/unused",
-      identity: "identity",
-      enabled: true,
-    },
+  const operation = fakeOperation({
     capabilities: { tools: false, resources: false, prompts: true },
-    changes: Stream.never,
-    checkCurrent: Effect.void,
-    commit: (effect) => effect,
     request: (input) =>
       Effect.sync(() => {
         sent.push(input);
         return { action: input.action, outcome: "completed", result: { messages } };
       }),
-    shared: (_key, use) => use(operation),
-    forkOwned: (effect) => Effect.forkChild(effect),
-  };
+  });
   return { operation, sent, messages };
 };
 

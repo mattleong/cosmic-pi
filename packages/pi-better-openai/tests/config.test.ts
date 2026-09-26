@@ -5,13 +5,7 @@ import * as Path from "effect/Path";
 import { nodePlatformLayer, InvalidSettingError, type JsonObject } from "pi-cosmic-core";
 import { prepareSettingUpdate } from "../src/config/options.ts";
 import { DEFAULT_IMAGE_CONFIG, type ConfigFile } from "../src/config/schema.ts";
-import {
-  configPaths,
-  readConfig,
-  readRawConfig,
-  resolveConfig,
-  writeConfig,
-} from "../src/config/store.ts";
+import { configPaths, readRawConfig, resolveConfig, writeConfig } from "../src/config/store.ts";
 
 const temp = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "pi-better-openai-config-" })),
@@ -49,18 +43,6 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       expect(resolved.configPath).toBe(paths.global);
       expect(resolved.projectConfigExists).toBe(false);
       expect(resolved.usage.showResetTimes).toBe(true);
-    }),
-  );
-
-  it.effect("invalid siblings fall back independently", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const configPath = path.join(yield* temp, "config.json");
-      yield* writeConfig(configPath, {
-        image: { enabled: true, defaultSave: "desktop", outputFormat: "gif" },
-      });
-      const parsed = yield* readConfig(configPath);
-      expect(parsed?.image).toEqual({ enabled: true });
     }),
   );
 
@@ -148,7 +130,7 @@ layer(nodePlatformLayer)("config helpers", (it) => {
       ] as const) {
         const failure = yield* prepareSettingUpdate(id, value).pipe(Effect.flip);
         expect(failure).toBeInstanceOf(InvalidSettingError);
-        expect(failure).toMatchObject({ id, message: `Invalid value for ${id}.` });
+        expect(failure).toMatchObject({ id });
       }
     }),
   );

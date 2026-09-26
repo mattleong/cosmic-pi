@@ -104,8 +104,8 @@ export interface McpConnection {
   readonly instructions?: McpInstructions | undefined;
   /** One application consumer; each pending family is coalesced until delivery. */
   readonly changes: Stream.Stream<McpMetadataFamily>;
-  readonly remoteEvents?: Stream.Stream<McpRemoteEvent>;
-  readonly remoteEventDrops?: Effect.Effect<number>;
+  readonly remoteEvents: Stream.Stream<McpRemoteEvent>;
+  readonly remoteEventDrops: Effect.Effect<number>;
   /** Settles on local closure or terminal failure, not on individual request failure. */
   readonly terminal: Effect.Effect<void, McpBoundaryError>;
   readonly health: Effect.Effect<McpConnectionHealth>;
@@ -114,11 +114,11 @@ export interface McpConnection {
     input: McpRequest,
     options?: McpDispatchOptions,
   ) => Effect.Effect<McpReply, McpBoundaryError>;
-  readonly subscribeResource?: (
+  readonly subscribeResource: (
     uri: string,
     identity?: symbol,
   ) => Effect.Effect<McpResourceSubscription, McpBoundaryError, Scope.Scope>;
-  readonly exchange?: (
+  readonly exchange: (
     input: McpRequest,
     options?: McpDispatchOptions,
   ) => Effect.Effect<McpExchange, McpBoundaryError>;

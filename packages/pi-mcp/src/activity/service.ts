@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { invokeHostCallback } from "pi-cosmic-core";
+import { notifyListeners } from "pi-cosmic-core";
 import { McpBoundaryError } from "../client/errors.ts";
 import { McpServerIdSchema } from "../config/schema.ts";
 import {
@@ -78,9 +78,7 @@ export const makeMcpActivity = (
     });
     const handles = new WeakSet<McpActivityHandle>();
     const listeners = new Set<() => void>();
-    const notify = Effect.sync(() => {
-      for (const listener of listeners) invokeHostCallback(listener, undefined);
-    });
+    const notify = Effect.sync(() => notifyListeners(listeners));
     const commit = <A>(transition: (current: State) => readonly [A, State]) =>
       SynchronizedRef.modify(state, transition).pipe(Effect.tap(() => notify));
     yield* Effect.addFinalizer(() =>

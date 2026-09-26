@@ -1,4 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { FAST_SERVICE_TIER } from "./models.ts";
 
 export const CODEX_FAST_ROUTING_HEADER = "x-codex-routing-hint";
 
@@ -31,7 +32,6 @@ export function isCanonicalCodexEndpoint(baseUrl: string | undefined): boolean {
 export function codexFastRoutingHint(
   model: Model<Api> | null | undefined,
   active: boolean,
-  serviceTier: string,
 ): string | undefined {
   if (
     !active ||
@@ -41,5 +41,5 @@ export function codexFastRoutingHint(
     !isCanonicalCodexEndpoint(model.baseUrl)
   )
     return undefined;
-  return `model=${model.id};tier=${serviceTier}`;
+  return `model=${model.id};tier=${FAST_SERVICE_TIER}`;
 }

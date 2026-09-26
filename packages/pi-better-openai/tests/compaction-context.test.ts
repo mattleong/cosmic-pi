@@ -2,13 +2,12 @@ import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import {
   buildSessionContext,
   SessionManager,
-  type ExtensionAPI,
-  type ExtensionContext,
   type ExtensionHandler,
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { describe, expect, it, vi } from "vitest";
-import { registerBetterOpenAIApplication } from "../src/application.ts";
+import { betterOpenAIWithDependencies } from "../src/application.ts";
 import {
   hasExactPrefix,
   reconstructOpenAIContext,
@@ -19,6 +18,7 @@ import {
   OPENAI_COMPACTION_DETAILS_TYPE,
   OPENAI_COMPACTION_SUMMARY,
 } from "../src/compaction/protocol.ts";
+import { assistantMessage, serializedSnapshot } from "./helpers.ts";
 
 const details = {
   type: OPENAI_COMPACTION_DETAILS_TYPE,
@@ -42,7 +42,6 @@ const preparation = {
   fileOps: { read: new Set<string>(), written: new Set<string>(), edited: new Set<string>() },
   settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
 } satisfies SessionBeforeCompactEvent["preparation"];
-const text = <Value>(value: Value) => JSON.stringify(value);
 const appendUser = (manager: SessionManager, content: string) =>
   manager.appendMessage({ role: "user", content, timestamp: 1 });
 const appendCheckpoint = (manager: SessionManager, retained = manager.getLeafId()!) =>
@@ -53,23 +52,9 @@ const appendAssistant = (
   stopReason: "error" | "length" | "stop",
   content: string,
 ) =>
-  manager.appendMessage({
-    role: "assistant",
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.5",
-    stopReason,
-    content: [{ type: "text", text: content }],
-    timestamp: 10,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  });
+  manager.appendMessage(
+    assistantMessage([{ type: "text", text: content }], { stopReason, timestamp: 10 }),
+  );
 
 function history() {
   const manager = SessionManager.inMemory("/virtual/repair");
@@ -103,11 +88,9 @@ describe("owned checkpoint reconstruction", () => {
       registerCommand: vi.fn(),
       events: { emit: vi.fn(), on: vi.fn() },
     };
-    // SAFETY: Registration only uses these host methods; no runtime is started.
-    registerBetterOpenAIApplication(registration as typeof registration & ExtensionAPI);
+    betterOpenAIWithDependencies(extensionApiFixture(registration));
     const host = { sessionManager: history(), abort: vi.fn(), ui: { notify: vi.fn() } };
-    // SAFETY: Inactive-runtime context/compaction admission only uses these members.
-    const ctx = host as typeof host & ExtensionContext;
+    const ctx = extensionContextFixture(host);
     handlers.get("context")!(
       { type: "context", messages: host.sessionManager.buildSessionContext().messages },
       ctx,
@@ -126,16 +109,16 @@ describe("owned checkpoint reconstruction", () => {
     });
     appendUser(manager, "tail dialogue");
     const branch = manager.getBranch();
-    const before = text(branch);
+    const before = serializedSnapshot(branch);
     const restored = reconstructOpenAIContext(branch)!;
-    expect(text(restored.messages)).toContain("original dialogue");
-    expect(text(restored.messages)).toContain("second dialogue");
-    expect(text(restored.messages)).toContain("tail dialogue");
-    expect(text(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
+    expect(serializedSnapshot(restored.messages)).toContain("original dialogue");
+    expect(serializedSnapshot(restored.messages)).toContain("second dialogue");
+    expect(serializedSnapshot(restored.messages)).toContain("tail dialogue");
+    expect(serializedSnapshot(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
     expect(restored.messages.filter((message) => message.role === "system")).toHaveLength(2);
-    expect(text(restored.coveredEntries)).not.toContain("tail dialogue");
-    expect(text(restored.coveredEntries)).not.toContain("tail instruction");
-    expect(text(branch)).toBe(before);
+    expect(serializedSnapshot(restored.coveredEntries)).not.toContain("tail dialogue");
+    expect(serializedSnapshot(restored.coveredEntries)).not.toContain("tail instruction");
+    expect(serializedSnapshot(branch)).toBe(before);
   });
 
   it("preserves an extension's non-session tail and rejects a modified native prefix", () => {
@@ -144,7 +127,7 @@ describe("owned checkpoint reconstruction", () => {
     const tail = { role: "user" as const, content: "extension addition", timestamp: 5 };
     const repaired = repairOpenAIContext(manager.getBranch(), [...native, tail])!.messages!;
     expect(repaired.at(-1)).toBe(tail);
-    expect(text(repaired)).toContain("original dialogue");
+    expect(serializedSnapshot(repaired)).toContain("original dialogue");
     expect(() => repairOpenAIContext(manager.getBranch(), [tail, ...native])).toThrow();
   });
 
@@ -161,11 +144,11 @@ describe("owned checkpoint reconstruction", () => {
     appendUser(manager, "legacy tail");
     appendCheckpoint(manager, oldCheckpoint);
     const restored = reconstructOpenAIContext(manager.getBranch())!;
-    expect(text(restored.messages)).not.toContain("already summarized secret");
-    expect(text(restored.messages)).toContain("ordinary prior summary");
-    expect(text(restored.messages)).toContain("ordinary retained dialogue");
-    expect(text(restored.messages)).toContain("legacy tail");
-    expect(text(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
+    expect(serializedSnapshot(restored.messages)).not.toContain("already summarized secret");
+    expect(serializedSnapshot(restored.messages)).toContain("ordinary prior summary");
+    expect(serializedSnapshot(restored.messages)).toContain("ordinary retained dialogue");
+    expect(serializedSnapshot(restored.messages)).toContain("legacy tail");
+    expect(serializedSnapshot(restored.messages)).not.toContain(OPENAI_COMPACTION_SUMMARY);
     appendUser(manager, "native retained");
     const fallback = prepareOpenAIFallback(manager.getBranch(), preparation)!;
     expect(fallback.previousSummary).toBe("ordinary prior summary");
@@ -225,31 +208,20 @@ describe("owned checkpoint reconstruction", () => {
       expect(prompt).toContain("current");
       expect(prompt).not.toContain("old");
       expect(getCurrentTools(repaired).map((tool) => tool.name)).toEqual(["current"]);
-      expect(text(repaired)).toContain("first dialogue");
-      expect(text(repaired)).toContain("second dialogue");
+      expect(serializedSnapshot(repaired)).toContain("first dialogue");
+      expect(serializedSnapshot(repaired)).toContain("second dialogue");
       // Pi would persist its unfiltered, obsolete system state on ordinary fallback.
       expect(prepareOpenAIFallback(branch, preparation)).toBeUndefined();
     });
 
   it("preserves complete tool results and images, and never retains an orphaned result", () => {
     const manager = history();
-    manager.appendMessage({
-      role: "assistant",
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [{ type: "toolCall", id: "call|fc", name: "read", arguments: { path: "body.txt" } }],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "toolUse",
-      timestamp: 4,
-    });
+    manager.appendMessage(
+      assistantMessage(
+        [{ type: "toolCall", id: "call|fc", name: "read", arguments: { path: "body.txt" } }],
+        { stopReason: "toolUse", timestamp: 4 },
+      ),
+    );
     appendCheckpoint(manager);
     const result = {
       role: "toolResult" as const,
@@ -326,7 +298,7 @@ describe("owned checkpoint reconstruction", () => {
         (message) => message.role !== "assistant" || message.stopReason !== "length",
       );
     const repaired = repairOpenAIContext(manager.getBranch(), runtime)!;
-    expect(text(repaired.messages)).not.toContain("truncated response");
+    expect(serializedSnapshot(repaired.messages)).not.toContain("truncated response");
     const restored = reconstructOpenAIContext(manager.getBranch(), repaired.omittedEntryIds)!;
     expect(restored.omittedEntryIds).toContain(truncatedId);
     expect(restored.coverageChanged).toBe(true);
@@ -379,8 +351,8 @@ describe("owned checkpoint reconstruction", () => {
       "must keep tool",
       "future length remains",
     ])
-      expect(text(restored.messages)).toContain(retained);
-    expect(text(restored.messages)).not.toContain("omitted length");
+      expect(serializedSnapshot(restored.messages)).toContain(retained);
+    expect(serializedSnapshot(restored.messages)).not.toContain("omitted length");
   });
 
   it("native fallback summarizes repaired history and retains only a safe post-checkpoint tail", () => {
@@ -393,9 +365,9 @@ describe("owned checkpoint reconstruction", () => {
     expect(
       manager.getBranch().findIndex((entry) => entry.id === fallback.firstKeptEntryId),
     ).toBeGreaterThan(manager.getBranch().findLastIndex((entry) => entry.type === "compaction"));
-    expect(text(fallback.messagesToSummarize)).toContain("original dialogue");
-    expect(text(fallback.messagesToSummarize)).toContain("second dialogue");
-    expect(text(fallback.messagesToSummarize)).not.toContain("retained tail");
+    expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("original dialogue");
+    expect(serializedSnapshot(fallback.messagesToSummarize)).toContain("second dialogue");
+    expect(serializedSnapshot(fallback.messagesToSummarize)).not.toContain("retained tail");
     manager.appendCompaction("ordinary fallback", fallback.firstKeptEntryId, 100);
     expect(manager.buildContextEntries().some((entry) => entry.id === retained)).toBe(true);
     expect(reconstructOpenAIContext(manager.getBranch())).toBeUndefined();

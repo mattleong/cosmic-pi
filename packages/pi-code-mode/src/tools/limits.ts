@@ -64,7 +64,6 @@ export interface CumulativeOutputBudget {
    * that remainder; an exhausted budget yields an empty safe failure message.
    */
   readonly admitFailure: (message: string) => string;
-  readonly used: () => number;
   readonly remaining: () => number;
 }
 
@@ -95,7 +94,6 @@ export const makeCumulativeOutputBudget = (limitBytes: number): CumulativeOutput
       used += utf8ByteLength(admitted);
       return admitted;
     },
-    used: () => used,
     remaining: () => Math.max(0, limitBytes - used),
   };
 };

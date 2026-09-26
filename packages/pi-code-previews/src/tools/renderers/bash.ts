@@ -18,7 +18,8 @@ import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { shouldHideShellResultByCommand } from "../shell-result-policy";
 import { getBashWarnings } from "../../warnings/bash";
 import { renderSelectedOutputLines } from "./shared/preview-text";
-import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
+import { renderResultPrelude } from "./shared/result-prelude";
+import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { withSecretWarning } from "./shared/secret-preview";
 
 function shouldHideBashResult<ArgsInput>(args: ArgsInput): boolean {
@@ -64,13 +65,8 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
         loadingLabel: "Running…",
       });
       if (prelude) return prelude;
-      const hiddenPrelude = renderHiddenPreviewPrelude({
-        expanded,
-        state: renderContext.state,
-        theme,
-        hidePreview: !renderContext.isError && shouldHideBashResult(renderContext.args),
-      });
-      if (hiddenPrelude) return hiddenPrelude;
+      if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
+        return renderHiddenPreviewExpandHint(renderContext.state, theme);
       const output = trimSingleTrailingNewline(getTextContent(result.content));
       const rawLines = output ? output.split("\n") : [];
       const limit = expanded ? rawLines.length : 8;

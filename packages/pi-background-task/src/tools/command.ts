@@ -18,32 +18,12 @@ import type {
   BackgroundTaskWaitResult,
   StartBackgroundTask,
 } from "../task/model.ts";
+import type { BackgroundTaskDetailsSchema } from "../task/schema.ts";
 import { BackgroundTaskService } from "../task/service.ts";
 import { utf8ByteLength } from "../task/utf8.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
-export type BackgroundTaskToolDetails =
-  | {
-      readonly action: "start" | "status" | "stop";
-      readonly snapshot: BackgroundTaskSnapshot;
-    }
-  | {
-      readonly action: "list" | "stop_all";
-      readonly tasks: ReadonlyArray<BackgroundTaskSnapshot>;
-    }
-  | {
-      readonly action: "logs";
-      readonly logs: BackgroundLogSlice;
-      readonly truncation?: ReturnType<typeof truncateTail>;
-    }
-  | {
-      readonly action: "wait";
-      readonly wait: BackgroundTaskWaitResult;
-    }
-  | {
-      readonly action: "clear";
-      readonly removed: number;
-    };
+export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
 
 export interface BackgroundTaskCommandResult {
   readonly text: string;
@@ -112,13 +92,17 @@ const formatLogs = (slice: BackgroundLogSlice, maxBytes: number) => {
       .map((event) => `${event.stream === "stderr" ? "[stderr] " : ""}${event.text}`)
       .join(""),
   );
-  const truncation = truncateTail(content, {
-    maxLines: DEFAULT_MAX_LINES,
-    maxBytes,
-  });
+  const cut = truncateTail(content, { maxLines: DEFAULT_MAX_LINES, maxBytes });
+  const { truncated, outputBytes, totalBytes, outputLines, totalLines } = cut;
   const metadata = `[${slice.id} state=${slice.state} cursor=${slice.nextCursor} earliest=${slice.earliestAvailableCursor}]\n`;
   const gap = slice.droppedBytes > 0 ? `[${slice.droppedBytes} earlier log bytes discarded]\n` : "";
-  return { text: `${metadata}${gap}${truncation.content || "(no new output)"}`, truncation };
+  return {
+    text: `${metadata}${gap}${cut.content || "(no new output)"}`,
+    // Five explicit fields: persisted details never store the truncated log text a second time.
+    truncation: truncated
+      ? { truncated, outputBytes, totalBytes, outputLines, totalLines }
+      : undefined,
+  };
 };
 
 const reply = (text: string, details: BackgroundTaskToolDetails): BackgroundTaskCommandResult => ({
@@ -188,23 +172,19 @@ export const executeBackgroundTaskCommand = (
         });
       }
       case "logs": {
-        const logs = yield* service.logs({
+        const slice = yield* service.logs({
           id: yield* required(input.id, "id"),
           ...(input.afterCursor !== undefined && { afterCursor: input.afterCursor }),
           ...(input.tailLines !== undefined && { tailLines: input.tailLines }),
           ...(input.waitSeconds !== undefined && { waitSeconds: input.waitSeconds }),
         });
-        const formatted = formatLogs(logs, maxTextBytes);
-        const details: BackgroundTaskToolDetails = {
+        const { text, truncation } = formatLogs(slice, maxTextBytes);
+        const { events: _events, ...logs } = slice;
+        return reply(boundedText(text, maxTextBytes), {
           action: input.action,
-          logs: { ...logs, events: [] },
-        };
-        return reply(
-          boundedText(formatted.text, maxTextBytes),
-          formatted.truncation.truncated
-            ? { ...details, truncation: formatted.truncation }
-            : details,
-        );
+          logs,
+          ...(truncation && { truncation }),
+        });
       }
       case "wait": {
         if (input.until === undefined) {

@@ -5,36 +5,30 @@ import * as Schema from "effect/Schema";
 import { HttpServerResponse } from "effect/unstable/http";
 import { openSdkHttp } from "../../src/boundary/sdk-http.ts";
 import { openSdkStdio } from "../../src/boundary/sdk-stdio.ts";
+import type { McpConnection } from "../../src/client/model.ts";
 import { startHttpServer } from "../fixtures/http-server.ts";
+import { legacyInitialized, parseWireOption } from "../fixtures/json-rpc.ts";
 
-const decode = Schema.decodeUnknownOption(
-  Schema.fromJsonString(
-    Schema.Struct({
-      method: Schema.String,
-      id: Schema.optionalKey(Schema.Finite),
-    }),
-  ),
-);
 const json = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
-const handshake = {
-  protocolVersion: "2025-11-25",
-  capabilities: { tools: {} },
-  serverInfo: { name: "instructions-fixture", version: "1" },
-};
+const handshake = legacyInitialized({ tools: {} });
+// Pure bounding cases live with boundedSdkInstructions; each transport proves only its wiring.
 const cases = [
   { name: "absent", text: undefined, expected: undefined },
-  { name: "empty", text: "", expected: { text: "", truncated: false } },
-  {
-    name: "supplied",
-    text: "Use the server's documented workflow.",
-    expected: { text: "Use the server's documented workflow.", truncated: false },
-  },
   {
     name: "oversized multibyte",
     text: "😀".repeat(16_385),
     expected: { text: "😀".repeat(16_384), truncated: true },
   },
 ];
+const expectCaptured = (connection: McpConnection, expected: (typeof cases)[number]["expected"]) =>
+  Effect.gen(function* () {
+    expect(connection.instructions).toEqual(expected);
+    expect(connection.protocolVersion).toBe(handshake.protocolVersion);
+    expect((yield* connection.request({ action: "tools.list" })).result).toEqual({ tools: [] });
+    expect(connection.instructions).toEqual(expected);
+    yield* connection.close;
+    expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
+  });
 
 it.live.each(cases)(
   "captures $name instructions from an owned HTTP handshake",
@@ -44,7 +38,7 @@ it.live.each(cases)(
       const fixture = yield* startHttpServer((request) => {
         if (request.method === "GET")
           return Effect.succeed(HttpServerResponse.empty({ status: 405 }));
-        const message = Option.getOrUndefined(decode(request.body));
+        const message = Option.getOrUndefined(parseWireOption(request.body));
         if (message?.id === undefined)
           return Effect.succeed(HttpServerResponse.empty({ status: 202 }));
         return Effect.succeed(
@@ -58,13 +52,7 @@ it.live.each(cases)(
           ),
         );
       });
-      const connection = yield* openSdkHttp({ url: fixture.url, protocol: "legacy" });
-      expect(connection.instructions).toEqual(expected);
-      expect(connection.protocolVersion).toBe(handshake.protocolVersion);
-      expect((yield* connection.request({ action: "tools.list" })).result).toEqual({ tools: [] });
-      expect(connection.instructions).toEqual(expected);
-      yield* connection.close;
-      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
+      yield* expectCaptured(yield* openSdkHttp({ url: fixture.url, protocol: "legacy" }), expected);
     }),
 );
 
@@ -93,16 +81,6 @@ it.live.each(cases)(
             args: ["-e", script],
             environment: {},
           });
-          expect(connection.instructions).toEqual(expected);
-          expect(connection.protocolVersion).toBe(handshake.protocolVersion);
-          expect((yield* connection.request({ action: "tools.list" })).result).toEqual({
-            tools: [],
-          });
-          expect(connection.instructions).toEqual(expected);
-          yield* connection.close;
-          expect(yield* connection.health).toMatchObject({
-            closed: true,
-            cleanupUnconfirmed: false,
-          });
+          yield* expectCaptured(connection, expected);
         }),
 );

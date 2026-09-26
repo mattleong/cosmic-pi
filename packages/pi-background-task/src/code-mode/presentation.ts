@@ -1,13 +1,13 @@
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, invokeBestEffort, sanitizeTerminalLine } from "pi-cosmic-core";
 import { createBoundedCompactIssuesSchema } from "pi-code-previews";
+import { BACKGROUND_TASK_ACTIONS, MaxChars } from "../task/schema.ts";
 import { projectBackgroundTaskCompactSummary } from "../ui/compact-summary.ts";
 import type { BackgroundTaskCodeModeInput } from "./protocol.ts";
 
 export const BACKGROUND_TASK_PRESENTATION_VERSION = 1 as const;
-const Text = Schema.String.check(Schema.isMaxLength(2048));
+const Text = MaxChars(2048);
 const Labels = Schema.Array(Text).check(Schema.isMaxLength(16));
 export const BackgroundTaskPresentationSchema = Schema.Struct({
   version: Schema.Literal(BACKGROUND_TASK_PRESENTATION_VERSION),
@@ -15,16 +15,7 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
   overflow: Schema.Boolean,
   summary: Schema.optionalKey(
     Schema.Struct({
-      action: Schema.Literals([
-        "start",
-        "list",
-        "status",
-        "logs",
-        "wait",
-        "stop",
-        "stop_all",
-        "clear",
-      ]),
+      action: Schema.Literals(BACKGROUND_TASK_ACTIONS),
       subject: Text,
       compactSubject: Schema.optionalKey(Text),
       outcome: Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]),
@@ -34,7 +25,7 @@ export const BackgroundTaskPresentationSchema = Schema.Struct({
         Schema.Struct({
           kind: Schema.Literals(["warning", "error", "recovery"]),
           text: Text,
-          description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(240))),
+          description: Schema.optionalKey(MaxChars(240)),
         }),
       ).check(Schema.isMaxLength(32)),
       issues: Schema.optionalKey(
@@ -57,9 +48,7 @@ export const normalizeBackgroundTaskPresentation = <Value>(
   value: Value,
 ): BackgroundTaskPresentation | undefined => {
   try {
-    const decoded = Option.getOrUndefined(
-      Schema.decodeUnknownOption(BackgroundTaskPresentationSchema)(value),
-    );
+    const decoded = decodeUnknownOrUndefined(BackgroundTaskPresentationSchema, value);
     if (
       !decoded ||
       (decoded.overflow && !decoded.incomplete) ||
@@ -149,24 +138,10 @@ export const projectBackgroundTaskPresentation = (
   }
 };
 
-/** Observers are best effort, including hostile or rejecting thenables. */
+/** Observers are best effort: throws and rejecting thenables never change execution. */
 export const observeBackgroundTaskPresentation = (
   observer: BackgroundTaskPresentationObserver | undefined,
   receipt: BackgroundTaskPresentation,
 ): void => {
-  try {
-    if (!Predicate.isFunction(observer)) return;
-    const result: unknown = observer(receipt);
-    if (!Predicate.isObjectOrArray(result) && !Predicate.isFunction(result)) return;
-    // SAFETY: only objects and functions can carry a then method.
-    const then = (result as { then?: unknown }).then;
-    if (Predicate.isFunction(then))
-      then.call(
-        result,
-        () => undefined,
-        () => undefined,
-      );
-  } catch {
-    /* Presentation must not change execution. */
-  }
+  if (Predicate.isFunction(observer)) invokeBestEffort(() => observer(receipt));
 };

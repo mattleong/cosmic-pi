@@ -7,16 +7,6 @@ import { codePreviewPerformanceConfig } from "../config/env";
 import { resolvePreviewPath } from "../paths/resolve";
 import { formatBytes } from "../shared/helpers";
 
-export type ExistingFilePreview =
-  | { kind: "content"; content: string }
-  | {
-      kind: "skipped";
-      reason: string;
-      byteLength?: number;
-      maxBytes: number;
-      sizeExceeded?: boolean;
-    };
-
 const PreviewByteLength = Schema.Natural;
 const SkippedExistingFilePreview = Schema.Struct({
   kind: Schema.Literal("skipped"),
@@ -25,6 +15,9 @@ const SkippedExistingFilePreview = Schema.Struct({
   maxBytes: PreviewByteLength,
   sizeExceeded: Schema.optional(Schema.Boolean),
 });
+export type ExistingFilePreview =
+  | { kind: "content"; content: string }
+  | typeof SkippedExistingFilePreview.Type;
 const decodeSkippedExistingFilePreview = Schema.decodeUnknownOption(SkippedExistingFilePreview, {
   onExcessProperty: "error",
 });

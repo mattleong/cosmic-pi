@@ -18,19 +18,8 @@ export const SUBAGENT_TOOL_NAME = Object.freeze({
   workspace: "subagent_workspace",
 } as const);
 
-export const SUBAGENT_TOOL_NAMES = [
-  SUBAGENT_TOOL_NAME.models,
-  SUBAGENT_TOOL_NAME.start,
-  SUBAGENT_TOOL_NAME.list,
-  SUBAGENT_TOOL_NAME.status,
-  SUBAGENT_TOOL_NAME.await,
-  SUBAGENT_TOOL_NAME.send,
-  SUBAGENT_TOOL_NAME.reply,
-  SUBAGENT_TOOL_NAME.lifecycle,
-  SUBAGENT_TOOL_NAME.rename,
-  SUBAGENT_TOOL_NAME.claims,
-  SUBAGENT_TOOL_NAME.workspace,
-] as const;
+export const SUBAGENT_TOOL_NAMES = Object.freeze(Object.values(SUBAGENT_TOOL_NAME));
+export type SubagentToolName = (typeof SUBAGENT_TOOL_NAMES)[number];
 
 /** Competing orchestrators stay disabled even when the root session has them active. */
 export const PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_NAMES = [

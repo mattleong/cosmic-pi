@@ -165,47 +165,16 @@ describe("Background Tasks Code Mode protocol", () => {
   it("rejects wrong versions, invalid session ids, non-functions, and hostile getters", () => {
     const boundarySessionId = "s".repeat(BACKGROUND_TASK_CODE_MODE_BOUNDS.maxSessionIdChars);
     const oversizedSessionId = `${boundarySessionId}s`;
-    expect(
-      normalizeBackgroundTaskCodeModeQuery({
-        version: 1,
-        sessionId: boundarySessionId,
-        respond() {},
-      }),
-    ).toBeDefined();
-    expect(
-      normalizeBackgroundTaskCodeModeCapability({
-        version: 1,
-        sessionId: boundarySessionId,
-        execute() {},
-      }),
-    ).toBeDefined();
-    expect(
-      normalizeBackgroundTaskCodeModeQuery({ version: 2, sessionId: "session-1", respond() {} }),
-    ).toBeUndefined();
-    expect(
-      normalizeBackgroundTaskCodeModeQuery({ version: 1, sessionId: "", respond() {} }),
-    ).toBeUndefined();
-    expect(
-      normalizeBackgroundTaskCodeModeQuery({
-        version: 1,
-        sessionId: oversizedSessionId,
-        respond() {},
-      }),
-    ).toBeUndefined();
-    expect(
-      normalizeBackgroundTaskCodeModeCapability({
-        version: 1,
-        sessionId: oversizedSessionId,
-        execute() {},
-      }),
-    ).toBeUndefined();
-    expect(
-      normalizeBackgroundTaskCodeModeCapability({
-        version: 1,
-        sessionId: "session-1",
-        execute: "nope",
-      }),
-    ).toBeUndefined();
+    const query = { version: 1, sessionId: boundarySessionId, respond() {} };
+    const capability = { version: 1, sessionId: boundarySessionId, execute() {} };
+    expect(normalizeBackgroundTaskCodeModeQuery(query)).toBeDefined();
+    expect(normalizeBackgroundTaskCodeModeCapability(capability)).toBeDefined();
+    for (const fields of [{ version: 2 }, { sessionId: "" }, { sessionId: oversizedSessionId }])
+      expect(normalizeBackgroundTaskCodeModeQuery({ ...query, ...fields })).toBeUndefined();
+    for (const fields of [{ sessionId: oversizedSessionId }, { execute: "nope" }])
+      expect(
+        normalizeBackgroundTaskCodeModeCapability({ ...capability, ...fields }),
+      ).toBeUndefined();
     expect(
       normalizeBackgroundTaskCodeModeCapability({
         version: 1,

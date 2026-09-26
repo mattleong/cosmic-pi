@@ -25,7 +25,6 @@ import {
   SupervisorRpcGroup,
   validSupervisorReply,
 } from "../supervisor/protocol.ts";
-import { isSupervisorMcpMessage, isSupervisorMcpReport } from "../supervisor/mcp-contract.ts";
 import {
   SupervisorRpcConnection,
   type SupervisorRpcConnectionContract,
@@ -90,11 +89,9 @@ interface PendingQuestion {
   replyStarted: boolean;
 }
 
-interface AcceptedReport {
-  readonly epoch: number;
-  readonly sequence: number;
-  readonly text: string;
-  readonly report: BackendReport;
+interface AuthenticatedRequest {
+  readonly runId: string;
+  readonly token: string;
 }
 
 interface PendingEpochAcknowledgement {
@@ -108,7 +105,7 @@ interface PendingNotificationAcknowledgement {
   readonly acknowledgement: Deferred.Deferred<void, SupervisorChannelError>;
 }
 
-const channelError = (operation: string, code: string, message: string) =>
+export const channelError = (operation: string, code: string, message: string) =>
   new SupervisorChannelError({ operation, code, message });
 const rpcFailure = (code: string, message: string) => new SupervisorRpcFailure({ code, message });
 
@@ -140,14 +137,13 @@ export const makeSupervisorChannelSession = ({
     const peers = new Map<number, RpcPeer>();
     const assignmentEpochs = new Set<number>();
     const questionEpochs = new Set<number>();
-    const reports = new Map<SupervisorDeliveryId, AcceptedReport>();
+    const reports = new Map<SupervisorDeliveryId, BackendReport>();
     const epochAcknowledgements = new Map<SupervisorChannelId, PendingEpochAcknowledgement>();
     const notificationAcknowledgements = new Map<
       SupervisorChannelId,
       PendingNotificationAcknowledgement
     >();
     const readiness = yield* Latch.make();
-    const contactEventCapacity = events.capacity - 1;
     let pendingAssignmentEpoch: number | undefined;
     let currentAssignmentEpoch = 0;
     let nextReportSequence = 1;
@@ -163,10 +159,13 @@ export const makeSupervisorChannelSession = ({
       else Latch.closeUnsafe(readiness);
     };
 
+    const hasEventCapacity = (reserved: number): boolean =>
+      Queue.sizeUnsafe(events) <= events.capacity - pendingProxyCalls - reserved;
+
     const failPendingQuestion = (
       code: string,
       message: string,
-      publishCancellation: boolean,
+      publishCancellation = true,
     ): void => {
       const pending = pendingQuestion;
       if (!pending) return;
@@ -185,12 +184,6 @@ export const makeSupervisorChannelSession = ({
         pending.acknowledgement,
         Effect.fail(channelError("reply", code, message)),
       );
-    };
-
-    const cancelPendingQuestion = (code: string, message: string): boolean => {
-      if (!pendingQuestion) return false;
-      failPendingQuestion(code, message, true);
-      return pendingQuestion === undefined;
     };
 
     const removePeer = (clientId: number): void => {
@@ -236,21 +229,29 @@ export const makeSupervisorChannelSession = ({
         );
       }
       if (pendingQuestion?.peerId === clientId)
-        cancelPendingQuestion(
+        failPendingQuestion(
           "question_transport_closed",
           "The supervisor question transport closed before settlement was confirmed.",
         );
     };
 
+    const currentConnectionGuard = Effect.serviceOption(SupervisorRpcConnection).pipe(
+      Effect.flatMap((guard) =>
+        Option.isSome(guard)
+          ? Effect.succeed(guard.value)
+          : Effect.fail(
+              rpcFailure("connection_context_missing", "Supervisor connection context is missing."),
+            ),
+      ),
+    );
+
     const authorize = (
-      guard: SupervisorRpcConnectionContract,
       clientId: number,
-      payload: { readonly version: number; readonly runId: string; readonly token: string },
-    ): Effect.Effect<void, SupervisorRpcFailure> =>
-      Effect.suspend(() => {
+      payload: AuthenticatedRequest,
+    ): Effect.Effect<SupervisorRpcConnectionContract, SupervisorRpcFailure> =>
+      Effect.flatMap(currentConnectionGuard, (guard) => {
         if (
           closed ||
-          payload.version !== SUPERVISOR_CHANNEL_VERSION ||
           payload.runId !== runId ||
           !authenticatedToken(token, payload.token) ||
           guard.clientId !== clientId
@@ -264,87 +265,62 @@ export const makeSupervisorChannelSession = ({
           guard.accepted = true;
           Deferred.doneUnsafe(guard.authenticated, Effect.void);
         }
-        return Effect.void;
+        return Effect.succeed(guard);
       });
 
-    const currentConnectionGuard = Effect.serviceOption(SupervisorRpcConnection).pipe(
-      Effect.flatMap((guard) =>
-        Option.isSome(guard)
-          ? Effect.succeed(guard.value)
+    const authorizePeer = (
+      clientId: number,
+      payload: AuthenticatedRequest,
+    ): Effect.Effect<RpcPeer, SupervisorRpcFailure> =>
+      Effect.flatMap(authorize(clientId, payload), () => {
+        const peer = peers.get(clientId);
+        return peer
+          ? Effect.succeed(peer)
+          : Effect.fail(rpcFailure("session_not_open", "The supervisor RPC session is not open."));
+      });
+
+    const authorizeAssignment = (
+      clientId: number,
+      payload: AuthenticatedRequest & { readonly assignmentEpoch: number },
+    ): Effect.Effect<RpcPeer, SupervisorRpcFailure> =>
+      Effect.tap(authorizePeer(clientId, payload), () =>
+        assignmentEpochs.has(payload.assignmentEpoch)
+          ? Effect.void
           : Effect.fail(
-              rpcFailure("connection_context_missing", "Supervisor connection context is missing."),
+              rpcFailure(
+                "unknown_assignment_epoch",
+                "Supervisor event did not name an assignment epoch issued by this channel.",
+              ),
             ),
-      ),
-    );
-
-    const requirePeer = (clientId: number): Effect.Effect<RpcPeer, SupervisorRpcFailure> => {
-      const peer = peers.get(clientId);
-      return peer
-        ? Effect.succeed(peer)
-        : Effect.fail(rpcFailure("session_not_open", "The supervisor RPC session is not open."));
-    };
-
-    const requireAssignedEpoch = (epoch: number): Effect.Effect<void, SupervisorRpcFailure> =>
-      assignmentEpochs.has(epoch)
-        ? Effect.void
-        : Effect.fail(
-            rpcFailure(
-              "unknown_assignment_epoch",
-              "Supervisor event did not name an assignment epoch issued by this channel.",
-            ),
-          );
-
-    const offerContact = (
-      requestId: SupervisorChannelId,
-      epoch: number,
-      kind: "progress" | "warning",
-      message: string,
-    ): Effect.Effect<string, SupervisorRpcFailure> =>
-      Effect.suspend(() => {
-        if (!isSupervisorMcpMessage(message))
-          return Effect.fail(rpcFailure("invalid_message", "Supervisor message is invalid."));
-        const offered =
-          Queue.sizeUnsafe(events) < contactEventCapacity - pendingProxyCalls &&
-          Queue.offerUnsafe(events, {
-            type: "supervisor_contact",
-            assignmentEpoch: epoch,
-            requestId,
-            kind,
-            message,
-          });
-        return offered
-          ? Effect.succeed(
-              kind === "progress"
-                ? "Progress delivered to the parent projection."
-                : "Warning recorded in parent-visible run status.",
-            )
-          : Effect.fail(rpcFailure("event_queue_full", "Supervisor event queue is full."));
-      });
+      );
 
     const dispatchContact = (
       kind: "progress" | "warning",
       payload: typeof SupervisorProgressRpc.payloadSchema.Type,
       clientId: number,
-    ) =>
-      Effect.gen(function* () {
-        const guard = yield* currentConnectionGuard;
-        yield* authorize(guard, clientId, payload);
-        yield* requirePeer(clientId);
-        yield* requireAssignedEpoch(payload.assignmentEpoch);
-        return yield* offerContact(
-          payload.requestId,
-          payload.assignmentEpoch,
+    ): Effect.Effect<string, SupervisorRpcFailure> =>
+      Effect.flatMap(authorizeAssignment(clientId, payload), () =>
+        hasEventCapacity(2) &&
+        Queue.offerUnsafe(events, {
+          type: "supervisor_contact",
+          assignmentEpoch: payload.assignmentEpoch,
+          requestId: payload.requestId,
           kind,
-          payload.message,
-        );
-      });
+          message: payload.message,
+        })
+          ? Effect.succeed(
+              kind === "progress"
+                ? "Progress delivered to the parent projection."
+                : "Warning recorded in parent-visible run status.",
+            )
+          : Effect.fail(rpcFailure("event_queue_full", "Supervisor event queue is full.")),
+      );
 
     const handlers = SupervisorRpcGroup.toHandlers(
       SupervisorRpcGroup.of({
         SupervisorOpenSession: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
+            const guard = yield* authorize(options.client.id, payload);
             if (!peers.has(options.client.id)) {
               const assignments = yield* Queue.bounded<AssignmentUpdate, Cause.Done>(4);
               peers.set(options.client.id, {
@@ -360,9 +336,7 @@ export const makeSupervisorChannelSession = ({
         SupervisorWatchAssignments: (payload, options) =>
           Stream.unwrap(
             Effect.gen(function* () {
-              const guard = yield* currentConnectionGuard;
-              yield* authorize(guard, options.client.id, payload);
-              const peer = yield* requirePeer(options.client.id);
+              const peer = yield* authorizePeer(options.client.id, payload);
               if (peer.watching)
                 return yield* rpcFailure(
                   "assignment_watch_active",
@@ -383,9 +357,7 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorAcknowledgeAssignment: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
-            yield* requirePeer(options.client.id);
+            yield* authorizePeer(options.client.id, payload);
             const acknowledgement = epochAcknowledgements.get(payload.updateId);
             if (
               !acknowledgement ||
@@ -399,7 +371,7 @@ export const makeSupervisorChannelSession = ({
             epochAcknowledgements.delete(payload.updateId);
             if (pendingAssignmentEpoch === acknowledgement.epoch) {
               if (pendingQuestion && pendingQuestion.epoch < acknowledgement.epoch)
-                cancelPendingQuestion(
+                failPendingQuestion(
                   "question_assignment_advanced",
                   "The pending supervisor question belonged to a prior assignment.",
                 );
@@ -411,9 +383,7 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorAcknowledgeNotification: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
-            yield* requirePeer(options.client.id);
+            yield* authorizePeer(options.client.id, payload);
             const pending = notificationAcknowledgements.get(payload.updateId);
             if (!pending || pending.peerId !== options.client.id)
               return yield* rpcFailure(
@@ -431,12 +401,7 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorQuestion: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
-            yield* requirePeer(options.client.id);
-            yield* requireAssignedEpoch(payload.assignmentEpoch);
-            if (!isSupervisorMcpMessage(payload.message))
-              return yield* rpcFailure("invalid_question", "Supervisor question is invalid.");
+            yield* authorizeAssignment(options.client.id, payload);
             if (pendingQuestion)
               return yield* rpcFailure(
                 "question_pending",
@@ -462,7 +427,7 @@ export const makeSupervisorChannelSession = ({
             };
             pendingQuestion = pending;
             const offered =
-              Queue.sizeUnsafe(events) < contactEventCapacity - pendingProxyCalls &&
+              hasEventCapacity(2) &&
               Queue.offerUnsafe(events, {
                 type: "supervisor_contact",
                 assignmentEpoch: payload.assignmentEpoch,
@@ -479,7 +444,7 @@ export const makeSupervisorChannelSession = ({
               Effect.onExit((exit) =>
                 Effect.sync(() => {
                   if (Exit.isFailure(exit) && pendingQuestion === pending && !pending.replyStarted)
-                    cancelPendingQuestion(
+                    failPendingQuestion(
                       "question_cancelled",
                       "The supervisor question call was cancelled.",
                     );
@@ -490,8 +455,7 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorAcknowledgeQuestionReply: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
+            yield* authorize(options.client.id, payload);
             const pending = pendingQuestion;
             if (
               !pending ||
@@ -510,9 +474,7 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorProxy: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
-            yield* requirePeer(options.client.id);
+            yield* authorizePeer(options.client.id, payload);
             if (!allowPiProxy)
               return yield* rpcFailure(
                 "pi_proxy_forbidden",
@@ -520,8 +482,7 @@ export const makeSupervisorChannelSession = ({
               );
             return yield* Effect.acquireUseRelease(
               Effect.suspend(() => {
-                const requiredSlots = pendingProxyCalls + (pendingQuestion === undefined ? 2 : 3);
-                if (Queue.sizeUnsafe(events) > events.capacity - requiredSlots)
+                if (!hasEventCapacity(pendingQuestion === undefined ? 2 : 3))
                   return Effect.fail(
                     rpcFailure("event_queue_full", "Supervisor event queue is full."),
                   );
@@ -561,15 +522,13 @@ export const makeSupervisorChannelSession = ({
 
         SupervisorReport: (payload, options) =>
           Effect.gen(function* () {
-            const guard = yield* currentConnectionGuard;
-            yield* authorize(guard, options.client.id, payload);
-            yield* requirePeer(options.client.id);
-            yield* requireAssignedEpoch(payload.assignmentEpoch);
-            if (!isSupervisorMcpReport(payload.text))
-              return yield* rpcFailure("invalid_report", "Supervisor report is invalid.");
+            yield* authorizeAssignment(options.client.id, payload);
             const previous = reports.get(payload.deliveryId);
             if (previous) {
-              if (previous.epoch !== payload.assignmentEpoch || previous.text !== payload.text)
+              if (
+                previous.assignmentEpoch !== payload.assignmentEpoch ||
+                previous.text !== payload.text
+              )
                 return yield* rpcFailure(
                   "delivery_identity_conflict",
                   "The report delivery identity was already used for different evidence.",
@@ -577,7 +536,7 @@ export const makeSupervisorChannelSession = ({
               return {
                 duplicate: true,
                 sequence: previous.sequence,
-                assignmentEpoch: previous.epoch,
+                assignmentEpoch: previous.assignmentEpoch,
               };
             }
             if (reports.size >= MAX_REPORT_DELIVERIES)
@@ -600,23 +559,17 @@ export const makeSupervisorChannelSession = ({
             };
             const cancelsQuestion =
               pendingQuestion !== undefined && pendingQuestion.epoch <= payload.assignmentEpoch;
-            const requiredSlots = pendingProxyCalls + (pendingQuestion === undefined ? 1 : 2);
             if (
-              Queue.sizeUnsafe(events) > events.capacity - requiredSlots ||
+              !hasEventCapacity(pendingQuestion === undefined ? 1 : 2) ||
               !Queue.offerUnsafe(events, report)
             )
               return yield* rpcFailure("event_queue_full", "Supervisor event queue is full.");
             if (cancelsQuestion)
-              cancelPendingQuestion(
+              failPendingQuestion(
                 "question_cancelled_by_report",
                 "The pending question was cancelled because its assignment report was accepted.",
               );
-            reports.set(payload.deliveryId, {
-              epoch: payload.assignmentEpoch,
-              sequence,
-              text: payload.text,
-              report,
-            });
+            reports.set(payload.deliveryId, report);
             nextReportSequence += 1;
             return { duplicate: false, sequence, assignmentEpoch: payload.assignmentEpoch };
           }),
@@ -773,8 +726,8 @@ export const makeSupervisorChannelSession = ({
             ),
           );
         // Accepted entries are inserted in sequence order and never replaced.
-        const accepted = [...reports.values()].find((entry) => entry.epoch === epoch);
-        return Effect.succeed(accepted?.report);
+        const accepted = [...reports.values()].find((entry) => entry.assignmentEpoch === epoch);
+        return Effect.succeed(accepted);
       });
 
     const deliverNotification: SupervisorChannelControls["deliverNotification"] = (message) =>
@@ -874,7 +827,7 @@ export const makeSupervisorChannelSession = ({
 
     const cancelPending = (reason?: string): void => {
       const trimmed = reason?.trim();
-      cancelPendingQuestion(
+      failPendingQuestion(
         "question_cancelled",
         trimmed ? trimmed.slice(0, 512) : "The pending supervisor question was cancelled.",
       );

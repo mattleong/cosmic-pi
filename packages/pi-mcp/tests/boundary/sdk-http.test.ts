@@ -1,11 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import {
-  MissingRequiredClientCapabilityError,
-  UnsupportedProtocolVersionError,
-  UrlElicitationRequiredError,
-  serializeMessage,
-  type FetchLike,
-} from "@modelcontextprotocol/client";
+import type { FetchLike, JSONRPCErrorResponse } from "@modelcontextprotocol/client";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -28,7 +22,8 @@ import {
 import { SdkHttpOperationRegistry, mapSdkFailure } from "../../src/boundary/sdk-http-transport.ts";
 import * as SdkClient from "../../src/boundary/sdk-client.ts";
 import { startHttpServer, type HttpRequestRecord } from "../fixtures/http-server.ts";
-import { protocolErrors } from "../fixtures/sdk-protocol-errors.ts";
+import { legacyInitialized, rpcError, streamResponse } from "../fixtures/json-rpc.ts";
+import { protocolResponses } from "../fixtures/sdk-protocol-errors.ts";
 
 const Wire = Schema.fromJsonString(
   Schema.Struct({
@@ -46,12 +41,11 @@ const resultBody = (id: number | undefined, result: typeof Schema.Json.Type) => 
   if (id === undefined) throw new Error("Fixture response needs a request ID.");
   return json({ jsonrpc: "2.0", id, result });
 };
-const initialized = {
-  protocolVersion: "2025-11-25",
-  capabilities: {},
-  serverInfo: { name: "fixture", version: "1" },
-};
+const initialized = legacyInitialized();
 const toolResult = { content: [{ type: "text", text: "ok" }] };
+const jsonReply = (id: number | undefined, result: typeof Schema.Json.Type = toolResult) =>
+  new Response(resultBody(id, result), { headers: { "content-type": "application/json" } });
+const sse = { headers: { "content-type": "text/event-stream" } };
 const defaults = {
   protocol: "legacy" as const,
   connectTimeoutMs: 1_000,
@@ -98,49 +92,55 @@ const realFixture = (
     );
   });
 
-const unsupportedErrors = [
-  {
-    name: "URL elicitation",
-    error: new UrlElicitationRequiredError(
-      [
-        {
-          mode: "url",
-          url: "https://private-url.test",
-          elicitationId: "private-id",
-          message: "private-prompt",
-        },
-      ],
-      "private-server-message",
-    ),
-  },
-  {
-    name: "required client capability",
-    error: new MissingRequiredClientCapabilityError(
-      { requiredCapabilities: { experimental: { "private-capability": {} } } },
-      "private-server-message",
-    ),
-  },
-  {
-    name: "protocol version",
-    error: new UnsupportedProtocolVersionError(
-      { requested: "private-version", supported: ["private-supported"] },
-      "private-server-message",
-    ),
-  },
-];
-const protocolResponses = [
-  ...unsupportedErrors.map((entry) => ({ ...entry, kind: "unsupported", reason: undefined })),
-  ...protocolErrors,
-].map(({ name, error, kind, reason }) => ({
-  name,
-  kind,
-  reason,
-  response: { error: { code: error.code, message: error.message, data: error.data } },
-}));
+/** Answers one RPC method with a JSON-RPC error and counts its dispatches. */
+const failing = (method: string, error: JSONRPCErrorResponse["error"]) => {
+  let calls = 0;
+  const fetch = controlledFetch((_init, message) => {
+    if (message?.method !== method || message.id === undefined) return undefined;
+    calls += 1;
+    return Promise.resolve(rpcError(message.id, error));
+  });
+  return { fetch, calls: () => calls };
+};
+const onAbort = (init: RequestInit | undefined, f: () => void) =>
+  init?.signal?.addEventListener("abort", f, { once: true });
+/** Holds one sibling call's headers until released; create one per held call. */
+const heldSibling = () => {
+  let id: number | undefined;
+  let seen = false;
+  let aborted = false;
+  const headers = Promise.withResolvers<Response>();
+  return {
+    fetch: (init: RequestInit | undefined, message: WireMessage) => {
+      id = message.id;
+      seen = true;
+      onAbort(init, () => {
+        aborted = true;
+      });
+      return headers.promise;
+    },
+    release: () => headers.resolve(jsonReply(id)),
+    seen: () => seen,
+    aborted: () => aborted,
+  };
+};
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("scoped SDK HTTP connection", () => {
+  it.effect.each(["ftp://example.test/mcp", "https://user:secret@example.test/mcp"])(
+    "rejects %s before any request",
+    (url) =>
+      Effect.gen(function* () {
+        const fetch = vi.fn<FetchLike>();
+        const error = yield* openSdkHttp({ ...defaults, url: new URL(url), fetch }).pipe(
+          Effect.flip,
+        );
+        expect(error).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
+        expect(fetch).not.toHaveBeenCalled();
+      }),
+  );
+
   it.live.each([600_001, 3_600_000])(
     "accepts a %i ms request timeout for an immediately completed HTTP call",
     (requestTimeoutMs) =>
@@ -157,21 +157,13 @@ describe("scoped SDK HTTP connection", () => {
     "classifies and redacts $name without replay",
     ({ response, kind, reason }) =>
       Effect.gen(function* () {
-        let calls = 0;
+        const failure = failing("tools/list", response.error);
         const cleanup: boolean[] = [];
         const connection = yield* openSdkHttp({
           url: fakeUrl,
           ...defaults,
           onCleanup: (confirmed) => cleanup.push(confirmed),
-          fetch: controlledFetch((_init, message) => {
-            if (message?.method !== "tools/list" || message.id === undefined) return undefined;
-            calls += 1;
-            return Promise.resolve(
-              new Response(serializeMessage({ jsonrpc: "2.0", id: message.id, ...response }), {
-                headers: { "content-type": "application/json" },
-              }),
-            );
-          }),
+          fetch: failure.fetch,
         });
         expect(connection.protocolVersion).toBe(initialized.protocolVersion);
         const result = yield* connection.request({ action: "tools.list" }).pipe(Effect.result);
@@ -181,7 +173,7 @@ describe("scoped SDK HTTP connection", () => {
         });
         if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
         expect(String(result)).not.toContain("private-");
-        expect(calls).toBe(1);
+        expect(failure.calls()).toBe(1);
         expect(yield* connection.health).toMatchObject({
           closed: false,
           cleanupUnconfirmed: false,
@@ -194,21 +186,13 @@ describe("scoped SDK HTTP connection", () => {
     "cleans up initialization rejected for $name",
     ({ response, kind, reason }) =>
       Effect.gen(function* () {
-        let calls = 0;
+        const failure = failing("initialize", response.error);
         const cleanup: boolean[] = [];
         const result = yield* openSdkHttp({
           url: fakeUrl,
           ...defaults,
           onCleanup: (confirmed) => cleanup.push(confirmed),
-          fetch: controlledFetch((_init, message) => {
-            if (message?.method !== "initialize" || message.id === undefined) return undefined;
-            calls += 1;
-            return Promise.resolve(
-              new Response(serializeMessage({ jsonrpc: "2.0", id: message.id, ...response }), {
-                headers: { "content-type": "application/json" },
-              }),
-            );
-          }),
+          fetch: failure.fetch,
         }).pipe(Effect.result);
         expect(result).toMatchObject({
           _tag: "Failure",
@@ -216,7 +200,7 @@ describe("scoped SDK HTTP connection", () => {
         });
         if (result._tag === "Failure") expect(result.failure.reason).toBe(reason);
         expect(String(result)).not.toContain("private-");
-        expect(calls).toBe(1);
+        expect(failure.calls()).toBe(1);
         expect(cleanup).toEqual([true]);
       }),
   );
@@ -247,7 +231,10 @@ describe("scoped SDK HTTP connection", () => {
     }),
   );
 
-  it.live("dispatches with fixed token auth and strips private operation tags", () =>
+  it.live.each([
+    { source: "fixed token", token: "snapshot-token", authorization: "Bearer snapshot-token" },
+    { source: "static header", authorization: "Bearer static" },
+  ])("dispatches with $source auth and strips private operation tags", ({ token, authorization }) =>
     Effect.gen(function* () {
       const fixture = yield* realFixture();
       const reply = yield* Effect.scoped(
@@ -255,8 +242,8 @@ describe("scoped SDK HTTP connection", () => {
           const connection = yield* openSdkHttp({
             url: fixture.url,
             ...defaults,
-            headers: { Authorization: "Bearer stale", "X-PI-MCP-OPERATION": "private" },
-            token: "snapshot-token",
+            headers: { Authorization: "Bearer static", "X-PI-MCP-OPERATION": "private" },
+            ...(token !== undefined && { token }),
           });
           expect(connection.protocolVersion).toBe(initialized.protocolVersion);
           return yield* connection.request({ action: "tools.call", tool: "example" });
@@ -265,7 +252,7 @@ describe("scoped SDK HTTP connection", () => {
       expect(reply).toEqual({ action: "tools.call", outcome: "completed", result: toolResult });
       for (const request of fixture.requests) {
         expect(request.headers["x-pi-mcp-operation"]).toBeUndefined();
-        expect(request.headers.authorization).toBe("Bearer snapshot-token");
+        expect(request.headers.authorization).toBe(authorization);
       }
       expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
     }),
@@ -323,32 +310,6 @@ describe("scoped SDK HTTP connection", () => {
     }),
   );
 
-  for (const status of [401, 403]) {
-    it.live(`does not replay a dispatched HTTP ${status} request`, () =>
-      Effect.gen(function* () {
-        let calls = 0;
-        const fixture = yield* realFixture((_request, message) => {
-          if (message?.method !== "tools/call") return undefined;
-          calls += 1;
-          return Effect.succeed(HttpServerResponse.empty({ status }));
-        });
-        const connection = yield* openSdkHttp({
-          url: fixture.url,
-          token: "fixed-token",
-          ...defaults,
-        });
-        const result = yield* Effect.result(
-          connection.request({ action: "tools.call", tool: "denied" }),
-        );
-        expect(Result.isFailure(result) && result.failure).toMatchObject({
-          kind: status === 401 ? "auth-required" : "denied",
-          outcome: "unknown",
-        });
-        expect(calls).toBe(1);
-      }),
-    );
-  }
-
   it.effect("keeps interleaved POST challenges private and bound to their own failures", () =>
     Effect.gen(function* () {
       const challenges = {
@@ -366,12 +327,12 @@ describe("scoped SDK HTTP connection", () => {
           const name = message.params?.name === "first" ? "first" : "second";
           calls.push(name);
           return Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
+            streamResponse(
+              {
                 start: (controller) => {
                   bodies.set(name, controller);
                 },
-              }),
+              },
               {
                 status: name === "first" ? 401 : 403,
                 headers: { "www-authenticate": challenges[name] },
@@ -452,6 +413,7 @@ describe("scoped SDK HTTP connection", () => {
       const connection = yield* openSdkHttp({
         url: fakeUrl,
         ...defaults,
+        token: "fixed-token",
         fetch: controlledFetch((init, message) => {
           if (init?.method === "GET")
             return Promise.resolve(
@@ -489,7 +451,7 @@ describe("scoped SDK HTTP connection", () => {
   );
 
   it("refuses stale, reused, and cross-operation SDK error associations", () => {
-    const registry = new SdkHttpOperationRegistry(1);
+    const registry = new SdkHttpOperationRegistry();
     const first = registry.begin()!;
     const second = registry.begin()!;
     const challenge = 'Bearer resource_metadata="https://private.example/metadata"';
@@ -530,6 +492,9 @@ describe("scoped SDK HTTP connection", () => {
       const sideEffects: Array<{ tool: string | undefined; session: string | undefined }> = [];
       const cleanup: boolean[] = [];
       const fixture = yield* realFixture((request, message) => {
+        // Session deletion after expiry may also 404; close must still confirm cleanup.
+        if (request.method === "DELETE")
+          return Effect.succeed(HttpServerResponse.empty({ status: 404 }));
         if (message?.method === "initialize") {
           initializations.push(request.headers["mcp-session-id"]);
           return Effect.succeed(
@@ -559,15 +524,14 @@ describe("scoped SDK HTTP connection", () => {
         onCleanup: (confirmed) => cleanup.push(confirmed),
       });
       expect(
-        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "transport", outcome: "unknown" },
-      });
+        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.flip),
+      ).toMatchObject({ kind: "transport", outcome: "unknown" });
       expect(sideEffects).toEqual([{ tool: "expired", session: "sessionA" }]);
       expect(initializations).toEqual([undefined]);
       expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(0);
 
+      yield* connection.close;
+      // A repeated close returns the cached success without new session traffic.
       yield* connection.close;
       expect(cleanup).toEqual([true]);
       expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
@@ -578,11 +542,8 @@ describe("scoped SDK HTTP connection", () => {
       ).toEqual(["sessionA"]);
       const closedRequestCount = fixture.requests.length;
       expect(
-        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "unavailable", outcome: "not-sent" },
-      });
+        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.flip),
+      ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
       expect(fixture.requests).toHaveLength(closedRequestCount);
 
       const replacement = yield* openSdkHttp({ url: fixture.url, ...defaults });
@@ -636,51 +597,6 @@ describe("scoped SDK HTTP connection", () => {
     }),
   );
 
-  it.live("confirms native cleanup despite DELETE 404 after an expired-session call", () =>
-    Effect.gen(function* () {
-      const cleanup: boolean[] = [];
-      const fixture = yield* realFixture((request, message) =>
-        request.method === "DELETE" || message?.method === "tools/call"
-          ? Effect.succeed(HttpServerResponse.empty({ status: 404 }))
-          : undefined,
-      );
-      const connection = yield* openSdkHttp({
-        url: fixture.url,
-        ...defaults,
-        onCleanup: (confirmed) => cleanup.push(confirmed),
-      });
-      expect(
-        yield* connection.request({ action: "tools.call", tool: "expired" }).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "transport", outcome: "unknown" },
-      });
-      const closed = yield* connection.close.pipe(Effect.result);
-      expect(closed._tag).toBe("Success");
-      expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });
-      expect(cleanup).toEqual([true]);
-      expect(fixture.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
-      expect(
-        fixture.requests.filter((request) => parseMessage(request.body)?.method === "initialize"),
-      ).toHaveLength(1);
-      const calls = fixture.requests.filter(
-        (request) => parseMessage(request.body)?.method === "tools/call",
-      );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.headers["mcp-session-id"]).toBe("fixture-session");
-      const closedRequestCount = fixture.requests.length;
-      expect(yield* connection.close.pipe(Effect.result)).toEqual(closed);
-      expect(
-        yield* connection.request({ action: "tools.call", tool: "later" }).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "unavailable", outcome: "not-sent" },
-      });
-      expect(fixture.requests).toHaveLength(closedRequestCount);
-      expect(cleanup).toEqual([true]);
-    }),
-  );
-
   it.live("maps declared byte overflow while aborting an actual HTTP response", () =>
     Effect.gen(function* () {
       const fixture = yield* realFixture((_request, message) => {
@@ -692,10 +608,9 @@ describe("scoped SDK HTTP connection", () => {
         );
       });
       const connection = yield* openSdkHttp({ url: fixture.url, ...defaults, responseBytes: 512 });
-      const result = yield* Effect.result(
-        connection.request({ action: "tools.call", tool: "oversized" }),
-      );
-      expect(Result.isFailure(result) && result.failure).toMatchObject({ kind: "output-limit" });
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "oversized" }).pipe(Effect.flip),
+      ).toMatchObject({ kind: "output-limit" });
     }),
   );
 
@@ -718,13 +633,13 @@ describe("scoped SDK HTTP connection", () => {
             if (message.params?.name !== "bad") return undefined;
             badCalls += 1;
             return Promise.resolve(
-              new Response(
-                new ReadableStream<Uint8Array>({
+              streamResponse(
+                {
                   start(controller) {
                     controller.enqueue(bytes("x".repeat(1024)));
                   },
-                }),
-                { status, headers: { "content-type": "text/event-stream" } },
+                },
+                { ...sse, status },
               ),
             );
           });
@@ -738,20 +653,11 @@ describe("scoped SDK HTTP connection", () => {
             connection.request({ action: "tools.call", tool: "sibling" }),
           );
           yield* Deferred.await(siblingSeen);
-          const bad = yield* Effect.result(
-            connection.request({ action: "tools.call", tool: "bad" }),
-          );
-          expect(Result.isFailure(bad) && bad.failure).toMatchObject({
-            kind: "output-limit",
-            outcome: "unknown",
-          });
+          expect(
+            yield* connection.request({ action: "tools.call", tool: "bad" }).pipe(Effect.flip),
+          ).toMatchObject({ kind: "output-limit", outcome: "unknown" });
           expect(badCalls).toBe(1);
-          yield* Deferred.succeed(
-            siblingHeaders,
-            new Response(resultBody(siblingId, toolResult), {
-              headers: { "content-type": "application/json" },
-            }),
-          );
+          yield* Deferred.succeed(siblingHeaders, jsonReply(siblingId));
           expect((yield* Fiber.join(sibling)).outcome).toBe("completed");
           expect((yield* connection.request({ action: "tools.call", tool: "later" })).outcome).toBe(
             "completed",
@@ -771,13 +677,13 @@ describe("scoped SDK HTTP connection", () => {
         if (init?.method === "GET") {
           Deferred.doneUnsafe(getSeen, Effect.void);
           return Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
+            streamResponse(
+              {
                 cancel() {
                   getCancelled = true;
                 },
-              }),
-              { headers: { "content-type": "text/event-stream" } },
+              },
+              sse,
             ),
           );
         }
@@ -797,13 +703,9 @@ describe("scoped SDK HTTP connection", () => {
       yield* connection.close;
       expect(getCancelled).toBe(true);
       expect(deletes).toBe(1);
-      const later = yield* Effect.result(
-        connection.request({ action: "tools.call", tool: "late" }),
-      );
-      expect(Result.isFailure(later) && later.failure).toMatchObject({
-        kind: "unavailable",
-        outcome: "not-sent",
-      });
+      expect(
+        yield* connection.request({ action: "tools.call", tool: "late" }).pipe(Effect.flip),
+      ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
     }),
   );
 
@@ -819,13 +721,9 @@ describe("scoped SDK HTTP connection", () => {
         const fetch = controlledFetch((init) => {
           if (init?.method !== "DELETE") return undefined;
           deletes += 1;
-          init.signal?.addEventListener(
-            "abort",
-            () => {
-              deleteAborted = true;
-            },
-            { once: true },
-          );
+          onAbort(init, () => {
+            deleteAborted = true;
+          });
           Deferred.doneUnsafe(deleteSeen, Effect.void);
           return Effect.runPromise(Deferred.await(deleteHeaders));
         });
@@ -844,13 +742,11 @@ describe("scoped SDK HTTP connection", () => {
         expect(Result.isFailure(result) && result.failure).toMatchObject({ kind: "cleanup" });
         yield* Deferred.succeed(
           deleteHeaders,
-          new Response(
-            new ReadableStream<Uint8Array>({
-              cancel() {
-                lateBodyCancelled = true;
-              },
-            }),
-          ),
+          streamResponse({
+            cancel() {
+              lateBodyCancelled = true;
+            },
+          }),
         );
         yield* yieldUntil(() => lateBodyCancelled);
         const repeated = yield* Effect.result(connection.close);
@@ -867,13 +763,9 @@ describe("scoped SDK HTTP connection", () => {
       const fetch = controlledFetch((init) => {
         if (init?.method !== "DELETE") return undefined;
         deletes += 1;
-        init.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-          },
-          { once: true },
-        );
+        onAbort(init, () => {
+          aborted = true;
+        });
         Deferred.doneUnsafe(deleteSeen, Effect.void);
         return Effect.runPromise(Effect.never, { signal: init.signal ?? undefined });
       });
@@ -888,8 +780,7 @@ describe("scoped SDK HTTP connection", () => {
       const interrupt = yield* Effect.forkChild(Fiber.interrupt(closing));
       yield* TestClock.adjust(Duration.millis(20));
       yield* Fiber.join(interrupt);
-      const repeated = yield* Effect.result(connection.close);
-      expect(Result.isFailure(repeated) && repeated.failure).toMatchObject({ kind: "cleanup" });
+      expect(yield* connection.close.pipe(Effect.flip)).toMatchObject({ kind: "cleanup" });
       expect(aborted).toBe(true);
       expect(deletes).toBe(1);
     }),
@@ -906,14 +797,14 @@ describe("scoped SDK HTTP connection", () => {
           if (message?.method !== "tools/call") return undefined;
           Deferred.doneUnsafe(callSeen, Effect.void);
           return Promise.resolve(
-            new Response(
-              new ReadableStream<Uint8Array>({
+            streamResponse(
+              {
                 cancel() {
                   Deferred.doneUnsafe(cancelSeen, Effect.void);
                   return Effect.runPromise(Deferred.await(releaseCancel));
                 },
-              }),
-              { headers: { "content-type": "text/event-stream" } },
+              },
+              sse,
             ),
           );
         });
@@ -937,10 +828,9 @@ describe("scoped SDK HTTP connection", () => {
         expect(yield* Deferred.isDone(interruptionDone)).toBe(false);
         yield* TestClock.adjust(Duration.millis(20));
         yield* Fiber.join(interruption);
-        const later = yield* Effect.result(
-          connection.request({ action: "tools.call", tool: "late" }),
-        );
-        expect(Result.isFailure(later) && later.failure).toMatchObject({ kind: "unavailable" });
+        expect(
+          yield* connection.request({ action: "tools.call", tool: "late" }).pipe(Effect.flip),
+        ).toMatchObject({ kind: "unavailable" });
         yield* Deferred.succeed(releaseCancel, undefined);
         yield* connection.close;
       }),
@@ -954,32 +844,26 @@ describe("scoped SDK HTTP connection", () => {
         let liveControls = 0;
         let controlsSeen = 0;
         let getCancelled = false;
-        let siblingAborted = false;
-        let siblingId: number | undefined;
-        let releaseSibling: ((response: Response) => void) | undefined;
+        let held = heldSibling();
         const fetch = controlledFetch((init, message) => {
           if (init?.method === "GET") {
             return Promise.resolve(
-              new Response(
-                new ReadableStream<Uint8Array>({
+              streamResponse(
+                {
                   cancel() {
                     getCancelled = true;
                   },
-                }),
-                { headers: { "content-type": "text/event-stream" } },
+                },
+                sse,
               ),
             );
           }
           if (message?.method === "notifications/cancelled") {
             controlsSeen += 1;
             liveControls += 1;
-            init?.signal?.addEventListener(
-              "abort",
-              () => {
-                liveControls -= 1;
-              },
-              { once: true },
-            );
+            onAbort(init, () => {
+              liveControls -= 1;
+            });
             return Effect.runPromise(Effect.never, { signal: init?.signal ?? undefined });
           }
           if (message?.method !== "tools/call") return undefined;
@@ -987,20 +871,7 @@ describe("scoped SDK HTTP connection", () => {
             slowCalls += 1;
             return Effect.runPromise(Effect.never, { signal: init?.signal ?? undefined });
           }
-          if (message.params?.name !== "sibling") return undefined;
-          siblingId = message.id;
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              siblingAborted = true;
-            },
-            { once: true },
-          );
-          return Effect.runPromise(
-            Effect.callback<Response>((resume) => {
-              releaseSibling = (response) => resume(Effect.succeed(response));
-            }),
-          );
+          return message.params?.name === "sibling" ? held.fetch(init, message) : undefined;
         });
         const connection = yield* openSdkHttp({
           url: fakeUrl,
@@ -1011,30 +882,24 @@ describe("scoped SDK HTTP connection", () => {
         });
         for (let index = 0; index < 3; index += 1) {
           const call = yield* Effect.forkChild(
-            Effect.result(connection.request({ action: "tools.call", tool: "slow" })),
+            connection.request({ action: "tools.call", tool: "slow" }).pipe(Effect.flip),
           );
           yield* yieldUntil(() => slowCalls === index + 1);
           yield* TestClock.adjust(Duration.millis(20));
-          const result = yield* Fiber.join(call);
-          expect(Result.isFailure(result) && result.failure).toMatchObject({ kind: "timeout" });
+          expect(yield* Fiber.join(call)).toMatchObject({ kind: "timeout" });
           yield* yieldUntil(() => controlsSeen === index + 1);
           expect(liveControls).toBe(1);
           yield* TestClock.adjust(Duration.millis(10));
-          siblingAborted = false;
-          releaseSibling = undefined;
+          held = heldSibling();
           const sibling = yield* Effect.forkChild(
             connection.request({ action: "tools.call", tool: "sibling" }),
           );
-          yield* yieldUntil(() => releaseSibling !== undefined);
+          yield* yieldUntil(held.seen);
           yield* TestClock.adjust(Duration.millis(10));
           yield* yieldUntil(() => liveControls === 0);
           expect(getCancelled).toBe(false);
-          expect(siblingAborted).toBe(false);
-          releaseSibling!(
-            new Response(resultBody(siblingId, toolResult), {
-              headers: { "content-type": "application/json" },
-            }),
-          );
+          expect(held.aborted()).toBe(false);
+          held.release();
           expect((yield* Fiber.join(sibling)).outcome).toBe("completed");
         }
         expect((yield* connection.request({ action: "tools.call", tool: "later" })).outcome).toBe(
@@ -1052,21 +917,15 @@ describe("scoped SDK HTTP connection", () => {
         let slowSeen = false;
         let controlsSeen = 0;
         let controlAborted = false;
-        let siblingAborted = false;
-        let siblingId: number | undefined;
         let lateBodyCancelled = false;
         let releaseControl: ((response: Response) => void) | undefined;
-        let releaseSibling: ((response: Response) => void) | undefined;
+        const held = heldSibling();
         const fetch = controlledFetch((init, message) => {
           if (message?.method === "notifications/cancelled") {
             controlsSeen += 1;
-            init?.signal?.addEventListener(
-              "abort",
-              () => {
-                controlAborted = true;
-              },
-              { once: true },
-            );
+            onAbort(init, () => {
+              controlAborted = true;
+            });
             return Effect.runPromise(
               Effect.callback<Response>((resume) => {
                 releaseControl = (response) => resume(Effect.succeed(response));
@@ -1078,20 +937,7 @@ describe("scoped SDK HTTP connection", () => {
             slowSeen = true;
             return Effect.runPromise(Effect.never, { signal: init?.signal ?? undefined });
           }
-          if (message.params?.name !== "sibling") return undefined;
-          siblingId = message.id;
-          init?.signal?.addEventListener(
-            "abort",
-            () => {
-              siblingAborted = true;
-            },
-            { once: true },
-          );
-          return Effect.runPromise(
-            Effect.callback<Response>((resume) => {
-              releaseSibling = (response) => resume(Effect.succeed(response));
-            }),
-          );
+          return message.params?.name === "sibling" ? held.fetch(init, message) : undefined;
         });
         const connection = yield* openSdkHttp({
           url: fakeUrl,
@@ -1111,33 +957,23 @@ describe("scoped SDK HTTP connection", () => {
         const sibling = yield* Effect.forkChild(
           connection.request({ action: "tools.call", tool: "sibling" }),
         );
-        yield* yieldUntil(() => releaseSibling !== undefined);
+        yield* yieldUntil(held.seen);
         yield* TestClock.adjust(Duration.millis(5));
         yield* yieldUntil(() => controlAborted);
         yield* TestClock.adjust(Duration.millis(10));
-        const later = yield* Effect.result(
-          connection.request({ action: "tools.call", tool: "late" }),
-        );
-        expect(Result.isFailure(later) && later.failure).toMatchObject({
-          kind: "unavailable",
-          outcome: "not-sent",
-        });
-        expect(siblingAborted).toBe(false);
+        expect(
+          yield* connection.request({ action: "tools.call", tool: "late" }).pipe(Effect.flip),
+        ).toMatchObject({ kind: "unavailable", outcome: "not-sent" });
+        expect(held.aborted()).toBe(false);
         expect(controlsSeen).toBe(1);
-        releaseSibling!(
-          new Response(resultBody(siblingId, toolResult), {
-            headers: { "content-type": "application/json" },
-          }),
-        );
+        held.release();
         expect((yield* Fiber.join(sibling)).outcome).toBe("completed");
         releaseControl!(
-          new Response(
-            new ReadableStream<Uint8Array>({
-              cancel() {
-                lateBodyCancelled = true;
-              },
-            }),
-          ),
+          streamResponse({
+            cancel() {
+              lateBodyCancelled = true;
+            },
+          }),
         );
         yield* yieldUntil(() => lateBodyCancelled);
         yield* Effect.result(connection.close);
@@ -1150,13 +986,9 @@ describe("scoped SDK HTTP connection", () => {
       let aborted = false;
       const fetch = controlledFetch((init, message) => {
         if (message?.method !== "initialize") return undefined;
-        init?.signal?.addEventListener(
-          "abort",
-          () => {
-            aborted = true;
-          },
-          { once: true },
-        );
+        onAbort(init, () => {
+          aborted = true;
+        });
         Deferred.doneUnsafe(seen, Effect.void);
         return Effect.runPromise(Effect.never, { signal: init?.signal ?? undefined });
       });
@@ -1198,11 +1030,8 @@ describe("scoped SDK HTTP connection", () => {
               },
         );
         expect(
-          yield* connection.request({ action: "tools.call", tool: "denied" }).pipe(Effect.result),
-        ).toMatchObject({
-          _tag: "Failure",
-          failure: { kind: "auth-required", outcome: "unknown" },
-        });
+          yield* connection.request({ action: "tools.call", tool: "denied" }).pipe(Effect.flip),
+        ).toMatchObject({ kind: "auth-required", outcome: "unknown" });
         yield* connection.setToken("new");
         expect(authorization).toEqual(["Bearer old"]);
         yield* connection.request({ action: "tools.call", tool: "next" });
@@ -1215,9 +1044,7 @@ describe("scoped SDK HTTP connection", () => {
         });
         yield* connection.close;
         yield* connection.terminal;
-        expect(yield* connection.setToken("late").pipe(Effect.result)).toMatchObject({
-          _tag: "Failure",
-        });
+        yield* connection.setToken("late").pipe(Effect.flip);
       }),
   );
 
@@ -1229,8 +1056,8 @@ describe("scoped SDK HTTP connection", () => {
       const fetch = controlledFetch((_init, message) => {
         if (message?.method !== "tools/call") return undefined;
         return Promise.resolve(
-          new Response(
-            new ReadableStream<Uint8Array>({
+          streamResponse(
+            {
               start(controller) {
                 controller.enqueue(
                   bytes(`event: message\ndata: ${resultBody(message.id, toolResult)}\n\n`),
@@ -1240,8 +1067,8 @@ describe("scoped SDK HTTP connection", () => {
                 Deferred.doneUnsafe(cancelSeen, Effect.void);
                 return Effect.runPromise(Deferred.await(releaseCancel));
               },
-            }),
-            { headers: { "content-type": "text/event-stream" } },
+            },
+            sse,
           ),
         );
       });
@@ -1258,10 +1085,7 @@ describe("scoped SDK HTTP connection", () => {
       yield* Deferred.await(cancelSeen);
       yield* TestClock.adjust(Duration.millis(20));
       // Terminal evidence may arrive before the caller observes its accepted reply.
-      expect(yield* connection.terminal.pipe(Effect.result)).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "cleanup" },
-      });
+      expect(yield* connection.terminal.pipe(Effect.flip)).toMatchObject({ kind: "cleanup" });
       expect(yield* Fiber.join(request)).toEqual({
         action: "tools.call",
         outcome: "completed",
@@ -1270,22 +1094,13 @@ describe("scoped SDK HTTP connection", () => {
       });
       expect(yield* connection.health).toMatchObject({ closed: true, cleanupUnconfirmed: true });
       expect(
-        yield* connection.request({ action: "tools.call", tool: "repeat" }).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { outcome: "not-sent" },
-      });
-      const close = yield* connection.close.pipe(Effect.result, Effect.forkChild);
+        yield* connection.request({ action: "tools.call", tool: "repeat" }).pipe(Effect.flip),
+      ).toMatchObject({ outcome: "not-sent" });
+      const close = yield* connection.close.pipe(Effect.flip, Effect.forkChild);
       yield* TestClock.adjust(Duration.millis(20));
-      expect(yield* Fiber.join(close)).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "cleanup" },
-      });
+      expect(yield* Fiber.join(close)).toMatchObject({ kind: "cleanup" });
       expect(cleanup).toEqual([false]);
-      expect(yield* connection.terminal.pipe(Effect.result)).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "cleanup" },
-      });
+      expect(yield* connection.terminal.pipe(Effect.flip)).toMatchObject({ kind: "cleanup" });
       yield* Deferred.succeed(releaseCancel, undefined);
     }),
   );

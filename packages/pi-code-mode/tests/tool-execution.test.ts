@@ -1,34 +1,20 @@
 // End-to-end `code_mode` execution through the real vendored runtime over fake Pi definitions:
 // exact guest catalog, host limits, cancellation, progress, and diagnostics.
-import { createEventBus, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  BACKGROUND_TASK_CODE_MODE_QUERY,
-  BACKGROUND_TASK_CODE_MODE_VERSION,
-  normalizeBackgroundTaskCodeModeQuery,
-  type BackgroundTaskCodeModeCapability,
-} from "pi-background-task/code-mode";
-import {
-  MCP_CODE_MODE_QUERY,
-  MCP_CODE_MODE_VERSION,
-  McpCodeModeOutputSchema,
-  mcpCodeModeError,
-  normalizeMcpCodeModeQuery,
-  type McpCodeModeCapability,
-} from "pi-mcp/code-mode";
+import { BACKGROUND_TASK_CODE_MODE_QUERY } from "pi-background-task/code-mode";
+import { McpCodeModeOutputSchema, mcpCodeModeError } from "pi-mcp/code-mode";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { CodeMode } from "../src/boundary/codemode-runtime.ts";
+import { CodeMode, type CodeModeToolCallLifecycleEvent } from "../src/boundary/codemode-runtime.ts";
 import {
   type NestedPiToolDefinitions,
   type PiGuestToolInput,
   type PiGuestToolName,
 } from "../src/boundary/host-builtin-tools.ts";
-import type { CodeModeConfig } from "../src/config/schema.ts";
 import {
   CODE_MODE_UNAVAILABLE_MESSAGE,
-  makeCodeModeToolExecute,
   type CodeModeExecutionEnvironment,
 } from "../src/tools/execution.ts";
 import {
@@ -37,9 +23,15 @@ import {
   type CodeModeToolDetails,
 } from "../src/tools/format.ts";
 import { checkSourceSize, clampModelVisibleText, utf8ByteLength } from "../src/tools/limits.ts";
-import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
+import {
+  executeHarness,
+  textOf,
+  type CallOptions,
+  type ExecuteHarnessOptions,
+} from "./support/execute.ts";
+import { codeModeStateFixture } from "./support/host.ts";
+import { backgroundTaskProvider, mcpProvider } from "./support/providers.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import { captureGuestResult } from "./support/guest-result.ts";
 
 // JSON here decodes guest results; these are code fixtures under test control.
 const guestJson = (text: string) => JSON.parse(text);
@@ -48,32 +40,6 @@ const guestJson = (text: string) => JSON.parse(text);
 const blockingCall = (onStart?: () => void): Promise<never> => {
   onStart?.();
   return Promise.race([]);
-};
-
-const inertEvents = createEventBus();
-
-const backgroundEvents = (
-  capabilities: ReadonlyArray<BackgroundTaskCodeModeCapability>,
-): ExtensionAPI["events"] => {
-  const events = createEventBus();
-  events.on(BACKGROUND_TASK_CODE_MODE_QUERY, (value) => {
-    const query = normalizeBackgroundTaskCodeModeQuery(value);
-    if (!query) return;
-    for (const capability of capabilities) query.respond(capability);
-  });
-  return events;
-};
-
-const mcpEvents = (execute: McpCodeModeCapability["execute"]): ExtensionAPI["events"] => {
-  const events = createEventBus();
-  events.on(MCP_CODE_MODE_QUERY, (value) =>
-    normalizeMcpCodeModeQuery(value)?.respond({
-      version: MCP_CODE_MODE_VERSION,
-      sessionId: "test-session",
-      execute,
-    }),
-  );
-  return events;
 };
 
 const backgroundSnapshot = {
@@ -86,16 +52,6 @@ const backgroundSnapshot = {
   logCursor: 0,
   droppedLogBytes: 0,
 };
-
-const ctx = extensionContextFixture({
-  cwd: "/",
-  sessionManager: {
-    getSessionId: () => "test-session",
-    getSessionFile: () => undefined,
-  },
-  model: undefined,
-  thinkingLevel: undefined,
-});
 
 interface FakeCall {
   readonly name: string;
@@ -141,13 +97,15 @@ const fakeDefinitions = (
   );
 };
 
-const numericDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
+const leafDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
   const implemented = (name: PiGuestToolName) => () => Promise.resolve(name);
   return fakeDefinitions(
     {
       read: implemented("read"),
       bash: implemented("bash"),
       powershell: implemented("powershell"),
+      edit: implemented("edit"),
+      write: implemented("write"),
       grep: implemented("grep"),
       find: implemented("find"),
       ls: implemented("ls"),
@@ -156,85 +114,57 @@ const numericDefinitions = (calls: FakeCall[]): NestedPiToolDefinitions => {
   );
 };
 
-interface HarnessOptions {
-  readonly config?: Partial<CodeModeConfig>;
+interface HarnessOptions extends ExecuteHarnessOptions {
   readonly available?: boolean;
-  readonly events?: ExtensionAPI["events"];
-  readonly sessionId?: string | undefined;
   /** Simulates the no-current-state gate: getState() returns undefined. */
   readonly noState?: boolean;
-  readonly definitions?: NestedPiToolDefinitions;
-  readonly executeCodeMode?: CodeModeExecutionEnvironment["executeCodeMode"];
-  readonly isCurrent?: () => boolean;
-  readonly runInSession?: CodeModeExecutionEnvironment["runInSession"];
-  readonly retainFailureDetails?: CodeModeExecutionEnvironment["retainFailureDetails"];
 }
 
-const makeHarness = (options: HarnessOptions = {}) => {
-  const state = codeModeStateFixture(options.config, {
-    available: options.available ?? true,
+type LifecycleEmit = (event: CodeModeToolCallLifecycleEvent) => Effect.Effect<void>;
+/** Runtime stand-in that emits scripted lifecycle events, then returns successfully. */
+const scriptedRuntime =
+  (
+    script: (emit: LifecycleEmit) => Effect.Effect<void>,
+  ): NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> =>
+  (options) =>
+    script((event) => options.onToolCallLifecycle?.(event) ?? Effect.void).pipe(
+      Effect.as({ ok: true as const, value: "done" }),
+    );
+
+/** The suite's positional call form over the shared harness, with fake Pi definitions. */
+const makeHarness = ({ available = true, noState = false, ...options }: HarnessOptions = {}) => {
+  const state = codeModeStateFixture(options.config, { available });
+  const harness = executeHarness({
+    cwd: "/",
+    definitions: fakeDefinitions({}),
+    getState: () => (noState ? undefined : state),
+    ...options,
   });
-  const base = {
-    isCurrent: options.isCurrent ?? (() => true),
-    getState: () => (options.noState === true ? undefined : state),
-    runInSession:
-      options.runInSession ??
-      ((effect, signal) => Effect.runPromise(effect, signal ? { signal } : undefined)),
-    definitions: options.definitions ?? fakeDefinitions({}),
-    events: options.events ?? inertEvents,
-    sessionId: options.sessionId === undefined ? "test-session" : options.sessionId,
-  };
-  const guest = captureGuestResult(options.executeCodeMode);
-  const execute = { ...base, executeCodeMode: guest.executeCodeMode };
-  const environment =
-    options.retainFailureDetails === undefined
-      ? execute
-      : { ...execute, retainFailureDetails: options.retainFailureDetails };
-  const run = makeCodeModeToolExecute(environment);
   return Object.assign(
-    (id: string, code: string, signal?: AbortSignal, onUpdate?: Parameters<typeof run>[3]) =>
-      run(id, { code }, signal, onUpdate, ctx),
-    { guestValue: guest.value },
+    (id: string, code: string, signal?: AbortSignal, onUpdate?: CallOptions["onUpdate"]) =>
+      harness.run(code, { id, signal, onUpdate }),
+    { guestValue: harness.guestValue },
   );
 };
 
-const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>
-  result.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("\n");
-
 describe("guest catalog", () => {
-  it.effect("validates canonical non-empty edit input before dispatch", () =>
+  it.effect("rejects representative invalid input before dispatch", () =>
     Effect.gen(function* () {
-      const calls: FakeCall[] = [];
-      const definitions = fakeDefinitions({ edit: () => Promise.resolve("should not run") }, calls);
-      const execute = makeHarness({ definitions });
-      yield* Effect.promise(() =>
-        expect(
-          execute("call-empty-edit", "return await tools.pi.edit({ path: 'x', edits: [] });"),
-        ).rejects.toThrow(/\[InvalidToolInput\]/),
-      );
-      expect(calls).toHaveLength(0);
-    }),
-  );
-
-  it.effect("rejects representative invalid numeric bounds before dispatch", () =>
-    Effect.gen(function* () {
-      const invalidNumericCalls = [
+      const invalidCalls = [
         `tools.pi.read({ path: "x", offset: 0 })`,
         `tools.pi.grep({ pattern: "x", context: -1 })`,
         `tools.pi.find({ pattern: "*", limit: Number.MAX_SAFE_INTEGER + 1 })`,
         `tools.pi.ls({ limit: Infinity })`,
         `tools.pi.bash({ command: "true", timeout: 0 })`,
         `tools.pi.powershell({ command: "Write-Output ok", timeout: NaN })`,
+        `tools.pi.edit({ path: "x", edits: [] })`,
       ];
       const calls: FakeCall[] = [];
       const execute = makeHarness({
         config: { maxToolCalls: 100 },
-        definitions: numericDefinitions(calls),
+        definitions: leafDefinitions(calls),
       });
-      const attempts = invalidNumericCalls
+      const attempts = invalidCalls
         .map((call) => `[${JSON.stringify(call)}, () => ${call}]`)
         .join(",\n");
       const result = yield* Effect.promise(() =>
@@ -254,14 +184,14 @@ describe("guest catalog", () => {
             `,
         ),
       );
-      expect(guestJson(textOf(result))).toEqual(invalidNumericCalls);
+      expect(guestJson(textOf(result))).toEqual(invalidCalls);
       expect(calls).toEqual([]);
     }),
   );
 
-  it.effect("forwards representative valid numeric inputs unchanged", () =>
+  it.effect("forwards representative valid input to every leaf unchanged", () =>
     Effect.gen(function* () {
-      const validNumericCalls = [
+      const validCalls = [
         {
           name: "read",
           source: `tools.pi.read({ path: "x", offset: 1, limit: Number.MAX_SAFE_INTEGER })`,
@@ -282,12 +212,22 @@ describe("guest catalog", () => {
           source: `tools.pi.powershell({ command: "Write-Output ok", timeout: 0.25 })`,
           input: { command: "Write-Output ok", timeout: 0.25 },
         },
+        {
+          name: "edit",
+          source: `tools.pi.edit({ path: "a", edits: [{ oldText: "before", newText: "after" }] })`,
+          input: { path: "a", edits: [{ oldText: "before", newText: "after" }] },
+        },
+        {
+          name: "write",
+          source: `tools.pi.write({ path: "a", content: "x" })`,
+          input: { path: "a", content: "x" },
+        },
+        { name: "find", source: `tools.pi.find({ pattern: "*" })`, input: { pattern: "*" } },
+        { name: "ls", source: `tools.pi.ls({})`, input: {} },
       ] as const;
       const calls: FakeCall[] = [];
-      const execute = makeHarness({ definitions: numericDefinitions(calls) });
-      const body = validNumericCalls
-        .map(({ source }) => `values.push(await ${source});`)
-        .join("\n");
+      const execute = makeHarness({ definitions: leafDefinitions(calls) });
+      const body = validCalls.map(({ source }) => `values.push(await ${source});`).join("\n");
       const result = yield* Effect.promise(() =>
         execute(
           "call-valid-numeric-inputs",
@@ -298,64 +238,15 @@ describe("guest catalog", () => {
             `,
         ),
       );
-      expect(guestJson(textOf(result))).toEqual(validNumericCalls.map(({ name }) => name));
+      expect(guestJson(textOf(result))).toEqual(validCalls.map(({ name }) => name));
       expect(calls.map(({ name, input }) => ({ name, input }))).toEqual(
-        validNumericCalls.map(({ name, input }) => ({ name, input })),
+        validCalls.map(({ name, input }) => ({ name, input })),
       );
     }),
   );
 
-  it.effect("dispatches all seven core leaves through fake definitions", () =>
+  it.effect("does not expose PowerShell when the current definitions omit it", () =>
     Effect.gen(function* () {
-      const implemented = (name: PiGuestToolName) => () => Promise.resolve(name);
-      const definitions = fakeDefinitions({
-        read: implemented("read"),
-        bash: implemented("bash"),
-        edit: implemented("edit"),
-        write: implemented("write"),
-        grep: implemented("grep"),
-        find: implemented("find"),
-        ls: implemented("ls"),
-      });
-      const execute = makeHarness({ definitions });
-      const result = yield* Effect.promise(() =>
-        execute(
-          "call-all-tools",
-          `
-              const values = [];
-              values.push(await tools.pi.read({ path: "a" }));
-              values.push(await tools.pi.bash({ command: "true" }));
-              values.push(await tools.pi.edit({
-                path: "a",
-                edits: [{ oldText: "before", newText: "after" }]
-              }));
-              values.push(await tools.pi.write({ path: "a", content: "x" }));
-              values.push(await tools.pi.grep({ pattern: "x" }));
-              values.push(await tools.pi.find({ pattern: "*" }));
-              values.push(await tools.pi.ls({}));
-              return values.join(",");
-            `,
-        ),
-      );
-      expect(textOf(result)).toBe("read,bash,edit,write,grep,find,ls");
-    }),
-  );
-
-  it.effect("exposes PowerShell only when the current definitions include it", () =>
-    Effect.gen(function* () {
-      const calls: FakeCall[] = [];
-      const windows = makeHarness({
-        definitions: fakeDefinitions({ powershell: () => Promise.resolve("powershell-ok") }, calls),
-      });
-      const result = yield* Effect.promise(() =>
-        windows(
-          "call-powershell",
-          `return await tools.pi.powershell({ command: "Write-Output ok" });`,
-        ),
-      );
-      expect(textOf(result)).toBe("powershell-ok");
-      expect(calls.map((call) => call.name)).toEqual(["powershell"]);
-
       const nonWindows = makeHarness();
       yield* Effect.promise(() =>
         expect(
@@ -371,19 +262,15 @@ describe("guest catalog", () => {
   it.effect("returns structured results from the explicit Background Tasks adapter", () =>
     Effect.gen(function* () {
       const calls: Array<{ id: string; input: unknown; signal: AbortSignal }> = [];
-      const capability: BackgroundTaskCodeModeCapability = {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId: "test-session",
-        execute: (id, input, signal) => {
-          calls.push({ id, input, signal });
-          return Promise.resolve({
-            action: "start",
-            text: "Started bg-1",
-            snapshot: backgroundSnapshot,
-          });
-        },
-      };
-      const execute = makeHarness({ events: backgroundEvents([capability]) });
+      const events = backgroundTaskProvider((id, input, signal) => {
+        calls.push({ id, input, signal });
+        return Promise.resolve({
+          action: "start",
+          text: "Started bg-1",
+          snapshot: backgroundSnapshot,
+        });
+      });
+      const execute = makeHarness({ events });
       const result = yield* Effect.promise(() =>
         execute(
           "call-background",
@@ -619,18 +506,14 @@ describe("final model-visible byte bound", () => {
 describe("cumulative nested output budget", () => {
   it.effect("charges structured Background Tasks output as compact JSON", () =>
     Effect.gen(function* () {
-      const capability: BackgroundTaskCodeModeCapability = {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId: "test-session",
-        execute: () =>
+      const execute = makeHarness({
+        events: backgroundTaskProvider(() =>
           Promise.resolve({
             action: "status",
             text: "x".repeat(200),
             snapshot: backgroundSnapshot,
           }),
-      };
-      const execute = makeHarness({
-        events: backgroundEvents([capability]),
+        ),
         config: { maxCumulativeChildOutputBytes: 80 },
       });
       const result = yield* Effect.promise(() =>
@@ -681,60 +564,53 @@ describe("cumulative nested output budget", () => {
 });
 
 describe("cancellation", () => {
-  it.effect("aborts a nested Background Tasks wait through the protocol signal", () =>
-    Effect.gen(function* () {
-      const started = Deferred.makeUnsafe<void>();
-      let seenSignal: AbortSignal | undefined;
-      const capability: BackgroundTaskCodeModeCapability = {
-        version: BACKGROUND_TASK_CODE_MODE_VERSION,
-        sessionId: "test-session",
-        execute: (_id, _input, signal) => {
-          seenSignal = signal;
-          void Deferred.doneUnsafe(started, Effect.void);
-          return blockingCall();
-        },
-      };
-      const execute = makeHarness({ events: backgroundEvents([capability]) });
-      const controller = new AbortController();
-      const pending = execute(
-        "call-background-abort",
-        `return await tools.session.backgroundTask({ action: "wait", id: "bg-1", until: "exit" });`,
-        controller.signal,
-      );
-      yield* Deferred.await(started);
-      controller.abort();
-      const result = yield* Effect.promise(() => pending);
-      expect(textOf(result)).toContain("Execution cancelled.");
-      expect(result.details.executionReceipts).toMatchObject({ total: 1, unknown: 1 });
-      expect(seenSignal?.aborted).toBe(true);
-    }),
-  );
-
-  it.effect("aborts mid-flight executions and their nested calls through the outer signal", () =>
-    Effect.gen(function* () {
-      const calls: FakeCall[] = [];
-      const started = Deferred.makeUnsafe<void>();
-      const definitions = fakeDefinitions(
-        { read: () => blockingCall(() => void Deferred.doneUnsafe(started, Effect.void)) },
-        calls,
-      );
-      const execute = makeHarness({ definitions });
-      const controller = new AbortController();
-      const pending = execute(
-        "call-abort",
-        "return await tools.pi.read({ path: 'hang' });",
-        controller.signal,
-      );
-      yield* Deferred.await(started);
-      controller.abort();
-      const result = yield* Effect.promise(() => pending);
-      expect(textOf(result)).toContain("Execution cancelled.");
-      expect(result.details.executionReceipts).toMatchObject({ total: 1, unknown: 1 });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      expect((result.details as CodeModeToolDetails).cancelled).toBe(true);
-      expect(result.details.toolCalls[0]?.subject).toBe("hang");
-      expect(calls[0]?.signal?.aborted).toBe(true);
-    }),
+  type OnStart = (signal: AbortSignal | undefined) => void;
+  it.effect.each([
+    {
+      label: "Pi read",
+      code: "return await tools.pi.read({ path: 'hang' });",
+      subject: "hang",
+      options: (onStart: OnStart): HarnessOptions => ({
+        definitions: fakeDefinitions({
+          read: (_input, signal) => blockingCall(() => onStart(signal)),
+        }),
+      }),
+    },
+    {
+      label: "Background Tasks wait",
+      code: `return await tools.session.backgroundTask({ action: "wait", id: "bg-1", until: "exit" });`,
+      options: (onStart: OnStart): HarnessOptions => ({
+        events: backgroundTaskProvider((_id, _input, signal) =>
+          blockingCall(() => onStart(signal)),
+        ),
+      }),
+    },
+    {
+      label: "MCP call",
+      code: `return await tools.mcp.request({action:"tools.call",server:"fixture",tool:"wait"});`,
+      options: (onStart: OnStart): HarnessOptions => ({
+        events: mcpProvider((_id, _input, signal) => blockingCall(() => onStart(signal))),
+      }),
+    },
+  ])(
+    "aborts a pending $label and its nested signal without waiting for foreign settlement",
+    ({ code, subject, options }) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<AbortSignal | undefined>();
+        const execute = makeHarness(
+          options((signal) => Deferred.doneUnsafe(started, Effect.succeed(signal))),
+        );
+        const controller = new AbortController();
+        const pending = execute("call-abort", code, controller.signal);
+        const signal = yield* Deferred.await(started);
+        controller.abort();
+        const result = yield* Effect.promise(() => pending);
+        expect(signal?.aborted).toBe(true);
+        expect(textOf(result)).toContain("Execution cancelled.");
+        expect(result.details.cancelled).toBe(true);
+        expect(result.details.executionReceipts).toMatchObject({ total: 1, unknown: 1 });
+        if (subject !== undefined) expect(result.details.toolCalls[0]?.subject).toBe(subject);
+      }),
   );
 });
 
@@ -778,29 +654,19 @@ describe("progress", () => {
 
   it.effect("keeps high-call cancellation final state isolated from hostile progress updates", () =>
     Effect.gen(function* () {
-      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-        options,
-      ) =>
+      const executeCodeMode = scriptedRuntime((emit) =>
         Effect.gen(function* () {
           for (let id = 0; id <= 256; id += 1)
-            yield* (
-              options.onToolCallLifecycle?.({
-                id,
-                name: "pi.read",
-                status: "queued",
-              }) ?? Effect.void
-            );
-          yield* (
-            options.onToolCallLifecycle?.({
-              id: 256,
-              name: "pi.read",
-              status: "cancelled",
-              started: false,
-              durationMs: 1,
-            }) ?? Effect.void
-          );
-          return { ok: true as const, value: "done" };
-        });
+            yield* emit({ id, name: "pi.read", status: "queued" });
+          yield* emit({
+            id: 256,
+            name: "pi.read",
+            status: "cancelled",
+            started: false,
+            durationMs: 1,
+          });
+        }),
+      );
       const execute = makeHarness({ executeCodeMode });
       const result = yield* Effect.promise(() =>
         execute("call-never-started", "return 'done';", undefined, (partial) => {
@@ -825,44 +691,18 @@ describe("progress", () => {
   it.effect("retains recent failures and cancellations beyond the 256-row cap", () =>
     Effect.gen(function* () {
       const callCount = 300;
-      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-        options,
-      ) =>
+      const executeCodeMode = scriptedRuntime((emit) =>
         Effect.gen(function* () {
           for (let id = 0; id < callCount; id += 1) {
             const name = `nested-${id}`;
-            yield* options.onToolCallLifecycle?.({ id, name, status: "queued" }) ?? Effect.void;
+            yield* emit({ id, name, status: "queued" });
             if (id % 2 === 0) {
-              yield* (
-                options.onToolCallLifecycle?.({
-                  id,
-                  name,
-                  status: "running",
-                }) ?? Effect.void
-              );
-              yield* (
-                options.onToolCallLifecycle?.({
-                  id,
-                  name,
-                  status: "failed",
-                  started: true,
-                  durationMs: 1,
-                }) ?? Effect.void
-              );
-            } else {
-              yield* (
-                options.onToolCallLifecycle?.({
-                  id,
-                  name,
-                  status: "cancelled",
-                  started: false,
-                  durationMs: 1,
-                }) ?? Effect.void
-              );
-            }
+              yield* emit({ id, name, status: "running" });
+              yield* emit({ id, name, status: "failed", started: true, durationMs: 1 });
+            } else yield* emit({ id, name, status: "cancelled", started: false, durationMs: 1 });
           }
-          return { ok: true as const, value: "done" };
-        });
+        }),
+      );
       const execute = makeHarness({
         config: { maxToolCalls: callCount },
         executeCodeMode,
@@ -896,54 +736,20 @@ describe("progress", () => {
   it.effect("never evicts queued or running rows at the 256-row cap", () =>
     Effect.gen(function* () {
       const succeeded = 300;
-      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-        options,
-      ) =>
+      const executeCodeMode = scriptedRuntime((emit) =>
         Effect.gen(function* () {
-          yield* (
-            options.onToolCallLifecycle?.({
-              id: 0,
-              name: "queued-survivor",
-              status: "queued",
-            }) ?? Effect.void
-          );
-          yield* (
-            options.onToolCallLifecycle?.({
-              id: 1,
-              name: "running-survivor",
-              status: "queued",
-            }) ?? Effect.void
-          );
-          yield* (
-            options.onToolCallLifecycle?.({
-              id: 1,
-              name: "running-survivor",
-              status: "running",
-            }) ?? Effect.void
-          );
+          yield* emit({ id: 0, name: "queued-survivor", status: "queued" });
+          yield* emit({ id: 1, name: "running-survivor", status: "queued" });
+          yield* emit({ id: 1, name: "running-survivor", status: "running" });
           for (let offset = 0; offset < succeeded; offset += 1) {
             const id = offset + 2;
             const name = `completed-${id}`;
-            yield* options.onToolCallLifecycle?.({ id, name, status: "queued" }) ?? Effect.void;
-            yield* (
-              options.onToolCallLifecycle?.({
-                id,
-                name,
-                status: "running",
-              }) ?? Effect.void
-            );
-            yield* (
-              options.onToolCallLifecycle?.({
-                id,
-                name,
-                status: "succeeded",
-                started: true,
-                durationMs: 1,
-              }) ?? Effect.void
-            );
+            yield* emit({ id, name, status: "queued" });
+            yield* emit({ id, name, status: "running" });
+            yield* emit({ id, name, status: "succeeded", started: true, durationMs: 1 });
           }
-          return { ok: true as const, value: "done" };
-        });
+        }),
+      );
       const execute = makeHarness({
         config: { maxToolCalls: succeeded + 2 },
         executeCodeMode,
@@ -1000,77 +806,6 @@ describe("progress", () => {
         true,
       );
       expect(callUpdates.at(-1)?.details.toolCalls[0]?.status).toBe("completed");
-    }),
-  );
-
-  it.effect("retains recent calls beyond the cap with a reload-cached legacy runtime", () =>
-    Effect.gen(function* () {
-      const definitions = fakeDefinitions({ read: () => Promise.resolve("legacy-data") });
-      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-        options,
-      ) => {
-        const { onToolCallLifecycle: _ignored, ...legacyOptions } = options;
-        return CodeMode.execute(legacyOptions);
-      };
-      const execute = makeHarness({ definitions, executeCodeMode, config: { maxToolCalls: 300 } });
-      const result = yield* Effect.promise(() =>
-        execute(
-          "call-legacy-runtime",
-          "for (let index = 0; index < 299; index++) await tools.pi.read({ path: 'legacy-' + index }); return await tools.pi.read({ path: 'legacy-299' });",
-        ),
-      );
-      expect(textOf(result)).toBe("legacy-data");
-      expect(result.details.counts).toMatchObject({ total: 300, succeeded: 300, running: 0 });
-      expect(result.details.toolCalls).toEqual(
-        Array.from({ length: MAX_PROGRESS_ENTRIES }, (_, offset) =>
-          expect.objectContaining({
-            tool: "pi.read",
-            status: "completed",
-            subject: expect.stringContaining(`legacy-${300 - MAX_PROGRESS_ENTRIES + offset}`),
-          }),
-        ),
-      );
-    }),
-  );
-  it.effect("counts legacy calls hidden by active rows and cancels the retained survivors", () =>
-    Effect.gen(function* () {
-      const executeCodeMode: NonNullable<CodeModeExecutionEnvironment["executeCodeMode"]> = (
-        options,
-      ) =>
-        Effect.gen(function* () {
-          for (let index = 0; index < 300; index++) {
-            yield* (
-              options.onToolCallStart?.({ index, name: `legacy-${index}`, input: {} }) ??
-                Effect.void
-            );
-          }
-          for (let index = 1; index < 300; index++) {
-            yield* (
-              options.onToolCallEnd?.({
-                index,
-                outcome: index === 1 || index === 299 ? "failure" : "success",
-                durationMs: 1,
-              }) ?? Effect.void
-            );
-          }
-          return { ok: true as const, value: "done" };
-        });
-      const execute = makeHarness({ executeCodeMode, config: { maxToolCalls: 300 } });
-      const result = yield* Effect.promise(() => execute("legacy-active-cap", "return 'done';"));
-      expect(result.details.counts).toEqual({
-        total: 300,
-        queued: 0,
-        running: 0,
-        succeeded: 297,
-        failed: 2,
-        cancelled: 1,
-      });
-      expect(result.details.toolCalls).toHaveLength(MAX_PROGRESS_ENTRIES);
-      expect(result.details.toolCalls[0]).toMatchObject({ tool: "legacy-0", status: "cancelled" });
-      expect(result.details.toolCalls.at(-1)).toMatchObject({
-        tool: "legacy-255",
-        status: "completed",
-      });
     }),
   );
 });
@@ -1137,7 +872,7 @@ describe("MCP guest execution", () => {
       const started: string[] = [];
       const ids = new Set<string>();
       const release = yield* Deferred.make<void>();
-      const events = mcpEvents((callId, input, _signal, allowance) => {
+      const events = mcpProvider((callId, input, _signal, allowance) => {
         ids.add(callId);
         expect(allowance).toBeGreaterThan(0);
         if (input.action === "tools.call") {
@@ -1184,7 +919,7 @@ describe("MCP guest execution", () => {
   it.effect("rejects management and excess fields before the provider receives anything", () =>
     Effect.gen(function* () {
       let called = false;
-      const events = mcpEvents(() => {
+      const events = mcpProvider(() => {
         called = true;
         return Promise.reject(new Error("unreachable"));
       });
@@ -1239,7 +974,7 @@ describe("MCP guest execution", () => {
           data: null,
           notices: [],
         };
-        const events = mcpEvents((_id, _input, _signal, allowance) => {
+        const events = mcpProvider((_id, _input, _signal, allowance) => {
           allowances.push(allowance);
           if (allowances.length === 1) return Promise.resolve(response);
           return Promise.reject(mcpCodeModeError("transport", "unknown"));
@@ -1268,29 +1003,6 @@ describe("MCP guest execution", () => {
         );
         expect(allowances.at(-1)).toBe(0);
         expect(errors.at(-1)).toBe("");
-      }),
-  );
-
-  it.effect(
-    "forwards outer cancellation to a pending MCP call without waiting for foreign settlement",
-    () =>
-      Effect.gen(function* () {
-        const started = yield* Deferred.make<AbortSignal>();
-        const events = mcpEvents((_id, _input, signal) => {
-          Effect.runSync(Deferred.succeed(started, signal));
-          return Promise.race([]);
-        });
-        const controller = new AbortController();
-        const pending = makeHarness({ events })(
-          "mcp-abort",
-          `return await tools.mcp.request({action:"tools.call",server:"fixture",tool:"wait"});`,
-          controller.signal,
-        );
-        const signal = yield* Deferred.await(started);
-        controller.abort();
-        const result = yield* Effect.promise(() => pending);
-        expect(signal.aborted).toBe(true);
-        expect(result.details.cancelled).toBe(true);
       }),
   );
 });

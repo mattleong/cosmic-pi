@@ -3,27 +3,30 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
-import type { BackendLaunchRequest, BackendStartupState } from "../backend/model.ts";
+import type { BackendLaunchRequest } from "../backend/model.ts";
 import type { SubagentBackendRegistryContract } from "../backend/service.ts";
 import { DEFAULT_SUBAGENT_NESTING_POLICY, type SubagentNestingPolicy } from "../config/schema.ts";
 import { isRetainableProfileCandidate } from "../profiles/model.ts";
-import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { normalizeWriteClaims } from "../domain/write-claims.ts";
-import { processCapacityError, writerConflictError } from "./admission.ts";
+import { canonicalizeWriterCwd, processCapacityError, writerConflictError } from "./admission.ts";
 import { peerNoticeText } from "./coordination.ts";
 import { childSystemPrompt, taskPrompt } from "./tool-policy.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest,
   type SubagentError,
   SubagentHistoryCapacityError,
   SubagentProcessError,
   SubagentRuntimeClosedError,
   UnsupportedSafeWriterOwnershipError,
 } from "./errors.ts";
-import { completeRunInitialization, type RunRecord } from "./internal.ts";
+import {
+  commitRunInitialization,
+  completeRunInitialization,
+  type RunContext,
+  type RunRecord,
+} from "./internal.ts";
 import { descendantRunIds } from "./tree.ts";
 import { MAX_RETAINED_RUNS } from "./limits.ts";
-import { runSessionOwned } from "./session-owned.ts";
 import {
   emptyUsage,
   isActiveRunState,
@@ -33,7 +36,11 @@ import {
   type StartSubagentRequest,
   type SubagentRunView,
 } from "./model.ts";
+import type { RunAssignment } from "./assignment.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
+import type { RunProcessInitializer } from "./process-lifecycle.ts";
+import type { RunRecordCleanup } from "./record-cleanup.ts";
+import type { RunSettlement } from "./settlement.ts";
 import {
   MAX_ERROR_CHARS,
   MAX_TASK_CHARS,
@@ -42,8 +49,9 @@ import {
   snapshotView,
 } from "./state.ts";
 import { emptyRunWarningSlots } from "./warnings.ts";
-import { addWriterPoolMemberLocked, type WriterPoolEntry } from "./writer-pool.ts";
+import { addWriterPoolMemberLocked } from "./writer-pool.ts";
 import { failedStartRecoveryForRecord } from "./retry.ts";
+import type { RunWorkspaceControl } from "./workspace-control.ts";
 
 const failedStartRecoveries = new WeakMap<SubagentError, FailedStartRecovery>();
 
@@ -53,32 +61,23 @@ const validateStartRequest = (
 ): Effect.Effect<ReadonlyArray<string> | undefined, SubagentError> =>
   Effect.gen(function* () {
     if (!request.task.trim())
-      return yield* new InvalidSubagentRequestError({
-        code: "task_required",
-        message: "Subagent task is required.",
-      });
+      return yield* invalidRequest("task_required", "Subagent task is required.");
     if (request.task.length > MAX_TASK_CHARS)
-      return yield* new InvalidSubagentRequestError({
-        code: "task_too_large",
-        message: "Subagent task is too large.",
-      });
+      return yield* invalidRequest("task_too_large", "Subagent task is too large.");
     const normalizedClaims =
       request.writes === undefined ? undefined : normalizeWriteClaims(request.writes);
     if (normalizedClaims && !normalizedClaims.ok)
-      return yield* new InvalidSubagentRequestError({
-        code: normalizedClaims.code,
-        message: normalizedClaims.message,
-      });
+      return yield* invalidRequest(normalizedClaims.code, normalizedClaims.message);
     if (normalizedClaims && request.writeIntent !== "writer")
-      return yield* new InvalidSubagentRequestError({
-        code: "write_claims_read_only",
-        message: "writes may be supplied only for a writer subagent.",
-      });
+      return yield* invalidRequest(
+        "write_claims_read_only",
+        "writes may be supplied only for a writer subagent.",
+      );
     if (request.closeOnReport === false && !isRetainableProfileCandidate(request))
-      return yield* new InvalidSubagentRequestError({
-        code: "retained_report_capability_invalid",
-        message: "closeOnReport=false requires a Herdr-hosted read-only backend.",
-      });
+      return yield* invalidRequest(
+        "retained_report_capability_invalid",
+        "closeOnReport=false requires a Herdr-hosted read-only backend.",
+      );
     if (request.writeIntent === "writer" && platform === "win32")
       return yield* new UnsupportedSafeWriterOwnershipError({
         code: "unsupported_safe_writer_ownership",
@@ -93,19 +92,11 @@ const validateStartRequest = (
 export const getFailedStartRecovery = (error: SubagentError): FailedStartRecovery | undefined =>
   failedStartRecoveries.get(error);
 
-export interface RunLaunchDependencies {
-  readonly ownerScope: Scope.Scope;
+export interface RunLaunchDependencies extends RunContext {
   readonly backendRegistry: SubagentBackendRegistryContract;
-  readonly writerLeases: WriterLeaseContract;
-  /** The service-owned run registry; launch admission inserts and evicts under the lock. */
+  /** The service-owned run registry; only launch admission inserts and evicts, under the lock. */
   readonly records: Map<string, RunRecord>;
-  /** One session-owned cross-process writer pool per canonical cwd digest. */
-  readonly writerPools: Map<string, WriterPoolEntry>;
-  /** The shared service lock guarding every RunRecord mutation. */
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
   readonly delivery: RunNotificationDelivery;
-  readonly redactCompletionReport: (view: SubagentRunView) => SubagentRunView;
   /** Service-owned shutdown flag, observed under the admission lock. */
   readonly isClosed: () => boolean;
   /** Service-owned run ordinal/name allocation, invoked under the admission lock. */
@@ -113,29 +104,14 @@ export interface RunLaunchDependencies {
     readonly id: string;
     readonly name: string;
   };
-  /** Service-owned assignment-attempt token allocation, invoked under the admission lock. */
-  readonly allocateAssignmentAttemptToken: () => string;
-  readonly reclaimRecordRunState: (record: RunRecord) => Effect.Effect<void, SubagentError>;
-  /** Quarantines uncertain/partial eviction reclamation so the old run cannot resume. */
-  readonly quarantineReclaimFailure: (record: RunRecord) => Effect.Effect<void>;
-  readonly markCleanupPending: (record: RunRecord) => Effect.Effect<void>;
-  readonly closeRecordScope: (record: RunRecord) => Effect.Effect<void>;
-  readonly settle: (
-    record: RunRecord,
-    state: "completed" | "failed" | "stopped",
-    error?: string,
-  ) => Effect.Effect<SubagentRunView>;
-  readonly submitPrompt: (
-    record: RunRecord,
-    message: string,
-    operation: "start" | "resume",
-    attemptToken: string,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly initializeProcess: (
-    record: RunRecord,
-  ) => Effect.Effect<BackendStartupState, SubagentError>;
-  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  readonly bindWorkspace: (record: RunRecord, request: StartSubagentRequest) => void;
+  readonly reclaimRecordRunState: RunRecordCleanup["reclaimRecordRunState"];
+  readonly retainCleanupQuarantine: RunRecordCleanup["retainCleanupQuarantine"];
+  readonly markCleanupPending: RunRecordCleanup["markCleanupPending"];
+  readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
+  readonly settle: RunSettlement["settle"];
+  readonly submitPrompt: RunAssignment["submitPrompt"];
+  readonly initializeProcess: RunProcessInitializer;
+  readonly bindWorkspace: RunWorkspaceControl["bind"];
 }
 
 /**
@@ -147,7 +123,6 @@ export interface RunLaunchDependencies {
  */
 export function makeRunLaunch(dependencies: RunLaunchDependencies) {
   const {
-    ownerScope,
     backendRegistry,
     writerLeases,
     records,
@@ -155,12 +130,11 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
     withLock,
     publish,
     delivery,
-    redactCompletionReport,
     isClosed,
     allocateRunIdentity,
     allocateAssignmentAttemptToken,
     reclaimRecordRunState,
-    quarantineReclaimFailure,
+    retainCleanupQuarantine,
     markCleanupPending,
     closeRecordScope,
     settle,
@@ -185,17 +159,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
         );
         const canonicalWriterCwd =
           request.writeIntent === "writer"
-            ? yield* restore(
-                writerLeases.canonicalize(request.cwd).pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new InvalidSubagentRequestError({
-                        code: "writer_cwd_canonicalization_failed",
-                        message: error.message,
-                      }),
-                  ),
-                ),
-              )
+            ? yield* restore(canonicalizeWriterCwd(writerLeases, request.cwd))
             : undefined;
         // Public profile routing already preflights for ordered fallback. Recheck at the service
         // admission boundary with the canonical writer cwd to close readiness races and protect
@@ -254,10 +218,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 predecessor.retryClaim?.token !== request.supersedes.claimToken ||
                 predecessor.view.supersededByRunId !== undefined)
             )
-              return yield* new InvalidSubagentRequestError({
-                code: "retry_claim_stale",
-                message: `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
-              });
+              return yield* invalidRequest(
+                "retry_claim_stale",
+                `Failed predecessor ${request.supersedes.runId} no longer owns this next-candidate retry claim.`,
+              );
             return predecessor;
           });
 
@@ -266,30 +230,30 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const parent =
               parentRunId === SUBAGENT_ROOT_RUN_ID ? undefined : records.get(parentRunId);
             if (parentRunId !== SUBAGENT_ROOT_RUN_ID && !parent)
-              return yield* new InvalidSubagentRequestError({
-                code: "parent_run_not_found",
-                message: `Subagent parent ${parentRunId} is no longer registered.`,
-              });
+              return yield* invalidRequest(
+                "parent_run_not_found",
+                `Subagent parent ${parentRunId} is no longer registered.`,
+              );
             if (parent && (parent.stoppedByParent || !isActiveRunState(parent.view.state)))
-              return yield* new InvalidSubagentRequestError({
-                code: "parent_run_disconnected",
-                message: `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
-              });
+              return yield* invalidRequest(
+                "parent_run_disconnected",
+                `Subagent parent ${parentRunId} is not connected and cannot spawn a child.`,
+              );
             const parentDepth = parent?.view.depth ?? 0;
             if (parentDepth >= nestingPolicy.maxDepth)
-              return yield* new InvalidSubagentRequestError({
-                code: "nesting_depth_limit",
-                message: `Subagent nesting depth reached (${nestingPolicy.maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
-              });
+              return yield* invalidRequest(
+                "nesting_depth_limit",
+                `Subagent nesting depth reached (${nestingPolicy.maxDepth}); ${parentRunId} cannot spawn another Pi run node.`,
+              );
             if (
               request.supersedes &&
               predecessor &&
               (predecessor.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) !== parentRunId
             )
-              return yield* new InvalidSubagentRequestError({
-                code: "retry_parent_mismatch",
-                message: "A retry successor must keep its predecessor's parent.",
-              });
+              return yield* invalidRequest(
+                "retry_parent_mismatch",
+                "A retry successor must keep its predecessor's parent.",
+              );
             return parent;
           });
 
@@ -407,50 +371,6 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           ),
         });
 
-        const buildRunRecord = (
-          view: SubagentRunView,
-          scope: Scope.Closeable,
-          launch: BackendLaunchRequest,
-          cleanupSettlement: Deferred.Deferred<"confirmed" | "quarantined">,
-          initializationSettled: Deferred.Deferred<void>,
-          assignmentAttemptToken: string,
-          writerPool: WriterPoolEntry | undefined,
-        ): RunRecord => ({
-          view,
-          scope,
-          driver,
-          launch,
-          activeTools: new Map(),
-          nativeAgents: new Map(),
-          nativeAgentTotal: 0,
-          cleanupSettlement,
-          cleanupDisposition: "pending",
-          routeContinuation: request.routeContinuation,
-          retryExhausted: false,
-          pauseRequested: false,
-          stoppedByParent: false,
-          cleanupPending: false,
-          runStateReclaimState: "pending",
-          writeViolationContainmentStarted: false,
-          ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
-          initializationPending: true,
-          initializationSettled,
-          notificationGeneration: 0,
-          completionGeneration: 0,
-          warningSlots: emptyRunWarningSlots(),
-          completionGenerations: new Map(),
-          completionClaims: new Map(),
-          assignment: {
-            epoch: 1,
-            phase: "preparing",
-            attemptToken: assignmentAttemptToken,
-            startedObserved: false,
-            outcomeUncertain: false,
-            pendingRunSettled: false,
-          },
-          nextAssignmentEpoch: 2,
-        });
-
         /**
          * Shared locked final admission and record construction. Rechecks every
          * admission constraint before deleting history; `ownReservation` is this
@@ -479,19 +399,43 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             const initializationSettled = Deferred.makeUnsafe<void>();
             const cleanupSettlement = yield* Deferred.make<"confirmed" | "quarantined">();
             const { id, name } = allocateRunIdentity(requestedName);
-            const assignmentAttemptToken = allocateAssignmentAttemptToken();
+            const attemptToken = allocateAssignmentAttemptToken();
             const writerPool = yield* writerPoolForAdmissionLocked(id);
-            const view = buildRunView(parent, id, name);
-            const launch = buildBackendLaunch(id, name);
-            const record = buildRunRecord(
-              view,
+            const record: RunRecord = {
+              view: buildRunView(parent, id, name),
               scope,
-              launch,
+              driver,
+              launch: buildBackendLaunch(id, name),
+              activeTools: new Map(),
+              nativeAgents: new Map(),
+              nativeAgentTotal: 0,
               cleanupSettlement,
+              cleanupDisposition: "pending",
+              routeContinuation: request.routeContinuation,
+              retryExhausted: false,
+              pauseRequested: false,
+              stoppedByParent: false,
+              cleanupPending: false,
+              runStateReclaimState: "pending",
+              writeViolationContainmentStarted: false,
+              ...(canonicalWriterCwd && { canonicalWriterCwd, writerPool }),
+              initializationPending: true,
               initializationSettled,
-              assignmentAttemptToken,
-              writerPool,
-            );
+              notificationGeneration: 0,
+              completionGeneration: 0,
+              warningSlots: emptyRunWarningSlots(),
+              completionGenerations: new Map(),
+              completionClaims: new Map(),
+              assignment: {
+                epoch: 1,
+                phase: "preparing",
+                attemptToken,
+                startedObserved: false,
+                outcomeUncertain: false,
+                pendingRunSettled: false,
+              },
+              nextAssignmentEpoch: 2,
+            };
             if (predecessor) {
               predecessor.retryClaim = undefined;
               predecessor.view = { ...predecessor.view, supersededByRunId: id };
@@ -530,23 +474,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                       (right.view.endedAt ?? right.view.startedAt),
                   )[0];
                 if (candidate && candidate.runStateReclaimState !== "reclaimed") {
-                  const capacityFailure = processCapacityError(
-                    records,
-                    parentRunId,
-                    nestingPolicy.maxDirectChildren,
+                  yield* validateCapacityLocked(
+                    undefined,
+                    request.supersedes ? records.get(request.supersedes.runId) : undefined,
                   );
-                  if (capacityFailure) return yield* capacityFailure;
-                  if (canonicalWriterCwd) {
-                    const writerFailure = writerConflictError(
-                      records,
-                      writerPools,
-                      canonicalWriterCwd,
-                      writeClaims,
-                      undefined,
-                      request.supersedes ? records.get(request.supersedes.runId) : undefined,
-                    );
-                    if (writerFailure) return yield* writerFailure;
-                  }
                   candidate.evictionClaim = canonicalWriterCwd
                     ? {
                         parentRunId,
@@ -591,18 +522,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           attempt.kind === "reserved"
             ? attempt.record
             : yield* reclaimRecordRunState(attempt.candidate).pipe(
+                Effect.andThen(admitReclaimed(attempt.candidate)),
                 Effect.onError(() =>
-                  quarantineReclaimFailure(attempt.candidate).pipe(
+                  retainCleanupQuarantine(attempt.candidate, attempt.candidate.scope).pipe(
                     Effect.andThen(clearEvictionClaim(attempt.candidate)),
-                  ),
-                ),
-                Effect.andThen(
-                  admitReclaimed(attempt.candidate).pipe(
-                    Effect.onError(() =>
-                      quarantineReclaimFailure(attempt.candidate).pipe(
-                        Effect.andThen(clearEvictionClaim(attempt.candidate)),
-                      ),
-                    ),
                   ),
                 ),
               );
@@ -617,11 +540,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           // commit its deferred settlement before this start result is returned.
           yield* Effect.yieldNow;
           if (request.effortWasExplicit && state.effort !== request.effort)
-            return yield* new InvalidSubagentRequestError({
-              code: "pi_effort_unsupported",
-              message: `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.effort}.`,
-            });
-          const resolvedModel = state.model ?? reserved.view.model;
+            return yield* invalidRequest(
+              "pi_effort_unsupported",
+              `Model ${request.model} does not support requested effort ${request.effort}; effective level was ${state.effort}.`,
+            );
           const startedAt = yield* Clock.currentTimeMillis;
           const activated = yield* withLock(
             Effect.gen(function* () {
@@ -631,18 +553,8 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
                 reserved.view.state === "stopped"
               )
                 return undefined;
-              completeRunInitialization(reserved);
-              reserved.resumeToken = state.resumeToken;
-              const pendingSettlement = reserved.pendingInitializationSettlement;
-              reserved.pendingInitializationSettlement = undefined;
-              reserved.view = {
-                ...reserved.view,
-                effort: state.effort,
-                model: resolvedModel,
-                lastActivityAt: startedAt,
-                sessionId: state.sessionId,
-                ...(state.sessionFile && { sessionFile: state.sessionFile }),
-              };
+              const pendingSettlement = commitRunInitialization(reserved, state);
+              reserved.view = { ...reserved.view, lastActivityAt: startedAt };
               yield* publish;
               return {
                 view: snapshotView(reserved.view),
@@ -651,10 +563,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
             }),
           );
           if (!activated)
-            return yield* new InvalidSubagentRequestError({
-              code: "start_cancelled",
-              message: `Subagent ${reserved.view.id} was stopped during startup.`,
-            });
+            return yield* invalidRequest(
+              "start_cancelled",
+              `Subagent ${reserved.view.id} was stopped during startup.`,
+            );
           if (activated.pendingSettlement) {
             const pending = activated.pendingSettlement;
             if (pending.state === "failed")
@@ -668,10 +580,10 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           const attemptToken = yield* withLock(
             Effect.gen(function* () {
               if (reserved.assignment.phase !== "preparing" || reserved.view.state !== "starting")
-                return yield* new InvalidSubagentRequestError({
-                  code: "start_cancelled",
-                  message: `Subagent ${reserved.view.id} changed state before its task could be issued.`,
-                });
+                return yield* invalidRequest(
+                  "start_cancelled",
+                  `Subagent ${reserved.view.id} changed state before its task could be issued.`,
+                );
               reserved.assignment.phase = "issuing";
               return reserved.assignment.attemptToken;
             }),
@@ -685,12 +597,7 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
           Effect.onError((cause) =>
             Effect.gen(function* () {
               const interruptedOnly = Cause.hasInterruptsOnly(cause);
-              yield* withLock(
-                Effect.sync(() => {
-                  completeRunInitialization(reserved);
-                  reserved.pendingInitializationSettlement = undefined;
-                }),
-              );
+              yield* withLock(Effect.sync(() => completeRunInitialization(reserved)));
               yield* markCleanupPending(reserved);
               if (!reserved.stoppedByParent) {
                 if (interruptedOnly) yield* settle(reserved, "stopped");
@@ -717,22 +624,11 @@ export function makeRunLaunch(dependencies: RunLaunchDependencies) {
       }),
     );
 
-  const startSessionOwned = (
-    request: StartSubagentRequest,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    runSessionOwned(ownerScope, Effect.void, () => start(request)).pipe(
-      // Public start is admission-only. A report racing prompt confirmation remains unresolved
-      // for exact-once await/notifier delivery and is never exposed or claimed here.
-      Effect.map((view) => redactCompletionReport(view)),
-    );
-
   return {
     /** Cheap input/platform checks also run before private workspace acquisition. */
     validate: (request: StartSubagentRequest) =>
       validateStartRequest(request, writerLeases.platform),
     /** Admission, eviction, record construction, initialization, prompt issue, compensation. */
     start,
-    /** Session-owned launch; cancelling the waiter never abandons ownership. */
-    startSessionOwned,
   };
 }

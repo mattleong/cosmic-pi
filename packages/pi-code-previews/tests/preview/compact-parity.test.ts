@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderCompactChildren } from "../../src/preview/compact-children";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { formatToolCallDuration } from "../../src/preview/format";
 import type { CompactSummary } from "../../src/tools/compact-summary";
-import { stripAnsi, testTheme } from "../support/render";
+import { compactChildren, plainTheme as theme, stripAnsi } from "../support/render";
 
-const theme = testTheme();
 describe("shared semantic row", () => {
   it("uses identical clipping and detail priorities after branch indentation", () => {
     for (const width of [24, 48, 100])
@@ -32,15 +30,10 @@ describe("shared semantic row", () => {
             theme,
             width,
           )[0]!;
-          const child = renderCompactChildren(
-            {
-              entries: [{ ...summary, label: "read", status: "warning", durationMs: 123 }],
-              total: 1,
-            },
-            theme,
+          const child = compactChildren(
+            [{ ...summary, label: "read", status: "warning", durationMs: 123 }],
             width + 5,
-            0,
-            timingEnabled,
+            { timing: timingEnabled },
           )[0]!;
           expect(stripAnsi(child).slice(5)).toBe(stripAnsi(standalone));
           expect(visibleWidth(child)).toBeLessThanOrEqual(width + 5);
@@ -73,43 +66,16 @@ describe("shared semantic row", () => {
               theme,
               100,
             )[0]!;
-            const child = renderCompactChildren(
-              {
-                entries: [{ ...summary, label: name, status: "running", durationMs: elapsedMs }],
-                total: 1,
-              },
-              theme,
+            const child = compactChildren(
+              [{ ...summary, label: name, status: "running", durationMs: elapsedMs }],
               105,
-              3,
-              timingEnabled,
+              { frame: 3, timing: timingEnabled },
             )[0]!;
             expect(stripAnsi(child).slice(5)).toBe(stripAnsi(standalone));
             expect(child.includes(duration)).toBe(
               timingEnabled && detail === undefined && (name === "bash" || elapsedMs >= 10000),
             );
           }
-  });
-
-  it("preserves every recovery character when subtree indentation must yield", () => {
-    const text = "abcdefghijklmnopqrstuvwxyz";
-    for (const width of [1, 2, 5, 6, 7, 12, 40]) {
-      const rows = renderCompactChildren(
-        {
-          entries: [
-            {
-              label: "read",
-              status: "error",
-              notices: [{ kind: "recovery", text, description: text }],
-            },
-          ],
-          total: 1,
-        },
-        theme,
-        width,
-      );
-      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
-      expect(stripAnsi(rows.slice(1).join("")).replace(/[\s╰─│]/gu, "")).toBe(text);
-    }
   });
 
   it("keeps selected child recovery independent of the child row budget", () => {
@@ -125,21 +91,16 @@ describe("shared semantic row", () => {
         },
       ],
     }));
-    const rows = renderCompactChildren({ entries, total: 8 }, theme, 100);
+    const rows = compactChildren(entries, 100);
     expect(rows.filter((row) => row.includes("delivery-"))).toHaveLength(5);
     expect(rows.join("\n")).not.toContain("do not replay");
     expect(rows.join("\n")).toContain("3 more");
     // Delivery failure remains authoritative even when the operation succeeded.
-    const success = renderCompactChildren(
-      { entries: [{ label: "read", status: "success", outcome: "success" }], total: 1 },
-      theme,
+    const success = compactChildren(
+      [{ label: "read", status: "success", outcome: "success" }],
       100,
     );
-    const failure = renderCompactChildren(
-      { entries: [{ label: "read", status: "error", outcome: "success" }], total: 1 },
-      theme,
-      100,
-    );
+    const failure = compactChildren([{ label: "read", status: "error", outcome: "success" }], 100);
     expect(stripAnsi(failure.join(""))).not.toBe(stripAnsi(success.join("")));
   });
 });

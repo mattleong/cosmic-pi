@@ -21,6 +21,9 @@ export {
 /** Reuse the canonical standalone-call icon in compound or nested tool renderers. */
 export { getCodePreviewToolIcon } from "./src/tools/presentation";
 
+/** Newline-joined text parts of a tool result's content. */
+export { getTextContent } from "./src/tools/data/results";
+
 /** Public settings types used by package authors integrating with pi-code-previews. */
 export type {
   CodePreviewSettings,
@@ -41,12 +44,10 @@ export {
   claimCompactIssue,
   subtractCompactIssueClaims,
   type CompactIssueClaim,
-  isCompactIssues,
   normalizeCompactIssues,
   compactIssueSeverity,
   legacyCompactIssues,
   summaryCompactIssues,
-  withoutFailureBodyIssues,
   withCompactIssues,
   type CompactIssue,
   type CompactIssues,

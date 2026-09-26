@@ -1,10 +1,6 @@
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { setCodePreviewSettings } from "../../pi-code-previews/src/config/state.ts";
-import { defaultCodePreviewSettings } from "../../pi-code-previews/src/config/defaults.ts";
-import { registerAskUserTool } from "../src/tools/ask-user.ts";
-import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
+import { renderContextFixture } from "pi-code-previews/testing";
 import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 
 const submitted = {
@@ -22,34 +18,31 @@ const row = (overrides = {}) => ({
   outcome: submitted,
   ...overrides,
 });
-function summarize<Details>(provider: CompactSummaryProvider, details: Details, isError = false) {
+type SummaryInput = Parameters<CompactSummaryProvider>[0];
+function summarize<Details>(
+  provider: CompactSummaryProvider,
+  details: Details,
+  {
+    isError = false,
+    args = {},
+    phase = "settled",
+  }: Partial<Pick<SummaryInput, "args" | "phase"> & { isError: boolean }> = {},
+) {
   return provider({
-    phase: "settled",
-    args: {},
-    result: { content: [], details },
-    // SAFETY: These pure providers read only isError, not Pi's rendering capabilities.
-    context: { isError } as Parameters<CompactSummaryProvider>[0]["context"],
+    phase,
+    args,
+    result: phase === "settled" ? { content: [], details } : undefined,
+    context: renderContextFixture({ isError }),
   });
 }
 
 describe("questionnaire compact outcome projection", () => {
-  it("keeps domain cancellation when Pi marks the result as an error", () => {
-    expect(summarize(askUserCompactSummary, cancelled, true)?.outcome).toBe("cancelled");
-    expect(
-      summarize(asyncAskUserCompactSummary, row({ status: "cancelled", outcome: cancelled }), true)
-        ?.outcome,
-    ).toBe("cancelled");
-    expect(summarize(askUserCompactSummary, submitted, true)).toBeUndefined();
-  });
   it("summarizes live transcript args without claiming an answer", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
       for (const phase of ["pending", "running"] as const) {
-        const summary = provider({
+        const summary = summarize(provider, undefined, {
           phase,
           args: { questions: [{ title: "Library" }] },
-          result: undefined,
-          // SAFETY: These providers only read isError from the renderer context.
-          context: { isError: false } as Parameters<CompactSummaryProvider>[0]["context"],
         });
         expect(summary).toBeDefined();
         expect(summary?.outcome).toBeUndefined();
@@ -120,12 +113,8 @@ describe("questionnaire compact outcome projection", () => {
     for (const provider of [askUserCompactSummary, asyncAskUserCompactSummary]) {
       const details = provider === askUserCompactSummary ? submitted : row();
       const before = structuredClone(details);
-      const summary = provider({
-        phase: "settled",
+      const summary = summarize(provider, details, {
         args: { questions: [{ key: "library", title: "Library" }] },
-        result: { content: [], details },
-        // SAFETY: These providers only read isError from the renderer context.
-        context: { isError: false } as Parameters<CompactSummaryProvider>[0]["context"],
       });
       expect(summary?.subject).toBe("Library");
       expect(summary?.counters).toHaveLength(1);
@@ -161,13 +150,7 @@ describe("questionnaire compact outcome projection", () => {
         const outcome = { outcome: "submitted", answers: sample.answers };
         const details = provider === askUserCompactSummary ? outcome : row({ outcome });
         const before = structuredClone(details);
-        const summary = provider({
-          phase: "settled",
-          args: { questions: sample.questions },
-          result: { content: [], details },
-          // SAFETY: These providers only read isError from the renderer context.
-          context: { isError: false } as Parameters<CompactSummaryProvider>[0]["context"],
-        });
+        const summary = summarize(provider, details, { args: { questions: sample.questions } });
         expect(summary?.outcome).toBe("success");
         expect(summary?.subject).toContain(question.title);
         if (sample.selected) {
@@ -183,16 +166,21 @@ describe("questionnaire compact outcome projection", () => {
     }
   });
 
-  it("never interprets cancellation as approval or replaces the original cancelled detail", () => {
-    for (const summary of [
-      summarize(askUserCompactSummary, cancelled),
-      summarize(asyncAskUserCompactSummary, row({ status: "cancelled", outcome: cancelled })),
-    ]) {
-      expect(summary?.outcome).toBe("cancelled");
-      expect(summary?.issues?.entries).toEqual([]);
-      expect(summary?.failure).toBeUndefined();
-    }
-  });
+  it.each([false, true])(
+    "never interprets cancellation as approval or replaces its detail (Pi error flag: %s)",
+    (isError) => {
+      for (const summary of [
+        summarize(askUserCompactSummary, cancelled, { isError }),
+        summarize(asyncAskUserCompactSummary, row({ status: "cancelled", outcome: cancelled }), {
+          isError,
+        }),
+      ]) {
+        expect(summary?.outcome).toBe("cancelled");
+        expect(summary?.issues?.entries).toEqual([]);
+        expect(summary?.failure).toBeUndefined();
+      }
+    },
+  );
 
   it("keeps automatic delivery recovery visible even when answers were submitted", () => {
     const summary = summarize(asyncAskUserCompactSummary, row({ delivery: "failed" }));
@@ -264,8 +252,8 @@ describe("questionnaire compact outcome projection", () => {
       { requests: Array.from({ length: 17 }, () => row()) },
     ])
       expect(summarize(asyncAskUserCompactSummary, details)).toBeUndefined();
-    expect(summarize(askUserCompactSummary, submitted, true)).toBeUndefined();
-    expect(summarize(asyncAskUserCompactSummary, row(), true)).toBeUndefined();
+    expect(summarize(askUserCompactSummary, submitted, { isError: true })).toBeUndefined();
+    expect(summarize(asyncAskUserCompactSummary, row(), { isError: true })).toBeUndefined();
     const hostile = Object.defineProperty({}, "outcome", {
       get() {
         throw new Error("untrusted replay getter");
@@ -280,78 +268,4 @@ describe("questionnaire compact outcome projection", () => {
     expect(summarize(asyncAskUserCompactSummary, hostileId)).toBeUndefined();
     expect(summarize(asyncAskUserCompactSummary, { requests: [hostileId] })).toBeUndefined();
   });
-});
-
-// SAFETY: Only the declared rendering and registration capabilities are used by this test.
-const animationFixture = <Value>(value: Value): never => value as never;
-interface AnimationCallback {
-  tick: (() => void) | undefined;
-}
-
-it("uses the registering owner's scheduler and releases it when the call settles", () => {
-  setCodePreviewSettings({
-    ...defaultCodePreviewSettings,
-    toolCallCollapsedStyle: "compact",
-    toolCallTiming: false,
-  });
-  try {
-    const tools: ToolDefinition[] = [];
-    const pi: ExtensionAPI = animationFixture({
-      registerTool: (tool: ToolDefinition) => tools.push(tool),
-      registerMessageRenderer() {},
-    });
-    const unavailable = () => Promise.reject(new Error("not executed"));
-    const animation: AnimationCallback = { tick: undefined };
-    let stopped = 0;
-    const scheduleAnimation = (_interval: number, callback: () => void) => {
-      animation.tick = callback;
-      return () => {
-        stopped++;
-      };
-    };
-    registerAskUserTool(pi, unavailable, scheduleAnimation);
-    registerAsyncAskUserTools(pi, unavailable, unavailable, scheduleAnimation);
-    const theme = animationFixture({
-      fg: (_color: string, text: string) => text,
-      bg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    });
-    for (const tool of tools) {
-      let invalidated = 0;
-      const args =
-        tool.name === "ask_user_async_control"
-          ? { action: "await", requestId: "request-1" }
-          : { questions: [{ title: "Library" }] };
-      const context: Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] = animationFixture({
-        args,
-        state: {},
-        toolCallId: tool.name,
-        cwd: "/tmp",
-        expanded: false,
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: true,
-        isError: false,
-        invalidate: () => {
-          invalidated++;
-        },
-      });
-      tool.renderCall?.(args, theme, context).render(100);
-      expect(animation.tick).toBeTypeOf("function");
-      animation.tick?.();
-      expect(invalidated).toBeGreaterThan(0);
-      const before = stopped;
-      tool
-        .renderResult?.(
-          { content: [{ type: "text", text: "done" }], details: undefined },
-          { expanded: false, isPartial: false },
-          theme,
-          { ...context, isPartial: false },
-        )
-        .render(100);
-      expect(stopped).toBeGreaterThan(before);
-    }
-  } finally {
-    setCodePreviewSettings(defaultCodePreviewSettings);
-  }
 });

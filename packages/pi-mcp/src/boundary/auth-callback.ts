@@ -44,10 +44,7 @@ export const openAuthCallback = (configured?: string) =>
             request.url.startsWith("//")
           )
             return HttpServerResponse.empty({ status: 404 });
-          const callback = yield* Effect.try({
-            try: () => new URL(request.url, redirect),
-            catch: deniedAuth,
-          }).pipe(Effect.orElseSucceed(() => undefined));
+          const callback = URL.parse(request.url, redirect);
           if (!callback || callback.pathname !== redirect.pathname)
             return HttpServerResponse.empty({ status: 404 });
           consumed = true;

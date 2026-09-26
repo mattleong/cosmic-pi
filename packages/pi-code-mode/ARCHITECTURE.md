@@ -29,7 +29,8 @@ beside the unchanged model-visible text; publication revocation replaces both to
 `ui/result-read-summary.ts` validates saved metadata before showing page ranges and original
 execution warnings. Page counters take priority over opaque retained IDs at narrow widths; routine
 read-recovery explanations use expanded-only diagnostics. `ui/result-read-renderer.ts` owns the
-read-specific status and raw page view, including unknown historical reads.
+read-specific status and raw page view, including unknown historical reads, and the plain
+status/raw view that `ui/status.ts` reuses with its own status line.
 It omits execution-only Program/Calls sections and uses shared attention rendering without internal
 operation labels. Compact expansion supplies only page content; the common shell owns attention. Read views never parse guest page text or treat a successful read as execution success.
 
@@ -101,9 +102,10 @@ evidence remain separate.
   declaring second protocol shapes. MCP catalog decoding retains those constraints but replaces
   raw parser diagnostics with producer-owned, action-specific not-sent repair guidance.
   Neither adapter invokes a registered tool definition.
-- `src/ui/` is pure presentation. `tool-render-details.ts` tolerantly normalizes current and
-  legacy details, ignores malformed rows, and retains valid explicit totals. It delegates count
-  reconciliation to `detail-counts.ts` and current/legacy ledger validation to `replay-evidence.ts`.
+- `src/ui/` is pure presentation. `tool-render-details.ts` normalizes v2 details and ignores
+  malformed rows. `detail-counts.ts` reconciles exact counts with visible rows, or falls back to
+  the visible rows alone. `replay-evidence.ts` validates the ledger; malformed evidence means
+  incomplete.
   `compact-summary.ts` normalizes details once and uses pure notice and outcome helpers in
   `compact-summary-context.ts`. `receipt-attention.ts` preserves uncertainty, failed delivery, and
   inconsistent receipt evidence when older lifecycle rows lack matching attention. Receipt replay
@@ -111,7 +113,7 @@ evidence remain separate.
   `status.ts` independently schema-validates producer status details,
   never parses model-visible output, and keeps raw status output under the shared shell without
   execution-only Program or Calls sections. `tool-renderer.ts`
-  renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` projects small structured results without
+  renders calls and results with Cosmic UI's semantic tool header, activity, and disclosure vocabulary, while `result-output.ts` pretty-prints canonical structured results without
   changing model-visible text. `compact-summary.ts` opts only the outer tool into the shared
   compact shell. It requires consistent current details and explicit execution success evidence,
   retains failure recovery text, and warns on handled nested failures or output truncation.
@@ -125,8 +127,9 @@ evidence remain separate.
   admission-to-settlement duration, including queue wait. No child durations are inferred or summed.
   Its optional compact child tree projects retained call names, lifecycle and builtin targets,
   with exact totals for the shared shell's omitted-call marker. Duplicate calls remain distinct.
-  `tools/compact-subject.ts` captures allowlisted paths, read ranges, commands and search targets
-  at decoded call start using Code Previews' shared argument-only formatter. It redacts fields
+  `tools/compact-subject.ts` owns the built-in `pi.*` nested tool names that rows and ledgers
+  classify. It captures allowlisted paths, read ranges, commands and search targets at decoded
+  call start using Code Previews' shared argument-only formatter. It redacts fields
   before clipping, caps subjects at 1024 code points and contains formatting failures. Replay
   validates subjects without resolving paths again; older rows remain names-only. New calls retain
   only this redacted heading, not a second argument-derived activity label. Historical activity is
@@ -147,13 +150,15 @@ evidence remain separate.
   rows with plain hints beneath each row; the collapsed tree remains unchanged. Aggregate
   recovery uses the shared attention block so it cannot appear to belong to the last visible call.
   `program-source.ts` formats source without rewriting tokens; `result-output.ts` pretty
-  prints only complete successful structured output. The controller supplies content-only call
-  and result callbacks to the shared shell. The call callback retains program source even when
-  the shared failure view owns the diagnostic body. The result callback retains child rows and
+  prints only complete successful structured output. The controller builds the original and
+  content-only result callbacks from one result-slot factory and supplies content-only call and
+  result callbacks to the shared shell. Only the call slot shows program source, even when the
+  shared failure view owns the diagnostic body. The result callback retains child rows and
   raw output, using the same host ticker as the original renderer for expanded live progress.
   Preview style and direct renderers retain their existing call/result slots. Shared presentation
-  policy and attention rendering govern expansion; renderer failure retains bounded source and
-  independent recovery text.
+  policy and attention rendering govern expansion; a failed policy capture keeps default timing.
+  On renderer failure the call slot retains bounded source and the result keeps independent
+  recovery text.
   Final host clamping publishes the truncation flag without changing model-visible content.
   The shared shell owns compact animation and expansion; nested dispatch remains direct.
   MCP compact outcomes use versioned, schema-validated execution evidence, not guest return
@@ -170,8 +175,14 @@ evidence remain separate.
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
   the hostile-safe rejection formatter before returning a model-visible tool failure.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
-  interpreter integration, progress, retention, and fail-soft rendering. `runtime/tests/` remains
-  owned by the private runtime package.
+  interpreter integration, progress, retention, and fail-soft rendering. Execution suites share
+  `tests/support/execute.ts` over the real `makeCodeModeToolExecute`, provider discovery goes
+  through `tests/support/providers.ts`, and presentation suites render the registered definition
+  through `pi-code-previews/testing`, never `pi-code-previews/src`; the shared shell view in
+  `tests/support/presentation.ts` serves the shell conformance suites. Host casts, deferred
+  promises and the plain theme come from `pi-cosmic-core/testing`; `tests/support/host.ts` keeps
+  only the Code Mode state fixture, and behavior-specific fixtures stay in each suite.
+  `runtime/tests/` remains owned by the private runtime package.
 
 ## Trust and configuration
 
@@ -256,11 +267,12 @@ All settings checks use one guarded `signalAborted` helper. It invokes the host 
 UI, persistence, or notification work. The same guard covers command admission, the active write
 callback, list callbacks, input application, and reopen checks.
 
-`host-ui.ts` adapts select, input, and custom dialogs. The custom adapter owns a callback
-`AbortController` and exact-once latches. Its finalizer revokes callbacks and calls an available
-`done(Closed)` once. A normal PromptInteger remains authoritative. A late factory receives an
-inert component. Preset writes use the list signal, ignore stale callbacks, and restore the
-persisted row after an active failure.
+`host-ui.ts` adapts select, input, and custom dialogs. The custom adapter opens Cosmic UI's shared
+`inline` surface, which owns the exact-once latches and a guarded `done`; the adapter owns the
+callback `AbortController`, aborted as closing begins. Closing calls an available `done(Closed)`
+once, a normal PromptInteger remains authoritative, a stale factory receives an inert component,
+and a failed opening maps to `Failed`. Preset writes use the list signal, ignore stale callbacks,
+and restore the persisted row after an active failure.
 
 ## Discovery snapshots
 
@@ -361,8 +373,7 @@ status-only changes coalesce to a 16 ms host frame, and settlement flushes the l
 One ordered Map retains up to 256 rows without evicting active calls; exact counts remain separate.
 Rows never contain nested output. Selection prioritizes active, failed, cancelled, and recent rows
 within 32 visible slots, while exact counts include hidden calls and drive the hidden-row marker.
-New details retain `totalToolCalls` when rows are hidden so older renderers keep the marker; exact
-counts carry current lifecycle totals. Tolerant render decoding still accepts historical details.
+New details still write `totalToolCalls` when rows are hidden, but rendering reads only exact counts.
 Selected rows and counts are copied before host publication, so a hostile `onUpdate` cannot alter
 execution state. `tools/compact-evidence.ts` owns versioned, schema-validated per-call receipts
 and an execution-wide attention ledger independent of both row caps. Lifecycle start binds the
@@ -405,19 +416,19 @@ validation, cleanup, discovery relevance, and retained-output access, rather tha
 
 Only bounded sanitized presentation fields survive. Failure bodies, nested output, diffs and raw
 arguments do not. Exact admission, observation and attention counts survive row eviction. Snapshots
-are detached and frozen, including failure retention; settlement revokes late callbacks. The older
-`tools/mcp-evidence.ts` only decodes and renders historical MCP-specific ledgers. New executions
-publish v2 receipts and one v2 generic attention ledger. `tools/issue-evidence.ts` bounds each
-collection to 32 issues, each issue to eight recovery instructions and eight diagnostics, and each
-string to 1024 UTF-16 units through the shared bounded issue schema. Correlation, sanitization and
-frozen replay preserve those diagnostics. Renderer ownership is never retained in nested receipts. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
+are detached and frozen, including failure retention; settlement revokes late callbacks.
+Executions publish v2 receipts and one v2 generic attention ledger, the only format replay
+decodes. `tools/issue-evidence.ts` owns the shared diagnostic redaction and bounds each
+collection to 32 issues, each issue to eight recovery instructions and eight diagnostics, and
+each string to 1024 UTF-16 units through the shared bounded issue schema. Correlation, sanitization and frozen replay preserve those diagnostics. Renderer ownership is never retained in nested receipts. Invocation prefixes keep identical concurrent operations distinct. Guest delivery
 failures have independent identities and never rewrite captured operation outcomes. Structured
 coverage is separate from outcome counters. Unknown coverage uses a generic compact row while
 collapsed and retains the original renderer on expansion. Retained reads keep their `result.read`
-action and ID in argument-only headings. Malformed and overflowing evidence adds explicit incomplete recovery. Explicit v1 schema branches
-continue decoding historical receipts and ledgers without inventing semantic identities. Historical dual-ledger records still validate both because
-older per-call receipts did not contain complete MCP recovery. Overflow or malformed evidence
-never silently becomes success; fallback retains salvaged notices and explicit incompleteness.
+action and ID in argument-only headings. Malformed and overflowing evidence adds explicit
+incomplete recovery. An undecodable ledger, including an older format, becomes a synthetic
+incomplete v2 ledger whose valid notices are salvaged with those of malformed receipts. Overflow or
+malformed evidence never silently becomes success; fallback retains salvaged notices and explicit
+incompleteness.
 
 The application composes `CodePreviewSchedulerService.layer` into its own session runtime and passes a token-checked scheduler to the compact shell. It does not depend on the previews extension's isolated module-local runtime; replacement and shutdown cancel remaining compact animations. The original renderer owns a weak 160 ms ticker. The host compact-summary callback releases that ticker when the shared shell hides its rows or the tool settles, even when the original result renderer is not called. Missing or hostile state, invalidation, keybindings, clock,
 and ticker callbacks fall back without affecting execution. The controller captures sanitized

@@ -1,43 +1,30 @@
 import type { PageSteps } from "./keymap.ts";
 
-/** Motion keybindings shared by settings list pages; endpoint motions jump to the bounds. */
-export type ListMotion =
-  | "up"
-  | "down"
-  | "half-page-up"
-  | "half-page-down"
-  | "full-page-up"
-  | "full-page-down"
-  | "first"
-  | "last";
+/** Signed row offset of each one-row and page motion under the given page steps. */
+const MOVEMENT_OFFSETS = {
+  up: () => -1,
+  down: () => 1,
+  "half-page-up": (steps: PageSteps) => -steps.half,
+  "half-page-down": (steps: PageSteps) => steps.half,
+  "full-page-up": (steps: PageSteps) => -steps.page,
+  "full-page-down": (steps: PageSteps) => steps.page,
+};
 
 /** One-row and page motions that shift the selection by a signed offset. */
-export type MovementMotion = Exclude<ListMotion, "first" | "last">;
+export type MovementMotion = keyof typeof MOVEMENT_OFFSETS;
 
-const MOVEMENT_MOTIONS: ReadonlySet<string> = new Set([
-  "up",
-  "down",
-  "half-page-up",
-  "half-page-down",
-  "full-page-up",
-  "full-page-down",
-]);
-
-export const isListMotion = (action: string): action is ListMotion =>
-  action === "first" || action === "last" || MOVEMENT_MOTIONS.has(action);
+/** Motion keybindings shared by settings list pages; endpoint motions jump to the bounds. */
+export type ListMotion = MovementMotion | "first" | "last";
 
 export const isMovementMotion = (action: string): action is MovementMotion =>
-  MOVEMENT_MOTIONS.has(action);
+  Object.hasOwn(MOVEMENT_OFFSETS, action);
+
+export const isListMotion = (action: string): action is ListMotion =>
+  action === "first" || action === "last" || isMovementMotion(action);
 
 /** Signed row offset for a movement motion under the given page steps. */
-export const movementOffset = (motion: MovementMotion, steps: PageSteps): number => {
-  if (motion === "up") return -1;
-  if (motion === "down") return 1;
-  if (motion === "half-page-up") return -steps.half;
-  if (motion === "half-page-down") return steps.half;
-  if (motion === "full-page-up") return -steps.page;
-  return steps.page;
-};
+export const movementOffset = (motion: MovementMotion, steps: PageSteps): number =>
+  MOVEMENT_OFFSETS[motion](steps);
 
 /** Pure clamped arithmetic for one list motion; single-row motions may wrap when allowed. */
 export const nextListMotionIndex = (

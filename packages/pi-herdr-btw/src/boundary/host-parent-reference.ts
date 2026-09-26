@@ -29,34 +29,6 @@ export interface HerdrBtwParentReferenceBridge {
   readonly clear: () => void;
 }
 
-const captureParentReference = (
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  probe: (path: string) => SessionHeaderProbe,
-  compareIdentity: SessionFileIdentityComparator,
-): HerdrBtwParentReference | undefined => {
-  try {
-    const sessionId = ctx.sessionManager.getSessionId();
-    const sessionFile = ctx.sessionManager.getSessionFile();
-    const candidate = resolveParentReferenceCandidate({
-      parentIdMarker: pi.getFlag(HERDR_BTW_PARENT_FLAG),
-      parentFileMarker: pi.getFlag(HERDR_BTW_PARENT_FILE_FLAG),
-      childSessionMarker: pi.getFlag(HERDR_BTW_CHILD_SESSION_FLAG),
-      sessionId,
-      sessionFile,
-    });
-    if (!candidate || !sessionFile) return undefined;
-    if (compareIdentity(candidate.path, sessionFile) !== "distinct") return undefined;
-    const parentHeader = probe(candidate.path);
-    return parentHeader._tag === "valid" && parentHeader.header.id === candidate.id
-      ? candidate
-      : undefined;
-  } catch {
-    // A hostile or shutting-down host deactivates the reference fail-closed.
-    return undefined;
-  }
-};
-
 /**
  * Registers the fixed parent-marker flags and before-turn prompt hook. The
  * application's generation-checked slot remains the activation owner.
@@ -85,8 +57,28 @@ export const registerHerdrBtwParentReference = (
     type: "string",
   });
 
-  const capture = (ctx: ExtensionContext) =>
-    captureParentReference(pi, ctx, probe, compareIdentity);
+  const capture = (ctx: ExtensionContext): HerdrBtwParentReference | undefined => {
+    try {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      const candidate = resolveParentReferenceCandidate({
+        parentIdMarker: pi.getFlag(HERDR_BTW_PARENT_FLAG),
+        parentFileMarker: pi.getFlag(HERDR_BTW_PARENT_FILE_FLAG),
+        childSessionMarker: pi.getFlag(HERDR_BTW_CHILD_SESSION_FLAG),
+        sessionId,
+        sessionFile,
+      });
+      if (!candidate || !sessionFile) return undefined;
+      if (compareIdentity(candidate.path, sessionFile) !== "distinct") return undefined;
+      const parentHeader = probe(candidate.path);
+      return parentHeader._tag === "valid" && parentHeader.header.id === candidate.id
+        ? candidate
+        : undefined;
+    } catch {
+      // A hostile or shutting-down host deactivates the reference fail-closed.
+      return undefined;
+    }
+  };
 
   pi.on("before_agent_start", (event, ctx) => {
     // Options may survive repeated hooks: remove only our section before revalidation.
@@ -99,7 +91,6 @@ export const registerHerdrBtwParentReference = (
       activeReference = undefined;
       return undefined;
     }
-    activeReference = current;
     event.systemPromptOptions.sections.herdr_btw_parent_reference = parentReferenceInstruction(
       current.path,
       current.id,

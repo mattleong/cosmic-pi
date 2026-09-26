@@ -5,9 +5,7 @@ import {
   SessionManager,
   type Extension,
   type ExtensionAPI,
-  type ExtensionContext,
   type ExtensionUIContext,
-  type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
@@ -16,18 +14,20 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+} from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { makeMcpLoginUi } from "../../src/boundary/host-auth.ts";
 
 const serialize = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const makeContext = (
   ui: Pick<ExtensionUIContext, "input" | "confirm"> & Partial<Pick<ExtensionUIContext, "select">>,
-): ExtensionContext =>
-  // SAFETY: This auth adapter reads only mode/trust/availability and the supplied stock UI capabilities.
-  ({ mode: "rpc", hasUI: true, isProjectTrusted: () => true, ui }) as ExtensionContext;
+) => extensionContextFixture({ mode: "rpc", hasUI: true, isProjectTrusted: () => true, ui });
 const exec: ExtensionAPI["exec"] = () => Promise.reject(new Error("Must not open a local browser"));
-// SAFETY: The local browser adapter uses only exec; these manual tests must never call it.
-const host = { exec } as ExtensionAPI;
+const host = extensionApiFixture({ exec });
 
 describe("private stock RPC handoff", () => {
   for (const outcome of ["current", "trust", "deadline", "cancel"] as const)
@@ -53,7 +53,7 @@ describe("private stock RPC handoff", () => {
         const waiting = yield* ui.approveScopes!(
           { requested: ["PRIVATE_SCOPE"], additions: ["PRIVATE_SCOPE"], source: "challenge" },
           (yield* Clock.currentTimeMillis) + 1000,
-        ).pipe(Effect.result, Effect.forkScoped);
+        ).pipe(Effect.flip, Effect.forkScoped);
         yield* Deferred.await(entered);
         if (outcome === "current") current = false;
         if (outcome === "trust") trusted = false;
@@ -65,8 +65,7 @@ describe("private stock RPC handoff", () => {
         answer.resolve(true);
         if (outcome !== "cancel")
           expect(yield* Fiber.join(waiting)).toMatchObject({
-            _tag: "Failure",
-            failure: { kind: outcome === "deadline" ? "timeout" : "stale" },
+            kind: outcome === "deadline" ? "timeout" : "stale",
           });
       }),
     );
@@ -86,8 +85,7 @@ describe("private stock RPC handoff", () => {
         Deferred.doneUnsafe(entered, Effect.void);
         return native.promise;
       };
-      // SAFETY: The browser adapter invokes only this typed exec capability.
-      const host = { exec } as ExtensionAPI;
+      const host = extensionApiFixture({ exec });
       const ui = makeMcpLoginUi(
         host,
         makeContext({ input: vi.fn(), confirm: vi.fn() }),
@@ -122,29 +120,17 @@ describe("private stock RPC handoff", () => {
     Effect.gen(function* () {
       const publicEvents: Array<unknown> = [];
       const privateMessages: string[] = [];
+      const record = <Event>(event: Event) => {
+        publicEvents.push(event);
+        return Promise.resolve();
+      };
       const extension: Extension = {
         path: "owned-fixture",
         resolvedPath: "owned-fixture",
         sourceInfo: createSyntheticSourceInfo("owned-fixture", { source: "test" }),
         handlers: new Map([
-          [
-            "ui_prompt_start",
-            [
-              (event) => {
-                publicEvents.push(event);
-                return Promise.resolve();
-              },
-            ],
-          ],
-          [
-            "ui_prompt_end",
-            [
-              (event) => {
-                publicEvents.push(event);
-                return Promise.resolve();
-              },
-            ],
-          ],
+          ["ui_prompt_start", [record]],
+          ["ui_prompt_end", [record]],
         ]),
         tools: new Map(),
         commands: new Map(),
@@ -158,8 +144,7 @@ describe("private stock RPC handoff", () => {
         createExtensionRuntime(),
         "/fixture",
         SessionManager.inMemory("/fixture"),
-        // SAFETY: This runner only wraps/emits stock prompts and never reads model authority.
-        {} as ModelRegistry,
+        opaqueFixture({}),
       );
       const privateUi: Pick<ExtensionUIContext, "confirm" | "input"> = {
         confirm: (_title: string, message: string) => {
@@ -171,8 +156,7 @@ describe("private stock RPC handoff", () => {
             "http://127.0.0.1:1234/callback?code=PRIVATE_CALLBACK&state=PRIVATE_STATE",
           ),
       };
-      // SAFETY: The runner and tested manual handoff invoke only these two supplied stock dialogs.
-      runner.setUIContext(privateUi as ExtensionUIContext, "rpc");
+      runner.setUIContext(opaqueFixture(privateUi), "rpc");
       const ui = makeMcpLoginUi(host, makeContext(runner.getUIContext()), true, () => true);
       const callback = yield* ui.readCallback(
         "https://issuer.example/authorize?state=PRIVATE_STATE&code_challenge=PRIVATE_PKCE",

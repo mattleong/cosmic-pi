@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import {
   JsonDocumentError,
@@ -11,7 +10,11 @@ import {
   provideBuiltLayer,
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
-import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  makeInMemoryDocuments,
+} from "pi-cosmic-core/testing";
 import { DEFAULT_CONFIG } from "../src/config/schema.ts";
 import {
   configPaths,
@@ -98,75 +101,41 @@ describe("Cosmic UI config", () => {
     ),
   );
 
-  it.effect("ignores untrusted project configuration and writes through the global document", () =>
-    withTempConfig(({ cwd, agent }) =>
-      Effect.gen(function* () {
-        const documents = yield* JsonDocumentStore;
-        const paths = yield* configPaths(cwd, agent);
-        yield* documents.writeObject(paths.global, {
-          footer: { enabled: true, density: "comfortable" },
-        });
-        yield* documents.writeObject(paths.project, {
-          footer: { enabled: false, density: "compact" },
-        });
+  it.effect.each([false, undefined])(
+    "project trust %s ignores the project document for resolution and writes",
+    (trusted) => {
+      const memory = makeInMemoryDocuments();
+      return Effect.gen(function* () {
+        const paths = yield* configPaths("/project", "/agent");
+        memory.documents.set(paths.project, { footer: { enabled: false, density: "compact" } });
+        memory.documents.set(paths.global, { footer: { density: "comfortable" } });
 
-        const config = yield* resolveConfig(cwd, agent, false);
+        const config = yield* resolveConfig("/project", "/agent", trusted);
         expect(config.configPath).toBe(paths.global);
         expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
-        const updated = yield* updateFooterConfig(cwd, agent, { enabled: false }, false);
+
+        const updated = yield* updateFooterConfig(
+          "/project",
+          "/agent",
+          { enabled: false },
+          trusted,
+        );
         expect(updated.configPath).toBe(paths.global);
-        expect(yield* documents.readObject(paths.project)).toEqual({
+        expect(memory.documents.get(paths.global)).toEqual({
+          footer: { density: "comfortable", enabled: false },
+        });
+
+        // The untrusted project document is never stat'd, read, or written.
+        expect(memory.operations.length).toBeGreaterThan(0);
+        expect(memory.operations.filter((operation) => operation.includes(paths.project))).toEqual(
+          [],
+        );
+        expect(memory.documents.get(paths.project)).toEqual({
           footer: { enabled: false, density: "compact" },
         });
-      }),
-    ),
+      }).pipe(provideBuiltLayer(Layer.merge(memory.layer, Path.layer)));
+    },
   );
-
-  it.effect("omitted trust fails closed for resolution and writes", () => {
-    const memory = makeInMemoryDocuments();
-    const operations: string[] = [];
-    const record =
-      <Arguments extends unknown[], Result>(
-        operation: string,
-        method: (path: string, ...rest: Arguments) => Result,
-      ) =>
-      (path: string, ...rest: Arguments): Result => {
-        operations.push(`${operation}:${path}`);
-        return method(path, ...rest);
-      };
-    const service: JsonDocumentStoreContract = {
-      exists: record("exists", memory.service.exists),
-      readObject: record("read", memory.service.readObject),
-      writeObject: record("write", memory.service.writeObject),
-      modifyObject: (path, modify) => {
-        operations.push(`modify:${path}`);
-        return memory.service.modifyObject(path, modify);
-      },
-      updateObject: record("update", memory.service.updateObject),
-    };
-    return Effect.gen(function* () {
-      const paths = yield* configPaths("/project", "/agent");
-      memory.documents.set(paths.project, { footer: { enabled: false, density: "compact" } });
-      memory.documents.set(paths.global, { footer: { density: "comfortable" } });
-
-      const config = yield* resolveConfig("/project", "/agent");
-      expect(config.configPath).toBe(paths.global);
-      expect(config.footer).toMatchObject({ enabled: true, density: "comfortable" });
-
-      const updated = yield* updateFooterConfig("/project", "/agent", { enabled: false });
-      expect(updated.configPath).toBe(paths.global);
-      expect(memory.documents.get(paths.global)).toEqual({
-        footer: { density: "comfortable", enabled: false },
-      });
-
-      // The untrusted project document is never stat'd, read, or written.
-      expect(operations.length).toBeGreaterThan(0);
-      expect(operations.filter((operation) => operation.includes(paths.project))).toEqual([]);
-      expect(memory.documents.get(paths.project)).toEqual({
-        footer: { enabled: false, density: "compact" },
-      });
-    }).pipe(provideBuiltLayer(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)));
-  });
 
   it.effect("reselects scope when external documents appear or disappear", () =>
     withTempConfig(({ cwd, agent }) =>
@@ -204,7 +173,7 @@ describe("Cosmic UI config", () => {
   );
 
   it.effect("logs a safe diagnostic when an existing config cannot be read", () => {
-    const messages: string[] = [];
+    const captured = makeCapturedLogger();
     const failure = new JsonDocumentError({
       operation: "read",
       path: "/secret/path",
@@ -215,20 +184,18 @@ describe("Cosmic UI config", () => {
       readObject: () => Effect.fail(failure),
       writeObject: () => Effect.fail(failure),
       modifyObject: () => Effect.fail(failure),
-      updateObject: () => Effect.fail(failure),
     };
-    const logger = Logger.make(({ message }) => {
-      messages.push(String(message));
-    });
     return Effect.gen(function* () {
       const config = yield* resolveConfig("/project", "/agent");
       expect(config.footer.enabled).toBe(true);
-      expect(messages.join(" ")).toContain("Unable to read a Cosmic UI configuration document");
-      expect(messages.join(" ")).not.toContain("secret");
-      expect(messages.join(" ")).not.toContain("credential");
+      const logged = capturedTelemetrySnapshot(captured);
+      expect(logged).toContain("Unable to read a Cosmic UI configuration document");
+      expect(logged).not.toContain("secret");
+      expect(logged).not.toContain("credential");
     }).pipe(
-      provideBuiltLayer(Layer.merge(Layer.succeed(JsonDocumentStore, service), Path.layer)),
-      Effect.withLogger(logger),
+      provideBuiltLayer(
+        Layer.mergeAll(Layer.succeed(JsonDocumentStore, service), Path.layer, captured.layer),
+      ),
     );
   });
 

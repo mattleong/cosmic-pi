@@ -2,7 +2,6 @@
 // Test-only runtime driver captures the host-boundary startup span.
 import * as Predicate from "effect/Predicate";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -10,11 +9,33 @@ import * as Layer from "effect/Layer";
 import {
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
-  PiSessionRuntimeError,
   type PiManagedRuntime,
   type PiSessionRuntimeSlot,
 } from "../index.ts";
-import { makeCapturedTracer } from "../testing.ts";
+import { extensionApiFixture, makeCapturedTracer, makeLifecycleProbe } from "../testing.ts";
+
+/** A fake managed runtime whose unused `fork` fails loudly. */
+const fakeRuntime = (
+  run: PiManagedRuntime<never, never>["run"],
+  dispose: () => Promise<void>,
+): PiManagedRuntime<never, never> => ({
+  run,
+  fork: () => {
+    throw new Error("unused");
+  },
+  dispose,
+});
+
+const hostRuntime = <R, E>(layer: Layer.Layer<R, E>) =>
+  makePiManagedRuntime(extensionApiFixture({}), layer);
+
+const rejects = <A>(run: () => Promise<A>) =>
+  Effect.promise(() =>
+    run().then(
+      () => false,
+      () => true,
+    ),
+  );
 
 function makeAbortDisposalHarness() {
   const events: string[] = [];
@@ -23,28 +44,23 @@ function makeAbortDisposalHarness() {
   const started = Effect.runPromise(Deferred.await(startedGate));
   const disposal = Effect.runPromise(Deferred.await(disposalGate));
   const slot = makePiSessionRuntimeSlot<number, never, never, never>({
-    makeRuntime: (input): PiManagedRuntime<never, never> => ({
-      run: (_effect, signal) => {
-        events.push(`run:${input}`);
-        if (input !== 1) {
-          // SAFETY: This harness invokes run only with Effect<void>; its resolved value is therefore undefined.
-          return Promise.resolve(undefined as never);
-        }
-        Deferred.doneUnsafe(startedGate, Effect.void);
-        // Settles only through abort-driven interruption, like the replaced host runtime.
-        return Effect.runPromise(Effect.never, signal ? { signal } : undefined);
-      },
-      fork: () => {
-        throw new Error("unused");
-      },
-      runSync: () => {
-        throw new Error("unused");
-      },
-      dispose: () => {
-        events.push(`dispose:${input}`);
-        return input === 1 ? disposal : Promise.resolve();
-      },
-    }),
+    makeRuntime: (input) =>
+      fakeRuntime(
+        (_effect, signal) => {
+          events.push(`run:${input}`);
+          if (input !== 1) {
+            // SAFETY: This harness invokes run only with Effect<void>; its resolved value is therefore undefined.
+            return Promise.resolve(undefined as never);
+          }
+          Deferred.doneUnsafe(startedGate, Effect.void);
+          // Settles only through abort-driven interruption, like the replaced host runtime.
+          return Effect.runPromise(Effect.never, signal ? { signal } : undefined);
+        },
+        () => {
+          events.push(`dispose:${input}`);
+          return input === 1 ? disposal : Promise.resolve();
+        },
+      ),
     startup: () => Effect.void,
   });
   const releaseDisposal = () => void Deferred.doneUnsafe(disposalGate, Effect.void);
@@ -68,23 +84,18 @@ function makeSignalSetupHarness(signal: AbortSignal) {
   let failures = 0;
   let runs = 0;
   const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-    makeRuntime: (): PiManagedRuntime<never, never> => ({
-      run: () => {
-        runs++;
-        // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-        return Promise.resolve(undefined as never);
-      },
-      fork: () => {
-        throw new Error("unused");
-      },
-      runSync: () => {
-        throw new Error("unused");
-      },
-      dispose: () => {
-        disposals++;
-        return Promise.resolve();
-      },
-    }),
+    makeRuntime: () =>
+      fakeRuntime(
+        () => {
+          runs++;
+          // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
+          return Promise.resolve(undefined as never);
+        },
+        () => {
+          disposals++;
+          return Promise.resolve();
+        },
+      ),
     startup: () => Effect.void,
     onStartFailure: () => {
       failures++;
@@ -98,12 +109,9 @@ it.effect("replaces a stalled runtime and releases every acquired layer exactly 
     const events: string[] = [];
     const activations: number[] = [];
     const firstStarted = yield* Deferred.make<void>();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const pi = {} as ExtensionAPI;
     const slot = makePiSessionRuntimeSlot<number, never, never, never>({
       makeRuntime: (input) =>
-        makePiManagedRuntime(
-          pi,
+        hostRuntime(
           Layer.effectDiscard(
             Effect.acquireRelease(
               Effect.sync(() => events.push(`acquire:${input}`)),
@@ -140,12 +148,7 @@ it.effect("captures a stable runtime startup span without session input", () =>
   Effect.gen(function* () {
     const captured = makeCapturedTracer();
     const slot = makePiSessionRuntimeSlot<string, never, never, never>({
-      makeRuntime: () =>
-        makePiManagedRuntime(
-          // SAFETY: This locally constructed test fixture satisfies the host contract used here.
-          {} as ExtensionAPI,
-          captured.layer,
-        ),
+      makeRuntime: () => hostRuntime(captured.layer),
       startup: () => Effect.void,
     });
     expect(yield* Effect.promise(() => slot.start("secret-session-input"))).toBe(1);
@@ -161,12 +164,7 @@ it.effect("publishes startup values only after activation", () =>
     const releaseStartup = yield* Deferred.make<void>();
     const activations: Array<readonly [number, string]> = [];
     const slot = makePiSessionRuntimeSlot<void, never, never, never, string>({
-      makeRuntime: () =>
-        makePiManagedRuntime(
-          // SAFETY: This locally constructed test fixture satisfies the host contract used here.
-          {} as ExtensionAPI,
-          Layer.empty,
-        ),
+      makeRuntime: () => hostRuntime(Layer.empty),
       startup: () =>
         Deferred.succeed(startupEntered, undefined).pipe(
           Effect.andThen(Deferred.await(releaseStartup)),
@@ -194,12 +192,7 @@ it.effect("rechecks ownership after reentrant activation teardown", () =>
     let shutdown: Promise<void> | undefined;
     let slot: PiSessionRuntimeSlot<void, never, never>;
     slot = makePiSessionRuntimeSlot<void, never, never, never>({
-      makeRuntime: () =>
-        makePiManagedRuntime(
-          // SAFETY: This locally constructed test fixture satisfies the host contract used here.
-          {} as ExtensionAPI,
-          Layer.empty,
-        ),
+      makeRuntime: () => hostRuntime(Layer.empty),
       startup: () => Effect.void,
       onActivated: () => {
         shutdown = slot.shutdown();
@@ -215,25 +208,15 @@ it.effect("rechecks ownership after reentrant activation teardown", () =>
 
 it.effect("releases acquired resources after startup failure", () =>
   Effect.gen(function* () {
-    const events: string[] = [];
+    const probe = makeLifecycleProbe("acquire", "release");
     const failures: number[] = [];
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const slot = makePiSessionRuntimeSlot<void, never, "startup", never>({
-      makeRuntime: () =>
-        makePiManagedRuntime(
-          {} as ExtensionAPI,
-          Layer.effectDiscard(
-            Effect.acquireRelease(
-              Effect.sync(() => events.push("acquire")),
-              () => Effect.sync(() => events.push("release")),
-            ),
-          ),
-        ),
+      makeRuntime: () => hostRuntime(probe.layer),
       startup: () => Effect.fail("startup" as const),
       onStartFailure: (_input, token) => failures.push(token),
     });
     expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
-    expect(events).toEqual(["acquire", "release"]);
+    expect(probe.events).toEqual(["acquire", "release"]);
     expect(failures).toEqual([1]);
   }),
 );
@@ -251,9 +234,7 @@ it.effect("reports a synchronous runtime-construction throw without activating t
 
     expect(yield* Effect.promise(() => slot.start(undefined))).toBeUndefined();
     expect(failures).toEqual([1]);
-    expect((yield* Effect.result(Effect.tryPromise(() => slot.run(Effect.void))))._tag).toBe(
-      "Failure",
-    );
+    expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
   }),
 );
 
@@ -263,24 +244,18 @@ for (const operation of ["startup", "run"] as const) {
       let disposals = 0;
       let runs = 0;
       const failures: number[] = [];
-      const runtime: PiManagedRuntime<never, never> = {
-        run: () => {
+      const runtime = fakeRuntime(
+        () => {
           runs++;
           if (operation === "run") throw new Error("hostile runtime.run");
           // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
           return Promise.resolve(undefined as never);
         },
-        fork: () => {
-          throw new Error("unused");
-        },
-        runSync: () => {
-          throw new Error("unused");
-        },
-        dispose: () => {
+        () => {
           disposals++;
           return Promise.resolve();
         },
-      };
+      );
       const slot = makePiSessionRuntimeSlot<void, never, never, never>({
         makeRuntime: () => runtime,
         startup: () => {
@@ -296,44 +271,23 @@ for (const operation of ["startup", "run"] as const) {
         failures: [1],
         runs: operation === "run" ? 1 : 0,
       });
-      expect((yield* Effect.result(Effect.tryPromise(() => slot.run(Effect.void))))._tag).toBe(
-        "Failure",
-      );
+      expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
     }),
   );
 }
 
 it.effect("disposes an already-aborted start and leaves the slot unavailable", () =>
   Effect.gen(function* () {
-    const events: string[] = [];
+    const probe = makeLifecycleProbe("acquire", "release");
     const controller = new AbortController();
     controller.abort();
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const slot = makePiSessionRuntimeSlot<void, never, never, never>({
-      makeRuntime: () =>
-        makePiManagedRuntime(
-          {} as ExtensionAPI,
-          Layer.effectDiscard(
-            Effect.acquireRelease(
-              Effect.sync(() => events.push("acquire")),
-              () => Effect.sync(() => events.push("release")),
-            ),
-          ),
-        ),
+      makeRuntime: () => hostRuntime(probe.layer),
       startup: () => Effect.void,
     });
     expect(yield* Effect.promise(() => slot.start(undefined, controller.signal))).toBeUndefined();
-    const result = yield* Effect.result(
-      Effect.tryPromise({
-        try: () => slot.run(Effect.void),
-        catch: (error) =>
-          error instanceof PiSessionRuntimeError
-            ? error
-            : new PiSessionRuntimeError({ operation: "test", message: "unexpected" }),
-      }),
-    );
-    expect(result._tag).toBe("Failure");
-    expect(events).toEqual([]);
+    expect(yield* rejects(() => slot.run(Effect.void))).toBe(true);
+    expect(probe.events).toEqual([]);
   }),
 );
 
@@ -345,17 +299,7 @@ for (const operation of ["addEventListener", "aborted"] as const) {
         yield* Effect.promise(() => harness.slot.start(undefined, harness.signal)),
       ).toBeUndefined();
       expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
-
-      const result = yield* Effect.result(
-        Effect.tryPromise({
-          try: () => harness.slot.run(Effect.void),
-          catch: (error) =>
-            error instanceof PiSessionRuntimeError
-              ? error
-              : new PiSessionRuntimeError({ operation: "test", message: "unexpected" }),
-        }),
-      );
-      expect(result._tag).toBe("Failure");
+      expect(yield* rejects(() => harness.slot.run(Effect.void))).toBe(true);
       yield* Effect.promise(() => harness.slot.shutdown());
       expect(harness.counts()).toEqual({ disposals: 1, failures: 1, runs: 0 });
     }),

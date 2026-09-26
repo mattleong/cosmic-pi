@@ -50,31 +50,11 @@ const commandFailure = (operation: string): HerdrBtwError =>
     outcome: MUTATING_OPERATIONS.has(operation) ? "uncertain" : "confirmed",
   });
 
-/** Fresh per-scenario Herdr call recording and failure injection. */
-export const makeHerdrBtwCallRecorder = (failOperation?: string) => {
-  const calls: HerdrBtwClientCall[] = [];
-
-  const runEffect = <A>(
-    operation: string,
-    input: HerdrBtwClientCallInput | undefined,
-    effect: () => Effect.Effect<A, HerdrBtwError>,
-  ): Effect.Effect<A, HerdrBtwError> =>
-    Effect.suspend(() => {
-      calls.push(input === undefined ? { operation } : { operation, input });
-      return operation === failOperation ? Effect.fail(commandFailure(operation)) : effect();
-    });
-
-  const run = <A>(
-    operation: string,
-    input: HerdrBtwClientCallInput | undefined,
-    result: () => A,
-  ): Effect.Effect<A, HerdrBtwError> => runEffect(operation, input, () => Effect.sync(result));
-
-  return { calls, run, runEffect } as const;
-};
-
 export const operationNames = (calls: ReadonlyArray<HerdrBtwClientCall>): string[] =>
   calls.map((call) => call.operation);
+
+export const operationCount = (calls: ReadonlyArray<HerdrBtwClientCall>, operation: string) =>
+  calls.filter((call) => call.operation === operation).length;
 
 export const operationInputs = <A>(
   calls: ReadonlyArray<HerdrBtwClientCall>,
@@ -98,9 +78,6 @@ const CHILD_ID = "0198aaaa-7564-4c88-8b67-child0btw001";
 const CHILD_FILE = "/sessions/child.jsonl";
 const CWD = "/project";
 
-/** One Herdr snapshot agent with optional identity overrides. */
-export type HerdrBtwSnapshotAgent = HerdrPane;
-
 /** Comparator for scenarios where one or two paths are lexically distinct aliases of one file. */
 export const aliasIdentity =
   (
@@ -119,11 +96,12 @@ export interface HerdrBtwFixtureOptions {
   readonly initialLinks?: ReadonlyArray<HerdrBtwLink>;
   readonly restoreOverride?: HerdrBtwLinkRestoration;
   readonly recordResult?: HerdrBtwLinkRecordResult;
-  readonly liveAgents?: ReadonlyArray<HerdrBtwSnapshotAgent>;
-  readonly liveAgentSnapshots?: ReadonlyArray<ReadonlyArray<HerdrBtwSnapshotAgent>>;
+  readonly liveAgents?: ReadonlyArray<HerdrPane>;
+  readonly liveAgentSnapshots?: ReadonlyArray<ReadonlyArray<HerdrPane>>;
   readonly probes?: Readonly<Record<string, SessionHeaderProbe>>;
   readonly compareSessionFileIdentity?: SessionFileIdentityComparator;
   readonly failOperation?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly holdStart?: Deferred.Deferred<void>;
   readonly sessionId?: string;
   readonly createdChildId?: string;
@@ -142,11 +120,25 @@ export interface HerdrBtwFixtureOptions {
 }
 
 /**
- * Superset service fixture: shared recorder, one client stub, input, link
- * store, and the four service seams with makeService/open/openNew helpers.
+ * Superset service fixture: per-scenario call recording and failure injection,
+ * one client stub, a link store, and the four service seams with
+ * makeService/open/openNew helpers.
  */
 export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
-  const { calls, run, runEffect } = makeHerdrBtwCallRecorder(options.failOperation);
+  const calls: HerdrBtwClientCall[] = [];
+  const runEffect = <A>(
+    operation: string,
+    input: HerdrBtwClientCallInput | undefined,
+    effect: () => Effect.Effect<A, HerdrBtwError>,
+  ): Effect.Effect<A, HerdrBtwError> =>
+    Effect.suspend(() => {
+      calls.push(input === undefined ? { operation } : { operation, input });
+      return operation === options.failOperation
+        ? Effect.fail(commandFailure(operation))
+        : effect();
+    });
+  const run = <A>(operation: string, input: HerdrBtwClientCallInput | undefined, result: () => A) =>
+    runEffect(operation, input, () => Effect.sync(result));
   const createdChildId = options.createdChildId ?? CHILD_ID;
   const createdChildFile = options.createdChildFile ?? CHILD_FILE;
   let snapshotReads = 0;
@@ -235,7 +227,7 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
   } satisfies HerdrClientContract);
 
   const input = {
-    environment: {
+    environment: options.environment ?? {
       HERDR_ENV: "1",
       HERDR_PANE_ID: "w1:p1",
       HERDR_TAB_ID: "w1:t1",
@@ -298,8 +290,6 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
 
   return {
     calls,
-    client,
-    input,
     linkStore,
     makeService,
     open,
@@ -307,6 +297,5 @@ export const makeServiceFixture = (options: HerdrBtwFixtureOptions = {}) => {
     recordAttempts,
     recordedLinks,
     restoreCount: () => restoreCount,
-    serviceOptions,
   };
 };

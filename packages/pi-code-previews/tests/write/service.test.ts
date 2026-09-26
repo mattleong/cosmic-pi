@@ -38,14 +38,7 @@ it.effect("before-write snapshots are cleared when the owning session scope clos
       CodePreviewWriteService.use((service) =>
         Effect.gen(function* () {
           yield* service.rememberBeforeWrite("tool", { kind: "content", content: "secret" });
-          assert.deepEqual(lookupBeforeWrite("tool"), {
-            kind: "content",
-            content: "secret",
-          });
-          assert.deepEqual(lookupBeforeWrite("tool"), {
-            kind: "content",
-            content: "secret",
-          });
+          assert.deepEqual(lookupBeforeWrite("tool"), { kind: "content", content: "secret" });
         }),
       ).pipe(provideBuiltLayer(CodePreviewWriteService.layer)),
     );

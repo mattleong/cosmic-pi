@@ -9,6 +9,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { describe, expect } from "vitest";
 import { makeKeychainStore, type KeychainEntryFactory } from "../../src/boundary/keychain.ts";
+import { heldKeychain, memoryKeychain } from "../fixtures/keychain.ts";
 
 const identity = "c".repeat(64);
 describe("Keychain native mutation ownership", () => {
@@ -95,20 +96,9 @@ describe("Keychain native mutation ownership", () => {
   it.effect("normalizes either native absence value without losing later stored credentials", () =>
     Effect.gen(function* () {
       for (const missing of [null, undefined]) {
-        let password: string | null | undefined = missing;
-        const factory: KeychainEntryFactory = () =>
-          Promise.resolve({
-            getPassword: () => Promise.resolve(password),
-            setPassword: (value) => {
-              password = value;
-              return Promise.resolve();
-            },
-            deleteCredential: () => {
-              password = missing;
-              return Promise.resolve(true);
-            },
-          });
-        const store = yield* makeKeychainStore({ entryFactory: factory });
+        const store = yield* makeKeychainStore({
+          entryFactory: memoryKeychain(undefined, missing).factory,
+        });
         expect(yield* store.read(identity)).toBeUndefined();
         yield* store.write(identity, "private-grant");
         expect(yield* store.read(identity)).toBe("private-grant");
@@ -152,44 +142,20 @@ describe("Keychain native mutation ownership", () => {
     "retains cancelled writes across service replacement and deletes only after native settlement",
     () =>
       Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        let release: () => void = () => undefined;
-        let password: string | undefined;
-        let removed = false;
-        const factory: KeychainEntryFactory = () =>
-          Promise.resolve({
-            getPassword: () => Promise.resolve(password),
-            setPassword: (value) => {
-              // Model a native write that ignores Effect cancellation until explicitly released.
-              const completion = Promise.withResolvers<void>();
-              release = () => {
-                password = value;
-                completion.resolve();
-              };
-              Deferred.doneUnsafe(entered, Effect.void);
-              return completion.promise;
-            },
-            deleteCredential: () => {
-              removed = true;
-              password = undefined;
-              return Promise.resolve(true);
-            },
-          });
-        const first = yield* makeKeychainStore({ entryFactory: factory });
+        const native = yield* heldKeychain();
+        const first = yield* makeKeychainStore({ entryFactory: native.factory });
         const write = yield* first.write(identity, "private-grant").pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
+        yield* Deferred.await(native.entered);
         yield* Fiber.interrupt(write);
-        const replacement = yield* makeKeychainStore({ entryFactory: factory });
-        expect((yield* replacement.read(identity).pipe(Effect.result))._tag).toBe("Failure");
-        expect((yield* replacement.write(identity, "another").pipe(Effect.result))._tag).toBe(
-          "Failure",
-        );
+        const replacement = yield* makeKeychainStore({ entryFactory: native.factory });
+        expect(yield* replacement.read(identity).pipe(Effect.isFailure)).toBe(true);
+        expect(yield* replacement.write(identity, "another").pipe(Effect.isFailure)).toBe(true);
         const deletion = yield* replacement.remove(identity).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
-        expect(removed).toBe(false);
-        release();
+        expect(native.deleted()).toBe(false);
+        native.release();
         yield* Fiber.join(deletion);
-        expect(removed).toBe(true);
+        expect(native.deleted()).toBe(true);
         expect(yield* replacement.read(identity)).toBeUndefined();
       }),
   );
@@ -216,7 +182,7 @@ describe("Keychain native mutation ownership", () => {
         const failed = yield* store.remove(identity).pipe(Effect.result);
         expect(failed._tag).toBe("Failure");
         expect(failed._tag === "Failure" && failed.failure.message).not.toContain("secret-account");
-        expect((yield* store.read(identity).pipe(Effect.result))._tag).toBe("Failure");
+        expect(yield* store.read(identity).pipe(Effect.isFailure)).toBe(true);
         fail = false;
         yield* store.remove(identity);
         expect(yield* store.read(identity)).toBeUndefined();
@@ -232,7 +198,7 @@ describe("Keychain native mutation ownership", () => {
         },
       });
       expect(opened).toBe(false);
-      expect((yield* store.read(identity).pipe(Effect.result))._tag).toBe("Failure");
+      expect(yield* store.read(identity).pipe(Effect.isFailure)).toBe(true);
       expect(opened).toBe(true);
     }),
   );

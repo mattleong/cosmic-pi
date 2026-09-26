@@ -202,8 +202,9 @@ An execution-wide attention ledger preserves hidden-call warnings. Incomplete or
 evidence produces an explicit warning in both compact and detailed views. Valid recovery notices
 survive malformed sibling fields in saved receipts. MCP supplies its own outcome and recovery
 policy; Code Mode aggregates it without maintaining a second live MCP-specific ledger. Historical calls
-without correlated receipts remain conservative. Programs must still inspect and return protocol
-outcome evidence. No nested built-in is wrapped or dispatched differently.
+without correlated receipts remain conservative. Saved calls in the first receipt format replay as
+incomplete and uncertain, keeping their valid recovery notices. Programs must still inspect and
+return protocol outcome evidence. No nested built-in is wrapped or dispatched differently.
 
 ## Catalog updates
 
@@ -475,8 +476,8 @@ JSON. Capture is bounded at 8 MiB and 100,000 visits; session storage keeps at m
 under a conservatively charged 64 MiB cap. Oldest results are evicted. Nothing is persisted.
 Tree navigation, replacement and shutdown revoke IDs. Disabling revokes access until reload.
 
-Full capture can be unavailable, including when an older cached runtime lacks the observation
-hook. A failure receipt may still be retained; it explicitly says when full output is absent.
+Full capture can be unavailable. A failure receipt may still be retained; it explicitly says when
+full output is absent.
 It cannot recover output already discarded by a nested provider or the interpreter's data boundary.
 Failure and cancellation receipts preserve distinct nested invocation IDs, completion certainty,
 redacted targets and guest output delivery. `completed` does not mean success or background process

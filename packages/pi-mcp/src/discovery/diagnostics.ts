@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import { McpServerIdSchema } from "../config/schema.ts";
-import type { McpMetadataSnapshot } from "./model.ts";
+import { MCP_DISCOVERY_ACTIONS, type McpMetadataSnapshot } from "./model.ts";
 import type { McpCacheEvidence } from "./cached.ts";
 import { metadataIsFresh } from "./freshness.ts";
 
@@ -27,14 +27,7 @@ export function classifyMcpDiscoveryNotice(input: {
   if (
     input.outcome !== "completed" ||
     input.isError ||
-    ![
-      "tools.list",
-      "tools.search",
-      "tools.describe",
-      "resources.list",
-      "resources.templates",
-      "prompts.list",
-    ].includes(input.action)
+    !MCP_DISCOVERY_ACTIONS.some((action) => action === input.action)
   )
     return attention;
   const server = /^MCP ([^ ]+) /u.exec(input.notice)?.[1];

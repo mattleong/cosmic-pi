@@ -15,7 +15,7 @@ import {
   makePiSessionRuntimeSlot,
   notifyAtHostBoundary,
 } from "pi-cosmic-core";
-import { createCosmicFooterClient } from "pi-cosmic-ui/client";
+import { createCosmicFooterClient, makeHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 import { registerSettingsController } from "./settings/controller.ts";
 import {
@@ -58,12 +58,13 @@ export function registerBetterXaiApplication(
     cosmicUi.query();
     return cosmicUi.isVisible("xai.usage");
   };
+  const resynchronizeUsage = XaiUsageService.use((service) =>
+    service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
+  );
   const updateFooter = (fallback: ExtensionContext) => {
     const ctx = currentContext ? MutableRef.get(currentContext) : fallback;
-    const cfg = MutableRef.get(projection).config;
-    if (!cfg) return;
-    cosmicUi.query();
-    const nextUsageVisible = cosmicUi.isVisible("xai.usage");
+    if (!config()) return;
+    const nextUsageVisible = isUsageVisible();
     const usage = nextUsageVisible
       ? xaiUsageFooterPrimitive(MutableRef.get(projection))
       : undefined;
@@ -74,24 +75,12 @@ export function registerBetterXaiApplication(
     setStatus(ctx, hasTerminalUI(ctx) && cosmicUi.active ? undefined : usage?.text);
     if (usageVisible !== nextUsageVisible) {
       usageVisible = nextUsageVisible;
-      slot.fork(
-        XaiUsageService.use((service) =>
-          service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
-        ),
-      );
+      slot.fork(resynchronizeUsage);
     }
   };
-  let stopCosmicUiChanges: (() => void) | undefined;
-  const watchCosmicUi = () => {
-    if (stopCosmicUiChanges) return;
-    stopCosmicUiChanges = cosmicUi.onHostStateChange(() => {
-      if (currentContext) updateFooter(MutableRef.get(currentContext));
-    });
-  };
-  const stopWatchingCosmicUi = () => {
-    stopCosmicUiChanges?.();
-    stopCosmicUiChanges = undefined;
-  };
+  const cosmicUiWatch = makeHostStateWatch(cosmicUi, () => {
+    if (currentContext) updateFooter(MutableRef.get(currentContext));
+  });
 
   const slot = makePiSessionRuntimeSlot<XaiSessionInput, XaiApplication, never, XaiRuntimeError>({
     makeRuntime: (input) =>
@@ -109,7 +98,7 @@ export function registerBetterXaiApplication(
     startup: () => dependencies.startupEffect(),
     onActivated: ({ ctx, context }) => {
       currentContext = context;
-      watchCosmicUi();
+      cosmicUiWatch.start();
       updateFooter(ctx);
     },
     onDeactivated: ({ context }) => {
@@ -117,7 +106,7 @@ export function registerBetterXaiApplication(
         setStatus(MutableRef.get(context), undefined);
         currentContext = undefined;
       }
-      stopWatchingCosmicUi();
+      cosmicUiWatch.stop();
       cosmicUi.shutdown();
       resetProjection(projection);
     },
@@ -125,9 +114,6 @@ export function registerBetterXaiApplication(
       notifyAtHostBoundary(ctx, "Better xAI failed to start.", "warning");
     },
   });
-
-  const run = <A, E>(effect: Effect.Effect<A, E, XaiApplication>, signal?: AbortSignal) =>
-    slot.run(effect, signal);
 
   pi.registerCommand(XAI_STATUS_COMMAND, {
     description: "Show xAI subscription usage status",
@@ -137,10 +123,12 @@ export function registerBetterXaiApplication(
         notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning");
         return Promise.resolve();
       }
-      return run(
-        XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
-        capturedSignal.signal,
-      ).catch(() => notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning"));
+      return slot
+        .run(
+          XaiUsageService.use((service) => service.refresh({ notify: true, force: true })),
+          capturedSignal.signal,
+        )
+        .catch(() => notifyAtHostBoundary(ctx, "xAI usage is unavailable.", "warning"));
     },
   });
 
@@ -148,8 +136,7 @@ export function registerBetterXaiApplication(
     config,
     updateFooter,
     formatDebugStatus: (ctx) => formatDebug(projection, ctx),
-    captureSignal: captureHostSignal,
-    run,
+    run: slot.run,
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -190,16 +177,11 @@ export function registerBetterXaiApplication(
 
   pi.on("model_select", (_event, ctx) => {
     if (currentContext) MutableRef.set(currentContext, ctx);
-    synchronizeProjectionContext(projection, ctx, { clearUsage: true });
+    synchronizeProjectionContext(projection, ctx);
     updateFooter(ctx);
     const capturedSignal = captureHostSignal(ctx);
     if (capturedSignal._tag === "Unavailable") return;
-    slot.fork(
-      XaiUsageService.use((service) =>
-        service.contextChanged(true).pipe(Effect.andThen(service.refresh({ force: true }))),
-      ),
-      capturedSignal.signal,
-    );
+    slot.fork(resynchronizeUsage, capturedSignal.signal);
   });
 
   pi.on("session_shutdown", () => slot.shutdown());

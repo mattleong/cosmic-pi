@@ -15,23 +15,27 @@ import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/te
 import { describe, expect } from "vitest";
 import type { McpLoginUi, McpScopeProposal } from "../../src/auth/model.ts";
 import type { McpAuthProgressEvent } from "../../src/auth/progress.ts";
+import type { McpGrant, McpRegistrationReceipt } from "../../src/auth/credentials.ts";
 import {
-  decodeGrant,
-  encodeGrant,
-  type McpGrant,
-  type McpRegistrationReceipt,
-} from "../../src/auth/credentials.ts";
-import type { McpEffectiveServer, McpOAuthConfig } from "../../src/config/model.ts";
+  decodeCredentialRecord,
+  encodeCredentialRecord,
+} from "../../src/auth/credential-record.ts";
 import { makeMcpSdkAuth } from "../../src/boundary/sdk-auth.ts";
 import { openAuthCallback } from "../../src/boundary/auth-callback.ts";
 import { withAuthFetch } from "../../src/boundary/auth-fetch.ts";
 import { AuthRequestCurrent } from "../../src/auth/authority.ts";
 import { authUrlPolicy } from "../../src/auth/policy.ts";
 import { boundaryError } from "../../src/client/errors.ts";
+import { manualUi } from "../fixtures/auth.ts";
 import { startOAuthServer } from "../fixtures/oauth-server.ts";
 import { startHttpServer } from "../fixtures/http-server.ts";
+import { blockingProbe } from "../fixtures/probes.ts";
+import { httpDefinition, testServer } from "../fixtures/services.ts";
 
 const serialize = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const persist = (grant: McpGrant) => encodeCredentialRecord({ version: 2, grant });
+const restore = (raw: string) =>
+  decodeCredentialRecord(raw).pipe(Effect.map((record) => record.grant!));
 const network = Layer.succeed(NetworkAddresses, {
   resolve: (hostname) =>
     Effect.succeed(
@@ -62,23 +66,7 @@ const browser = (mode: "local" | "manual", mutate: (callback: string) => string 
     } satisfies McpLoginUi;
   });
 
-const changeOAuth = (
-  server: McpEffectiveServer,
-  patch: Partial<McpOAuthConfig>,
-): McpEffectiveServer => {
-  if (server.definition?.transport !== "http" || server.definition.auth.type !== "oauth")
-    throw new Error("Missing fixture OAuth configuration");
-  return {
-    ...server,
-    definition: { ...server.definition, auth: { ...server.definition.auth, ...patch } },
-  };
-};
-const cancelledUi: McpLoginUi = {
-  mode: "manual",
-  openBrowser: () => Effect.void,
-  readCallback: () => Effect.succeed(undefined),
-  waitForCallback: () => Effect.succeed(undefined),
-};
+const cancelledUi: McpLoginUi = { ...manualUi, waitForCallback: () => Effect.succeed(undefined) };
 
 describe("explicit OAuth permissions and registration checkpoints", () => {
   it.live(
@@ -90,7 +78,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
           serverScopes: ["admin", "offline_access"],
           requireOfflineAccess: true,
         });
-        const server = changeOAuth(fixture.configured("dynamic"), { scopes: [] });
+        const server = fixture.configured("dynamic", { scopes: [] });
         const sdk = yield* makeMcpSdkAuth;
         const ui = yield* browser("manual");
         const proposals: McpScopeProposal[] = [];
@@ -146,7 +134,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
     it.live(`does not register, open, or exchange after ${approval} permission approval`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ resourceScopes: ["read"] });
-        const server = changeOAuth(fixture.configured("dynamic"), { scopes: [] });
+        const server = fixture.configured("dynamic", { scopes: [] });
         const sdk = yield* makeMcpSdkAuth;
         let opened = false;
         const ui: McpLoginUi = {
@@ -163,8 +151,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
                 ? Effect.fail(boundaryError("stale", "not-sent", "Fixture consent revoked."))
                 : Effect.succeed(false),
           });
-        const result = yield* sdk.login(server, ui).pipe(Effect.result);
-        expect(result._tag).toBe("Failure");
+        expect(yield* sdk.login(server, ui).pipe(Effect.isFailure)).toBe(true);
         expect(opened).toBe(false);
         expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
       }).pipe(Effect.provide(layers)),
@@ -174,25 +161,16 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer({ resourceScopes: ["read"] });
       const sdk = yield* makeMcpSdkAuth;
-      const entered = yield* Deferred.make<void>();
-      let released = false;
+      const approval = yield* blockingProbe;
       const login = yield* sdk
-        .login(changeOAuth(fixture.configured("dynamic"), { scopes: [] }), {
+        .login(fixture.configured("dynamic", { scopes: [] }), {
           ...cancelledUi,
-          approveScopes: () =>
-            Deferred.succeed(entered, undefined).pipe(
-              Effect.andThen(Effect.never),
-              Effect.ensuring(
-                Effect.sync(() => {
-                  released = true;
-                }),
-              ),
-            ),
+          approveScopes: () => approval.block,
         })
         .pipe(Effect.forkScoped);
-      yield* Deferred.await(entered);
+      yield* Deferred.await(approval.entered);
       yield* Fiber.interrupt(login);
-      expect(released).toBe(true);
+      expect(approval.released()).toBe(true);
       expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
     }).pipe(Effect.provide(layers)),
   );
@@ -208,10 +186,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
       const sdk = yield* makeMcpSdkAuth;
       const ui = yield* browser("manual");
       const grant = yield* sdk.login(
-        changeOAuth(fixture.configured("dynamic"), {
-          scopes: [],
-          explicitEmptyScopes: true,
-        }),
+        fixture.configured("dynamic", { scopes: [], explicitEmptyScopes: true }),
         {
           ...ui,
           openBrowser: (value) =>
@@ -231,7 +206,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
         const fixture = yield* startOAuthServer({ requireNoScope: true });
         const sdk = yield* makeMcpSdkAuth;
         const grant = yield* sdk.login(
-          changeOAuth(fixture.configured("dynamic"), { scopes: [] }),
+          fixture.configured("dynamic", { scopes: [] }),
           yield* browser("manual"),
         );
         expect(grant.requestedScopes).toEqual([]);
@@ -290,13 +265,13 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
         `${fixture.origin}/ `,
       ])
         expect(
-          (yield* sdk
+          yield* sdk
             .token(server, {
               ...grant,
               resourceMetadata: { resource, authorization_servers: [fixture.issuer] },
             })
-            .pipe(Effect.result))._tag,
-        ).toBe("Failure");
+            .pipe(Effect.isFailure),
+        ).toBe(true);
     }).pipe(Effect.provide(layers)),
   );
 
@@ -305,12 +280,10 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ secretClient: true });
         const sdk = yield* makeMcpSdkAuth;
-        const server =
-          mode === "local"
-            ? changeOAuth(fixture.configured("dynamic"), {
-                redirectUri: "http://127.0.0.1:0/callback",
-              })
-            : fixture.configured("dynamic");
+        const server = fixture.configured(
+          "dynamic",
+          mode === "local" ? { redirectUri: "http://127.0.0.1:0/callback" } : {},
+        );
         let registration: McpRegistrationReceipt | undefined;
         const saveRegistration = (value: McpRegistrationReceipt) =>
           Effect.sync(() => {
@@ -407,7 +380,7 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
       const fixture = yield* startOAuthServer();
       const sdk = yield* makeMcpSdkAuth;
       let opened = false;
-      const result = yield* sdk
+      const failed = yield* sdk
         .login(
           fixture.configured("dynamic"),
           {
@@ -422,8 +395,8 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
               Effect.fail(boundaryError("unavailable", "not-sent", "Fixture storage failed.")),
           },
         )
-        .pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
+        .pipe(Effect.isFailure);
+      expect(failed).toBe(true);
       expect(opened).toBe(false);
       expect(fixture.counts()).toEqual({ registered: 1, exchanged: 0, refreshed: 0 });
     }).pipe(Effect.provide(layers)),
@@ -447,10 +420,11 @@ describe("explicit OAuth permissions and registration checkpoints", () => {
           .login(server, cancelledUi, { registration: { ...first, scopes: [] }, saveRegistration })
           .pipe(Effect.result);
         expect(fixture.counts().registered).toBe(2);
-        const result = yield* sdk
-          .login(server, yield* browser("manual"), { registration: registration! })
-          .pipe(Effect.result);
-        expect(result._tag).toBe("Failure");
+        expect(
+          yield* sdk
+            .login(server, yield* browser("manual"), { registration: registration! })
+            .pipe(Effect.isFailure),
+        ).toBe(true);
         expect(fixture.counts().registered).toBe(2);
         expect(fixture.counts().exchanged).toBe(0);
       }).pipe(Effect.provide(layers)),
@@ -523,17 +497,10 @@ describe("SDK-owned public OAuth", () => {
             registration === "metadata"
               ? { clientMetadataUrl: "https://client.example:443/oauth.json" }
               : { clientId };
-          const server: McpEffectiveServer = {
-            id: "normalized",
+          const server = testServer("normalized", {
             identity: "a".repeat(64),
-            enabled: true,
-            scope: "global",
-            directory: "/fixture",
-            definition: {
-              transport: "http",
+            definition: httpDefinition({
               url: "https://api.example",
-              headers: {},
-              denyTools: [],
               auth: {
                 type: "oauth",
                 registration,
@@ -541,8 +508,8 @@ describe("SDK-owned public OAuth", () => {
                 scopes: [],
                 ...configuredClient,
               },
-            },
-          };
+            }),
+          });
           const grant: McpGrant = {
             version: 1,
             identity: server.identity,
@@ -566,21 +533,16 @@ describe("SDK-owned public OAuth", () => {
             tokens: { token_type: "Bearer", access_token: "fixture-restored" },
           };
           expect(yield* sdk.token(server, grant)).toBe("fixture-restored");
-          expect(
-            (yield* sdk
-              .token(server, { ...grant, issuer: "https://issuer.example/" })
-              .pipe(Effect.result))._tag,
-          ).toBe("Failure");
+          const rejects = (changed: McpGrant) => sdk.token(server, changed).pipe(Effect.isFailure);
+          expect(yield* rejects({ ...grant, issuer: "https://issuer.example/" })).toBe(true);
           if (registration === "pre-registered")
             expect(
-              (yield* sdk
-                .token(server, {
-                  ...grant,
-                  clientId: "https://opaque.example/",
-                  clientInformation: { client_id: "https://opaque.example/" },
-                })
-                .pipe(Effect.result))._tag,
-            ).toBe("Failure");
+              yield* rejects({
+                ...grant,
+                clientId: "https://opaque.example/",
+                clientInformation: { client_id: "https://opaque.example/" },
+              }),
+            ).toBe(true);
         }).pipe(Effect.provide(layers)),
     );
   }
@@ -592,22 +554,10 @@ describe("SDK-owned public OAuth", () => {
           Effect.gen(function* () {
             const fixture = yield* startOAuthServer();
             const sdk = yield* makeMcpSdkAuth;
-            const configured = fixture.configured(registration);
-            const server =
-              mode === "local" &&
-              configured.definition?.transport === "http" &&
-              configured.definition.auth.type === "oauth"
-                ? {
-                    ...configured,
-                    definition: {
-                      ...configured.definition,
-                      auth: {
-                        ...configured.definition.auth,
-                        redirectUri: "http://127.0.0.1:0/callback",
-                      },
-                    },
-                  }
-                : configured;
+            const server = fixture.configured(
+              registration,
+              mode === "local" ? { redirectUri: "http://127.0.0.1:0/callback" } : {},
+            );
             const ui = yield* browser(mode);
             const progress: McpAuthProgressEvent[] = [];
             const grant = yield* sdk.login(server, {
@@ -683,7 +633,7 @@ describe("SDK-owned public OAuth", () => {
             }).pipe(Effect.andThen(ui.openBrowser(url))),
         });
         expect(grant.resourceMetadataSource).toBeUndefined();
-        const stored = yield* decodeGrant(yield* encodeGrant(grant));
+        const stored = yield* restore(yield* persist(grant));
         const restored = yield* makeMcpSdkAuth;
         expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
         expect(yield* restored.token(server, yield* restored.refresh(server, stored))).toBe(
@@ -720,12 +670,12 @@ describe("SDK-owned public OAuth", () => {
         const server = fixture.configured("dynamic");
         const sdk = yield* makeMcpSdkAuth;
         const grant = yield* sdk.login(server, yield* browser("manual"));
-        const encoded = yield* encodeGrant(grant);
+        const encoded = yield* persist(grant);
         expect(encoded).not.toContain("fixture-unused-secret");
         expect(grant.clientInformation).not.toHaveProperty("client_secret");
         expect(grant.clientInformation).not.toHaveProperty("client_secret_expires_at");
         expect(grant.clientInformation).toHaveProperty("token_endpoint_auth_method", "none");
-        const stored = yield* decodeGrant(encoded);
+        const stored = yield* restore(encoded);
         const restored = yield* makeMcpSdkAuth;
         expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
         // A stored declaration must survive decoding, not become public through SDK field stripping.
@@ -753,7 +703,7 @@ describe("SDK-owned public OAuth", () => {
         };
         const refreshed = yield* restored.refresh(server, surplus);
         expect(yield* restored.token(server, refreshed)).toBe("fixture-access-1");
-        expect(yield* encodeGrant(refreshed)).not.toContain("private-restored-unused-secret");
+        expect(yield* persist(refreshed)).not.toContain("private-restored-unused-secret");
         expect(refreshed.clientInformation).not.toHaveProperty("client_secret");
         expect(refreshed.clientInformation).not.toHaveProperty("client_secret_expires_at");
         expect(refreshed.clientInformation).toHaveProperty("token_endpoint_auth_method", "none");
@@ -788,7 +738,7 @@ describe("SDK-owned public OAuth", () => {
           const grant = yield* sdk.login(server, yield* browser("manual"));
           expect(grant.resourceMetadataSource).toBe("origin");
           expect(grant.issuer).toBe(fixture.issuer);
-          const stored = yield* decodeGrant(yield* encodeGrant(grant));
+          const stored = yield* restore(yield* persist(grant));
           const restored = yield* makeMcpSdkAuth;
           expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
           const refreshed = yield* restored.refresh(server, stored);
@@ -817,14 +767,14 @@ describe("SDK-owned public OAuth", () => {
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ authorizationMetadataStatuses: [status, 200] });
         const sdk = yield* makeMcpSdkAuth;
-        const result = yield* sdk
-          .login(fixture.configured("dynamic"), yield* browser("manual"))
-          .pipe(Effect.result);
-        if (status === 404 || status === 410) {
-          expect(result._tag).toBe("Success");
-          expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 0 });
-        } else {
-          expect(result._tag).toBe("Failure");
+        const absent = status === 404 || status === 410;
+        expect(
+          yield* sdk
+            .login(fixture.configured("dynamic"), yield* browser("manual"))
+            .pipe(Effect.isSuccess),
+        ).toBe(absent);
+        if (absent) expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 0 });
+        else {
           expect(fixture.counts()).toEqual({ registered: 0, exchanged: 0, refreshed: 0 });
           expect(fixture.requests.some((request) => request.path.includes("openid"))).toBe(false);
         }
@@ -842,23 +792,12 @@ describe("SDK-owned public OAuth", () => {
           const fixture = yield* startOAuthServer({ resourceMetadataStatuses: statuses });
           const sdk = yield* makeMcpSdkAuth;
           const configured = fixture.configured("dynamic");
-          if (
-            configured.definition?.transport !== "http" ||
-            configured.definition.auth.type !== "oauth"
-          )
+          if (configured.definition?.transport !== "http")
             return yield* Effect.die("Fixture OAuth definition missing.");
-          const definition = configured.definition;
-          const auth = definition.auth;
-          const server = {
-            ...configured,
-            definition: {
-              ...definition,
-              auth: { ...auth, allowMissingResourceMetadata: true },
-            },
-          };
+          const server = fixture.configured("dynamic", { allowMissingResourceMetadata: true });
           const grant = yield* sdk.login(server, yield* browser("manual"));
           expect(grant.resourceMetadataSource).toBe("configured");
-          const stored = yield* decodeGrant(yield* encodeGrant(grant));
+          const stored = yield* restore(yield* persist(grant));
           const restored = yield* makeMcpSdkAuth;
           expect(yield* restored.token(server, stored)).toBe("fixture-access-0");
           const refreshed = yield* restored.refresh(server, stored);
@@ -866,27 +805,27 @@ describe("SDK-owned public OAuth", () => {
           expect(yield* restored.token(server, refreshed)).toBe("fixture-access-1");
           expect(fixture.counts()).toEqual({ registered: 1, exchanged: 1, refreshed: 1 });
           // Keep identity unchanged here to exercise restore policy independently of config hashing.
-          expect(
-            yield* restored.token({ ...server, definition: { ...definition, auth } }, refreshed),
-          ).toBe("fixture-access-1");
-          for (const changedAuth of [
-            { ...auth, allowMissingResourceMetadata: false },
-            { ...auth, allowMissingResourceMetadata: true, issuer: `${fixture.issuer}/other` },
-            { ...auth, allowMissingResourceMetadata: true, resource: `${fixture.origin}/other` },
+          expect(yield* restored.token(configured, refreshed)).toBe("fixture-access-1");
+          const allow = { allowMissingResourceMetadata: true };
+          for (const changed of [
+            fixture.configured("dynamic", { allowMissingResourceMetadata: false }),
+            fixture.configured("dynamic", { ...allow, issuer: `${fixture.issuer}/other` }),
+            fixture.configured("dynamic", { ...allow, resource: `${fixture.origin}/other` }),
             {
-              type: "oauth" as const,
-              registration: "dynamic" as const,
-              scopes: [],
-              allowMissingResourceMetadata: true,
+              ...configured,
+              definition: {
+                ...configured.definition,
+                auth: {
+                  type: "oauth" as const,
+                  registration: "dynamic" as const,
+                  scopes: [],
+                  ...allow,
+                },
+              },
             },
           ]) {
-            const changed = { ...configured, definition: { ...definition, auth: changedAuth } };
-            expect((yield* restored.token(changed, refreshed).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
-            expect((yield* restored.refresh(changed, refreshed).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
+            expect(yield* restored.token(changed, refreshed).pipe(Effect.isFailure)).toBe(true);
+            expect(yield* restored.refresh(changed, refreshed).pipe(Effect.isFailure)).toBe(true);
           }
           expect(fixture.counts().refreshed).toBe(1);
         }).pipe(Effect.provide(layers)),
@@ -905,19 +844,7 @@ describe("SDK-owned public OAuth", () => {
         Effect.gen(function* () {
           const fixture = yield* startOAuthServer(options);
           const sdk = yield* makeMcpSdkAuth;
-          const configured = fixture.configured("dynamic");
-          if (
-            configured.definition?.transport !== "http" ||
-            configured.definition.auth.type !== "oauth"
-          )
-            return yield* Effect.die("Fixture OAuth definition missing.");
-          const server = {
-            ...configured,
-            definition: {
-              ...configured.definition,
-              auth: { ...configured.definition.auth, allowMissingResourceMetadata: true },
-            },
-          };
+          const server = fixture.configured("dynamic", { allowMissingResourceMetadata: true });
           const result = yield* sdk.login(server, yield* browser("manual")).pipe(Effect.result);
           expect(result._tag).toBe("Failure");
           expect(fixture.counts().exchanged).toBe(0);
@@ -934,19 +861,9 @@ describe("SDK-owned public OAuth", () => {
           invalidTokens: failure === "tokens",
         });
         const sdk = yield* makeMcpSdkAuth;
-        const configured = fixture.configured("pre-registered");
-        if (
-          configured.definition?.transport !== "http" ||
-          configured.definition.auth.type !== "oauth"
-        )
-          return yield* Effect.die("Fixture OAuth definition missing.");
-        const server = {
-          ...configured,
-          definition: {
-            ...configured.definition,
-            auth: { ...configured.definition.auth, allowMissingResourceMetadata: true },
-          },
-        };
+        const server = fixture.configured("pre-registered", {
+          allowMissingResourceMetadata: true,
+        });
         const parameter = failure === "issuer" ? "iss" : "state";
         const ui = yield* browser("manual", (callback) =>
           failure === "tokens" ? callback : callback.replace(`${parameter}=`, `${parameter}=wrong`),
@@ -1025,19 +942,9 @@ describe("SDK-owned public OAuth", () => {
       const fixture = yield* startOAuthServer();
       const sdk = yield* makeMcpSdkAuth;
       const opened = yield* Deferred.make<string>();
-      const configured = fixture.configured("pre-registered");
-      if (
-        configured.definition?.transport !== "http" ||
-        configured.definition.auth.type !== "oauth"
-      )
-        return yield* Effect.die("Missing fixture definition.");
-      const server = {
-        ...configured,
-        definition: {
-          ...configured.definition,
-          auth: { ...configured.definition.auth, redirectUri: "http://127.0.0.1:0/callback" },
-        },
-      };
+      const server = fixture.configured("pre-registered", {
+        redirectUri: "http://127.0.0.1:0/callback",
+      });
       const login = yield* sdk
         .login(server, {
           mode: "local",
@@ -1050,7 +957,7 @@ describe("SDK-owned public OAuth", () => {
       const client = yield* HttpClient.HttpClient;
       expect((yield* client.get(new URL("/other", redirect))).status).toBe(404);
       yield* Fiber.interrupt(login);
-      expect((yield* client.get(redirect).pipe(Effect.result))._tag).toBe("Failure");
+      expect(yield* client.get(redirect).pipe(Effect.isFailure)).toBe(true);
       expect(fixture.counts().exchanged).toBe(0);
     }).pipe(Effect.provide(layers)),
   );
@@ -1144,19 +1051,7 @@ describe("SDK-owned public OAuth", () => {
         Effect.provideService(HttpMiddleware.TracerDisabledWhen, () => true),
       );
       const sdk = yield* makeMcpSdkAuth;
-      const configured = fixture.configured("dynamic");
-      if (
-        configured.definition?.transport !== "http" ||
-        configured.definition.auth.type !== "oauth"
-      )
-        return yield* Effect.die("Fixture OAuth definition missing.");
-      const server = {
-        ...configured,
-        definition: {
-          ...configured.definition,
-          auth: { ...configured.definition.auth, redirectUri: "http://127.0.0.1:0/callback" },
-        },
-      };
+      const server = fixture.configured("dynamic", { redirectUri: "http://127.0.0.1:0/callback" });
       const grant = yield* sdk.login(server, yield* browser("local"));
       yield* sdk.refresh(server, grant);
       const snapshot = capturedTelemetrySnapshot(trace);
@@ -1202,13 +1097,13 @@ describe("SDK-owned public OAuth", () => {
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer();
       const policy = yield* authUrlPolicy(fixture.configured("pre-registered"));
-      const result = yield* withAuthFetch(policy, (fetch) =>
+      const denied = withAuthFetch(policy, (fetch) =>
         fetch("http://169.254.169.254/metadata").then(
           () => "fallback",
           () => "fallback",
         ),
-      ).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
+      );
+      expect(yield* Effect.isFailure(denied)).toBe(true);
     }).pipe(Effect.provide(layers)),
   );
 });

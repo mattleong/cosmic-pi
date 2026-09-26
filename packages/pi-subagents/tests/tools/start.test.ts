@@ -10,17 +10,24 @@ import {
 } from "../../src/boundary/host-profile-resolution.ts";
 import {
   SubagentBackendRegistry,
+  type BackendSelection,
   type SubagentBackendRegistryContract,
 } from "../../src/backend/service.ts";
-import { PROFILE_IDS } from "../../src/profiles/model.ts";
+import { PROFILE_IDS, type DeclaredProfileCandidate } from "../../src/profiles/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
-import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
-import { decodeSubagentEffort, type SubagentRuntime } from "../../src/domain/routing.ts";
+import {
+  invalidRequest,
+  type InvalidSubagentRequestError,
+  SubagentProcessError,
+} from "../../src/run/errors.ts";
+import { decodeSubagentEffort } from "../../src/domain/routing.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
-import { type SubagentServiceContract } from "../../src/run/service.ts";
+import type { SubagentStartDetails } from "../../src/tools/details-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
+  type CaptureOptions,
   captureSubagentTools,
+  executeTool,
   invokeOptionalTool,
   context,
   fallbackProfileService,
@@ -30,16 +37,44 @@ import {
   testBackendRegistry,
   view,
 } from "./fixtures/tool-harness.ts";
-import { extensionApiFixture, extensionContextFixture } from "../fixtures/pi-host.ts";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture } from "../fixtures/pi-host.ts";
 
-// v4 Deferred latch shared by tests that gate a host promise on test-side release.
-const deferred = <A>() => {
-  const cell = Deferred.makeUnsafe<A>();
+const route = (overrides: Partial<DeclaredProfileCandidate> = {}): DeclaredProfileCandidate => ({
+  host: "local",
+  runtime: "pi",
+  model: "parent",
+  effort: "default",
+  context: "fresh",
+  writeIntent: "read-only",
+  ...overrides,
+});
+
+const startTool = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
+  captureSubagentTools(startCapturingService(requests), options).get("subagent_start");
+
+/** Resolves every selection to its own runtime and fails preflight when `reject` names a failure. */
+const preflightRegistry = (
+  reject: (selection: BackendSelection) => InvalidSubagentRequestError | undefined,
+): SubagentBackendRegistryContract => {
+  const driver = (selection: BackendSelection) => ({
+    ...testBackendDriver,
+    runtime: selection.runtime,
+  });
   return {
-    promise: Effect.runPromise(Deferred.await(cell)),
-    resolve: (value: A) => Deferred.doneUnsafe(cell, Effect.succeed(value)),
+    resolve: (selection) => Effect.succeed(driver(selection)),
+    preflight: (selection) => {
+      const failure = reject(selection);
+      return failure ? Effect.fail(failure) : Effect.succeed(driver(selection));
+    },
   };
 };
+
+const herdrProtocol21 = () =>
+  invalidRequest(
+    "herdr_protocol_unsupported",
+    "Unsupported Herdr protocol 21. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
+  );
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -51,23 +86,25 @@ describe("subagent tool", () => {
       const service = subagentServiceDouble({
         start: (input) => Effect.sync(() => ((request = input), view())),
       });
-      const tool = captureSubagentTools(service, [
-        "read",
-        "grep",
-        "edit",
-        "write",
-        "bash",
-        "mcp",
-        "read",
-        "subagent_start",
-        "subagent_future",
-        "subagent_await",
-        "herdr_agent_start",
-        "herdr_agent_future",
-        "workflow",
-        "workflow_control",
-        "workflow_future",
-      ]).get("subagent_start");
+      const tool = captureSubagentTools(service, {
+        activeTools: [
+          "read",
+          "grep",
+          "edit",
+          "write",
+          "bash",
+          "mcp",
+          "read",
+          "subagent_start",
+          "subagent_future",
+          "subagent_await",
+          "herdr_agent_start",
+          "herdr_agent_future",
+          "workflow",
+          "workflow_control",
+          "workflow_future",
+        ],
+      }).get("subagent_start");
 
       const result = yield* invokeOptionalTool(tool, {
         agents: [{ task: "Review auth" }],
@@ -75,6 +112,9 @@ describe("subagent tool", () => {
 
       expect(result?.content[0]?.text).toContain("agent-1");
       expect(request).toMatchObject({
+        profile: "generalist",
+        profileGuidance: expect.stringContaining("Act as a generalist"),
+        selection: { source: "profile-parent-candidate", skippedCandidates: [] },
         context: "fresh",
         model: "openai-codex/gpt-5.6-sol",
         effort: "high",
@@ -92,16 +132,7 @@ describe("subagent tool", () => {
       beginAwait: vi.fn(() => () => undefined),
       isLiveHierarchyAvailable: vi.fn(() => true),
     };
-    const tool = captureSubagentTools(
-      startCapturingService([]),
-      ["read"],
-      fallbackProfileService,
-      undefined,
-      { cwd: "/project", projectTrusted: true },
-      "high",
-      undefined,
-      presentation,
-    ).get("subagent_start");
+    const tool = startTool([], { toolPresentation: presentation });
 
     yield* invokeOptionalTool(tool, { agents: [{ task: "Review auth" }] });
 
@@ -133,8 +164,7 @@ describe("subagent tool", () => {
 
   effectTest("threads exact writes claims only through writer profiles", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tools = captureSubagentTools(startCapturingService(requests));
-    const start = tools.get("subagent_start");
+    const start = startTool(requests);
 
     const result = yield* invokeOptionalTool(start, {
       agents: [
@@ -163,31 +193,9 @@ describe("subagent tool", () => {
   effectTest("skips read-only route candidates when exact writes require a writer", function* () {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
-      profiles: {
-        worker: [
-          {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "default",
-            context: "fresh",
-            writeIntent: "read-only",
-          },
-          {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "default",
-            context: "fresh",
-            writeIntent: "writer",
-          },
-        ],
-      },
+      profiles: { worker: [route(), route({ writeIntent: "writer" })] },
     });
-    const start = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
-      "subagent_start",
-    );
-    yield* invokeOptionalTool(start, {
+    yield* invokeOptionalTool(startTool(requests, { profiles }), {
       agents: [
         {
           task: "Implement auth",
@@ -209,11 +217,9 @@ describe("subagent tool", () => {
   effectTest("does not request confirmation when launches use profile routing", function* () {
     const confirm = vi.fn(() => Promise.resolve(true));
     const requests: StartSubagentRequest[] = [];
-    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     yield* invokeOptionalTool(
-      tool,
+      startTool(requests),
       { agents: [{ task: "Inspect auth", profile: "scout" }] },
       {
         context: extensionContextFixture({
@@ -228,31 +234,6 @@ describe("subagent tool", () => {
     expect(requests[0]?.selection?.source).toBe("profile-parent-candidate");
   });
 
-  effectTest(
-    "routes the short form through the neutral generalist profile and records provenance",
-    function* () {
-      const requests: StartSubagentRequest[] = [];
-      const tool = captureSubagentTools(startCapturingService(requests), ["read"]).get(
-        "subagent_start",
-      );
-
-      yield* invokeOptionalTool(tool, { agents: [{ task: "Inspect auth" }] });
-
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatchObject({
-        profile: "generalist",
-        context: "fresh",
-        model: "openai-codex/gpt-5.6-sol",
-        selection: {
-          source: "profile-parent-candidate",
-          reason: "Profile generalist selected built-in route candidate 1 (local/pi).",
-          skippedCandidates: [],
-        },
-      });
-      expect(requests[0]?.profileGuidance).toContain("Act as a generalist");
-    },
-  );
-
   effectTest("uses one active session override for discovery and launch provenance", function* () {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor(undefined, undefined, {
@@ -261,20 +242,14 @@ describe("subagent tool", () => {
         reviewer: {
           candidates: [
             {
-              host: "local",
-              runtime: "pi",
-              model: "openai-codex/gpt-5.6-sol",
-              effort: "low",
-              context: "fresh",
-              writeIntent: "read-only",
-              openaiFastMode: false,
+              ...route({ model: "openai-codex/gpt-5.6-sol", effort: "low", openaiFastMode: false }),
               closeOnReport: true,
             },
           ],
         },
       },
     });
-    const tools = captureSubagentTools(startCapturingService(requests), ["read"], profiles);
+    const tools = captureSubagentTools(startCapturingService(requests), { profiles });
     const models = yield* invokeOptionalTool(tools.get("subagent_models"), { profile: "reviewer" });
     expect(models?.content[0]?.text).toContain("source=session");
     expect(models?.content[0]?.text).toContain("openai-codex/gpt-5.6-sol:low");
@@ -297,9 +272,8 @@ describe("subagent tool", () => {
     "routes every built-in profile through the tool boundary with its guidance and context",
     function* () {
       const requests: StartSubagentRequest[] = [];
-      const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
-      yield* invokeOptionalTool(tool, {
+      yield* invokeOptionalTool(startTool(requests), {
         agents: PROFILE_IDS.map((profile) => ({
           profile,
           task: `Smoke test ${profile}`,
@@ -342,9 +316,8 @@ describe("subagent tool", () => {
 
   effectTest("never degrades a Pi oracle fork to fresh for an ephemeral parent", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+    const tool = startTool(requests);
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const ephemeral = extensionContextFixture({
       ...context,
       sessionManager: {
@@ -372,31 +345,21 @@ describe("subagent tool", () => {
       const profiles = profileServiceFor({
         profiles: {
           reviewer: [
-            {
+            route({
               host: "herdr",
               runtime: "claude",
               model: "sonnet",
               effort: "high",
-              context: "fresh",
-              writeIntent: "read-only",
               closeOnReport: false,
-            },
-            {
-              host: "local",
-              runtime: "pi",
-              model: "parent",
-              effort: "default",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
+            }),
+            route(),
           ],
         },
       });
-      const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
-        "subagent_start",
-      );
 
-      yield* invokeOptionalTool(tool, { agents: [{ profile: "reviewer", task: "Review" }] });
+      yield* invokeOptionalTool(startTool(requests, { profiles }), {
+        agents: [{ profile: "reviewer", task: "Review" }],
+      });
 
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
@@ -433,39 +396,21 @@ describe("subagent tool", () => {
         const requests: StartSubagentRequest[] = [];
         const profiles = profileServiceFor({
           profiles: {
-            reviewer: {
+            reviewer: route({
               host: "herdr",
-              runtime: runtimeCase.runtime,
-              model: runtimeCase.model,
               effort: "high",
-              context: "fresh",
-              writeIntent: "read-only",
-              openaiFastMode: runtimeCase.openaiFastMode,
               closeOnReport: false,
-            },
+              ...runtimeCase,
+            }),
           },
         });
-        const driverFor = (runtime: SubagentRuntime) => ({ ...testBackendDriver, runtime });
-        const registry: SubagentBackendRegistryContract = {
-          resolve: (selection) => Effect.succeed(driverFor(selection.runtime)),
-          preflight: (selection) =>
-            selection.host === "herdr"
-              ? Effect.fail(
-                  new InvalidSubagentRequestError({
-                    code: "herdr_protocol_unsupported",
-                    message:
-                      "Unsupported Herdr protocol 21. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
-                  }),
-                )
-              : Effect.succeed(driverFor(selection.runtime)),
-        };
-
-        const result = yield* invokeOptionalTool(
-          captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
-            "subagent_start",
-          ),
-          { agents: [{ profile: "reviewer", task: "Review" }] },
+        const registry = preflightRegistry((selection) =>
+          selection.host === "herdr" ? herdrProtocol21() : undefined,
         );
+
+        const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+          agents: [{ profile: "reviewer", task: "Review" }],
+        });
 
         expect(requests).toHaveLength(1);
         expect(requests[0]).toMatchObject({
@@ -510,45 +455,27 @@ describe("subagent tool", () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
       profiles: {
-        worker: {
+        worker: route({
           host: "herdr",
-          runtime: "pi",
           model: "openai-codex/gpt-5.6-sol",
           effort: "high",
-          context: "fresh",
           writeIntent: "writer",
           closeOnReport: true,
-        },
+        }),
       },
     });
-    const registry: SubagentBackendRegistryContract = {
-      resolve: () => Effect.succeed(testBackendDriver),
-      preflight: (selection) =>
-        selection.host === "herdr"
-          ? Effect.fail(
-              new InvalidSubagentRequestError({
-                code: "herdr_upgrade_required",
-                message:
-                  "Unsupported Herdr protocol 19. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
-              }),
-            )
-          : Effect.succeed(testBackendDriver),
-    };
-
-    yield* invokeOptionalTool(
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
-        "subagent_start",
-      ),
-      {
-        agents: [
-          {
-            profile: "worker",
-            task: "Implement auth",
-            writes: ["src/auth.ts"],
-          },
-        ],
-      },
+    const registry = preflightRegistry((selection) =>
+      selection.host === "herdr"
+        ? invalidRequest(
+            "herdr_upgrade_required",
+            "Unsupported Herdr protocol 19. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
+          )
+        : undefined,
     );
+
+    yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+      agents: [{ profile: "worker", task: "Implement auth", writes: ["src/auth.ts"] }],
+    });
 
     expect(requests[0]).toMatchObject({
       host: "local",
@@ -567,42 +494,24 @@ describe("subagent tool", () => {
       const requests: StartSubagentRequest[] = [];
       const profiles = profileServiceFor({
         profiles: {
-          reviewer: {
+          reviewer: route({
             host: "herdr",
             runtime: "claude",
             model: "claude-opus-5",
             effort: "high",
-            context: "fresh",
-            writeIntent: "read-only",
             closeOnReport: true,
-          },
+          }),
         },
       });
-      const registry: SubagentBackendRegistryContract = {
-        resolve: () => Effect.succeed({ ...testBackendDriver, runtime: "claude" }),
-        preflight: (selection) =>
-          selection.host === "herdr"
-            ? Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "herdr_protocol_unsupported",
-                  message:
-                    "Unsupported Herdr protocol 21. pi-subagents supports protocol 20; Herdr launch was blocked before topology changes.",
-                }),
-              )
-            : Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "claude_unauthenticated",
-                  message: "Local Claude authentication is unavailable.",
-                }),
-              ),
-      };
-
-      const result = yield* invokeOptionalTool(
-        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
-          "subagent_start",
-        ),
-        { agents: [{ profile: "reviewer", task: "Review" }] },
+      const registry = preflightRegistry((selection) =>
+        selection.host === "herdr"
+          ? herdrProtocol21()
+          : invalidRequest("claude_unauthenticated", "Local Claude authentication is unavailable."),
       );
+
+      const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+        agents: [{ profile: "reviewer", task: "Review" }],
+      });
 
       expect(requests).toEqual([]);
       expect(result?.content[0]?.text).toContain("Unsupported Herdr protocol 21");
@@ -620,58 +529,22 @@ describe("subagent tool", () => {
       const profiles = profileServiceFor({
         profiles: {
           reviewer: [
-            {
-              host: "local",
-              runtime: "claude",
-              model: "sonnet",
-              effort: "xhigh",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
-            {
-              host: "local",
-              runtime: "codex",
-              model: "gpt-5.6-sol",
-              effort: "max",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
-            {
-              host: "local",
-              runtime: "pi",
-              model: "parent",
-              effort: "high",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
+            route({ runtime: "claude", model: "sonnet", effort: "xhigh" }),
+            route({ runtime: "codex", model: "gpt-5.6-sol", effort: "max" }),
+            route({ effort: "high" }),
           ],
         },
       });
-      const registry: SubagentBackendRegistryContract = {
-        resolve: () => Effect.succeed(testBackendDriver),
-        preflight: (selection) =>
-          selection.runtime === "claude"
-            ? Effect.fail(
-                new InvalidSubagentRequestError({
-                  code: "claude_unauthenticated",
-                  message: "Claude fixture auth unavailable.",
-                }),
-              )
-            : selection.runtime === "codex"
-              ? Effect.fail(
-                  new InvalidSubagentRequestError({
-                    code: "codex_effort_unsupported",
-                    message: "Codex fixture effort unavailable.",
-                  }),
-                )
-              : Effect.succeed(testBackendDriver),
-      };
-      yield* invokeOptionalTool(
-        captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
-          "subagent_start",
-        ),
-        { agents: [{ profile: "reviewer", task: "Review" }] },
+      const registry = preflightRegistry((selection) =>
+        selection.runtime === "claude"
+          ? invalidRequest("claude_unauthenticated", "Claude fixture auth unavailable.")
+          : selection.runtime === "codex"
+            ? invalidRequest("codex_effort_unsupported", "Codex fixture effort unavailable.")
+            : undefined,
       );
+      yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+        agents: [{ profile: "reviewer", task: "Review" }],
+      });
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
         host: "local",
@@ -692,43 +565,22 @@ describe("subagent tool", () => {
     const profiles = profileServiceFor({
       profiles: {
         reviewer: [
-          {
-            host: "local",
-            runtime: "claude",
-            model: "sonnet",
-            effort: "xhigh",
-            context: "fresh",
-            writeIntent: "read-only",
-          },
-          {
-            host: "local",
-            runtime: "pi",
-            model: "parent",
-            effort: "high",
-            context: "fresh",
-            writeIntent: "read-only",
-          },
+          route({ runtime: "claude", model: "sonnet", effort: "xhigh" }),
+          route({ effort: "high" }),
         ],
       },
     });
-    const registry: SubagentBackendRegistryContract = {
-      resolve: () => Effect.succeed(testBackendDriver),
-      preflight: (selection) =>
-        selection.runtime === "claude"
-          ? Effect.fail(
-              new InvalidSubagentRequestError({
-                code: "claude_preflight_cleanup_unconfirmed",
-                message: "Fixture readiness process cleanup is uncertain.",
-              }),
-            )
-          : Effect.succeed(testBackendDriver),
-    };
-    const result = yield* invokeOptionalTool(
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles, registry).get(
-        "subagent_start",
-      ),
-      { agents: [{ profile: "reviewer", task: "Review" }] },
+    const registry = preflightRegistry((selection) =>
+      selection.runtime === "claude"
+        ? invalidRequest(
+            "claude_preflight_cleanup_unconfirmed",
+            "Fixture readiness process cleanup is uncertain.",
+          )
+        : undefined,
     );
+    const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+      agents: [{ profile: "reviewer", task: "Review" }],
+    });
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
       startFailures: [{ code: "claude_preflight_cleanup_unconfirmed" }],
@@ -739,23 +591,18 @@ describe("subagent tool", () => {
     const requests: StartSubagentRequest[] = [];
     const profiles = profileServiceFor({
       profiles: {
-        reviewer: {
+        reviewer: route({
           host: "herdr",
           runtime: "codex",
           model: "gpt-5.4",
           effort: "high",
-          context: "fresh",
-          writeIntent: "read-only",
           closeOnReport: false,
-        },
+        }),
       },
     });
-    const result = yield* invokeOptionalTool(
-      captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
-        "subagent_start",
-      ),
-      { agents: [{ profile: "reviewer", task: "Review" }] },
-    );
+    const result = yield* invokeOptionalTool(startTool(requests, { profiles }), {
+      agents: [{ profile: "reviewer", task: "Review" }],
+    });
     expect(requests).toEqual([]);
     expect(result?.details).toMatchObject({
       startFailures: [{ code: "backend_not_implemented" }],
@@ -766,30 +613,10 @@ describe("subagent tool", () => {
     "does not fall through to another candidate after the selected start reaches the service",
     function* () {
       const profiles = profileServiceFor({
-        profiles: {
-          reviewer: [
-            {
-              host: "local",
-              runtime: "pi",
-              model: "openai-codex/gpt-5.6-sol",
-              effort: "default",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
-            {
-              host: "local",
-              runtime: "pi",
-              model: "parent",
-              effort: "default",
-              context: "fresh",
-              writeIntent: "read-only",
-            },
-          ],
-        },
+        profiles: { reviewer: [route({ model: "openai-codex/gpt-5.6-sol" }), route()] },
       });
       let starts = 0;
-      const base = startCapturingService([]);
-      const failStart: SubagentServiceContract["start"] = () => {
+      const failStart = () => {
         starts += 1;
         return Effect.fail(
           new SubagentProcessError({
@@ -799,16 +626,10 @@ describe("subagent tool", () => {
           }),
         );
       };
-      const service = subagentServiceDouble({
-        ...base,
-        start: failStart,
-        startSessionOwned: failStart,
-      });
+      const service = subagentServiceDouble({ start: failStart, startSessionOwned: failStart });
       const result = yield* invokeOptionalTool(
-        captureSubagentTools(service, ["read"], profiles).get("subagent_start"),
-        {
-          agents: [{ profile: "reviewer", task: "Review" }],
-        },
+        captureSubagentTools(service, { profiles }).get("subagent_start"),
+        { agents: [{ profile: "reviewer", task: "Review" }] },
       );
       expect(starts).toBe(1);
       expect(result?.details).toMatchObject({
@@ -826,34 +647,22 @@ describe("subagent tool", () => {
       expect(decodeSubagentEffort(42)).toBeUndefined();
       expect(decodeSubagentEffort(undefined)).toBeUndefined();
 
-      const startWithLevel = (thinkingLevel: string | number) => {
-        const requests: StartSubagentRequest[] = [];
-        const tools = captureSubagentTools(
-          startCapturingService(requests),
-          ["read"],
-          fallbackProfileService,
-          undefined,
-          { cwd: "/project", projectTrusted: true },
-          thinkingLevel,
-        );
-        return Promise.resolve(
-          tools
-            .get("subagent_start")
-            ?.execute(
-              "automatic",
-              { agents: [{ profile: "generalist", task: "Probe" }] },
-              undefined,
-              undefined,
-              context,
-            ),
-        ).then(() => requests.map((request) => request.effort));
-      };
+      const startWithLevel = (thinkingLevel: string | number) =>
+        Effect.gen(function* () {
+          const requests: StartSubagentRequest[] = [];
+          yield* invokeOptionalTool(
+            startTool(requests, { thinkingLevel }),
+            { agents: [{ profile: "generalist", task: "Probe" }] },
+            { callID: "automatic" },
+          );
+          return requests.map((request) => request.effort);
+        });
 
-      expect(yield* step(() => startWithLevel("low"))).toEqual(["low"]);
+      expect(yield* startWithLevel("low")).toEqual(["low"]);
       // Future or malformed host levels clamp to the shared "high" inheritance default.
-      expect(yield* step(() => startWithLevel("ultra"))).toEqual(["high"]);
-      expect(yield* step(() => startWithLevel(42))).toEqual(["high"]);
-      expect(yield* step(() => startWithLevel(" MEDIUM "))).toEqual(["medium"]);
+      expect(yield* startWithLevel("ultra")).toEqual(["high"]);
+      expect(yield* startWithLevel(42)).toEqual(["high"]);
+      expect(yield* startWithLevel(" MEDIUM ")).toEqual(["medium"]);
     },
   );
 
@@ -862,10 +671,7 @@ describe("subagent tool", () => {
     function* () {
       const requests: StartSubagentRequest[] = [];
       const emptyRoute = profileServiceFor({ profiles: { reviewer: "disabled" } });
-      const tool = captureSubagentTools(startCapturingService(requests), ["read"], emptyRoute).get(
-        "subagent_start",
-      );
-      const result = yield* invokeOptionalTool(tool, {
+      const result = yield* invokeOptionalTool(startTool(requests, { profiles: emptyRoute }), {
         agents: [
           { profile: "future", task: "Unknown" },
           { profile: "reviewer", task: "Review" },
@@ -926,7 +732,9 @@ describe("subagent tool", () => {
           ),
         ),
     });
-    const tool = captureSubagentTools(service, ["read", "grep"]).get("subagent_start");
+    const tool = captureSubagentTools(service, { activeTools: ["read", "grep"] }).get(
+      "subagent_start",
+    );
 
     const result = yield* invokeOptionalTool(tool, { agents });
 
@@ -938,30 +746,8 @@ describe("subagent tool", () => {
       model: "openai-codex/gpt-5.6-sol",
       effort: "high",
     });
-    // SAFETY: This locally constructed test fixture satisfies the declared details contract.
-    const details = result?.details as
-      | {
-          readonly startEntries?: ReadonlyArray<{
-            readonly index: number;
-            readonly name: string;
-            readonly profile: string;
-            readonly status: "started" | "failed" | "pending";
-            readonly routeStatus: "selected" | "resolving" | "unavailable";
-            readonly host?: string;
-            readonly runtime?: string;
-            readonly model?: string;
-            readonly effort?: string;
-            readonly openaiFastMode?: boolean;
-            readonly runId?: string;
-          }>;
-          readonly startFailures?: ReadonlyArray<{
-            readonly index: number;
-            readonly name?: string;
-            readonly message: string;
-            readonly code?: string;
-          }>;
-        }
-      | undefined;
+    // SAFETY: The public start tool persists SubagentStartDetails on this path.
+    const details = result?.details as SubagentStartDetails | undefined;
     expect(details?.startEntries).toHaveLength(32);
     expect(details?.startEntries?.map((entry) => entry.index)).toEqual(
       Array.from({ length: 32 }, (_, index) => index),
@@ -1007,7 +793,7 @@ describe("subagent tool", () => {
 
   effectTest("rejects per-launch routing overrides before side effects", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
+    const tool = startTool(requests)!;
 
     for (const fields of [
       { execution: "foreground" },
@@ -1017,13 +803,7 @@ describe("subagent tool", () => {
     ])
       yield* step(() =>
         expect(
-          tool?.execute(
-            "call",
-            { agents: [{ task: "Review auth", ...fields }] },
-            undefined,
-            undefined,
-            context,
-          ),
+          executeTool(tool, { agents: [{ task: "Review auth", ...fields }] }),
         ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
       );
     expect(requests).toEqual([]);
@@ -1033,13 +813,10 @@ describe("subagent tool", () => {
     "does not let a failed partial renderer turn a successful launch into failure",
     function* () {
       const requests: StartSubagentRequest[] = [];
-      const tool = captureSubagentTools(startCapturingService(requests)).get("subagent_start");
 
       const result = yield* invokeOptionalTool(
-        tool,
-        {
-          agents: [{ task: "Review auth" }],
-        },
+        startTool(requests),
+        { agents: [{ task: "Review auth" }] },
         {
           update: () => {
             throw new Error("stale renderer");
@@ -1081,11 +858,7 @@ describe("subagent tool", () => {
         captures += 1;
       }).pipe(Effect.flatMap(() => base.capture)),
     };
-    const tool = captureSubagentTools(startCapturingService(requests), ["read"], profiles).get(
-      "subagent_start",
-    );
-
-    yield* invokeOptionalTool(tool, {
+    yield* invokeOptionalTool(startTool(requests, { profiles }), {
       agents: [
         { task: "One", profile: "scout" },
         { task: "Two", profile: "reviewer" },
@@ -1097,7 +870,6 @@ describe("subagent tool", () => {
   });
 
   effectTest("rejects forged routing fields again at the host profile boundary", function* () {
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     const pi = extensionApiFixture({
       getThinkingLevel: () => "high",
       getActiveTools: () => ["read"],
@@ -1113,34 +885,22 @@ describe("subagent tool", () => {
         ),
       );
 
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    yield* step(() =>
-      expect(
-        reject({ task: "Probe", model: "pi/openai/other" } as SubagentProfileStartSpec),
-      ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-    );
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    yield* step(() =>
-      expect(
-        reject({ task: "Probe", backend: "claude-cli" } as SubagentProfileStartSpec),
-      ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-    );
-    // SAFETY: These hostile shapes prove internal continuation capabilities cannot enter public start.
-    yield* step(() =>
-      expect(
-        reject({ task: "Probe", routeContinuation: {} } as SubagentProfileStartSpec),
-      ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-    );
-    // SAFETY: These hostile shapes prove internal continuation capabilities cannot enter public start.
-    yield* step(() =>
-      expect(
-        reject({ task: "Probe", supersedes: {} } as SubagentProfileStartSpec),
-      ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
-    );
+    for (const forged of [
+      { model: "pi/openai/other" },
+      { backend: "claude-cli" },
+      { routeContinuation: {} },
+      { supersedes: {} },
+    ])
+      yield* step(() =>
+        expect(
+          // SAFETY: These hostile shapes prove forged routing fields and internal continuation capabilities cannot enter public start.
+          reject({ task: "Probe", ...forged } as SubagentProfileStartSpec),
+        ).rejects.toMatchObject({ code: "launch_override_not_allowed" }),
+      );
   });
 
   effectTest("publishes request-ordered partial receipts for out-of-order launches", function* () {
-    const slowLaunch = deferred<void>();
+    const slowLaunch = Deferred.makeUnsafe<void>();
     const updates: Array<{ readonly text: string; readonly details: unknown }> = [];
     const recordUpdate = (update: { content?: unknown; details?: unknown }) => {
       // SAFETY: The tool's update contract is a content array of text blocks plus a details payload.
@@ -1151,34 +911,25 @@ describe("subagent tool", () => {
     const service = subagentServiceDouble({
       startSessionOwned: (input: StartSubagentRequest) =>
         input.name === "launch-1"
-          ? Effect.tryPromise(() =>
-              slowLaunch.promise.then(() => view({ id: "agent-slow", name: "launch-1" })),
-            )
+          ? Deferred.await(slowLaunch).pipe(Effect.as(view({ id: "agent-slow", name: "launch-1" })))
           : input.name === "launch-2"
             ? Effect.fail(
                 new SubagentProcessError({ operation: "start", message: "simulated failure" }),
               )
             : Effect.sync(() => view({ id: "agent-fast", name: "launch-3" })),
     });
-    const tool = captureSubagentTools(service, ["read"]).get("subagent_start");
+    const tool = captureSubagentTools(service).get("subagent_start")!;
     const agents = ["launch-1", "launch-2", "launch-3"].map((name) => ({ task: "Review", name }));
 
-    let execution: Promise<unknown> | undefined;
-    yield* step(() => {
-      execution = tool?.execute("call", { agents }, undefined, recordUpdate, context);
-      return Promise.resolve();
-    });
+    const execution = executeTool(tool, { agents }, { update: recordUpdate });
     yield* step(() =>
       vi.waitFor(() => {
         if (!updates.some((update) => update.text.includes("Processed 1 of 3")))
           throw new Error("Waiting for the first partial receipt.");
       }),
     );
-    slowLaunch.resolve(undefined);
-    // SAFETY: The started execution promise is assigned inside the step above and always resolves.
-    const result = (yield* step(() => execution as Promise<unknown>)) as
-      | { content?: ReadonlyArray<{ readonly text?: string }> }
-      | undefined;
+    Deferred.doneUnsafe(slowLaunch, Effect.void);
+    const result = yield* step(() => execution);
 
     // The first partial receipt names the two unresolved launches in request order.
     const partial = updates[0]!;
@@ -1190,35 +941,23 @@ describe("subagent tool", () => {
     // Every published receipt stays request-ordered, and pending entries stay resolving.
     const receipt = (update: (typeof updates)[number]) =>
       // SAFETY: The tool constructs these persisted details on this public path.
-      update.details as {
-        readonly startEntries?: ReadonlyArray<{
-          readonly index: number;
-          readonly status: string;
-          readonly routeStatus: string;
-          readonly runId?: string;
-        }>;
-        readonly startFailures?: ReadonlyArray<{ readonly index: number }>;
-      };
-    for (const update of updates) {
-      const indexes = (receipt(update).startEntries ?? []).map((entry) => entry.index);
-      expect(indexes).toEqual([0, 1, 2]);
-    }
+      update.details as SubagentStartDetails;
+    for (const update of updates)
+      expect(receipt(update).startEntries.map((entry) => entry.index)).toEqual([0, 1, 2]);
     const partialReceipt = receipt(partial);
-    expect(partialReceipt.startEntries?.[0]).toMatchObject({ status: "pending" });
-    expect(partialReceipt.startEntries?.[1]).toMatchObject({
+    expect(partialReceipt.startEntries[0]).toMatchObject({ status: "pending" });
+    expect(partialReceipt.startEntries[1]).toMatchObject({
       status: "failed",
       routeStatus: "selected",
     });
-    expect(partialReceipt.startEntries?.[2]).toMatchObject({ status: "pending" });
+    expect(partialReceipt.startEntries[2]).toMatchObject({ status: "pending" });
 
     const final = receipt(updates.at(-1)!);
-    expect(final.startEntries?.map((entry) => entry.runId)).toEqual([
-      "agent-slow",
-      undefined,
-      "agent-fast",
-    ]);
+    expect(final.startEntries.map((entry) => ("runId" in entry ? entry.runId : undefined))).toEqual(
+      ["agent-slow", undefined, "agent-fast"],
+    );
     expect(final.startFailures?.map((failure) => failure.index)).toEqual([1]);
-    expect(result?.content?.[0]?.text).toContain("agent-slow");
-    expect(result?.content?.[0]?.text).toContain("agent-fast");
+    expect(result.content[0]?.text).toContain("agent-slow");
+    expect(result.content[0]?.text).toContain("agent-fast");
   });
 });

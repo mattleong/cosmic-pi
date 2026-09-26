@@ -12,6 +12,7 @@ import {
   executeSdkRequest,
   makeSdkClient,
 } from "../../src/boundary/sdk-client.ts";
+import { legacyInitialized } from "../fixtures/json-rpc.ts";
 
 it.each([
   { name: "absent", text: undefined, expected: undefined },
@@ -53,11 +54,7 @@ const makeClientHarness = Effect.gen(function* () {
       clientTransport.onmessage?.({
         jsonrpc: "2.0",
         id: message.id,
-        result: {
-          protocolVersion: "2025-11-25",
-          capabilities: { tools: { listChanged: true }, prompts: {} },
-          serverInfo: { name: "sdk-test-server", version: "1" },
-        },
+        result: legacyInitialized({ tools: { listChanged: true }, prompts: {} }),
       });
       return;
     }
@@ -109,11 +106,11 @@ it.effect(
 it.effect("keeps request decoding closed and rejects excess fields", () =>
   Effect.gen(function* () {
     expect(yield* decodeMcpRequest({ action: "tools.list" })).toEqual({ action: "tools.list" });
-    const rejected = yield* decodeMcpRequest({
-      action: "tools.list",
-      privateOperation: "connect",
-    }).pipe(Effect.result);
-    expect(rejected).toMatchObject({ _tag: "Failure", failure: { kind: "invalid-input" } });
+    expect(
+      yield* decodeMcpRequest({ action: "tools.list", privateOperation: "connect" }).pipe(
+        Effect.flip,
+      ),
+    ).toMatchObject({ kind: "invalid-input" });
   }),
 );
 
@@ -164,10 +161,7 @@ it.effect("coalesces metadata changes and ends delivery on terminal transport cl
     );
     yield* Effect.yieldNow;
     yield* Effect.promise(() => client.close());
-    expect(yield* events.terminal.pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "transport" },
-    });
+    expect(yield* events.terminal.pipe(Effect.flip)).toMatchObject({ kind: "transport" });
     yield* Fiber.join(reader);
     expect(delivered.sort()).toEqual(["prompts", "resources", "tools"]);
     expect(yield* events.health).toMatchObject({ closed: true, cleanupUnconfirmed: false });

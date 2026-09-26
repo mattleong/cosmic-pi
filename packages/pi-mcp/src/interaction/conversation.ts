@@ -29,7 +29,6 @@ export const converse = (
     let continued = false;
     return Effect.gen(function* () {
       if (
-        !operation.exchange ||
         !operation.capabilities.multiRoundTrip ||
         (input.action !== "tools.call" &&
           input.action !== "resources.read" &&
@@ -40,7 +39,7 @@ export const converse = (
       let requested = 0;
       let declined = false;
       const check = Effect.gen(function* () {
-        yield* operation.checkContinuation ?? operation.checkCurrent;
+        yield* operation.checkContinuation;
         if (provider && !(yield* provider.current))
           return yield* boundaryError(
             "stale",
@@ -48,7 +47,7 @@ export const converse = (
             "MCP input provider authority changed.",
           );
       });
-      for (let round = 0; round < MCP_INTERACTION_LIMITS.rounds; round++) {
+      for (let round = 0; ; round++) {
         yield* check;
         let dispatch: McpDispatchOptions = { ...options };
         if (provider) dispatch = { ...dispatch, elicitation: true };
@@ -62,7 +61,7 @@ export const converse = (
             "unknown",
             "MCP input request cleanup is unconfirmed.",
           );
-        if (round + 1 === MCP_INTERACTION_LIMITS.rounds)
+        if (round + 1 >= MCP_INTERACTION_LIMITS.rounds)
           return yield* boundaryError(
             "unsupported",
             "unknown",
@@ -104,7 +103,7 @@ export const converse = (
           }
           const owner = {
             extensionId: "pi-mcp",
-            operationId: operation.operationId ?? operation.owner,
+            operationId: operation.operationId,
             requestId: `${round}:${index}`,
             label: `MCP ${operation.server.id}`,
           };
@@ -148,11 +147,6 @@ export const converse = (
         if (exchange.requestState !== undefined)
           continuation = { ...continuation, requestState: exchange.requestState };
       }
-      return yield* boundaryError(
-        "unsupported",
-        "unknown",
-        "MCP conversation round limit reached.",
-      );
     }).pipe(
       Effect.mapError((error) =>
         continued && error.outcome === "not-sent"

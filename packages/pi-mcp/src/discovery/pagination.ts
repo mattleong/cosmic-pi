@@ -1,8 +1,9 @@
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import type * as Types from "effect/Types";
 import { boundaryError, type McpBoundaryError } from "../client/errors.ts";
 import type { McpOperation } from "../connection/model.ts";
+import { measureBoundedJson, type BoundedJsonUsage } from "../validation/schema-policy.ts";
 import { MCP_DISCOVERY_LIMITS } from "./model.ts";
 import { metadataFreshness, metadataTime, type McpMetadataFreshness } from "./freshness.ts";
 
@@ -11,67 +12,10 @@ export type McpListAction =
   | "resources.list"
   | "resources.templates"
   | "prompts.list";
-interface MetadataBudget {
-  bytes: number;
-  nodes: number;
-}
-export const metadataBudget = (): MetadataBudget => ({ bytes: 0, nodes: 0 });
+/** Shared by every page and family of one collection. */
+export const metadataBudget = (): Types.Mutable<BoundedJsonUsage> => ({ bytes: 0, nodes: 0 });
 const tooLarge = () =>
   boundaryError("output-limit", "not-sent", "MCP metadata exceeds discovery limits.");
-
-const isContainer = (
-  value: Schema.Json | undefined,
-): value is Schema.JsonArray | Schema.JsonObject =>
-  Array.isArray(value) || Predicate.isObject(value);
-
-/** Charge serialized UTF-8, including JSON escapes, before decoding or freezing entries. */
-export const chargeMetadata = (value: Schema.Json, budget: MetadataBudget): void => {
-  const pending: Array<{ value: Schema.Json; depth: number }> = [{ value, depth: 0 }];
-  const charge = (text: string): void => {
-    if (text.length > MCP_DISCOVERY_LIMITS.metadataBytes) throw tooLarge();
-    budget.bytes += new TextEncoder().encode(text).byteLength;
-    if (budget.bytes > MCP_DISCOVERY_LIMITS.metadataBytes) throw tooLarge();
-  };
-  while (pending.length > 0) {
-    const item = pending.pop();
-    if (item === undefined) break;
-    if (
-      ++budget.nodes > MCP_DISCOVERY_LIMITS.metadataNodes ||
-      item.depth > MCP_DISCOVERY_LIMITS.metadataDepth
-    )
-      throw tooLarge();
-    const current = item.value;
-    if (Predicate.isString(current)) {
-      if (current.length > MCP_DISCOVERY_LIMITS.metadataBytes) throw tooLarge();
-      charge(JSON.stringify(current));
-    } else if (!isContainer(current)) {
-      charge(String(current));
-    } else {
-      const entries = Object.entries(current);
-      if (entries.length > MCP_DISCOVERY_LIMITS.metadataNodes - budget.nodes) throw tooLarge();
-      charge("[]");
-      for (const [key, child] of entries) {
-        if (!Array.isArray(current)) charge(`${JSON.stringify(key)}:`);
-        if (pending.length >= MCP_DISCOVERY_LIMITS.metadataNodes) throw tooLarge();
-        pending.push({ value: child, depth: item.depth + 1 });
-      }
-      budget.bytes += Math.max(0, entries.length - 1);
-      if (budget.bytes > MCP_DISCOVERY_LIMITS.metadataBytes) throw tooLarge();
-    }
-  }
-};
-
-/** Input has passed the bounded JSON walk and schema decode. No remote object is retained. */
-export const freezeMetadata = <A extends Schema.Json>(value: A): A => {
-  const pending: Array<Schema.Json> = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!isContainer(current) || Object.isFrozen(current)) continue;
-    for (const child of Object.values(current)) pending.push(child);
-    Object.freeze(current);
-  }
-  return value;
-};
 
 export type McpMetadataList<A> =
   | (Required<McpMetadataFreshness> & {
@@ -90,7 +34,7 @@ export const listMetadata = <A extends Schema.Json>(
   field: "tools" | "resources" | "resourceTemplates" | "prompts",
   entry: Schema.Codec<A>,
   key: (item: A) => string,
-  budget: MetadataBudget,
+  budget: Types.Mutable<BoundedJsonUsage>,
 ): Effect.Effect<McpMetadataList<A>, McpBoundaryError> =>
   Effect.gen(function* () {
     const result: Array<A> = [];
@@ -123,13 +67,19 @@ export const listMetadata = <A extends Schema.Json>(
       if (reply === undefined)
         return { supported: false, entries: [], reason: "rpc-method-not-found" };
       if (reply.action !== action)
-        return yield* Effect.fail(
-          boundaryError("protocol", "not-sent", "MCP metadata action mismatch."),
-        );
-      yield* Effect.try({
-        try: () => chargeMetadata(reply.result, budget),
+        return yield* boundaryError("protocol", "not-sent", "MCP metadata action mismatch.");
+      // Charge serialized UTF-8, including JSON escapes, against the remaining budget before decoding.
+      const usage = yield* Effect.try({
+        try: () =>
+          measureBoundedJson(reply.result, {
+            bytes: MCP_DISCOVERY_LIMITS.metadataBytes - budget.bytes,
+            depth: MCP_DISCOVERY_LIMITS.metadataDepth,
+            nodes: MCP_DISCOVERY_LIMITS.metadataNodes - budget.nodes,
+          }),
         catch: () => tooLarge(),
       });
+      budget.bytes += usage.bytes;
+      budget.nodes += usage.nodes;
       const body = yield* Schema.decodeUnknownEffect(Schema.JsonObject)(reply.result).pipe(
         Effect.mapError(() =>
           boundaryError("protocol", "not-sent", "MCP metadata page is invalid."),
@@ -162,9 +112,7 @@ export const listMetadata = <A extends Schema.Json>(
       if (page.nextCursor === undefined)
         return { supported: true, entries: result, expiresAt, cacheScope };
       if (seenCursors.has(page.nextCursor))
-        return yield* Effect.fail(
-          boundaryError("protocol", "not-sent", "MCP metadata cursor repeated."),
-        );
+        return yield* boundaryError("protocol", "not-sent", "MCP metadata cursor repeated.");
       seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
     }

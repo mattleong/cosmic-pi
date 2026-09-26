@@ -5,7 +5,6 @@ import {
   makeConfigDocumentErrorFactory,
   makeScopedConfigStore,
   type JsonObject,
-  type ScopedConfigMetadata,
 } from "pi-cosmic-core";
 import {
   CONFIG_BASENAME,
@@ -24,11 +23,7 @@ const mapDocumentError = makeConfigDocumentErrorFactory(XaiConfigError, "Better 
 
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 
-type DecodedConfig = {
-  usage: Partial<ResolvedConfig["usage"]>;
-};
-
-function decodeConfig<ValueInput>(value: ValueInput): DecodedConfig {
+function decodeConfig<ValueInput>(value: ValueInput) {
   const root = decodeTolerantFields(
     value,
     { usage: UnknownRecordSchema },
@@ -57,9 +52,9 @@ const store = makeScopedConfigStore({
     usage: { ...DEFAULT_USAGE_CONFIG },
   }),
   resolve: (
-    metadata: ScopedConfigMetadata,
-    project: DecodedConfig | undefined,
-    global: DecodedConfig | undefined,
+    metadata,
+    project: ReturnType<typeof decodeConfig> | undefined,
+    global: ReturnType<typeof decodeConfig> | undefined,
   ): ResolvedConfig => {
     const usage = {
       ...DEFAULT_USAGE_CONFIG,

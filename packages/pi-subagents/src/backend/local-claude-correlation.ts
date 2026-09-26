@@ -5,15 +5,11 @@
  * handle report buffering and cumulative accounting. This module tracks sent
  * inputs and the native result each owns.
  */
+import type { SubagentUsage } from "../run/model.ts";
 import type { ClaudeProtocolEvent } from "./local-claude-protocol.ts";
 
 /** Cumulative native usage components tracked for monotone delta accounting. */
-export interface UsageComponents {
-  readonly input: number;
-  readonly output: number;
-  readonly cacheRead: number;
-  readonly cacheWrite: number;
-}
+export type UsageComponents = Omit<SubagentUsage, "totalTokens" | "cost">;
 
 export const zeroUsageComponents: UsageComponents = {
   input: 0,
@@ -22,25 +18,18 @@ export const zeroUsageComponents: UsageComponents = {
   cacheWrite: 0,
 };
 
-export const componentwiseMax = (
-  left: UsageComponents,
-  right: UsageComponents,
-): UsageComponents => ({
-  input: Math.max(left.input, right.input),
-  output: Math.max(left.output, right.output),
-  cacheRead: Math.max(left.cacheRead, right.cacheRead),
-  cacheWrite: Math.max(left.cacheWrite, right.cacheWrite),
-});
+const componentwise =
+  (combine: (left: number, right: number) => number) =>
+  (left: UsageComponents, right: UsageComponents): UsageComponents => ({
+    input: combine(left.input, right.input),
+    output: combine(left.output, right.output),
+    cacheRead: combine(left.cacheRead, right.cacheRead),
+    cacheWrite: combine(left.cacheWrite, right.cacheWrite),
+  });
 
-export const addUsageComponents = (
-  left: UsageComponents,
-  right: UsageComponents,
-): UsageComponents => ({
-  input: left.input + right.input,
-  output: left.output + right.output,
-  cacheRead: left.cacheRead + right.cacheRead,
-  cacheWrite: left.cacheWrite + right.cacheWrite,
-});
+export const componentwiseMax = componentwise(Math.max);
+export const addUsageComponents = componentwise((left, right) => left + right);
+const nonnegativeDelta = componentwise((previous, next) => Math.max(0, next - previous));
 
 export interface CumulativeUsageDelta {
   readonly delta: UsageComponents;
@@ -55,12 +44,7 @@ export const cumulativeUsageDelta = (
   previous: UsageComponents,
   next: UsageComponents,
 ): CumulativeUsageDelta => ({
-  delta: {
-    input: Math.max(0, next.input - previous.input),
-    output: Math.max(0, next.output - previous.output),
-    cacheRead: Math.max(0, next.cacheRead - previous.cacheRead),
-    cacheWrite: Math.max(0, next.cacheWrite - previous.cacheWrite),
-  },
+  delta: nonnegativeDelta(previous, next),
   inconsistent:
     next.input < previous.input ||
     next.output < previous.output ||
@@ -73,6 +57,21 @@ export const usageComponentsTotal = (components: UsageComponents): number =>
 
 /** Bound shared by the confirmed-UUID window and the result-expectation FIFO. */
 export const SENT_UUID_LIMIT = 64;
+
+/** Re-inserts a key as the newest entry, evicting the oldest entries beyond `limit`. */
+export const rememberBounded = <Key, Value>(
+  map: Map<Key, Value>,
+  key: Key,
+  value: Value,
+  limit: number,
+): void => {
+  map.delete(key);
+  map.set(key, value);
+  for (const oldest of map.keys()) {
+    if (map.size <= limit) break;
+    map.delete(oldest);
+  }
+};
 
 export type ClaudeSentUserKind = "probe" | "assignment" | "steer";
 export type ClaudeSentContentMatch = ClaudeSentUserKind | "multiple" | "other";
@@ -173,14 +172,14 @@ export const claudeSessionDiagnostic = (
 const diagnosticOrigin = (value: string | undefined, known: ReadonlySet<string>): string =>
   value === undefined ? "absent" : known.has(value) ? value : "other";
 
-const DIAGNOSTIC_LEADING_TAGS: ReadonlySet<string> = new Set([
+const DIAGNOSTIC_LEADING_TAGS = [
   "task-notification",
   "system-reminder",
   "teammate-message",
   "local-command-stdout",
   "local-command-stderr",
   "local-command-caveat",
-]);
+] as const;
 
 export type ClaudeTextLengthDiagnostic = "empty" | "1-64" | "65-1024" | "1025-16384" | "over-16384";
 
@@ -198,29 +197,13 @@ export const claudeTextLengthDiagnostic = (length: number): ClaudeTextLengthDiag
 export type ClaudeLeadingTagDiagnostic =
   | "none"
   | "other"
-  | "task-notification"
-  | "system-reminder"
-  | "teammate-message"
-  | "local-command-stdout"
-  | "local-command-stderr"
-  | "local-command-caveat";
+  | (typeof DIAGNOSTIC_LEADING_TAGS)[number];
 
 export const claudeLeadingTagDiagnostic = (text: string): ClaudeLeadingTagDiagnostic => {
-  const match = /^\s*<([a-z][a-z0-9-]{0,63})(?:\s|>)/u.exec(text.slice(0, 256));
-  if (!match) return "none";
-  const tag = match[1];
-  if (!tag || !DIAGNOSTIC_LEADING_TAGS.has(tag)) return "other";
-  switch (tag) {
-    case "task-notification":
-    case "system-reminder":
-    case "teammate-message":
-    case "local-command-stdout":
-    case "local-command-stderr":
-    case "local-command-caveat":
-      return tag;
-    default:
-      return "other";
-  }
+  const tag = /^\s*<([a-z][a-z0-9-]{0,63})(?:\s|>)/u.exec(text.slice(0, 256))?.[1];
+  return tag === undefined
+    ? "none"
+    : (DIAGNOSTIC_LEADING_TAGS.find((known) => known === tag) ?? "other");
 };
 
 export type ClaudeOutboundAgeDiagnostic = "none" | "under-1s" | "1-10s" | "11-60s" | "over-60s";
@@ -316,30 +299,10 @@ export interface ClaudeResultCorrelation {
 
 export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
   const sentUserUuids = new Map<string, ClaudeSentUserIdentity | undefined>();
-  const internalReplayUuids = new Set<string>();
+  const internalReplayUuids = new Map<string, true>();
   const resultExpectations = new Map<string, ResultExpectation>();
   /** FIFO used only when the current protocol legitimately omits user_message_uuid. */
   const resultOrder: ResultExpectation[] = [];
-
-  const rememberSentUuid = (uuid: string, identity?: ClaudeSentUserIdentity): void => {
-    sentUserUuids.delete(uuid);
-    sentUserUuids.set(uuid, identity);
-    while (sentUserUuids.size > SENT_UUID_LIMIT) {
-      const oldest = sentUserUuids.keys().next().value;
-      if (oldest === undefined) break;
-      sentUserUuids.delete(oldest);
-    }
-  };
-
-  const rememberInternalReplayUuid = (uuid: string): void => {
-    internalReplayUuids.delete(uuid);
-    internalReplayUuids.add(uuid);
-    while (internalReplayUuids.size > SENT_UUID_LIMIT) {
-      const oldest = internalReplayUuids.values().next().value;
-      if (oldest === undefined) break;
-      internalReplayUuids.delete(oldest);
-    }
-  };
 
   const matchSentContent = (contentDigest: string): ClaudeSentContentMatch => {
     const kinds = new Set<ClaudeSentUserKind>();
@@ -393,9 +356,11 @@ export const makeClaudeResultCorrelation = (): ClaudeResultCorrelation => {
   };
 
   return {
-    rememberSentUuid,
+    rememberSentUuid: (uuid, identity) =>
+      rememberBounded(sentUserUuids, uuid, identity, SENT_UUID_LIMIT),
     hasSentUuid: (uuid) => sentUserUuids.has(uuid),
-    rememberInternalReplayUuid,
+    rememberInternalReplayUuid: (uuid) =>
+      rememberBounded(internalReplayUuids, uuid, true, SENT_UUID_LIMIT),
     hasInternalReplayUuid: (uuid) => internalReplayUuids.has(uuid),
     matchSentContent,
     register,

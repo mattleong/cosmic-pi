@@ -4,12 +4,9 @@ export type TextRange = [number, number];
 export type TokenGroup = { start: number; end: number };
 
 export function rangesForTokenGroup(tokens: WordEmphasisToken[], group: TokenGroup): TextRange[] {
-  const ranges: TextRange[] = [];
-  for (let index = group.start; index < group.end; index++) {
-    const token = tokens[index];
-    if (token) appendTokenRange(ranges, token);
-  }
-  return ranges;
+  return mergeRanges(
+    tokens.slice(group.start, group.end).map((token): TextRange => [token.start, token.end]),
+  );
 }
 
 export function pushTokenRange(ranges: TextRange[], token: WordEmphasisToken): void {
@@ -28,10 +25,4 @@ export function mergeRanges(ranges: TextRange[]): TextRange[] {
     else merged.push([...range]);
   }
   return merged;
-}
-
-function appendTokenRange(ranges: TextRange[], token: WordEmphasisToken): void {
-  const previous = ranges.at(-1);
-  if (previous && token.start - previous[1] <= 1) previous[1] = token.end;
-  else ranges.push([token.start, token.end]);
 }

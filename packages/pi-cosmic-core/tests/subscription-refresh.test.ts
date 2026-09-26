@@ -4,12 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
-import { makeSubscriptionRefresh, type RefreshRequest } from "../index.ts";
-
-const merge = (current: RefreshRequest | undefined, next: RefreshRequest): RefreshRequest => ({
-  force: current?.force === true || next.force === true,
-  notify: current?.notify === true || next.notify === true,
-});
+import { makeSubscriptionRefresh } from "../index.ts";
 
 it.effect("discards a response when its key or revision becomes stale", () =>
   Effect.gen(function* () {
@@ -18,7 +13,6 @@ it.effect("discards a response when its key or revision becomes stale", () =>
     const release = yield* Deferred.make<void>();
     const commits: number[] = [];
     const refresh = yield* makeSubscriptionRefresh({
-      mergeRequest: merge,
       currentKey: Ref.get(key),
       interval: Effect.succeed(60_000),
       fetch: () =>
@@ -35,7 +29,6 @@ it.effect("discards a response when its key or revision becomes stale", () =>
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(request);
     expect(commits).toEqual([]);
-    expect(yield* refresh.revision).toBe(1);
   }).pipe(Effect.scoped),
 );
 
@@ -45,7 +38,6 @@ it.effect("does not retain a wake pulse emitted before polling waits", () =>
     const fetched = yield* Deferred.make<void>();
     const calls = yield* Ref.make(0);
     const refresh = yield* makeSubscriptionRefresh({
-      mergeRequest: merge,
       currentKey: Effect.succeed("key"),
       interval: Deferred.succeed(intervalRead, undefined).pipe(Effect.as(1_000)),
       fetch: () =>
@@ -55,7 +47,7 @@ it.effect("does not retain a wake pulse emitted before polling waits", () =>
       commit: () => Effect.void,
     });
 
-    yield* refresh.wake;
+    yield* refresh.invalidate;
     const poller = yield* refresh.startPolling({}).pipe(Effect.forkScoped);
     yield* Deferred.await(intervalRead);
     yield* Effect.yieldNow;
@@ -78,7 +70,6 @@ it.effect("releases the current polling wait and applies the next interval", () 
     const secondFetch = yield* Deferred.make<void>();
     const calls = yield* Ref.make(0);
     const refresh = yield* makeSubscriptionRefresh({
-      mergeRequest: merge,
       currentKey: Effect.succeed("key"),
       interval: Effect.gen(function* () {
         const read = yield* Ref.updateAndGet(intervalReads, (count) => count + 1);
@@ -100,7 +91,7 @@ it.effect("releases the current polling wait and applies the next interval", () 
     yield* Deferred.await(firstWaitReady);
     yield* Effect.yieldNow;
     yield* Ref.set(interval, 1_000);
-    yield* refresh.wake;
+    yield* refresh.invalidate;
     yield* Deferred.await(firstFetch);
     yield* Deferred.await(secondWaitReady);
     yield* Effect.yieldNow;
@@ -121,7 +112,6 @@ it.effect("serializes final validation and commit with invalidation", () =>
     const events: string[] = [];
     let keyReads = 0;
     const refresh = yield* makeSubscriptionRefresh({
-      mergeRequest: merge,
       currentKey: Effect.suspend(() => {
         keyReads++;
         return keyReads === 2
@@ -150,7 +140,6 @@ it.effect("serializes final validation and commit with invalidation", () =>
     yield* Fiber.join(request);
     yield* Fiber.join(invalidation);
     expect(events).toEqual(["commit", "invalidate"]);
-    expect(yield* refresh.revision).toBe(1);
   }).pipe(Effect.scoped),
 );
 
@@ -159,7 +148,6 @@ it.effect("allows a commit to invalidate the refresh without deadlocking its gat
     const committed = yield* Deferred.make<void>();
     let invalidate: Effect.Effect<void> = Effect.void;
     const refresh = yield* makeSubscriptionRefresh({
-      mergeRequest: merge,
       currentKey: Effect.succeed("key"),
       interval: Effect.succeed(60_000),
       fetch: () => Effect.succeed(1),
@@ -174,6 +162,5 @@ it.effect("allows a commit to invalidate the refresh without deadlocking its gat
 
     expect(yield* Deferred.isDone(committed)).toBe(true);
     yield* Fiber.join(request);
-    expect(yield* refresh.revision).toBe(1);
   }).pipe(Effect.scoped),
 );

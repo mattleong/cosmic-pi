@@ -1,15 +1,9 @@
 // Promise-shaped child Pi host boundary tests.
-import { EventEmitter } from "node:events";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../pi-code-previews/src/config/state.ts";
+import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
 import type { ExtensionHandler, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { deferredPromise, extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, vi } from "vitest";
 import type { LocalPiContact, LocalPiParentControl } from "../src/backend/local-pi-protocol.ts";
 import {
@@ -17,10 +11,11 @@ import {
   type SubagentChildBridgeBoundaries,
 } from "../src/boundary/host-child.ts";
 import { ParentContactError, type LocalPiChildIpcHandlers } from "../src/boundary/local-pi-ipc.ts";
-import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
-import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
-import * as subagentTools from "../src/tools/subagent.ts";
+import { SUBAGENT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import { extensionApiFixture } from "./fixtures/pi-host.ts";
+import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
+import { eventBus, pickQuestionnaire } from "./support/questionnaire.ts";
 
 type Handler = ExtensionHandler<any, any>;
 type CapturedTool = ToolDefinition<any, any, any>;
@@ -32,33 +27,14 @@ interface ListenerRecord {
 }
 
 interface HarnessOptions {
-  readonly loadSettings?: SubagentChildBridgeBoundaries["loadSettings"];
+  readonly loadSettings?: SubagentChildBridgeBoundaries["loadSettings"] | undefined;
   readonly failSend?: (contact: LocalPiContact) => ParentContactError | undefined;
   readonly throwAtRegistration?: number;
 }
 
-const deferred = <A>() => {
-  const cell = Deferred.makeUnsafe<A>();
-  return {
-    promise: Effect.runPromise(Deferred.await(cell)),
-    resolve: (value: A) => Deferred.doneUnsafe(cell, Effect.succeed(value)),
-  };
-};
-
 const makeHarness = (options: HarnessOptions = {}) => {
   const handlers = new Map<string, Handler>();
-  const emitter = new EventEmitter();
-  const events = {
-    on: (name: string, handler: (event: any) => void) => {
-      emitter.on(name, handler);
-      return () => {
-        emitter.off(name, handler);
-      };
-    },
-    emit: (name: string, event: any) => {
-      emitter.emit(name, event);
-    },
-  };
+  const events = eventBus();
   const tools: CapturedTool[] = [];
   const contacts: LocalPiContact[] = [];
   const listeners: ListenerRecord[] = [];
@@ -80,7 +56,6 @@ const makeHarness = (options: HarnessOptions = {}) => {
       };
     },
   };
-  // SAFETY: This test double implements only the ExtensionAPI members exercised by the bridge.
   const pi = extensionApiFixture({
     events,
     registerFlag: vi.fn(),
@@ -127,9 +102,22 @@ const makeHarness = (options: HarnessOptions = {}) => {
     if (!listener) throw new Error("Missing active IPC listener");
     return listener;
   };
+  /** Waits until the latest contact of one type exists and matches the expected fields. */
+  const awaitContact = <Type extends LocalPiContact["type"]>(
+    type: Type,
+    match: Partial<Extract<LocalPiContact, { readonly type: Type }>> = {},
+  ) =>
+    step(() =>
+      vi.waitFor(() => {
+        const contact = contactOfType(contacts, type);
+        expect(contact).toMatchObject(match);
+        return contact!;
+      }),
+    );
   return {
     events,
     activeTools: () => [...active],
+    awaitContact,
     contacts,
     currentListener,
     latestTool,
@@ -165,85 +153,33 @@ afterEach(() => {
 
 describe("local Pi child bridge", () => {
   effectTest("renders registered child tools without sending parent requests", function* () {
-    const saved = { ...codePreviewSettings };
-    setCodePreviewSettings({ ...saved, toolCallCollapsedStyle: "compact", toolCallTiming: false });
+    const restore = applyPresentationSettings({
+      toolCallCollapsedStyle: "compact",
+      toolCallTiming: false,
+    });
     const bridge = makeHarness();
-    // SAFETY: The render-only theme implements the styling callbacks.
-    const theme = {
-      fg: (_key: string, text: string) => text,
-      bg: (_key: string, text: string) => text,
-      bold: (text: string) => text,
-    } as Theme;
     try {
       yield* step(() => bridge.start());
       for (const name of [...SUBAGENT_TOOL_NAMES, "contact_parent"]) {
-        const render = createToolPresentationHarness(bridge.latestTool(name), { theme });
-        for (const expanded of [false, true, false, true]) {
-          render.call({ kind: "question", message: "input evidence" }, { expanded });
-          render.result(
-            { content: [{ type: "text", text: "reply evidence sentinel" }], details: {} },
-            { expanded },
-          );
-          if (expanded) expect(render.render(80).join("\n")).toContain("reply evidence sentinel");
-        }
+        const cycled = createToolPresentationHarness(bridge.latestTool(name)).cycle(
+          { kind: "question", message: "input evidence" },
+          { content: [{ type: "text", text: "reply evidence sentinel" }], details: {} },
+        );
+        for (const { expanded, text } of cycled)
+          if (expanded) expect(text).toContain("reply evidence sentinel");
       }
       expect(bridge.contacts).toEqual([]);
     } finally {
       yield* step(bridge.shutdown);
-      setCodePreviewSettings(saved);
-    }
-  });
-  effectTest("retires compact animation with the child session", function* () {
-    const registration = vi.spyOn(subagentTools, "registerSubagentTools");
-    const harness = makeHarness();
-    try {
-      yield* step(() => harness.start("/old"));
-      const first = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
-      let oldTicks = 0;
-      expect(first?.(1, () => oldTicks++)).toBeTypeOf("function");
-      yield* step(() => vi.waitFor(() => expect(oldTicks).toBeGreaterThan(0)));
-      yield* step(() => harness.start("/new"));
-      const retiredTicks = oldTicks;
-      expect(first?.(1, () => oldTicks++)).toBeUndefined();
-      const second = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
-      let newTicks = 0;
-      expect(second?.(1, () => newTicks++)).toBeTypeOf("function");
-      yield* step(() => vi.waitFor(() => expect(newTicks).toBeGreaterThan(0)));
-      expect(oldTicks).toBe(retiredTicks);
-      yield* step(harness.shutdown);
-      expect(second?.(1, () => newTicks++)).toBeUndefined();
-    } finally {
-      yield* step(harness.shutdown);
-      registration.mockRestore();
+      restore();
     }
   });
   effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
     const harness = makeHarness();
     yield* step(() => harness.start("/old"));
     const relay = queryQuestionnaireRelay(harness.events, "/old")!;
-    const answer = rejection(
-      relay.ask(
-        {
-          questions: [
-            {
-              key: "pick",
-              title: "Pick",
-              prompt: "Which?",
-              mode: "single",
-              choices: [
-                { value: "a", label: "A", description: "First" },
-                { value: "b", label: "B", description: "Second" },
-              ],
-            },
-          ],
-        },
-        new AbortController().signal,
-      ),
-    );
-    yield* step(() =>
-      vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
-    );
-    const request = contactOfType(harness.contacts, "proxy_request")!;
+    const answer = rejection(relay.ask(pickQuestionnaire, new AbortController().signal));
+    const request = yield* harness.awaitContact("proxy_request");
     yield* step(() => harness.start("/new"));
     expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(request.requestId);
     expect(queryQuestionnaireRelay(harness.events, "/old")).toBeUndefined();
@@ -251,8 +187,8 @@ describe("local Pi child bridge", () => {
     yield* step(harness.shutdown);
   });
   effectTest("aborts superseded preview loading and ignores its late settlement", function* () {
-    const first = deferred<void>();
-    const second = deferred<void>();
+    const first = deferredPromise();
+    const second = deferredPromise();
     const signals: AbortSignal[] = [];
     let loads = 0;
     const harness = makeHarness({
@@ -287,38 +223,14 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.shutdown);
   });
 
-  effectTest("aborts preview loading on shutdown and ignores late settlement", function* () {
-    const preview = deferred<void>();
-    let signal: AbortSignal | undefined;
-    const harness = makeHarness({
-      loadSettings: (_cwd, _trusted, ownedSignal) => {
-        signal = ownedSignal;
-        return preview.promise;
-      },
-    });
-
-    const start = harness.start();
-    yield* step(() => vi.waitFor(() => expect(signal).toBeDefined()));
-    yield* settle(harness.shutdown);
-    expect(signal?.aborted).toBe(true);
-    yield* step(() => start);
-    preview.resolve();
-    yield* step(() => preview.promise);
-    expect(harness.tools).toHaveLength(0);
-    expect(harness.activeTools()).toEqual(["read"]);
-  });
-
   effectTest("re-registers on reload and rejects stale tool definitions", function* () {
     const harness = makeHarness();
     yield* settle(() => harness.start("/first"));
     const staleContact = harness.latestTool("contact_parent");
-    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAMES[2]);
+    const staleProxy = harness.latestTool(SUBAGENT_TOOL_NAME.list);
     const staleListener = harness.currentListener().handlers;
     const staleInFlight = rejection(execute(staleProxy, {}, undefined));
-    yield* step(() =>
-      vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
-    );
-    const staleRequest = contactOfType(harness.contacts, "proxy_request");
+    const staleRequest = yield* harness.awaitContact("proxy_request");
 
     yield* settle(() => harness.start("/second"));
     expect(yield* step(() => staleInFlight)).toMatchObject({
@@ -327,7 +239,7 @@ describe("local Pi child bridge", () => {
     staleListener.onControl({
       channel: "pi-subagents",
       type: "proxy_response",
-      requestId: staleRequest?.requestId ?? "missing",
+      requestId: staleRequest.requestId,
       ok: true,
       payloadJson: '{"content":[{"type":"text","text":"late"}]}',
     });
@@ -366,10 +278,7 @@ describe("local Pi child bridge", () => {
         { runIds: ["agent-child"], until: "all_finished" },
         controller.signal,
       );
-      yield* step(() =>
-        vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
-      );
-      const request = contactOfType(harness.contacts, "proxy_request")!;
+      const request = yield* harness.awaitContact("proxy_request");
       controller.abort();
       const result = yield* step(() => waiting);
       expect(result.details).toMatchObject({
@@ -388,13 +297,7 @@ describe("local Pi child bridge", () => {
       expect(text).toContain("Root completion-claim cleanup is unconfirmed");
       expect(text).not.toContain("Wait cleanup is complete");
       expect(text).not.toContain("Await these IDs again");
-      yield* step(() =>
-        vi.waitFor(() =>
-          expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(
-            request.requestId,
-          ),
-        ),
-      );
+      yield* harness.awaitContact("proxy_cancel", { requestId: request.requestId });
       const immediate = yield* step(() =>
         execute(
           harness.latestTool("subagent_await"),
@@ -413,21 +316,12 @@ describe("local Pi child bridge", () => {
 
     const proxyAbort = new AbortController();
     const proxyOutcome = rejection(
-      execute(harness.latestTool(SUBAGENT_TOOL_NAMES[2]), {}, proxyAbort.signal),
+      execute(harness.latestTool(SUBAGENT_TOOL_NAME.list), {}, proxyAbort.signal),
     );
-    yield* step(() =>
-      vi.waitFor(() => expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined()),
-    );
-    const proxyRequest = contactOfType(harness.contacts, "proxy_request");
+    const proxyRequest = yield* harness.awaitContact("proxy_request");
     proxyAbort.abort();
     expect(yield* step(() => proxyOutcome)).toBeDefined();
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(
-          proxyRequest?.requestId,
-        ),
-      ),
-    );
+    yield* harness.awaitContact("proxy_cancel", { requestId: proxyRequest.requestId });
 
     const questionAbort = new AbortController();
     const questionOutcome = rejection(
@@ -437,21 +331,12 @@ describe("local Pi child bridge", () => {
         questionAbort.signal,
       ),
     );
-    yield* step(() =>
-      vi.waitFor(() => expect(contactOfType(harness.contacts, "contact_parent")).toBeDefined()),
-    );
-    const question = contactOfType(harness.contacts, "contact_parent");
+    const question = yield* harness.awaitContact("contact_parent");
     questionAbort.abort();
     expect(yield* step(() => questionOutcome)).toMatchObject({
       message: "Parent question was cancelled.",
     });
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(contactOfType(harness.contacts, "contact_cancel")?.requestId).toBe(
-          question?.requestId,
-        ),
-      ),
-    );
+    yield* harness.awaitContact("contact_cancel", { requestId: question.requestId });
     yield* settle(harness.shutdown);
   });
 
@@ -492,14 +377,10 @@ describe("local Pi child bridge", () => {
         ),
       );
       const proxyOutcome = rejection(
-        execute(harness.latestTool(SUBAGENT_TOOL_NAMES[2]), {}, undefined),
+        execute(harness.latestTool(SUBAGENT_TOOL_NAME.list), {}, undefined),
       );
-      yield* step(() =>
-        vi.waitFor(() => {
-          expect(contactOfType(harness.contacts, "contact_parent")).toBeDefined();
-          expect(contactOfType(harness.contacts, "proxy_request")).toBeDefined();
-        }),
-      );
+      yield* harness.awaitContact("contact_parent");
+      yield* harness.awaitContact("proxy_request");
 
       if (end === "disconnect") harness.currentListener().handlers.onDisconnect();
       else yield* settle(harness.shutdown);
@@ -541,27 +422,18 @@ describe("local Pi child bridge", () => {
       type: "turn_input_barrier",
       requestId: "current-barrier",
     });
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(contactOfType(harness.contacts, "turn_input_barrier_ack")?.requestId).toBe(
-          "current-barrier",
-        ),
-      ),
-    );
+    yield* harness.awaitContact("turn_input_barrier_ack", { requestId: "current-barrier" });
 
     const result = execute(
       harness.latestTool("contact_parent"),
       { kind: "question", message: "Need input" },
       undefined,
     );
-    yield* step(() =>
-      vi.waitFor(() => expect(contactOfType(harness.contacts, "contact_parent")).toBeDefined()),
-    );
-    const question = contactOfType(harness.contacts, "contact_parent");
+    const question = yield* harness.awaitContact("contact_parent");
     const reply: LocalPiParentControl = {
       channel: "pi-subagents",
       type: "parent_reply",
-      requestId: question?.requestId ?? "missing",
+      requestId: question.requestId,
       ackId: "reply-ack",
       message: "approved",
     };
@@ -576,14 +448,7 @@ describe("local Pi child bridge", () => {
         content: [{ text: "Parent replied: approved" }],
       }),
     );
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(contactOfType(harness.contacts, "parent_reply_ack")).toMatchObject({
-          requestId: "reply-ack",
-          ok: true,
-        }),
-      ),
-    );
+    yield* harness.awaitContact("parent_reply_ack", { requestId: "reply-ack", ok: true });
     yield* settle(harness.shutdown);
   });
 
@@ -592,7 +457,7 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.start);
     yield* step(() => vi.waitFor(() => expect(harness.listeners[0]?.detached).toBe(true)));
     expect(harness.activeTools()).toEqual(["read"]);
-    const partial = harness.tools.find((tool) => tool.name === SUBAGENT_TOOL_NAMES[0]);
+    const partial = harness.tools.find((tool) => tool.name === SUBAGENT_TOOL_NAME.models);
     expect(partial).toBeDefined();
     yield* step(() =>
       expect(execute(partial!, {}, undefined)).rejects.toThrow(
@@ -601,26 +466,14 @@ describe("local Pi child bridge", () => {
     );
     yield* settle(harness.shutdown);
   });
+});
 
-  for (const failure of [
-    {
-      label: "rejected",
-      load: () => Promise.reject(new Error("preview rejected")),
-    },
-    {
-      label: "synchronously throwing",
-      load: () => {
-        throw new Error("preview threw");
-      },
-    },
-  ]) {
-    effectTest(`activates after ${failure.label} preview loading`, function* () {
-      const harness = makeHarness({ loadSettings: failure.load });
-      yield* settle(harness.start);
-      expect(harness.activeTools()).toEqual(
-        expect.arrayContaining(["read", "contact_parent", "subagent_start"]),
-      );
-      yield* settle(harness.shutdown);
-    });
-  }
+describeActivationLifecycle("child bridge", (loadSettings) => {
+  const harness = makeHarness({ loadSettings });
+  return {
+    start: () => harness.start(),
+    shutdown: harness.shutdown,
+    registeredToolCount: () => harness.tools.length,
+    activeTools: harness.activeTools,
+  };
 });

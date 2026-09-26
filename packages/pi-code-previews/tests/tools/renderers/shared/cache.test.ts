@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, test } from "vitest";
+import { applyPresentationSettings, renderContextFixture } from "../../../../testing";
 import {
   diffPreviewCacheKey,
   previewCacheKey,
@@ -16,81 +17,62 @@ import type {
 import { codePreviewSettings, setCodePreviewSettings } from "../../../../src/config/state";
 import { acquireProjectionOwnership } from "../../../../src/shared/projection-ownership";
 import { clearSyntaxProjection, publishSyntaxProjection } from "../../../../src/syntax/projection";
-import {
-  cloneCodePreviewSettingsForTest,
-  renderComponent,
-  testTheme,
-} from "../../../support/render";
+import { plainTheme as theme, renderComponent } from "../../../support/render";
 
 const syntaxOwner = acquireProjectionOwnership("preview-cache-key-test");
-let previousCodePreviewSettings = cloneCodePreviewSettingsForTest();
 
-beforeEach(() => {
-  previousCodePreviewSettings = cloneCodePreviewSettingsForTest();
-});
+beforeEach(() => applyPresentationSettings({}));
+afterEach(() => clearSyntaxProjection(syntaxOwner));
 
-afterEach(() => {
-  clearSyntaxProjection(syntaxOwner);
-  setCodePreviewSettings(previousCodePreviewSettings);
-});
-
-function previewCache(key: () => string) {
+/** Reports whether a render is reused, replaced after `change`, and the replacement reused. */
+function cacheTransitions(key: () => string, change: () => void): boolean[] {
   const state: RendererState = {};
-  return () => cachedPreview(state, "key", "component", key(), () => new Text("preview"));
+  const render = () => cachedPreview(state, "key", "component", key(), () => new Text("preview"));
+  const first = render();
+  const reused = render() === first;
+  change();
+  const replacement = render();
+  return [reused, replacement !== first, render() === replacement];
 }
 
 test("word emphasis changes replace the cached preview", () => {
-  const theme = testTheme();
   setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "all" });
-  const render = previewCache(() =>
-    previewCacheKey("edit-result", "-1 old\n+1 new", "src/a.ts", false, theme),
+  const transitions = cacheTransitions(
+    () => previewCacheKey("edit-result", "-1 old\n+1 new", "src/a.ts", false, theme),
+    () => setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "off" }),
   );
-  const first = render();
-  assert.equal(render(), first);
-  setCodePreviewSettings({ ...codePreviewSettings, wordEmphasis: "off" });
-  const replacement = render();
-  assert.notEqual(replacement, first);
-  assert.equal(render(), replacement);
+  assert.deepEqual(transitions, [true, true, true]);
 });
 
 test("syntax highlighter status changes replace the cached diff preview", () => {
-  const theme = testTheme();
-  const render = previewCache(() =>
-    diffPreviewCacheKey(
-      "edit-result",
-      "-1 old\n+1 new",
-      "src/a.ts",
-      false,
-      theme,
-      codePreviewSettings.editCollapsedLines,
-    ),
+  const transitions = cacheTransitions(
+    () =>
+      diffPreviewCacheKey(
+        "edit-result",
+        "-1 old\n+1 new",
+        "src/a.ts",
+        false,
+        theme,
+        codePreviewSettings.editCollapsedLines,
+      ),
+    () =>
+      publishSyntaxProjection(syntaxOwner, {
+        theme: codePreviewSettings.shikiTheme,
+        highlighter: undefined,
+        loadedLanguages: ["typescript"],
+        status: { initialized: true, loadedLanguages: 1, pendingLanguages: 0, statusVersion: 1 },
+      }),
   );
-  const first = render();
-  assert.equal(render(), first);
-  publishSyntaxProjection(syntaxOwner, {
-    generation: 1,
-    theme: codePreviewSettings.shikiTheme,
-    highlighter: undefined,
-    loadedLanguages: ["typescript"],
-    status: { initialized: true, loadedLanguages: 1, pendingLanguages: 0, statusVersion: 1 },
-  });
-  const replacement = render();
-  assert.notEqual(replacement, first);
-  assert.equal(render(), replacement);
+  assert.deepEqual(transitions, [true, true, true]);
 });
 
 test("write collapsed line changes replace the cached write preview", () => {
-  const theme = testTheme();
   setCodePreviewSettings({ ...codePreviewSettings, writeCollapsedLines: 20 });
-  const render = previewCache(() =>
-    writeCallPreviewCacheKey("const value = 1;", "src/a.ts", false, theme),
+  const transitions = cacheTransitions(
+    () => writeCallPreviewCacheKey("const value = 1;", "src/a.ts", false, theme),
+    () => setCodePreviewSettings({ ...codePreviewSettings, writeCollapsedLines: 40 }),
   );
-  const first = render();
-  assert.equal(render(), first);
-  setCodePreviewSettings({ ...codePreviewSettings, writeCollapsedLines: 40 });
-  const replacement = render();
-  assert.notEqual(replacement, first);
-  assert.equal(render(), replacement);
+  assert.deepEqual(transitions, [true, true, true]);
 });
 
 test("edit previews wait for complete arguments and reuse unchanged arguments", () => {
@@ -102,22 +84,11 @@ test("edit previews wait for complete arguments and reuse unchanged arguments", 
     toolCallTiming: false,
   });
   const edit = createEditPreviewTool("/project");
-  const theme = testTheme();
   const args: EditToolInput = { path: "src/a.ts", edits: [{ oldText: "old", newText: "new" }] };
-  const context: ToolRenderContext<RendererState, EditToolInput> = {
+  const context: ToolRenderContext<RendererState, EditToolInput> = renderContextFixture({
     args,
-    state: {},
-    toolCallId: "edit",
-    cwd: "/project",
-    invalidate: () => undefined,
-    lastComponent: undefined,
-    executionStarted: false,
     argsComplete: false,
-    isPartial: true,
-    expanded: false,
-    showImages: true,
-    isError: false,
-  };
+  });
   edit.renderCall!(args, theme, context);
   assert.equal(context.state.editCallPreviewComponent, undefined);
   context.argsComplete = true;

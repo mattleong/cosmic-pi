@@ -6,24 +6,19 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
   return item.status === "blocked" ? "blocked" : undefined;
 }
 
+const blockedLabels = {
+  "parent-review": "Parent needs to review",
+  "file-access-review": "Parent needs to review file access",
+  "file-access": "Waiting for file access",
+  "write-containment": "Pausing writes for safety",
+} as const;
+
 export function activityStatus(item: ActivityItem): string {
   const attention = activityAttention(item);
   if (attention === "user") return "Waiting for you";
   if (attention === "parent") return "Waiting for parent";
-  if (item.status === "blocked") {
-    switch (item.blockedReason) {
-      case "parent-review":
-        return "Parent needs to review";
-      case "file-access-review":
-        return "Parent needs to review file access";
-      case "file-access":
-        return "Waiting for file access";
-      case "write-containment":
-        return "Pausing writes for safety";
-      default:
-        return "blocked";
-    }
-  }
+  if (item.status === "blocked")
+    return item.blockedReason ? blockedLabels[item.blockedReason] : "blocked";
   return item.kind === "agent" && item.status === "pending" ? "starting" : item.status;
 }
 

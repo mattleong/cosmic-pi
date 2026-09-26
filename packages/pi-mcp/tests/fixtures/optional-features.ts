@@ -1,4 +1,4 @@
-import type { FetchLike } from "@modelcontextprotocol/client";
+import type { FetchLike, RequestId } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -10,33 +10,20 @@ import { JsonSchemaValidator } from "../../src/boundary/schema-validator.ts";
 import type { McpConnection } from "../../src/client/model.ts";
 import type { McpBoundaryError } from "../../src/client/errors.ts";
 import type * as Scope from "effect/Scope";
-import type { McpResolvedConfig, McpSettings } from "../../src/config/model.ts";
-import { McpConfigStore } from "../../src/config/store.ts";
+import type { McpSettings } from "../../src/config/model.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import { McpDiscovery } from "../../src/discovery/service.ts";
 import { McpInteraction } from "../../src/interaction/service.ts";
 import type { McpInteractionHost } from "../../src/interaction/model.ts";
 import { McpResults } from "../../src/results/service.ts";
 import { McpExecution } from "../../src/tools/service.ts";
+import { legacyInitialized, parseWire, rpcResult, type FixtureRequest } from "./json-rpc.ts";
+import { fakeAuth, fakeConfigStore, httpDefinition, testConfig, testServer } from "./services.ts";
 
-export const wireSchema = Schema.Struct({
-  _meta: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-  method: Schema.String,
-  id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
-  params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-});
-export type FixtureRequest = typeof wireSchema.Type;
-export const parseWire = (body: BodyInit | null | undefined) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(wireSchema))(body);
-export const reply = (id: string | number, result: Schema.JsonObject) =>
-  new Response(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      result: { resultType: "complete", ttlMs: 60_000, cacheScope: "private", ...result },
-    }),
-    { headers: { "content-type": "application/json" } },
-  );
+export const reply = (id: RequestId, result: Schema.JsonObject) =>
+  rpcResult(id, { resultType: "complete", ttlMs: 60_000, cacheScope: "private", ...result });
+const legacyResources = legacyInitialized({ resources: { subscribe: true } });
+export const legacyInitialize = (id: RequestId) => rpcResult(id, legacyResources);
 export const discovered = (
   capabilities: Schema.JsonObject = {
     tools: {},
@@ -103,60 +90,24 @@ export const optionalFixture = (
         (response) => response ?? reply(id, defaultResult(request)),
       );
     });
-  const config: McpResolvedConfig = {
-    revision: 1,
-    trusted: true,
-    diagnostics: [],
-    settings: {
-      enabled: true,
-      connectTimeoutMs: 1_000,
-      requestTimeoutMs: 60_000,
-      idleTimeoutMs: 1_000,
-      maxConcurrent: 8,
-      maxPerServer: 4,
-      maxQueued: 64,
-      ...options.settings,
-    },
+  const config = testConfig({
+    settings: { connectTimeoutMs: 1_000, idleTimeoutMs: 1_000, ...options.settings },
     servers: {
-      fixture: {
-        id: "fixture",
+      fixture: testServer("fixture", {
         identity: "owned-fixture",
-        enabled: true,
-        scope: "global",
-        directory: "/fixture",
-        definition: {
-          transport: "http",
-          url: url.href,
-          headers: options.headers ?? {},
-          auth: { type: "none" },
-          denyTools: [],
-        },
-      },
+        definition: httpDefinition({ url: url.href, headers: options.headers ?? {} }),
+      }),
     },
-  };
-  const configLayer = Layer.succeed(McpConfigStore, {
-    snapshot: Effect.succeed(config),
-    subscribe: (listener) => listener(config),
-    reload: Effect.succeed(config),
-    setServer: () => Effect.succeed(config),
-    removeServer: () => Effect.succeed(config),
-    setSettings: () => Effect.succeed(config),
   });
-  const auth = Layer.succeed(McpAuth, {
-    access: () => options.auth ?? Effect.succeed(undefined),
-    status: () => Effect.succeed({ state: "none" }),
-    login: () => Effect.succeed({ state: "none" }),
-    logout: () => Effect.void,
-    reject: () => Effect.void,
-    completeLogin: () => Effect.void,
-    finalizationFailed: () => Effect.void,
-    revoke: Effect.void,
-  });
+  const auth = Layer.succeed(
+    McpAuth,
+    fakeAuth({ access: () => options.auth ?? Effect.succeed(undefined) }),
+  );
   const activity = McpActivity.layer();
   const connections = McpConnections.layer({ isTrusted: () => trusted }).pipe(
     Layer.provide(
       Layer.mergeAll(
-        configLayer,
+        fakeConfigStore(config).layer,
         auth,
         activity,
         Layer.succeed(McpConnector, {
@@ -188,7 +139,7 @@ export const optionalFixture = (
         discovery,
         auth,
         McpResults.layer(),
-        JsonSchemaValidator.layer(),
+        JsonSchemaValidator.layer,
         McpInteraction.layer(options.interaction),
       ),
     ),

@@ -26,11 +26,13 @@ export const validateScopes = (values: ReadonlyArray<string>) =>
 export const parseScopes = (value: string) => validateScopes(value === "" ? [] : value.split(" "));
 
 export interface ScopeEvidence {
-  readonly challenge?: { readonly scope?: string; readonly error?: string };
+  readonly challenge?:
+    | { readonly scope?: string | undefined; readonly error?: string | undefined }
+    | undefined;
   readonly retained: boolean;
-  readonly resourceScopes?: ReadonlyArray<string>;
-  readonly serverScopes?: ReadonlyArray<string>;
-  readonly grantTypes?: ReadonlyArray<string>;
+  readonly resourceScopes?: ReadonlyArray<string> | undefined;
+  readonly serverScopes?: ReadonlyArray<string> | undefined;
+  readonly grantTypes?: ReadonlyArray<string> | undefined;
 }
 export const proposeScopes = (config: McpOAuthConfig, evidence: ScopeEvidence) =>
   Effect.gen(function* () {

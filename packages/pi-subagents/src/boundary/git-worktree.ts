@@ -8,7 +8,14 @@ import type {
   WorkspaceTarget,
 } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "./node-builtins.ts";
-import { checkDirectory, git, oid, workspaceFailure, workspaceIO } from "./git-worktree-process.ts";
+import {
+  checkDirectory,
+  git,
+  oid,
+  workspaceFailure,
+  workspaceIO,
+  workspaceIOIfPresent,
+} from "./git-worktree-process.ts";
 import { captureSnapshot, inspectSource, sourceIdentity } from "./git-worktree-snapshot.ts";
 import {
   initializeWorkspaceStore,
@@ -23,6 +30,11 @@ import {
 import { listWorkspaceRecords, removeWorkspaceTrees } from "./git-worktree-recovery.ts";
 import { publishWorkspace } from "./git-worktree-integration.ts";
 
+const treeOf = (repository: string, revision: string) =>
+  git(repository, ["rev-parse", `${revision}^{tree}`]).pipe(Effect.flatMap(oid));
+const subdirectory = (record: WorkspaceRecord) =>
+  path.relative(record.handle.sourceRoot, record.handle.sourceCwd);
+
 const requiredLeaseDirectories = (record: WorkspaceRecord) =>
   Effect.gen(function* () {
     const directories = new Set([record.handle.sourceRoot, record.handle.sourceCwd]);
@@ -33,12 +45,7 @@ const requiredLeaseDirectories = (record: WorkspaceRecord) =>
         .split(path.sep)
         .filter((part) => part !== ".")) {
         directory = path.join(directory, part);
-        const stat = yield* workspaceIO("prepare", () =>
-          fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
-            if (error.code === "ENOENT") return undefined;
-            throw error;
-          }),
-        );
+        const stat = yield* workspaceIOIfPresent("prepare", () => fs.lstat(directory));
         if (!stat) break;
         if (!stat.isDirectory() || stat.isSymbolicLink())
           return yield* workspaceFailure(
@@ -93,7 +100,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             "authorization",
             "Workspace is not owned by this parent and live session.",
           );
-        const relative = path.relative(record.handle.sourceRoot, record.handle.sourceCwd);
+        const relative = subdirectory(record);
         if (
           relative.startsWith("..") ||
           path.isAbsolute(relative) ||
@@ -127,10 +134,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           ? {
               sourceRoot: predecessor.handle.sourceRoot,
               sourceCwd: predecessor.handle.sourceCwd,
-              subdirectory: path.relative(
-                predecessor.handle.sourceRoot,
-                predecessor.handle.sourceCwd,
-              ),
+              subdirectory: subdirectory(predecessor),
             }
           : yield* inspectSource(input.sourceCwd);
         if (
@@ -190,10 +194,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
               );
           }
           if (predecessor) {
-            const originalTree = yield* git(repository(predecessor), [
-              "rev-parse",
-              `${predecessor.baseline}^{tree}`,
-            ]).pipe(Effect.flatMap(oid));
+            const originalTree = yield* treeOf(repository(predecessor), predecessor.baseline);
             if (originalTree !== baseline.tree)
               return yield* workspaceFailure(
                 "fork",
@@ -299,10 +300,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           if (record.status !== "frozen" && record.status !== "prepared")
             return yield* workspaceFailure("prepare", "Workspace is not awaiting integration.");
           const workerTree = yield* capture(record, worker(record), "verify-worker");
-          const reviewedTree = yield* git(repository(record), [
-            "rev-parse",
-            `${target.revisionId}^{tree}`,
-          ]).pipe(Effect.flatMap(oid));
+          const reviewedTree = yield* treeOf(repository(record), target.revisionId);
           if (workerTree.tree !== reviewedTree)
             return yield* workspaceFailure(
               "prepare",
@@ -341,10 +339,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
           const result = {
             preparationId,
             revisionId: target.revisionId,
-            cwd: path.join(
-              preparedRoot,
-              path.relative(record.handle.sourceRoot, record.handle.sourceCwd),
-            ),
+            cwd: path.join(preparedRoot, subdirectory(record)),
             leaseDirectories,
           };
           yield* checkDirectory(result.cwd);
@@ -373,10 +368,7 @@ export const makeGitWorkspaceEngine = (agentDirectory: string) =>
             !validWorkspaceId(target.preparationId)
           )
             return yield* workspaceFailure("integrate", "Tested preparation is stale or unknown.");
-          const reviewedTree = yield* git(repository(record), [
-            "rev-parse",
-            `${target.revisionId}^{tree}`,
-          ]).pipe(Effect.flatMap(oid));
+          const reviewedTree = yield* treeOf(repository(record), target.revisionId);
           const workerTree = yield* capture(record, worker(record), "verify-worker");
           const preparedRoot = path.join(directory(record), `prepare-${target.preparationId}`);
           const prepared = yield* capture(record, preparedRoot, "verify-prepared");

@@ -1,4 +1,4 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import type { TruncationResult } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -7,7 +7,7 @@ import {
   type NestedPiToolDefinitions,
   type PiGuestToolInput,
 } from "../src/boundary/host-builtin-tools.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
+import type { CodeModeExecutionEnvironment } from "../src/tools/execution.ts";
 import { utf8ByteLength } from "../src/tools/limits.ts";
 import {
   decodeReadGuestInput,
@@ -15,76 +15,30 @@ import {
   StructuredReadResultSchema,
   type StructuredReadResult,
 } from "../src/tools/read-result.ts";
-import { codeModeStateFixture, extensionContextFixture } from "./support/host.ts";
+import { executeHarness, textOf } from "./support/execute.ts";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
-import { captureGuestResult } from "./support/guest-result.ts";
-
-const context = extensionContextFixture({
-  cwd: "/project",
-  sessionManager: {
-    getSessionId: () => "complete-read",
-    getSessionFile: () => undefined,
-  },
-  model: undefined,
-  thinkingLevel: undefined,
-});
-
-const textOf = (result: { content: ReadonlyArray<{ type: string; text?: string }> }): string =>
-  result.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("\n");
+import { truncation } from "./support/read.ts";
 
 const parseGuestJson = (result: { content: ReadonlyArray<{ type: string; text?: string }> }) =>
   JSON.parse(textOf(result));
 
-interface NativeTruncationFixture {
-  content: string;
-  truncated: boolean;
-  truncatedBy: "lines" | "bytes" | null;
-  totalLines: number;
-  totalBytes: number;
-  outputLines: number;
-  outputBytes: number;
-  lastLinePartial: boolean;
-  firstLineExceedsLimit: boolean;
-  maxLines: number;
-  maxBytes: number;
-}
-
-interface NativeReadDetailsFixture {
-  truncation: Partial<NativeTruncationFixture>;
-}
-
-interface NativeTextResult {
-  content: Array<{ type: "text"; text: string }>;
-  details: NativeReadDetailsFixture | undefined;
-}
-
-const nativeText = (text: string, details?: NativeReadDetailsFixture): NativeTextResult => ({
-  content: [{ type: "text", text }],
+const nativeText = (text: string, details?: { truncation: Partial<TruncationResult> }) => ({
+  content: [{ type: "text" as const, text }],
   details,
 });
 
 const inputPath = <Input>(input: Input): string | undefined => decodeReadGuestInput(input)?.path;
 
-const nativeTruncation = (
-  overrides: Partial<NativeTruncationFixture> = {},
-): NativeTruncationFixture => ({
+/** The first complete line of a two-line, 12-byte file. */
+const FIRST_LINE = {
   content: "first",
-  truncated: true,
-  truncatedBy: "lines",
   totalLines: 2,
   totalBytes: 12,
   outputLines: 1,
   outputBytes: 5,
-  lastLinePartial: false,
-  firstLineExceedsLimit: false,
-  maxLines: 2_000,
-  maxBytes: 51_200,
-  ...overrides,
-});
+};
 
+type NativeTextResult = ReturnType<typeof nativeText>;
 type ReadExecute = (id: string, input: PiGuestToolInput) => Promise<NativeTextResult>;
 
 const definitionsWith = (
@@ -102,26 +56,15 @@ const definitionsWith = (
 const executeWith = (
   definitions: NestedPiToolDefinitions,
   config: Partial<CodeModeConfig> = {},
-  retainFailureDetails?: Parameters<typeof makeCodeModeToolExecute>[0]["retainFailureDetails"],
+  retainFailureDetails?: CodeModeExecutionEnvironment["retainFailureDetails"],
 ) => {
-  const state = codeModeStateFixture(config);
-  const guest = captureGuestResult();
-  const base = {
-    executeCodeMode: guest.executeCodeMode,
-    isCurrent: () => true,
-    getState: () => state,
-    runInSession: <A>(effect: Effect.Effect<A>, signal?: AbortSignal) =>
-      Effect.runPromise(effect, signal === undefined ? undefined : { signal }),
+  const harness = executeHarness({
     definitions,
-    events: createEventBus(),
-    sessionId: "complete-read",
-  };
-  const environment = retainFailureDetails === undefined ? base : { ...base, retainFailureDetails };
-  const execute = makeCodeModeToolExecute(environment);
-  return Object.assign(
-    (id: string, code: string) => execute(id, { code }, undefined, undefined, context),
-    { guestValue: guest.value },
-  );
+    config,
+    cwd: "/project",
+    ...(retainFailureDetails && { retainFailureDetails }),
+  });
+  return Object.assign(harness.run, { guestValue: harness.guestValue });
 };
 
 describe("complete read execution", () => {
@@ -134,7 +77,7 @@ describe("complete read execution", () => {
           () =>
             Promise.resolve(
               nativeText("first\n\n[Showing line 1 of 2. Use offset=2 to continue.]", {
-                truncation: nativeTruncation(),
+                truncation: truncation(FIRST_LINE),
               }),
             ),
           () => {
@@ -147,7 +90,6 @@ describe("complete read execution", () => {
       );
       const message = yield* Effect.promise(() =>
         execute(
-          "truncated-guard",
           `
             await tools.pi.read({ path: "fixture", requireComplete: true });
             await tools.pi.edit({
@@ -198,7 +140,6 @@ describe("complete read execution", () => {
       );
       const result = yield* Effect.promise(() =>
         execute(
-          "complete-then-edit",
           `
             const text = await tools.pi.read({
               path: "fixture",
@@ -227,12 +168,11 @@ describe("complete read execution", () => {
       const execute = executeWith(
         definitionsWith((_id, input) => {
           inputs.push(input);
-          return Promise.resolve(nativeText(text, { truncation: nativeTruncation() }));
+          return Promise.resolve(nativeText(text, { truncation: truncation(FIRST_LINE) }));
         }),
       );
       const result = yield* Effect.promise(() =>
         execute(
-          "read-formats",
           `
             const plain = await tools.pi.read({ path: "fixture" });
             const structured = await tools.pi.read({ path: "fixture", format: "structured" });
@@ -276,7 +216,6 @@ describe("complete read execution", () => {
       );
       const result = yield* Effect.promise(() =>
         execute(
-          "conservative-read-metadata",
           `
             return await Promise.all([
               tools.pi.read({ path: "limited", limit: 1, format: "structured" }),
@@ -317,7 +256,6 @@ describe("complete read execution", () => {
 
       const admitted = yield* Effect.promise(() =>
         executeWith(definitions, { maxCumulativeChildOutputBytes: exactBytes })(
-          "unicode-exact",
           `return await tools.pi.read({ path: "unicode", format: "structured" });`,
         ),
       );
@@ -328,7 +266,6 @@ describe("complete read execution", () => {
       });
       const refused = yield* Effect.promise(() =>
         refusingExecute(
-          "unicode-over",
           `
             try {
               await tools.pi.read({ path: "unicode", format: "structured" });
@@ -361,7 +298,6 @@ describe("complete read execution", () => {
       const readExecute = executeWith(definitions, { maxCumulativeChildOutputBytes: oneReadBytes });
       const readResult = yield* Effect.promise(() =>
         readExecute(
-          "concurrent-structured",
           `
             const calls = ["a", "b"].map(path =>
               tools.pi.read({ path, format: "structured" }).then(
@@ -390,7 +326,6 @@ describe("complete read execution", () => {
       });
       const guardResult = yield* Effect.promise(() =>
         guardExecute(
-          "concurrent-guards",
           `
             const calls = ["a", "b"].map(path =>
               tools.pi.read({ path, limit: 1, requireComplete: true }).then(

@@ -1,7 +1,5 @@
 import * as Schema from "effect/Schema";
 
-export type HerdrBtwErrorOutcome = "confirmed" | "uncertain";
-
 export class HerdrBtwError extends Schema.TaggedError<HerdrBtwError>()("HerdrBtwError", {
   operation: Schema.String,
   code: Schema.String,
@@ -10,3 +8,6 @@ export class HerdrBtwError extends Schema.TaggedError<HerdrBtwError>()("HerdrBtw
   paneId: Schema.optional(Schema.String),
   herdrCode: Schema.optional(Schema.String),
 }) {}
+
+export const confirmedFailure = (operation: string, code: string, message: string): HerdrBtwError =>
+  new HerdrBtwError({ operation, code, message, outcome: "confirmed" });

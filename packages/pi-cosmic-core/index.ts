@@ -18,6 +18,7 @@ export {
   type PiSessionRuntimeSlot,
 } from "./src/runtime/session-runtime.ts";
 export { type RefreshRequest } from "./src/coordination/refresh-coordinator.ts";
+export { notifyListeners, scopedListener } from "./src/coordination/listeners.ts";
 export {
   makeSubscriptionRefresh,
   type SubscriptionRefresh,
@@ -35,9 +36,8 @@ export {
 } from "./src/platform/network-addresses.ts";
 export { nodeHttpServerLayer } from "./src/platform/http-server.ts";
 export { SafeFile, type SafeFileResult, type SafeFileContract } from "./src/platform/safe-file.ts";
-export { readSchemaDocument, type DecodedDocument } from "./src/platform/schema-document.ts";
+export { decodeUnknownOrUndefined } from "./src/schema/decode.ts";
 export {
-  type AtomicJsonDocumentStoreContract,
   isJsonObject,
   JsonDocumentStore,
   type JsonDocumentModification,
@@ -47,11 +47,10 @@ export {
 } from "./src/platform/json-document.ts";
 export {
   abbreviateHomePath,
-  isContainedPath,
-  isContainedPathWith,
   isStrictlyInsidePathWith,
   type PathContainmentAdapter,
 } from "./src/platform/paths.ts";
+export { isInteractiveShellProcessName } from "./src/platform/shell-process-names.ts";
 export {
   JsonHttpClient,
   type JsonHttpAcceptedResponse,
@@ -70,10 +69,6 @@ export {
   type CrossProcessLockOptions,
 } from "./src/platform/cross-process-lock.ts";
 export {
-  ProcessCoordinator,
-  type ProcessCoordinatorContract,
-} from "./src/platform/process-coordinator.ts";
-export {
   decodeTolerantFields,
   type TolerantFieldDiagnostic,
   type TolerantFieldOptions,
@@ -82,17 +77,7 @@ export {
   type TolerantFieldValues,
 } from "./src/config/tolerant-fields.ts";
 export {
-  scopedDocumentPaths,
-  selectScopedDocument,
-  type ScopedDocumentPathOptions,
-  type ScopedDocumentPaths,
-  type ScopedDocumentSelection,
-  type ScopedDocumentSelectionOptions,
-} from "./src/config/scoped-store.ts";
-export {
   makeConfigDocumentErrorFactory,
-  readConfigOrWarn,
-  readOptionalJsonObject,
   type ConfigDocumentErrorFactory,
 } from "./src/config/document-ops.ts";
 export {
@@ -100,11 +85,14 @@ export {
   type ScopedConfigMetadata,
   type ScopedConfigStore,
   type ScopedConfigStoreOptions,
+  type ScopedDocumentPaths,
 } from "./src/config/scoped-config-store.ts";
 export {
   captureHostSignal,
   captureSessionHost,
+  containThenable,
   hasTerminalUI,
+  invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
   isUsingOAuthAtHostBoundary,
@@ -118,6 +106,13 @@ export {
   type HostTrustContext,
   type HostUiContext,
 } from "./src/host-session.ts";
+export {
+  makeSessionCapabilityProtocol,
+  querySessionCapability,
+  type SessionCapabilityProtocolOptions,
+  type SessionCapabilityQuery,
+} from "./src/session-capability.ts";
+export { safeTextPrefix, utf8Prefix } from "./src/text.ts";
 export {
   initialUsageProjection,
   withUsageEligibility,
@@ -141,6 +136,7 @@ export {
   type UsageProviderRequirements,
   type UsageRefreshController,
   type UsageRefreshControllerOptions,
+  type SubscriptionUsageConfig,
 } from "./src/usage-controller.ts";
 export {
   freezeSnapshot,
@@ -184,6 +180,17 @@ export {
   type EffectProcessExit,
 } from "./src/platform/process.ts";
 export { awaitProcessClose, type ProcessCloseSource } from "./src/platform/process-close.ts";
+export {
+  processGroupSignalError,
+  ProcessTreeError,
+  signalProcess,
+  signalProcessGroup,
+  terminateWindowsProcessTree,
+  type ProcessSignalResult,
+  type ProcessTreeTerminatorChild,
+  type ProcessTreeTerminatorSpawn,
+  type WindowsProcessTreeTermination,
+} from "./src/platform/process-tree.ts";
 export {
   DUPLEX_PROCESS_DEFAULTS,
   duplexProcessError,

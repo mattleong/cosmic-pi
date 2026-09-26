@@ -73,6 +73,7 @@ for await (const line of lines) {
     const edit = request.params.edits?.[0];
     const state = edit?.value?.["opaque.future:key.with.dots/and:colons"];
     if (
+      mode === "rejected" ||
       edit?.keyPath !== "hooks.state" ||
       edit?.mergeStrategy !== "upsert" ||
       state?.trusted_hash !== hash ||
@@ -81,7 +82,7 @@ for await (const line of lines) {
       process.stdout.write(
         `${JSON.stringify({
           id: request.id,
-          error: { code: "invalid_request", message: "invalid trust request" },
+          error: { code: -32600, message: "invalid trust request" },
         })}\n`,
       );
       continue;

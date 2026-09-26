@@ -1,7 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-export { stripAnsi } from "pi-cosmic-core";
-
 const ESCAPE_CODE = 0x1b;
 const CARRIAGE_RETURN_CODE = 0x0d;
 
@@ -44,14 +42,15 @@ export function matchSgrSequence(text: string, index: number): string | undefine
   return undefined;
 }
 
-/** Replaces every strict SGR sequence via `replace(sequence, parameters)`. */
+/** Replaces every SGR sequence found by `match` (strict by default) via `replace(sequence, parameters)`. */
 export function replaceSgrSequences(
   text: string,
   replace: (sequence: string, parameters: string) => string,
+  match: (text: string, index: number) => string | undefined = matchSgrSequence,
 ): string {
   let out = "";
   for (let index = 0; index < text.length; ) {
-    const sequence = matchSgrSequence(text, index);
+    const sequence = match(text, index);
     if (sequence) {
       out += replace(sequence, sequence.slice(2, -1));
       index += sequence.length;
@@ -96,11 +95,8 @@ export function injectVisibleRanges(
   for (let i = 0; i < ansi.length; i++) {
     const sgr = extractSgr(ansi, i);
     if (sgr) {
-      out +=
-        active && options.reopenAfterSgr?.(sgr.sequence)
-          ? `${sgr.sequence}${options.open}`
-          : sgr.sequence;
-      i += sgr.sequence.length - 1;
+      out += active && options.reopenAfterSgr?.(sgr) ? `${sgr}${options.open}` : sgr;
+      i += sgr.length - 1;
       continue;
     }
     while (rangeIndex < sorted.length && visible >= (sorted[rangeIndex]?.[1] ?? Infinity)) {
@@ -150,9 +146,9 @@ export function wrapAnsiToWidth(
   while (index < text.length) {
     const ansi = extractSgr(text, index);
     if (ansi) {
-      row += ansi.sequence;
-      state = updateAnsiState(state, ansi.sequence);
-      index += ansi.sequence.length;
+      row += ansi;
+      state = updateAnsiState(state, ansi);
+      index += ansi.length;
       continue;
     }
 
@@ -206,60 +202,37 @@ function truncateLastRow(rows: string[], width: number): string[] {
   return rows;
 }
 
-function extractSgr(text: string, index: number): { sequence: string } | undefined {
+function extractSgr(text: string, index: number): string | undefined {
   if (text[index] !== "\x1b" || text[index + 1] !== "[") return undefined;
   let end = index + 2;
   while (end < text.length && text[end] !== "m") end++;
   if (end >= text.length) return undefined;
-  return { sequence: text.slice(index, end + 1) };
+  return text.slice(index, end + 1);
 }
 
-function isExtendedOrDefaultParameters(parameters: string, prefix: string): boolean {
-  return (
-    parameters === `${prefix.charAt(0)}9` ||
-    (parameters.startsWith(prefix) && parameters.length > prefix.length)
-  );
-}
+/** Attribute groups the wrap state tracks: a set-code predicate and the code that resets it. */
+const ANSI_STATE_GROUPS: Array<{ isSet: (parameters: string) => boolean; reset: string }> = [
+  { isSet: (parameters) => parameters.startsWith("38;") && parameters.length > 3, reset: "39" },
+  { isSet: (parameters) => parameters.startsWith("48;") && parameters.length > 3, reset: "49" },
+  { isSet: (parameters) => parameters === "1", reset: "22" },
+  { isSet: (parameters) => parameters === "2", reset: "22" },
+  { isSet: (parameters) => parameters === "3", reset: "23" },
+  { isSet: (parameters) => parameters === "4", reset: "24" },
+];
 
+/** Replaces the matched groups' set-codes; reset codes are never kept, so only set-codes are dropped. */
 function updateAnsiState(current: string, sequence: string): string {
   const parameters = sequence.slice(2, -1);
   if (parameters === "0") return "";
-  if (isExtendedOrDefaultParameters(parameters, "38;"))
-    return (
-      dropAnsiState(current, (p) => isExtendedOrDefaultParameters(p, "38;")) +
-      (parameters === "39" ? "" : sequence)
-    );
-  if (isExtendedOrDefaultParameters(parameters, "48;"))
-    return (
-      dropAnsiState(current, (p) => isExtendedOrDefaultParameters(p, "48;")) +
-      (parameters === "49" ? "" : sequence)
-    );
-  if (parameters === "22") return dropAnsiState(current, (p) => p === "1" || p === "2");
-  if (parameters === "1") return dropAnsiState(current, (p) => p === "1") + sequence;
-  if (parameters === "2") return dropAnsiState(current, (p) => p === "2") + sequence;
-  if (parameters === "3" || parameters === "23")
-    return (
-      dropAnsiState(current, (p) => p === "3" || p === "23") + (parameters === "23" ? "" : sequence)
-    );
-  if (parameters === "4" || parameters === "24")
-    return (
-      dropAnsiState(current, (p) => p === "4" || p === "24") + (parameters === "24" ? "" : sequence)
-    );
-  return current + sequence;
-}
-
-/** Removes state sequences whose parameters match, preserving everything else. */
-function dropAnsiState(current: string, drop: (parameters: string) => boolean): string {
-  let out = "";
-  for (let index = 0; index < current.length; ) {
-    const sgr = extractSgr(current, index);
-    if (sgr) {
-      if (!drop(sgr.sequence.slice(2, -1))) out += sgr.sequence;
-      index += sgr.sequence.length;
-    } else {
-      out += current[index];
-      index++;
-    }
-  }
-  return out;
+  const groups = ANSI_STATE_GROUPS.filter(
+    (group) => group.isSet(parameters) || group.reset === parameters,
+  );
+  if (groups.length === 0) return current + sequence;
+  const kept = replaceSgrSequences(
+    current,
+    (existing, existingParameters) =>
+      groups.some((group) => group.isSet(existingParameters)) ? "" : existing,
+    extractSgr,
+  );
+  return groups.some((group) => group.reset === parameters) ? kept : kept + sequence;
 }

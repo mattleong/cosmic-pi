@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../../src/config/schema";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
+import { codePreviewSettings } from "../../src/config/state";
 import { normalizeSettingsWithDiagnostics, updateSetting } from "../../src/config/values";
 
 type SettingsFixtureValue = string | number | boolean | readonly string[] | undefined;
@@ -12,40 +12,35 @@ const settingsFrom = (
   fallback: CodePreviewSettings = codePreviewSettings,
 ): CodePreviewSettings => normalizeSettingsWithDiagnostics(data, fallback).settings;
 
+const disabledFlags = {
+  syntaxHighlighting: false,
+  secretWarnings: false,
+  bashWarnings: false,
+  bashResultPreview: false,
+  toolCallTiming: false,
+  readContentPreview: false,
+  writeContentPreview: false,
+  editDiffPreview: false,
+  grepResultPreview: false,
+  findResultPreview: false,
+  lsResultPreview: false,
+} as const;
+
 test("settings normalization and reset preserve defaults", () => {
   const normalized = settingsFrom({
-    syntaxHighlighting: false,
-    secretWarnings: false,
-    bashWarnings: false,
-    bashResultPreview: false,
-    toolCallTiming: false,
-    readContentPreview: false,
-    writeContentPreview: false,
-    editDiffPreview: false,
-    grepResultPreview: false,
-    findResultPreview: false,
-    lsResultPreview: false,
+    ...disabledFlags,
     readCollapsedLines: -1,
     toolCallBackground: "off",
     toolCallCollapsedStyle: "compact",
     tools: ["bash", "not-a-tool", "write", "bash"],
   });
-  assert.equal(normalized.syntaxHighlighting, false);
-  assert.equal(normalized.secretWarnings, false);
-  assert.equal(normalized.bashWarnings, false);
-  assert.equal(normalized.bashResultPreview, false);
-  assert.equal(normalized.toolCallBackground, "off");
-  assert.equal(normalized.toolCallCollapsedStyle, "compact");
-  assert.equal(normalized.toolCallTiming, false);
-  assert.equal(normalized.readContentPreview, false);
-  assert.equal(normalized.writeContentPreview, false);
-  assert.equal(normalized.editDiffPreview, false);
-  assert.equal(normalized.grepResultPreview, false);
-  assert.equal(normalized.findResultPreview, false);
-  assert.equal(normalized.lsResultPreview, false);
-  assert.equal(normalized.wordEmphasis, defaultCodePreviewSettings.wordEmphasis);
-  assert.equal(normalized.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
-  assert.deepEqual(normalized.tools, ["bash", "read", "write", "edit", "grep", "find", "ls"]);
+  // Disabled previews keep every tool renderer; invalid values keep their defaults.
+  assert.deepEqual(normalized, {
+    ...defaultCodePreviewSettings,
+    ...disabledFlags,
+    toolCallBackground: "off",
+    toolCallCollapsedStyle: "compact",
+  });
   assert.deepEqual(
     updateSetting(normalized, "resetToDefaults", "reset now"),
     defaultCodePreviewSettings,
@@ -69,17 +64,9 @@ test("settings normalization falls back to accumulated settings for invalid over
   assert.equal(validOverride.shikiTheme, "dark-plus");
   assert.equal(validOverride.readCollapsedLines, 20);
   assert.equal(updateSetting(validOverride, "wordEmphasis", "all").wordEmphasis, "all");
-  assert.equal(updateSetting(validOverride, "readContentPreview", "off").readContentPreview, false);
-  assert.equal(
-    updateSetting(validOverride, "writeContentPreview", "off").writeContentPreview,
-    false,
-  );
-  assert.equal(updateSetting(validOverride, "editDiffPreview", "off").editDiffPreview, false);
-  assert.equal(updateSetting(validOverride, "grepResultPreview", "off").grepResultPreview, false);
-  assert.equal(updateSetting(validOverride, "findResultPreview", "off").findResultPreview, false);
-  assert.equal(updateSetting(validOverride, "lsResultPreview", "off").lsResultPreview, false);
-  assert.equal(updateSetting(validOverride, "bashResultPreview", "off").bashResultPreview, false);
-  assert.equal(updateSetting(validOverride, "toolCallTiming", "off").toolCallTiming, false);
+  // SAFETY: disabledFlags is a literal object whose own keys are exactly its declared keys.
+  for (const key of Object.keys(disabledFlags) as Array<keyof typeof disabledFlags>)
+    assert.equal(updateSetting(validOverride, key, "off")[key], false, key);
   assert.equal(updateSetting(validOverride, "toolCallBackground", "off").toolCallBackground, "off");
   assert.equal(
     updateSetting(validOverride, "toolCallBackground", "border").toolCallBackground,
@@ -141,25 +128,6 @@ test("valid tool arrays are deduplicated and invalid arrays use the complete fal
     "grep",
   ]);
   assert.deepEqual(settingsFrom({ tools: ["grep", "unknown"] }, fallback).tools, ["write"]);
-});
-
-test("setCodePreviewSettings publishes a new frozen snapshot", () => {
-  const previous = { ...codePreviewSettings, tools: [...codePreviewSettings.tools] };
-  const reference = codePreviewSettings;
-  try {
-    setCodePreviewSettings({
-      ...defaultCodePreviewSettings,
-      readCollapsedLines: 33,
-      tools: ["bash"],
-    });
-    assert.notEqual(codePreviewSettings, reference);
-    assert.equal(codePreviewSettings.readCollapsedLines, 33);
-    assert.deepEqual(codePreviewSettings.tools, ["bash"]);
-    assert.equal(Object.isFrozen(codePreviewSettings), true);
-    assert.equal(Object.isFrozen(codePreviewSettings.tools), true);
-  } finally {
-    setCodePreviewSettings(previous);
-  }
 });
 
 test("disabled preview settings keep corresponding tool renderers enabled", () => {

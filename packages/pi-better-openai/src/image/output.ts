@@ -9,7 +9,7 @@ import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { fail, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
+import { fail, failWith, type ExtractedImageResult, type ImageOutputFormat } from "./types.ts";
 
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const imageVerificationLostMessage =
@@ -46,7 +46,6 @@ export const makeImageOutput = (dependencies: {
   const { fs, path, sharp } = dependencies;
   const isInside = (root: string, child: string) =>
     isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
-  const imageError = (operation: string, message: string) => () => fail(operation, message);
   const validatedGeneratedImage = Effect.fn("OpenAIImage.validateGeneratedImage")(function* (
     parsed: ExtractedImageResult,
     outputFormat: ImageOutputFormat,
@@ -55,7 +54,7 @@ export const makeImageOutput = (dependencies: {
     if (!bytes) return yield* fail("response", "Codex returned invalid image base64.");
     const metadata = yield* sharp
       .decode(bytes)
-      .pipe(Effect.mapError(imageError("response", "Codex returned unreadable image data.")));
+      .pipe(Effect.mapError(failWith("response", "Codex returned unreadable image data.")));
     const expected = imageOutputMetadata(outputFormat);
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
     if (actual !== expected.sharpFormat)
@@ -81,7 +80,7 @@ export const makeImageOutput = (dependencies: {
     if (protectedBase) {
       canonicalBase = yield* fs
         .realPath(protectedBase)
-        .pipe(Effect.mapError(imageError("save", "Unable to resolve protected output root.")));
+        .pipe(Effect.mapError(failWith("save", "Unable to resolve protected output root.")));
       if (!isInside(protectedBase, requestedDirectory))
         return yield* fail("save", "Image output directory escapes its protected root.");
       let existingAncestor = path.resolve(requestedDirectory);
@@ -93,16 +92,16 @@ export const makeImageOutput = (dependencies: {
       }
       const canonicalAncestor = yield* fs
         .realPath(existingAncestor)
-        .pipe(Effect.mapError(imageError("save", "Unable to inspect image output path.")));
+        .pipe(Effect.mapError(failWith("save", "Unable to inspect image output path.")));
       if (canonicalAncestor !== canonicalBase && !isInside(canonicalBase, canonicalAncestor))
         return yield* fail("save", "Image output directory escapes its protected root.");
     }
     yield* fs
       .makeDirectory(requestedDirectory, { recursive: true })
-      .pipe(Effect.mapError(imageError("save", "Unable to create image output directory.")));
+      .pipe(Effect.mapError(failWith("save", "Unable to create image output directory.")));
     const canonicalDirectory = yield* fs
       .realPath(requestedDirectory)
-      .pipe(Effect.mapError(imageError("save", "Unable to resolve image output directory.")));
+      .pipe(Effect.mapError(failWith("save", "Unable to resolve image output directory.")));
     if (
       canonicalBase &&
       canonicalDirectory !== canonicalBase &&
@@ -125,31 +124,26 @@ export const makeImageOutput = (dependencies: {
     );
     const temporary = `${destination}.${nonce}.tmp`;
     let ownedIdentity: { readonly dev: number; readonly ino: number } | undefined;
+    const isOwned = (info: FileSystem.File.Info) =>
+      ownedIdentity !== undefined &&
+      info.type === "File" &&
+      Option.getOrUndefined(info.ino) === ownedIdentity.ino &&
+      info.dev === ownedIdentity.dev;
     const removeOwnedTemporary = Effect.gen(function* () {
       if (!ownedIdentity) return;
-      const visible = yield* fs.stat(temporary);
-      const visibleInode = Option.getOrUndefined(visible.ino);
-      if (
-        visible.type === "File" &&
-        visibleInode === ownedIdentity.ino &&
-        visible.dev === ownedIdentity.dev
-      )
-        yield* fs.remove(temporary);
+      if (isOwned(yield* fs.stat(temporary))) yield* fs.remove(temporary);
     }).pipe(Effect.ignoreCause);
     const verifyPublicationSource = Effect.fn("OpenAIImage.verifyPublicationSource")(function* () {
       if (!ownedIdentity)
         return yield* fail("save", "Unable to verify image temporary file identity.");
       const actualTemporary = yield* fs
         .realPath(temporary)
-        .pipe(Effect.mapError(imageError("save", "Unable to verify image temporary path.")));
+        .pipe(Effect.mapError(failWith("save", "Unable to verify image temporary path.")));
       const visible = yield* fs
         .stat(temporary)
-        .pipe(Effect.mapError(imageError("save", "Unable to verify image temporary file.")));
-      const visibleInode = Option.getOrUndefined(visible.ino);
+        .pipe(Effect.mapError(failWith("save", "Unable to verify image temporary file.")));
       if (
-        visible.type !== "File" ||
-        visibleInode !== ownedIdentity.ino ||
-        visible.dev !== ownedIdentity.dev ||
+        !isOwned(visible) ||
         !isInside(canonicalDirectory, actualTemporary) ||
         (canonicalBase && !isInside(canonicalBase, actualTemporary))
       )
@@ -164,12 +158,10 @@ export const makeImageOutput = (dependencies: {
             Effect.gen(function* () {
               const file = yield* fs
                 .open(temporary, { flag: "wx" })
-                .pipe(
-                  Effect.mapError(imageError("save", "Unable to create image temporary file.")),
-                );
+                .pipe(Effect.mapError(failWith("save", "Unable to create image temporary file.")));
               const opened = yield* file.stat.pipe(
                 Effect.mapError(
-                  imageError("save", "Unable to verify image temporary file identity."),
+                  failWith("save", "Unable to verify image temporary file identity."),
                 ),
               );
               const openedInode = Option.getOrUndefined(opened.ino);
@@ -179,9 +171,9 @@ export const makeImageOutput = (dependencies: {
               yield* verifyPublicationSource();
               yield* file
                 .writeAll(bytes)
-                .pipe(Effect.mapError(imageError("save", "Unable to save generated image.")));
+                .pipe(Effect.mapError(failWith("save", "Unable to save generated image.")));
               yield* file.sync.pipe(
-                Effect.mapError(imageError("save", "Unable to sync generated image.")),
+                Effect.mapError(failWith("save", "Unable to sync generated image.")),
               );
             }).pipe(Scope.provide(fileScope)),
           ).pipe(Effect.exit);
@@ -202,7 +194,7 @@ export const makeImageOutput = (dependencies: {
               .link(temporary, destination)
               .pipe(
                 Effect.mapError(
-                  imageError("save", "Unable to publish generated image without clobbering."),
+                  failWith("save", "Unable to publish generated image without clobbering."),
                 ),
               );
             // Linking is the commit point. Never remove the destination after this succeeds:
@@ -218,16 +210,7 @@ export const makeImageOutput = (dependencies: {
                 Effect.logWarning(imageVerificationLostMessage).pipe(Effect.as(Option.none())),
               ),
             );
-            if (Option.isNone(published)) return;
-            const publishedStat = published.value;
-            const publishedInode = Option.getOrUndefined(publishedStat.ino);
-            if (
-              !ownedIdentity ||
-              publishedStat.type !== "File" ||
-              publishedInode === undefined ||
-              publishedInode !== ownedIdentity.ino ||
-              publishedStat.dev !== ownedIdentity.dev
-            )
+            if (Option.isSome(published) && !isOwned(published.value))
               return yield* fail("save", "Published image did not match the owned temporary file.");
           }).pipe(Effect.uninterruptible),
         () => removeOwnedTemporary,

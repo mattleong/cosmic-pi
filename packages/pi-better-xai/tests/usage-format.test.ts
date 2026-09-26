@@ -3,8 +3,8 @@ import {
   formatUsageDetails,
   formatUsageSnapshot,
   parseUsageSnapshot,
-  type UsageSnapshot,
 } from "../src/usage/format.ts";
+import { usageSnapshot } from "./support/fixtures.ts";
 
 describe("xAI usage parsing", () => {
   it.each([undefined, null, { config: {} }, { config: { creditUsagePercent: 0 } }])(
@@ -57,19 +57,6 @@ describe("xAI usage parsing", () => {
   });
 });
 
-const snapshotWithOnDemandUsed = (onDemandUsed: number | null): UsageSnapshot => ({
-  capturedAt: 0,
-  weeklyUsedPercent: null,
-  weeklyLeftPercent: null,
-  weeklyResetInSeconds: null,
-  monthlyUsed: null,
-  monthlyLimit: null,
-  monthlyLeftPercent: null,
-  monthlyResetInSeconds: null,
-  onDemandCap: 500,
-  onDemandUsed,
-});
-
 describe("xAI usage formatting", () => {
   it("keeps both billing windows and their short reset dates in status output", () => {
     const snapshot = parseUsageSnapshot(
@@ -95,8 +82,8 @@ describe("xAI usage formatting", () => {
   });
 
   it("distinguishes unavailable on-demand usage from a numeric zero", () => {
-    const unavailable = formatUsageDetails(snapshotWithOnDemandUsed(null), 0);
-    const zero = formatUsageDetails(snapshotWithOnDemandUsed(0), 0);
+    const unavailable = formatUsageDetails({ ...usageSnapshot(0, 0), onDemandUsed: null }, 0);
+    const zero = formatUsageDetails({ ...usageSnapshot(0, 0), onDemandUsed: 0 }, 0);
 
     expect(unavailable).toContain("  On-demand: unavailable");
     expect(unavailable).not.toContain("  On-demand: $0 / $5");

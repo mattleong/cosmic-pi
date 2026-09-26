@@ -3,8 +3,6 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import { flow } from "effect/Function";
 import * as Schema from "effect/Schema";
 import type * as Semaphore from "effect/Semaphore";
 import { acquireNativeLock, type NativeLockOptions } from "./cross-process-lock-node.ts";
@@ -29,16 +27,24 @@ export interface CrossProcessLockContract {
     use: (lease: CrossProcessLease) => Effect.Effect<A, E, R>,
     check?: Effect.Effect<void, E, R>,
   ) => Effect.Effect<A, E | CrossProcessLockError, R>;
+  /**
+   * One synchronous admission attempt with no polling. A dead quiescent owner is retired and
+   * retried once, so `undefined` means a live owner holds the slot. The caller owns release.
+   */
+  readonly tryAcquire: (
+    namespace: string,
+  ) => Effect.Effect<CrossProcessLease | undefined, CrossProcessLockError>;
 }
-const failure = flow(
-  Schema.decodeUnknownOption(CrossProcessLockError),
-  Option.getOrElse(() => new CrossProcessLockError({ reason: "unavailable" })),
-);
+const failure = (cause: unknown) =>
+  cause instanceof CrossProcessLockError
+    ? cause
+    : new CrossProcessLockError({ reason: "unavailable" });
 const AdmissionDeadline = Context.Reference<bigint | undefined>(
   "pi-cosmic-core/platform/cross-process-lock/AdmissionDeadline",
   { defaultValue: () => undefined },
 );
 const timedOut = () => new CrossProcessLockError({ reason: "acquire-timeout" });
+const invalidMillis = (ms: number) => !Number.isFinite(ms) || ms <= 0 || ms > 2_147_483_647;
 const permitChanges = new WeakMap<Semaphore.Semaphore, { pulse: Deferred.Deferred<void> }>();
 
 /** Polling avoids a timeout race transferring an acquired permit from a losing child fiber. */
@@ -53,14 +59,7 @@ const withAdmission = <L, A, E, R>(
   Effect.gen(function* () {
     const timeout = options.acquireTimeoutMs ?? 15_000;
     const poll = options.pollMs ?? 50;
-    if (
-      !Number.isFinite(timeout) ||
-      timeout <= 0 ||
-      timeout > 2_147_483_647 ||
-      !Number.isFinite(poll) ||
-      poll <= 0 ||
-      poll > 2_147_483_647
-    )
+    if (invalidMillis(timeout) || invalidMillis(poll))
       return yield* new CrossProcessLockError({ reason: "unavailable" });
     const now = yield* Clock.monotonicTimeNanos;
     const inherited = yield* AdmissionDeadline;
@@ -71,29 +70,23 @@ const withAdmission = <L, A, E, R>(
       if (left <= 0) return yield* timedOut();
       return left;
     });
+    const timedCheck = Effect.gen(function* () {
+      const left = yield* remaining;
+      yield* check.pipe(
+        Effect.timeoutOrElse({ duration: left, orElse: () => Effect.fail(timedOut()) }),
+      );
+      yield* remaining;
+    });
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         for (;;) {
-          const left = yield* remaining;
-          yield* restore(
-            check.pipe(
-              Effect.timeoutOrElse({ duration: left, orElse: () => Effect.fail(timedOut()) }),
-            ),
-          );
-          yield* remaining;
+          yield* restore(timedCheck);
           const lease = yield* acquire;
           // Install exact-owner release while masked, before the timed check can fail.
           // Only admission checks have a deadline; admitted work has no timer.
           if (lease !== undefined)
             return yield* restore(
-              Effect.gen(function* () {
-                const left = yield* remaining;
-                yield* check.pipe(
-                  Effect.timeoutOrElse({ duration: left, orElse: () => Effect.fail(timedOut()) }),
-                );
-                yield* remaining;
-                return yield* Effect.suspend(() => use(lease));
-              }),
+              timedCheck.pipe(Effect.andThen(Effect.suspend(() => use(lease)))),
             ).pipe(Effect.onExit(() => release(lease)));
           yield* restore(Effect.raceFirst(Effect.sleep(Math.min(poll, yield* remaining)), changed));
         }
@@ -152,6 +145,8 @@ export class CrossProcessLock extends Context.Service<CrossProcessLock, CrossPro
           check,
           options,
         ),
+      tryAcquire: (namespace) =>
+        Effect.try({ try: () => acquireNativeLock(namespace, options, true), catch: failure }),
     });
 }
 export type { NativeLockOptions as CrossProcessLockOptions } from "./cross-process-lock-node.ts";

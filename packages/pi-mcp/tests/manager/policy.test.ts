@@ -1,26 +1,8 @@
 import { expect, it } from "vitest";
-import type { McpManagerServer } from "../../src/manager/model.ts";
 import { serverActions } from "../../src/manager/policy.ts";
+import { managerRow } from "../fixtures/manager.ts";
 
-const row: Omit<McpManagerServer, "actions"> = {
-  id: "a",
-  scope: "global",
-  transport: "http",
-  enabled: true,
-  invalid: false,
-  diagnostic: undefined,
-  authType: "oauth",
-  auth: "unchecked",
-  state: "disconnected",
-  blockedReason: undefined,
-  active: 0,
-  queued: 0,
-  operations: 0,
-  metadata: undefined,
-  metadataState: "undiscovered",
-  configRevision: 1,
-  operationRevision: 0,
-};
+const row = managerRow({ transport: "http", authType: "oauth", auth: "unchecked" });
 it("unchecked credentials do not hide local logout and do not imply sign-in is required", () => {
   const actions = serverActions(row, true, true);
   expect(actions.find((choice) => choice.action === "logout")).toMatchObject({

@@ -14,38 +14,15 @@ import {
  */
 export const fullScreenSettingsHint = (context: {
   readonly searching: boolean;
-  readonly search?: boolean | undefined;
   readonly helpExpanded?: boolean | undefined;
 }): string => {
   if (context.searching) return "Type to filter · Enter select · Esc done";
-  const filter = context.search ? " · / filter" : "";
   return context.helpExpanded
-    ? `j/k or ↑/↓ move · gg/G ends · C-u/d/PgUp/PgDn page${filter} · Enter/l select · h/q/Esc back · ? less`
-    : `j/k move · Enter/l select · h/q back${filter} · ? help`;
+    ? "j/k or ↑/↓ move · gg/G ends · C-u/d/PgUp/PgDn page · / filter · Enter/l select · h/q/Esc back · ? less"
+    : "j/k move · Enter/l select · h/q back · / filter · ? help";
 };
 
-export interface SettingsHintRendererOptions {
-  /** Caller-owned dim styling; the renderer itself stays pure. */
-  readonly dim: (text: string) => string;
-  readonly search?: boolean | undefined;
-}
-
-/** Pure `renderHint` factory for settings surfaces sharing the modeless hint copy. */
-export const settingsHintRenderer =
-  (
-    options: SettingsHintRendererOptions,
-  ): ((mode: "navigation" | "search", helpExpanded?: boolean) => string) =>
-  (mode, helpExpanded) =>
-    options.dim(
-      ` ${fullScreenSettingsHint({
-        searching: mode === "search",
-        search: options.search,
-        helpExpanded,
-      })} `,
-    );
-
 export interface VimSettingsAdapterOptions {
-  readonly search?: boolean | undefined;
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
   readonly requestRender?: (() => void) | undefined;
   readonly renderHint?:
@@ -53,58 +30,33 @@ export interface VimSettingsAdapterOptions {
     | undefined;
 }
 
-const selectionIdForAction = (
-  action: FullScreenAction,
-): FullScreenSelectionKeybindingId | undefined => {
-  switch (action) {
-    case "up":
-      return "tui.select.up";
-    case "down":
-      return "tui.select.down";
-    case "full-page-up":
-      return "tui.select.pageUp";
-    case "full-page-down":
-      return "tui.select.pageDown";
-    case "confirm":
-      return "tui.select.confirm";
-    case "cancel":
-      return "tui.select.cancel";
-    default:
-      return undefined;
+/** Raw SettingsList input and configured selection id each full-screen action forwards as. */
+const SETTINGS_ACTION_INPUT = {
+  up: { input: "\u001b[A", id: "tui.select.up" },
+  down: { input: "\u001b[B", id: "tui.select.down" },
+  "half-page-up": { input: "\u001b[5~", id: undefined },
+  "full-page-up": { input: "\u001b[5~", id: "tui.select.pageUp" },
+  "half-page-down": { input: "\u001b[6~", id: undefined },
+  "full-page-down": { input: "\u001b[6~", id: "tui.select.pageDown" },
+  first: { input: "\u001b[H", id: undefined },
+  last: { input: "\u001b[F", id: undefined },
+  confirm: { input: "\r", id: "tui.select.confirm" },
+  forward: { input: "\r", id: undefined },
+  cancel: { input: "\u001b", id: "tui.select.cancel" },
+  back: { input: "\u001b", id: undefined },
+  quit: { input: "\u001b", id: undefined },
+  help: { input: undefined, id: undefined },
+  "next-pane": { input: undefined, id: undefined },
+  "pending-first": { input: undefined, id: undefined },
+  "previous-pane": { input: undefined, id: undefined },
+  search: { input: undefined, id: undefined },
+} satisfies Record<
+  FullScreenAction,
+  {
+    readonly input: string | undefined;
+    readonly id: FullScreenSelectionKeybindingId | undefined;
   }
-};
-
-const translatedSettingsInput = (action: FullScreenAction): string | undefined => {
-  switch (action) {
-    case "up":
-      return "\u001b[A";
-    case "down":
-      return "\u001b[B";
-    case "half-page-up":
-    case "full-page-up":
-      return "\u001b[5~";
-    case "half-page-down":
-    case "full-page-down":
-      return "\u001b[6~";
-    case "first":
-      return "\u001b[H";
-    case "last":
-      return "\u001b[F";
-    case "confirm":
-    case "forward":
-      return "\r";
-    case "cancel":
-    case "back":
-    case "quit":
-      return "\u001b";
-    case "help":
-    case "next-pane":
-    case "pending-first":
-    case "previous-pane":
-    case "search":
-      return undefined;
-  }
-};
+>;
 
 /**
  * Structural view of the *private* pi-tui SettingsList/SelectList internals the adapter
@@ -128,11 +80,12 @@ export class VimSettingsAdapter implements Component, Focusable {
   private helpExpanded = false;
   private _focused = false;
   private readonly keymap = new FullScreenKeymap();
-  private readonly child: Component;
+  private readonly child: Component & SettingsFocusableBridge;
   private readonly options: VimSettingsAdapterOptions;
 
   constructor(child: Component, options: VimSettingsAdapterOptions = {}) {
-    this.child = child;
+    // SAFETY: Callers pass pi-tui SettingsList/SelectList instances; every bridge member is optional and checked before use.
+    this.child = child as Component & SettingsFocusableBridge;
     this.options = options;
   }
 
@@ -146,18 +99,16 @@ export class VimSettingsAdapter implements Component, Focusable {
   }
 
   private syncChildFocus(): void {
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const bridge = this.child as Component & SettingsFocusableBridge;
-    if ("focused" in bridge) bridge.focused = this._focused;
-    if (bridge.searchInput) bridge.searchInput.focused = this._focused && this.mode === "search";
-    if (bridge.submenuComponent && "focused" in bridge.submenuComponent)
-      bridge.submenuComponent.focused = this._focused;
+    const child = this.child;
+    if ("focused" in child) child.focused = this._focused;
+    if (child.searchInput) child.searchInput.focused = this._focused && this.mode === "search";
+    if (child.submenuComponent && "focused" in child.submenuComponent)
+      child.submenuComponent.focused = this._focused;
   }
 
   private forwardSelection(data: string, action: FullScreenAction): string | undefined {
-    const id = selectionIdForAction(action);
-    const configured = id && this.options.matchesKeybinding?.(data, id);
-    return configured ? data : translatedSettingsInput(action);
+    const { input, id } = SETTINGS_ACTION_INPUT[action];
+    return id && this.options.matchesKeybinding?.(data, id) ? data : input;
   }
 
   handleInput(data: string): void {
@@ -171,10 +122,8 @@ export class VimSettingsAdapter implements Component, Focusable {
         // cleared and re-applied so it cannot keep filtering the list invisibly.
         this.mode = "navigation";
         this.keymap.resetChord();
-        // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-        const bridge = this.child as Component & SettingsFocusableBridge;
-        bridge.searchInput?.setValue("");
-        bridge.applyFilter?.("");
+        this.child.searchInput?.setValue("");
+        this.child.applyFilter?.("");
       } else if (resolution?._tag === "Action") {
         this.child.handleInput?.(this.forwardSelection(data, resolution.action) ?? data);
         if (resolution.action === "confirm") {
@@ -200,7 +149,7 @@ export class VimSettingsAdapter implements Component, Focusable {
       this.options.requestRender?.();
       return;
     }
-    if (resolution.action === "search" && this.options.search) {
+    if (resolution.action === "search") {
       this.mode = "search";
       this.helpExpanded = false;
       this.keymap.resetChord();
@@ -222,9 +171,7 @@ export class VimSettingsAdapter implements Component, Focusable {
       truncateToWidth(line, safeWidth, ""),
     );
     const hint = this.options.renderHint?.(this.mode, this.helpExpanded);
-    // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-    const bridge = this.child as Component & SettingsFocusableBridge;
-    if (hint && bridge.submenuComponent === null && lines.at(-2) === "") lines.pop();
+    if (hint && this.child.submenuComponent === null && lines.at(-2) === "") lines.pop();
     return hint ? [...lines, truncateToWidth(hint, safeWidth, "")] : lines;
   }
 

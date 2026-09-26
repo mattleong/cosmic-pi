@@ -15,7 +15,6 @@ const pane: HerdrPane = {
   tabId: "w:t",
   cwd: "/project",
   foregroundCwd: "/project",
-  focused: true,
   agentStatus: "working",
 };
 
@@ -26,18 +25,13 @@ const agent: HerdrAgent = {
   stateChangeSequence: 1,
   interactiveReady: true,
   agentSession: { source: "fixture", agent: "pi", kind: "id", value: "native-1" },
-  nativeSession: "native-1",
 };
 
 const snapshot = (panes: ReadonlyArray<HerdrPane>, agents: ReadonlyArray<HerdrAgent>) =>
   ({
-    version: "0.8.2",
     protocol: 20,
-    focusedWorkspaceId: "w",
-    focusedTabId: "w:t",
-    focusedPaneId: "w:p1",
-    workspaces: [{ workspaceId: "w", label: "owned", focused: true, activeTabId: "w:t" }],
-    tabs: [{ tabId: "w:t", workspaceId: "w", label: "1", paneCount: 1, focused: true }],
+    workspaces: [{ workspaceId: "w" }],
+    tabs: [{ tabId: "w:t", workspaceId: "w" }],
     panes,
     agents,
   }) satisfies HerdrSnapshot;

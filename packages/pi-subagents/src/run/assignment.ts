@@ -1,31 +1,18 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { isOutcomeUncertain, type SubagentError, SubagentProcessError } from "./errors.ts";
-import { isInactiveRunRecord, type RunRecord } from "./internal.ts";
+import { isOutcomeUncertain, SubagentProcessError } from "./errors.ts";
+import { isInactiveRunRecord, type RunContext, type RunRecord } from "./internal.ts";
 import type { SubagentRunView } from "./model.ts";
-import type { AssignmentActivationReplay } from "./settlement.ts";
-import { appendNoticeSessionEvent } from "./session-events.ts";
+import type { RunProcessControls } from "./process-lifecycle.ts";
+import type { RunSettlement } from "./settlement.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, snapshotView } from "./state.ts";
-import { projectRunWarning, setRunWarning } from "./warnings.ts";
+import { emptyRunWarningSlots, recordRunWarning } from "./warnings.ts";
 
-export interface RunAssignmentDependencies {
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
-  readonly startPrompt: (
-    record: RunRecord,
-    message: string,
-    assignmentEpoch: number,
-  ) => Effect.Effect<void, SubagentError>;
+export interface RunAssignmentDependencies extends RunContext {
+  readonly startPrompt: RunProcessControls["startPrompt"];
   /** Caller holds the service lock while draining one issuing assignment. */
-  readonly activateAssignmentLocked: (
-    record: RunRecord,
-    now: number,
-    runningView: SubagentRunView,
-  ) => Effect.Effect<AssignmentActivationReplay>;
-  readonly replayAssignmentActivation: (
-    record: RunRecord,
-    replay: AssignmentActivationReplay,
-  ) => Effect.Effect<SubagentRunView>;
+  readonly activateAssignmentLocked: RunSettlement["activateAssignmentLocked"];
+  readonly replayAssignmentActivation: RunSettlement["replayAssignmentActivation"];
 }
 
 /** Run-start evidence may change the view before the issuing prompt confirms. */
@@ -33,6 +20,37 @@ export const isCurrentIssuingAssignment = (record: RunRecord, attemptToken: stri
   record.assignment.attemptToken === attemptToken &&
   record.assignment.phase === "issuing" &&
   !isInactiveRunRecord(record);
+
+/** Rolls over to a new issuing assignment and a starting view; caller holds the service lock. */
+export const beginNextAssignmentLocked = (
+  record: RunRecord,
+  attemptToken: string,
+  now: number,
+  viewPatch: Partial<SubagentRunView>,
+): void => {
+  record.pausedAssignmentEpoch = undefined;
+  record.latestAssistantText = undefined;
+  record.warningSlots = emptyRunWarningSlots();
+  record.assignment = {
+    epoch: record.nextAssignmentEpoch++,
+    phase: "issuing",
+    attemptToken,
+    startedObserved: false,
+    outcomeUncertain: false,
+    pendingRunSettled: false,
+  };
+  record.view = {
+    ...record.view,
+    ...viewPatch,
+    state: "starting",
+    endedAt: undefined,
+    warning: undefined,
+    warningSource: undefined,
+    systemWarning: undefined,
+    error: undefined,
+    lastActivityAt: now,
+  };
+};
 
 /** Owns prompt issue confirmation, rollback, and uncertain assignment retention. */
 export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
@@ -106,16 +124,9 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
           if (!isCurrentIssuingAssignment(record, attemptToken)) return undefined;
           record.assignment.outcomeUncertain = true;
           const diagnostic = sanitizeDiagnosticText(warning, MAX_ERROR_CHARS);
-          record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
           record.view = {
             ...record.view,
-            ...projectRunWarning(record.warningSlots, "system"),
-            sessionEvents: appendNoticeSessionEvent(
-              record.view.sessionEvents,
-              "warning",
-              diagnostic,
-              now,
-            ),
+            ...recordRunWarning(record, record.view.sessionEvents, "system", diagnostic, now),
           };
           if (!record.assignment.startedObserved) {
             yield* publish;
@@ -135,3 +146,5 @@ export function makeRunAssignment(dependencies: RunAssignmentDependencies) {
 
   return { submitPrompt, retainUncertainAssignment };
 }
+
+export type RunAssignment = ReturnType<typeof makeRunAssignment>;

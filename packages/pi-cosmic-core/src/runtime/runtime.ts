@@ -9,6 +9,7 @@ import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
 import type * as Types from "effect/Types";
+import { invokeHostCallback } from "../host-session.ts";
 import { PiApi } from "./pi-api.ts";
 
 /**
@@ -101,11 +102,8 @@ const ownAbortSignal = (source: AbortSignal): OwnedAbortSignal => {
   const release = () => {
     if (!removePending) return;
     removePending = false;
-    try {
-      source.removeEventListener("abort", abort);
-    } catch {
-      // A hostile host signal cannot prevent Effect-owned fiber cleanup.
-    }
+    // A hostile host signal cannot prevent Effect-owned fiber cleanup.
+    invokeHostCallback(() => source.removeEventListener("abort", abort), undefined);
   };
   try {
     source.addEventListener("abort", abort, { once: true });
@@ -127,25 +125,14 @@ const ownAbortSignal = (source: AbortSignal): OwnedAbortSignal => {
  * operation) and dispose it during `session_shutdown`. Application code should
  * not create nested runtimes.
  */
-export function makePiRuntime(
-  pi: ExtensionAPI,
-  applicationLayer?: undefined,
-  log?: PiHostLogTarget,
-): ManagedRuntime.ManagedRuntime<PiApi, never>;
 export function makePiRuntime<R, E>(
   pi: ExtensionAPI,
   applicationLayer: Layer.Layer<R, E, PiApi>,
   log?: PiHostLogTarget,
-): ManagedRuntime.ManagedRuntime<PiApi | R, E>;
-export function makePiRuntime<R, E>(
-  pi: ExtensionAPI,
-  applicationLayer?: Layer.Layer<R, E, PiApi>,
-  log?: PiHostLogTarget,
-) {
+): ManagedRuntime.ManagedRuntime<PiApi | R, E> {
   const loggerLayer = log ? piHostFileLoggerLayer(log) : piHostLoggerLayer;
-  const hostLayer = Layer.merge(PiApi.layer(pi), loggerLayer);
   return ManagedRuntime.make(
-    applicationLayer ? applicationLayer.pipe(Layer.provideMerge(hostLayer)) : hostLayer,
+    applicationLayer.pipe(Layer.provideMerge(Layer.merge(PiApi.layer(pi), loggerLayer))),
   );
 }
 
@@ -157,7 +144,6 @@ export interface PiManagedRuntime<R, RuntimeError = unknown> {
     effect: Effect.Effect<A, E, PiApi | R>,
     signal?: AbortSignal,
   ) => Fiber.Fiber<A, E | RuntimeError>;
-  readonly runSync: <A, E>(effect: Effect.Effect<A, E, PiApi | R>) => A;
   readonly dispose: () => Promise<void>;
 }
 
@@ -181,7 +167,6 @@ export function makePiManagedRuntime<R, E>(
       if (owned) fiber.addObserver(owned.release);
       return fiber;
     },
-    runSync: (effect) => runtime.runSync(effect),
     dispose: () => {
       disposal ??= Promise.resolve().then(() => runtime.dispose());
       return disposal;

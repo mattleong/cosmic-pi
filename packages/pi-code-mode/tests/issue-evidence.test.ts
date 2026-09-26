@@ -10,8 +10,7 @@ import {
 import { decodeOption } from "../src/tools/format.ts";
 import { BoundedIssuesSchema, invocationIssues } from "../src/tools/issue-evidence.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { summarize } from "./support/compact.ts";
 
 const issues: CompactIssues = {
   coverage: "complete",
@@ -49,13 +48,10 @@ describe("bounded v2 issue evidence", () => {
       counts: { total: 1, running: 0, queued: 0, failed: 1, cancelled: 0, succeeded: 0 },
       compactAttention: collector.snapshot(),
     });
-    expect(retained.version).toBe(2);
-    if (retained.version !== 2 || replay.compactAttention?.version !== 2)
-      throw new Error("Expected v2 evidence");
     expect(retained.issues.entries[0]?.diagnostics).toEqual(diagnostics);
     expect(Object.isFrozen(retained.issues.entries[0]?.diagnostics)).toBe(true);
     expect(JSON.stringify(retained)).not.toContain("expandedInResult");
-    expect(replay.compactAttention.issues.entries[0]?.diagnostics).toEqual(diagnostics);
+    expect(replay.compactAttention?.issues.entries[0]?.diagnostics).toEqual(diagnostics);
     expect(JSON.stringify(original)).toBe(before);
     diagnostics.push("late mutation");
     expect(retained.issues.entries[0]?.diagnostics).toHaveLength(1);
@@ -80,20 +76,15 @@ describe("bounded v2 issue evidence", () => {
   it("does not convert cancellation diagnostics into an independent error", () => {
     const collector = makeCompactEvidence(() => undefined);
     collector.close();
-    const summary = codeModeCompactSummary({
-      phase: "settled",
-      args: {},
-      context: opaqueHostFixture({ isError: true }),
-      result: {
-        content: [{ type: "text", text: "Execution cancelled" }],
-        details: {
-          toolCalls: [],
-          cancelled: true,
-          counts: { total: 0, running: 0, queued: 0, failed: 0, cancelled: 0, succeeded: 0 },
-          compactAttention: collector.snapshot(),
-        },
+    const summary = summarize(
+      {
+        toolCalls: [],
+        cancelled: true,
+        counts: { total: 0, running: 0, queued: 0, failed: 0, cancelled: 0, succeeded: 0 },
+        compactAttention: collector.snapshot(),
       },
-    });
+      { isError: true, text: "Execution cancelled" },
+    );
     expect(summary?.outcome).toBe("cancelled");
     expect(summary && compactIssueSeverity(summaryCompactIssues(summary))).toBe("warning");
     expect(summary?.issues?.entries.some((issue) => issue.severity === "error")).toBe(false);
@@ -110,7 +101,6 @@ describe("bounded v2 issue evidence", () => {
     collector.deliveryFailure(1);
     const aggregate = collector.snapshot();
     expect(aggregate.version).toBe(2);
-    if (aggregate.version !== 2) throw new Error("Expected v2");
     expect(aggregate.issues.entries.map((issue) => issue.operation)).toEqual([
       "call-2/mcp:tools.call",
       "call-1/mcp:tools.call",
@@ -126,7 +116,7 @@ describe("bounded v2 issue evidence", () => {
         entries: [...receipts.values()].map((receipt) => ({
           label: "mcp",
           status: "error",
-          ...(receipt.version === 2 && { issues: receipt.issues }),
+          issues: receipt.issues,
         })),
       },
     });
@@ -146,7 +136,6 @@ describe("bounded v2 issue evidence", () => {
     }
     const aggregate = collector.snapshot();
     expect(aggregate).toMatchObject({ version: 2, observed: 40, errors: 40, incomplete: true });
-    if (aggregate.version !== 2) throw new Error("Expected v2");
     expect(aggregate.issues.entries).toHaveLength(32);
     expect(aggregate.issues.coverage).toBe("unknown");
     expect(decodeOption(CompactAttentionSchema, aggregate)).toBeDefined();
@@ -160,7 +149,7 @@ describe("bounded v2 issue evidence", () => {
     expect(JSON.stringify(collector.snapshot())).not.toContain("PRIVATE");
   });
 
-  it("decodes explicit v1 history but rejects malformed v2 and salvages bounded recovery", () => {
+  it("rejects v1 history and malformed v2 receipts but salvages bounded recovery", () => {
     const legacy = {
       version: 1,
       subject: "old",
@@ -168,7 +157,8 @@ describe("bounded v2 issue evidence", () => {
       notices: [],
       deliveryFailed: false,
     };
-    expect(decodeOption(CompactReceiptSchema, legacy)).toBeDefined();
+    expect(decodeOption(CompactReceiptSchema, legacy)).toBeUndefined();
+    expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 2, issues })).toBeDefined();
     expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 2 })).toBeUndefined();
     expect(decodeOption(CompactReceiptSchema, { ...legacy, version: 3, issues })).toBeUndefined();
     const broken = { ...legacy, version: 2, outcome: "hostile", issues };

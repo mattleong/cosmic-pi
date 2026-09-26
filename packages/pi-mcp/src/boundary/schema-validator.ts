@@ -19,8 +19,6 @@ import {
   JSON_SCHEMA_VALIDATOR_LIMITS,
 } from "../validation/schema-policy.ts";
 
-export { JSON_SCHEMA_VALIDATOR_LIMITS } from "../validation/schema-policy.ts";
-
 export type JsonSchemaValidationOutcome = "not-sent" | "completed";
 
 const encodeRequest = (
@@ -38,10 +36,7 @@ const encodeRequest = (
       ),
   });
 
-const helperReplySchema = Schema.Union([
-  Schema.Struct({ valid: Schema.Literal(true) }),
-  Schema.Struct({ valid: Schema.Literal(false) }),
-]);
+const helperReplySchema = Schema.Struct({ valid: Schema.Boolean });
 
 const decodeHelperReply = (
   stdout: string,
@@ -134,12 +129,7 @@ const validateWithProcess = (
         return Effect.fail(
           boundaryError("output-limit", outcome, "Schema validator output exceeded its limit."),
         );
-      if (
-        !result.dispatched ||
-        result.code !== 0 ||
-        result.signal !== null ||
-        result.stderr.length > 0
-      )
+      if (result.code !== 0 || result.signal !== null || result.stderr.length > 0)
         return Effect.fail(unavailable(outcome));
       const responseBytes = new TextEncoder().encode(result.stdout).byteLength;
       if (responseBytes > JSON_SCHEMA_VALIDATOR_LIMITS.maximumResponseBytes)
@@ -209,11 +199,9 @@ export const makeJsonSchemaValidator = (
         yield* validateWithProcess(input, outcome, runner, disabled);
       }).pipe(
         processAdmission.withPermitsIfAvailable(1),
-        Effect.flatMap((result: Option.Option<void>) =>
-          Effect.fromOption(result).pipe(
-            Effect.mapError(() =>
-              boundaryError("unavailable", outcome, "Schema validator is busy."),
-            ),
+        Effect.flatMap(
+          Effect.fromOption(() =>
+            boundaryError("unavailable", outcome, "Schema validator is busy."),
           ),
         ),
         Effect.catchCause((cause) => Effect.fail(mapFailure(outcome, cause))),
@@ -226,7 +214,5 @@ export class JsonSchemaValidator extends Context.Service<
   JsonSchemaValidator,
   JsonSchemaValidatorContract
 >()("pi-mcp/boundary/schema-validator/JsonSchemaValidator") {
-  static readonly layer = (
-    options: JsonSchemaValidatorOptions = {},
-  ): Layer.Layer<JsonSchemaValidator> => Layer.effect(this, makeJsonSchemaValidator(options));
+  static readonly layer = Layer.effect(this, makeJsonSchemaValidator());
 }

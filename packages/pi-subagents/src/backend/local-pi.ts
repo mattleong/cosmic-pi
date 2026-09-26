@@ -1,15 +1,13 @@
-import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
-  type ChildLaunchRequest,
   type ChildProcessHandle,
   type ChildProcessContract,
   type ChildWireEvent,
@@ -18,7 +16,6 @@ import {
   InvalidSubagentRequestError,
   isOutcomeUncertain,
   SubagentProcessError,
-  SubagentProtocolError,
   type SubagentError,
 } from "../run/errors.ts";
 import { PI_SUBAGENT_CAPABILITIES, emptyUsage } from "../run/model.ts";
@@ -31,6 +28,7 @@ import {
   decodeRpcStateData,
   rpcStateModelId,
   type LocalPiParentControl,
+  type RpcChildEnvelope,
   type RpcCommand,
   type RpcResponse,
 } from "./local-pi-protocol.ts";
@@ -57,20 +55,13 @@ const EVENT_CAPACITY = 512;
 
 const noBackendEvent: Effect.Effect<BackendEvent | undefined> = Effect.as(Effect.void, undefined);
 
-const rpcOutcomeCode = (command: string): string => {
-  switch (command) {
-    case "steer":
-      return "guidance_outcome_uncertain";
-    case "clear_queue":
-      return "clear_queue_outcome_uncertain";
-    case "abort":
-      return "interrupt_outcome_uncertain";
-    case "set_session_name":
-      return "rename_outcome_uncertain";
-    default:
-      return `${command}_outcome_uncertain`;
-  }
-};
+const RPC_OUTCOME_CODES = new Map<RpcCommand["type"], string>([
+  ["steer", "guidance_outcome_uncertain"],
+  ["abort", "interrupt_outcome_uncertain"],
+  ["set_session_name", "rename_outcome_uncertain"],
+]);
+const rpcOutcomeCode = (command: RpcCommand["type"]): string =>
+  RPC_OUTCOME_CODES.get(command) ?? `${command}_outcome_uncertain`;
 
 const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
   error._tag === "SubagentProcessError" && error.code === "transport_outcome_uncertain"
@@ -84,103 +75,82 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
       })
     : error;
 
-const normalizeRpcEvent = <ValueInput>(value: ValueInput, assignmentEpoch: number) =>
-  decodeRpcEnvelope(value).pipe(
-    Effect.flatMap((envelope) => {
-      switch (envelope.type) {
-        case "response":
-        case "agent_end":
-        case "message_start":
-        case "ignored":
-          return noBackendEvent;
-        case "agent_start":
-          return Effect.succeed<BackendEvent>({ type: "run_started", assignmentEpoch });
-        case "agent_settled":
-          return Effect.succeed<BackendEvent>({ type: "run_settled", assignmentEpoch });
-        case "message_update":
-          return Effect.succeed(
-            envelope.assistantMessageEvent.type === "text_delta" &&
-              envelope.assistantMessageEvent.delta
-              ? ({ type: "activity", assignmentEpoch } as const)
-              : undefined,
-          );
-        case "message_end":
-          return decodeAssistantMessage(envelope.message).pipe(
-            Effect.map((message): BackendEvent | undefined => {
-              if (!message) return undefined;
-              const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
-              return {
-                type: "assistant_message",
-                assignmentEpoch,
-                ...(text && { text }),
-                usage: emptyUsage(),
-                terminal: {
-                  stopReason: message.stopReason,
-                  text,
-                  ...(message.errorMessage && {
-                    errorMessage: sanitizeDiagnosticText(message.errorMessage, MAX_ERROR_CHARS),
-                  }),
-                },
-              };
-            }),
-          );
-        case "tool_execution_start":
-          return Effect.succeed<BackendEvent>({
-            type: "tool_started",
+const normalizeRpcEvent = (
+  envelope: RpcChildEnvelope,
+  assignmentEpoch: number,
+): Effect.Effect<BackendEvent | undefined, Schema.SchemaError> => {
+  switch (envelope.type) {
+    case "agent_start":
+      return Effect.succeed<BackendEvent>({ type: "run_started", assignmentEpoch });
+    case "agent_settled":
+      return Effect.succeed<BackendEvent>({ type: "run_settled", assignmentEpoch });
+    case "message_update":
+      return Effect.succeed(
+        envelope.assistantMessageEvent.type === "text_delta" && envelope.assistantMessageEvent.delta
+          ? ({ type: "activity", assignmentEpoch } as const)
+          : undefined,
+      );
+    case "message_end":
+      return decodeAssistantMessage(envelope.message).pipe(
+        Effect.map((message): BackendEvent | undefined => {
+          if (!message) return undefined;
+          const text = sanitizeOutputText(assistantText(message), MAX_FINAL_TEXT_CHARS);
+          return {
+            type: "assistant_message",
             assignmentEpoch,
-            toolCallId: envelope.toolCallId,
-            toolName: envelope.toolName,
-            args: envelope.args,
-          });
-        case "tool_execution_end":
-          return Effect.succeed<BackendEvent>({
-            type: "tool_finished",
-            assignmentEpoch,
-            toolCallId: envelope.toolCallId,
-            toolName: envelope.toolName,
-            isError: envelope.isError,
-          });
-        case "extension_error":
-          return Effect.succeed<BackendEvent>({
-            type: "warning",
-            source: "runtime-extension",
-            message: envelope.error,
-          });
-        case "extension_ui_request":
-          return noBackendEvent;
-      }
-    }),
-    Effect.catch(() =>
-      Effect.succeed<BackendEvent>({
-        type: "protocol_error",
-        message: "Subagent emitted an invalid protocol event.",
-      }),
-    ),
-  );
+            ...(text && { text }),
+            usage: emptyUsage(),
+            terminal: {
+              stopReason: message.stopReason,
+              text,
+              ...(message.errorMessage && {
+                errorMessage: sanitizeDiagnosticText(message.errorMessage, MAX_ERROR_CHARS),
+              }),
+            },
+          };
+        }),
+      );
+    case "tool_execution_start":
+      return Effect.succeed<BackendEvent>({
+        type: "tool_started",
+        assignmentEpoch,
+        toolCallId: envelope.toolCallId,
+        toolName: envelope.toolName,
+        args: envelope.args,
+      });
+    case "tool_execution_end":
+      return Effect.succeed<BackendEvent>({
+        type: "tool_finished",
+        assignmentEpoch,
+        toolCallId: envelope.toolCallId,
+        toolName: envelope.toolName,
+        isError: envelope.isError,
+      });
+    case "extension_error":
+      return Effect.succeed<BackendEvent>({
+        type: "warning",
+        source: "runtime-extension",
+        message: envelope.error,
+      });
+    default:
+      return noBackendEvent;
+  }
+};
 
-interface LocalPiResumeToken extends BackendResumeToken {
-  readonly type: "local-pi-session-file";
-  readonly sessionFile: string;
-}
+const LocalPiResumeToken = Schema.Struct({
+  type: Schema.Literal("local-pi-session-file"),
+  sessionFile: Schema.String.check(Schema.isMinLength(1)),
+});
 
-const localPiResumeToken = (sessionFile: string): LocalPiResumeToken => ({
+const localPiResumeToken = (sessionFile: string): typeof LocalPiResumeToken.Type => ({
   type: "local-pi-session-file",
   sessionFile,
 });
 
-// SAFETY: Boundary decoding validates the value before it is narrowed to this declared contract.
-const decodeLocalPiResumeToken = (
-  token: BackendResumeToken,
-): Effect.Effect<LocalPiResumeToken, SubagentProtocolError> =>
-  hasObjectRuntimeType(token) &&
-  token !== null &&
-  "type" in token &&
-  token.type === "local-pi-session-file" &&
-  "sessionFile" in token &&
-  Predicate.isString(token.sessionFile) &&
-  token.sessionFile.length > 0
-    ? Effect.succeed(token as LocalPiResumeToken)
-    : Effect.fail(protocolError("Local Pi received an invalid backend resume token."));
+const decodeLocalPiResumeToken = (token: BackendResumeToken) =>
+  Schema.decodeUnknownEffect(LocalPiResumeToken)(token).pipe(
+    Effect.mapError(() => protocolError("Local Pi received an invalid backend resume token.")),
+  );
 
 interface PendingRpcResponse {
   readonly command: string;
@@ -200,10 +170,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let assignmentEpoch = 0;
   let latestTerminal: BackendAssistantTerminal | undefined;
 
-  const acknowledgeRaw = (event: ChildWireEvent) => child.acknowledge?.(event);
-  const { offer, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
+  const { offer, release, acknowledge, acknowledgeAll } = makeLocalCliRawEventOwnership(
     events,
-    acknowledgeRaw,
+    (event: ChildWireEvent) => child.acknowledge?.(event),
     "local-Pi",
   );
   yield* Effect.addFinalizer(() =>
@@ -225,7 +194,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     command: A,
     timeout: Duration.Input = RPC_TIMEOUT,
   ): Effect.Effect<RpcResponse, SubagentError> =>
-    correlatedRequest({
+    correlatedRequest<string, RpcResponse>({
       timeout,
       register: (deferred) => {
         const id = `backend-rpc-${nextRpcId++}`;
@@ -251,21 +220,21 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
               : `Subagent did not answer ${command.type}; the command may already have applied. Inspect subagent status before retrying.`,
         }),
       awaitEarlyResponse: true,
-      decode: (response) =>
-        response.success
-          ? Effect.succeed(response)
-          : Effect.fail(
-              new SubagentProcessError({
-                operation: `execute ${command.type} in`,
-                message: sanitizeDiagnosticText(
-                  command.type === "clear_queue"
-                    ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
-                    : (response.error ?? `Subagent RPC command ${command.type} failed.`),
-                  MAX_ERROR_CHARS,
-                ),
-              }),
+    }).pipe(
+      Effect.filterOrFail(
+        (response) => response.success,
+        (response) =>
+          new SubagentProcessError({
+            operation: `execute ${command.type} in`,
+            message: sanitizeDiagnosticText(
+              command.type === "clear_queue"
+                ? `${response.error ?? "Subagent RPC command clear_queue failed."} Abort was not sent.`
+                : (response.error ?? `Subagent RPC command ${command.type} failed.`),
+              MAX_ERROR_CHARS,
             ),
-    });
+          }),
+      ),
+    );
 
   const ipcAck = (
     idPrefix: string,
@@ -368,8 +337,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                   ),
                 ),
           );
-        acknowledgeRaw(event);
-        return Effect.void;
+        return release(event);
       }
       const normalized: BackendEvent = (() => {
         switch (contact.type) {
@@ -408,18 +376,12 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       })();
       return offer(normalized, event);
     }
-    if (event.type === "exit")
-      return Effect.sync(() => {
-        acknowledgeRaw(event);
-      });
+    if (event.type === "exit") return release(event);
     return decodeRpcEnvelope(event.value).pipe(
       Effect.flatMap((envelope) => {
         if (envelope.type === "response") {
           const pending = envelope.id ? responses.get(envelope.id) : undefined;
-          if (!pending) {
-            acknowledgeRaw(event);
-            return Effect.void;
-          }
+          if (!pending) return release(event);
           if (pending.command !== envelope.command) {
             const error = protocolError(
               `Subagent RPC response command did not match ${pending.command}.`,
@@ -434,8 +396,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             );
           }
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
-          acknowledgeRaw(event);
-          return Effect.void;
+          return release(event);
         }
         if (envelope.type === "extension_ui_request")
           return child
@@ -446,7 +407,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             })
             .pipe(
               Effect.catch(() => Effect.void),
-              Effect.ensuring(Effect.sync(() => acknowledgeRaw(event))),
+              Effect.ensuring(release(event)),
             );
         if (
           envelope.type === "ignored" &&
@@ -462,18 +423,15 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
           pendingSettlement = undefined;
         }
         const eventAssignmentEpoch = assignmentEpoch;
-        return normalizeRpcEvent(event.value, eventAssignmentEpoch).pipe(
+        return normalizeRpcEvent(envelope, eventAssignmentEpoch).pipe(
           Effect.flatMap((normalized) => {
             if (normalized?.type === "assistant_message") latestTerminal = normalized.terminal;
             if (normalized?.type === "run_settled") {
               pendingSettlement = { ...normalized, terminal: latestTerminal };
               requestUsage();
-              acknowledgeRaw(event);
-              return Effect.void;
+              return release(event);
             }
-            if (normalized) return offer(normalized, event);
-            acknowledgeRaw(event);
-            return Effect.void;
+            return normalized ? offer(normalized, event) : release(event);
           }),
         );
       }),
@@ -663,28 +621,14 @@ export const makeLocalPiBackendDriver = (childProcesses: ChildProcessContract): 
         ),
   spawn: (request: BackendLaunchRequest) =>
     Effect.gen(function* () {
-      const resumeSessionFile = request.resumeToken
-        ? (yield* decodeLocalPiResumeToken(request.resumeToken)).sessionFile
+      const { closeOnReport: _closeOnReport, resumeToken, ...launch } = request;
+      const resumeSessionFile = resumeToken
+        ? (yield* decodeLocalPiResumeToken(resumeToken)).sessionFile
         : undefined;
-      const childRequest: ChildLaunchRequest = {
-        runId: request.runId,
-        name: request.name,
-        cwd: request.cwd,
-        context: request.context,
-        writeIntent: request.writeIntent,
-        openaiFastMode: request.openaiFastMode,
-        model: request.model,
-        effort: request.effort,
-        ...(request.runtimeApiKey && { runtimeApiKey: request.runtimeApiKey }),
-        activeTools: request.activeTools,
-        projectTrusted: request.projectTrusted,
-        parentSessionId: request.parentSessionId,
-        ...(request.parentSessionFile && { parentSessionFile: request.parentSessionFile }),
-        ...(request.parentLeafId && { parentLeafId: request.parentLeafId }),
+      const child = yield* childProcesses.spawn({
+        ...launch,
         ...(resumeSessionFile && { resumeSessionFile }),
-        systemPrompt: request.systemPrompt,
-      };
-      const child = yield* childProcesses.spawn(childRequest);
+      });
       return yield* makeLocalPiHandle(child);
     }),
   reclaimRunState: (request) => childProcesses.reclaimRunState(request),

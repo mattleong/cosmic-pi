@@ -1,21 +1,19 @@
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { createToolPresentationHarness } from "../../testing";
+import {
+  applyPresentationSettings,
+  createToolPresentationHarness,
+  withPresentationSettings,
+} from "../../testing";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { claimCompactIssue, type CompactIssue } from "../../src/tools/compact-issues";
 import type { CompactSummary } from "../../src/tools/compact-summary";
-import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
-import { testTheme } from "../support/render";
-const saved = { ...codePreviewSettings };
+import { failingRenderer, textResult } from "../support/render";
 beforeEach(() =>
-  setCodePreviewSettings({ ...saved, toolCallCollapsedStyle: "compact", toolCallTiming: false }),
+  applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
 );
-afterEach(() => setCodePreviewSettings(saved));
-const result = {
-  content: [{ type: "text" as const, text: "RAW diagnostics" }],
-  details: undefined,
-};
+const result = textResult("RAW diagnostics");
 const issue: CompactIssue = {
   operation: "original-execution",
   code: "failure",
@@ -24,7 +22,6 @@ const issue: CompactIssue = {
   description: "Failure cause",
   recovery: [{ code: "inspect", text: "Independent recovery" }],
 };
-const theme = Object.assign(testTheme(), { bg: (_key: string, text: string) => text });
 
 test.each(["on", "off", "border"] as const)(
   "compact descriptions do not expose or erase agent evidence in %s mode",
@@ -68,11 +65,8 @@ test.each(["on", "off", "border"] as const)(
         }),
       },
     );
-    const h = createToolPresentationHarness(tool, { theme, width: 120 });
-    for (const expanded of [false, true, false, true]) {
-      h.call({ path: "file" }, { expanded });
-      h.result(original, { expanded });
-      const text = h.render().join("\n");
+    const h = createToolPresentationHarness(tool, { width: 120 });
+    for (const { expanded, text } of h.cycle({ path: "file" }, original)) {
       expect(text.includes(human)).toBe(!expanded);
       for (const evidence of [cause, recovery, diagnostic])
         expect(text.includes(evidence)).toBe(expanded);
@@ -113,40 +107,27 @@ test.each(["on", "off", "border"] as const)(
           ...(!path.startsWith("legacy") && {
             expandedContent: {
               renderCall: () => new Text("complete arguments", 0, 0),
-              renderResult: () => {
-                if (path === "factory") throw new Error("construction failed");
-                return {
-                  render: () => {
-                    if (path === "draw") throw new Error("drawing failed");
-                    return ["complete output"];
-                  },
-                  invalidate() {},
-                };
-              },
+              renderResult: failingRenderer(path, ["complete output"]),
             },
           }),
         },
       );
       for (const timing of [true, false]) {
-        setCodePreviewSettings({
-          ...saved,
-          toolCallCollapsedStyle: "compact",
-          toolCallTiming: timing,
+        withPresentationSettings({ toolCallTiming: timing }, () => {
+          const h = createToolPresentationHarness(tool, {
+            state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+          });
+          for (const expanded of [false, true, false, true]) {
+            h.call({ path: "file" }, { expanded, isPartial: false });
+            h.result(result, { expanded, isError: failure });
+            const occurrences = (width: number) =>
+              h.render(width).join("\n").match(/379ms/g)?.length ?? 0;
+            expect(occurrences(120), `${path}, timing=${timing}, expanded=${expanded}`).toBe(
+              timing ? 1 : 0,
+            );
+            expect(occurrences(12)).toBeLessThanOrEqual(timing ? 1 : 0);
+          }
         });
-        const h = createToolPresentationHarness(tool, {
-          theme,
-          state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
-        });
-        for (const expanded of [false, true, false, true]) {
-          h.call({ path: "file" }, { expanded, isPartial: false });
-          h.result(result, { expanded, isError: failure });
-          const occurrences = (width: number) =>
-            h.render(width).join("\n").match(/379ms/g)?.length ?? 0;
-          expect(occurrences(120), `${path}, timing=${timing}, expanded=${expanded}`).toBe(
-            timing ? 1 : 0,
-          );
-          expect(occurrences(12)).toBeLessThanOrEqual(timing ? 1 : 0);
-        }
       }
     }
   },
@@ -180,7 +161,7 @@ test("expanded failure retains unique multiline call content and one claimed dia
       },
     );
     expect(tool.execute).toBe(source.execute);
-    const h = createToolPresentationHarness(tool, { theme });
+    const h = createToolPresentationHarness(tool);
     for (const expanded of [false, true, false, true]) {
       h.call({ path: "file" }, { expanded });
       h.result(result, { expanded, isError: true });
@@ -215,7 +196,7 @@ test("failure body cannot borrow claims from an unrendered original result", () 
       expandedContent: { renderResult: () => new Text("Must not render", 0, 0) },
     },
   );
-  const h = createToolPresentationHarness(tool, { theme });
+  const h = createToolPresentationHarness(tool);
   h.call({ path: "file" }, { expanded: true });
   h.result(result, { expanded: true });
   const text = h.render().join("\n");
@@ -257,7 +238,7 @@ test("partial content hooks retain the other slot and malformed-to-valid switche
               },
       },
     );
-    const h = createToolPresentationHarness(tool, { theme });
+    const h = createToolPresentationHarness(tool);
     for (valid of [true, false, true]) {
       h.call({ path: "file" }, { expanded: true });
       h.result(result, { expanded: true });
@@ -300,20 +281,11 @@ test("unknown coverage uses content rendering and revokes claims on construction
         compactSummary: () => summary,
         expandedContent: {
           renderCall: () => new Text("unique call", 0, 0),
-          renderResult: () => {
-            if (failure === "factory") throw new Error("broken");
-            return {
-              render: () => {
-                if (failure === "draw") throw new Error("broken");
-                return ["Failure cause"];
-              },
-              invalidate() {},
-            };
-          },
+          renderResult: failingRenderer(failure, ["Failure cause"]),
         },
       },
     );
-    const h = createToolPresentationHarness(tool, { theme });
+    const h = createToolPresentationHarness(tool);
     h.call({ path: "file" }, { expanded: true });
     h.result(result, { expanded: true });
     const text = h.render().join("\n");
@@ -375,7 +347,7 @@ test.each(["on", "off", "border"] as const)(
           }),
         },
       );
-      const h = createToolPresentationHarness(tool, { theme });
+      const h = createToolPresentationHarness(tool);
       h.call({ path: "file" }, { expanded: true });
       h.result(result, { expanded: true });
       for (let redraw = 0; redraw < 2; redraw++) {
@@ -441,7 +413,7 @@ test.each(["factory", "draw"] as const)(
             ...(contentOnly && { expandedContent: { renderResult } }),
           },
         );
-        const h = createToolPresentationHarness(tool, { theme });
+        const h = createToolPresentationHarness(tool);
         const args = { path: "file" };
         h.call(args, { expanded: true });
         h.result(result, { expanded: true });

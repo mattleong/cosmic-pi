@@ -1,28 +1,19 @@
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { yieldUntil } from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { describe, expect } from "vitest";
 import type { McpAuthAttempt } from "../../src/auth/flow.ts";
 import type { McpAuthProgress } from "../../src/auth/progress.ts";
 import { presentMcpAuthPanel } from "../../src/boundary/host-auth-panel.ts";
 
-type Factory = Parameters<ExtensionContext["ui"]["custom"]>[0];
-type Options = Parameters<ExtensionContext["ui"]["custom"]>[1];
 const harness = () => {
-  const stack: OverlayHandle[] = [];
-  const widgets = new Map<string, Component>();
-  let factory: Factory | undefined;
-  let options: Options;
-  let doneCount = 0;
+  const host = fakeCustomSurfaceHost({ rows: 40 });
   let cancelled = 0;
   let reopened = 0;
-  let hidden = false;
-  let failGuard = false;
   let active = true;
-  let mounted: Component | undefined;
   let snapshot: McpAuthProgress = {
     attemptId: 1,
     server: "owned",
@@ -36,62 +27,7 @@ const harness = () => {
     mutation: "idle",
   };
   const listeners = new Set<() => void>();
-  const result = Promise.withResolvers<unknown>();
-  const handle = (): OverlayHandle => {
-    // SAFETY: This owned overlay fixture is exercised only through hide/setHidden.
-    const owned = {
-      hide() {
-        const index = stack.indexOf(owned);
-        if (index !== -1) stack.splice(index, 1);
-      },
-      setHidden(value: boolean) {
-        hidden = value;
-      },
-    } as OverlayHandle;
-    return owned;
-  };
-  const terminal = { columns: 160, rows: 40 };
-  const tuiFixture: Pick<TUI, "requestRender" | "showOverlay" | "terminal"> = {
-    // SAFETY: Dock sizing uses only terminal dimensions.
-    terminal: terminal as TUI["terminal"],
-    requestRender() {},
-    showOverlay() {
-      if (failGuard) throw new Error("PRIVATE_ERROR");
-      const owned = handle();
-      stack.push(owned);
-      return owned;
-    },
-  };
-  // SAFETY: The auth host uses the fixture methods and terminal dimensions above.
-  const tui = tuiFixture as TUI;
-  // SAFETY: The pure auth view calls only fg/bold on the injected theme.
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
-  const keysFixture: Pick<Parameters<Factory>[2], "matches" | "getKeys"> = {
-    matches: () => false,
-    getKeys: () => [],
-  };
-  // SAFETY: The manager keymap calls only matches/getKeys on this fixture.
-  const keys = keysFixture as Parameters<Factory>[2];
-  // SAFETY: Presentation uses mode, trust, UI availability and the owned custom factory only.
-  const ctx = {
-    mode: "tui",
-    hasUI: true,
-    isProjectTrusted: () => true,
-    ui: {
-      setWidget(key: string, factory: (() => Component) | undefined) {
-        if (factory) widgets.set(key, factory());
-        else widgets.delete(key);
-      },
-      custom(fn: Factory, settings: Options) {
-        factory = fn;
-        options = settings;
-        return result.promise;
-      },
-    },
-  } as ExtensionContext;
+  let input: Component | undefined;
   const attempt: McpAuthAttempt = {
     snapshot: () => snapshot,
     now: () => 1_000,
@@ -113,51 +49,32 @@ const harness = () => {
       ),
   };
   return {
-    ctx,
+    host,
+    ctx: { ...host.ctx, isProjectTrusted: () => true },
     attempt,
-    stack,
-    widgets,
-    terminal,
-    ready: () => factory !== undefined,
     current: () => active,
     revoke: () => {
       active = false;
     },
+    /** Waits for the panel's dock, then mounts it and keeps its keyboard overlay. */
+    open: Effect.gen(function* () {
+      yield* yieldUntil(() => host.widgets.size > 0);
+      const before = host.overlays;
+      host.mount();
+      input = host.overlays.find((overlay) => !before.includes(overlay));
+    }),
+    widget: () => [...host.widgets.values()][0]!,
     subscriptions: () => listeners.size,
     cancelled: () => cancelled,
     reopened: () => reopened,
-    done: () => doneCount,
-    hidden: () => hidden,
-    failGuard: () => {
-      failGuard = true;
-    },
-    factory: () => {
-      const value = factory!(tui, theme, keys, (value) => {
-        doneCount++;
-        stack.pop();
-        result.resolve(value);
-      });
-      if (!("render" in value)) throw new Error("Unexpected asynchronous auth factory");
-      mounted = value;
-      return value;
-    },
-    mount: () => {
-      const owned = handle();
-      stack.push(owned);
-      options?.onHandle?.(owned);
-    },
-    foreign: () => {
-      const owned = handle();
-      stack.push(owned);
-      return owned;
-    },
-    input: (data: string) => mounted?.handleInput?.(data),
+    input: (data: string) => input?.handleInput?.(data),
     update: (change: Partial<McpAuthProgress>) => {
       snapshot = { ...snapshot, ...change };
       for (const listener of listeners) listener();
     },
   };
 };
+const foreignView = (): Component => ({ render: () => ["foreign"], invalidate() {} });
 
 describe("owned auth panel", () => {
   it.effect("draws above the input while the overlay only captures keyboard input", () =>
@@ -166,17 +83,15 @@ describe("owned auth panel", () => {
       const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
         Effect.forkScoped,
       );
-      yield* yieldUntil(fixture.ready);
-      const input = fixture.factory();
-      fixture.mount();
-      const widget = [...fixture.widgets.values()][0]!;
+      yield* fixture.open;
+      const widget = fixture.widget();
+      const [input] = fixture.host.overlays;
       expect(widget.render(160).length).toBeGreaterThan(0);
-      expect(input.render(160)).toEqual([]);
-      fixture.terminal.columns = 80;
+      expect(input?.render(160)).toEqual([]);
+      fixture.host.terminal.columns = 80;
       expect(widget.render(80).length).toBeGreaterThan(0);
-      expect(input.render(80)).toEqual([]);
       yield* Fiber.interrupt(panel);
-      expect(fixture.widgets.size).toBe(0);
+      expect(fixture.host.widgets.size).toBe(0);
       expect(widget.render(80)).toEqual([]);
     }),
   );
@@ -190,22 +105,21 @@ describe("owned auth panel", () => {
           fixture.attempt,
           fixture.current,
         ).pipe(Effect.forkScoped);
-        yield* yieldUntil(fixture.ready);
-        fixture.factory();
-        fixture.mount();
-        expect(fixture.hidden()).toBe(true);
-        const widget = [...fixture.widgets.values()][0]!;
+        yield* fixture.open;
+        expect(fixture.host.overlays).toEqual([]);
+        const widget = fixture.widget();
         expect(widget.render(160)).toEqual([]);
         fixture.update({ phase: "registration" });
-        expect(fixture.hidden()).toBe(false);
+        expect(fixture.host.overlays).toHaveLength(1);
         expect(widget.render(160).length).toBeGreaterThan(0);
         fixture.update({ phase: "scope-approval" });
-        const foreign = fixture.foreign();
+        const foreign = foreignView();
+        fixture.host.showUnrelated(foreign);
         fixture.revoke();
         fixture.update({ phase: "registration" });
-        expect(fixture.hidden()).toBe(true);
+        expect(fixture.host.overlays).toEqual([foreign]);
         yield* Fiber.interrupt(panel);
-        expect(fixture.stack).toEqual([foreign]);
+        expect(fixture.host.overlays).toEqual([foreign]);
         expect(fixture.subscriptions()).toBe(0);
       }),
     );
@@ -215,15 +129,14 @@ describe("owned auth panel", () => {
       const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
         Effect.forkScoped,
       );
-      yield* yieldUntil(fixture.ready);
-      fixture.factory();
-      fixture.mount();
-      const foreign = fixture.foreign();
+      yield* fixture.open;
+      const foreign = foreignView();
+      fixture.host.showUnrelated(foreign);
       fixture.input("\u001b");
       yield* Fiber.join(panel);
       expect(fixture.cancelled()).toBe(1);
-      expect(fixture.stack).toEqual([foreign]);
-      expect(fixture.done()).toBe(1);
+      expect(fixture.host.overlays).toEqual([foreign]);
+      expect(fixture.host.doneCalls).toBe(1);
       expect(fixture.subscriptions()).toBe(0);
       fixture.input("\r");
       expect(fixture.cancelled()).toBe(1);
@@ -254,9 +167,7 @@ describe("owned auth panel", () => {
       const panel = yield* presentMcpAuthPanel(fixture.ctx, attempt, fixture.current).pipe(
         Effect.forkScoped,
       );
-      yield* yieldUntil(fixture.ready);
-      fixture.factory();
-      fixture.mount();
+      yield* fixture.open;
       fixture.input("j");
       fixture.input("\r");
       yield* yieldUntil(() => opening);
@@ -275,51 +186,43 @@ describe("owned auth panel", () => {
     }),
   );
 
-  for (const afterFactory of [false, true])
-    it.effect(
-      `protects foreign overlays when cancelled ${afterFactory ? "between factory and mount" : "before a late factory"}`,
-      () =>
-        Effect.gen(function* () {
-          const fixture = harness();
-          const panel = yield* presentMcpAuthPanel(
-            fixture.ctx,
-            fixture.attempt,
-            fixture.current,
-          ).pipe(Effect.forkScoped);
-          yield* yieldUntil(fixture.ready);
-          if (afterFactory) fixture.factory();
-          yield* Fiber.interrupt(panel);
-          const foreign = fixture.foreign();
-          expect(fixture.done()).toBe(0);
-          expect(fixture.widgets.size).toBe(0);
-          if (!afterFactory) expect(fixture.factory().render(40)).toEqual([]);
-          fixture.mount();
-          expect(fixture.widgets.size).toBe(0);
-          expect(fixture.stack).toEqual([foreign]);
-          expect(fixture.done()).toBe(1);
-          expect(fixture.subscriptions()).toBe(0);
-          fixture.input("\r");
-          expect(fixture.cancelled()).toBe(0);
-        }),
-    );
+  it.effect("protects foreign overlays when cancelled between factory and mount", () =>
+    Effect.gen(function* () {
+      const fixture = harness();
+      const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
+        Effect.forkScoped,
+      );
+      yield* yieldUntil(() => fixture.host.widgets.size > 0);
+      yield* Fiber.interrupt(panel);
+      const foreign = foreignView();
+      fixture.host.showUnrelated(foreign);
+      expect(fixture.host.doneCalls).toBe(0);
+      expect(fixture.host.widgets.size).toBe(0);
+      fixture.host.mount();
+      expect(fixture.host.widgets.size).toBe(0);
+      expect(fixture.host.overlays).toEqual([foreign]);
+      expect(fixture.host.doneCalls).toBe(1);
+      expect(fixture.subscriptions()).toBe(0);
+      expect(fixture.cancelled()).toBe(0);
+    }),
+  );
 
   it.effect("fails closed if the owned-close guard cannot be installed", () =>
     Effect.gen(function* () {
       const fixture = harness();
       const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
-        Effect.result,
+        Effect.flip,
         Effect.forkScoped,
       );
-      yield* yieldUntil(fixture.ready);
-      fixture.factory();
-      fixture.mount();
-      const foreign = fixture.foreign();
-      fixture.failGuard();
+      yield* fixture.open;
+      const foreign = foreignView();
+      fixture.host.showUnrelated(foreign);
+      fixture.host.fail("guardShow");
       fixture.input("\u001b");
-      expect((yield* Fiber.join(panel))._tag).toBe("Failure");
-      expect(fixture.stack).toEqual([foreign]);
-      expect(fixture.done()).toBe(0);
-      expect(fixture.widgets.size).toBe(0);
+      expect(yield* Fiber.join(panel)).toMatchObject({ kind: "unavailable" });
+      expect(fixture.host.overlays).toEqual([foreign]);
+      expect(fixture.host.doneCalls).toBe(0);
+      expect(fixture.host.widgets.size).toBe(0);
       expect(fixture.subscriptions()).toBe(0);
     }),
   );
@@ -330,18 +233,16 @@ describe("owned auth panel", () => {
       const panel = yield* presentMcpAuthPanel(fixture.ctx, fixture.attempt, fixture.current).pipe(
         Effect.forkScoped,
       );
-      yield* yieldUntil(fixture.ready);
-      fixture.factory();
-      fixture.mount();
+      yield* fixture.open;
       fixture.update({ mode: "manual" });
-      expect(fixture.hidden()).toBe(true);
+      expect(fixture.host.overlays).toEqual([]);
       fixture.update({ phase: "exchange" });
-      expect(fixture.hidden()).toBe(false);
+      expect(fixture.host.overlays).toHaveLength(1);
       fixture.revoke();
       fixture.input("\u001b");
       expect(fixture.cancelled()).toBe(0);
       yield* Fiber.interrupt(panel);
-      expect(fixture.stack).toEqual([]);
+      expect(fixture.host.overlays).toEqual([]);
     }),
   );
 
@@ -356,7 +257,7 @@ describe("owned auth panel", () => {
             fixture.current,
           ).pipe(Effect.flip),
         ).toMatchObject({ kind: "unavailable" });
-        expect(fixture.ready()).toBe(false);
+        expect(fixture.host.widgets.size).toBe(0);
       }
     }),
   );

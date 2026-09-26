@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 import type { FooterTotals } from "../footer/builtin-contributions.ts";
-import { decodeUnknownOrUndefined } from "../schema/decode.ts";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 
 const NonNegativeFiniteNumberSchema = Schema.Number.check(
   Schema.isFinite(),

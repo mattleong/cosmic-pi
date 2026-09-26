@@ -1,9 +1,5 @@
 // Promise assertions are test-runner boundaries.
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import type { BackendDriver } from "../../../src/backend/model.ts";
 import {
@@ -15,35 +11,29 @@ import { decodeSubagentConfig } from "../../../src/config/schema.ts";
 import {
   makeSubagentProfileService,
   SubagentProfileService,
+  type SubagentProfileServiceContract,
 } from "../../../src/profiles/service.ts";
 import type { DeclaredProfileRoute, ProfileId } from "../../../src/profiles/model.ts";
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
 import { InvalidSubagentRequestError } from "../../../src/run/errors.ts";
-import { type StartSubagentRequest, type SubagentRunView } from "../../../src/run/model.ts";
+import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture } from "../../fixtures/pi-host.ts";
+import { view } from "../../fixtures/run-view.ts";
 import { maybe } from "../../support/effect-test.ts";
 
-type NativeCapturedTool = ToolDefinition<any, any, any>;
-type NativeExecute = NativeCapturedTool["execute"];
-type NativeRenderResult = NonNullable<NativeCapturedTool["renderResult"]>;
+export { view };
+
+type NativeExecute = ToolDefinition<any, any, any>["execute"];
 type CapturedToolResult = Omit<Awaited<ReturnType<NativeExecute>>, "content"> & {
   readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
 };
 
-type CapturedRenderResult = {
-  readonly content: ReadonlyArray<{
-    readonly type: string;
-    readonly text?: string;
-    readonly data?: string;
-    readonly mimeType?: string;
-  }>;
-  readonly details?: unknown;
-};
-
-export type CapturedTool = Omit<NativeCapturedTool, "execute" | "renderResult"> & {
+export type CapturedTool = Omit<ToolDefinition<any, any, any>, "execute"> & {
   readonly execute: (
     id: Parameters<NativeExecute>[0],
     params: Parameters<NativeExecute>[1],
@@ -51,49 +41,7 @@ export type CapturedTool = Omit<NativeCapturedTool, "execute" | "renderResult"> 
     onUpdate?: Parameters<NativeExecute>[3],
     ctx?: Parameters<NativeExecute>[4],
   ) => Promise<CapturedToolResult>;
-  readonly renderResult?: (
-    result: CapturedRenderResult,
-    options: Parameters<NativeRenderResult>[1],
-    theme: Parameters<NativeRenderResult>[2],
-    context?: Parameters<NativeRenderResult>[3],
-  ) => ReturnType<NativeRenderResult>;
 };
-
-export const view = (overrides: Partial<SubagentRunView> = {}): SubagentRunView => ({
-  id: "agent-1",
-  name: "auth-review",
-  task: "Review auth",
-  selection: {
-    source: "profile-candidate",
-    reason: "Profile model selection.",
-    skippedCandidates: [],
-  },
-  cwd: "/project",
-  state: "running",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  host: "local",
-  runtime: "pi",
-  closeOnReport: true,
-  reportGeneration: 0,
-  capabilities: [
-    "steer",
-    "interrupt",
-    "resume",
-    "rename-display",
-    "parent-contact",
-    "peer-notice",
-    "native-fork",
-  ],
-  model: "openai-codex/gpt-5.6-sol",
-  effort: "high",
-  startedAt: 1,
-  lastActivityAt: 1,
-  sessionEvents: [],
-  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 },
-  ...overrides,
-});
 
 const profileDocument = <Input extends object>(input: Input | undefined) => {
   // SAFETY: This harness accepts only JSON-shaped profile fixtures and immediately decodes them.
@@ -118,23 +66,13 @@ export const profileServiceFor = <Global extends object = never, Project extends
 ) =>
   Effect.runSync(
     makeSubagentProfileService(
-      resolveSubagentConfig(
-        (() => {
-          const baseResult = {
-            globalConfigPath: "/agent/pi-subagents.json",
-            projectConfigPath: "/project/.pi/pi-subagents.json",
-            projectTrusted: true,
-            globalConfigExists: global !== undefined,
-            projectConfigExists: project !== undefined,
-            global: decodeSubagentConfig(profileDocument(global)),
-          };
-          const withProject =
-            project === undefined
-              ? baseResult
-              : { ...baseResult, project: decodeSubagentConfig(profileDocument(project)) };
-          return withProject;
-        })(),
-      ),
+      resolveSubagentConfig({
+        globalConfigPath: "/agent/pi-subagents.json",
+        projectConfigPath: "/project/.pi/pi-subagents.json",
+        projectTrusted: true,
+        global: decodeSubagentConfig(profileDocument(global)),
+        ...(project !== undefined && { project: decodeSubagentConfig(profileDocument(project)) }),
+      }),
       { initialSessionOverrides },
     ),
   );
@@ -148,103 +86,85 @@ export const testBackendDriver = {
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),
 } satisfies BackendDriver;
-export const testBackendRegistry = {
-  resolve: (selection: { readonly host: string; readonly runtime: string }) =>
-    selection.host === "local" && selection.runtime === "pi"
-      ? Effect.succeed(testBackendDriver)
-      : Effect.fail(
-          new InvalidSubagentRequestError({
-            code: "backend_not_implemented",
-            message: `${selection.host}/${selection.runtime} is unavailable in this fixture.`,
-          }),
-        ),
-  preflight: (selection: { readonly host: string; readonly runtime: string }) =>
-    selection.host === "local" && selection.runtime === "pi"
-      ? Effect.succeed(testBackendDriver)
-      : Effect.fail(
-          new InvalidSubagentRequestError({
-            code: "backend_not_implemented",
-            message: `${selection.host}/${selection.runtime} is unavailable in this fixture.`,
-          }),
-        ),
+const fixtureBackend = (selection: { readonly host: string; readonly runtime: string }) =>
+  selection.host === "local" && selection.runtime === "pi"
+    ? Effect.succeed(testBackendDriver)
+    : Effect.fail(
+        new InvalidSubagentRequestError({
+          code: "backend_not_implemented",
+          message: `${selection.host}/${selection.runtime} is unavailable in this fixture.`,
+        }),
+      );
+export const testBackendRegistry = { resolve: fixtureBackend, preflight: fixtureBackend };
+
+export type CaptureOptions = {
+  readonly activeTools?: ReadonlyArray<string>;
+  readonly profiles?: SubagentProfileServiceContract;
+  readonly registry?: SubagentBackendRegistryContract;
+  readonly environment?: SubagentToolRuntime["environment"];
+  readonly thinkingLevel?: string | number;
+  readonly startUiTicker?: SubagentToolRuntime["startUiTicker"];
+  readonly toolPresentation?: SubagentToolRuntime["toolPresentation"];
 };
 
 export const captureSubagentTools = (
   service: SubagentServiceContract,
-  activeTools: ReadonlyArray<string> = ["read"],
-  profileService = fallbackProfileService,
-  backendRegistry: SubagentBackendRegistryContract | undefined = undefined,
-  environment = { cwd: "/project", projectTrusted: true },
-  thinkingLevel: string | number = "high",
-  startUiTicker?: SubagentToolRuntime["startUiTicker"],
-  toolPresentation?: SubagentToolRuntime["toolPresentation"],
+  {
+    activeTools = ["read"],
+    profiles = fallbackProfileService,
+    registry = testBackendRegistry,
+    environment = { cwd: "/project", projectTrusted: true },
+    thinkingLevel = "high",
+    startUiTicker,
+    toolPresentation,
+  }: CaptureOptions = {},
 ): ReadonlyMap<string, CapturedTool> => {
   const tools = new Map<string, CapturedTool>();
-  const piFixture = {
+  const pi = extensionApiFixture({
     registerTool: (tool: CapturedTool) => tools.set(tool.name, tool),
     getThinkingLevel: () => thinkingLevel,
     getActiveTools: () => [...activeTools],
-  };
-  // SAFETY: registerSubagentTools uses only the three ExtensionAPI methods implemented by this fixture.
-  const pi = piFixture as typeof piFixture & ExtensionAPI;
-  const run: SubagentToolRuntime["run"] = (effect, signal) =>
-    Effect.runPromise(
-      effect.pipe(
-        Effect.provideService(SubagentService, service),
-        Effect.provideService(SubagentProfileService, profileService),
-        Effect.provideService(SubagentBackendRegistry, backendRegistry ?? testBackendRegistry),
+  });
+  registerSubagentTools(pi, {
+    startUiTicker,
+    toolPresentation,
+    environment,
+    run: (effect, signal) =>
+      Effect.runPromise(
+        effect.pipe(
+          Effect.provideService(SubagentService, service),
+          Effect.provideService(SubagentProfileService, profiles),
+          Effect.provideService(SubagentBackendRegistry, registry),
+        ),
+        signal ? { signal } : undefined,
       ),
-      signal ? { signal } : undefined,
-    );
-  registerSubagentTools(
-    pi,
-    (() => {
-      const baseResult = {};
-      const withStartUiTicker = startUiTicker ? { ...baseResult, startUiTicker } : baseResult;
-      const withToolPresentation = toolPresentation
-        ? { ...withStartUiTicker, toolPresentation }
-        : withStartUiTicker;
-      return { ...withToolPresentation, environment, run };
-    })(),
-  );
+  });
   return tools;
 };
 
-const contextFixture = {
+const parentModel = {
+  provider: "openai-codex",
+  id: "gpt-5.6-sol",
+  name: "GPT 5.6 Sol",
+  reasoning: true,
+  thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+};
+
+export const context: ExtensionContext = extensionContextFixture({
   cwd: "/project",
   mode: "tui" as const,
   hasUI: true,
   ui: {
     confirm: () => Promise.resolve(true),
   },
-  model: {
-    provider: "openai-codex",
-    id: "gpt-5.6-sol",
-    name: "GPT 5.6 Sol",
-    reasoning: true,
-    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-  },
+  model: parentModel,
   modelRegistry: {
-    find: () => ({
-      provider: "openai-codex",
-      id: "gpt-5.6-sol",
-      name: "GPT 5.6 Sol",
-      reasoning: true,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    }),
+    find: () => parentModel,
     hasConfiguredAuth: () => true,
     getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
     getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "stored-key" }),
     getRegisteredProviderIds: () => [],
-    getAvailable: () => [
-      {
-        provider: "openai-codex",
-        id: "gpt-5.6-sol",
-        name: "GPT 5.6 Sol",
-        reasoning: true,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      },
-    ],
+    getAvailable: () => [parentModel],
   },
   sessionManager: {
     getSessionFile: () => "/sessions/parent.jsonl",
@@ -267,12 +187,7 @@ const contextFixture = {
   getContextUsage: () => undefined,
   compact: () => undefined,
   getSystemPrompt: () => "",
-};
-const makeContextFixture = (): ExtensionContext => {
-  // SAFETY: The fixture implements every ExtensionContext member used by subagent tool registration and execution.
-  return contextFixture as typeof contextFixture & ExtensionContext;
-};
-export const context = makeContextFixture();
+});
 
 type InvocationOptions = {
   readonly callID?: Parameters<NativeExecute>[0];
@@ -281,46 +196,52 @@ type InvocationOptions = {
   readonly context?: Parameters<NativeExecute>[4];
 };
 
+/** Runs a captured or natively registered tool at its raw Promise boundary. */
+export const executeTool = <Result>(
+  tool: {
+    readonly execute: (
+      id: Parameters<NativeExecute>[0],
+      params: Parameters<NativeExecute>[1],
+      signal: Parameters<NativeExecute>[2],
+      onUpdate: Parameters<NativeExecute>[3],
+      ctx: Parameters<NativeExecute>[4],
+    ) => Promise<Result>;
+  },
+  params: Parameters<NativeExecute>[1],
+  options: InvocationOptions = {},
+) =>
+  tool.execute(
+    options.callID ?? "call",
+    params,
+    options.signal,
+    options.update,
+    options.context ?? context,
+  );
+
 // Preserve optional captured-tool calls at the existing Promise test boundary.
 export const invokeOptionalTool = (
   tool: CapturedTool | undefined,
   params: Parameters<NativeExecute>[1],
   options: InvocationOptions = {},
-) =>
-  maybe(() =>
-    tool?.execute(
-      options.callID ?? "call",
-      params,
-      options.signal,
-      options.update,
-      options.context ?? context,
-    ),
-  );
+) => maybe(() => (tool ? executeTool(tool, params, options) : undefined));
 
 export const startCapturingService = (requests: StartSubagentRequest[]) =>
   subagentServiceDouble({
     start: (input) =>
       Effect.sync(() => {
         requests.push(input);
-        return view(
-          (() => {
-            const baseResult = {
-              id: `agent-${requests.length}`,
-              host: input.host,
-              runtime: input.runtime,
-              closeOnReport: input.closeOnReport,
-              openaiFastMode: input.openaiFastMode,
-              context: input.context,
-              writeIntent: input.writeIntent,
-              model: input.model,
-              effort: input.effort,
-              selection: input.selection ?? view().selection,
-            };
-            const withProfile = input.profile
-              ? { ...baseResult, profile: input.profile }
-              : baseResult;
-            return withProfile;
-          })(),
-        );
+        return view({
+          id: `agent-${requests.length}`,
+          host: input.host,
+          runtime: input.runtime,
+          closeOnReport: input.closeOnReport,
+          openaiFastMode: input.openaiFastMode,
+          context: input.context,
+          writeIntent: input.writeIntent,
+          model: input.model,
+          effort: input.effort,
+          selection: input.selection ?? view().selection,
+          ...(input.profile && { profile: input.profile }),
+        });
       }),
   });

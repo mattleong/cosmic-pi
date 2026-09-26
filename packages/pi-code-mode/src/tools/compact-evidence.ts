@@ -1,14 +1,19 @@
 /** Execution-local, bounded presentation receipts. Raw arguments and results never persist. */
 import * as Schema from "effect/Schema";
-import { isCompactAttention, type CompactIssue, type CompactSummary } from "pi-code-previews";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
+import {
+  isCompactAttention,
+  legacyCompactIssues,
+  type CompactIssue,
+  type CompactSummary,
+} from "pi-code-previews";
+import { freezeSnapshot } from "pi-cosmic-core";
 import {
   BoundedIssuesSchema,
-  freezeIssues,
+  cleanDiagnosticText as clean,
   invocationIssues,
-  legacyCompactIssues,
 } from "./issue-evidence.ts";
 import { decodeOption } from "./format.ts";
+import { isCompactPiTool } from "./compact-subject.ts";
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 const Text = Schema.String.check(Schema.isMaxLength(1024));
@@ -24,7 +29,9 @@ export const FailureEvidenceSchema = Schema.Struct({
   cause: Text,
   coverage: Schema.Literals(["complete", "unknown"]),
 });
-const ReceiptFields = {
+export const CompactReceiptSchema = Schema.Struct({
+  version: Schema.Literal(2),
+  issues: BoundedIssuesSchema,
   failureEvidence: Schema.optionalKey(FailureEvidenceSchema),
   subject: Text,
   compactSubject: Schema.optionalKey(Text),
@@ -34,13 +41,11 @@ const ReceiptFields = {
   outcome: Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]),
   notices: Schema.Array(Notice).check(Schema.isMaxLength(32)),
   deliveryFailed: Schema.Boolean,
-};
-export const CompactReceiptSchema = Schema.Union([
-  Schema.Struct({ ...ReceiptFields, version: Schema.Literal(1) }),
-  Schema.Struct({ ...ReceiptFields, version: Schema.Literal(2), issues: BoundedIssuesSchema }),
-]);
+});
 export type CompactReceipt = typeof CompactReceiptSchema.Type;
-const AttentionFields = {
+export const CompactAttentionSchema = Schema.Struct({
+  version: Schema.Literal(2),
+  issues: BoundedIssuesSchema,
   admitted: Count,
   started: Count,
   unsupported: Count,
@@ -51,35 +56,16 @@ const AttentionFields = {
   uncertain: Count,
   incomplete: Schema.Boolean,
   notices: Schema.Array(Notice).check(Schema.isMaxLength(32)),
-};
-export const CompactAttentionSchema = Schema.Union([
-  Schema.Struct({ ...AttentionFields, version: Schema.Literal(1) }),
-  Schema.Struct({ ...AttentionFields, version: Schema.Literal(2), issues: BoundedIssuesSchema }),
-]);
+});
 export type CompactAttention = typeof CompactAttentionSchema.Type;
 export const INCOMPLETE_ATTENTION =
   "Nested presentation evidence is incomplete or exceeded its warning limit. Some recovery information is unavailable; check operation state and do not replay completed work to recover output.";
-const clean = (text: string) =>
-  sanitizeDiagnosticContent(text, { maximumLength: Number.MAX_SAFE_INTEGER });
-export const freezeReceipt = (receipt: CompactReceipt): CompactReceipt =>
-  Object.freeze({
-    ...receipt,
-    ...(receipt.version === 2 && { issues: freezeIssues(receipt.issues) }),
-    ...(receipt.failureEvidence && {
-      failureEvidence: Object.freeze({ ...receipt.failureEvidence }),
-    }),
-    ...(receipt.counters && { counters: Object.freeze([...receipt.counters]) }),
-    ...(receipt.metadata && { metadata: Object.freeze([...receipt.metadata]) }),
-    notices: Object.freeze(receipt.notices.map((notice) => Object.freeze({ ...notice }))),
-  });
-
-export const copyCompactAttention = (attention: CompactAttention): CompactAttention =>
-  Object.freeze({
-    ...attention,
-    ...(attention.version === 2 && { issues: freezeIssues(attention.issues) }),
-    notices: Object.freeze(attention.notices.map((notice) => Object.freeze({ ...notice }))),
-  });
-
+const cleanNotice = (notice: NonNullable<CompactSummary["notices"]>[number]) => ({
+  kind: notice.kind,
+  text: clean(notice.text),
+  ...(notice.description !== undefined && { description: clean(notice.description) }),
+  ...(notice.expandedOnly === true && { expandedOnly: true as const }),
+});
 /** Recover bounded valid notices even if replayed sibling fields fail validation. */
 export const recoverCompactNotices = <Value>(value: Value): readonly (typeof Notice.Type)[] => {
   try {
@@ -147,16 +133,10 @@ const decodeSummaryReceipt = (
     ...(summary.counters !== undefined && { counters: summary.counters.map(clean) }),
     ...(summary.metadata !== undefined && { metadata: summary.metadata.map(clean) }),
     ...(summary.outcome !== undefined && { outcome: summary.outcome }),
-    notices: semanticNotices.map((notice) => ({
-      kind: notice.kind,
-      text: clean(notice.text),
-      ...(notice.description !== undefined && { description: clean(notice.description) }),
-      ...(notice.expandedOnly === true && { expandedOnly: true }),
-    })),
+    notices: semanticNotices.map(cleanNotice),
     deliveryFailed: false,
   };
-  const decoded = decodeOption(CompactReceiptSchema, candidate);
-  return decoded;
+  return decodeOption(CompactReceiptSchema, candidate);
 };
 
 /** All methods are guarded: presentation must never change dispatch or output admission. */
@@ -203,20 +183,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
     admit: (name: string) =>
       guard(() => {
         admitted++;
-        if (
-          ![
-            "pi.read",
-            "pi.bash",
-            "pi.powershell",
-            "pi.edit",
-            "pi.write",
-            "pi.grep",
-            "pi.find",
-            "pi.ls",
-            "mcp.request",
-            "session.backgroundTask",
-          ].includes(name)
-        )
+        if (!isCompactPiTool(name) && name !== "mcp.request" && name !== "session.backgroundTask")
           unsupported++;
       }),
     start: (fiber: number, id: number) =>
@@ -261,19 +228,18 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           return;
         }
         const failureEvidence = decodeOption(FailureEvidenceSchema, summary.failureEvidence);
-        if (failureEvidence && summary.outcome !== "cancelled") {
-          const cause = decodeOption(Notice, { kind: "error", text: clean(failureEvidence.cause) });
+        const causeNotice =
+          failureEvidence && summary.outcome !== "cancelled"
+            ? { kind: "error" as const, text: clean(failureEvidence.cause) }
+            : undefined;
+        if (causeNotice) {
+          const cause = decodeOption(Notice, causeNotice);
           if (cause) attention(cause);
           else incomplete = true;
         }
         // Preserve valid notices independently of malformed or oversized sibling fields.
         for (const notice of summary.notices ?? []) {
-          const decoded = decodeOption(Notice, {
-            kind: notice.kind,
-            text: clean(notice.text),
-            ...(notice.description !== undefined && { description: clean(notice.description) }),
-            ...(notice.expandedOnly === true && { expandedOnly: true }),
-          });
+          const decoded = decodeOption(Notice, cleanNotice(notice));
           if (decoded === undefined) incomplete = true;
           else attention(decoded);
         }
@@ -282,12 +248,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           incomplete = true;
         if (summary.failureEvidence !== undefined && failureEvidence === undefined)
           incomplete = true;
-        const semanticNotices = [
-          ...(failureEvidence && summary.outcome !== "cancelled"
-            ? [{ kind: "error" as const, text: clean(failureEvidence.cause) }]
-            : []),
-          ...(summary.notices ?? []),
-        ];
+        const semanticNotices = [...(causeNotice ? [causeNotice] : []), ...(summary.notices ?? [])];
         const projectedIssues = invocationIssues(
           summary.issues ??
             legacyCompactIssues(semanticNotices.filter(isCompactAttention), "legacy"),
@@ -306,7 +267,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
           incomplete = true;
           return;
         }
-        const receipt = freezeReceipt(decoded);
+        const receipt = freezeSnapshot(decoded);
         if (!receipts.has(id)) {
           observed++;
           if (receipt.outcome === "error") errors++;
@@ -342,27 +303,23 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
         retainIssues([deliveryIssue]);
         const hasCapacity = receipt.notices.length < 32;
         if (!hasCapacity) incomplete = true;
-        const updated = freezeReceipt({
+        const updated = freezeSnapshot<CompactReceipt>({
           ...receipt,
           deliveryFailed: true,
-          ...(receipt.version === 2 && {
-            issues: {
-              coverage:
-                receipt.issues.entries.length >= 32
-                  ? ("unknown" as const)
-                  : receipt.issues.coverage,
-              entries: [...receipt.issues.entries, deliveryIssue].slice(0, 32),
-            },
-          }),
+          issues: {
+            coverage:
+              receipt.issues.entries.length >= 32 ? ("unknown" as const) : receipt.issues.coverage,
+            entries: [...receipt.issues.entries, deliveryIssue].slice(0, 32),
+          },
           notices: hasCapacity ? [...receipt.notices, notice] : receipt.notices,
         });
         receipts.set(id, updated);
         publish(id, updated);
       }),
     snapshot: (): CompactAttention =>
-      Object.freeze({
+      freezeSnapshot({
         version: 2,
-        issues: freezeIssues({ coverage: incomplete ? "unknown" : issueCoverage, entries: issues }),
+        issues: { coverage: incomplete ? "unknown" : issueCoverage, entries: issues },
         admitted,
         started,
         unsupported,
@@ -372,7 +329,7 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
         cancelled,
         uncertain,
         incomplete,
-        notices: Object.freeze(notices.map((notice) => Object.freeze({ ...notice }))),
+        notices,
       }),
     close: () => {
       if (closed) return;

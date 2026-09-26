@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
+import { querySessionCapability } from "pi-cosmic-core";
 import type { QuestionnaireEvents } from "./protocol.ts";
 
 export const OWNED_FORM_CAPABILITY_QUERY = "pi-ask-user:owned-form-capability-query:v1";
@@ -158,73 +159,43 @@ function capture<Input>(input: Input): FormData {
     throw new Error("Bound exceeded");
   return snapshot;
 }
-export function decodeOwnedFormRequest<Input>(input: Input): OwnedFormRequest | undefined {
-  try {
-    return Schema.decodeUnknownSync(OwnedFormRequestSchema)(capture(input));
-  } catch {
-    return undefined;
-  }
-}
-export function decodeFormOutcome<Input>(input: Input): FormOutcome | undefined {
-  try {
-    return Schema.decodeUnknownSync(FormOutcomeSchema)(capture(input));
-  } catch {
-    return undefined;
-  }
-}
-export function decodeExtensionFormOwner<Input>(input: Input): ExtensionFormOwner | undefined {
-  try {
-    return Schema.decodeUnknownSync(ExtensionFormOwnerSchema)(capture(input));
-  } catch {
-    return undefined;
-  }
-}
+const decodeCaptured =
+  <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
+  <Input>(input: Input): S["Type"] | undefined => {
+    try {
+      return Schema.decodeUnknownSync(schema)(capture(input));
+    } catch {
+      return undefined;
+    }
+  };
+export const decodeOwnedFormRequest = decodeCaptured(OwnedFormRequestSchema);
+export const decodeFormOutcome = decodeCaptured(FormOutcomeSchema);
+export const decodeExtensionFormOwner = decodeCaptured(ExtensionFormOwnerSchema);
+/** Exactly one provider: duplicate responses are ambiguous even when they repeat the same object. */
 export function queryOwnedFormCapability(
   events: QuestionnaireEvents,
   sessionId: string,
 ): OwnedFormCapability | undefined {
-  let found: OwnedFormCapability | undefined;
-  let accepting = true;
-  let failed = false;
-  let responses = 0;
-  try {
-    events.emit(OWNED_FORM_CAPABILITY_QUERY, {
-      version: 1,
-      sessionId,
-      respond: (value: OwnedFormCapability) => {
-        if (!accepting) return;
-        try {
-          const version = value?.version;
-          const candidateSession = value?.sessionId;
-          const generation = value?.generation;
-          const ask = value?.ask;
-          const cancel = value?.cancel;
-          if (
-            version === 1 &&
-            candidateSession === sessionId &&
-            Predicate.isString(generation) &&
-            generation.length > 0 &&
-            Predicate.isFunction(ask) &&
-            Predicate.isFunction(cancel)
-          ) {
-            responses++;
-            found = Object.freeze({
-              version,
-              sessionId: candidateSession,
-              generation,
-              ask,
-              cancel,
-            });
-          }
-        } catch {
-          failed = true;
-        }
-      },
-    });
-  } catch {
-    failed = true;
-  }
-  accepting = false;
-  // Duplicate responses are ambiguous even when they repeat the same object.
-  return !failed && responses === 1 ? found : undefined;
+  const { candidates, failed } = querySessionCapability(
+    events,
+    OWNED_FORM_CAPABILITY_QUERY,
+    { version: 1, sessionId },
+    (value: OwnedFormCapability) => {
+      const version = value?.version;
+      const candidateSession = value?.sessionId;
+      const generation = value?.generation;
+      const ask = value?.ask;
+      const cancel = value?.cancel;
+      return version === 1 &&
+        candidateSession === sessionId &&
+        Predicate.isString(generation) &&
+        generation.length > 0 &&
+        Predicate.isFunction(ask) &&
+        Predicate.isFunction(cancel)
+        ? Object.freeze({ version, sessionId: candidateSession, generation, ask, cancel })
+        : undefined;
+    },
+    2,
+  );
+  return !failed && candidates.length === 1 ? candidates[0] : undefined;
 }

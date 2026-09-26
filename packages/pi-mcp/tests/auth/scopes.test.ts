@@ -13,27 +13,23 @@ import {
   validateScopes,
 } from "../../src/auth/scopes.ts";
 import { parseBearerChallenge } from "../../src/boundary/sdk-auth-challenge.ts";
-import type { McpLoginUi } from "../../src/auth/model.ts";
 import type { McpOAuthConfig } from "../../src/config/model.ts";
+import { manualUi as ui } from "../fixtures/auth.ts";
+import { blockingProbe } from "../fixtures/probes.ts";
 const config: McpOAuthConfig = { type: "oauth", registration: "dynamic", scopes: [] };
-const ui: McpLoginUi = {
-  mode: "manual",
-  openBrowser: () => Effect.void,
-  readCallback: () => Effect.succeed(undefined),
-};
 
 describe("OAuth permission policy", () => {
   for (const value of [" ", "read write", "a\t", "a\n", "a\0", 'a"b', "a\\b", "é", "a".repeat(257)])
     it.effect("rejects malformed scope tokens without repairing their spelling", () =>
       Effect.gen(function* () {
-        expect((yield* validateScopes([value]).pipe(Effect.result))._tag).toBe("Failure");
+        expect(yield* validateScopes([value]).pipe(Effect.isFailure)).toBe(true);
       }),
     );
   it.effect("keeps case and requires single ASCII spaces between wire tokens", () =>
     Effect.gen(function* () {
       expect(yield* parseScopes("Read read")).toEqual(["Read", "read"]);
       for (const value of [" read", "read ", "read  write", "read\twrite"])
-        expect((yield* parseScopes(value).pipe(Effect.result))._tag).toBe("Failure");
+        expect(yield* parseScopes(value).pipe(Effect.isFailure)).toBe(true);
     }),
   );
   it.effect(
@@ -167,27 +163,15 @@ describe("OAuth permission policy", () => {
           ).pipe(Effect.flip),
         ).toMatchObject({ kind: "timeout" });
         expect(called).toBe(false);
-        const entered = yield* Deferred.make<void>();
-        let released = false;
+        const approval = yield* blockingProbe;
         const pending = yield* approveScopes(
-          {
-            ...ui,
-            approveScopes: () =>
-              Deferred.succeed(entered, undefined).pipe(
-                Effect.andThen(Effect.never),
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    released = true;
-                  }),
-                ),
-              ),
-          },
+          { ...ui, approveScopes: () => approval.block },
           proposal,
           deadline,
         ).pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
+        yield* Deferred.await(approval.entered);
         yield* Fiber.interrupt(pending);
-        expect(released).toBe(true);
+        expect(approval.released()).toBe(true);
       }),
   );
   it.effect("owns the deadline even when consent does not settle", () =>
@@ -220,11 +204,11 @@ describe("OAuth permission policy", () => {
         ["?scope=read+admin", ["read"]],
       ] as const)
         expect(
-          (yield* validateAuthorizationScopes(
+          yield* validateAuthorizationScopes(
             new URL(`https://issuer.example/authorize${query}`),
             requested,
-          ).pipe(Effect.result))._tag,
-        ).toBe("Failure");
+          ).pipe(Effect.isFailure),
+        ).toBe(true);
       yield* validateAuthorizationScopes(new URL("https://issuer.example/authorize?scope=read"), [
         "read",
       ]);
@@ -260,7 +244,7 @@ describe("private Bearer challenge parsing", () => {
   ])
     it.effect("rejects ambiguous, malformed, and oversized challenges", () =>
       Effect.gen(function* () {
-        expect((yield* parseBearerChallenge(value).pipe(Effect.result))._tag).toBe("Failure");
+        expect(yield* parseBearerChallenge(value).pipe(Effect.isFailure)).toBe(true);
       }),
     );
 });

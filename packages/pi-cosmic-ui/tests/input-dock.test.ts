@@ -1,24 +1,18 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { opaqueFixture } from "pi-cosmic-core/testing";
 import { createInputDock } from "../src/boundary/host-input-dock.ts";
 
 const harness = () => {
   const widgets = new Map<string, Component>();
-  const tuiFixture: Pick<TUI, "terminal" | "requestRender"> = {
-    // SAFETY: The dock only reads terminal dimensions.
-    terminal: { columns: 200, rows: 60 } as TUI["terminal"],
-    requestRender: vi.fn(),
-  };
-  // SAFETY: The dock uses only terminal and requestRender from this fixture.
-  const tui = tuiFixture as TUI;
-  // SAFETY: The dock uses only the component-factory form of setWidget.
-  const ui = {
+  const tui: TUI = opaqueFixture({ terminal: { columns: 200, rows: 60 }, requestRender: vi.fn() });
+  const ui: ExtensionUIContext = opaqueFixture({
     setWidget: (key: string, factory: (() => Component) | undefined) => {
       if (factory) widgets.set(key, factory());
       else widgets.delete(key);
     },
-  } as ExtensionUIContext;
+  });
   return { tui, ui, widgets };
 };
 const component = () => ({

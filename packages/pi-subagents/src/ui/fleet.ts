@@ -274,6 +274,11 @@ export class SubagentFleetComponent implements Component, Focusable {
     this.busyAction = progress;
     this.notice = { kind: "info", text: progress };
     this.options.requestRender();
+    const settle = (notice: FleetNotice): void => {
+      this.busyAction = undefined;
+      this.notice = notice;
+      this.options.requestRender();
+    };
     let result: Promise<void>;
     try {
       result = operation();
@@ -281,19 +286,12 @@ export class SubagentFleetComponent implements Component, Focusable {
       result = Promise.reject(error);
     }
     void Promise.resolve(result).then(
-      () => {
-        this.busyAction = undefined;
-        this.notice = { kind: "success", text: success };
-        this.options.requestRender();
-      },
-      (error) => {
-        this.busyAction = undefined;
-        this.notice = {
+      () => settle({ kind: "success", text: success }),
+      (error) =>
+        settle({
           kind: "error",
           text: error instanceof Error ? error.message : "Subagent operation failed.",
-        };
-        this.options.requestRender();
-      },
+        }),
     );
   }
 
@@ -629,11 +627,21 @@ export class SubagentFleetComponent implements Component, Focusable {
     );
   }
 
-  private visibleRows(rows: ReadonlyArray<FleetTreeRow>, limit: number) {
+  private listPane(
+    rows: ReadonlyArray<FleetTreeRow>,
+    limit: number,
+    width: number,
+    scopeRuns: ReadonlyArray<SubagentRunView>,
+  ): string[] {
     // The rendered window is the authoritative list page size for half/full-page motions,
     // so stacked layouts page by their actual visible rows rather than the full height.
     const { start, end } = this.shell.visibleWindow(rows.length, limit);
-    return rows.slice(start, end).map((row, offset) => ({ row, index: start + offset }));
+    const visible = rows.slice(start, end).map((row, offset) => ({ row, index: start + offset }));
+    const pane = this.shell.state.pane === "list";
+    return [
+      listDetailHeading(this.options.theme, this.listHeading(rows, visible), pane),
+      ...visible.map(({ row, index }) => this.runLine(row, index, width, scopeRuns)),
+    ];
   }
 
   private listHeading(
@@ -731,21 +739,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     return renderSubagentSessionOutput(run, this.options.theme, {
       now: this.options.getNow(),
       showTechnicalDetails: this.showTechnicalDetails,
-      renderHeading: (name) =>
-        listDetailHeading(
-          this.options.theme,
-          name,
-          this.shell.state.pane === "detail",
-          managerTone.identity,
-        ),
-      renderSubtitle: ({ policy, profile, context, model, duration }) =>
-        [
-          this.options.theme.fg("muted", policy),
-          ...(profile ? [this.options.theme.fg(managerTone.identity, profile)] : []),
-          this.options.theme.fg(managerTone.value, context),
-          this.options.theme.fg(managerTone.value, model),
-          this.options.theme.fg("muted", duration),
-        ].join(" · "),
+      detailFocused: this.shell.state.pane === "detail",
     }).render(Math.max(1, width));
   }
 
@@ -765,15 +759,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     selected: SubagentRunView | undefined,
   ): string[] {
     const { listWidth, detailWidth } = wideListDetailGeometry(width, 38, 0.42);
-    const visible = this.visibleRows(rows, Math.max(1, height - 1));
-    const left = [
-      listDetailHeading(
-        this.options.theme,
-        this.listHeading(rows, visible),
-        this.shell.state.pane === "list",
-      ),
-      ...visible.map(({ row, index }) => this.runLine(row, index, listWidth, scopeRuns)),
-    ];
+    const left = this.listPane(rows, Math.max(1, height - 1), listWidth, scopeRuns);
     const right = this.detailWindow(this.detailLines(selected, detailWidth), height, detailWidth);
     return framedWideRows(this.frame, { left, right, height, listWidth, detailWidth });
   }
@@ -786,16 +772,7 @@ export class SubagentFleetComponent implements Component, Focusable {
     selected: SubagentRunView | undefined,
   ): string[] {
     const inner = width - 2;
-    const listHeight = stackedListHeight(height, rows.length);
-    const visible = this.visibleRows(rows, listHeight - 1);
-    const list = [
-      listDetailHeading(
-        this.options.theme,
-        this.listHeading(rows, visible),
-        this.shell.state.pane === "list",
-      ),
-      ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
-    ];
+    const list = this.listPane(rows, stackedListHeight(height, rows.length) - 1, inner, scopeRuns);
     const remaining = Math.max(0, height - list.length - 1);
     const detail = this.detailWindow(this.detailLines(selected, inner), remaining, inner);
     return framedStackedRows(this.frame, { list, detail, height, inner });
@@ -813,19 +790,9 @@ export class SubagentFleetComponent implements Component, Focusable {
       this.shell.state.details && selected
         ? this.detailWindow(this.detailLines(selected, inner), height, inner)
         : rows.length
-          ? (() => {
-              const visible = this.visibleRows(rows, Math.max(1, height - 1));
-              if (height <= 1)
-                return visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns));
-              return [
-                listDetailHeading(
-                  this.options.theme,
-                  this.listHeading(rows, visible),
-                  this.shell.state.pane === "list",
-                ),
-                ...visible.map(({ row, index }) => this.runLine(row, index, inner, scopeRuns)),
-              ];
-            })()
+          ? this.listPane(rows, Math.max(1, height - 1), inner, scopeRuns).slice(
+              height <= 1 ? 1 : 0,
+            )
           : [
               this.options.theme.fg(
                 "dim",

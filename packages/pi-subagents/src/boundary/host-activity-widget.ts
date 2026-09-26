@@ -1,6 +1,6 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback, synchronousNow } from "pi-cosmic-core";
 import type { SubagentProjection } from "../run/model.ts";
 import {
   emptyActivityPresentation,
@@ -45,9 +45,7 @@ export interface SubagentActivityPresentationController {
   readonly clear: () => void;
 }
 
-export const makeSubagentActivityPresentation = (
-  onChange: () => void = () => undefined,
-): SubagentActivityPresentationController => {
+export const makeSubagentActivityPresentation = (): SubagentActivityPresentationController => {
   let revision = 0;
   let generation = 0;
   let panelAvailable = false;
@@ -57,43 +55,23 @@ export const makeSubagentActivityPresentation = (
   const listeners = new Set<() => void>();
 
   const notify = () => {
-    try {
-      onChange();
-    } catch {
-      // Presentation callbacks are best effort during host teardown.
-    }
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch {
-        // One stale widget cannot block another presentation listener.
-      }
-    }
+    for (const listener of listeners) invokeHostCallback(listener, undefined);
   };
   const publish = () => {
     revision += 1;
     snapshot = Object.freeze({
       revision,
       starts: Object.freeze(
-        [...leases.values()]
-          .filter(
-            (lease): lease is Extract<PresentationLease, { action: "start" }> =>
-              lease.action === "start",
-          )
-          .map((lease) => Object.freeze({ requestedCount: lease.requestedCount })),
+        [...leases.values()].flatMap((lease) =>
+          lease.action === "start" ? [Object.freeze({ requestedCount: lease.requestedCount })] : [],
+        ),
       ),
       awaits: Object.freeze(
-        [...leases.values()]
-          .filter(
-            (lease): lease is Extract<PresentationLease, { action: "await" }> =>
-              lease.action === "await",
-          )
-          .map((lease) =>
-            Object.freeze({
-              runIds: Object.freeze([...lease.runIds]),
-              until: lease.until,
-            }),
-          ),
+        [...leases.values()].flatMap((lease) =>
+          lease.action === "await"
+            ? [Object.freeze({ runIds: Object.freeze([...lease.runIds]), until: lease.until })]
+            : [],
+        ),
       ),
     });
     notify();
@@ -152,13 +130,9 @@ export const makeSubagentActivityPresentation = (
   };
 };
 
-interface ActivityWidgetComponentOptions {
+interface ActivityWidgetComponentOptions extends Omit<SubagentActivityWidgetHostOptions, "getNow"> {
   readonly theme: Theme;
   readonly tui: TUI;
-  readonly getProjection: () => SubagentProjection;
-  readonly subscribeProjection: (listener: () => void) => () => void;
-  readonly presentation: SubagentActivityPresentationController;
-  readonly startTicker: (intervalMs: number, tick: () => void) => () => void;
   readonly getNow: () => number;
   readonly onDispose: () => void;
 }
@@ -191,11 +165,7 @@ class SubagentActivityWidgetComponent implements Component {
       this.panelCache = undefined;
       this.renderCache = undefined;
       this.refreshTicker?.sync();
-      try {
-        this.options.tui.requestRender();
-      } catch {
-        // The TUI may already be tearing down.
-      }
+      invokeHostCallback(() => this.options.tui.requestRender(), undefined);
     };
     this.unsubscribeProjection = options.subscribeProjection(refresh);
     this.unsubscribePresentation = options.presentation.subscribe(refresh);
@@ -248,21 +218,11 @@ class SubagentActivityWidgetComponent implements Component {
     this.refreshTicker = undefined;
     this.panelCache = undefined;
     this.renderCache = undefined;
-    try {
-      this.options.onDispose();
-    } catch {
-      // Host disposal is best effort while the UI is tearing down.
-    }
+    invokeHostCallback(() => this.options.onDispose(), undefined);
   }
 }
 
-class EmptyActivityWidgetComponent implements Component {
-  render(): string[] {
-    return [];
-  }
-
-  invalidate(): void {}
-}
+const emptyActivityWidget = (): Component => ({ render: () => [], invalidate: () => undefined });
 
 export interface SubagentActivityWidgetHost {
   readonly setContext: (ctx: ExtensionContext | undefined) => void;
@@ -296,11 +256,10 @@ export const makeSubagentActivityWidgetHost = (
     const previous = context;
     context = undefined;
     if (!previous) return;
-    try {
-      previous.ui.setWidget(WIDGET_KEY, undefined, { placement: "aboveEditor" });
-    } catch {
-      // Host UI may already be tearing down.
-    }
+    invokeHostCallback(
+      () => previous.ui.setWidget(WIDGET_KEY, undefined, { placement: "aboveEditor" }),
+      undefined,
+    );
   };
 
   return {
@@ -322,17 +281,13 @@ export const makeSubagentActivityWidgetHost = (
         next.ui.setWidget(
           WIDGET_KEY,
           (tui, theme) => {
-            if (ownerGeneration !== generation || context !== next)
-              return new EmptyActivityWidgetComponent();
+            if (ownerGeneration !== generation || context !== next) return emptyActivityWidget();
             disposeComponent();
             try {
               const created = new SubagentActivityWidgetComponent({
+                ...options,
                 theme,
                 tui,
-                getProjection: options.getProjection,
-                subscribeProjection: options.subscribeProjection,
-                presentation: options.presentation,
-                startTicker: options.startTicker,
                 getNow,
                 onDispose: () => {
                   if (ownerGeneration === generation && context === next)
@@ -344,7 +299,7 @@ export const makeSubagentActivityWidgetHost = (
             } catch {
               factoryFailed = true;
               options.presentation.setPanelAvailable(false);
-              return new EmptyActivityWidgetComponent();
+              return emptyActivityWidget();
             }
           },
           { placement: "aboveEditor" },

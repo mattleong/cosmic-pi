@@ -1,4 +1,4 @@
-// Private JSONL process ownership shared by Pi RPC and the native CLI adapters.
+// Private JSONL process ownership shared by Pi RPC, the native CLI adapters, and Codex hook trust.
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,7 +8,7 @@ import * as Queue from "effect/Queue";
 import { processCauseError, type SubagentProcessError } from "../run/errors.ts";
 import { attachBoundedLineParser, makeByteBoundedQueueRoom } from "./bounded-line-parser.ts";
 import { nodeSpawn, type NodeChildProcess } from "./node-builtins.ts";
-import { terminateProcessTree, terminateProcessTreeEffect } from "./process-tree.ts";
+import { terminateProcessTree } from "./process-tree.ts";
 import { decodeUnknownJsonOption } from "./wire-shared.ts";
 
 export const MAX_PROCESS_LINE_BYTES = 4 * 1024 * 1024;
@@ -44,54 +44,41 @@ const cleanupUnconfirmed = () =>
 
 export const releaseChildProcess = (
   operations: ChildProcessReleaseOperations,
-): Effect.Effect<void, SubagentProcessError> => {
-  const waitForExit = operations.awaitExit.pipe(
-    Effect.interruptible,
-    Effect.as(true),
-    Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
-  );
-  return operations.requestAbort.pipe(
-    Effect.andThen(Effect.sleep("100 millis")),
-    Effect.andThen(Effect.exit(operations.terminate("graceful"))),
-    Effect.flatMap((gracefulAttempt) =>
-      waitForExit.pipe(
-        Effect.flatMap((gracefulExit) => {
-          if (gracefulExit) {
-            if (operations.platform === "win32")
-              return Exit.isSuccess(gracefulAttempt)
-                ? Effect.void
-                : Effect.fail(cleanupUnconfirmed());
-            return Effect.sleep("100 millis").pipe(
-              // POSIX descendants remain owned after the detached group leader exits.
-              Effect.andThen(operations.terminate("force")),
-            );
-          }
-          return Effect.exit(operations.terminate("force")).pipe(
-            Effect.flatMap((forceAttempt) =>
-              waitForExit.pipe(
-                Effect.flatMap((forcedExit) =>
-                  Exit.isSuccess(forceAttempt) && forcedExit
-                    ? Effect.void
-                    : Effect.fail(cleanupUnconfirmed()),
-                ),
-              ),
-            ),
-          );
-        }),
-      ),
-    ),
-  );
-};
+): Effect.Effect<void, SubagentProcessError> =>
+  Effect.gen(function* () {
+    const waitForExit = operations.awaitExit.pipe(
+      Effect.interruptible,
+      Effect.as(true),
+      Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }),
+    );
+    yield* operations.requestAbort;
+    yield* Effect.sleep("100 millis");
+    const gracefulAttempt = yield* Effect.exit(operations.terminate("graceful"));
+    if (yield* waitForExit) {
+      if (operations.platform === "win32") {
+        if (Exit.isFailure(gracefulAttempt)) return yield* cleanupUnconfirmed();
+        return;
+      }
+      yield* Effect.sleep("100 millis");
+      // POSIX descendants remain owned after the detached group leader exits.
+      return yield* operations.terminate("force");
+    }
+    const forceAttempt = yield* Effect.exit(operations.terminate("force"));
+    // Wait even when the forced terminate failed, so a late exit is still observed.
+    const forcedExit = yield* waitForExit;
+    if (Exit.isFailure(forceAttempt) || !forcedExit) return yield* cleanupUnconfirmed();
+  });
 
 /** Owned process operations, injectable without replacing Node or provider modules. */
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
-  readonly terminate: typeof terminateProcessTreeEffect;
+  readonly terminate: typeof terminateProcessTree;
+  /** Fire-and-forget termination from synchronous stream callbacks. */
   readonly force: typeof terminateProcessTree;
 }
 const nodeRuntime: ProcessTransportRuntime = {
   spawn: nodeSpawn,
-  terminate: terminateProcessTreeEffect,
+  terminate: terminateProcessTree,
   force: terminateProcessTree,
 };
 
@@ -104,8 +91,11 @@ interface ProcessTransportOptions<Message, Frame, Attachment> {
     error?: ErrorInput,
     code?: string,
   ) => SubagentProcessError;
-  readonly message: <ValueInput>(value: ValueInput) => Message;
+  /** `bytes` is the parsed line's UTF-8 length. */
+  readonly message: <ValueInput>(value: ValueInput, bytes: number) => Message;
   readonly encode: (frame: Frame) => string;
+  /** Defaults to MAX_PROCESS_LINE_BYTES. */
+  readonly maxLineBytes?: number | undefined;
   readonly maxOutboundBytes?: number;
   readonly terminateOnParserOverflow: boolean;
   readonly synchronousWriteFailure: "not_sent" | "defect";
@@ -143,12 +133,15 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
 
   return yield* Effect.uninterruptible(
     Effect.gen(function* () {
+      const services = yield* Effect.context();
       const child = yield* Effect.try({
         try: () => options.spawn(runtime.spawn),
         catch: (error) => processError("spawn", error),
       });
       const force = () => {
-        void runtime.force(child, "force", { platform }).catch(() => {});
+        Effect.runForkWith(services)(
+          runtime.force(child, "force", { platform }).pipe(Effect.ignore),
+        );
       };
       const appendStderr = (chunk: Buffer) => {
         stderr.push(chunk);
@@ -181,18 +174,19 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       };
       const detachStdout = child.stdout
         ? attachBoundedLineParser(child.stdout, {
-            maxLineBytes: MAX_PROCESS_LINE_BYTES,
+            maxLineBytes: options.maxLineBytes ?? MAX_PROCESS_LINE_BYTES,
             maxQueuedBytes: MAX_QUEUED_BYTES,
             onLine: (line) => {
               const decoded = decodeUnknownJsonOption(line);
+              const bytes = Buffer.byteLength(line, "utf8");
               offer(
                 Option.isSome(decoded)
-                  ? options.message(decoded.value)
+                  ? options.message(decoded.value, bytes)
                   : {
                       type: "protocol_error",
                       message: `${label} emitted malformed JSONL.`,
                     },
-                Buffer.byteLength(line, "utf8") + 1,
+                bytes + 1,
               );
             },
             onOverflow: () => {
@@ -270,37 +264,22 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
       }
       const send = (frame: Frame) =>
         Effect.callback<void, SubagentProcessError>((resume) => {
+          const notSent = <ErrorInput>(operation: string, error: ErrorInput) =>
+            resume(Effect.fail(processError(operation, error, "transport_not_sent")));
           const stdin = child.stdin;
-          if (!stdin || stdin.destroyed || stdinError) {
-            resume(
-              Effect.fail(
-                processError(
-                  "send frame to",
-                  stdinError ?? "Process input is closed.",
-                  "transport_not_sent",
-                ),
-              ),
-            );
-            return;
-          }
+          if (!stdin || stdin.destroyed || stdinError)
+            return notSent("send frame to", stdinError ?? "Process input is closed.");
           let encoded: string;
           try {
             encoded = options.encode(frame);
           } catch (error) {
-            resume(Effect.fail(processError("encode frame for", error, "transport_not_sent")));
-            return;
+            return notSent("encode frame for", error);
           }
           if (
             options.maxOutboundBytes !== undefined &&
             Buffer.byteLength(encoded, "utf8") > options.maxOutboundBytes
-          ) {
-            resume(
-              Effect.fail(
-                processError("encode frame for", "Frame exceeded limit.", "transport_not_sent"),
-              ),
-            );
-            return;
-          }
+          )
+            return notSent("encode frame for", "Frame exceeded limit.");
           try {
             stdin.write(encoded, (error) =>
               resume(
@@ -310,11 +289,8 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               ),
             );
           } catch (error) {
-            resume(
-              options.synchronousWriteFailure === "defect"
-                ? Effect.die(error)
-                : Effect.fail(processError("send frame to", error, "transport_not_sent")),
-            );
+            if (options.synchronousWriteFailure === "defect") resume(Effect.die(error));
+            else notSent("send frame to", error);
           }
         }).pipe(
           Effect.timeoutOrElse({

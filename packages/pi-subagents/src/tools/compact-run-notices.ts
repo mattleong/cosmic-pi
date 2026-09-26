@@ -24,12 +24,11 @@ const staticSkipCodes = new Set([
 /** Card audits are bounded projections, never authority for granting paths. */
 export function compactRunNotices(
   cards: readonly SubagentRunCard[],
-  reportsOnlyOmitted = false,
-  quietHistory = false,
-  includeQuietHistory?: boolean,
-) {
+  reportsOnlyOmitted: boolean,
+  quietHistory: boolean,
+  includeQuietHistory: boolean,
+): CompactNotice[] {
   const notices: CompactNotice[] = [];
-  let skipped = 0;
   for (const card of cards) {
     const noticeStart = notices.length;
     const id = JSON.stringify(card.id);
@@ -104,15 +103,12 @@ export function compactRunNotices(
           `${skipped.candidate}: ${skipped.reason}`,
           "warning",
         );
-    else {
-      skipped += card.selection.skippedCandidates.length;
-      notices.push(...quietHistoryNotices(card, includeQuietHistory));
-    }
+    else notices.push(...quietHistoryNotices(card, includeQuietHistory));
   }
-  return { notices, skipped };
+  return notices;
 }
 
-function quietHistoryNotices(card: SubagentRunCard, include: boolean | undefined): CompactNotice[] {
+function quietHistoryNotices(card: SubagentRunCard, include: boolean): CompactNotice[] {
   if (!include) return [];
   return card.selection.skippedCandidates.map((candidate) => ({
     code: `${card.id}:selection:${candidate.candidate}:${candidate.code}`,

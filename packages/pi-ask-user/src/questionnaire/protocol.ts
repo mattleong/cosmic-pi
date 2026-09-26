@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
-import type { AskUserOutcome } from "./model.ts";
+import { querySessionCapability } from "pi-cosmic-core";
 import { MAX_CHOICES, MAX_QUESTIONS, type AskUserRequest } from "./schema.ts";
 import {
   normalizeAskUserRequest,
@@ -10,7 +10,6 @@ import {
 } from "./validation.ts";
 
 export type { AskUserRequest } from "./schema.ts";
-export type { AskUserOutcome } from "./model.ts";
 export const QUESTIONNAIRE_CAPABILITY_QUERY = "pi-ask-user:capability-query:v1";
 export const QUESTIONNAIRE_RELAY_QUERY = "pi-ask-user:relay-query:v1";
 export type QuestionnaireEvents = Pick<ExtensionAPI["events"], "on" | "emit">;
@@ -37,11 +36,6 @@ export interface QuestionnaireRelay {
   readonly version: 1;
   readonly sessionId: string;
   readonly ask: (request: AskUserRequest, signal: AbortSignal) => Promise<AskUserOutcome>;
-}
-export interface QuestionnaireQuery<A> {
-  readonly version: 1;
-  readonly sessionId: string;
-  readonly respond: (capability: A) => void;
 }
 
 export const QuestionnaireRequestSchema = Schema.Struct({
@@ -103,6 +97,7 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
     ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_QUESTIONS)),
   }),
 ]);
+export type AskUserOutcome = typeof QuestionnaireOutcomeSchema.Type;
 // Decode each bounded record once before inspecting nested arrays. Later schema
 // validation reads only detached data, never a second hostile getter value.
 const RawRequest = Schema.Struct({ questions: Schema.Unknown });
@@ -200,58 +195,35 @@ export const decodeQuestionnaireOutcome = <Input>(input: Input): AskUserOutcome 
   }
 };
 
+/** Missing or rejected providers are unavailable, never a local fallback. Last valid wins. */
 export const queryQuestionnaireRelay = (
   events: QuestionnaireEvents,
   sessionId: string,
-): QuestionnaireRelay | undefined => {
-  let found: QuestionnaireRelay | undefined;
-  let accepting = true;
-  try {
-    events.emit(QUESTIONNAIRE_RELAY_QUERY, {
-      version: 1,
-      sessionId,
-      respond: (value: QuestionnaireRelay) => {
-        if (
-          accepting &&
-          value?.version === 1 &&
-          value.sessionId === sessionId &&
-          Predicate.isFunction(value.ask)
-        )
-          found = value;
-      },
-    });
-  } catch {
-    /* Missing or rejected providers are unavailable, never a local fallback. */
-  }
-  accepting = false;
-  return found;
-};
+): QuestionnaireRelay | undefined =>
+  querySessionCapability(
+    events,
+    QUESTIONNAIRE_RELAY_QUERY,
+    { version: 1, sessionId },
+    (value: QuestionnaireRelay) =>
+      value?.version === 1 && value.sessionId === sessionId && Predicate.isFunction(value.ask)
+        ? value
+        : undefined,
+  ).candidates.at(-1);
+/** Optional root capability; its ask takes an additional authenticated owner. Last valid wins. */
 export const queryQuestionnaireCapability = (
   events: QuestionnaireEvents,
   sessionId: string,
-): QuestionnaireCapability | undefined => {
-  // The root ask signature has an additional authenticated owner argument.
-  let found: QuestionnaireCapability | undefined;
-  let accepting = true;
-  try {
-    events.emit(QUESTIONNAIRE_CAPABILITY_QUERY, {
-      version: 1,
-      sessionId,
-      respond: (value: QuestionnaireCapability) => {
-        if (
-          accepting &&
-          value?.version === 1 &&
-          value.sessionId === sessionId &&
-          Predicate.isString(value.generation) &&
-          Predicate.isFunction(value.ask) &&
-          Predicate.isFunction(value.cancel)
-        )
-          found = value;
-      },
-    });
-  } catch {
-    /* Optional root capability. */
-  }
-  accepting = false;
-  return found;
-};
+): QuestionnaireCapability | undefined =>
+  querySessionCapability(
+    events,
+    QUESTIONNAIRE_CAPABILITY_QUERY,
+    { version: 1, sessionId },
+    (value: QuestionnaireCapability) =>
+      value?.version === 1 &&
+      value.sessionId === sessionId &&
+      Predicate.isString(value.generation) &&
+      Predicate.isFunction(value.ask) &&
+      Predicate.isFunction(value.cancel)
+        ? value
+        : undefined,
+  ).candidates.at(-1);

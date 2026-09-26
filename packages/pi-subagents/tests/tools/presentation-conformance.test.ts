@@ -1,4 +1,3 @@
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import { effectTest } from "../support/effect-test.ts";
@@ -6,34 +5,26 @@ import { executeWorkspaceAction } from "../../src/tools/execute-workspace.ts";
 import { compactWorkspaceSummary } from "../../src/tools/compact-workspace-summary.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { afterEach, expect, it } from "vitest";
-import { createToolPresentationHarness } from "pi-code-previews/testing";
+import { beforeEach, expect, it } from "vitest";
 import {
-  codePreviewSettings,
-  setCodePreviewSettings,
-} from "../../../pi-code-previews/src/config/state.ts";
+  animationSchedulerProbe,
+  applyPresentationSettings,
+  captureRegistrations,
+  createToolPresentationHarness,
+  probeAnimationOwnership,
+} from "pi-code-previews/testing";
+import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
-import { makeCompactToolDetails } from "../../src/tools/details.ts";
-import type { SubagentAwaitDetails } from "../../src/tools/details-schema.ts";
-import { extensionApiFixture } from "../fixtures/pi-host.ts";
+import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
-const settings = { ...codePreviewSettings };
-afterEach(() => setCodePreviewSettings(settings));
-// SAFETY: Rendering only uses these styling functions.
-const theme = {
-  fg: (_key: string, text: string) => text,
-  bg: (_key: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
-function registered(panel = false) {
-  setCodePreviewSettings({ ...settings, toolCallCollapsedStyle: "compact", toolCallTiming: false });
-  const tools: ToolDefinition<any, any, any>[] = [];
-  registerSubagentTools(
-    extensionApiFixture({
-      registerTool: (tool: ToolDefinition<any, any, any>) => tools.push(tool),
-    }),
-    {
+beforeEach(() =>
+  applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
+);
+/** Root registrations for rendering only; `panel` says whether the live panel is available. */
+function registered(panel = false, runtime: Partial<SubagentToolRuntime> = {}) {
+  return captureRegistrations((pi) =>
+    registerSubagentTools(pi, {
       environment: { cwd: "/project", projectTrusted: false },
       run: () => Promise.reject(new Error("render-only fixture")),
       startUiTicker: () => () => undefined,
@@ -42,14 +33,14 @@ function registered(panel = false) {
         beginAwait: () => () => undefined,
         isLiveHierarchyAvailable: () => panel,
       },
-    },
-  );
-  return tools;
+      ...runtime,
+    }),
+  ).tools;
 }
 
 it("retains malformed and historical evidence through expansion for every root registration", () => {
   for (const tool of registered()) {
-    const harness = createToolPresentationHarness(tool, { theme });
+    const harness = createToolPresentationHarness(tool);
     for (const expanded of [false, true, false, true]) {
       harness.call({}, { expanded });
       harness.result(
@@ -70,8 +61,7 @@ it("retains malformed and historical evidence through expansion for every root r
 
 it("keeps parent recovery visible when a live panel hides partial hierarchy", () => {
   const tool = registered(true).find((tool) => tool.name === "subagent_await")!;
-  const projected = makeCompactToolDetails({
-    action: "status",
+  const details = makeAwaitDetails({
     runs: [
       view({
         id: "target",
@@ -79,25 +69,13 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
         question: { requestId: "question", message: "grant the reviewed file", createdAt: 1 },
       }),
     ],
+    awaitUntil: "all_finished",
+    attentionRequired: true,
   });
-  if (projected.action === "models") throw new Error("Expected cards");
-  const harness = createToolPresentationHarness(tool, { theme });
+  const harness = createToolPresentationHarness(tool);
   for (const expanded of [false, true, false, true]) {
     harness.call({ runIds: ["target"], until: "all_finished" }, { expanded, isPartial: true });
-    harness.result(
-      {
-        content: [],
-        details: {
-          version: 2,
-          action: "await",
-          cards: projected.cards,
-          awaitedRunIds: ["target"],
-          awaitUntil: "all_finished",
-          attentionRequired: true,
-        },
-      },
-      { expanded, isPartial: true },
-    );
+    harness.result({ content: [], details }, { expanded, isPartial: true });
     const text = harness.render(100).join("\n");
     expect(text.includes("grant the reviewed file")).toBe(expanded);
     expect(text.includes("subagent_reply")).toBe(expanded);
@@ -133,7 +111,7 @@ effectTest(
     const warning = summary.notices!.find((notice) => notice.kind === "warning")!;
     expect(warning.description).toBeTruthy();
     const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
-    const harness = createToolPresentationHarness(tool, { theme });
+    const harness = createToolPresentationHarness(tool);
     for (const expanded of [false, true, false, true]) {
       harness.call({ action: "list" }, { expanded });
       harness.result(response, { expanded });
@@ -150,7 +128,7 @@ effectTest(
 
 it("keeps workspace diff bytes without repeating generated recovery", () => {
   const tool = registered().find((tool) => tool.name === "subagent_workspace")!;
-  const harness = createToolPresentationHarness(tool, { theme });
+  const harness = createToolPresentationHarness(tool);
   const prefix = "legacy generated status\n";
   const diff = "diff --git a/file b/file\n+preserved evidence";
   harness.call({ action: "review", workspaceId: "workspace" }, { expanded: true });
@@ -198,7 +176,7 @@ effectTest("preserves preparation paths omitted from bounded metadata", function
   expect(result.content[0]?.type === "text" && result.content[0].text).toContain(cwd);
   const original = structuredClone(result);
   const tool = registered().find((entry) => entry.name === "subagent_workspace")!;
-  const harness = createToolPresentationHarness(tool, { theme });
+  const harness = createToolPresentationHarness(tool);
   for (const details of [
     result.details,
     { ...result.details, displayContent: { offset: 0, length: 0 } },
@@ -212,7 +190,7 @@ effectTest("preserves preparation paths omitted from bounded metadata", function
 
 it("retains unique guidance input when expansion replaces the original call heading", () => {
   const tool = registered().find((entry) => entry.name === "subagent_send")!;
-  const harness = createToolPresentationHarness(tool, { theme });
+  const harness = createToolPresentationHarness(tool);
   const details = makeCompactToolDetails({ action: "send", runs: [view({ id: "target" })] });
   harness.call({ runIds: ["target"], message: "unique guidance evidence" }, { expanded: true });
   harness.result({ content: [], details }, { expanded: true });
@@ -231,23 +209,15 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
     { state: "running" as const, cancelled: true, evidence: "NOT stopped" },
     { state: "stopping" as const, cancelled: false, evidence: "cleanup is not yet confirmed" },
   ]) {
-    const projected = makeCompactToolDetails({
-      action: "status",
+    const details = makeAwaitDetails({
       runs: [view({ id: "target", ...scenario })],
+      awaitUntil: "all_finished",
+      cancelled: scenario.cancelled,
+      cancellationCleanup: "unconfirmed",
     });
-    if (projected.action === "models") throw new Error("Expected cards");
-    const harness = createToolPresentationHarness(tool, { theme });
+    const harness = createToolPresentationHarness(tool);
     for (const expanded of [false, true, false, true]) {
       harness.call({ runIds: ["target"], until: "all_finished" }, { expanded });
-      const details: SubagentAwaitDetails = {
-        version: 2,
-        action: "await",
-        cards: projected.cards,
-        awaitedRunIds: ["target"],
-        awaitUntil: "all_finished",
-      };
-      if (scenario.cancelled)
-        Object.assign(details, { cancelled: true, cancellationCleanup: "unconfirmed" });
       harness.result({ content: [], details }, { expanded });
       const text = harness.render(120).join("\n");
       if (expanded) expect(text).toContain(scenario.evidence);
@@ -261,4 +231,65 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
       if (scenario.cancelled) expect(text.includes("completion_claim_conflict")).toBe(expanded);
     }
   }
+});
+
+it("stops an expanded await ticker when a declined summary collapses", () => {
+  const ticks = new Set<() => void>();
+  const tool = registered(false, {
+    startUiTicker: (_interval, tick) => {
+      ticks.add(tick);
+      return () => ticks.delete(tick);
+    },
+  }).find((entry) => entry.name === "subagent_await")!;
+  const details = makeAwaitDetails({
+    runs: [view({ id: "target", state: "running" })],
+    awaitUntil: "all_finished",
+  });
+  const harness = createToolPresentationHarness(tool, { width: 120 });
+  let invalidations = 0;
+  for (const expanded of [true, false]) {
+    const state = {
+      expanded,
+      executionStarted: true,
+      isPartial: true,
+      isError: !expanded,
+      invalidate: () => void invalidations++,
+    };
+    harness.call({ runIds: ["target"], until: "all_finished" }, state);
+    harness.result({ content: [], details: expanded ? details : undefined }, state);
+    harness.render();
+    for (const tick of ticks) tick();
+    expect(ticks.size).toBe(expanded ? 1 : 0);
+    expect(invalidations).toBe(1);
+  }
+});
+
+it("keeps the sole await heading when the live panel owns the result", () => {
+  const details = { version: 2, action: "await", cards: [], awaitUntil: "all_finished" };
+  for (const panelOwns of [false, true]) {
+    const tool = registered(panelOwns).find((entry) => entry.name === "subagent_await")!;
+    const harness = createToolPresentationHarness(tool, { width: 120 });
+    for (const expanded of [true, false, true]) {
+      const state = { expanded, executionStarted: true, isPartial: true };
+      harness.call({ runIds: ["target"], until: "all_finished" }, state);
+      harness.result({ content: [], details }, state);
+      const text = harness.render().join("\n");
+      expect(text.match(/subagent_await/g)).toHaveLength(1);
+    }
+  }
+});
+
+it("animates with the registering owner and releases the ticker on settlement", () => {
+  const scheduler = animationSchedulerProbe();
+  const tools = registered(false, { scheduleAnimation: scheduler.schedule });
+  const [report] = probeAnimationOwnership(tools, scheduler, {
+    filter: (tool) => tool.name === "subagent_status",
+    args: () => ({ runIds: ["agent-1"] }),
+    result: () => ({
+      content: [],
+      details: makeCompactToolDetails({ action: "status", runs: [] }),
+    }),
+  });
+  expect(report?.scheduled).toBeGreaterThan(0);
+  expect(report).toMatchObject({ invalidated: true, stops: 1 });
 });

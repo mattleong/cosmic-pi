@@ -1,6 +1,7 @@
 import * as Predicate from "effect/Predicate";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { listDetailFrame } from "pi-cosmic-ui/manager/list-detail-shell";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import { codePreviewSettings } from "../config/state";
@@ -9,10 +10,7 @@ import { getSettingsPath } from "../config/store";
 import { getShikiStatus } from "../syntax/render";
 import { formatEnabledCodePreviewTools } from "../tools/selection";
 import {
-  formatDisabledCodePreviewTools,
-  formatInstalledCodePreviewTools,
-  formatPendingCodePreviewTools,
-  formatRegistrationErrorCodePreviewTools,
+  formatCodePreviewToolsWithState,
   formatSkippedCodePreviewToolLines,
 } from "../tools/status";
 
@@ -22,7 +20,7 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
     handler: (_args, ctx) => {
       const status = getShikiStatus();
       const skippedLines = formatSkippedCodePreviewToolLines();
-      const pendingTools = formatPendingCodePreviewTools();
+      const pendingTools = formatCodePreviewToolsWithState("pending");
       const lines = [
         "Code preview health",
         `Shiki initialized: ${status.initialized ? "yes" : "no"}`,
@@ -40,11 +38,11 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         `Bash result preview: ${formatOnOff(codePreviewSettings.bashResultPreview)}`,
         `Word-level diff emphasis: ${codePreviewSettings.wordEmphasis}`,
         `Configured tools: ${formatEnabledCodePreviewTools()}`,
-        `Installed previews: ${formatInstalledCodePreviewTools()}`,
-        `Registration errors: ${formatRegistrationErrorCodePreviewTools()}`,
+        `Installed previews: ${formatCodePreviewToolsWithState("installed")}`,
+        `Registration errors: ${formatCodePreviewToolsWithState("registration-error")}`,
         `Skipped previews: ${skippedLines.length ? "" : "none"}`,
         ...skippedLines,
-        `Disabled by config: ${formatDisabledCodePreviewTools()}`,
+        `Disabled by config: ${formatCodePreviewToolsWithState("disabled-by-config")}`,
         ...(pendingTools === "none" ? [] : [`Pending registration: ${pendingTools}`]),
         `Cache: ${status.cacheSize}/${status.cacheLimit}`,
         `Loaded languages: ${status.loadedLanguages}`,
@@ -57,18 +55,22 @@ export function registerHealthCommand(pi: ExtensionAPI): void {
         if (ctx.hasUI) ctx.ui.notify(lines.join("\n"), "info");
         return Promise.resolve();
       }
-      return ctx.ui.custom(
-        (_tui, theme, _kb, done) =>
+      return openOwnedSurfacePromise<undefined>(ctx, {
+        placement: "overlay",
+        closedValue: undefined,
+        create: ({ theme, finish }) =>
           new TextPanelComponent({
             theme,
             title: theme.bold(lines[0] ?? "Code preview health"),
             lines: lines.slice(1),
-            done: () => done(undefined),
+            done: () => finish(undefined),
             frame: listDetailFrame(theme),
             dismiss: "any-key",
           }),
-        { overlay: true },
-      );
+      }).then((outcome) => {
+        // A failed opening rejects the command, as Pi's own custom Promise does.
+        if (Predicate.isTagged(outcome, "Failed")) throw outcome.cause;
+      });
     },
   });
 }

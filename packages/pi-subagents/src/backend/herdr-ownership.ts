@@ -22,23 +22,17 @@ export const agentOwnershipEvidence = (
   agent: HerdrAgent,
 ): HerdrAgentOwnershipEvidence | undefined =>
   agent.name && agent.runtime && agent.agentSession
-    ? (() => {
-        const baseResult = {
-          workspaceId: agent.workspaceId,
-          tabId: agent.tabId,
-          paneId: agent.paneId,
-          terminalId: agent.terminalId,
-          name: agent.name,
-          runtime: agent.runtime,
-          agentSession: { ...agent.agentSession },
-        };
-        const withCwd = agent.cwd === undefined ? baseResult : { ...baseResult, cwd: agent.cwd };
-        const withForegroundCwd =
-          agent.foregroundCwd === undefined
-            ? withCwd
-            : { ...withCwd, foregroundCwd: agent.foregroundCwd };
-        return withForegroundCwd;
-      })()
+    ? {
+        workspaceId: agent.workspaceId,
+        tabId: agent.tabId,
+        paneId: agent.paneId,
+        terminalId: agent.terminalId,
+        name: agent.name,
+        runtime: agent.runtime,
+        agentSession: { ...agent.agentSession },
+        ...(agent.cwd !== undefined && { cwd: agent.cwd }),
+        ...(agent.foregroundCwd !== undefined && { foregroundCwd: agent.foregroundCwd }),
+      }
     : undefined;
 
 export const sameStartedAgent = (
@@ -102,6 +96,24 @@ export const matchingPaneIdentity = (
   const terminalIds = snapshot.panes.filter((pane) => pane.terminalId === expected.terminalId);
   return exact.length === 1 && paneIds.length === 1 && terminalIds.length === 1
     ? exact[0]
+    : undefined;
+};
+
+/** The exact unique pane, provided its workspace and tab are also unique and consistent. */
+export const exactPaneContext = (
+  expected: Pick<HerdrPane, "paneId" | "terminalId" | "workspaceId" | "tabId">,
+  snapshot: HerdrSnapshot,
+): HerdrPane | undefined => {
+  const pane = matchingPaneIdentity(expected, snapshot);
+  if (!pane) return undefined;
+  const workspaces = snapshot.workspaces.filter(
+    (candidate) => candidate.workspaceId === expected.workspaceId,
+  );
+  const tabs = snapshot.tabs.filter((candidate) => candidate.tabId === expected.tabId);
+  return workspaces.length === 1 &&
+    tabs.length === 1 &&
+    tabs[0]?.workspaceId === expected.workspaceId
+    ? pane
     : undefined;
 };
 

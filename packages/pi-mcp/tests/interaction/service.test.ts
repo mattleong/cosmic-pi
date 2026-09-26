@@ -7,6 +7,7 @@ const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 import type { FormOutcome, OwnedFormRequest, ExtensionFormOwner } from "pi-ask-user/protocol";
 import type { McpInteractionHost } from "../../src/interaction/model.ts";
 import { McpExecution } from "../../src/tools/service.ts";
+import { sseFrames, sseResponse, type FixtureRequest } from "../fixtures/json-rpc.ts";
 import { optionalFixture, projection, reply } from "../fixtures/optional-features.ts";
 
 const form = {
@@ -30,12 +31,23 @@ const provider = (
   ask: (request: OwnedFormRequest, owner: ExtensionFormOwner) => Effect.Effect<FormOutcome>,
 ): McpInteractionHost => ({
   resolve: Effect.succeed({
-    generation: "current",
     current: Effect.succeed(true),
     ask,
     openBrowser: () => Effect.succeed(true),
   }),
 });
+const onToolCall = (result: Schema.JsonObject) => (request: FixtureRequest) =>
+  request.method === "tools/call" ? reply(request.id!, result) : undefined;
+const countingDecline = () => {
+  let asks = 0;
+  const host = provider(() =>
+    Effect.sync(() => {
+      asks++;
+      return { action: "decline" };
+    }),
+  );
+  return { host, asks: () => asks };
+};
 
 it.live(
   "runs fresh MRTR legs with original arguments, exact opaque state, absent-state reset and private answers",
@@ -104,34 +116,24 @@ it.live(
 );
 
 it.live.each(["unsupported", "malformed"])("rejects whole %s batches before any UI", (mode) => {
-  let asks = 0;
+  const decline = countingDecline();
   const fixture = optionalFixture(
-    (request) =>
-      request.method === "tools/call"
-        ? reply(request.id!, {
-            resultType: "input_required",
-            inputRequests: {
-              first: form,
-              second:
-                mode === "unsupported"
-                  ? { method: "roots/list", params: {} }
-                  : { method: "elicitation/create", params: { message: "broken" } },
-            },
-          })
-        : undefined,
-    {
-      interaction: provider(() =>
-        Effect.sync(() => {
-          asks++;
-          return { action: "decline" };
-        }),
-      ),
-    },
+    onToolCall({
+      resultType: "input_required",
+      inputRequests: {
+        first: form,
+        second:
+          mode === "unsupported"
+            ? { method: "roots/list", params: {} }
+            : { method: "elicitation/create", params: { message: "broken" } },
+      },
+    }),
+    { interaction: decline.host },
   );
   return Effect.gen(function* () {
     const result = yield* (yield* McpExecution).execute(input, projection).pipe(Effect.flip);
     expect(result.outcome).toBe("unknown");
-    expect(asks).toBe(0);
+    expect(decline.asks()).toBe(0);
     expect(fixture.requests.filter((request) => request.method === "tools/call")).toHaveLength(1);
   }).pipe(Effect.provide(fixture.layer));
 });
@@ -144,10 +146,7 @@ it.live("decline handles maximum and prototype-looking request keys without reop
     ["__proto__", form],
   ]);
   const fixture = optionalFixture(
-    (request) =>
-      request.method === "tools/call"
-        ? reply(request.id!, { resultType: "input_required", inputRequests: requests })
-        : undefined,
+    onToolCall({ resultType: "input_required", inputRequests: requests }),
     {
       interaction: provider((_request, owner) =>
         Effect.sync(() => {
@@ -199,14 +198,11 @@ it.live.each(["cancel", "deadline", "credential"])(
         ),
       );
       const fixture = optionalFixture(
-        (request) =>
-          request.method === "tools/call"
-            ? reply(request.id!, {
-                resultType: "input_required",
-                inputRequests: { first: form },
-                requestState: "private",
-              })
-            : undefined,
+        onToolCall({
+          resultType: "input_required",
+          inputRequests: { first: form },
+          requestState: "private",
+        }),
         {
           interaction: host,
           auth: Effect.sync(() => token),
@@ -237,28 +233,21 @@ it.live.each(["cancel", "deadline", "credential"])(
 
 it.live("does not collect input when no continuation round remains", () => {
   let legs = 0;
-  let asks = 0;
+  const decline = countingDecline();
   const fixture = optionalFixture(
     (request) => {
       if (request.method !== "tools/call") return undefined;
       const result = { resultType: "input_required", requestState: String(++legs) };
       return reply(request.id!, legs === 8 ? { ...result, inputRequests: { last: form } } : result);
     },
-    {
-      interaction: provider(() =>
-        Effect.sync(() => {
-          asks++;
-          return { action: "decline" };
-        }),
-      ),
-    },
+    { interaction: decline.host },
   );
   return Effect.gen(function* () {
     expect(yield* (yield* McpExecution).execute(input, projection).pipe(Effect.flip)).toMatchObject(
       { outcome: "unknown" },
     );
     expect(legs).toBe(8);
-    expect(asks).toBe(0);
+    expect(decline.asks()).toBe(0);
   }).pipe(Effect.provide(fixture.layer));
 });
 
@@ -272,7 +261,6 @@ for (const kind of ["form", "url"] as const)
       let rejectOwner: Effect.Effect<void> = Effect.void;
       const host: McpInteractionHost = {
         resolve: Effect.succeed({
-          generation: "current",
           current: Effect.succeed(true),
           ask: () =>
             rejectOwner.pipe(
@@ -354,9 +342,7 @@ it.live("fresh MRTR progress tokens restart at zero within one logical observati
               : { resultType: "complete", content: [{ type: "text", text: "done" }] },
         },
       ];
-      return new Response(messages.map((value) => `data: ${serialize(value)}\n\n`).join(""), {
-        headers: { "content-type": "text/event-stream" },
-      });
+      return sseResponse(sseFrames(...messages));
     },
     {
       interaction: provider(() => Effect.succeed({ action: "accept", content: { label: "safe" } })),

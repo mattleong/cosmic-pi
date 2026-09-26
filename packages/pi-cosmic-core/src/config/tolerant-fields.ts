@@ -1,6 +1,5 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { JsonObject } from "../platform/json-document.ts";
 
 const JsonRecordSchema = Schema.Record(Schema.String, Schema.MutableJson);
 
@@ -24,8 +23,6 @@ export type TolerantFieldValues<Fields extends TolerantFieldSchemas> = {
 
 export interface TolerantFieldResult<Fields extends TolerantFieldSchemas> {
   readonly value: TolerantFieldValues<Fields>;
-  /** The original object, including fields not owned by the decoder. */
-  readonly raw: JsonObject;
   readonly diagnostics: readonly TolerantFieldDiagnostic[];
 }
 
@@ -64,9 +61,5 @@ export const decodeTolerantFields = <Input, const Fields extends TolerantFieldSc
     }
   }
 
-  return {
-    value,
-    raw,
-    diagnostics,
-  };
+  return { value, diagnostics };
 };

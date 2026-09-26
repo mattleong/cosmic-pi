@@ -1,6 +1,4 @@
-import * as Predicate from "effect/Predicate";
-import type { JsonObject } from "pi-cosmic-core";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
+import { asObject, stringField } from "./claims-observation.ts";
 import type { SubagentSessionEvent } from "./model.ts";
 import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
@@ -23,22 +21,11 @@ const bytes = (event: SubagentSessionEvent): number => {
   return size;
 };
 
-// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
-const asRecord = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined =>
-  value !== null && hasObjectRuntimeType(value) && !Array.isArray(value)
-    ? (value as Readonly<JsonObject>)
-    : undefined;
-
-const stringField = (record: Readonly<JsonObject> | undefined, key: string): string | undefined => {
-  const value = record?.[key];
-  return Predicate.isString(value) && value.trim() ? value.trim() : undefined;
-};
-
 export function summarizeToolArguments<ArgsInput>(
   toolName: string,
   args: ArgsInput,
 ): string | undefined {
-  const input = asRecord(args);
+  const input = asObject(args);
   const path =
     stringField(input, "path") ?? stringField(input, "file_path") ?? stringField(input, "cwd");
   let summary: string | undefined;
@@ -152,14 +139,9 @@ export function finishToolSessionEvent(
   },
 ): ReadonlyArray<SubagentSessionEvent> {
   const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
-  let index = -1;
-  for (let candidate = current.length - 1; candidate >= 0; candidate -= 1) {
-    const event = current[candidate];
-    if (event?.type === "tool" && event.toolCallId === toolCallId) {
-      index = candidate;
-      break;
-    }
-  }
+  const index = current.findLastIndex(
+    (event) => event.type === "tool" && event.toolCallId === toolCallId,
+  );
   if (index < 0)
     return appendSessionEvent(current, {
       type: "tool",

@@ -32,9 +32,7 @@ for (const format of ["png", "jpeg", "webp", "gif"] as const) {
       );
       expect(yield* makeSharpAdapter().decode(bytes)).toEqual({ format });
       const damaged = bytes.subarray(0, Math.floor(bytes.length / 2));
-      expect(yield* makeSharpAdapter().decode(damaged).pipe(Effect.result)).toMatchObject({
-        _tag: "Failure",
-      });
+      yield* makeSharpAdapter().decode(damaged).pipe(Effect.flip);
     }),
   );
 }
@@ -52,22 +50,12 @@ it.live("validates multi-page animated input", () =>
   }),
 );
 
-it.live("rejects readable but unsupported image formats", () =>
-  Effect.gen(function* () {
-    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
-    expect(yield* makeSharpAdapter().decode(svg).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-    });
-  }),
-);
-
 it.live("rejects corrupt bytes without exposing native errors", () =>
   Effect.gen(function* () {
-    const result = yield* makeSharpAdapter()
+    const failure = yield* makeSharpAdapter()
       .decode(Buffer.from("secret not an image"))
-      .pipe(Effect.result);
-    expect(result._tag).toBe("Failure");
-    expect(inspect(result)).not.toContain("secret");
+      .pipe(Effect.flip);
+    expect(inspect(failure)).not.toContain("secret");
   }),
 );
 

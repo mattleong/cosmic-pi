@@ -54,44 +54,36 @@ export const normalizeAskUserRequest = (request: AskUserRequest): AskUserRequest
 export function validateAskUserRequest(
   request: AskUserRequest,
 ): AskUserValidationError | undefined {
-  for (let questionIndex = 0; questionIndex < request.questions.length; questionIndex++) {
-    const question = request.questions[questionIndex]!;
+  for (const [questionIndex, question] of request.questions.entries()) {
     const questionPosition = `Question ${questionIndex + 1}`;
-    if (question.key.length === 0) return fail(questionPosition, "has an empty key.");
-    if (question.title.length === 0) return fail(questionPosition, "has an empty title.");
-    if (question.prompt.length === 0) return fail(questionPosition, "has an empty prompt.");
+    for (const field of ["key", "title", "prompt"] as const)
+      if (question[field].length === 0) return fail(questionPosition, `has an empty ${field}.`);
     if (question.mode === "text") continue;
 
-    for (let choiceIndex = 0; choiceIndex < question.choices.length; choiceIndex++) {
-      const choice = question.choices[choiceIndex]!;
+    for (const [choiceIndex, choice] of question.choices.entries()) {
       const choicePosition = `${questionPosition}, choice ${choiceIndex + 1}`;
-      if (choice.value.length === 0) return fail(choicePosition, "has an empty value.");
-      if (choice.label.length === 0) return fail(choicePosition, "has an empty label.");
-      if (choice.description.length === 0) return fail(choicePosition, "has an empty description.");
+      for (const field of ["value", "label", "description"] as const)
+        if (choice[field].length === 0) return fail(choicePosition, `has an empty ${field}.`);
     }
   }
 
   const questionKeys = new Set<string>();
-  for (let questionIndex = 0; questionIndex < request.questions.length; questionIndex++) {
-    const question = request.questions[questionIndex]!;
-    const key = question.key;
-    if (questionKeys.has(key)) {
+  for (const [questionIndex, question] of request.questions.entries()) {
+    if (questionKeys.has(question.key)) {
       return fail(`Question ${questionIndex + 1}`, "has a duplicate key.");
     }
-    questionKeys.add(key);
+    questionKeys.add(question.key);
     if (question.mode === "text") continue;
 
     const values = new Set<string>();
     const labels = new Set<string>();
-    for (let choiceIndex = 0; choiceIndex < question.choices.length; choiceIndex++) {
-      const choice = question.choices[choiceIndex]!;
-      const value = choice.value;
+    for (const [choiceIndex, choice] of question.choices.entries()) {
       const label = choice.label.toLowerCase();
       const position = `Question ${questionIndex + 1}, choice ${choiceIndex + 1}`;
-      if (values.has(value)) return fail(position, "has a duplicate value.");
+      if (values.has(choice.value)) return fail(position, "has a duplicate value.");
       if (labels.has(label)) return fail(position, "has a duplicate label.");
       if (RESERVED_LABELS.has(label)) return fail(position, "uses a reserved label.");
-      values.add(value);
+      values.add(choice.value);
       labels.add(label);
     }
   }

@@ -1,17 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
-
-export const BACKGROUND_TASK_ACTIONS = [
-  "start",
-  "list",
-  "status",
-  "logs",
-  "wait",
-  "stop",
-  "stop_all",
-  "clear",
-] as const;
+import { BACKGROUND_TASK_ACTIONS } from "../task/schema.ts";
 
 export const BackgroundTaskParameters = Type.Object({
   action: StringEnum(BACKGROUND_TASK_ACTIONS, { description: "Background task operation" }),

@@ -1,4 +1,4 @@
-import type { BuiltinCompactTool } from "./builtin-compact-summary";
+import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactNotice, CompactFailureEvidence } from "./compact-summary";
 import { shellFailure } from "./builtin-failure-shell";
 import { fileFailure } from "./builtin-failure-file";

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import {
   materializeContextUsage,
@@ -10,7 +11,6 @@ import {
   decodeContextUsage,
   decodeHostCount,
 } from "../src/boundary/host-usage.ts";
-import { extensionContextFixture } from "./support/host.ts";
 
 const validUsage = {
   input: 1,

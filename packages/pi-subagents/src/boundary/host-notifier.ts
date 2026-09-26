@@ -52,13 +52,8 @@ interface CompletionChunk {
   readonly runs: ReadonlyArray<SubagentCompletionNotification>;
 }
 
-const completionWarning = (run: SubagentCompletionNotification): string | undefined => {
-  const warning = run.warning?.trim();
-  return warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined;
-};
-
 const completionBody = (run: SubagentCompletionNotification): string => {
-  const warning = completionWarning(run);
+  const warning = run.warning?.trim();
   const primary =
     run.outcome === "failed"
       ? `Error: ${run.error?.trim() || "Run failed without an error report."}`
@@ -66,7 +61,11 @@ const completionBody = (run: SubagentCompletionNotification): string => {
   const retry = run.retryAvailable
     ? `Next: ${run.remainingCandidateCount ?? 1} configured ${run.profile ?? "profile"} candidate${(run.remainingCandidateCount ?? 1) === 1 ? " remains" : "s remain"}. Continue this exact task with subagent_lifecycle({ action: "retry", runIds: ["${run.id}"] }) before launching any generalist replacement.`
     : undefined;
-  return [primary, warning, retry]
+  return [
+    primary,
+    warning && warning !== run.error?.trim() ? `Warning: ${warning}` : undefined,
+    retry,
+  ]
     .filter((value): value is string => value !== undefined)
     .join("\n\n");
 };
@@ -79,26 +78,15 @@ const completionHeading = (run: SubagentCompletionNotification): string =>
 const completionSection = (run: SubagentCompletionNotification): string =>
   `## ${run.name} (${run.id}) · ${completionHeading(run)}\n\n${completionBody(run)}`;
 
-const boundedCompletionSection = (
+const boundedCompletion = (
   run: SubagentCompletionNotification,
+  text: string,
   maximumLength: number,
 ): string => {
-  const section = completionSection(run);
-  if (section.length <= maximumLength) return clip(section, maximumLength);
+  if (text.length <= maximumLength) return clip(text, maximumLength);
   const noun = run.outcome === "failed" ? "Outcome" : "Report";
   const marker = `\n\n[${noun} truncated; use subagent_status or subagent_await for ${run.id}.]`;
-  return `${clip(section, Math.max(0, maximumLength - marker.length))}${marker}`;
-};
-
-const boundedCompletionBody = (
-  run: SubagentCompletionNotification,
-  maximumLength: number,
-): string => {
-  const body = completionBody(run);
-  if (body.length <= maximumLength) return clip(body, maximumLength);
-  const noun = run.outcome === "failed" ? "Outcome" : "Report";
-  const marker = `\n\n[${noun} truncated; use subagent_status or subagent_await for ${run.id}.]`;
-  return `${clip(body, Math.max(0, maximumLength - marker.length))}${marker}`;
+  return `${clip(text, Math.max(0, maximumLength - marker.length))}${marker}`;
 };
 
 const completionChunks = (
@@ -113,7 +101,7 @@ const completionChunks = (
           ? `Background subagent ${run.name} (${run.id}) reported generation ${run.generation} and remains available for guidance.`
           : `Background subagent ${run.name} (${run.id}) completed.`;
     const maximumBodyLength = Math.max(0, MAX_NOTIFICATION_CHARS - prefix.length - 2);
-    const content = `${prefix}\n\n${boundedCompletionBody(run, maximumBodyLength)}`;
+    const content = `${prefix}\n\n${boundedCompletion(run, completionBody(run), maximumBodyLength)}`;
     return [{ content: clip(content), runs: [run] }];
   }
 
@@ -164,7 +152,7 @@ const completionChunks = (
         (sections.length ? 2 : 0),
     );
     chunkRuns.push(run);
-    sections.push(boundedCompletionSection(run, maximumSectionLength));
+    sections.push(boundedCompletion(run, unboundedSection, maximumSectionLength));
   }
   flush();
   return chunks;

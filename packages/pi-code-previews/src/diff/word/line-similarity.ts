@@ -2,6 +2,7 @@ import type { AddedDiffLine, RemovedDiffLine } from "../parse";
 import { suffixAlignmentScore } from "./alignment";
 import { wordEmphasisSimilarityTokenValues, wordEmphasisTokenWeight } from "./tokens";
 import { changedLineTokens, type IndexedChangedLine } from "./changed-line";
+import { requiredAt } from "./types";
 
 type ChangedLineSimilarityDocuments = {
   removedFeatures: string[][];
@@ -67,27 +68,10 @@ export function hasUniqueSharedSimilarityFeature(
 
 function similarityFeatures(tokens: string[]): string[] {
   const features = [...tokens];
-  appendSimilarityShingles(
-    features,
-    tokens.filter(isSimilarityShingleToken),
-    2,
-    SIMILARITY_BIGRAM_PREFIX,
-  );
+  const weighted = tokens.filter((token) => wordEmphasisTokenWeight(token) >= 1);
+  for (let index = 0; index + 2 <= weighted.length; index++)
+    features.push(`${SIMILARITY_BIGRAM_PREFIX}${weighted.slice(index, index + 2).join("\u0000")}`);
   return features;
-}
-
-function appendSimilarityShingles(
-  features: string[],
-  tokens: string[],
-  size: number,
-  prefix: string,
-): void {
-  for (let index = 0; index + size <= tokens.length; index++)
-    features.push(`${prefix}${tokens.slice(index, index + size).join("\u0000")}`);
-}
-
-function isSimilarityShingleToken(token: string): boolean {
-  return wordEmphasisTokenWeight(token) >= 1;
 }
 
 export function similarityTokenWeight(
@@ -157,7 +141,7 @@ export function tokenSimilarity(
   );
 }
 
-function unorderedTokenSimilarity(
+export function unorderedTokenSimilarity(
   beforeTokens: string[],
   afterTokens: string[],
   weight: SimilarityTokenWeight,
@@ -189,8 +173,8 @@ function orderedTokenSimilarity(
     beforeTokens.length,
     afterTokens.length,
     (beforeIndex, afterIndex) => {
-      const beforeToken = stringAt(beforeTokens, beforeIndex);
-      return beforeToken === stringAt(afterTokens, afterIndex)
+      const beforeToken = requiredAt(beforeTokens, beforeIndex, "similarity token");
+      return beforeToken === requiredAt(afterTokens, afterIndex, "similarity token")
         ? weight(beforeToken)
         : Number.NEGATIVE_INFINITY;
     },
@@ -206,10 +190,4 @@ export function similarityTokenListWeight(tokens: string[], weight: SimilarityTo
 function tokenWeight(token: string): number {
   if (token.startsWith(SIMILARITY_BIGRAM_PREFIX)) return 1.15;
   return wordEmphasisTokenWeight(token);
-}
-
-function stringAt(values: string[], index: number): string {
-  const value = values[index];
-  if (value === undefined) throw new RangeError(`Missing similarity token ${index}`);
-  return value;
 }

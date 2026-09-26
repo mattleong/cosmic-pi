@@ -1,17 +1,16 @@
 // Private harness files are intentional boundary-test IO.
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Redacted from "effect/Redacted";
+import type * as Scope from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { prepareHerdrStartupAttestation } from "../src/boundary/herdr-attestation.ts";
 import { HerdrCodexHooksError, makeHerdrCodexHooks } from "../src/boundary/herdr-codex-hooks.ts";
-import { makeHerdrHarness } from "../src/boundary/herdr-harness.ts";
-import type { SupervisorConnectionMetadata } from "../src/boundary/supervisor-channel.ts";
+import { makeHerdrHarness, type HerdrHarnessLayerOptions } from "../src/boundary/herdr-harness.ts";
 import type { BackendLaunchRequest } from "../src/backend/model.ts";
 import { processError } from "../src/run/errors.ts";
 import {
@@ -19,15 +18,19 @@ import {
   SUBAGENT_TOOL_NAMES,
 } from "../src/run/tool-policy.ts";
 import { SUPERVISOR_MCP_TOOL_NAMES } from "../src/supervisor/mcp-contract.ts";
+import { supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath, nodeSpawn } from "./support/node-builtins.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
 
 const codexHookFixture = fileURLToPath(
   new URL("./fixtures/codex-hook-trust-fixture.mjs", import.meta.url),
 );
-const directories: string[] = [];
 
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
@@ -59,14 +62,12 @@ const runShellCommand = (command: string): Promise<void> =>
   );
 
 const setupReceiptDirectory = () =>
-  fs.mkdtemp(join(tmpdir(), "pi-subagents-herdr-receipts-")).then((directory) => {
-    directories.push(directory);
-    return fs.chmod(directory, 0o700).then(() => directory);
-  });
+  makeTemporaryDirectory("pi-subagents-herdr-receipts-").then((directory) =>
+    fs.chmod(directory, 0o700).then(() => directory),
+  );
 
 const setup = () =>
-  fs.mkdtemp(join(tmpdir(), "pi-subagents-herdr-harness-")).then((directory) => {
-    directories.push(directory);
+  makeTemporaryDirectory("pi-subagents-herdr-harness-").then((directory) => {
     const home = join(directory, "home");
     const agentDirectory = join(directory, "agent");
     const integrations = {
@@ -110,54 +111,29 @@ const buildSetup = (
   agentDirectory: string,
   integrations: { readonly pi: string; readonly claude: string; readonly codex: string },
 ) => {
-  const supervisor: SupervisorConnectionMetadata = {
-    runId: "agent-herdr",
-    host: "127.0.0.1",
-    port: 1,
+  const supervisor = supervisorMetadata({
     stateDirectory: join(directory, "supervisor"),
     connectionConfigPath: join(directory, "supervisor", "connection.json"),
-    helperPath: "/private/helper.mjs",
-    claudeMcp: {
-      mcpServers: {
-        pi_subagents_supervisor: {
-          type: "stdio",
-          command: process.execPath,
-          args: ["/private/helper.mjs", "--config", "/private/connection.json"],
-          env: {},
-        },
-      },
-    },
-    codexMcp: {
-      serverName: "pi_subagents_supervisor",
-      command: process.execPath,
-      args: ["/private/helper.mjs", "--config", "/private/connection.json"],
-      enabledTools: [
-        "supervisor_progress",
-        "supervisor_warning",
-        "supervisor_question",
-        "supervisor_submit_report",
-      ],
-      tomlFragment: "[mcp_servers.pi_subagents_supervisor]\nrequired = true",
-    },
-  };
+    args: ["/private/helper.mjs", "--config", "/private/connection.json"],
+  });
   const environment = {
     HOME: home,
     PATH: inheritedPath(process.env),
     HERDR_SOCKET_PATH: "/private/herdr.sock",
     OPENAI_API_KEY: "must-never-appear-in-argv",
   };
-  const harness = makeHerdrHarness({
-    agentDirectory,
-    environment,
-    integrationPaths: integrations,
+  const harnessWith = (overrides: Partial<HerdrHarnessLayerOptions>) =>
+    makeHerdrHarness({ agentDirectory, environment, integrationPaths: integrations, ...overrides });
+  const harness = harnessWith({
     codexHooks: makeHerdrCodexHooks({
       executable: codexHookFixture,
       environment,
       timeoutMillis: 1_000,
     }),
   });
-  return { directory, agentDirectory, environment, integrations, harness, supervisor };
+  return { directory, agentDirectory, environment, integrations, harness, harnessWith, supervisor };
 };
+type HarnessSetup = ReturnType<typeof buildSetup>;
 
 const launch = (
   runtime: "pi" | "claude" | "codex",
@@ -182,11 +158,22 @@ const launch = (
   systemPrompt: "Fixed supervisor policy.\n\nReport only through the private supervisor.",
 });
 
-afterEach(() =>
-  Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  ).then(() => undefined),
-);
+const withSetup =
+  <E>(body: (test: HarnessSetup) => Effect.Effect<void, E, Scope.Scope>) =>
+  () =>
+    setup().then((test) => Effect.runPromise(Effect.scoped(body(test))));
+
+/** Prepares a harness whose private state is authorized for removal when the test scope closes. */
+const prepareOwned = (
+  test: HarnessSetup,
+  runtime: "pi" | "claude" | "codex",
+  request: BackendLaunchRequest = launch(runtime),
+) =>
+  Effect.acquireRelease(test.harness.prepare(runtime, request, test.supervisor), (prepared) =>
+    Effect.sync(() => prepared.authorizeCleanup()),
+  );
+
+afterEach(removeTemporaryDirectories);
 
 describe("Herdr native harness security", () => {
   it("atomically publishes a unique private receipt from the pane command", () =>
@@ -376,6 +363,7 @@ describe("Herdr native harness security", () => {
         }
         for (const [id, version] of [
           [runtime, 999],
+          [runtime, 6],
           ["other", versions[0]],
         ] as const) {
           yield* step(() =>
@@ -394,235 +382,175 @@ describe("Herdr native harness security", () => {
     },
   );
 
-  it("rejects obsolete Herdr integration marker versions", () =>
-    setup().then((test) =>
-      fs
-        .writeFile(
-          test.integrations.pi,
-          "// installed by herdr\n// HERDR_INTEGRATION_ID=pi\n// HERDR_INTEGRATION_VERSION=6\n",
-        )
-        .then(() =>
-          expect(
-            Effect.runPromise(test.harness.preflight("pi", launch("pi"))),
-          ).rejects.toMatchObject({ code: "pi_herdr_integration_unavailable" }),
-        ),
-    ));
-
-  it("rejects control-bearing inherited harness values before topology ownership", () =>
-    setup().then((test) => {
-      const harness = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: { ...test.environment, PATH: "bad\u0085path" },
-        integrationPaths: test.integrations,
-      });
-      return expect(Effect.runPromise(harness.preflight("pi", launch("pi")))).rejects.toMatchObject(
-        {
-          code: "herdr_environment_invalid",
-        },
-      );
-    }));
-
-  it("rejects every Windows Herdr harness before topology ownership", () =>
-    setup().then((test) => {
-      const harness = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: test.environment,
-        integrationPaths: test.integrations,
-        platform: "win32",
-      });
-      return expect(Effect.runPromise(harness.preflight("pi", launch("pi")))).rejects.toMatchObject(
-        {
-          code: "herdr_platform_unsupported",
-        },
-      );
-    }));
-
-  it("rejects read-only Claude Bash where the strict sandbox is unsupported", () =>
-    setup().then((test) => {
-      const harness = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: test.environment,
-        integrationPaths: test.integrations,
-        platform: "freebsd",
-      });
-      return expect(
-        Effect.runPromise(harness.preflight("claude", launch("claude"))),
-      ).rejects.toMatchObject({ code: "claude_shell_confinement_unsupported" });
-    }));
-
-  it("exposes read-only Claude Bash only through the strict sandbox", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare(
-              "claude",
-              launch("claude"),
-              test.supervisor,
-            );
-            expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
-            expect(valueAfter(prepared.argv, "--tools")).toContain("Agent");
-            expect(valueAfter(prepared.argv, "--tools")).toContain("TaskOutput");
-            expect(valueAfter(prepared.argv, "--tools")).not.toContain("Edit");
-            const allowed = valueAfter(prepared.argv, "--allowedTools")?.split(",") ?? [];
-            expect(allowed).not.toContain("Bash");
-            expect(allowed).not.toContain("Edit");
-            expect(allowed).not.toContain("Write");
-            expect(allowed).toContain("Agent");
-            expect(allowed).toContain("TaskOutput");
-            const settings = yield* Effect.promise(() =>
-              readJsonFile(valueAfter(prepared.argv, "--settings")!),
-            );
-            expect(settings.sandbox).toMatchObject({
-              enabled: true,
-              autoAllowBashIfSandboxed: true,
-              failIfUnavailable: true,
-              allowUnsandboxedCommands: false,
-              filesystem: { allowWrite: [], denyWrite: [process.cwd()] },
-            });
-            prepared.authorizeCleanup();
-          }),
-        ),
+  for (const [name, runtime, code, overrides] of [
+    [
+      "rejects control-bearing inherited harness values before topology ownership",
+      "pi",
+      "herdr_environment_invalid",
+      (test: HarnessSetup) => ({ environment: { ...test.environment, PATH: "bad\u0085path" } }),
+    ],
+    [
+      "rejects every Windows Herdr harness before topology ownership",
+      "pi",
+      "herdr_platform_unsupported",
+      () => ({ platform: "win32" as const }),
+    ],
+    [
+      "rejects read-only Claude Bash where the strict sandbox is unsupported",
+      "claude",
+      "claude_shell_confinement_unsupported",
+      () => ({ platform: "freebsd" as const }),
+    ],
+  ] as const) {
+    it(name, () =>
+      setup().then((test) =>
+        expect(
+          Effect.runPromise(test.harnessWith(overrides(test)).preflight(runtime, launch(runtime))),
+        ).rejects.toMatchObject({ code }),
       ),
-    ));
+    );
+  }
 
-  it("fixes Claude args and reuses strict cwd-scoped writer policy", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare(
-              "claude",
-              launch("claude", "writer"),
-              test.supervisor,
-            );
-            expect(valueAfter(prepared.argv, "--model")).toBe("claude-model");
-            expect(valueAfter(prepared.argv, "--effort")).toBe("xhigh");
-            expect(prepared.argv).toContain("--strict-mcp-config");
-            expect(prepared.argv).not.toContain("--no-session-persistence");
-            expect(valueAfter(prepared.argv, "--setting-sources")).toBe("");
-            const promptPath = valueAfter(prepared.argv, "--system-prompt-file")!;
-            expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
-              launch("claude", "writer").systemPrompt,
-            );
-            expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
-            expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
-            expect(valueAfter(prepared.argv, "--tools")).toContain("Edit");
-            expect(valueAfter(prepared.argv, "--tools")).not.toContain("Write,");
-            expect(valueAfter(prepared.argv, "--allowedTools")).toContain(
-              `Edit(/${process.cwd()}/**)`,
-            );
-            const environmentCommand = prepared.environmentCommand({
-              paneId: "w:p",
-              tabId: "w:t",
-              workspaceId: "w",
-            });
-            expect(environmentCommand).toContain("exec /usr/bin/env -i");
-            expect(environmentCommand).toContain("CLAUDE_CODE_SKIP_PROMPT_HISTORY='1'");
-            expect(environmentCommand).toContain(
-              prepared.startupAttestation.environmentReadyReceipt.path,
-            );
-            const startupReceipts = [
-              prepared.startupAttestation.activationReceipt(1),
-              prepared.startupAttestation.activationReceipt(2),
-              prepared.startupAttestation.environmentReadyReceipt,
-              prepared.startupAttestation.postEnvironmentShellReceipt,
-              prepared.startupAttestation.secretReadyReceipt,
-              prepared.startupAttestation.postSecretShellReceipt,
-            ];
-            expect(new Set(startupReceipts.map((receipt) => receipt.path)).size).toBe(6);
-            expect(new Set(startupReceipts.map((receipt) => receipt.command)).size).toBe(6);
-            expect(
-              startupReceipts.every((receipt) => receipt.path.startsWith(prepared.directory)),
-            ).toBe(true);
-            const settings = yield* Effect.promise(() =>
-              readJsonFile(valueAfter(prepared.argv, "--settings")!),
-            );
-            expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true });
-            expect(settings.env).toEqual({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
-            expect(settings.hooks.SessionStart[0].hooks[0].command).toContain(
-              "claude-integration.sh",
-            );
-            expect(settings.hooks.SessionStart[0].hooks[0].command).toMatch(/ session$/u);
-            prepared.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+  it(
+    "exposes read-only Claude Bash only through the strict sandbox",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const prepared = yield* prepareOwned(test, "claude");
+        expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
+        expect(valueAfter(prepared.argv, "--tools")).toContain("Agent");
+        expect(valueAfter(prepared.argv, "--tools")).toContain("TaskOutput");
+        expect(valueAfter(prepared.argv, "--tools")).not.toContain("Edit");
+        const allowed = valueAfter(prepared.argv, "--allowedTools")?.split(",") ?? [];
+        expect(allowed).not.toContain("Bash");
+        expect(allowed).not.toContain("Edit");
+        expect(allowed).not.toContain("Write");
+        expect(allowed).toContain("Agent");
+        expect(allowed).toContain("TaskOutput");
+        const settings = yield* Effect.promise(() =>
+          readJsonFile(valueAfter(prepared.argv, "--settings")!),
+        );
+        expect(settings.sandbox).toMatchObject({
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          failIfUnavailable: true,
+          allowUnsandboxedCommands: false,
+          filesystem: { allowWrite: [], denyWrite: [process.cwd()] },
+        });
+      }),
+    ),
+  );
 
-  it("propagates fast mode to Herdr Pi and Codex without exposing a credential", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const pi = yield* test.harness.prepare(
-              "pi",
-              { ...launch("pi"), openaiFastMode: true },
-              test.supervisor,
-            );
-            expect(pi.argv).toContain("--pi-subagents-fast-mode");
+  it(
+    "fixes Claude args and reuses strict cwd-scoped writer policy",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const prepared = yield* prepareOwned(test, "claude", launch("claude", "writer"));
+        expect(valueAfter(prepared.argv, "--model")).toBe("claude-model");
+        expect(valueAfter(prepared.argv, "--effort")).toBe("xhigh");
+        expect(prepared.argv).toContain("--strict-mcp-config");
+        expect(prepared.argv).not.toContain("--no-session-persistence");
+        expect(valueAfter(prepared.argv, "--setting-sources")).toBe("");
+        const promptPath = valueAfter(prepared.argv, "--system-prompt-file")!;
+        expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
+          launch("claude", "writer").systemPrompt,
+        );
+        expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
+        expect(valueAfter(prepared.argv, "--tools")).toContain("Bash");
+        expect(valueAfter(prepared.argv, "--tools")).toContain("Edit");
+        expect(valueAfter(prepared.argv, "--tools")).not.toContain("Write,");
+        expect(valueAfter(prepared.argv, "--allowedTools")).toContain(`Edit(/${process.cwd()}/**)`);
+        const environmentCommand = prepared.environmentCommand({
+          paneId: "w:p",
+          tabId: "w:t",
+          workspaceId: "w",
+        });
+        expect(environmentCommand).toContain("exec /usr/bin/env -i");
+        expect(environmentCommand).toContain("CLAUDE_CODE_SKIP_PROMPT_HISTORY='1'");
+        expect(environmentCommand).toContain(
+          prepared.startupAttestation.environmentReadyReceipt.path,
+        );
+        const startupReceipts = [
+          prepared.startupAttestation.activationReceipt(1),
+          prepared.startupAttestation.activationReceipt(2),
+          prepared.startupAttestation.environmentReadyReceipt,
+          prepared.startupAttestation.postEnvironmentShellReceipt,
+          prepared.startupAttestation.secretReadyReceipt,
+          prepared.startupAttestation.postSecretShellReceipt,
+        ];
+        expect(new Set(startupReceipts.map((receipt) => receipt.path)).size).toBe(6);
+        expect(new Set(startupReceipts.map((receipt) => receipt.command)).size).toBe(6);
+        expect(
+          startupReceipts.every((receipt) => receipt.path.startsWith(prepared.directory)),
+        ).toBe(true);
+        const settings = yield* Effect.promise(() =>
+          readJsonFile(valueAfter(prepared.argv, "--settings")!),
+        );
+        expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true });
+        expect(settings.env).toEqual({ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
+        expect(settings.hooks.SessionStart[0].hooks[0].command).toContain("claude-integration.sh");
+        expect(settings.hooks.SessionStart[0].hooks[0].command).toMatch(/ session$/u);
+      }),
+    ),
+  );
 
-            const codex = yield* test.harness.prepare(
-              "codex",
-              { ...launch("codex"), openaiFastMode: true },
-              test.supervisor,
-            );
-            const config = yield* Effect.promise(() =>
-              fs.readFile(join(codex.directory, "codex-home", "config.toml"), "utf8"),
-            );
-            expect(config).toContain('service_tier = "priority"');
-            expect(config).toContain("fast_mode = true");
-            expect(codex.argv.join(" ")).not.toContain("must-never-appear-in-argv");
-            pi.authorizeCleanup();
-            codex.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+  it(
+    "propagates fast mode to Herdr Pi and Codex without exposing a credential",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const pi = yield* prepareOwned(test, "pi", { ...launch("pi"), openaiFastMode: true });
+        expect(pi.argv).toContain("--pi-subagents-fast-mode");
 
-  it("isolates Codex auth/config and never places secrets in Herdr agent argv", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare("codex", launch("codex"), test.supervisor);
-            expect(valueAfter(prepared.argv, "--model")).toBe("codex-model");
-            expect(valueAfter(prepared.argv, "--sandbox")).toBe("read-only");
-            expect(valueAfter(prepared.argv, "--ask-for-approval")).toBe("never");
-            expect(prepared.argv).not.toContain("--dangerously-bypass-hook-trust");
-            expect(prepared.argv.at(-1)).toContain("lifecycle hook");
-            expect(prepared.argv.join(" ")).not.toContain("must-never-appear-in-argv");
-            expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
-            expect(prepared.secretCommand).not.toContain("must-never-appear-in-argv");
-            const codexHome = join(prepared.directory, "codex-home");
-            const hooks = yield* Effect.promise(() => readJsonFile(join(codexHome, "hooks.json")));
-            const sessionStart = hooks.hooks.SessionStart[0];
-            expect(sessionStart.matcher).toBe("startup");
-            expect(sessionStart.hooks[0]).toMatchObject({ type: "command", timeout: 10 });
-            expect(sessionStart.hooks[0].command).toContain("herdr-codex-session-hook.mjs");
-            const config = yield* Effect.promise(() =>
-              fs.readFile(join(codexHome, "config.toml"), "utf8"),
-            );
-            expect(config).toContain('approval_policy = "never"');
-            expect(config).toContain("[agents]\nenabled = true");
-            expect(config).toContain("multi_agent = true");
-            expect(config).toContain("[mcp_servers.pi_subagents_supervisor]");
-            const auth = yield* Effect.promise(() => readJsonFile(join(codexHome, "auth.json")));
-            expect(auth).toEqual({
-              tokens: { access: "private" },
-            });
-            prepared.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+        const codex = yield* prepareOwned(test, "codex", {
+          ...launch("codex"),
+          openaiFastMode: true,
+        });
+        const config = yield* Effect.promise(() =>
+          fs.readFile(join(codex.directory, "codex-home", "config.toml"), "utf8"),
+        );
+        expect(config).toContain('service_tier = "priority"');
+        expect(config).toContain("fast_mode = true");
+        expect(codex.argv.join(" ")).not.toContain("must-never-appear-in-argv");
+      }),
+    ),
+  );
+
+  it(
+    "isolates Codex auth/config and never places secrets in Herdr agent argv",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const prepared = yield* prepareOwned(test, "codex");
+        expect(valueAfter(prepared.argv, "--model")).toBe("codex-model");
+        expect(valueAfter(prepared.argv, "--sandbox")).toBe("read-only");
+        expect(valueAfter(prepared.argv, "--ask-for-approval")).toBe("never");
+        expect(prepared.argv).not.toContain("--dangerously-bypass-hook-trust");
+        expect(prepared.argv.at(-1)).toContain("lifecycle hook");
+        expect(prepared.argv.join(" ")).not.toContain("must-never-appear-in-argv");
+        expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
+        expect(prepared.secretCommand).not.toContain("must-never-appear-in-argv");
+        const codexHome = join(prepared.directory, "codex-home");
+        const hooks = yield* Effect.promise(() => readJsonFile(join(codexHome, "hooks.json")));
+        const sessionStart = hooks.hooks.SessionStart[0];
+        expect(sessionStart.matcher).toBe("startup");
+        expect(sessionStart.hooks[0]).toMatchObject({ type: "command", timeout: 10 });
+        expect(sessionStart.hooks[0].command).toContain("herdr-codex-session-hook.mjs");
+        const config = yield* Effect.promise(() =>
+          fs.readFile(join(codexHome, "config.toml"), "utf8"),
+        );
+        expect(config).toContain('approval_policy = "never"');
+        expect(config).toContain("[agents]\nenabled = true");
+        expect(config).toContain("multi_agent = true");
+        expect(config).toContain("[mcp_servers.pi_subagents_supervisor]");
+        const auth = yield* Effect.promise(() => readJsonFile(join(codexHome, "auth.json")));
+        expect(auth).toEqual({
+          tokens: { access: "private" },
+        });
+      }),
+    ),
+  );
 
   it("removes private Codex state when exact hook trust cannot be established", () =>
     setup().then((test) => {
-      const failing = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: test.environment,
-        integrationPaths: test.integrations,
+      const failing = test.harnessWith({
         codexHooks: {
           establishTrust: () =>
             Effect.fail(new HerdrCodexHooksError({ code: "codex_herdr_hook_unavailable" })),
@@ -641,28 +569,25 @@ describe("Herdr native harness security", () => {
         );
     }));
 
-  it("pins the sanitized inherited environment at harness construction", () =>
-    setup().then((test) => {
+  it(
+    "pins the sanitized inherited environment at harness construction",
+    withSetup((test) => {
       test.environment.HOME = join(test.directory, "redirected-home");
       test.environment.HERDR_SOCKET_PATH = "/redirected/herdr.sock";
       test.environment.OPENAI_API_KEY = "redirected-secret";
-      return Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare("codex", launch("codex"), test.supervisor);
-            const auth = yield* Effect.promise(() =>
-              readJsonFile(join(prepared.directory, "codex-home", "auth.json")),
-            );
-            expect(auth).toEqual({ tokens: { access: "private" } });
-            expect(prepared.secretCommand).not.toContain("redirected-secret");
-            expect(
-              prepared.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
-            ).toContain("HERDR_SOCKET_PATH='/private/herdr.sock'");
-            prepared.authorizeCleanup();
-          }),
-        ),
-      );
-    }));
+      return Effect.gen(function* () {
+        const prepared = yield* prepareOwned(test, "codex");
+        const auth = yield* Effect.promise(() =>
+          readJsonFile(join(prepared.directory, "codex-home", "auth.json")),
+        );
+        expect(auth).toEqual({ tokens: { access: "private" } });
+        expect(prepared.secretCommand).not.toContain("redirected-secret");
+        expect(
+          prepared.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
+        ).toContain("HERDR_SOCKET_PATH='/private/herdr.sock'");
+      });
+    }),
+  );
 
   effectTest(
     "leaves a pre-owned blocking parent unchanged and reports prepare failure",
@@ -686,12 +611,7 @@ describe("Herdr native harness security", () => {
 
   effectTest("removes an owned partial harness after a build failure", function* () {
     const test = yield* step(setup);
-    const harness = makeHerdrHarness({
-      agentDirectory: test.agentDirectory,
-      environment: test.environment,
-      integrationPaths: test.integrations,
-      harnessFault: "after-claude-settings",
-    });
+    const harness = test.harnessWith({ harnessFault: "after-claude-settings" });
     const exit = yield* Effect.scoped(
       harness.prepare("claude", launch("claude"), test.supervisor),
     ).pipe(Effect.exit);
@@ -703,12 +623,7 @@ describe("Herdr native harness security", () => {
 
   effectTest("keeps final-release cleanup failures as top-level Cause reasons", function* () {
     const test = yield* step(setup);
-    const harness = makeHerdrHarness({
-      agentDirectory: test.agentDirectory,
-      environment: test.environment,
-      integrationPaths: test.integrations,
-      harnessCleanupFault: true,
-    });
+    const harness = test.harnessWith({ harnessCleanupFault: true });
     const exit = yield* Effect.scoped(harness.prepare("pi", launch("pi"), test.supervisor)).pipe(
       Effect.exit,
     );
@@ -727,13 +642,10 @@ describe("Herdr native harness security", () => {
   });
 
   effectTest(
-    "keeps partial cleanup failure primary while preserving every preparation failure",
+    "keeps partial cleanup failure primary, preserves every preparation failure, and keeps private state",
     function* () {
       const test = yield* step(setup);
-      const harness = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: test.environment,
-        integrationPaths: test.integrations,
+      const harness = test.harnessWith({
         harnessFault: "after-claude-settings",
         harnessCleanupFault: true,
       });
@@ -745,21 +657,24 @@ describe("Herdr native harness security", () => {
         const codes = exit.cause.reasons.flatMap((reason) =>
           Cause.isFailReason(reason) ? [reason.error.code] : [],
         );
-        expect(codes[0]).toBe("herdr_harness_cleanup_unconfirmed");
-        expect(codes.slice(1)).toEqual([
+        expect(codes).toEqual([
+          "herdr_harness_cleanup_unconfirmed",
           "herdr_harness_prepare_failed",
           "herdr_harness_prepare_failed",
         ]);
       }
+      const root = join(test.agentDirectory, "subagents", "herdr-host-v1");
+      const entries = yield* step(() => fs.readdir(root));
+      expect(entries).toHaveLength(1);
+      expect(yield* step(() => fs.readdir(join(root, entries[0]!)))).toContain(
+        "claude-settings.json",
+      );
     },
   );
 
   effectTest("quarantines Codex state when hook-process cleanup is unconfirmed", function* () {
     const test = yield* step(setup);
-    const harness = makeHerdrHarness({
-      agentDirectory: test.agentDirectory,
-      environment: test.environment,
-      integrationPaths: test.integrations,
+    const harness = test.harnessWith({
       codexHooks: {
         establishTrust: () =>
           Effect.failCause(
@@ -794,150 +709,90 @@ describe("Herdr native harness security", () => {
     );
   });
 
-  effectTest(
-    "surfaces partial preparation cleanup uncertainty and preserves private state",
-    function* () {
-      const test = yield* step(setup);
-      const harness = makeHerdrHarness({
-        agentDirectory: test.agentDirectory,
-        environment: test.environment,
-        integrationPaths: test.integrations,
-        harnessFault: "after-claude-settings",
-        harnessCleanupFault: true,
-      });
-      yield* step(() =>
-        expect(
-          Effect.runPromise(
-            Effect.scoped(harness.prepare("claude", launch("claude"), test.supervisor)),
-          ),
-        ).rejects.toMatchObject({
-          _tag: "SubagentProcessError",
-          code: "herdr_harness_cleanup_unconfirmed",
-        }),
-      );
-      const root = join(test.agentDirectory, "subagents", "herdr-host-v1");
-      const entries = yield* step(() => fs.readdir(root));
-      expect(entries).toHaveLength(1);
-      expect(yield* step(() => fs.readdir(join(root, entries[0]!)))).toContain(
-        "claude-settings.json",
-      );
-    },
+  it(
+    "preserves Pi registry @ context variants as one Herdr model argument",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const request = { ...launch("pi"), model: "openai/gpt-5.5@1m" };
+        const prepared = yield* prepareOwned(test, "pi", request);
+        expect(valueAfter(prepared.argv, "--model")).toBe("openai/gpt-5.5@1m");
+      }),
+    ),
   );
 
-  it("preserves Pi registry @ context variants as one Herdr model argument", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const prepared = yield* test.harness.prepare(
-              "pi",
-              { ...launch("pi"), model: "openai/gpt-5.5@1m" },
-              test.supervisor,
-            );
-            expect(valueAfter(prepared.argv, "--model")).toBe("openai/gpt-5.5@1m");
-            prepared.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+  it(
+    "inherits and deterministically deduplicates Pi tools without an intent-based built-in set",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const activeTools = ["code_mode", "edit", "supervisor_progress", "code_mode"];
+        const expected = [
+          "code_mode",
+          "edit",
+          ...SUPERVISOR_MCP_TOOL_NAMES,
+          ...SUBAGENT_TOOL_NAMES,
+        ];
+        const readOnly = yield* prepareOwned(test, "pi", { ...launch("pi"), activeTools });
+        const writer = yield* prepareOwned(test, "pi", { ...launch("pi", "writer"), activeTools });
+        const readOnlyTools = valueAfter(readOnly.argv, "--tools")?.split(",") ?? [];
+        const writerTools = valueAfter(writer.argv, "--tools")?.split(",") ?? [];
 
-  it("inherits and deterministically deduplicates Pi tools without an intent-based built-in set", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const activeTools = ["code_mode", "edit", "supervisor_progress", "code_mode"];
-            const expected = [
-              "code_mode",
-              "edit",
-              ...SUPERVISOR_MCP_TOOL_NAMES,
-              ...SUBAGENT_TOOL_NAMES,
-            ];
-            const readOnly = yield* test.harness.prepare(
-              "pi",
-              { ...launch("pi"), activeTools },
-              test.supervisor,
-            );
-            const writer = yield* test.harness.prepare(
-              "pi",
-              { ...launch("pi", "writer"), activeTools },
-              test.supervisor,
-            );
-            const readOnlyTools = valueAfter(readOnly.argv, "--tools")?.split(",") ?? [];
-            const writerTools = valueAfter(writer.argv, "--tools")?.split(",") ?? [];
+        expect(readOnlyTools).toEqual(expected);
+        expect(writerTools).toEqual(expected);
+        for (const fixedTool of ["read", "grep", "find", "ls", "bash", "write"])
+          expect(readOnlyTools).not.toContain(fixedTool);
+      }),
+    ),
+  );
 
-            expect(readOnlyTools).toEqual(expected);
-            expect(writerTools).toEqual(expected);
-            for (const fixedTool of ["read", "grep", "find", "ls", "bash", "write"])
-              expect(readOnlyTools).not.toContain(fixedTool);
-            readOnly.authorizeCleanup();
-            writer.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+  it(
+    "mirrors Pi project trust while retaining private resources and competing-tool exclusion",
+    withSetup((test) =>
+      Effect.gen(function* () {
+        const untrusted = yield* prepareOwned(test, "pi");
+        const trusted = yield* prepareOwned(test, "pi", { ...launch("pi"), projectTrusted: true });
 
-  it("mirrors Pi project trust while retaining private resources and competing-tool exclusion", () =>
-    setup().then((test) =>
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const untrusted = yield* test.harness.prepare("pi", launch("pi"), test.supervisor);
-            const trusted = yield* test.harness.prepare(
-              "pi",
-              { ...launch("pi"), projectTrusted: true },
-              test.supervisor,
-            );
-
-            expect(untrusted.argv).toContain("--no-approve");
-            expect(untrusted.argv).not.toContain("--approve");
-            expect(trusted.argv).toContain("--approve");
-            expect(trusted.argv).not.toContain("--no-approve");
-            for (const prepared of [untrusted, trusted]) {
-              expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
-              expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
-              expect(prepared.argv).toEqual(
-                expect.arrayContaining([
-                  "--no-skills",
-                  "--no-prompt-templates",
-                  "--no-context-files",
-                ]),
-              );
-              expect(prepared.argv).not.toContain("--no-extensions");
-              expect(prepared.argv).not.toContain("--no-themes");
-              const extensions = prepared.argv.flatMap((value, index) =>
-                value === "--extension" ? [prepared.argv[index + 1]] : [],
-              );
-              expect(extensions).toEqual([
-                test.integrations.pi,
-                expect.stringContaining("host-pi-supervisor-extension.ts"),
-              ]);
-              expect(valueAfter(prepared.argv, "--exclude-tools")).toBe(
-                PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
-              );
-              expect(valueAfter(prepared.argv, "--exclude-tools")).not.toContain("subagent_start");
-              expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
-              expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
-            }
-            const promptPath = valueAfter(untrusted.argv, "--append-system-prompt")!;
-            expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
-              launch("pi").systemPrompt,
-            );
-            expect(untrusted.secretCommand).not.toContain("pi-runtime-secret");
-            expect(untrusted.secretCommand).toContain(
-              untrusted.startupAttestation.secretReadyReceipt.path,
-            );
-            const bootstrapPath = join(untrusted.directory, "pi-environment.sh");
-            const bootstrap = yield* Effect.promise(() => fs.readFile(bootstrapPath, "utf8"));
-            expect(bootstrap).toContain("PI_SUBAGENT_RUNTIME_API_KEY='pi-runtime-secret'");
-            expect((yield* Effect.promise(() => fs.stat(bootstrapPath))).mode & 0o777).toBe(0o600);
-            expect(
-              untrusted.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
-            ).toContain("PI_SUBAGENT_CHILD='1'");
-            untrusted.authorizeCleanup();
-            trusted.authorizeCleanup();
-          }),
-        ),
-      ),
-    ));
+        expect(untrusted.argv).toContain("--no-approve");
+        expect(untrusted.argv).not.toContain("--approve");
+        expect(trusted.argv).toContain("--approve");
+        expect(trusted.argv).not.toContain("--no-approve");
+        for (const prepared of [untrusted, trusted]) {
+          expect(valueAfter(prepared.argv, "--model")).toBe("openai-codex/gpt-5.6-sol");
+          expect(valueAfter(prepared.argv, "--thinking")).toBe("xhigh");
+          expect(prepared.argv).toEqual(
+            expect.arrayContaining(["--no-skills", "--no-prompt-templates", "--no-context-files"]),
+          );
+          expect(prepared.argv).not.toContain("--no-extensions");
+          expect(prepared.argv).not.toContain("--no-themes");
+          const extensions = prepared.argv.flatMap((value, index) =>
+            value === "--extension" ? [prepared.argv[index + 1]] : [],
+          );
+          expect(extensions).toEqual([
+            test.integrations.pi,
+            expect.stringContaining("host-pi-supervisor-extension.ts"),
+          ]);
+          expect(valueAfter(prepared.argv, "--exclude-tools")).toBe(
+            PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
+          );
+          expect(valueAfter(prepared.argv, "--exclude-tools")).not.toContain("subagent_start");
+          expect(valueAfter(prepared.argv, "--exclude-tools")).toContain("workflow_control");
+          expect(prepared.argv.every((argument) => !hasControlCharacter(argument))).toBe(true);
+        }
+        const promptPath = valueAfter(untrusted.argv, "--append-system-prompt")!;
+        expect(yield* Effect.promise(() => fs.readFile(promptPath, "utf8"))).toBe(
+          launch("pi").systemPrompt,
+        );
+        expect(untrusted.secretCommand).not.toContain("pi-runtime-secret");
+        expect(untrusted.secretCommand).toContain(
+          untrusted.startupAttestation.secretReadyReceipt.path,
+        );
+        const bootstrapPath = join(untrusted.directory, "pi-environment.sh");
+        const bootstrap = yield* Effect.promise(() => fs.readFile(bootstrapPath, "utf8"));
+        expect(bootstrap).toContain("PI_SUBAGENT_RUNTIME_API_KEY='pi-runtime-secret'");
+        expect((yield* Effect.promise(() => fs.stat(bootstrapPath))).mode & 0o777).toBe(0o600);
+        expect(
+          untrusted.environmentCommand({ paneId: "p", tabId: "t", workspaceId: "w" }),
+        ).toContain("PI_SUBAGENT_CHILD='1'");
+      }),
+    ),
+  );
 });

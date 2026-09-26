@@ -1,12 +1,11 @@
 import { isCompactAttention } from "pi-code-previews";
+import { renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { normalizeResult } from "../../src/results/normalize.ts";
-import { projectPrepared } from "../../src/results/projection.ts";
-import { MCP_VALIDATION_NOTICES } from "../../src/results/validation-notices.ts";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
 import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
+import { projectReply } from "../fixtures/results.ts";
 
 it.effect("classifies normalized discovery by operation, not remote lookalike fields", () =>
   Effect.gen(function* () {
@@ -26,36 +25,18 @@ it.effect("classifies normalized discovery by operation, not remote lookalike fi
       "tools.list",
       "tools.search",
     ]) {
-      const normalized = normalizeResult({
-        owner: "owner",
-        server: "docs",
-        action,
-        reply: { outcome: "completed", result: payload },
-      });
-      const execution = yield* projectPrepared(
-        {
-          ...normalized,
-          owner: "owner",
-          server: "docs",
-          activation: {},
-          generation: 0,
-          serverGeneration: 0,
-        },
-        { status: "retained", resultId: "saved" },
-        { maxOutputBytes: 51_200, images: false },
-      );
+      const execution = yield* projectReply(action, payload);
       for (const retained of [false, true]) {
         const details = retained ? { ...execution.reply, action: "result.read" } : execution.reply;
         const card = decodeMcpCardDetails({ details, content: [] });
         const discovery = action === "tools.list" || action === "tools.search";
-        expect(card.undiscoveredCount).toBe(discovery ? 1 : 0);
         expect(card.page !== undefined).toBe(discovery);
         expect(
           card.presentation.issues.entries.some((issue) => issue.code === "discovery-incomplete"),
         ).toBe(discovery);
         expect(card.presentation.truncated).toBe(false);
         if (!discovery)
-          expect(card.counters.join(" ")).not.toMatch(/tools|resources|prompts|entries/);
+          expect(card.counts.join(" ")).not.toMatch(/tools|resources|prompts|entries/);
         expect(card.preview).toContain("remote-server");
         expect(card.preview).toContain("remote-cursor");
       }
@@ -82,20 +63,12 @@ function summarize<Details>(
     phase,
     args,
     result: { content: [], details },
-    context: {
+    context: renderContextFixture({
       args,
-      state: {},
-      toolCallId: "test",
-      cwd: "/project",
-      invalidate: () => undefined,
-      lastComponent: undefined,
-      argsComplete: true,
       executionStarted: phase !== "pending",
-      expanded: false,
       isPartial: phase === "running",
       isError,
-      showImages: true,
-    },
+    }),
   });
 }
 
@@ -114,7 +87,6 @@ describe("MCP compact summaries", () => {
         const card = decodeMcpCardDetails({ details, content: [] });
         expect(card.counts).toHaveLength(1);
         expect(card.counts[0]).toContain("2");
-        expect(card.undiscoveredCount).toBe(0);
       }
     },
   );
@@ -335,39 +307,7 @@ describe("MCP compact summaries", () => {
     expect(summary?.metadata?.join(" ") ?? "").not.toContain("retained-1");
     expect(summary?.notices).toEqual([]);
   });
-  it("retains UI notice completeness independently of origin validation and redaction", () => {
-    for (const outputValidation of ["failed", "unavailable"] as const) {
-      const notice = MCP_VALIDATION_NOTICES[outputValidation].invocation;
-      const details = reply(
-        {
-          origin: { action: "tools.call", outcome: "completed", isError: false, outputValidation },
-        },
-        { action: "result.read", notices: [notice] },
-      );
-      const card = decodeMcpCardDetails({ details });
-      expect(card.origin?.outputValidationFailed).toBe(outputValidation === "failed");
-      expect(card.origin?.outputValidationUnavailable).toBe(outputValidation === "unavailable");
-      expect(card.noticesComplete).toBe(true);
-      expect(card.notices).not.toContain(notice);
-
-      let invoked = false;
-      const malformedOrigin = Object.defineProperty(
-        { action: "tools.call", outcome: "completed", isError: false },
-        "outputValidation",
-        {
-          get: () => {
-            invoked = true;
-            return outputValidation;
-          },
-        },
-      );
-      const malformed = decodeMcpCardDetails({
-        details: reply({ origin: malformedOrigin }, { action: "result.read", notices: [notice] }),
-      });
-      expect(invoked).toBe(false);
-      expect(malformed.presentation.incomplete).toBe(true);
-      expect(malformed.notices).toContain(notice);
-    }
+  it("marks redacted notices incomplete without exposing them", () => {
     const raw = `token=${"private".repeat(200)}`;
     const redacted = decodeMcpCardDetails({ details: reply({}, { notices: [raw] }) });
     expect(redacted.noticesComplete).toBe(false);
@@ -384,12 +324,31 @@ describe("MCP compact summaries", () => {
   });
   it("requires explicit success and never clears a Pi error", () => {
     expect(summarize(reply())?.outcome).toBe("success");
-    for (const details of [undefined, {}, { outcome: "completed" }, reply({}, { isError: true })]) {
+    const hostile = Object.defineProperty({}, "outcome", {
+      get() {
+        throw new Error("getter");
+      },
+    });
+    for (const details of [
+      undefined,
+      {},
+      { outcome: "completed" },
+      hostile,
+      reply({}, { isError: true }),
+      reply({}, { outcome: "unknown", isError: true }),
+      reply({}, { outcome: "not-sent", isError: true }),
+    ]) {
       expect(summarize(details)).toBeUndefined();
     }
     expect(summarize(reply(), "settled", true)).toBeUndefined();
-    expect(summarize(reply({}, { outcome: "unknown" }))?.outcome).toBe("uncertain");
-    expect(summarize(reply({}, { outcome: "not-sent" }))?.outcome).toBe("warning");
+    for (const [outcome, expected] of [
+      ["unknown", "uncertain"],
+      ["not-sent", "warning"],
+    ] as const) {
+      const summary = summarize(reply({}, { outcome }));
+      expect(summary?.outcome).toBe(expected);
+      expect(summary?.issues?.coverage).toBe("unknown");
+    }
   });
   it("projects fixed boundary causes without claiming complete recovery coverage", () => {
     for (const data of [
@@ -489,32 +448,18 @@ describe("MCP compact summaries", () => {
     );
     expect(cancelled?.outcome).toBe("cancelled");
   });
-  it("does not turn successful retained reads into successful original operations", () => {
-    for (const origin of [
-      { outcome: "completed", isError: true },
-      { outcome: "completed", outputValidation: "failed" },
-      { outcome: "completed" },
-      {},
-    ]) {
-      expect(summarize(reply({ origin }, { action: "result.read" }))).toBeUndefined();
-    }
-  });
-  it("keeps explicit retained uncertainty distinct from successful reads", () => {
-    expect(
-      summarize(
-        reply({ origin: { outcome: "unknown", isError: false } }, { action: "result.read" }),
-      )?.outcome,
-    ).toBe("uncertain");
-  });
-  it("summarizes retained reads only with explicit original success", () => {
-    expect(
-      summarize(
-        reply(
-          { origin: { action: "tools.call", outcome: "completed", isError: false } },
-          { action: "result.read" },
-        ),
-      )?.outcome,
-    ).toBe("success");
+  it.each([
+    [{ outcome: "completed", isError: true }, undefined],
+    [{ outcome: "completed", outputValidation: "failed" }, undefined],
+    [{ outcome: "completed", isError: false, outputValidation: "invalid" }, undefined],
+    [{ outcome: "completed" }, undefined],
+    [{}, undefined],
+    [{ outcome: "unknown", isError: false }, "uncertain"],
+    [{ action: "tools.call", outcome: "completed", isError: false }, "success"],
+  ])("summarizes a retained read of origin %j only as %s", (origin, outcome) => {
+    const summary = summarize(reply({ origin }, { action: "result.read" }));
+    if (outcome === undefined) expect(summary).toBeUndefined();
+    else expect(summary?.outcome).toBe(outcome);
   });
   it("preserves safety warnings while leaving retained-output access in details", () => {
     const details = reply(
@@ -537,13 +482,5 @@ describe("MCP compact summaries", () => {
     expect(card.resultId).toBe("retained-1");
     expect(notices).not.toContain(card.recoveryHint);
     expect(summary?.failure).toBeUndefined();
-  });
-  it("does not invoke hostile historical getters", () => {
-    const details = Object.defineProperty({}, "outcome", {
-      get() {
-        throw new Error("getter");
-      },
-    });
-    expect(summarize(details)).toBeUndefined();
   });
 });

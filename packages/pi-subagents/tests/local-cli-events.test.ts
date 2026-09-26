@@ -13,59 +13,89 @@ import type { Scope } from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { capturedTelemetrySnapshot, makeCapturedLogger } from "pi-cosmic-core/testing";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
-import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
+import {
+  backendLaunch,
+  backendSupervisor,
+  supervisorMetadata,
+  takeBackendEvent,
+} from "./fixtures/backend-supervisor.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
-import { makeLocalCliRawEventOwnership } from "../src/backend/local-cli-events.ts";
+import {
+  makeLocalCliRawEventOwnership,
+  type LocalCliRawEventOwnership,
+} from "../src/backend/local-cli-events.ts";
 import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
 import { makeLocalPiBackendDriver } from "../src/backend/local-pi.ts";
-import type { ChildWireEvent } from "../src/boundary/child-process.ts";
-import type { BackendEvent, BackendHandle, BackendLaunchRequest } from "../src/backend/model.ts";
+import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
+import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
+import type { BackendEvent, BackendHandle } from "../src/backend/model.ts";
 import type { SubagentError } from "../src/run/errors.ts";
+
+const rpcResponse = (
+  command: RpcCommand,
+  options: { readonly tokens?: number; readonly cost?: number; readonly success?: boolean } = {},
+): ChildWireEvent => ({
+  type: "rpc_message",
+  value: {
+    type: "response",
+    id: command.id,
+    command: command.type,
+    success: options.success ?? true,
+    data:
+      command.type === "get_state"
+        ? { sessionId: "child", thinkingLevel: "high" }
+        : command.type !== "get_session_stats"
+          ? undefined
+          : options.tokens === undefined
+            ? {}
+            : {
+                tokens: {
+                  input: options.tokens,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: options.tokens,
+                },
+                cost: options.cost ?? 0,
+              },
+  },
+});
+
+const piChild = (
+  events: ChildProcessHandle["events"],
+  overrides: Partial<ChildProcessHandle> = {},
+): ChildProcessHandle => ({
+  pid: 4242,
+  events,
+  awaitExit: Effect.never,
+  send: () => Effect.void,
+  sendContactControl: () => Effect.void,
+  terminate: () => Effect.void,
+  ...overrides,
+});
+
+const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope>) =>
+  makeLocalPiBackendDriver({ spawn: () => child, reclaimRunState: () => Effect.void }).spawn(
+    backendLaunch(),
+  );
 
 it.effect("Pi reconciles cumulative charges before settlement without blocking RPC dispatch", () =>
   Effect.gen(function* () {
     const childEvents = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
     let tokens = 100;
     let closeOnStats = false;
-    const driver = makeLocalPiBackendDriver({
-      spawn: () =>
-        Effect.succeed({
-          pid: 4242,
-          events: childEvents,
-          awaitExit: Effect.never,
+    const backend = yield* spawnPi(
+      Effect.succeed(
+        piChild(childEvents, {
           send: (command) =>
             closeOnStats && command.type === "get_session_stats"
               ? Effect.sync(() => Queue.endUnsafe(childEvents))
-              : Queue.offer(childEvents, {
-                  type: "rpc_message",
-                  value: {
-                    type: "response",
-                    id: command.id,
-                    command: command.type,
-                    success: true,
-                    data:
-                      command.type === "get_state"
-                        ? { sessionId: "child", thinkingLevel: "high" }
-                        : command.type === "get_session_stats"
-                          ? {
-                              tokens: {
-                                input: tokens,
-                                output: 0,
-                                cacheRead: 0,
-                                cacheWrite: 0,
-                                total: tokens,
-                              },
-                              cost: tokens / 100,
-                            }
-                          : undefined,
-                  },
-                }).pipe(Effect.asVoid),
-          sendContactControl: () => Effect.void,
-          terminate: () => Effect.void,
+              : Queue.offer(childEvents, rpcResponse(command, { tokens, cost: tokens / 100 })).pipe(
+                  Effect.asVoid,
+                ),
         }),
-      reclaimRunState: () => Effect.void,
-    });
-    const backend = yield* driver.spawn(codexLaunch);
+      ),
+    );
     yield* backend.controls.initialize;
     yield* backend.controls.start("first", 1);
     yield* Queue.offer(childEvents, {
@@ -137,58 +167,24 @@ it.effect(
       let tokens = 100;
       let delay = false;
       let prompts = 0;
-      const driver = makeLocalPiBackendDriver({
-        spawn: () =>
-          Effect.succeed({
-            pid: 4242,
-            events: childEvents,
-            awaitExit: Effect.never,
-            send: (command) =>
-              Effect.gen(function* () {
-                if (command.type === "prompt") prompts++;
-                const snapshot = tokens;
-                if (command.type === "get_session_stats" && block) {
-                  yield* Deferred.succeed(blocked, undefined);
-                  return yield* Effect.never;
-                }
-                if (command.type === "get_session_stats" && delay) {
-                  delay = false;
-                  yield* Deferred.succeed(requested, undefined);
-                  yield* Deferred.await(release);
-                }
-                yield* Queue.offer(childEvents, {
-                  type: "rpc_message",
-                  value: {
-                    type: "response",
-                    id: command.id,
-                    command: command.type,
-                    success: true,
-                    data:
-                      command.type === "get_state"
-                        ? { sessionId: "child", thinkingLevel: "high" }
-                        : command.type === "get_session_stats"
-                          ? {
-                              tokens: {
-                                input: snapshot,
-                                output: 0,
-                                cacheRead: 0,
-                                cacheWrite: 0,
-                                total: snapshot,
-                              },
-                              cost: 0,
-                            }
-                          : undefined,
-                  },
-                });
-              }),
-            sendContactControl: () => Effect.void,
-            terminate: () => Effect.void,
-          }),
-        reclaimRunState: () => Effect.void,
-      });
-      const backend = yield* driver
-        .spawn(codexLaunch)
-        .pipe(Effect.provideService(EffectScope.Scope, scope));
+      const send: ChildProcessHandle["send"] = (command) =>
+        Effect.gen(function* () {
+          if (command.type === "prompt") prompts++;
+          const snapshot = tokens;
+          if (command.type === "get_session_stats" && block) {
+            yield* Deferred.succeed(blocked, undefined);
+            return yield* Effect.never;
+          }
+          if (command.type === "get_session_stats" && delay) {
+            delay = false;
+            yield* Deferred.succeed(requested, undefined);
+            yield* Deferred.await(release);
+          }
+          yield* Queue.offer(childEvents, rpcResponse(command, { tokens: snapshot }));
+        });
+      const backend = yield* spawnPi(Effect.succeed(piChild(childEvents, { send }))).pipe(
+        Effect.provideService(EffectScope.Scope, scope),
+      );
       yield* backend.controls.initialize;
       yield* backend.controls.start("first", 1);
       tokens = 110;
@@ -228,47 +224,23 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
       const requested = yield* Deferred.make<void>();
       const commands: string[] = [];
       let released = false;
-      const driver = makeLocalPiBackendDriver({
-        spawn: () =>
-          Effect.acquireRelease(
-            Effect.succeed({
-              pid: 42,
-              events,
-              awaitExit: Effect.never,
-              send: (command: import("../src/backend/local-pi-protocol.ts").RpcCommand) =>
-                Effect.gen(function* () {
-                  commands.push(command.type);
-                  if (command.type === "get_session_stats") {
-                    yield* Deferred.succeed(requested, undefined);
-                    if (failure === "timeout") return;
-                  }
-                  yield* Queue.offer(events, {
-                    type: "rpc_message",
-                    value: {
-                      type: "response",
-                      id: command.id,
-                      command: command.type,
-                      success: command.type !== "get_session_stats" || failure !== "rejected",
-                      data:
-                        command.type === "get_state"
-                          ? { sessionId: "child", thinkingLevel: "high" }
-                          : {},
-                    },
-                  });
-                }),
-              sendContactControl: () => Effect.void,
-              terminate: () => Effect.void,
-            }),
-            () =>
-              Effect.sync(() => {
-                released = true;
-              }),
-          ),
-        reclaimRunState: () => Effect.void,
-      });
-      const backend = yield* driver
-        .spawn(codexLaunch)
-        .pipe(Effect.provideService(EffectScope.Scope, scope));
+      const send: ChildProcessHandle["send"] = (command) =>
+        Effect.gen(function* () {
+          commands.push(command.type);
+          if (command.type === "get_session_stats") {
+            yield* Deferred.succeed(requested, undefined);
+            if (failure === "timeout") return;
+          }
+          const success = command.type !== "get_session_stats" || failure !== "rejected";
+          yield* Queue.offer(events, rpcResponse(command, { success }));
+        });
+      const backend = yield* spawnPi(
+        Effect.acquireRelease(Effect.succeed(piChild(events, { send })), () =>
+          Effect.sync(() => {
+            released = true;
+          }),
+        ),
+      ).pipe(Effect.provideService(EffectScope.Scope, scope));
       const initializing = yield* backend.controls.initialize.pipe(Effect.forkChild);
       yield* Deferred.await(requested);
       if (failure === "timeout") yield* TestClock.adjust("10 seconds");
@@ -298,43 +270,14 @@ const turnStartedFrame = (turnId: string) => ({
   params: { threadId: "thread-1", turn: { id: turnId, status: "inProgress" } },
 });
 
-const codexLaunch: BackendLaunchRequest = {
-  runId: "codex-event-driver",
-  name: "codex-event-driver",
-  closeOnReport: true,
-  cwd: process.cwd(),
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  model: "codex-fixture",
-  effort: "high",
-  activeTools: [],
-  projectTrusted: false,
-  parentSessionId: "parent-session",
-  systemPrompt: "Use the private supervisor report tool.",
-};
-
 it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scope release", () =>
   Effect.gen(function* () {
     const scope = yield* EffectScope.make();
     const childEvents = yield* Queue.bounded<ChildWireEvent, Cause.Done>(16);
     const acknowledged: ChildWireEvent[] = [];
-    const driver = makeLocalPiBackendDriver({
-      spawn: () =>
-        Effect.succeed({
-          pid: 4242,
-          events: childEvents,
-          awaitExit: Effect.never,
-          send: () => Effect.void,
-          sendContactControl: () => Effect.void,
-          acknowledge: (raw) => void acknowledged.push(raw),
-          terminate: () => Effect.void,
-        }),
-      reclaimRunState: () => Effect.void,
-    });
-    const backend = yield* driver
-      .spawn(codexLaunch)
-      .pipe(Effect.provideService(EffectScope.Scope, scope));
+    const backend = yield* spawnPi(
+      Effect.succeed(piChild(childEvents, { acknowledge: (raw) => void acknowledged.push(raw) })),
+    ).pipe(Effect.provideService(EffectScope.Scope, scope));
     const rpc: ChildWireEvent = { type: "rpc_message", value: { type: "agent_start" } };
     yield* Queue.offer(childEvents, rpc);
     const started = yield* Queue.take(backend.events);
@@ -365,18 +308,33 @@ it.effect("Pi keeps RPC and IPC byte owners until normalized consumption or scop
   }),
 );
 
+const withOwnership = <A, E>(
+  capacity: number,
+  use: (harness: {
+    readonly events: Queue.Queue<BackendEvent, Cause.Done>;
+    readonly acknowledged: ReadonlyArray<string>;
+    readonly ownership: LocalCliRawEventOwnership;
+    readonly warnings: () => string;
+  }) => Effect.Effect<A, E>,
+) =>
+  Effect.suspend(() => {
+    const captured = makeCapturedLogger();
+    return Effect.gen(function* () {
+      const events = yield* Queue.bounded<BackendEvent, Cause.Done>(capacity);
+      const acknowledged: string[] = [];
+      const ownership = makeLocalCliRawEventOwnership(
+        events,
+        (raw) => void acknowledged.push(rawId(raw)),
+      );
+      const warnings = () => capturedTelemetrySnapshot({ entries: captured.entries });
+      return yield* use({ events, acknowledged, ownership, warnings });
+    }).pipe(provideBuiltLayer(captured.layer));
+  });
+
 describe("local CLI raw event ownership", () => {
   it.effect("keeps raw ownership across a delivered offer until acknowledgement", () =>
-    Effect.gen(function* () {
-      const captured = makeCapturedLogger();
-      return yield* Effect.gen(function* () {
-        const events = yield* Queue.bounded<BackendEvent, Cause.Done>(4);
-        const acknowledged: string[] = [];
-        const ownership = makeLocalCliRawEventOwnership(
-          events,
-          (raw) => void acknowledged.push(rawId(raw)),
-        );
-
+    withOwnership(4, ({ events, acknowledged, ownership, warnings }) =>
+      Effect.gen(function* () {
         const event = backendEvent(1);
         yield* ownership.offer(event, rawEvent(1));
         expect(acknowledged).toEqual([]);
@@ -387,74 +345,47 @@ describe("local CLI raw event ownership", () => {
         ownership.acknowledge(event);
         expect(acknowledged).toEqual(["raw-1"]);
         // A successful offer must not log an overflow warning.
-        expect(capturedTelemetrySnapshot({ entries: captured.entries })).not.toContain(
-          "ingress overflowed",
-        );
-      }).pipe(provideBuiltLayer(captured.layer));
-    }),
+        expect(warnings()).not.toContain("ingress overflowed");
+      }),
+    ),
   );
 
   it.effect("logs and acknowledges an event dropped by an ended ingress queue", () =>
-    Effect.gen(function* () {
-      const captured = makeCapturedLogger();
-      return yield* Effect.gen(function* () {
-        const events = yield* Queue.bounded<BackendEvent, Cause.Done>(4);
-        const acknowledged: string[] = [];
-        const ownership = makeLocalCliRawEventOwnership(
-          events,
-          (raw) => void acknowledged.push(rawId(raw)),
-        );
-
+    withOwnership(4, ({ events, acknowledged, ownership, warnings }) =>
+      Effect.gen(function* () {
         yield* ownership.offer(backendEvent(1));
         Queue.endUnsafe(events);
-        const dropped = backendEvent(2);
-        yield* ownership.offer(dropped, rawEvent(2));
+        yield* ownership.offer(backendEvent(2), rawEvent(2));
         expect(acknowledged).toEqual(["raw-2"]);
-        const warnings = capturedTelemetrySnapshot({ entries: captured.entries });
-        expect(warnings).toContain("ingress overflowed");
-        expect(warnings).toContain("activity");
-      }).pipe(provideBuiltLayer(captured.layer));
-    }),
+        expect(warnings()).toContain("ingress overflowed");
+        expect(warnings()).toContain("activity");
+      }),
+    ),
   );
 
   it.effect("logs and acknowledges a blocked offer that is interrupted before delivering", () =>
-    Effect.gen(function* () {
-      const captured = makeCapturedLogger();
-      return yield* Effect.gen(function* () {
-        const events = yield* Queue.bounded<BackendEvent, Cause.Done>(1);
-        const acknowledged: string[] = [];
-        const ownership = makeLocalCliRawEventOwnership(
-          events,
-          (raw) => void acknowledged.push(rawId(raw)),
-        );
-
+    withOwnership(1, ({ acknowledged, ownership, warnings }) =>
+      Effect.gen(function* () {
         yield* ownership.offer(backendEvent(1));
         // The saturated bounded queue suspends the next offer until it is interrupted.
         const blocked = yield* Effect.forkChild(ownership.offer(backendEvent(2), rawEvent(3)));
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(blocked);
         expect(acknowledged).toEqual(["raw-3"]);
-        expect(capturedTelemetrySnapshot({ entries: captured.entries })).toContain(
-          "ingress overflowed",
-        );
-      }).pipe(provideBuiltLayer(captured.layer));
-    }),
+        expect(warnings()).toContain("ingress overflowed");
+      }),
+    ),
   );
 
   it.effect("releases an unoffered raw lazily, only when the release effect runs", () =>
-    Effect.gen(function* () {
-      const events = yield* Queue.bounded<BackendEvent, Cause.Done>(4);
-      const acknowledged: string[] = [];
-      const ownership = makeLocalCliRawEventOwnership(
-        events,
-        (raw) => void acknowledged.push(rawId(raw)),
-      );
-
-      const release = ownership.release(rawEvent(7));
-      expect(acknowledged).toEqual([]);
-      yield* release;
-      expect(acknowledged).toEqual(["raw-7"]);
-    }),
+    withOwnership(4, ({ acknowledged, ownership }) =>
+      Effect.gen(function* () {
+        const release = ownership.release(rawEvent(7));
+        expect(acknowledged).toEqual([]);
+        yield* release;
+        expect(acknowledged).toEqual(["raw-7"]);
+      }),
+    ),
   );
 });
 
@@ -480,7 +411,7 @@ describe("local Codex event driver raw safety", () => {
           terminate: () => Effect.sync(() => Queue.endUnsafe(childEvents)),
         };
         const supervisor = backendSupervisor(
-          supervisorMetadata(codexLaunch.runId, { enabledTools: [], tomlFragment: "" }),
+          supervisorMetadata({ tomlFragment: "" }),
           supervisorEvents,
           {
             hasAcceptedReport: () => Effect.succeed(true),
@@ -491,7 +422,7 @@ describe("local Codex event driver raw safety", () => {
         const backend = yield* makeLocalCodexBackendDriver(
           { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
           { open: () => Effect.succeed(supervisor) },
-        ).spawn(codexLaunch);
+        ).spawn(backendLaunch());
         const offerRaw = (wire: LocalCliWireEvent) => {
           Queue.offerUnsafe(childEvents, wire);
         };
@@ -499,14 +430,6 @@ describe("local Codex event driver raw safety", () => {
       }),
     );
 
-  const take = (backend: BackendHandle) =>
-    Queue.take(backend.events).pipe(
-      Effect.timeoutOption("5 seconds"),
-      Effect.flatMap((event) =>
-        Option.isSome(event) ? Effect.succeed(event.value) : Effect.die("fixture event timeout"),
-      ),
-      Effect.orDie,
-    );
   const settle = Effect.sleep("50 millis");
 
   it.live("releases consumed raws exactly once and keeps owned raws until acknowledgement", () =>
@@ -518,7 +441,7 @@ describe("local Codex event driver raw safety", () => {
         // the first turn/started owns its raw behind the normalized run_started event.
         offerRaw(rawExit);
         offerRaw(rawTurn1);
-        const started = yield* take(backend);
+        const started = yield* takeBackendEvent(backend);
         expect(started).toMatchObject({ type: "run_started" });
         expect([...acknowledged]).toEqual([rawExit]);
         backend.acknowledge(started);

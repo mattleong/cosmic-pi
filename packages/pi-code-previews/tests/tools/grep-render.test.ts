@@ -3,28 +3,12 @@ import { test } from "vitest";
 import { parseGrepOutputLine } from "../../src/tools/grep-render";
 
 test("parseGrepOutputLine handles hyphenated filenames, context lines, and empty matches", () => {
-  assert.deepEqual(parseGrepOutputLine("src/foo-1-bar.ts:42: const x = 1;"), {
-    path: "src/foo-1-bar.ts",
-    lineNumber: "42",
-    code: "const x = 1;",
-    kind: "match",
-  });
-  assert.deepEqual(parseGrepOutputLine("src/foo-1-bar.ts-43- return x;"), {
-    path: "src/foo-1-bar.ts",
-    lineNumber: "43",
-    code: "return x;",
-    kind: "context",
-  });
-  assert.deepEqual(parseGrepOutputLine("src/blank.ts:3: "), {
-    path: "src/blank.ts",
-    lineNumber: "3",
-    code: "",
-    kind: "match",
-  });
-  assert.deepEqual(parseGrepOutputLine("src/blank.ts-4- "), {
-    path: "src/blank.ts",
-    lineNumber: "4",
-    code: "",
-    kind: "context",
-  });
+  for (const [line, path, lineNumber, code, kind] of [
+    ["src/foo-1-bar.ts:42: const x = 1;", "src/foo-1-bar.ts", "42", "const x = 1;", "match"],
+    ["src/foo-1-bar.ts-43- return x;", "src/foo-1-bar.ts", "43", "return x;", "context"],
+    ["src/blank.ts:3: ", "src/blank.ts", "3", "", "match"],
+    ["src/blank.ts-4- ", "src/blank.ts", "4", "", "context"],
+  ] as const) {
+    assert.deepEqual(parseGrepOutputLine(line), { path, lineNumber, code, kind });
+  }
 });

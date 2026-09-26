@@ -120,13 +120,10 @@ export const failureRecovery = (
 };
 
 const formattedCandidateRoute = (candidate: SubagentProfileCandidateCard): string =>
-  `${formatRunRoute(
-    candidate.host,
-    candidate.runtime,
-    candidate.model,
-    candidate.effort,
-    candidate.openaiFastMode && candidate.status === "eligible",
-  )} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
+  `${formatRunRoute({
+    ...candidate,
+    openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
+  })} · ${candidate.context} · ${candidate.writeIntent} · ${candidate.closeOnReport ? "close after report" : "retain after report"}`;
 
 const PROFILE_SOURCE_LABELS = {
   session: "session override",
@@ -145,7 +142,7 @@ export const renderProfileRoutesComponent = (
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const profiles = details.profiles ?? [];
+    const profiles = details.profiles;
     const lines: string[] = contentOnly
       ? []
       : [
@@ -218,7 +215,7 @@ const summaryText = (
       return `Status · ${count} found${missing}`;
     case "send": {
       // closeOnReport=false targets started their next assignment; others got guidance.
-      const cards = details.cards ?? [];
+      const cards = details.cards;
       const retained = cards.filter((card) => card.closeOnReport === false).length;
       const label =
         cards.length > 0 && retained === cards.length
@@ -279,8 +276,8 @@ export const renderCompactResultComponent = (
 
   return renderComponent((width) => {
     const safeWidth = Math.max(1, width);
-    const cards = details.cards ?? [];
-    const count = details.runCount ?? cards.length;
+    const cards = details.cards;
+    const count = details.runCount;
     const failed = details.actionFailures?.length ?? 0;
     const neutral =
       details.action === "list" ||
@@ -304,12 +301,11 @@ export const renderCompactResultComponent = (
       color,
       text: summaryText(details, count, failed, failed > 0 ? ` · ${failed} failed` : ""),
     };
-    const totalRuns = details.runCount ?? cards.length;
-    const omittedRuns = Math.max(0, totalRuns - cards.length);
+    const omittedRuns = Math.max(0, count - cards.length);
     const omissionCues = [
       ...(omittedRuns > 0
         ? [
-            `${cards.length} of ${totalRuns} shown · ${omittedRuns} omitted · use subagent_status for specific run IDs`,
+            `${cards.length} of ${count} shown · ${omittedRuns} omitted · use subagent_status for specific run IDs`,
           ]
         : []),
       ...(details.contentOmitted

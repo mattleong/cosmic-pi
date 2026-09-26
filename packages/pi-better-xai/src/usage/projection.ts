@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type * as MutableRef from "effect/MutableRef";
 import {
   initialUsageProjection,
-  isUsingOAuthAtHostBoundary,
+  invokeHostCallback,
   makeFrozenUsageProjection,
   resetFrozenUsageProjection,
   synchronizeUsageProjectionContext,
@@ -34,31 +34,21 @@ export function resetProjection(projection: MutableRef.MutableRef<XaiProjection>
   resetFrozenUsageProjection(projection, initialExtras);
 }
 
-export function isXaiSubscriptionModel(
-  ctx: ExtensionContext,
-  cfg: ResolvedConfig,
-  isUsingOAuth = false,
-): boolean {
+export function isXaiSubscriptionModel(ctx: ExtensionContext, cfg: ResolvedConfig): boolean {
   const model = ctx.model;
   if (!model || model.provider !== "xai") return false;
-  return !cfg.usage.showOnlyOnSubscriptionModels || isUsingOAuth;
+  return (
+    !cfg.usage.showOnlyOnSubscriptionModels ||
+    invokeHostCallback(() => ctx.modelRegistry.isUsingOAuth(model), false)
+  );
 }
 
-export function synchronizeProjectionContext(
+export const synchronizeProjectionContext = (
   projection: MutableRef.MutableRef<XaiProjection>,
   ctx: ExtensionContext,
-  options: { readonly clearUsage?: boolean } = {},
-): void {
-  synchronizeUsageProjectionContext(projection, (state) => {
-    const model = ctx.model;
-    const isUsingOAuth =
-      model?.provider === "xai" && state.config?.usage.showOnlyOnSubscriptionModels
-        ? isUsingOAuthAtHostBoundary(ctx.modelRegistry, model)
-        : false;
-    return {
-      eligible: state.config ? isXaiSubscriptionModel(ctx, state.config, isUsingOAuth) : false,
-      clearUsage: options.clearUsage ?? false,
-      statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
-    };
-  });
-}
+): void =>
+  synchronizeUsageProjectionContext(projection, (state) => ({
+    eligible: state.config ? isXaiSubscriptionModel(ctx, state.config) : false,
+    clearUsage: true,
+    statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
+  }));

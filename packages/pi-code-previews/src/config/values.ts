@@ -63,7 +63,7 @@ function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
   settings: CodePreviewSettings,
   key: K,
   value: string,
-): CodePreviewSettings[K] | undefined {
+): void {
   const currentValue = settings[key];
   let candidate: unknown = value;
   if (key === "tools") {
@@ -77,10 +77,9 @@ function parseAndApplyUiSetting<K extends keyof CodePreviewSettings>(
     candidate = Number(value);
   }
   const decoded = Schema.decodeUnknownOption(CodePreviewSettingsSchema.fields[key])(candidate);
-  // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
-  const parsed = Option.isSome(decoded) ? (decoded.value as CodePreviewSettings[K]) : undefined;
-  if (parsed !== undefined) settings[key] = parsed;
-  return parsed;
+  if (Option.isSome(decoded))
+    // SAFETY: The selected authoritative field schema corresponds to the requested settings key.
+    settings[key] = decoded.value as CodePreviewSettings[K];
 }
 
 export function updateSetting(

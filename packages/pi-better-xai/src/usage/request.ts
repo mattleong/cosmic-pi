@@ -1,9 +1,10 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { JsonHttpClient, type JsonHttpResponseSchema } from "pi-cosmic-core";
-import { getXaiCredentials, recoverRejectedXaiCredentials } from "../auth/auth.ts";
+import { getXaiCredentials } from "../auth/auth.ts";
 import {
   MONTHLY_BILLING_URL,
   MonthlyBillingSchema,
@@ -35,14 +36,12 @@ const fetchBilling = Effect.fn("XaiUsage.fetchBilling")(function* <A, R>(
 });
 
 /**
- * Usage snapshot plus the redacted credential metadata resolved for the request.
- *
- * The metadata is carried out of the single credential resolution so callers never re-read the
- * auth file: registry-only credentials must not be reported as missing auth.
+ * Usage snapshot plus the team metadata of the registry credential that the accepted request used,
+ * so callers never repeat the credential lookup.
  */
 export interface XaiUsageResult {
   readonly snapshot: UsageSnapshot;
-  readonly teamId?: string;
+  readonly teamId?: string | undefined;
 }
 
 const fetchUsageResponses = (accessToken: Redacted.Redacted<string>) =>
@@ -68,24 +67,15 @@ const fetchUsageResponses = (accessToken: Redacted.Redacted<string>) =>
     { concurrency: 2 },
   );
 
-export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (authPath: string) {
-  let credentials = yield* getXaiCredentials(authPath);
+export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* () {
+  let credentials = yield* getXaiCredentials();
   if (!credentials) return undefined;
   let responses = yield* fetchUsageResponses(credentials.accessToken);
   if (responses[0]._tag === "Rejected" && responses[0].status === 401) {
-    const replacement = yield* recoverRejectedXaiCredentials(
-      authPath,
-      credentials.accessToken,
-    ).pipe(
-      Effect.mapError(
-        () =>
-          new XaiUsageError({
-            operation: "refresh",
-            message: "xAI OAuth credentials could not be refreshed.",
-          }),
-      ),
-    );
-    if (replacement !== undefined) {
+    // Pi may have refreshed or replaced the token since the lookup. Re-resolve once and retry only
+    // with a different token; a failed lookup keeps the provider's 401 result.
+    const replacement = yield* getXaiCredentials().pipe(Effect.orElseSucceed(() => undefined));
+    if (replacement && !Equal.equals(replacement.accessToken, credentials.accessToken)) {
       credentials = replacement;
       responses = yield* fetchUsageResponses(credentials.accessToken);
     }
@@ -97,12 +87,9 @@ export const requestXaiUsage = Effect.fn("XaiUsage.requestXaiUsage")(function* (
       message: `xAI monthly billing request failed (HTTP ${monthly.status}).`,
     });
   }
-  const decodedMonthly = monthly.body;
   const decodedWeekly = weekly?._tag === "Accepted" ? weekly.body : undefined;
   const now = yield* Clock.currentTimeMillis;
-  const snapshot = parseUsageSnapshot(decodedMonthly, decodedWeekly, now);
-  const result: XaiUsageResult = credentials.teamId
-    ? { snapshot, teamId: credentials.teamId }
-    : { snapshot };
+  const snapshot = parseUsageSnapshot(monthly.body, decodedWeekly, now);
+  const result: XaiUsageResult = { snapshot, teamId: credentials.teamId };
   return result;
 });

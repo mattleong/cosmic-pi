@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { parseHerdrBtwSessionId } from "../btw/marker.ts";
 
 // Synchronous host-boundary validation needs raw Node fs semantics. Effect
 // FileSystem cannot express this pre-runtime, never-mutating no-follow probe.
@@ -82,19 +83,16 @@ const withRegularSessionDescriptor = <A>(
 
 /**
  * Compares two regular session files by descriptor identity. Paths are bounded
- * and normalized before either no-follow open. Any failed probe makes identity
- * unavailable, never evidence that the files are distinct.
+ * before normalization, and each no-follow open bounds its normalized path
+ * again. Any failed probe makes identity unavailable, never evidence that the
+ * files are distinct.
  */
 export const compareSessionFileIdentity: SessionFileIdentityComparator = (leftPath, rightPath) => {
   if (!isBoundedSessionPath(leftPath) || !isBoundedSessionPath(rightPath))
     return IDENTITY_UNAVAILABLE;
-  const normalizedLeftPath = normalize(leftPath);
-  const normalizedRightPath = normalize(rightPath);
-  if (!isBoundedSessionPath(normalizedLeftPath) || !isBoundedSessionPath(normalizedRightPath))
-    return IDENTITY_UNAVAILABLE;
 
-  const comparison = withRegularSessionDescriptor(normalizedLeftPath, (leftDescriptor) =>
-    withRegularSessionDescriptor(normalizedRightPath, (rightDescriptor) => {
+  const comparison = withRegularSessionDescriptor(normalize(leftPath), (leftDescriptor) =>
+    withRegularSessionDescriptor(normalize(rightPath), (rightDescriptor) => {
       const left = fstatSync(leftDescriptor, { bigint: true });
       const right = fstatSync(rightDescriptor, { bigint: true });
       return left.dev === right.dev && left.ino === right.ino ? "same" : "distinct";
@@ -150,8 +148,7 @@ const createBlankChildSessionFileAt = (
 ): BlankChildSessionFileResult => {
   if (
     !isBoundedSessionPath(input.sessionDir) ||
-    !/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(input.sessionId) ||
-    input.sessionId.length > 128 ||
+    parseHerdrBtwSessionId(input.sessionId) === undefined ||
     !isAbsolute(input.cwd) ||
     input.cwd.includes("\0") ||
     input.cwd.includes("\n") ||

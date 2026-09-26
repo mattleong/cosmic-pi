@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   IMAGE_OUTPUT_FORMATS,
@@ -92,6 +93,25 @@ export type CodexImageResult = {
   action: ImageAction;
   outputFormat: ImageOutputFormat;
 };
+export type CodexImageDetails = Omit<CodexImageResult, "data">;
+
+const isOptionalString = <Value>(value: Value): value is Value & (string | undefined) =>
+  value === undefined || Predicate.isString(value);
+
+/** Shared shape guard for persisted image tool/message details. */
+export const isCodexImageDetails = <Value>(value: Value): value is Value & CodexImageDetails =>
+  Predicate.isObject(value) &&
+  Predicate.isString(value.id) &&
+  Predicate.isString(value.status) &&
+  Predicate.isString(value.prompt) &&
+  isOptionalString(value.revisedPrompt) &&
+  Predicate.isString(value.mimeType) &&
+  isOptionalString(value.savedPath) &&
+  Predicate.isString(value.model) &&
+  isOptionalString(value.imageModel) &&
+  Predicate.isString(value.action) &&
+  Predicate.isString(value.outputFormat);
+
 export type ExtractedImageResult = Omit<
   CodexImageResult,
   "prompt" | "savedPath" | "model" | "imageModel" | "action" | "outputFormat"
@@ -103,3 +123,4 @@ export class OpenAIImageError extends Schema.TaggedError<OpenAIImageError>()("Op
 }) {}
 export const fail = (operation: string, message: string) =>
   new OpenAIImageError({ operation, message });
+export const failWith = (operation: string, message: string) => () => fail(operation, message);

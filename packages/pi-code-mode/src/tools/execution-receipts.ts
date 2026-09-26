@@ -1,26 +1,7 @@
 import * as Schema from "effect/Schema";
 
-/** Operation facts, separate from UI severity and from guest delivery. No inputs or errors. */
-export type Certainty = "not-sent" | "completed" | "unknown";
-export interface ExecutionReceipt {
-  readonly id: number;
-  readonly tool: string;
-  readonly target?: string;
-  readonly certainty: Certainty;
-  readonly delivery: "pending" | "delivered" | "not-delivered";
-  readonly recoveryId?: string;
-  readonly isError?: boolean;
-}
-export interface ExecutionReceipts {
-  readonly total: number;
-  readonly completed: number;
-  readonly unknown: number;
-  readonly notSent: number;
-  readonly omitted: number;
-  readonly calls: ReadonlyArray<ExecutionReceipt>;
-}
-
 const ReceiptCount = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
+const RECOVERY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const ReceiptId = Schema.Int.check(
   Schema.isBetween({ minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER }),
 );
@@ -30,9 +11,7 @@ const ExecutionReceiptSchema = Schema.Struct({
   target: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
   certainty: Schema.Literals(["not-sent", "completed", "unknown"]),
   delivery: Schema.Literals(["pending", "delivered", "not-delivered"]),
-  recoveryId: Schema.optionalKey(
-    Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/)),
-  ),
+  recoveryId: Schema.optionalKey(Schema.String.check(Schema.isPattern(RECOVERY_ID))),
   isError: Schema.optionalKey(Schema.Boolean),
 });
 export const ExecutionReceiptsSchema = Schema.Struct({
@@ -43,6 +22,11 @@ export const ExecutionReceiptsSchema = Schema.Struct({
   omitted: ReceiptCount,
   calls: Schema.Array(ExecutionReceiptSchema).check(Schema.isMaxLength(256)),
 });
+
+/** Operation facts, separate from UI severity and from guest delivery. No inputs or errors. */
+export type ExecutionReceipts = typeof ExecutionReceiptsSchema.Type;
+type ExecutionReceipt = ExecutionReceipts["calls"][number];
+type Certainty = ExecutionReceipt["certainty"];
 
 /** Cross-field consistency required before replaying receipt safety classifications. */
 export const hasConsistentExecutionReceipts = (receipts: ExecutionReceipts): boolean =>
@@ -58,9 +42,7 @@ const REDUCIBLE_READ_TOOLS = new Set(["pi.read", "pi.grep", "pi.find", "pi.ls"])
 /** Receipt reduction is allowed only for a complete, explicitly successful read-only ledger. */
 export const hasCompleteReadOnlyReceipts = (receipts: ExecutionReceipts): boolean =>
   hasConsistentExecutionReceipts(receipts) &&
-  receipts.omitted === 0 &&
   receipts.calls.length === receipts.total &&
-  new Set(receipts.calls.map((call) => call.id)).size === receipts.total &&
   receipts.completed === receipts.total &&
   receipts.unknown === 0 &&
   receipts.notSent === 0 &&
@@ -143,9 +125,7 @@ export function makeExecutionReceipts() {
       count(call.certainty, -1);
       count(certainty, 1);
       const recovery =
-        recoveryId !== undefined && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(recoveryId)
-          ? { recoveryId }
-          : {};
+        recoveryId !== undefined && RECOVERY_ID.test(recoveryId) ? { recoveryId } : {};
       calls.set(id, { ...call, certainty, ...recovery, ...(isError !== undefined && { isError }) });
     },
     delivery(id: number | undefined, delivered: boolean) {

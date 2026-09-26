@@ -29,16 +29,9 @@ export const presentationArrayLength = <Value>(value: Value): number | undefined
     return undefined;
   }
 };
-export const presentationOutcome = <Value>(
-  value: Value,
-): "completed" | "not-sent" | "unknown" | undefined =>
-  value === "completed"
-    ? "completed"
-    : value === "not-sent"
-      ? "not-sent"
-      : value === "unknown"
-        ? "unknown"
-        : undefined;
+const outcomes = ["completed", "not-sent", "unknown"] as const;
+export const presentationOutcome = <Value>(value: Value) =>
+  outcomes.find((outcome) => outcome === value);
 
 /** Only raw envelope/origin descriptors establish validation-notice ownership. */
 export const presentationValidationIdentity = <Reply, Origin>(

@@ -1,5 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,40 +11,14 @@ import { FastModeService } from "../src/fast/service.ts";
 import { initialFastSnapshot, type FastSnapshot } from "../src/fast/controller.ts";
 import { OpenAIUsageService } from "../src/usage/controller.ts";
 import { initialProjection } from "../src/usage/projection.ts";
-import { makeResolvedConfig } from "./helpers.ts";
-
-const model = (id: string): Model<Api> => ({
-  id,
-  name: id,
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://example.invalid",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-});
+import { makeResolvedConfig, testContext, testModel } from "./helpers.ts";
 
 function makeContext(initialModel: string) {
-  let currentModel = model(initialModel);
-  const fixture = {
-    cwd: "/project",
-    hasUI: true as const,
-    get model() {
-      return currentModel;
-    },
-    modelRegistry: {
-      isUsingOAuth: () => false,
-      getApiKeyForProvider: () => Promise.resolve(undefined),
-    },
-    ui: { notify() {} },
-  };
+  let currentModel = testModel(initialModel);
   return {
-    // SAFETY: These tests exercise only the context members implemented by the fixture.
-    ctx: fixture as typeof fixture & ExtensionContext,
+    ctx: testContext({ model: () => currentModel, oauth: false }),
     setModel(id: string, provider = "openai") {
-      currentModel = { ...model(id), provider };
+      currentModel = testModel(id, provider);
     },
   };
 }
@@ -72,7 +44,6 @@ describe("FastModeService", () => {
       projection: usageProjection,
       onChange: () => undefined,
       startPolling: false,
-      agentDir: "/agent",
       projectTrusted: true,
     });
     const fastLayer = FastModeService.layer({ projection: fastProjection }).pipe(

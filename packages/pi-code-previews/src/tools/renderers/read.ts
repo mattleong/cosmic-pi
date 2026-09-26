@@ -16,7 +16,8 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderContentPreview } from "./shared/content-preview";
-import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
+import { renderResultPrelude } from "./shared/result-prelude";
+import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
 export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
   const originalRead = createReadToolDefinition(cwd, options);
@@ -60,13 +61,8 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
         );
       }
 
-      const hiddenPrelude = renderHiddenPreviewPrelude({
-        expanded,
-        state: renderContext.state,
-        theme,
-        hidePreview: !codePreviewSettings.readContentPreview,
-      });
-      if (hiddenPrelude) return hiddenPrelude;
+      if (!expanded && !codePreviewSettings.readContentPreview)
+        return renderHiddenPreviewExpandHint(renderContext.state, theme);
 
       const truncated = isTruncated(result.details);
       const { content, notice } =
@@ -85,8 +81,8 @@ export function createReadPreviewTool(cwd: string, options?: ReadToolOptions) {
         lang,
         theme,
         invalidate: renderContext.invalidate,
-        lineNumbers: codePreviewSettings.readLineNumbers
-          ? { firstLine: getReadStartLine(renderContext.args) }
+        firstLine: codePreviewSettings.readLineNumbers
+          ? getReadStartLine(renderContext.args)
           : undefined,
         emptyLabel: "Empty file",
         skipHighlightLabel: "Syntax highlighting skipped for large file",

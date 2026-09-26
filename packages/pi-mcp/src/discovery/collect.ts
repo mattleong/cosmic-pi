@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { freezeSnapshot } from "pi-cosmic-core";
 import { boundaryError } from "../client/errors.ts";
 import type { McpOperation } from "../connection/model.ts";
 import {
@@ -8,7 +9,7 @@ import {
   McpToolMetadataSchema,
   type McpDiscoveryDiagnostic,
 } from "./model.ts";
-import { freezeMetadata, listMetadata, metadataBudget } from "./pagination.ts";
+import { listMetadata, metadataBudget } from "./pagination.ts";
 import { isToolAllowed } from "./policy.ts";
 import { metadataTime } from "./freshness.ts";
 import { scanParameterHeaders } from "../invocation/parameter-headers.ts";
@@ -87,23 +88,21 @@ export const collectMetadata = (operation: McpOperation) =>
       diagnostics.push({ family: "tools", reason: "invalid-parameter-headers" });
     return yield* Effect.try({
       try: () =>
-        freezeMetadata(
-          structuredClone({
-            tools: accepted,
-            expiresAt,
-            cacheScope,
-            resources: resources?.entries ?? [],
-            templates: templates?.entries ?? [],
-            prompts: prompts?.entries ?? [],
-            support: {
-              tools: tools?.supported ?? false,
-              resources: resources?.supported ?? false,
-              templates: templates?.supported ?? false,
-              prompts: prompts?.supported ?? false,
-            },
-            diagnostics: diagnostics.map((diagnostic) => ({ ...diagnostic })),
-          }),
-        ),
+        freezeSnapshot({
+          tools: accepted,
+          expiresAt,
+          cacheScope,
+          resources: resources?.entries ?? [],
+          templates: templates?.entries ?? [],
+          prompts: prompts?.entries ?? [],
+          support: {
+            tools: tools?.supported ?? false,
+            resources: resources?.supported ?? false,
+            templates: templates?.supported ?? false,
+            prompts: prompts?.supported ?? false,
+          },
+          diagnostics,
+        }),
       catch: () =>
         boundaryError("output-limit", "not-sent", "Unable to prepare MCP metadata snapshot."),
     });

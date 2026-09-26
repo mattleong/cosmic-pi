@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { scopedListener } from "pi-cosmic-core";
 import { makeResourceSubscriptions } from "../resources/subscriptions.ts";
 import { makeObservations } from "../observations/service.ts";
 import type { McpActivityContract } from "../activity/service.ts";
@@ -16,6 +17,7 @@ import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import type { McpConnection } from "../client/model.ts";
 import type { McpConnectorContract } from "../boundary/sdk-connection.ts";
 import type { McpConfigStoreContract, McpEffectiveServer, McpSettings } from "../config/model.ts";
+import { isToolAllowed } from "../discovery/policy.ts";
 import { McpAdmission, type AdmissionTicket } from "./admission.ts";
 import type {
   McpActionBinding,
@@ -54,7 +56,6 @@ export interface AuthSuspension {
   readonly done: Deferred.Deferred<void>;
   running: boolean;
 }
-export type RegistryConnector = McpConnectorContract;
 
 const stale = (outcome: McpBoundaryError["outcome"] = "not-sent") =>
   boundaryError("stale", outcome, "MCP operation authority was revoked.");
@@ -64,7 +65,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
   options: McpConnectionsOptions,
   store: McpConfigStoreContract,
   auth: McpAuthContract,
-  connector: RegistryConnector,
+  connector: McpConnectorContract,
   activity: McpActivityContract,
 ) {
   const observations = yield* makeObservations;
@@ -221,12 +222,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
       if (!server.enabled || !server.definition) {
         return yield* boundaryError("denied", "not-sent", "MCP server is disabled or invalid.");
       }
-      if (
-        tool !== undefined &&
-        (server.definition.denyTools.includes(tool) ||
-          (server.definition.allowTools !== undefined &&
-            !server.definition.allowTools.includes(tool)))
-      )
+      if (tool !== undefined && !isToolAllowed(server, tool))
         return yield* boundaryError("denied", "not-sent", "MCP tool is not allowed.");
       return server;
     });
@@ -414,38 +410,37 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
               if (!owner.current) return;
               observationFailures.delete(owner.server.id);
               owner.state = "connected";
-              if (acquired.value.remoteEvents)
-                yield* Effect.forkIn(
-                  Stream.runForEach(acquired.value.remoteEvents, (event) =>
-                    (event.kind === "resource-updated"
-                      ? resourceSubscriptions.awaitReady(owner, event.uri, event.subscription)
-                      : Effect.void
-                    ).pipe(
-                      Effect.andThen(
-                        withLock(
-                          Effect.sync(() => {
-                            if (
-                              !owner.current ||
-                              !owner.accepting ||
-                              !options.isTrusted() ||
-                              event.kind === "log" ||
-                              (event.kind === "resource-updated" &&
-                                !resourceSubscriptions.has(owner, event.uri, event.subscription))
-                            )
-                              return;
-                            observations.publish(
-                              owner.server.id,
-                              event.kind === "resource-updated"
-                                ? { kind: event.kind, uri: event.uri }
-                                : event,
-                            );
-                          }),
-                        ),
+              yield* Effect.forkIn(
+                Stream.runForEach(acquired.value.remoteEvents, (event) =>
+                  (event.kind === "resource-updated"
+                    ? resourceSubscriptions.awaitReady(owner, event.uri, event.subscription)
+                    : Effect.void
+                  ).pipe(
+                    Effect.andThen(
+                      withLock(
+                        Effect.sync(() => {
+                          if (
+                            !owner.current ||
+                            !owner.accepting ||
+                            !options.isTrusted() ||
+                            event.kind === "log" ||
+                            (event.kind === "resource-updated" &&
+                              !resourceSubscriptions.has(owner, event.uri, event.subscription))
+                          )
+                            return;
+                          observations.publish(
+                            owner.server.id,
+                            event.kind === "resource-updated"
+                              ? { kind: event.kind, uri: event.uri }
+                              : event,
+                          );
+                        }),
                       ),
                     ),
                   ),
-                  owner.scope,
-                );
+                ),
+                owner.scope,
+              );
               yield* activity.finish(owner.activity!, { status: "done" });
               changed();
               Deferred.doneUnsafe(owner.ready, Effect.succeed(acquired.value));
@@ -539,27 +534,27 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
       Effect.gen(function* () {
         // Auth.status reads only observed state. Never resolve credentials from status.
         const observed = yield* auth.status(server);
-        const connection = owners.get(server.id)?.connection;
+        const owner = owners.get(server.id);
+        const suspension = suspensions.get(server.id);
+        const connection = owner?.connection;
         const health = connection === undefined ? undefined : yield* connection.health;
         let result: McpConnectionStatus["servers"][number] = {
           id: server.id,
           scope: server.scope,
           enabled: server.enabled,
-          state: suspensions.has(server.id)
-            ? ("blocked" as const)
-            : (owners.get(server.id)?.state ?? ("disconnected" as const)),
+          state: suspension ? "blocked" : (owner?.state ?? "disconnected"),
           auth: observed.state,
           operationRevision,
           ...admission.snapshot(server.id),
           operations: admission.operations(server.id),
-          blockedReason: owners.get(server.id)?.uncertain
-            ? ("cleanup-unconfirmed" as const)
-            : owners.get(server.id)?.state === "closing"
-              ? ("cleanup-running" as const)
-              : suspensions.has(server.id)
-                ? suspensions.get(server.id)?.running
-                  ? ("auth-running" as const)
-                  : ("auth-suspended" as const)
+          blockedReason: owner?.uncertain
+            ? "cleanup-unconfirmed"
+            : owner?.state === "closing"
+              ? "cleanup-running"
+              : suspension
+                ? suspension.running
+                  ? "auth-running"
+                  : "auth-suspended"
                 : undefined,
         };
         if (connection?.protocolVersion !== undefined)
@@ -655,16 +650,7 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     changed,
     checkActionLocked,
     checkAction: (expected: McpActionBinding) => withLock(checkActionLocked(expected)),
-    subscribeChanges: (listener: () => void) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          changes.add(listener);
-        }),
-        () =>
-          Effect.sync(() => {
-            changes.delete(listener);
-          }),
-      ),
+    subscribeChanges: (listener: () => void) => scopedListener(changes, listener),
     ownerLocked,
     serverLocked,
     executionServerLocked,
@@ -682,34 +668,12 @@ export const makeRegistry = Effect.fn("McpConnections.registry")(function* (
     acceptingLocked,
     // Read-only host projection. This neither grants tickets nor publishes trust changes.
     isAvailable: () => !closed && config.trusted && config.settings.enabled && options.isTrusted(),
-    status: withLock(
-      Effect.gen(function* () {
-        yield* trustLocked;
-        return yield* snapshotLocked;
-      }),
-    ),
-    config: withLock(
-      Effect.gen(function* () {
-        yield* trustLocked;
-        return config;
-      }),
-    ),
+    status: withLock(trustLocked.pipe(Effect.andThen(snapshotLocked))),
+    config: withLock(trustLocked.pipe(Effect.andThen(Effect.sync(() => config)))),
     requireServer: (id: string) => withLock(serverLocked(id)),
     revoke,
     subscribeRevocations: (listener: McpRevocationListener) =>
-      Effect.acquireRelease(
-        withLock(
-          Effect.sync(() => {
-            listeners.add(listener);
-          }),
-        ),
-        () =>
-          withLock(
-            Effect.sync(() => {
-              listeners.delete(listener);
-            }),
-          ),
-      ),
+      scopedListener(listeners, listener, withLock),
   };
 });
 

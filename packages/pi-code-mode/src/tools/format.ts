@@ -4,8 +4,8 @@
 import * as Predicate from "effect/Predicate";
 
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined, invokeHostCallback } from "pi-cosmic-core";
 import type { ExecutionReceipts } from "./execution-receipts.ts";
 import type {
   InitialPreviewPresentation,
@@ -13,7 +13,6 @@ import type {
 } from "../results/read-presentation.ts";
 import type { FailurePresentation } from "./failure-evidence.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
-import type { McpEvidence } from "./mcp-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
@@ -35,11 +34,7 @@ export const formatForeignRejection = <Rejection>(rejection: Rejection): string 
   } catch {
     return FOREIGN_REJECTION_FALLBACK;
   }
-  try {
-    return String(rejection);
-  } catch {
-    return FOREIGN_REJECTION_FALLBACK;
-  }
+  return invokeHostCallback(() => String(rejection), FOREIGN_REJECTION_FALLBACK);
 };
 
 /** Code-point-safe truncation with a single-character ellipsis inside the budget. */
@@ -50,13 +45,7 @@ export const truncateDisplay = (text: string, maxCodePoints: number): string => 
 };
 
 /** Tolerant schema decode of one unknown value; malformed input yields undefined, never a throw. */
-export const decodeOption = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => {
-  const decoded = Schema.decodeUnknownOption(schema)(value);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
+export const decodeOption = decodeUnknownOrUndefined;
 
 /** Identity-preserving validation; only the host's live registry grants timing authority. */
 export const LiveChildTimingSchema = Schema.declare(
@@ -82,14 +71,15 @@ export interface CodeModeCallEntry {
   readonly liveTiming?: LiveChildTiming;
 }
 
-export interface CodeModeCallCounts {
-  readonly total: number;
-  readonly queued: number;
-  readonly running: number;
-  readonly succeeded: number;
-  readonly failed: number;
-  readonly cancelled: number;
-}
+export const CodeModeCallCountsSchema = Schema.Struct({
+  total: Schema.Natural,
+  queued: Schema.Natural,
+  running: Schema.Natural,
+  succeeded: Schema.Natural,
+  failed: Schema.Natural,
+  cancelled: Schema.Natural,
+});
+export type CodeModeCallCounts = typeof CodeModeCallCountsSchema.Type;
 
 /** Structured details persisted on the final `code_mode` tool result. */
 export interface CodeModeToolDetails {
@@ -100,12 +90,10 @@ export interface CodeModeToolDetails {
   readonly executionReceipts?: ExecutionReceipts;
   readonly failurePresentation?: FailurePresentation;
   readonly compactAttention?: CompactAttention;
-  /** Historical MCP-specific ledger. New executions use compactAttention. */
-  readonly mcpEvidence?: McpEvidence;
   readonly toolCalls: ReadonlyArray<CodeModeCallEntry>;
   /** Exact lifecycle counts, including calls hidden by bounded display selection. */
   readonly counts?: CodeModeCallCounts;
-  /** Total retained for hidden-row display and legacy detail compatibility. */
+  /** Still written when rows are hidden; rendering reads the exact `counts`. */
   readonly totalToolCalls?: number;
   /** Extension-only presentation hint; model-visible content remains the authoritative result. */
   readonly outputKind?: "text" | "structured";
@@ -162,31 +150,26 @@ const withLogs = (text: string, logs: ReadonlyArray<string> | undefined): string
   return text.length > 0 ? `${text}\n\n${rendered}` : rendered;
 };
 
+const STATUS_SYMBOLS = {
+  queued: " ◌",
+  running: " ⠋",
+  completed: " ✓",
+  error: " ✗",
+  cancelled: " ⊘",
+} satisfies Record<CodeModeCallEntry["status"], string>;
+
 /**
  * Deterministic, bounded partial result for `onUpdate`: nested call names and statuses only,
  * never nested output.
  */
 export const progressResult = (
   calls: ReadonlyArray<CodeModeCallEntry>,
-  exactCounts: CodeModeCallCounts = countCallEntries(calls),
+  counts: CodeModeCallCounts = countCallEntries(calls),
 ): AgentToolResult<CodeModeToolDetails> => {
-  const counts = { ...exactCounts };
   const settled = counts.succeeded + counts.failed + counts.cancelled;
   const details = callEntryDetails(calls, counts);
   const names = details.toolCalls
-    .map((call) => {
-      const symbol =
-        call.status === "queued"
-          ? " ◌"
-          : call.status === "running"
-            ? " ⠋"
-            : call.status === "error"
-              ? " ✗"
-              : call.status === "cancelled"
-                ? " ⊘"
-                : " ✓";
-      return `${call.tool}${symbol}`;
-    })
+    .map((call) => `${call.tool}${STATUS_SYMBOLS[call.status]}`)
     .join(", ");
   const hidden = Math.max(0, counts.total - details.toolCalls.length);
   const suffix = hidden > 0 ? `, +${hidden} earlier` : "";

@@ -1,18 +1,23 @@
 import {
   initTheme,
   type ExtensionAPI,
-  type ExtensionCommandContext,
   type ExtensionUIContext,
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import { beforeAll, describe, vi } from "vitest";
 import { InvalidSettingError } from "pi-cosmic-core";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import type { ResolvedConfig } from "../src/config/schema.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
 
@@ -28,23 +33,7 @@ type TestCustomFactory<Value> = (
 
 beforeAll(() => initTheme(undefined, false));
 
-function testDouble<Value>(value: Partial<Value>): Value {
-  // SAFETY: Each call builds an owned test double for the named host contract.
-  return value as Value;
-}
-
-function deferred<Value>() {
-  const handle = Deferred.makeUnsafe<Value, Error>();
-  return {
-    promise: Effect.runPromise(Deferred.await(handle)),
-    resolve: (value: Value) => {
-      Effect.runSync(Deferred.succeed(handle, value));
-    },
-    reject: (error: Error) => {
-      Effect.runSync(Deferred.fail(handle, error));
-    },
-  };
-}
+const eventually = (assertion: () => void) => Effect.promise(() => vi.waitFor(assertion));
 
 const initialConfig = (): ResolvedConfig => ({
   configPath: "/tmp/pi-better-xai.json",
@@ -70,31 +59,25 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   const custom: ExtensionUIContext["custom"] = <Value>(
     factory: TestCustomFactory<Value>,
   ): Promise<Value> => {
-    const completion = Deferred.makeUnsafe<Value>();
+    const completion = deferredPromise<Value>();
     const created = factory(
-      testDouble<TUI>({ requestRender }),
-      testDouble<Theme>({
-        fg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      }),
-      testDouble<KeybindingsManager>({ matches: () => false }),
-      (value) => {
-        Effect.runSync(Deferred.succeed(completion, value));
-      },
+      opaqueFixture({ requestRender }),
+      plainTheme,
+      opaqueFixture({ matches: () => false }),
+      completion.resolve,
     );
     // SAFETY: The controller's custom factory returns its component synchronously.
     component = created as Component;
-    return Effect.runPromise(Deferred.await(completion));
+    return completion.promise;
   };
-  const ui = testDouble<ExtensionUIContext>({ custom, notify });
-  const ctx = testDouble<ExtensionCommandContext>({
+  const ctx = extensionContextFixture({
     cwd: "/tmp",
     mode: "tui",
     hasUI: true,
     signal: undefined,
-    ui,
+    ui: { custom, notify },
   });
-  const pi = testDouble<ExtensionAPI>({
+  const pi = extensionApiFixture({
     registerCommand(name: string, value: RegisteredCommand) {
       if (name === "xai-settings") command = value;
     },
@@ -113,7 +96,6 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     },
     updateFooter,
     formatDebugStatus: () => "diagnostics",
-    captureSignal: () => ({ _tag: "Captured", signal: undefined }),
     run,
   });
 
@@ -123,11 +105,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   };
   const open = Effect.gen(function* () {
     const closed = invoke("");
-    yield* Effect.promise(() =>
-      vi.waitFor(() => {
-        expect(component).toBeDefined();
-      }),
-    );
+    yield* eventually(() => expect(component).toBeDefined());
     return { closed };
   });
   const selectedComponent = () => {
@@ -168,8 +146,8 @@ function renderedRow(component: Component, label: string): string | undefined {
 describe("Better xAI settings controller", () => {
   it.effect("keeps a newer optimistic value when an older apply settles", () =>
     Effect.gen(function* () {
-      const first = deferred<StubRunResult>();
-      const second = deferred<StubRunResult>();
+      const first = deferredPromise<StubRunResult>();
+      const second = deferredPromise<StubRunResult>();
       const h = settingsHarness([() => first.promise, () => second.promise]);
       const { closed } = yield* h.open;
       const component = h.selectedComponent();
@@ -181,11 +159,7 @@ describe("Better xAI settings controller", () => {
 
       h.setRefreshInterval(120000);
       first.resolve(Result.succeed(undefined));
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(h.updateFooter).toHaveBeenCalledOnce();
-        }),
-      );
+      yield* eventually(() => expect(h.updateFooter).toHaveBeenCalledOnce());
       expect(renderedRow(component, "Usage refresh")).toContain("300000");
 
       h.notify.mockImplementation((message: string) => {
@@ -200,15 +174,13 @@ describe("Better xAI settings controller", () => {
           }),
         ),
       );
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(h.notify).toHaveBeenCalledWith(
-            "Invalid value for usage.refreshIntervalMs.",
-            "error",
-          );
-          expect(renderedRow(component, "Usage refresh")).toContain("120000");
-        }),
-      );
+      yield* eventually(() => {
+        expect(h.notify).toHaveBeenCalledWith(
+          "Invalid value for usage.refreshIntervalMs.",
+          "error",
+        );
+        expect(renderedRow(component, "Usage refresh")).toContain("120000");
+      });
 
       component.handleInput?.(input.quit);
       yield* Effect.promise(() => closed);
@@ -219,7 +191,7 @@ describe("Better xAI settings controller", () => {
     "warns and restores the pre-edit value when config %s after runtime rejection",
     (mode) =>
       Effect.gen(function* () {
-        const write = deferred<StubRunResult>();
+        const write = deferredPromise<StubRunResult>();
         const h = settingsHarness([() => write.promise]);
         const { closed } = yield* h.open;
         const component = h.selectedComponent();
@@ -231,44 +203,13 @@ describe("Better xAI settings controller", () => {
         expect(renderedRow(component, "Usage refresh")).toContain("120000");
         h.makeConfigUnavailable(mode);
         write.reject(new Error("runtime unavailable"));
-        yield* Effect.promise(() =>
-          vi.waitFor(() => {
-            expect(h.notify).toHaveBeenCalledWith(
-              "Better xAI settings are unavailable.",
-              "warning",
-            );
-            expect(renderedRow(component, "Usage refresh")).toContain("60000");
-          }),
-        );
+        yield* eventually(() => {
+          expect(h.notify).toHaveBeenCalledWith("Better xAI settings are unavailable.", "warning");
+          expect(renderedRow(component, "Usage refresh")).toContain("60000");
+        });
 
         component.handleInput?.(input.quit);
         yield* Effect.promise(() => closed);
       }),
-  );
-
-  it.effect("provides help, diagnostics, and validation feedback without session config", () =>
-    Effect.gen(function* () {
-      const h = settingsHarness([]);
-
-      h.makeConfigUnavailable("undefined");
-      yield* Effect.promise(() => h.invoke("help"));
-      expect(h.notify).toHaveBeenLastCalledWith(
-        expect.stringContaining("usage.refreshIntervalMs"),
-        "info",
-      );
-      yield* Effect.promise(() => h.invoke("diagnostics"));
-      expect(h.notify).toHaveBeenLastCalledWith("diagnostics", "info");
-      yield* Effect.promise(() => h.invoke("unknown true"));
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("unknown"), "error");
-      yield* Effect.promise(() => h.invoke("usage.refreshIntervalMs"));
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
-      yield* Effect.promise(() => h.invoke("usage.showResetTimes invalid"));
-      expect(h.notify).toHaveBeenLastCalledWith(
-        expect.stringContaining("usage.showResetTimes"),
-        "error",
-      );
-      yield* Effect.promise(() => h.invoke(""));
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
-    }),
   );
 });

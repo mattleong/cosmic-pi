@@ -1,42 +1,24 @@
 import * as Schema from "effect/Schema";
+import type { ScopedConfigMetadata } from "pi-cosmic-core";
 
 export const FOOTER_DENSITIES = ["auto", "comfortable", "compact"] as const;
-export const MEDIA_PLACEMENTS = [
-  "stacked",
-  "inline-left",
-  "inline-right",
-  "badge",
-  "habitat",
-] as const;
 
 export const FooterDensitySchema = Schema.Literals(FOOTER_DENSITIES);
-export const MediaPlacementSchema = Schema.Literals(MEDIA_PLACEMENTS);
 export type FooterDensity = typeof FooterDensitySchema.Type;
-export type MediaPlacement = typeof MediaPlacementSchema.Type;
 
-export interface CosmicUiConfigFile {
-  readonly footer?: {
-    readonly enabled?: boolean;
-    readonly density?: FooterDensity;
-    readonly order?: readonly string[];
-    readonly hidden?: readonly string[];
-    readonly mediaPlacement?: MediaPlacement;
-  };
+interface FooterConfig {
+  readonly enabled: boolean;
+  readonly density: FooterDensity;
+  readonly order: readonly string[];
+  readonly hidden: readonly string[];
 }
 
-export interface ResolvedCosmicUiConfig {
-  readonly configPath: string;
-  readonly projectConfigPath: string;
-  readonly globalConfigPath: string;
-  readonly projectConfigExists: boolean;
-  readonly globalConfigExists: boolean;
-  readonly footer: {
-    readonly enabled: boolean;
-    readonly density: FooterDensity;
-    readonly order: readonly string[];
-    readonly hidden: readonly string[];
-    readonly mediaPlacement: MediaPlacement;
-  };
+export interface CosmicUiConfigFile {
+  readonly footer?: Partial<FooterConfig>;
+}
+
+export interface ResolvedCosmicUiConfig extends ScopedConfigMetadata {
+  readonly footer: FooterConfig;
 }
 
 export const DEFAULT_FOOTER_ORDER = [
@@ -61,9 +43,8 @@ export const DEFAULT_CONFIG = {
     density: "auto",
     order: DEFAULT_FOOTER_ORDER,
     hidden: [],
-    mediaPlacement: "inline-right",
   },
-} satisfies { readonly footer: ResolvedCosmicUiConfig["footer"] };
+} satisfies { readonly footer: FooterConfig };
 
 export const makeDefaultResolvedCosmicUiConfig = (): ResolvedCosmicUiConfig => ({
   configPath: "",

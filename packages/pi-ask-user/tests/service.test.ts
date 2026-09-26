@@ -1,4 +1,4 @@
-import { defaultQuestion } from "./support/questionnaire.ts";
+import { asyncRequest, defaultQuestion, emptyForm, formOwner } from "./support/questionnaire.ts";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -25,7 +25,7 @@ const invalidRequest: AskUserRequest = {
 const outcome: AskUserOutcome = { outcome: "submitted", answers: [] };
 
 it.effect(
-  "owned asks queue behind async questionnaires and cancelled owners never mount or steer answers",
+  "async, owned, ordinary and form requests share FIFO; cancelled callers never mount or steer answers",
   () =>
     Effect.gen(function* () {
       const firstAnswer = yield* Deferred.make<AskUserOutcome>();
@@ -34,33 +34,42 @@ it.effect(
       let delivered = 0;
       const host: AskUserHost = (input, opened) =>
         Effect.gen(function* () {
-          calls.push(input.questions[0]!.key);
+          calls.push(opened ? "async" : input.questions[0]!.key);
           if (opened) yield* Deferred.succeed(opened, undefined);
           return opened ? yield* Deferred.await(firstAnswer) : outcome;
         });
+      const keyed = (key: string) => ({ questions: [{ ...request.questions[0]!, key }] });
       yield* Effect.gen(function* () {
         const service = yield* AskUserService;
-        const receipt = yield* service.startAsync({
-          ...request,
-          independentWork: "Inspect",
-          blockedWork: "Choose",
-        });
-        const cancelled = yield* Effect.forkChild(
-          service.askOwned(request, { runId: "cancelled", assignmentEpoch: 1, requestId: "first" }),
-          { startImmediately: true },
-        );
-        const owned = yield* Effect.forkChild(
-          service.askOwned(
-            { questions: [{ ...request.questions[0]!, key: "owned" }] },
-            { runId: "live", assignmentEpoch: 2, requestId: "second" },
+        const receipt = yield* service.startAsync(asyncRequest);
+        const fork = <A, E>(effect: Effect.Effect<A, E>) =>
+          Effect.forkChild(effect, { startImmediately: true });
+        const cancelled = [
+          yield* fork(
+            service.askOwned(request, {
+              runId: "cancelled",
+              assignmentEpoch: 1,
+              requestId: "first",
+            }),
           ),
-          { startImmediately: true },
+          yield* fork(service.askForm(emptyForm, formOwner)),
+        ];
+        const owned = yield* fork(
+          service.askOwned(keyed("owned"), {
+            runId: "live",
+            assignmentEpoch: 2,
+            requestId: "second",
+          }),
         );
-        yield* Fiber.interrupt(cancelled);
-        expect(calls).toEqual(["choice"]);
+        const ordinary = yield* fork(service.ask(keyed("ordinary")));
+        const form = yield* fork(service.askForm(emptyForm, { ...formOwner, requestId: "next" }));
+        yield* Fiber.interruptAll(cancelled);
+        expect(calls).toEqual(["async"]);
         yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
         expect(yield* Fiber.join(owned)).toEqual(outcome);
-        expect(calls).toEqual(["choice", "owned"]);
+        yield* Fiber.join(ordinary);
+        expect(yield* Fiber.join(form)).toEqual({ action: "accept", content: {} });
+        expect(calls).toEqual(["async", "owned", "ordinary", "form"]);
         expect(owners).toEqual(["cancelled", "live"]);
         expect(delivered).toBe(0);
       }).pipe(
@@ -75,12 +84,17 @@ it.effect(
             {
               admitted: (_id, _request, _cancel, owner) =>
                 Effect.sync(() => {
-                  if (owner) owners.push(owner.runId);
+                  if (owner && "runId" in owner) owners.push(owner.runId);
                 }),
               presenting: () => Effect.void,
               settled: () => Effect.void,
               removed: () => Effect.void,
             },
+            () =>
+              Effect.sync(() => {
+                calls.push("form");
+                return { action: "accept", content: {} } as const;
+              }),
           ),
         ),
       );
@@ -101,11 +115,7 @@ it.effect("shares one bounded queue across blocking, owned and async requests", 
         { startImmediately: true },
       );
       for (let i = 0; i < MAX_PENDING_QUESTIONNAIRES - 2; i++)
-        yield* service.startAsync({
-          ...request,
-          independentWork: "Inspect",
-          blockedWork: "Choose",
-        });
+        yield* service.startAsync(asyncRequest);
       expect(yield* Effect.flip(service.ask(request))).toMatchObject({ reason: "busy" });
       expect(
         yield* Effect.flip(
@@ -115,11 +125,9 @@ it.effect("shares one bounded queue across blocking, owned and async requests", 
       yield* Fiber.interrupt(owned);
       // The cancelled ticket still occupies its bounded slot until the active
       // predecessor closes. Repeated cancel/admit cannot grow drain fibers.
-      expect(
-        yield* Effect.flip(
-          service.startAsync({ ...request, independentWork: "Inspect", blockedWork: "Choose" }),
-        ),
-      ).toMatchObject({ reason: "busy" });
+      expect(yield* Effect.flip(service.startAsync(asyncRequest))).toMatchObject({
+        reason: "busy",
+      });
       yield* Fiber.interrupt(active);
     }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
   }),

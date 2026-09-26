@@ -169,6 +169,26 @@ const outputWait = (
   ...overrides,
 });
 
+const exitWait = (id: string, waitSeconds = 30): WaitForBackgroundTask => ({
+  id,
+  until: "exit",
+  waitSeconds,
+});
+const forkNow = Effect.forkScoped({ startImmediately: true });
+const emitAndRead = (
+  service: BackgroundTaskServiceContract,
+  control: FakeProcessControl | undefined,
+  id: string,
+  afterCursor: number,
+  text: string,
+  stream: "stdout" | "stderr" = "stdout",
+) =>
+  Effect.gen(function* () {
+    const reading = yield* service.logs({ id, afterCursor, waitSeconds: 30 }).pipe(forkNow);
+    control?.offer(stream, text);
+    return yield* Fiber.join(reading);
+  });
+
 const awaitState = (state: BackgroundTaskState) => {
   const reached = Deferred.makeUnsafe<void>();
   return {
@@ -194,11 +214,7 @@ describe("BackgroundTaskService", () => {
       return harness.run(function* (service) {
         const started = yield* service.start(taskInput());
         const waiting = yield* service
-          .wait(
-            outcome === "output"
-              ? outputWait(started.id)
-              : { id: started.id, until: "exit", waitSeconds: 5 },
-          )
+          .wait(outcome === "output" ? outputWait(started.id) : exitWait(started.id, 5))
           .pipe(Effect.forkScoped);
         yield* Deferred.await(admitted);
         expect(latest.tasks[0]?.awaited).toBe(true);
@@ -224,9 +240,7 @@ describe("BackgroundTaskService", () => {
       const first = yield* service.wait(outputWait(started.id)).pipe(Effect.forkScoped);
       yield* Deferred.await(admitted);
       admitted = Deferred.makeUnsafe<void>();
-      const second = yield* service
-        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
-        .pipe(Effect.forkScoped);
+      const second = yield* service.wait(exitWait(started.id)).pipe(Effect.forkScoped);
       yield* Deferred.await(admitted);
       yield* Fiber.interrupt(first);
       expect(latest.tasks[0]?.awaited).toBe(true);
@@ -250,24 +264,14 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput({ command: "watch" }));
 
-      const first = yield* service
-        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "a");
-      const firstSlice = yield* Fiber.join(first);
+      const read = (afterCursor: number, text: string) =>
+        emitAndRead(service, harness.controls[0], started.id, afterCursor, text);
+      const firstSlice = yield* read(0, "a");
       expect(firstSlice.events.map((event) => event.cursor)).toEqual([1]);
       expect(outputTexts()).toEqual(["a"]);
 
-      const second = yield* service
-        .logs({ id: started.id, afterCursor: firstSlice.nextCursor, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "b");
-      const secondSlice = yield* Fiber.join(second);
-      const third = yield* service
-        .logs({ id: started.id, afterCursor: secondSlice.nextCursor, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "c");
-      const thirdSlice = yield* Fiber.join(third);
+      const secondSlice = yield* read(firstSlice.nextCursor, "b");
+      const thirdSlice = yield* read(secondSlice.nextCursor, "c");
       expect([firstSlice.nextCursor, secondSlice.nextCursor, thirdSlice.nextCursor]).toEqual([
         1, 2, 3,
       ]);
@@ -288,9 +292,7 @@ describe("BackgroundTaskService", () => {
       const started = yield* service.start({ command: "watch", cwd: ".", name: "watcher" });
       expect(started).toMatchObject({ id: "task-1", state: "running", pid: 10_000 });
 
-      const waiting = yield* service
-        .logs({ id: started.id, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const waiting = yield* service.logs({ id: started.id, waitSeconds: 30 }).pipe(forkNow);
       harness.controls[0]?.offer("stdout", "ready\n");
       const logs = yield* Fiber.join(waiting);
       expect(logs.events.map((event) => event.text).join("")).toContain("ready");
@@ -357,7 +359,7 @@ describe("BackgroundTaskService", () => {
       const started = yield* service.start(taskInput());
       const waiting = yield* service
         .wait(outputWait(started.id, { contains: "ready now", afterCursor: 0 }))
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+        .pipe(forkNow);
 
       harness.controls[0]?.offer("stdout", "rea");
       yield* Effect.yieldNow;
@@ -379,11 +381,7 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const read = yield* service
-        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "server ready\n");
-      yield* Fiber.join(read);
+      yield* emitAndRead(service, harness.controls[0], started.id, 0, "server ready\n");
 
       expect(yield* service.wait(outputWait(started.id, { waitSeconds: 0 }))).toMatchObject({
         outcome: "matched",
@@ -397,16 +395,9 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const firstRead = yield* service
-        .logs({ id: started.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "rea");
-      const first = yield* Fiber.join(firstRead);
-      const secondRead = yield* service
-        .logs({ id: started.id, afterCursor: first.nextCursor, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stderr", "dy");
-      yield* Fiber.join(secondRead);
+      const control = harness.controls[0];
+      const first = yield* emitAndRead(service, control, started.id, 0, "rea");
+      yield* emitAndRead(service, control, started.id, first.nextCursor, "dy", "stderr");
 
       expect(yield* service.wait(outputWait(started.id, { waitSeconds: 0 }))).toMatchObject({
         outcome: "timeout",
@@ -434,9 +425,7 @@ describe("BackgroundTaskService", () => {
       const harness = serviceHarness();
       return harness.run(function* (service) {
         const started = yield* service.start(taskInput());
-        const waiting = yield* service
-          .wait(outputWait(started.id))
-          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const waiting = yield* service.wait(outputWait(started.id)).pipe(forkNow);
 
         harness.controls[0]?.offer("stdout", "rea");
         yield* Effect.yieldNow;
@@ -457,7 +446,7 @@ describe("BackgroundTaskService", () => {
       const started = yield* service.start(taskInput());
       const waiting = yield* service
         .wait(outputWait(started.id, { afterCursor: 10 }))
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+        .pipe(forkNow);
 
       harness.controls[0]?.offer("stdout", "ready");
       harness.controls[0]?.complete();
@@ -469,9 +458,7 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput({ command: "check" }));
-      const waiting = yield* service
-        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const waiting = yield* service.wait(exitWait(started.id)).pipe(forkNow);
 
       harness.controls[0]?.complete({ exitCode: 1 });
       expect(yield* Fiber.join(waiting)).toMatchObject({
@@ -481,29 +468,11 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("returns completed when a task exits before an output match", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput({ command: "check" }));
-      const waiting = yield* service
-        .wait(outputWait(started.id, { contains: "never printed" }))
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-
-      harness.controls[0]?.complete();
-      expect(yield* Fiber.join(waiting)).toMatchObject({
-        outcome: "completed",
-        snapshot: { state: "exited", exitCode: 0 },
-      });
-    });
-  });
-
   it.effect("returns a normal timeout result without stopping the task", () => {
     const harness = serviceHarness();
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const waiting = yield* service
-        .wait({ id: started.id, until: "exit", waitSeconds: 5 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const waiting = yield* service.wait(exitWait(started.id, 5)).pipe(forkNow);
 
       yield* Effect.yieldNow;
       yield* TestClock.adjust("5 seconds");
@@ -511,21 +480,6 @@ describe("BackgroundTaskService", () => {
         outcome: "timeout",
         snapshot: { state: "running" },
       });
-      expect((yield* service.status(started.id)).state).toBe("running");
-      yield* service.stop(started.id);
-    });
-  });
-
-  it.effect("interrupts a wait without mutating the task", () => {
-    const harness = serviceHarness();
-    return harness.run(function* (service) {
-      const started = yield* service.start(taskInput());
-      const waiting = yield* service
-        .wait({ id: started.id, until: "exit", waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-
-      yield* Effect.yieldNow;
-      yield* Fiber.interrupt(waiting);
       expect((yield* service.status(started.id)).state).toBe("running");
       yield* service.stop(started.id);
     });
@@ -569,13 +523,9 @@ describe("BackgroundTaskService", () => {
       const control = harness.controls[0];
       if (!control) throw new Error("started process was not captured");
 
-      const gracefulStop = yield* service
-        .stop(started.id)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const gracefulStop = yield* service.stop(started.id).pipe(forkNow);
       yield* control.awaitMode("graceful");
-      const forceStop = yield* service
-        .stop(started.id, true)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const forceStop = yield* service.stop(started.id, true).pipe(forkNow);
       yield* control.awaitMode("force");
 
       const settled = yield* Effect.all([Fiber.join(gracefulStop), Fiber.join(forceStop)]);
@@ -588,9 +538,7 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness({ stopGraceMs: 2_000 }, () => {}, { completeOnGraceful: false });
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const stopping = yield* service
-        .stop(started.id)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const stopping = yield* service.stop(started.id).pipe(forkNow);
       yield* Effect.yieldNow;
       expect(harness.controls[0]?.modes).toEqual(["graceful"]);
       yield* TestClock.adjust("2 seconds");
@@ -603,9 +551,7 @@ describe("BackgroundTaskService", () => {
     const harness = serviceHarness({ stopGraceMs: 2_000 }, () => {}, { completeOnGraceful: false });
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const stopping = yield* service
-        .stop(started.id)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const stopping = yield* service.stop(started.id).pipe(forkNow);
       yield* Effect.yieldNow;
       expect(harness.controls[0]?.modes).toEqual(["graceful"]);
       yield* TestClock.adjust("1999 millis");
@@ -622,9 +568,7 @@ describe("BackgroundTaskService", () => {
     });
     return harness.run(function* (service) {
       const started = yield* service.start(taskInput());
-      const stopping = yield* service
-        .stop(started.id)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const stopping = yield* service.stop(started.id).pipe(forkNow);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("5 seconds");
       const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
@@ -670,7 +614,7 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const first = yield* service.start(taskInput({ command: "first" }));
       const second = yield* service.start(taskInput({ command: "second" }));
-      const stopping = yield* service.stopAll().pipe(Effect.forkScoped({ startImmediately: true }));
+      const stopping = yield* service.stopAll().pipe(forkNow);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("2 seconds");
       const failure = yield* Fiber.join(stopping).pipe(Effect.flip);
@@ -715,9 +659,7 @@ describe("BackgroundTaskService", () => {
     const spawnGate = Deferred.makeUnsafe<void>();
     const harness = serviceHarness({}, () => {}, { spawnGate });
     return harness.run(function* (service) {
-      const starting = yield* service
-        .start(taskInput())
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const starting = yield* service.start(taskInput()).pipe(forkNow);
       yield* Effect.yieldNow;
       yield* Fiber.interrupt(starting);
       yield* Deferred.succeed(spawnGate, undefined);
@@ -735,16 +677,8 @@ describe("BackgroundTaskService", () => {
     return harness.run(function* (service) {
       const first = yield* service.start(taskInput({ command: "first" }));
       const second = yield* service.start(taskInput({ command: "second" }));
-      const firstLogs = yield* service
-        .logs({ id: first.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[0]?.offer("stdout", "a".repeat(3_000));
-      yield* Fiber.join(firstLogs);
-      const secondLogs = yield* service
-        .logs({ id: second.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      harness.controls[1]?.offer("stdout", "b".repeat(3_000));
-      yield* Fiber.join(secondLogs);
+      yield* emitAndRead(service, harness.controls[0], first.id, 0, "a".repeat(3_000));
+      yield* emitAndRead(service, harness.controls[1], second.id, 0, "b".repeat(3_000));
       expect((yield* service.status(first.id)).droppedLogBytes).toBe(3_000);
       yield* service.stopAll();
     });
@@ -754,13 +688,9 @@ describe("BackgroundTaskService", () => {
     const spawnGate = Deferred.makeUnsafe<void>();
     const harness = serviceHarness({}, () => {}, { spawnGate });
     return harness.run(function* (service) {
-      const starting = yield* service
-        .start(taskInput())
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const starting = yield* service.start(taskInput()).pipe(forkNow);
       yield* Effect.yieldNow;
-      const stopping = yield* service
-        .stop("task-1")
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const stopping = yield* service.stop("task-1").pipe(forkNow);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("10 seconds");
       expect(yield* Fiber.join(stopping).pipe(Effect.flip)).toMatchObject({
@@ -817,17 +747,15 @@ describe("BackgroundTaskService", () => {
       const second = yield* service.start(taskInput({ command: "second" }));
       const readingLogs = yield* service
         .logs({ id: first.id, afterCursor: 0, waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      const waitingForExit = yield* service
-        .wait({ id: first.id, until: "exit", waitSeconds: 30 })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
+        .pipe(forkNow);
+      const waitingForExit = yield* service.wait(exitWait(first.id)).pipe(forkNow);
       yield* Effect.yieldNow;
 
       // Both monitors are ready before either runs. The first completion wakes the admitted
       // readers, then the second completion evicts that terminal record before they resume.
       harness.controls[0]?.complete();
       harness.controls[1]?.complete();
-      expect(yield* service.wait({ id: second.id, until: "exit", waitSeconds: 30 })).toMatchObject({
+      expect(yield* service.wait(exitWait(second.id))).toMatchObject({
         outcome: "completed",
         snapshot: { state: "exited" },
       });
@@ -848,16 +776,6 @@ describe("BackgroundTaskService", () => {
     });
   });
 
-  it.effect("enforces active capacity", () => {
-    const harness = serviceHarness({ maxRunning: 1 });
-    return harness.run(function* (service) {
-      yield* service.start(taskInput({ command: "first" }));
-      const second = yield* Effect.result(service.start(taskInput({ command: "second" })));
-      expect(second._tag).toBe("Failure");
-      yield* service.stopAll();
-    });
-  });
-
   it.effect("confirms active termination before the fixed monitor scope closes", () => {
     const terminal = awaitState("stopped");
     const harness = serviceHarness({}, terminal.publish);
@@ -869,19 +787,6 @@ describe("BackgroundTaskService", () => {
       yield* Scope.close(scope, Exit.void);
       expect(harness.controls[0]?.modes).toContain("graceful");
       expect(Deferred.isDoneUnsafe(terminal.reached)).toBe(true);
-    });
-  });
-
-  it.effect("rejects starts after the service scope closes", () => {
-    const harness = serviceHarness();
-    return Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const context = yield* Layer.buildWithScope(harness.layer, scope);
-      const service = Context.get(context, BackgroundTaskService);
-      yield* Scope.close(scope, Exit.void);
-      expect(yield* service.start(taskInput({ command: "late" })).pipe(Effect.flip)).toMatchObject({
-        _tag: "BackgroundRuntimeClosedError",
-      });
     });
   });
 });

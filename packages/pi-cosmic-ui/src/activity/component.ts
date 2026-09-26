@@ -26,14 +26,13 @@ import {
 } from "../manager/list-detail-shell.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
-import { activityAttentionLabels, activityAttentionTotals } from "./attention.ts";
+import { activityAttentionLabels, activityAttentionTotals, activityStatus } from "./attention.ts";
 import { activityPath, activityTree, needsYou } from "./tree.ts";
 import {
   activityStartupGlyph,
   activityElapsed,
   activityOwnerLabel,
   activityRowLine,
-  activityStatus,
   activityType,
 } from "./widget.ts";
 

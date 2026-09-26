@@ -11,9 +11,10 @@ import {
   commonSuffixLength,
   rangesAtGraphemeBoundaries,
 } from "./text-boundaries";
-import { collectChangedTokenGaps, type ChangedTokenGap } from "./token-alignment";
+import { changedTokenGaps, type ChangedTokenGap } from "./token-alignment";
+import { unorderedTokenSimilarity } from "./line-similarity";
 import {
-  isIdentifierSimilarityPart,
+  identifierSimilarityParts,
   isIdentifierToken,
   isMeaningfulOperatorToken,
   isNumberToken,
@@ -56,7 +57,8 @@ function refinedRangesForTokenGaps(
     const addedGroup = nonEmptyTokenGroup(gap.added);
     const refined =
       removedGroup && addedGroup
-        ? refinedChangedTokenGroupRanges(beforeTokens, removedGroup, afterTokens, addedGroup)
+        ? (refinedSingleTokenRanges(beforeTokens, removedGroup, afterTokens, addedGroup) ??
+          refinedSoftTokenGroupRanges(beforeTokens, removedGroup, afterTokens, addedGroup))
         : undefined;
     if (refined) {
       removed.push(...refined.removed);
@@ -72,18 +74,6 @@ function refinedRangesForTokenGaps(
 
 function nonEmptyTokenGroup(group: TokenGroup): TokenGroup | undefined {
   return group.start < group.end ? group : undefined;
-}
-
-function refinedChangedTokenGroupRanges(
-  beforeTokens: WordEmphasisToken[],
-  beforeGroup: TokenGroup,
-  afterTokens: WordEmphasisToken[],
-  afterGroup: TokenGroup,
-): WordChangeRanges | undefined {
-  return (
-    refinedSingleTokenRanges(beforeTokens, beforeGroup, afterTokens, afterGroup) ??
-    refinedSoftTokenGroupRanges(beforeTokens, beforeGroup, afterTokens, afterGroup)
-  );
 }
 
 function refinedSingleTokenRanges(
@@ -134,12 +124,8 @@ function shouldSuppressUnbalancedIdentifierPartRefinement(
 ): boolean {
   if (textRanges) return false;
   if (!isIdentifierToken(beforeToken.value) || !isIdentifierToken(afterToken.value)) return false;
-  const beforePartCount = splitIdentifierToken(beforeToken.value, 0).filter((part) =>
-    isIdentifierSimilarityPart(part.value),
-  ).length;
-  const afterPartCount = splitIdentifierToken(afterToken.value, 0).filter((part) =>
-    isIdentifierSimilarityPart(part.value),
-  ).length;
+  const beforePartCount = identifierSimilarityParts(beforeToken.value).length;
+  const afterPartCount = identifierSimilarityParts(afterToken.value).length;
   return Math.min(beforePartCount, afterPartCount) === 1 && beforePartCount !== afterPartCount;
 }
 
@@ -224,29 +210,13 @@ function softTokenSimilarity(before: string, after: string): number {
 }
 
 function identifierTokenSimilarity(before: string, after: string): number {
-  const beforeParts = splitIdentifierToken(before, 0)
-    .map((part) => part.value.toLowerCase())
-    .filter(isIdentifierSimilarityPart);
-  const afterParts = splitIdentifierToken(after, 0)
-    .map((part) => part.value.toLowerCase())
-    .filter(isIdentifierSimilarityPart);
-  const partSimilarity = tokenDiceSimilarity(beforeParts, afterParts);
+  const beforeParts = identifierSimilarityParts(before);
+  const afterParts = identifierSimilarityParts(after);
+  const partSimilarity =
+    beforeParts.length > 0 && afterParts.length > 0
+      ? unorderedTokenSimilarity(beforeParts, afterParts, () => 1)
+      : 0;
   return Math.max(partSimilarity, edgeTextSimilarity(before, after));
-}
-
-function tokenDiceSimilarity(before: string[], after: string[]): number {
-  if (before.length === 0 || after.length === 0) return 0;
-  const remaining = new Map<string, number>();
-  for (const token of before) remaining.set(token, (remaining.get(token) ?? 0) + 1);
-  let shared = 0;
-  for (const token of after) {
-    const count = remaining.get(token) ?? 0;
-    if (count === 0) continue;
-    shared++;
-    if (count === 1) remaining.delete(token);
-    else remaining.set(token, count - 1);
-  }
-  return (2 * shared) / (before.length + after.length);
 }
 
 function edgeTextSimilarity(before: string, after: string): number {
@@ -265,16 +235,7 @@ function refinedIdentifierTokenRanges(
   const afterParts = splitIdentifierToken(afterToken.value, afterToken.start);
   if (beforeParts.length <= 1 && afterParts.length <= 1) return undefined;
 
-  const gaps: ChangedTokenGap[] = [];
-  collectChangedTokenGaps(
-    beforeParts,
-    0,
-    beforeParts.length,
-    afterParts,
-    0,
-    afterParts.length,
-    gaps,
-  );
+  const { gaps } = changedTokenGaps(beforeParts, afterParts);
   const ranges = refinedRangesForTokenGaps(beforeParts, afterParts, gaps);
   return hasWordChangeRanges(ranges) ? ranges : undefined;
 }

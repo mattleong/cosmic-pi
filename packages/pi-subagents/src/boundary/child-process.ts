@@ -1,5 +1,5 @@
 // Node process and session-file ownership is intentionally isolated at this boundary.
-import { hasObjectRuntimeType, synchronousNow } from "pi-cosmic-core";
+import { synchronousNow } from "pi-cosmic-core";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { nodeFsPromises, nodePath } from "./node-builtins.ts";
@@ -24,16 +24,20 @@ import {
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { processCauseError as processError, SubagentProcessError } from "../run/errors.ts";
-import type { RuntimeApiKey } from "../run/model.ts";
-import { acquireProcessTransport, type ProcessTransportRuntime } from "./process-transport.ts";
+import type { BackendLaunchRequest } from "../backend/model.ts";
+import {
+  acquireProcessTransport,
+  type ProcessTransportRuntime,
+  type ProcessWireEvent,
+} from "./process-transport.ts";
 export { releaseChildProcess, type ChildProcessReleaseOperations } from "./process-transport.ts";
+import { nodeErrorCode } from "./harness-shared.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import type {
   LocalPiContact,
   LocalPiParentControl,
   RpcCommand,
 } from "../backend/local-pi-protocol.ts";
-import type { SubagentContextMode, SubagentEffort } from "../domain/routing.ts";
 
 const { mkdir, readFile, rm, rmdir, writeFile } = nodeFsPromises;
 const { join } = nodePath;
@@ -49,35 +53,14 @@ const BLOCKED_ENV_KEYS = new Set([
   RUNTIME_API_PROVIDER_ENV,
 ]);
 
-export interface ChildLaunchRequest {
-  readonly runId: string;
-  readonly name: string;
-  readonly cwd: string;
-  readonly context: SubagentContextMode;
-  readonly writeIntent: import("../domain/routing.ts").SubagentWriteIntent;
-  readonly openaiFastMode: boolean;
-  readonly model: string;
-  readonly effort: SubagentEffort;
-  readonly runtimeApiKey?: RuntimeApiKey | undefined;
-  readonly activeTools: ReadonlyArray<string>;
-  readonly projectTrusted: boolean;
-  readonly parentSessionId: string;
-  readonly parentSessionFile?: string;
-  readonly parentLeafId?: string;
+export type ChildLaunchRequest = Omit<BackendLaunchRequest, "closeOnReport" | "resumeToken"> & {
   readonly resumeSessionFile?: string | undefined;
-  readonly systemPrompt: string;
-}
+};
 
-export type ChildWireEvent =
+export type ChildWireEvent = ProcessWireEvent<
   | { readonly type: "rpc_message"; readonly value: unknown }
   | { readonly type: "parent_contact"; readonly value: LocalPiContact }
-  | { readonly type: "protocol_error"; readonly message: string }
-  | {
-      readonly type: "exit";
-      readonly exitCode: number | null;
-      readonly signal?: string;
-      readonly stderr: string;
-    };
+>;
 
 export interface ChildProcessHandle {
   readonly pid: number;
@@ -135,11 +118,7 @@ const reclaimChildRunState = (
       );
       return rm(runDirectory, { recursive: true, force: true }).then(() =>
         rmdir(join(runDirectory, "..")).catch((error) => {
-          // SAFETY: The boundary adapter's ownership and validation checks establish this host contract before use.
-          const code =
-            hasObjectRuntimeType(error) && error !== null && "code" in error
-              ? (error as { readonly code?: unknown }).code
-              : undefined;
+          const code = nodeErrorCode(error);
           if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "EBUSY")
             throw error;
         }),

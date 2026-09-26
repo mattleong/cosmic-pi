@@ -18,7 +18,6 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
       readonly ack: Deferred.Deferred<void, McpWriteFailure>;
     }>(maximumWrites);
     const acknowledgements = new Set<Deferred.Deferred<void, McpWriteFailure>>();
-    let pending = 0;
     let closed = false;
     const writeLine = (line: string) =>
       Effect.callback<void, McpWriteFailure>((resume) => {
@@ -31,12 +30,7 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
         Effect.flatMap((frame) =>
           Effect.exit(writeLine(frame.line)).pipe(
             Effect.flatMap((exit) => Deferred.done(frame.ack, exit)),
-            Effect.ensuring(
-              Effect.sync(() => {
-                acknowledgements.delete(frame.ack);
-                pending = Math.max(0, pending - 1);
-              }),
-            ),
+            Effect.ensuring(Effect.sync(() => acknowledgements.delete(frame.ack))),
           ),
         ),
       ),
@@ -45,16 +39,15 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
     // frame's acknowledgement; interrupting its waiter cannot enqueue or publish a second frame.
     const write = <ValueInput>(value: ValueInput): Effect.Effect<void, McpWriteFailure> => {
       if (closed) return Effect.fail(new McpWriteFailure({ reason: "closed" }));
-      if (pending >= maximumWrites) return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
+      if (acknowledgements.size >= maximumWrites)
+        return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
       const line = `${JSON.stringify(value)}\n`;
       if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES)
         return Effect.fail(new McpWriteFailure({ reason: "size" }));
       const ack = Deferred.makeUnsafe<void, McpWriteFailure>();
       acknowledgements.add(ack);
-      pending += 1;
       if (!Queue.offerUnsafe(frames, { line, ack })) {
         acknowledgements.delete(ack);
-        pending -= 1;
         return Effect.fail(new McpWriteFailure({ reason: "capacity" }));
       }
       return Deferred.await(ack);
@@ -66,7 +59,6 @@ export const makeSerializedWriter = Effect.fn("SupervisorMcpHelper.makeSerialize
       for (const acknowledgement of acknowledgements)
         Deferred.doneUnsafe(acknowledgement, Effect.fail(failure));
       acknowledgements.clear();
-      pending = 0;
     };
     // Also cover startup failure before the helper installs its earlier ordered input close.
     yield* Effect.addFinalizer(() => Effect.sync(close));

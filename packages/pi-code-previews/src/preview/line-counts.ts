@@ -16,14 +16,6 @@ export function countContentLines(content: string): number {
   return terminators + (finalCode === 10 || finalCode === 13 ? 0 : 1);
 }
 
-export function countPreviewTextLines(text: string): number {
-  let total = 0;
-  forEachPreviewTextLine(text, () => {
-    total++;
-  });
-  return total;
-}
-
 export function forEachPreviewTextLine(
   text: string,
   callback: (line: string, index: number) => void,

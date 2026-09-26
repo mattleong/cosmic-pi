@@ -1,16 +1,26 @@
 // Stateful Herdr topology fixture shared by host integration suites.
 import * as Effect from "effect/Effect";
-import type { HerdrAgent, HerdrCliContract, HerdrSnapshot } from "../../src/boundary/herdr-cli.ts";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import {
+  HerdrCli,
+  type HerdrAgent,
+  type HerdrCliContract,
+  type HerdrSnapshot,
+} from "../../src/boundary/herdr-cli.ts";
 import type {
   HerdrStartupReceipt,
   HerdrStartupReceiptPhase,
 } from "../../src/boundary/herdr-attestation.ts";
-import type { HerdrHarnessContract } from "../../src/boundary/herdr-harness.ts";
+import { HerdrHarness, type HerdrHarnessContract } from "../../src/boundary/herdr-harness.ts";
+import { HerdrHost, type HerdrHostContract } from "../../src/boundary/herdr-host.ts";
 import { supervisorMetadata } from "./backend-supervisor.ts";
 import type { BackendLaunchRequest } from "../../src/backend/model.ts";
-import { SubagentProcessError } from "../../src/run/errors.ts";
+import type { SubagentRuntime } from "../../src/domain/routing.ts";
+import { processError, type SubagentProcessError } from "../../src/run/errors.ts";
 
-export const supervisor = supervisorMetadata("agent-1", {
+export const supervisor = supervisorMetadata({
   stateDirectory: "/private",
   connectionConfigPath: "/private/connection.json",
   tomlFragment: "[mcp_servers.pi_subagents_supervisor]",
@@ -43,12 +53,62 @@ export const launch = (id: string): BackendLaunchRequest => ({
   systemPrompt: "fixed",
 });
 
+const fixtureFailure = (operation: string, code: string, message: string) =>
+  Effect.fail(processError(operation, code, message));
+
+/** A pane outside the caller's workspace whose selectors all derive from `prefix`. */
+const foreignPane = (prefix: string, agentStatus: "unknown" | "working" = "unknown") => ({
+  paneId: `${prefix}:p`,
+  terminalId: `${prefix}:t`,
+  workspaceId: `${prefix}:w`,
+  tabId: `${prefix}:t`,
+  cwd: `/${prefix}`,
+  foregroundCwd: `/${prefix}`,
+  agentStatus,
+});
+const foreignAgent = (prefix: string, name: string): HerdrAgent => ({
+  ...foreignPane(prefix, "working"),
+  name,
+  runtime: "pi",
+  stateChangeSequence: 1,
+});
+
+/** A one-shot snapshot barrier that reports when it is reached and resumes on release. */
+const snapshotGate = (read: () => HerdrSnapshot) => {
+  let armed = false;
+  let reached = false;
+  let notify: (() => void) | undefined;
+  let release: (() => void) | undefined;
+  return {
+    arm: () => {
+      armed = true;
+      reached = false;
+      notify = undefined;
+    },
+    take: () => {
+      if (!armed) return undefined;
+      armed = false;
+      return Effect.callback<HerdrSnapshot>((resume) => {
+        reached = true;
+        notify?.();
+        release = () => resume(Effect.succeed(read()));
+      });
+    },
+    awaitReached: () =>
+      Effect.callback<void>((resume) => {
+        if (reached) resume(Effect.void);
+        else notify = () => resume(Effect.void);
+      }),
+    release: () => release?.(),
+  };
+};
+
 export const fakeTopology = () => {
   let nextPane = 1;
   let splitCalls = 0;
   const splitTargets: string[] = [];
-  const panes = new Map<string, { terminalId: string; label?: string }>([
-    ["user:p0", { terminalId: "user:term0", label: "Parent Pi" }],
+  const panes = new Map<string, { terminalId: string }>([
+    ["user:p0", { terminalId: "user:term0" }],
   ]);
   const agents = new Map<string, HerdrAgent>();
   const activationConfirmations = new Map<string, number>();
@@ -62,52 +122,42 @@ export const fakeTopology = () => {
   const shellInspectedPanes = new Set<string>();
   const closedPanes: string[] = [];
   const paneCommands: Array<{ readonly paneId: string; readonly operation: string }> = [];
-  const focusOperations: string[] = [];
+  /** One-shot faults a test switches on with `inject` before acting. */
+  const faults = {
+    omitAgentSession: false,
+    invalidSecretAttestation: false,
+    dropAllActivationProbes: false,
+    rejectStartAsBusy: false,
+    replaceTerminalDuringShellInspection: false,
+    validSecretBootstrap: false,
+    switchFocusAfterFirstProbe: false,
+    splitReturnsForeignPane: false,
+    processInfoReturnsWrongPane: false,
+    startReturnsMismatchedAgent: false,
+    agentNameCollision: false,
+    duplicateNameAfterStart: false,
+    replaceOriginalTabBeforeActivation: false,
+    escapeAgentSelectorAfterClose: false,
+    failPaneCloseAfterApply: false,
+    currentPaneMismatch: false,
+  };
   let failStartAfterApply = false;
   let failRollbackSnapshot = false;
   let startApplied = false;
-  let omitAgentSession = false;
   let focusedWorkspaceId: string | undefined = "user";
   let focusedTabId: string | undefined = "user:t";
   let focusedPaneId: string | undefined = "user:p0";
-  let invalidSecretAttestation = false;
   let dropFirstActivationReceipt = true;
-  let dropAllActivationProbes = false;
-  let rejectStartAsBusy = false;
   let initialBusyShellInspections = 0;
   let transientPostActivationOccupancySnapshots = 0;
   let configuredPostActivationOccupancySnapshots = 0;
   let postActivationOccupancyPaneId: string | undefined;
-  let replaceTerminalDuringShellInspection = false;
   let transientTerminalMismatchSnapshots = 0;
   let driftAfterOutput: "confirm pane input" | "confirm pane environment" | undefined;
-  let validSecretBootstrap = false;
-  let switchFocusAfterFirstProbe = false;
   let duplicateSelector: "workspace" | "tab" | "terminal" | undefined;
-  let splitReturnsForeignPane = false;
-  let processInfoReturnsWrongPane = false;
-  let startReturnsMismatchedAgent = false;
-  let agentNameCollision = false;
-  let duplicateNameAfterStart = false;
-  let replaceOriginalTabBeforeActivation = false;
   let plannedAgentName: string | undefined;
-  let escapeAgentSelectorAfterClose = false;
   let escapedAgentName: string | undefined;
-  let failPaneCloseAfterApply = false;
   let replaceOriginalTabIdentity = false;
-  let blockPostCloseSnapshot = false;
-  let blockPreSplitSnapshot = false;
-  let blockPostSplitSnapshot = false;
-  let currentPaneMismatch = false;
-  let postCloseSnapshotReached = false;
-  let preSplitSnapshotReached = false;
-  let postSplitSnapshotReached = false;
-  let notifyPostCloseSnapshotReached: (() => void) | undefined;
-  let notifyPreSplitSnapshotReached: (() => void) | undefined;
-  let notifyPostSplitSnapshotReached: (() => void) | undefined;
-  let releasePostCloseSnapshot: (() => void) | undefined;
-  let releasePreSplitSnapshot: (() => void) | undefined;
-  let releasePostSplitSnapshot: (() => void) | undefined;
 
   const observeReceipt = (
     phase: HerdrStartupReceiptPhase,
@@ -118,16 +168,14 @@ export const fakeTopology = () => {
         const attempts = (activationConfirmations.get(paneId) ?? 0) + 1;
         activationConfirmations.set(paneId, attempts);
         if (!publishedReceipts.has(phase)) {
-          if (attempts === 1 && switchFocusAfterFirstProbe) {
+          if (attempts === 1 && faults.switchFocusAfterFirstProbe) {
             focusedTabId = "user:other";
             focusedPaneId = undefined;
           }
-          return Effect.fail(
-            new SubagentProcessError({
-              operation: "observe Herdr startup receipt",
-              code: "herdr_startup_receipt_timeout",
-              message: "Fixture activation receipt remained absent.",
-            }),
+          return fixtureFailure(
+            "observe Herdr startup receipt",
+            "herdr_startup_receipt_timeout",
+            "Fixture activation receipt remained absent.",
           );
         }
         if (attempts > 1 && configuredPostActivationOccupancySnapshots > 0) {
@@ -138,20 +186,16 @@ export const fakeTopology = () => {
       }
       const fault = receiptFaults.get(phase);
       if (fault && fault !== "absent")
-        return Effect.fail(
-          new SubagentProcessError({
-            operation: "validate Herdr startup receipt",
-            code: "herdr_startup_receipt_invalid",
-            message: `Fixture ${fault} receipt was rejected.`,
-          }),
+        return fixtureFailure(
+          "validate Herdr startup receipt",
+          "herdr_startup_receipt_invalid",
+          `Fixture ${fault} receipt was rejected.`,
         );
       if (!publishedReceipts.has(phase))
-        return Effect.fail(
-          new SubagentProcessError({
-            operation: "observe Herdr startup receipt",
-            code: "herdr_startup_receipt_timeout",
-            message: "Fixture receipt remained absent.",
-          }),
+        return fixtureFailure(
+          "observe Herdr startup receipt",
+          "herdr_startup_receipt_timeout",
+          "Fixture receipt remained absent.",
         );
       if (phase === "environment-ready") {
         const paneId = `user:p${(nextPane - 1).toString()}`;
@@ -186,72 +230,31 @@ export const fakeTopology = () => {
       transientPostActivationOccupancySnapshots - 1,
     );
     return {
-      version: "0.8.2",
       protocol: 20,
-      focusedWorkspaceId,
-      focusedTabId,
-      focusedPaneId,
       workspaces: [
-        {
-          workspaceId: "user",
-          label: "user",
-          focused: focusedWorkspaceId === "user",
-          activeTabId: focusedTabId ?? "user:t",
-        },
-        ...(duplicateSelector === "workspace"
-          ? [
-              {
-                workspaceId: "user",
-                label: "replacement-workspace",
-                focused: false,
-                activeTabId: "user:t",
-              },
-            ]
-          : []),
+        { workspaceId: "user" },
+        ...(duplicateSelector === "workspace" ? [{ workspaceId: "user" }] : []),
       ],
       tabs: [
         {
           tabId: "user:t",
           workspaceId: replaceOriginalTabIdentity ? "replacement-user" : "user",
-          label: replaceOriginalTabIdentity ? "replacement-user" : "user",
-          paneCount: panes.size,
-          focused: focusedTabId === "user:t",
         },
         ...(duplicateSelector === "tab"
-          ? [
-              {
-                tabId: "user:t",
-                workspaceId: "replacement-workspace",
-                label: "replacement-tab",
-                paneCount: 0,
-                focused: false,
-              },
-            ]
+          ? [{ tabId: "user:t", workspaceId: "replacement-workspace" }]
           : []),
-        {
-          tabId: "user:other",
-          workspaceId: "user",
-          label: "other",
-          paneCount: 0,
-          focused: focusedTabId === "user:other",
-        },
+        { tabId: "user:other", workspaceId: "user" },
       ],
       panes: [
-        ...[...panes].map(([paneId, pane]) =>
-          (() => {
-            const paneView = {
-              paneId,
-              terminalId: showTerminalMismatch ? `${pane.terminalId}-replacement` : pane.terminalId,
-              workspaceId: "user",
-              tabId: "user:t",
-              cwd: "/project",
-              foregroundCwd: "/project",
-              focused: paneId === focusedPaneId,
-              agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
-            };
-            return pane.label ? { ...paneView, label: pane.label } : paneView;
-          })(),
-        ),
+        ...[...panes].map(([paneId, pane]) => ({
+          paneId,
+          terminalId: showTerminalMismatch ? `${pane.terminalId}-replacement` : pane.terminalId,
+          workspaceId: "user",
+          tabId: "user:t",
+          cwd: "/project",
+          foregroundCwd: "/project",
+          agentStatus: agents.get(paneId)?.agentStatus ?? "unknown",
+        })),
         ...(duplicateSelector === "terminal" && panes.size > 0
           ? [
               {
@@ -261,7 +264,6 @@ export const fakeTopology = () => {
                 tabId: "replacement-tab",
                 cwd: "/replacement",
                 foregroundCwd: "/replacement",
-                focused: false,
                 agentStatus: "unknown" as const,
               },
             ]
@@ -269,123 +271,56 @@ export const fakeTopology = () => {
       ],
       agents: [
         ...[...agents.values()].map((agent) => ({ ...agent })),
-        ...(showPostActivationOccupancy && postActivationOccupancyPaneId
-          ? (() => {
-              const pane = panes.get(postActivationOccupancyPaneId);
-              return pane
-                ? [
-                    {
-                      paneId: postActivationOccupancyPaneId,
-                      terminalId: pane.terminalId,
-                      workspaceId: "user",
-                      tabId: "user:t",
-                      cwd: "/project",
-                      foregroundCwd: "/project",
-                      focused: true,
-                      agentStatus: "unknown" as const,
-                      name: "transient-codex-detection",
-                      runtime: "codex" as const,
-                      stateChangeSequence: 1,
-                    },
-                  ]
-                : [];
-            })()
+        ...[...panes]
+          .filter(
+            ([paneId]) => showPostActivationOccupancy && paneId === postActivationOccupancyPaneId,
+          )
+          .map(([paneId, pane]) => ({
+            paneId,
+            terminalId: pane.terminalId,
+            workspaceId: "user",
+            tabId: "user:t",
+            cwd: "/project",
+            foregroundCwd: "/project",
+            agentStatus: "unknown" as const,
+            name: "transient-codex-detection",
+            runtime: "codex" as const,
+            stateChangeSequence: 1,
+          })),
+        ...(faults.agentNameCollision && plannedAgentName
+          ? [foreignAgent("foreign", plannedAgentName)]
           : []),
-        ...(agentNameCollision && plannedAgentName
-          ? [
-              {
-                paneId: "foreign:p",
-                terminalId: "foreign:t",
-                workspaceId: "foreign:w",
-                tabId: "foreign:t",
-                cwd: "/foreign",
-                foregroundCwd: "/foreign",
-                focused: false,
-                agentStatus: "working" as const,
-                name: plannedAgentName,
-                runtime: "pi",
-                stateChangeSequence: 1,
-              },
-            ]
-          : []),
-        ...(escapedAgentName
-          ? [
-              {
-                paneId: "escaped:p",
-                terminalId: "escaped:t",
-                workspaceId: "escaped:w",
-                tabId: "escaped:t",
-                cwd: "/escaped",
-                foregroundCwd: "/escaped",
-                focused: false,
-                agentStatus: "working" as const,
-                name: escapedAgentName,
-                runtime: "pi",
-                stateChangeSequence: 1,
-              },
-            ]
-          : []),
+        ...(escapedAgentName ? [foreignAgent("escaped", escapedAgentName)] : []),
       ],
     };
   };
+  const preSplit = snapshotGate(snapshot);
+  const postSplit = snapshotGate(snapshot);
+  const postClose = snapshotGate(snapshot);
   const cli: HerdrCliContract = {
-    sessionIdentity: "inherited",
     callingPaneId: "user:p0",
     preflight: () => Effect.void,
     snapshot: Effect.suspend(() => {
-      if (blockPreSplitSnapshot && splitCalls === 0) {
-        blockPreSplitSnapshot = false;
-        return Effect.callback<HerdrSnapshot>((resume) => {
-          preSplitSnapshotReached = true;
-          notifyPreSplitSnapshotReached?.();
-          releasePreSplitSnapshot = () => resume(Effect.succeed(snapshot()));
-        });
-      }
-      if (blockPostSplitSnapshot && splitCalls > 0 && closedPanes.length === 0) {
-        blockPostSplitSnapshot = false;
-        return Effect.callback<HerdrSnapshot>((resume) => {
-          postSplitSnapshotReached = true;
-          notifyPostSplitSnapshotReached?.();
-          releasePostSplitSnapshot = () => resume(Effect.succeed(snapshot()));
-        });
-      }
-      if (blockPostCloseSnapshot && closedPanes.length > 0) {
-        blockPostCloseSnapshot = false;
-        return Effect.callback<HerdrSnapshot>((resume) => {
-          postCloseSnapshotReached = true;
-          notifyPostCloseSnapshotReached?.();
-          releasePostCloseSnapshot = () => resume(Effect.succeed(snapshot()));
-        });
-      }
+      const gate = splitCalls === 0 ? preSplit : closedPanes.length === 0 ? postSplit : postClose;
+      const blocked = gate.take();
+      if (blocked) return blocked;
       return startApplied && failRollbackSnapshot
-        ? Effect.fail(
-            new SubagentProcessError({
-              operation: "session snapshot",
-              code: "herdr_cli_failed",
-              message: "Fixture rollback snapshot failed.",
-            }),
+        ? fixtureFailure(
+            "session snapshot",
+            "herdr_cli_failed",
+            "Fixture rollback snapshot failed.",
           )
         : Effect.succeed(snapshot());
     }),
     currentPane: Effect.sync(() => {
       const pane = snapshot().panes.find((candidate) => candidate.paneId === "user:p0")!;
-      return currentPaneMismatch ? { ...pane, paneId: "foreign:p" } : pane;
+      return faults.currentPaneMismatch ? { ...pane, paneId: "foreign:p" } : pane;
     }),
     splitPane: (anchorPaneId) =>
       Effect.sync(() => {
         splitCalls += 1;
         splitTargets.push(anchorPaneId);
-        if (splitReturnsForeignPane)
-          return {
-            paneId: "foreign:p",
-            terminalId: "foreign:t",
-            workspaceId: "foreign:w",
-            tabId: "foreign:t",
-            cwd: "/foreign",
-            foregroundCwd: "/foreign",
-            focused: false,
-            agentStatus: "unknown" as const,
-          };
+        if (faults.splitReturnsForeignPane) return foreignPane("foreign");
         if (!panes.has(anchorPaneId))
           throw new Error(`Fixture split anchor ${anchorPaneId} does not exist.`);
         const paneId = `user:p${nextPane}`;
@@ -393,14 +328,10 @@ export const fakeTopology = () => {
         panes.set(paneId, { terminalId: `user:term${nextPane}` });
         nextPane += 1;
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
-        if (replaceOriginalTabBeforeActivation) replaceOriginalTabIdentity = true;
+        if (faults.replaceOriginalTabBeforeActivation) replaceOriginalTabIdentity = true;
         return pane;
       }),
-    renamePane: (paneId, label) =>
-      Effect.sync(() => {
-        const pane = panes.get(paneId)!;
-        panes.set(paneId, { ...pane, label });
-      }),
+    renamePane: () => Effect.void,
     runPaneCommand: (paneId, command, operation) =>
       Effect.suspend(() => {
         if (
@@ -408,21 +339,17 @@ export const fakeTopology = () => {
           (shellProcessInspections.get(paneId) ?? 0) <=
             (environmentMarkerInspections.get(paneId) ?? 0)
         )
-          return Effect.fail(
-            new SubagentProcessError({
-              operation,
-              code: "fixture_secret_before_replacement_shell",
-              message: "Fixture requires fresh shell inspection after the environment receipt.",
-            }),
+          return fixtureFailure(
+            operation,
+            "fixture_secret_before_replacement_shell",
+            "Fixture requires fresh shell inspection after the environment receipt.",
           );
         paneCommands.push({ paneId, operation });
         if (!shellInspectedPanes.has(paneId))
-          return Effect.fail(
-            new SubagentProcessError({
-              operation: "activate pane input",
-              code: "fixture_input_before_shell_ready",
-              message: "Fixture rejects input while a transient native TUI still owns the pane.",
-            }),
+          return fixtureFailure(
+            "activate pane input",
+            "fixture_input_before_shell_ready",
+            "Fixture rejects input while a transient native TUI still owns the pane.",
           );
         const commandPhase = command.startsWith("publish-receipt:")
           ? command.slice("publish-receipt:".length)
@@ -439,7 +366,7 @@ export const fakeTopology = () => {
           const shouldDrop =
             receiptFaults.get(phase) === "absent" ||
             ((phase === "activation-1" || phase === "activation-2") &&
-              (dropAllActivationProbes ||
+              (faults.dropAllActivationProbes ||
                 (phase === "activation-1" && dropFirstActivationReceipt)));
           if (!shouldDrop) publishedReceipts.add(phase);
         }
@@ -449,20 +376,20 @@ export const fakeTopology = () => {
       Effect.sync(() => {
         const inspections = (shellProcessInspections.get(paneId) ?? 0) + 1;
         shellProcessInspections.set(paneId, inspections);
-        if (replaceTerminalDuringShellInspection && inspections === 1) {
+        if (faults.replaceTerminalDuringShellInspection && inspections === 1) {
           const pane = panes.get(paneId)!;
           panes.set(paneId, { ...pane, terminalId: `${pane.terminalId}-replacement` });
         }
         if (inspections <= initialBusyShellInspections)
           return {
-            paneId: processInfoReturnsWrongPane ? "foreign:p" : paneId,
+            paneId: faults.processInfoReturnsWrongPane ? "foreign:p" : paneId,
             shellPid: 4242,
             foregroundProcessGroupId: 4343,
             foregroundProcesses: [{ pid: 4343, name: "codex" }],
           };
         shellInspectedPanes.add(paneId);
         return {
-          paneId: processInfoReturnsWrongPane ? "foreign:p" : paneId,
+          paneId: faults.processInfoReturnsWrongPane ? "foreign:p" : paneId,
           shellPid: 4242,
           foregroundProcessGroupId: 4242,
           foregroundProcesses: [{ pid: 4242, name: "zsh" }],
@@ -471,58 +398,47 @@ export const fakeTopology = () => {
     startAgent: ({ runtime, paneId, agentName }) =>
       Effect.suspend(() => {
         if (!shellInspectedPanes.has(paneId))
-          return Effect.fail(
-            new SubagentProcessError({
-              operation: "start agent",
-              code: "fixture_shell_not_inspected",
-              message: "Fixture requires shell readiness inspection before start.",
-            }),
+          return fixtureFailure(
+            "start agent",
+            "fixture_shell_not_inspected",
+            "Fixture requires shell readiness inspection before start.",
           );
-        if (rejectStartAsBusy)
-          return Effect.fail(
-            new SubagentProcessError({
-              operation: "start agent",
-              code: "agent_pane_busy",
-              message: "Fixture rejects start before application because the pane is busy.",
-            }),
+        if (faults.rejectStartAsBusy)
+          return fixtureFailure(
+            "start agent",
+            "agent_pane_busy",
+            "Fixture rejects start before application because the pane is busy.",
           );
         const pane = snapshot().panes.find((candidate) => candidate.paneId === paneId)!;
-        const agent: HerdrAgent = (() => {
-          const baseResult = {
-            ...pane,
-            agentStatus: "working" as const,
-            name: agentName,
-            runtime,
-            stateChangeSequence: 1,
-            interactiveReady: true,
-          };
-          const withAgentSessionAndNativeSession = omitAgentSession
-            ? baseResult
+        const agent: HerdrAgent = {
+          ...pane,
+          agentStatus: "working",
+          name: agentName,
+          runtime,
+          stateChangeSequence: 1,
+          interactiveReady: true,
+          ...(faults.omitAgentSession
+            ? undefined
             : {
-                ...baseResult,
                 agentSession: {
                   source: "fixture",
                   agent: runtime,
                   kind: "id" as const,
                   value: `native-${paneId}`,
                 },
-                nativeSession: `native-${paneId}`,
-              };
-          return withAgentSessionAndNativeSession;
-        })();
+              }),
+        };
         agents.set(paneId, agent);
-        if (duplicateNameAfterStart) agentNameCollision = true;
+        if (faults.duplicateNameAfterStart) faults.agentNameCollision = true;
         startApplied = true;
         return failStartAfterApply
-          ? Effect.fail(
-              new SubagentProcessError({
-                operation: "start agent",
-                code: "herdr_start_agent_outcome_uncertain",
-                message: "Fixture start applied before response failure.",
-              }),
+          ? fixtureFailure(
+              "start agent",
+              "herdr_start_agent_outcome_uncertain",
+              "Fixture start applied before response failure.",
             )
           : Effect.succeed(
-              startReturnsMismatchedAgent
+              faults.startReturnsMismatchedAgent
                 ? { ...agent, terminalId: `${agent.terminalId}-replacement` }
                 : agent,
             );
@@ -536,14 +452,12 @@ export const fakeTopology = () => {
         agents.delete(paneId);
         panes.delete(paneId);
         if (wasFocused) focusedPaneId = [...panes.keys()][0];
-        if (escapeAgentSelectorAfterClose) escapedAgentName = closedAgentName;
-        return failPaneCloseAfterApply
-          ? Effect.fail(
-              new SubagentProcessError({
-                operation: "close pane",
-                code: "herdr_close_pane_outcome_uncertain",
-                message: "Fixture applied pane close before losing its response.",
-              }),
+        if (faults.escapeAgentSelectorAfterClose) escapedAgentName = closedAgentName;
+        return faults.failPaneCloseAfterApply
+          ? fixtureFailure(
+              "close pane",
+              "herdr_close_pane_outcome_uncertain",
+              "Fixture applied pane close before losing its response.",
             )
           : Effect.void;
       }),
@@ -564,9 +478,9 @@ export const fakeTopology = () => {
             argv: [],
             environmentCommand: () => "fixed-env",
             startupAttestation,
-            ...(invalidSecretAttestation
+            ...(faults.invalidSecretAttestation
               ? { secretCommand: "" }
-              : validSecretBootstrap
+              : faults.validSecretBootstrap
                 ? { secretCommand: "load-secret" }
                 : {}),
             withholdCleanup: () => {
@@ -596,7 +510,6 @@ export const fakeTopology = () => {
     shellInspectedPanes,
     closedPanes,
     paneCommands,
-    focusOperations,
     splitCalls: () => splitCalls,
     splitTargets: () => [...splitTargets],
     cleanupAuthorizations: () => cleanupAuthorizations,
@@ -609,8 +522,8 @@ export const fakeTopology = () => {
     }),
     callerPaneId: "user:p0",
     callerPaneLive: () => panes.has("user:p0"),
-    dropEveryActivationProbe: () => {
-      dropAllActivationProbes = true;
+    inject: (fault: keyof typeof faults) => {
+      faults[fault] = true;
     },
     executeFirstActivationReceipt: () => {
       dropFirstActivationReceipt = false;
@@ -627,96 +540,22 @@ export const fakeTopology = () => {
     delayPostActivationAgentClearance: (snapshots: number) => {
       configuredPostActivationOccupancySnapshots = snapshots;
     },
-    replaceTerminalOnFirstShellInspection: () => {
-      replaceTerminalDuringShellInspection = true;
-    },
     driftAfterMarker: (operation: "confirm pane input" | "confirm pane environment") => {
       driftAfterOutput = operation;
-    },
-    enableSecretBootstrap: () => {
-      validSecretBootstrap = true;
-    },
-    switchToOtherTabAfterFirstProbe: () => {
-      switchFocusAfterFirstProbe = true;
     },
     injectDuplicateSelector: (selector: "workspace" | "tab" | "terminal") => {
       duplicateSelector = selector;
     },
-    returnForeignSplitPane: () => {
-      splitReturnsForeignPane = true;
-    },
-    returnWrongProcessInfoPane: () => {
-      processInfoReturnsWrongPane = true;
-    },
-    returnMismatchedStartedAgent: () => {
-      startReturnsMismatchedAgent = true;
-    },
-    injectAgentNameCollision: () => {
-      agentNameCollision = true;
-    },
-    duplicateAgentNameAfterStart: () => {
-      duplicateNameAfterStart = true;
-    },
-    replaceOriginalTabBeforeFirstActivation: () => {
-      replaceOriginalTabBeforeActivation = true;
-    },
-    escapeAgentNameAfterClose: () => {
-      escapeAgentSelectorAfterClose = true;
-    },
-    failPaneCloseAfterApplying: () => {
-      failPaneCloseAfterApply = true;
-    },
-    blockSnapshotBeforeSplit: () => {
-      blockPreSplitSnapshot = true;
-      preSplitSnapshotReached = false;
-      notifyPreSplitSnapshotReached = undefined;
-    },
-    awaitBlockedPreSplitSnapshot: () =>
-      Effect.callback<void>((resume) => {
-        if (preSplitSnapshotReached) resume(Effect.void);
-        else notifyPreSplitSnapshotReached = () => resume(Effect.void);
-      }),
-    releaseBlockedPreSplitSnapshot: () => {
-      releasePreSplitSnapshot?.();
-    },
-    blockSnapshotAfterSplit: () => {
-      blockPostSplitSnapshot = true;
-      postSplitSnapshotReached = false;
-      notifyPostSplitSnapshotReached = undefined;
-    },
-    awaitBlockedPostSplitSnapshot: () =>
-      Effect.callback<void>((resume) => {
-        if (postSplitSnapshotReached) resume(Effect.void);
-        else notifyPostSplitSnapshotReached = () => resume(Effect.void);
-      }),
-    releaseBlockedPostSplitSnapshot: () => {
-      releasePostSplitSnapshot?.();
-    },
-    blockSnapshotAfterPaneClose: () => {
-      blockPostCloseSnapshot = true;
-      postCloseSnapshotReached = false;
-      notifyPostCloseSnapshotReached = undefined;
-    },
-    awaitBlockedPostCloseSnapshot: () =>
-      Effect.callback<void>((resume) => {
-        if (postCloseSnapshotReached) resume(Effect.void);
-        else notifyPostCloseSnapshotReached = () => resume(Effect.void);
-      }),
-    releaseBlockedPostCloseSnapshot: () => {
-      releasePostCloseSnapshot?.();
-    },
-    rejectStartWithPaneBusy: () => {
-      rejectStartAsBusy = true;
-    },
+    blockSnapshotBeforeSplit: preSplit.arm,
+    awaitBlockedPreSplitSnapshot: preSplit.awaitReached,
+    blockSnapshotAfterSplit: postSplit.arm,
+    awaitBlockedPostSplitSnapshot: postSplit.awaitReached,
+    blockSnapshotAfterPaneClose: postClose.arm,
+    awaitBlockedPostCloseSnapshot: postClose.awaitReached,
+    releaseBlockedPostCloseSnapshot: postClose.release,
     failAppliedStartAndRollbackSnapshot: () => {
       failStartAfterApply = true;
       failRollbackSnapshot = true;
-    },
-    omitNativeSession: () => {
-      omitAgentSession = true;
-    },
-    invalidateSecretAttestation: () => {
-      invalidSecretAttestation = true;
     },
     focusPaneAsUser: (paneId: string) => {
       if (!panes.has(paneId)) throw new Error(`Fixture pane ${paneId} does not exist.`);
@@ -729,12 +568,30 @@ export const fakeTopology = () => {
       focusedTabId = "user:other";
       focusedPaneId = undefined;
     },
-    mismatchCurrentPane: () => {
-      currentPaneMismatch = true;
-    },
     removeCallerPane: () => {
       panes.delete("user:p0");
       if (focusedPaneId === "user:p0") focusedPaneId = undefined;
     },
   };
 };
+
+export const hostLayer = (fake: ReturnType<typeof fakeTopology>) =>
+  HerdrHost.layer.pipe(
+    Layer.provide(
+      Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
+    ),
+  );
+
+export const launchRun = (host: HerdrHostContract, id: string, runtime: SubagentRuntime = "pi") =>
+  host.launch(runtime, launch(id), supervisor);
+
+/** Launches into a caller-owned run scope and returns the launch exit plus that scope's close. */
+export const launchInRunScope = (host: HerdrHostContract, id: string) =>
+  Effect.gen(function* () {
+    const runScope = yield* Scope.make();
+    const launched = yield* launchRun(host, id).pipe(
+      Effect.provideService(Scope.Scope, runScope),
+      Effect.exit,
+    );
+    return { launched, closeRunScope: Scope.close(runScope, Exit.void).pipe(Effect.exit) };
+  });

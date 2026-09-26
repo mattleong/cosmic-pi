@@ -1,7 +1,6 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
@@ -83,15 +82,9 @@ export function queueSettingsSave(
 ): Promise<void> {
   const admission = makeSettingsAdmission();
   const next = cloneCodePreviewSettings(settings);
-  if (hasCodePreviewSessionCapability()) {
-    return runCodePreviewSessionEffect(
-      CodePreviewSettingsService.use((service) => service.save(next, admission)),
-    );
-  }
-  return runOneShotSettingsEffect(
-    CodePreviewSettingsService.use((service) =>
-      service.save(next, admission, { rehydrate: loadOptions }),
-    ),
+  const options = hasCodePreviewSessionCapability() ? {} : { rehydrate: loadOptions };
+  return runSettingsEffect(
+    CodePreviewSettingsService.use((service) => service.save(next, admission, options)),
   );
 }
 
@@ -101,10 +94,7 @@ export function flushSettingsSaveQueue(): Promise<void> {
 
 export function formatSettingsSaveError<ErrorInput>(error: ErrorInput): string {
   const message =
-    hasObjectRuntimeType(error) &&
-    error !== null &&
-    "message" in error &&
-    Predicate.isString(error.message)
+    Predicate.hasProperty(error, "message") && Predicate.isString(error.message)
       ? error.message
       : "Unknown error.";
   return `Failed to save code preview settings: ${message}`;

@@ -6,8 +6,9 @@ export interface SettingsDispatchDescriptor {
 }
 
 /**
- * The closed result set of a `/…-settings <args>` invocation. Hosts own every side effect:
+ * The closed result set of a `/…-settings <args>` invocation. Callers own every side effect:
  * opening pickers, printing help/diagnostics, applying values, and wording error messages.
+ * Provider settings share one caller, Cosmic UI's settings command shell.
  */
 export type SettingsCommandDispatch =
   | { readonly _tag: "OpenInteractive" }

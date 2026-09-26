@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isProjectTrusted, notifyAtHostBoundary } from "../src/host-session.ts";
+import { invokeBestEffort, isProjectTrusted, notifyAtHostBoundary } from "../src/host-session.ts";
 
 describe("project trust capture", () => {
   it("requires an explicit callback returning literal true", () => {
@@ -54,5 +54,31 @@ describe("notification boundary", () => {
     notifyAtHostBoundary({ ui: { notify: () => callableThenable } }, "message", "warning");
 
     expect(rejectionContained).toBe(true);
+  });
+});
+
+describe("best-effort callbacks", () => {
+  it("swallows throws and reads a returned thenable's then exactly once", () => {
+    let reads = 0;
+    let handled = false;
+    const thenable = new Proxy(
+      {},
+      {
+        get: (_target, property) => {
+          if (property !== "then") return undefined;
+          reads += 1;
+          return (_resolve: () => void, reject: () => void) => {
+            handled = Boolean(reject);
+          };
+        },
+      },
+    );
+    expect(() =>
+      invokeBestEffort(() => {
+        throw new Error("hostile callback");
+      }),
+    ).not.toThrow();
+    invokeBestEffort(() => thenable);
+    expect({ reads, handled }).toEqual({ reads: 1, handled: true });
   });
 });

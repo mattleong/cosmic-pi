@@ -4,9 +4,8 @@ import * as Predicate from "effect/Predicate";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { completeSettingsArguments, isProjectTrusted, synchronousNow } from "pi-cosmic-core";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
-import { createScreenViewport } from "pi-cosmic-ui/boundary/host-viewport";
-import { fullScreenKeybindingLabel } from "pi-cosmic-ui/manager/key-labels";
-import type { FullScreenSelectionKeybindingId } from "pi-cosmic-ui/manager/keymap";
+import { openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import {
   makeAdaptiveHostRefreshTicker,
   type AdaptiveHostRefreshTicker,
@@ -66,15 +65,8 @@ export interface FleetManagerActions {
   readonly reply: (id: string, message: string) => Promise<void>;
   readonly rename: (id: string, name: string) => Promise<void>;
   readonly inspectProfiles: (projectTrusted: boolean) => Promise<ProfileSettingsInspection>;
-  readonly patchProfile: (patch: SubagentProfilePatch) => Promise<void>;
-  readonly patchProfileWithReceipt?: (patch: SubagentProfilePatch) => Promise<JsonObject>;
-  readonly restoreProfileDeclaration?: (patch: SubagentProfileRestorePatch) => Promise<JsonObject>;
-  readonly patchSessionProfileWithReceipt?: (
-    patch: SessionProfilePatch,
-  ) => Promise<SessionProfileSnapshot>;
-  readonly replaceSessionProfilesWithReceipt?: (
-    patch: SessionProfileSetPatch,
-  ) => Promise<SessionProfileSnapshot>;
+  readonly patchProfile: (patch: SubagentProfilePatch) => Promise<JsonObject>;
+  readonly restoreProfileDeclaration: (patch: SubagentProfileRestorePatch) => Promise<JsonObject>;
   readonly patchDefaultProfileSet: (patch: SubagentDefaultProfileSetPatch) => Promise<void>;
   readonly createProfileSetFromSnapshot: (patch: SessionProfileSetSnapshotWrite) => Promise<void>;
   readonly copyProfileSet: (patch: SubagentCopyProfileSetPatch) => Promise<void>;
@@ -87,8 +79,10 @@ export interface FleetManagerActions {
   }>;
   /** The coordinator rejects unsafe switches and persists accepted preferences for new sessions. */
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
-  readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<void>;
-  readonly replaceSessionProfiles: (patch: SessionProfileSetPatch) => Promise<void>;
+  readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
+  readonly replaceSessionProfiles: (
+    patch: SessionProfileSetPatch,
+  ) => Promise<SessionProfileSnapshot>;
   readonly patchSessionNesting: (patch: SessionNestingPatch) => Promise<void>;
   readonly listNativeModels: (
     runtime: LocalCliRuntime,
@@ -113,27 +107,19 @@ function openFleetManager(
     ctx.ui.notify("Subagents are not active. Run /reload, then reopen /subagents.", "warning");
     return Promise.resolve();
   }
-  const viewport = createScreenViewport();
-  return ctx.ui.custom<void>(
-    (tui, theme, keybindings, done) => {
-      viewport.attach(() => tui.terminal);
+  return openOwnedSurfacePromise<undefined>(ctx, {
+    placement: "screen",
+    closedValue: undefined,
+    create: ({ tui, theme, keybindings, getHeight, finish }) => {
       let unsubscribe = () => {};
       const manager = new SubagentFleetComponent({
         theme,
         getProjection: bridge.get,
-        getHeight: viewport.getHeight,
+        getHeight,
         getNow: synchronousNow,
-        matchesKeybinding: (data, id) => keybindings.matches(data, id),
-        keybindingLabel: (id, fallback) =>
-          fullScreenKeybindingLabel(
-            id,
-            fallback,
-            Predicate.isFunction(keybindings.getKeys)
-              ? (key: FullScreenSelectionKeybindingId) => keybindings.getKeys(key)
-              : undefined,
-          ),
+        ...fullScreenKeybindingOptions(keybindings),
         requestRender: () => tui.requestRender(),
-        close: () => done(undefined),
+        close: () => finish(undefined),
         actions: {
           stop: actions.stop,
           interrupt: actions.interrupt,
@@ -171,17 +157,26 @@ function openFleetManager(
         },
       };
     },
-    { overlay: true, overlayOptions: viewport.overlayOptions },
-  );
+  }).then((outcome) => {
+    // A failed opening rejects the command, as Pi's own custom Promise does.
+    if (outcome._tag === "Failed") throw outcome.cause;
+  });
 }
 
-const boundedInteger = (value: string, minimum: number, maximum: number): number | undefined => {
-  if (!/^(?:0|[1-9][0-9]*)$/u.test(value.trim())) return undefined;
-  const parsed = Number(value.trim());
-  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
-    ? parsed
-    : undefined;
-};
+const promptLimit = (
+  ctx: ExtensionCommandContext,
+  label: string,
+  current: number,
+  minimum: number,
+  maximum: number,
+): Promise<number | undefined> =>
+  ctx.ui.input(`${label} (${minimum} to ${maximum})`, current.toString()).then((text) => {
+    if (text === undefined) return undefined;
+    const parsed = /^(?:0|[1-9][0-9]*)$/u.test(text.trim()) ? Number(text.trim()) : Number.NaN;
+    if (Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum) return parsed;
+    ctx.ui.notify(`${label} must be a whole number from ${minimum} to ${maximum}.`, "error");
+    return undefined;
+  });
 
 function openNestingSettings(
   ctx: ExtensionCommandContext,
@@ -196,15 +191,10 @@ function openNestingSettings(
         trusted ? ["Session", "Global", "Project"] : ["Session", "Global"],
       )
       .then((selectedScope) => {
-        if (!selectedScope) return;
-        const normalizedScope = selectedScope.toLowerCase();
-        if (
-          normalizedScope !== "session" &&
-          normalizedScope !== "global" &&
-          normalizedScope !== "project"
-        )
-          return;
-        const scope = normalizedScope;
+        const scope = (["session", "global", "project"] as const).find(
+          (candidate) => candidate === selectedScope?.toLowerCase(),
+        );
+        if (!scope) return;
         const current: SubagentNestingPolicy =
           scope === "session"
             ? (inspection.session.nesting ?? inspection.session.effectiveConfig.nesting)
@@ -236,47 +226,27 @@ function openNestingSettings(
           .then((choice) => {
             if (!choice) return;
             if (choice.startsWith("Inherit")) return saveNesting();
-            return ctx.ui
-              .input(
-                `Maximum direct children (${MIN_DIRECT_CHILDREN} to ${MAX_DIRECT_CHILDREN})`,
-                current.maxDirectChildren.toString(),
-              )
-              .then((directText) => {
-                if (directText === undefined) return;
-                const maxDirectChildren = boundedInteger(
-                  directText,
-                  MIN_DIRECT_CHILDREN,
-                  MAX_DIRECT_CHILDREN,
-                );
-                if (maxDirectChildren === undefined) {
-                  ctx.ui.notify(
-                    `Maximum direct children must be a whole number from ${MIN_DIRECT_CHILDREN} to ${MAX_DIRECT_CHILDREN}.`,
-                    "error",
-                  );
-                  return;
-                }
-                return ctx.ui
-                  .input(
-                    `Maximum depth (${MIN_SUBAGENT_DEPTH} to ${MAX_SUBAGENT_DEPTH})`,
-                    current.maxDepth.toString(),
-                  )
-                  .then((depthText) => {
-                    if (depthText === undefined) return;
-                    const maxDepth = boundedInteger(
-                      depthText,
-                      MIN_SUBAGENT_DEPTH,
-                      MAX_SUBAGENT_DEPTH,
-                    );
-                    if (maxDepth === undefined) {
-                      ctx.ui.notify(
-                        `Maximum depth must be a whole number from ${MIN_SUBAGENT_DEPTH} to ${MAX_SUBAGENT_DEPTH}.`,
-                        "error",
-                      );
-                      return;
-                    }
-                    return saveNesting({ maxDirectChildren, maxDepth });
-                  });
-              });
+            return promptLimit(
+              ctx,
+              "Maximum direct children",
+              current.maxDirectChildren,
+              MIN_DIRECT_CHILDREN,
+              MAX_DIRECT_CHILDREN,
+            ).then((maxDirectChildren) =>
+              maxDirectChildren === undefined
+                ? undefined
+                : promptLimit(
+                    ctx,
+                    "Maximum depth",
+                    current.maxDepth,
+                    MIN_SUBAGENT_DEPTH,
+                    MAX_SUBAGENT_DEPTH,
+                  ).then((maxDepth) =>
+                    maxDepth === undefined
+                      ? undefined
+                      : saveNesting({ maxDirectChildren, maxDepth }),
+                  ),
+            );
           });
       }),
   );
@@ -373,7 +343,7 @@ export function registerSubagentManagerCommand(
         return openProfileDashboard(pi, ctx, actions, {
           initialProfile: profile ?? PROFILE_IDS[0],
           initialFocus: profile ? "fields" : "profiles",
-        }).then(() => undefined);
+        });
       ctx.ui.notify(
         "Usage: /subagents [settings | profiles [profile]]; use a known profile name. Omit arguments for the fleet inspector.",
         "error",

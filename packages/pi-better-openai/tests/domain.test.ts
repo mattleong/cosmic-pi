@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -8,35 +7,11 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
-import * as TestClock from "effect/testing/TestClock";
-import { JsonDocumentError, JsonDocumentStore, provideBuiltLayer } from "pi-cosmic-core";
+import { provideBuiltLayer } from "pi-cosmic-core";
 import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
-import {
-  extractAccountIdFromJwt,
-  getCodexCredentials,
-  parseCodexRegistryCredentials,
-  readCodexAuthCredentials,
-} from "../src/auth/codex-auth.ts";
+import { getCodexCredentials } from "../src/auth/codex-auth.ts";
 import { readConfig, resolveConfig } from "../src/config/store.ts";
-
-const documents = makeInMemoryDocuments;
-const context = (token?: string, oauth = true): ExtensionContext => {
-  const fixture = {
-    cwd: "/project",
-    hasUI: true as const,
-    model: { provider: "openai", id: "gpt-5.5" },
-    modelRegistry: {
-      getApiKeyForProvider: () => globalThis.Promise.resolve(token),
-      isUsingOAuth: () => oauth,
-    },
-    ui: { notify() {} },
-  };
-  // SAFETY: Domain tests exercise only the context fields implemented by this fixture.
-  return fixture as typeof fixture & ExtensionContext;
-};
-// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
-// runtime values (tagged results, redacted credentials) for secret fragments.
-const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
+import { serializedSnapshot, testContext } from "./helpers.ts";
 
 const jwt = (accountId: string) => {
   const body = Buffer.from(
@@ -47,7 +22,7 @@ const jwt = (accountId: string) => {
 
 describe("OpenAI configuration and credentials", () => {
   it.effect("decodes fields independently and merges project over global", () => {
-    const store = documents({
+    const store = makeInMemoryDocuments({
       "/agent/extensions/pi-better-openai.json": {
         usage: { refreshIntervalMs: 30_000, showResetTimes: false },
         image: { defaultSave: "global", timeoutMs: 40_000 },
@@ -75,189 +50,69 @@ describe("OpenAI configuration and credentials", () => {
     }).pipe(provideBuiltLayer(Layer.merge(store.layer, Path.layer)));
   });
 
-  it.effect("preserves the file failure when both credential readers fail", () => {
-    const failure = new JsonDocumentError({
-      operation: "read",
-      path: "/redacted",
-      message: "unavailable",
-    });
-    const failingStore = Layer.succeed(
-      JsonDocumentStore,
-      JsonDocumentStore.of({
-        exists: () => Effect.fail(failure),
-        readObject: () => Effect.fail(failure),
-        writeObject: () => Effect.fail(failure),
-        modifyObject: () => Effect.fail(failure),
-        updateObject: () => Effect.fail(failure),
-      }),
-    );
-    const rejectedRegistryContext = context();
-    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
-      Promise.reject(new Error("registry"));
-    return getCodexCredentials("/auth.json", rejectedRegistryContext).pipe(
-      Effect.result,
-      Effect.tap((failed) =>
-        Effect.sync(() => {
-          expect(failed._tag).toBe("Failure");
-          if (failed._tag === "Failure") expect(failed.failure.operation).toBe("read");
-          expect(serializedSnapshot(failed)).not.toContain("redacted");
-        }),
-      ),
-      provideBuiltLayer(failingStore),
-    );
-  });
+  it.effect("fails a rejected registry lookup with a fixed, sanitized message", () =>
+    Effect.gen(function* () {
+      const rejection = new Error("refresh failed for codex-secret-token: error_description");
+      const failure = yield* getCodexCredentials(testContext({ token: rejection })).pipe(
+        Effect.flip,
+      );
+      expect(failure).toMatchObject({
+        operation: "registry",
+        message: "Unable to read openai-codex credentials.",
+      });
+      expect(serializedSnapshot(failure)).not.toMatch(/codex-secret-token|error_description/);
+    }),
+  );
 
-  it.effect("distinguishes a registry failure from genuine credential absence", () => {
-    const store = documents();
-    const rejectedRegistryContext = context();
-    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
-      Promise.reject(new Error("registry"));
-    return Effect.gen(function* () {
-      const registryFailure = yield* getCodexCredentials(
-        "/auth.json",
-        rejectedRegistryContext,
-      ).pipe(Effect.result);
-      expect(registryFailure._tag).toBe("Failure");
-      if (registryFailure._tag === "Failure")
-        expect(registryFailure.failure.operation).toBe("registry");
-      expect(yield* getCodexCredentials("/auth.json", context())).toBeUndefined();
-    }).pipe(provideBuiltLayer(store.layer));
-  });
+  it.effect("treats an absent or empty registry key as missing credentials", () =>
+    Effect.gen(function* () {
+      for (const token of [undefined, ""])
+        expect(yield* getCodexCredentials(testContext({ token }))).toBeUndefined();
+    }),
+  );
 
   it.effect("interrupts a pending model-registry credential lookup", () => {
-    const pending = Deferred.makeUnsafe<string | undefined>();
-    const store = documents();
-    const ctx = context();
+    const pending = Deferred.makeUnsafe<undefined>();
+    const ctx = testContext();
     return Effect.gen(function* () {
       yield* Effect.addFinalizer(() => Deferred.succeed(pending, undefined));
       const started = yield* Deferred.make<void>();
-      ctx.modelRegistry.getApiKeyForProvider = () => {
+      ctx.modelRegistry.getProviderAuth = () => {
         Deferred.doneUnsafe(started, Effect.void);
         return Effect.runPromise(Deferred.await(pending));
       };
-      const fiber = yield* getCodexCredentials("/auth.json", ctx).pipe(Effect.forkScoped);
+      const fiber = yield* getCodexCredentials(ctx).pipe(Effect.forkScoped);
       yield* Deferred.await(started);
       yield* Fiber.interrupt(fiber);
       const exit = yield* Fiber.await(fiber);
       expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(store.layer));
+    }).pipe(Effect.scoped);
   });
 
-  it.effect("preserves valid credential fallback when the other source is malformed", () => {
-    const validAuthPath = "/agent/valid-auth.json";
-    const malformedAuthPath = "/agent/malformed-auth.json";
-    const store = documents({
-      [validAuthPath]: {
-        "openai-codex": {
-          type: "oauth",
-          access: "file-token",
-          accountId: "acct_file",
-        },
-      },
-      [malformedAuthPath]: {
-        "openai-codex": {
-          type: "oauth",
-          access: "",
-          accountId: "acct_file",
-        },
-      },
-    });
-    const registryPayload = JSON.stringify({
-      access: "registry-token",
-      accountId: "acct_registry",
-    });
-
-    return Effect.gen(function* () {
-      const fileFallback = yield* getCodexCredentials(
-        validAuthPath,
-        context("{malformed-registry"),
-      );
-      expect(fileFallback?.source).toBe("authFile");
-      if (fileFallback) expect(Redacted.value(fileFallback.accessToken)).toBe("file-token");
-
-      const registryFallback = yield* getCodexCredentials(
-        malformedAuthPath,
-        context(registryPayload),
-      );
-      expect(registryFallback?.source).toBe("modelRegistry");
-      if (registryFallback)
-        expect(Redacted.value(registryFallback.accessToken)).toBe("registry-token");
-
-      const malformed = yield* getCodexCredentials(
-        malformedAuthPath,
-        context("{malformed-registry"),
-      ).pipe(Effect.result);
-      expect(malformed._tag).toBe("Failure");
-      if (malformed._tag === "Failure") expect(malformed.failure.operation).toBe("registry-decode");
-      expect(serializedSnapshot([fileFallback, registryFallback, malformed])).not.toContain(
-        "file-token",
-      );
-      expect(serializedSnapshot([fileFallback, registryFallback, malformed])).not.toContain(
-        "registry-token",
-      );
-    }).pipe(provideBuiltLayer(store.layer));
-  });
-
-  it.effect("parses lossy registry credentials with auth-file fallback and expiry", () => {
-    const authPath = "/agent/auth.json";
-    const store = documents({
-      [authPath]: {
-        "openai-codex": {
-          type: "oauth",
-          access: "file-token",
-          accountId: "acct_file",
-          expires: 1_000,
-        },
-      },
-    });
+  it.effect("parses lossy registry keys into redacted credentials", () => {
     const rawJwt = jwt("acct_jwt");
-    const privateRegistryPayload = JSON.stringify({
+    const payload = JSON.stringify({
       access: "private-registry-token",
       accountId: "acct_registry",
     });
-    const registryPayload = JSON.stringify({ access: "registry", accountId: "acct_registry" });
-    const rejectedRegistryContext = context();
-    rejectedRegistryContext.modelRegistry.getApiKeyForProvider = () =>
-      Promise.reject(new Error("registry"));
-
-    expect(extractAccountIdFromJwt(rawJwt)).toBe("acct_jwt");
-    expect(extractAccountIdFromJwt("malformed-jwt")).toBeUndefined();
-    expect(parseCodexRegistryCredentials("{malformed-registry")).toBeUndefined();
-
-    const jwtCredentials = parseCodexRegistryCredentials(rawJwt);
-    expect(jwtCredentials?.accountId).toBe("acct_jwt");
-    if (jwtCredentials) {
-      expect(Redacted.value(jwtCredentials.accessToken)).toBe(rawJwt);
-      expect(serializedSnapshot(jwtCredentials)).not.toContain(rawJwt);
-    }
-
-    const registry = parseCodexRegistryCredentials(privateRegistryPayload);
-    expect(registry?.accountId).toBe("acct_registry");
-    if (registry) {
-      expect(Redacted.value(registry.accessToken)).toBe("private-registry-token");
-      expect(serializedSnapshot(registry)).not.toContain("private-registry-token");
-    }
-
     return Effect.gen(function* () {
-      const file = yield* readCodexAuthCredentials(authPath);
-      expect(file?.accountId).toBe("acct_file");
-      expect(file?.source).toBe("authFile");
-      if (file) {
-        expect(Redacted.value(file.accessToken)).toBe("file-token");
-        expect(serializedSnapshot(file)).not.toContain("file-token");
+      const fromJwt = yield* getCodexCredentials(testContext({ token: ` ${rawJwt}\n` }));
+      expect(fromJwt?.accountId).toBe("acct_jwt");
+      expect(fromJwt && Redacted.value(fromJwt.accessToken)).toBe(rawJwt);
+
+      const fromPayload = yield* getCodexCredentials(testContext({ token: payload }));
+      expect(fromPayload?.accountId).toBe("acct_registry");
+      expect(fromPayload && Redacted.value(fromPayload.accessToken)).toBe("private-registry-token");
+
+      for (const malformed of ["{malformed-registry", "malformed-jwt", "   "]) {
+        const failure = yield* getCodexCredentials(testContext({ token: malformed })).pipe(
+          Effect.flip,
+        );
+        expect(failure.operation).toBe("registry-decode");
       }
-      expect((yield* getCodexCredentials(authPath, context()))?.source).toBe("authFile");
-      expect((yield* getCodexCredentials(authPath, context("{malformed-registry")))?.source).toBe(
-        "authFile",
-      );
-      expect((yield* getCodexCredentials(authPath, rejectedRegistryContext))?.source).toBe(
-        "authFile",
-      );
-      expect((yield* getCodexCredentials(authPath, context(registryPayload)))?.source).toBe(
-        "modelRegistry",
-      );
-      yield* TestClock.adjust("2 seconds");
-      expect(yield* readCodexAuthCredentials(authPath)).toBeUndefined();
-    }).pipe(provideBuiltLayer(store.layer));
+      const serialized = serializedSnapshot([fromJwt, fromPayload]);
+      expect(serialized).not.toContain(rawJwt);
+      expect(serialized).not.toContain("private-registry-token");
+    });
   });
 });

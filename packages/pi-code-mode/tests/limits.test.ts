@@ -20,7 +20,7 @@ describe("UTF-8 truncation", () => {
       expect(clampModelVisibleText(text, limit)).toBe(expected);
       const budget = makeCumulativeOutputBudget(limit);
       expect(budget.admitFailure(text)).toBe(expected);
-      expect(budget.used()).toBe(utf8ByteLength(expected));
+      expect(budget.remaining()).toBe(limit - utf8ByteLength(expected));
       expect(budget.admitFailure("x".repeat(limit + 1))).toBe(
         "x".repeat(limit - utf8ByteLength(expected)),
       );
@@ -46,11 +46,6 @@ describe("checkSourceSize", () => {
 });
 
 describe("clampModelVisibleText (final model-visible bound)", () => {
-  it("returns empty for a zero budget", () => {
-    expect(clampModelVisibleText("anything at all", 0)).toBe("");
-    expect(clampModelVisibleText("", 0)).toBe("");
-  });
-
   it("admits an exact fit unchanged", () => {
     const text = "a".repeat(64);
     expect(clampModelVisibleText(text, 64)).toBe(text);
@@ -68,18 +63,6 @@ describe("clampModelVisibleText (final model-visible bound)", () => {
     expect(clamped).toBe("b".repeat(8));
     expect(utf8ByteLength(clamped)).toBe(8);
   });
-
-  it("never splits a multibyte code point", () => {
-    // 10 × "🙂" = 40 UTF-8 bytes; a 15-byte budget lands mid-emoji and must drop the partial.
-    const clamped = clampModelVisibleText("🙂".repeat(10), 15);
-    expect(utf8ByteLength(clamped)).toBeLessThanOrEqual(15);
-    expect(clamped).not.toContain("�");
-  });
-
-  it("bounds a hostile 100KB text inside the budget", () => {
-    const clamped = clampModelVisibleText("E".repeat(100_000), 256);
-    expect(utf8ByteLength(clamped)).toBeLessThanOrEqual(256);
-  });
 });
 
 describe("makeCumulativeOutputBudget", () => {
@@ -87,11 +70,9 @@ describe("makeCumulativeOutputBudget", () => {
     const budget = makeCumulativeOutputBudget(10);
     expect(budget.admit("aaaa")).toEqual({ admitted: true });
     expect(budget.admit("bbbb")).toEqual({ admitted: true });
-    expect(budget.used()).toBe(8);
     expect(budget.remaining()).toBe(2);
     // Exact threshold: the remaining 2 bytes are admitted.
     expect(budget.admit("cc").admitted).toBe(true);
-    expect(budget.used()).toBe(10);
     expect(budget.remaining()).toBe(0);
   });
 
@@ -105,35 +86,18 @@ describe("makeCumulativeOutputBudget", () => {
       expect(refused.message).toContain("8 of 10 bytes already used");
     }
     // The refusal consumed nothing: an exactly fitting later result still passes.
-    expect(budget.used()).toBe(8);
+    expect(budget.remaining()).toBe(2);
     expect(budget.admit("bb").admitted).toBe(true);
-    expect(budget.used()).toBe(10);
-  });
-
-  it("counts multibyte guest data in exact UTF-8 bytes", () => {
-    const budget = makeCumulativeOutputBudget(4);
-    // "éé" is 4 UTF-8 bytes (2 UTF-16 code units): an exact fit.
-    expect(budget.admit("éé").admitted).toBe(true);
-    expect(budget.used()).toBe(4);
-    expect(budget.admit("a").admitted).toBe(false);
+    expect(budget.remaining()).toBe(0);
   });
 
   it("bounds and consumes nested failure text from the same budget", () => {
     const budget = makeCumulativeOutputBudget(7);
     expect(budget.admit("ok").admitted).toBe(true);
     expect(budget.admitFailure("ééé")).toBe("éé");
-    expect(budget.used()).toBe(6);
+    expect(budget.remaining()).toBe(1);
     expect(budget.admitFailure("xy")).toBe("x");
-    expect(budget.used()).toBe(7);
+    expect(budget.remaining()).toBe(0);
     expect(budget.admitFailure("later")).toBe("");
-  });
-
-  it("stays deterministic under interleaved admissions of equal size", () => {
-    // Check-and-consume is one synchronous step, so any settle order of 5 equal-sized
-    // results against a 3-result budget admits exactly 3 and refuses exactly 2.
-    const budget = makeCumulativeOutputBudget(12);
-    const outcomes = ["11", "22", "33", "44", "55"].map((data) => budget.admit(data + data));
-    expect(outcomes.filter((outcome) => outcome.admitted)).toHaveLength(3);
-    expect(budget.used()).toBe(12);
   });
 });

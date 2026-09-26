@@ -1,12 +1,6 @@
 /** Thin Pi registration adapter for Better OpenAI. */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerBetterOpenAIApplication } from "./application.ts";
-
-export default function betterOpenAI(pi: ExtensionAPI): void {
-  registerBetterOpenAIApplication(pi);
-}
-
 export {
+  betterOpenAIWithDependencies as default,
   betterOpenAIWithDependencies,
   type BetterOpenAIExtensionDependencies,
 } from "./application.ts";

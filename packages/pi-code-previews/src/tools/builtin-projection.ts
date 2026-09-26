@@ -19,7 +19,6 @@ import {
 import { getPathArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
 import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
-export type { BuiltinCompactTool } from "./builtin-subject";
 
 export interface BuiltinCompactPolicy {
   secretWarnings: boolean;
@@ -122,9 +121,8 @@ function projectBuiltinSummary(
       notices.push(...recovery);
     } else if (tool === "bash" || tool === "grep" || tool === "find" || tool === "ls") {
       const projection = outputLimitProjection(tool, result.details);
-      counters.push(...(projection.counters ?? []));
+      counters.push(...projection.counters);
       notices.push(...projection.notices);
-      metadata.push(...projection.metadata);
     }
   }
   if (isError) {

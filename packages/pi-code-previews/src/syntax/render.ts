@@ -56,9 +56,9 @@ export function renderHighlightedText(
   theme: Theme,
   invalidate?: () => void,
 ): string[] {
-  const plain = () => plainHighlightedText(text, theme);
-  if (!codePreviewSettings.syntaxHighlighting || !lang) return plain();
-  return renderWithShiki(expandPreviewTabs(text), lang, invalidate) ?? plain();
+  return (
+    renderWithShiki(expandPreviewTabs(text), lang, invalidate) ?? plainHighlightedText(text, theme)
+  );
 }
 
 export function renderWithShiki(
@@ -149,40 +149,31 @@ function normalizeContrast(ansi: string, theme: string): string {
     isLowContrastFg(parameters) ? "\x1b[38;2;139;148;158m" : sequence,
   );
 }
+const LOW_CONTRAST_BASIC_FG = new Set(["30", "90", "38;5;0", "38;5;8"]);
 function isLowContrastFg(parameters: string): boolean {
-  if (
-    parameters === "30" ||
-    parameters === "90" ||
-    parameters === "38;5;0" ||
-    parameters === "38;5;8"
-  )
-    return true;
+  if (LOW_CONTRAST_BASIC_FG.has(parameters)) return true;
   if (!parameters.startsWith("38;2;")) return false;
-  const [, , red, green, blue] = parameters.split(";").map(Number);
-  if (
-    red === undefined ||
-    green === undefined ||
-    blue === undefined ||
-    ![red, green, blue].every(Number.isFinite)
-  )
-    return false;
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue < 72;
+  const [, , red = Number.NaN, green = Number.NaN, blue = Number.NaN] = parameters
+    .split(";")
+    .map(Number);
+  return (
+    [red, green, blue].every(Number.isFinite) && 0.2126 * red + 0.7152 * green + 0.0722 * blue < 72
+  );
 }
+/** Shiki font-style flags in open order (bold, italic, underline); closes nest in reverse. */
+const FONT_STYLES = [
+  [2, "\x1b[1m", "\x1b[22m"],
+  [1, "\x1b[3m", "\x1b[23m"],
+  [4, "\x1b[4m", "\x1b[24m"],
+] as const;
 function ansiFromToken(token: { content: string; color?: string; fontStyle?: number }): string {
   let open = token.color ? ansiFg(token.color) : "";
   let close = token.color ? "\x1b[39m" : "";
   const fontStyle = token.fontStyle ?? 0;
-  if (fontStyle & 2) {
-    open += "\x1b[1m";
-    close = "\x1b[22m" + close;
-  }
-  if (fontStyle & 1) {
-    open += "\x1b[3m";
-    close = "\x1b[23m" + close;
-  }
-  if (fontStyle & 4) {
-    open += "\x1b[4m";
-    close = "\x1b[24m" + close;
+  for (const [flag, styleOpen, styleClose] of FONT_STYLES) {
+    if (!(fontStyle & flag)) continue;
+    open += styleOpen;
+    close = styleClose + close;
   }
   return open + escapeControlChars(token.content) + close;
 }

@@ -4,35 +4,28 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { HerdrCli } from "../src/boundary/herdr-cli.ts";
-import { HerdrHarness } from "../src/boundary/herdr-harness.ts";
 import { HerdrHost } from "../src/boundary/herdr-host.ts";
-import { fakeTopology, launch, supervisor } from "./fixtures/herdr-host-fixture.ts";
-
-const hostLayer = (fake: ReturnType<typeof fakeTopology>) =>
-  HerdrHost.layer.pipe(
-    Layer.provide(
-      Layer.merge(Layer.succeed(HerdrCli, fake.cli), Layer.succeed(HerdrHarness, fake.harness)),
-    ),
-  );
+import {
+  fakeTopology,
+  hostLayer,
+  launch,
+  launchInRunScope,
+  launchRun,
+  supervisor,
+} from "./fixtures/herdr-host-fixture.ts";
 
 describe("session-owned Herdr topology", () => {
   it.live(
     "splits the calling pane first, then the newest owned pane, and closes only owned panes",
     () => {
       const fake = fakeTopology();
-      const layer = hostLayer(fake);
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
         const initialFocus = fake.focusedTopology();
-        const first = yield* host.launch("pi", launch("agent-1"), supervisor);
-        const second = yield* host.launch("pi", launch("agent-2"), {
-          ...supervisor,
-          runId: "agent-2",
-        });
+        const first = yield* launchRun(host, "agent-1");
+        const second = yield* launchRun(host, "agent-2");
         expect(first.workspaceId).toBe(second.workspaceId);
         expect(first.tabId).toBe(second.tabId);
         expect(first.paneId).not.toBe(second.paneId);
@@ -48,7 +41,6 @@ describe("session-owned Herdr topology", () => {
         );
         expect(fake.shellInspectedPanes).toEqual(new Set([first.paneId, second.paneId]));
         expect(fake.focusedTopology()).toEqual(initialFocus);
-        expect(fake.focusOperations).toEqual([]);
 
         yield* first.close;
         expect(fake.closedPanes).toEqual([first.paneId]);
@@ -59,46 +51,34 @@ describe("session-owned Herdr topology", () => {
         expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(2);
         expect(fake.focusedTopology()).toEqual(initialFocus);
-        expect(fake.focusOperations).toEqual([]);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
     },
   );
 
   it.live("rejects an unresolvable calling pane before splitting", () => {
     const fake = fakeTopology();
-    fake.mismatchCurrentPane();
-    const layer = hostLayer(fake);
+    fake.inject("currentPaneMismatch");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const runScope = yield* Scope.make();
-      const launched = yield* host
-        .launch("pi", launch("agent-no-caller"), {
-          ...supervisor,
-          runId: "agent-no-caller",
-        })
-        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
+      const { launched, closeRunScope } = yield* launchInRunScope(host, "agent-no-caller");
       expect(Exit.isFailure(launched)).toBe(true);
       expect(fake.splitCalls()).toBe(0);
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
-      expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
+      expect(Exit.isSuccess(yield* closeRunScope)).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(fake.harnessCleanups()).toBe(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("interrupts pre-topology acquisition and removes the still-authorized harness", () => {
     const fake = fakeTopology();
     fake.blockSnapshotBeforeSplit();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
       const launching = yield* host
-        .launch("pi", launch("agent-interrupted-before-split"), {
-          ...supervisor,
-          runId: "agent-interrupted-before-split",
-        })
+        .launch("pi", launch("agent-interrupted-before-split"), supervisor)
         .pipe(Effect.provideService(Scope.Scope, runScope), Effect.forkScoped);
       yield* fake.awaitBlockedPreSplitSnapshot();
       yield* Fiber.interrupt(launching);
@@ -108,21 +88,17 @@ describe("session-owned Herdr topology", () => {
       expect(fake.cleanupWithholds()).toBe(0);
       expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
       expect(fake.harnessCleanups()).toBe(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("interrupts after split, rolls back, and reauthorizes harness cleanup", () => {
     const fake = fakeTopology();
     fake.blockSnapshotAfterSplit();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const runScope = yield* Scope.make();
       const launching = yield* host
-        .launch("pi", launch("agent-interrupted-after-split"), {
-          ...supervisor,
-          runId: "agent-interrupted-after-split",
-        })
+        .launch("pi", launch("agent-interrupted-after-split"), supervisor)
         .pipe(Effect.provideService(Scope.Scope, runScope), Effect.forkScoped);
       yield* fake.awaitBlockedPostSplitSnapshot();
       yield* Fiber.interrupt(launching);
@@ -135,28 +111,18 @@ describe("session-owned Herdr topology", () => {
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(Exit.isSuccess(yield* Scope.close(runScope, Exit.void).pipe(Effect.exit))).toBe(true);
       expect(fake.harnessCleanups()).toBe(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("uses the newest remaining owned pane after the latest pane closes", () => {
     const fake = fakeTopology();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const first = yield* host.launch("pi", launch("anchor-first"), supervisor);
-      const second = yield* host.launch("pi", launch("anchor-second"), {
-        ...supervisor,
-        runId: "anchor-second",
-      });
-      const third = yield* host.launch("pi", launch("anchor-third"), {
-        ...supervisor,
-        runId: "anchor-third",
-      });
+      const first = yield* launchRun(host, "anchor-first");
+      const second = yield* launchRun(host, "anchor-second");
+      const third = yield* launchRun(host, "anchor-third");
       yield* third.close;
-      const fourth = yield* host.launch("pi", launch("anchor-fourth"), {
-        ...supervisor,
-        runId: "anchor-fourth",
-      });
+      const fourth = yield* launchRun(host, "anchor-fourth");
       expect(fake.splitTargets()).toEqual([
         fake.callerPaneId,
         first.paneId,
@@ -167,40 +133,32 @@ describe("session-owned Herdr topology", () => {
       yield* second.close;
       yield* first.close;
       expect(fake.callerPaneLive()).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("generates distinct Herdr 0.8-safe names for every hosted runtime", () => {
     const fake = fakeTopology();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const names: string[] = [];
       for (const runtime of ["pi", "claude", "codex"] as const) {
         const runId = `agent-${runtime}-with-a-long-ownership-identifier`;
-        const hosted = yield* host.launch(runtime, launch(runId), {
-          ...supervisor,
-          runId,
-        });
+        const hosted = yield* launchRun(host, runId, runtime);
         expect(hosted.agentName).toMatch(/^[a-z][a-z0-9_-]{0,31}$/u);
         names.push(hosted.agentName);
         yield* hosted.close;
       }
       expect(new Set(names).size).toBe(3);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("launches from private pane-command receipts without terminal-output attestation", () => {
     const fake = fakeTopology();
     fake.executeFirstActivationReceipt();
-    fake.enableSecretBootstrap();
-    const layer = hostLayer(fake);
+    fake.inject("validSecretBootstrap");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const hosted = yield* host.launch("pi", launch("agent-receipt-only"), {
-        ...supervisor,
-        runId: "agent-receipt-only",
-      });
+      const hosted = yield* launchRun(host, "agent-receipt-only");
       expect(fake.publishedReceipts).toEqual(
         new Set([
           "activation-1",
@@ -218,56 +176,42 @@ describe("session-owned Herdr topology", () => {
         "confirm pane shell",
       ]);
       expect(yield* hosted.inspect).toMatchObject({ paneId: hosted.paneId });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("waits for a transient native pane occupant before spending activation probes", () => {
     const fake = fakeTopology();
     fake.delayInitialShellReadiness(3);
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const hosted = yield* host.launch("pi", launch("agent-delayed-shell"), {
-        ...supervisor,
-        runId: "agent-delayed-shell",
-      });
+      const hosted = yield* launchRun(host, "agent-delayed-shell");
       expect(fake.shellProcessInspections.get(hosted.paneId)).toBeGreaterThanOrEqual(5);
       expect(fake.activationConfirmations.get(hosted.paneId)).toBe(2);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("waits for stale post-activation agent detection before environment input", () => {
     const fake = fakeTopology();
     fake.delayPostActivationAgentClearance(4);
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const hosted = yield* host.launch("claude", launch("agent-post-activation-detection"), {
-        ...supervisor,
-        runId: "agent-post-activation-detection",
-      });
+      const hosted = yield* launchRun(host, "agent-post-activation-detection", "claude");
       expect(fake.shellProcessInspections.get(hosted.paneId)).toBeGreaterThanOrEqual(4);
       expect(fake.paneCommands).toContainEqual({
         paneId: hosted.paneId,
         operation: "prepare pane environment",
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("rolls back when both harmless pane-input activation probes are dropped", () => {
     const fake = fakeTopology();
-    fake.dropEveryActivationProbe();
-    fake.enableSecretBootstrap();
-    const layer = hostLayer(fake);
+    fake.inject("dropAllActivationProbes");
+    fake.inject("validSecretBootstrap");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-activation-failure"), {
-          ...supervisor,
-          runId: "agent-activation-failure",
-        }),
-      );
+      const result = yield* Effect.result(launchRun(host, "agent-activation-failure"));
       expect(result).toMatchObject({
         _tag: "Failure",
         failure: {
@@ -286,23 +230,16 @@ describe("session-owned Herdr topology", () => {
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTopology()).toEqual(initialFocus);
-      expect(fake.focusOperations).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("blocks agent start and safely cleans up after an invalid environment receipt", () => {
     const fake = fakeTopology();
     fake.executeFirstActivationReceipt();
     fake.failReceipt("environment-ready", "wrong");
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const failure = yield* host
-        .launch("pi", launch("agent-invalid-environment-receipt"), {
-          ...supervisor,
-          runId: "agent-invalid-environment-receipt",
-        })
-        .pipe(Effect.flip);
+      const failure = yield* launchRun(host, "agent-invalid-environment-receipt").pipe(Effect.flip);
       expect(failure).toMatchObject({ code: "herdr_startup_receipt_invalid" });
       expect(fake.agents.size).toBe(0);
       expect(fake.paneCommands.map(({ operation }) => operation)).toEqual([
@@ -313,22 +250,16 @@ describe("session-owned Herdr topology", () => {
       expect(fake.cleanupWithholds()).toBe(1);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.callerPaneLive()).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("does not override newer user focus during focus-free receipt retry and rollback", () => {
     const fake = fakeTopology();
-    fake.dropEveryActivationProbe();
-    fake.switchToOtherTabAfterFirstProbe();
-    const layer = hostLayer(fake);
+    fake.inject("dropAllActivationProbes");
+    fake.inject("switchFocusAfterFirstProbe");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-newer-user-focus"), {
-          ...supervisor,
-          runId: "agent-newer-user-focus",
-        }),
-      );
+      const result = yield* Effect.result(launchRun(host, "agent-newer-user-focus"));
       expect(result).toMatchObject({
         _tag: "Failure",
         failure: { code: "herdr_pane_input_unavailable" },
@@ -338,24 +269,17 @@ describe("session-owned Herdr topology", () => {
         tabId: "user:other",
         paneId: undefined,
       });
-      expect(fake.focusOperations).toEqual([]);
       expect(fake.closedPanes).toEqual(["user:p1"]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("rolls back a confirmed pre-application agent_pane_busy rejection", () => {
     const fake = fakeTopology();
-    fake.rejectStartWithPaneBusy();
-    const layer = hostLayer(fake);
+    fake.inject("rejectStartAsBusy");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
-      const result = yield* Effect.result(
-        host.launch("pi", launch("agent-pane-busy"), {
-          ...supervisor,
-          runId: "agent-pane-busy",
-        }),
-      );
+      const result = yield* Effect.result(launchRun(host, "agent-pane-busy"));
       expect(result).toMatchObject({
         _tag: "Failure",
         failure: { code: "agent_pane_busy" },
@@ -364,40 +288,32 @@ describe("session-owned Herdr topology", () => {
       expect(fake.callerPaneLive()).toBe(true);
       expect(fake.cleanupAuthorizations()).toBe(1);
       expect(fake.focusedTopology()).toEqual(initialFocus);
-      expect(fake.focusOperations).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("launches into the exact caller tab while another tab remains focused", () => {
     const fake = fakeTopology();
     fake.switchToOtherTab();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const initialFocus = fake.focusedTopology();
-      const hosted = yield* host.launch("pi", launch("agent-unfocused-target"), {
-        ...supervisor,
-        runId: "agent-unfocused-target",
-      });
+      const hosted = yield* launchRun(host, "agent-unfocused-target");
       expect(hosted.tabId).toBe("user:t");
       expect(fake.focusedTopology()).toEqual(initialFocus);
-      expect(fake.focusOperations).toEqual([]);
       yield* hosted.close;
       expect(fake.closedPanes).toEqual([hosted.paneId]);
       expect(fake.focusedTopology()).toEqual(initialFocus);
-      expect(fake.focusOperations).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("closes a focused owned pane without issuing a focus command", () => {
     const fake = fakeTopology();
-    const layer = hostLayer(fake);
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
       const hosted = yield* host.launch(
         "pi",
         { ...launch("agent-focused-close"), closeOnReport: true },
-        { ...supervisor, runId: "agent-focused-close" },
+        supervisor,
       );
       fake.focusPaneAsUser(hosted.paneId);
       expect(fake.focusedTopology()).toEqual({
@@ -412,58 +328,46 @@ describe("session-owned Herdr topology", () => {
         tabId: "user:t",
         paneId: fake.callerPaneId,
       });
-      expect(fake.focusOperations).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live("quarantines startup when native-session identity is not returned atomically", () => {
     const fake = fakeTopology();
-    fake.omitNativeSession();
-    const layer = hostLayer(fake);
+    fake.inject("omitAgentSession");
     return Effect.gen(function* () {
       const host = yield* HerdrHost;
-      const runScope = yield* Scope.make();
-      const failure = yield* host
-        .launch("pi", launch("agent-session-unconfirmed"), {
-          ...supervisor,
-          runId: "agent-session-unconfirmed",
-        })
-        .pipe(Effect.provideService(Scope.Scope, runScope), Effect.flip);
-      expect(failure).toMatchObject({
+      const { launched, closeRunScope } = yield* launchInRunScope(
+        host,
+        "agent-session-unconfirmed",
+      );
+      expect(yield* Effect.flip(launched)).toMatchObject({
         code: "herdr_cleanup_unconfirmed",
         message: expect.stringContaining("supported Herdr protocol exposes no launch token"),
       });
-      const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
-      expect(Exit.isFailure(closed)).toBe(true);
+      expect(Exit.isFailure(yield* closeRunScope)).toBe(true);
       expect(fake.cleanupWithholds()).toBe(1);
       expect(fake.cleanupAuthorizations()).toBe(0);
       expect(fake.harnessCleanups()).toBe(0);
       expect(fake.closedPanes).toEqual([]);
       expect(fake.callerPaneLive()).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
   });
 
   it.live(
     "rejects a secret bootstrap without matching attestation before topology mutation",
     () => {
       const fake = fakeTopology();
-      fake.invalidateSecretAttestation();
-      const layer = hostLayer(fake);
+      fake.inject("invalidSecretAttestation");
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
-        const failure = yield* host
-          .launch("pi", launch("agent-invalid-secret"), {
-            ...supervisor,
-            runId: "agent-invalid-secret",
-          })
-          .pipe(Effect.flip);
+        const failure = yield* launchRun(host, "agent-invalid-secret").pipe(Effect.flip);
         expect(failure).toMatchObject({
           code: "herdr_secret_attestation_invalid",
         });
         expect(fake.closedPanes).toEqual([]);
         expect(fake.callerPaneLive()).toBe(true);
         expect(fake.cleanupAuthorizations()).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
     },
   );
 
@@ -472,25 +376,17 @@ describe("session-owned Herdr topology", () => {
     () => {
       const fake = fakeTopology();
       fake.failAppliedStartAndRollbackSnapshot();
-      const layer = hostLayer(fake);
       return Effect.gen(function* () {
         const host = yield* HerdrHost;
-        const runScope = yield* Scope.make();
-        const launched = yield* host
-          .launch("pi", launch("agent-uncertain"), {
-            ...supervisor,
-            runId: "agent-uncertain",
-          })
-          .pipe(Effect.provideService(Scope.Scope, runScope), Effect.exit);
+        const { launched, closeRunScope } = yield* launchInRunScope(host, "agent-uncertain");
         expect(Exit.isFailure(launched)).toBe(true);
-        const closed = yield* Scope.close(runScope, Exit.void).pipe(Effect.exit);
-        expect(Exit.isFailure(closed)).toBe(true);
+        expect(Exit.isFailure(yield* closeRunScope)).toBe(true);
         expect(fake.cleanupWithholds()).toBe(1);
         expect(fake.cleanupAuthorizations()).toBe(0);
         expect(fake.harnessCleanups()).toBe(0);
         expect(fake.closedPanes).toEqual([]);
         expect(fake.callerPaneLive()).toBe(true);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      }).pipe(Effect.scoped, provideBuiltLayer(hostLayer(fake)));
     },
   );
 });

@@ -1,35 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { projectReadCompleteness, readResultToGuestData } from "../src/tools/read-result.ts";
-
-interface TruncationFixture {
-  content: string;
-  truncated: boolean;
-  truncatedBy: "lines" | "bytes" | null;
-  totalLines: number;
-  totalBytes: number;
-  outputLines: number;
-  outputBytes: number;
-  lastLinePartial: boolean;
-  firstLineExceedsLimit: boolean;
-  maxLines: number;
-  maxBytes: number;
-}
-
-const truncation = (overrides: Partial<TruncationFixture> = {}): TruncationFixture => ({
-  content: "one\ntwo",
-  truncated: true,
-  truncatedBy: "lines",
-  totalLines: 3,
-  totalBytes: 13,
-  outputLines: 2,
-  outputBytes: 7,
-  lastLinePartial: false,
-  firstLineExceedsLimit: false,
-  maxLines: 2_000,
-  maxBytes: 51_200,
-  ...overrides,
-});
+import { truncation } from "./support/read.ts";
 
 describe("read completeness projection", () => {
   it("proves only an unscoped text read with absent native details complete", () => {

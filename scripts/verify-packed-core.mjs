@@ -309,6 +309,7 @@ try {
     "pi-mcp/src/protocol.ts",
     "pi-mcp/src/code-mode/protocol.ts",
     "pi-mcp/src/boundary/schema-validator-helper.mjs",
+    "pi-mcp/src/validation/schema-rules.mjs",
   ]) {
     await readFile(join(temporaryDirectory, "node_modules", source));
   }

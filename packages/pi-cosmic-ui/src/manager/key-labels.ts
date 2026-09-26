@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
 const SPECIAL_KEY_LABELS = new Map(
@@ -39,6 +40,19 @@ export const fullScreenKeybindingLabel = (
   fallback: string,
   getKeys?: ((id: FullScreenSelectionKeybindingId) => ReadonlyArray<string>) | undefined,
 ): string => getKeys?.(id).map(formatFullScreenKeyId).join("/") || fallback;
+
+/** Pi's keybindings as full-screen manager options. Labels fall back without `getKeys`. */
+export const fullScreenKeybindingOptions = (keybindings: {
+  matches(data: string, id: FullScreenSelectionKeybindingId): boolean;
+  getKeys?(id: FullScreenSelectionKeybindingId): ReadonlyArray<string>;
+}) => ({
+  matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
+    keybindings.matches(data, id),
+  keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
+    fullScreenKeybindingLabel(id, fallback, (key) =>
+      Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(key) : [],
+    ),
+});
 
 const SHIFT_LABEL_PREFIX = "⇧";
 

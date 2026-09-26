@@ -1,30 +1,29 @@
 // Private harness lifecycle tests intentionally exercise real filesystem and process ownership.
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
-import type { BackendLaunchRequest } from "../src/backend/model.ts";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import {
   prepareLocalCliHarness,
   sanitizeLocalCliEnvironment,
 } from "../src/boundary/local-cli-harness.ts";
 import { makeLocalCliProcess } from "../src/boundary/local-cli-process.ts";
-import { supervisorMetadata } from "./fixtures/backend-supervisor.ts";
+import { backendLaunch, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
 const executable = fileURLToPath(new URL("./fixtures/local-cli-fixture.mjs", import.meta.url));
-const directories: string[] = [];
-const deferredPromise = (deferred: Deferred.Deferred<void>): Promise<void> =>
-  Effect.runPromise(Deferred.await(deferred));
 const inheritedPath = (source: NodeJS.ProcessEnv): string | undefined => source.PATH;
 
 const setup = () =>
-  fs.mkdtemp(join(tmpdir(), "pi-subagents-local-cli-harness-")).then((directory) => {
-    directories.push(directory);
+  makeTemporaryDirectory("pi-subagents-local-cli-harness-").then((directory) => {
     const agentDirectory = join(directory, "agent");
     const home = join(directory, "home");
     return fs
@@ -38,27 +37,11 @@ const setup = () =>
   });
 
 const supervisor = (directory: string) =>
-  supervisorMetadata("agent-local-cli", {
+  supervisorMetadata({
     stateDirectory: join(directory, "supervisor"),
     connectionConfigPath: join(directory, "supervisor", "connection.json"),
     args: ["/private/helper.mjs", "--config", "/private/connection.json"],
   });
-
-const launch = (): BackendLaunchRequest => ({
-  runId: "agent-local-cli",
-  name: "local-cli-worker",
-  closeOnReport: true,
-  cwd: process.cwd(),
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  model: "claude-fixture",
-  effort: "high",
-  activeTools: [],
-  projectTrusted: false,
-  parentSessionId: "parent-session",
-  systemPrompt: "Use the private supervisor.",
-});
 
 const harnessEntries = (agentDirectory: string) =>
   fs
@@ -68,11 +51,7 @@ const harnessEntries = (agentDirectory: string) =>
       throw error;
     });
 
-afterEach(() =>
-  Promise.all(
-    directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  ).then(() => undefined),
-);
+afterEach(removeTemporaryDirectories);
 
 describe("local CLI harness ownership", () => {
   it("keeps adapter debug controls out of the child environment", () => {
@@ -82,12 +61,20 @@ describe("local CLI harness ownership", () => {
         PI_SUBAGENTS_CLAUDE_DEBUG: "1",
       },
       "claude",
-      launch(),
+      backendLaunch(),
     );
     expect(sanitized.PI_SUBAGENTS_CLAUDE_DEBUG).toBeUndefined();
   });
 
-  it.effect("removes a partially populated harness after preparation fails", () =>
+  it.effect.each([
+    ["removes a partially populated harness after preparation fails", false, "prepare_failed", 0],
+    [
+      "fails closed when partial-harness cleanup cannot be confirmed",
+      true,
+      "cleanup_unconfirmed",
+      1,
+    ],
+  ] as const)("%s", ([, harnessCleanupFault, reason, remaining]) =>
     Effect.gen(function* () {
       const test = yield* Effect.promise(setup);
       const error = yield* Effect.flip(
@@ -96,31 +83,15 @@ describe("local CLI harness ownership", () => {
             agentDirectory: test.agentDirectory,
             environment: test.environment,
             harnessFault: "after-claude-settings",
+            harnessCleanupFault,
           },
-          { runtime: "claude", launch: launch(), supervisor: supervisor(test.directory) },
+          { runtime: "claude", launch: backendLaunch(), supervisor: supervisor(test.directory) },
         ),
       );
-      expect(error.reason).toBe("prepare_failed");
-      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
-    }),
-  );
-
-  it.effect("fails closed when partial-harness cleanup cannot be confirmed", () =>
-    Effect.gen(function* () {
-      const test = yield* Effect.promise(setup);
-      const error = yield* Effect.flip(
-        prepareLocalCliHarness(
-          {
-            agentDirectory: test.agentDirectory,
-            environment: test.environment,
-            harnessFault: "after-claude-settings",
-            harnessCleanupFault: true,
-          },
-          { runtime: "claude", launch: launch(), supervisor: supervisor(test.directory) },
-        ),
+      expect(error.reason).toBe(reason);
+      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toHaveLength(
+        remaining,
       );
-      expect(error.reason).toBe("cleanup_unconfirmed");
-      expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toHaveLength(1);
     }),
   );
 
@@ -128,20 +99,20 @@ describe("local CLI harness ownership", () => {
     Effect.gen(function* () {
       const test = yield* Effect.promise(setup);
       const entered = Deferred.makeUnsafe<void>();
-      const gate = Deferred.makeUnsafe<void>();
+      const gate = deferredPromise();
       const service = makeLocalCliProcess({
         agentDirectory: test.agentDirectory,
         environment: test.environment,
         executables: { claude: executable, codex: executable },
         afterHarnessDirectoryCreated: () => {
           Deferred.doneUnsafe(entered, Effect.void);
-          return deferredPromise(gate);
+          return gate.promise;
         },
       });
       const target = yield* Effect.scoped(
         service.spawn({
           runtime: "claude",
-          launch: launch(),
+          launch: backendLaunch(),
           supervisor: supervisor(test.directory),
         }),
       ).pipe(Effect.forkScoped);
@@ -155,7 +126,7 @@ describe("local CLI harness ownership", () => {
       );
       yield* Effect.sleep("20 millis");
       expect(yield* Ref.get(interruptionSettled)).toBe(false);
-      Deferred.doneUnsafe(gate, Effect.void);
+      gate.resolve();
       yield* Fiber.join(interrupted);
       expect(yield* Effect.promise(() => harnessEntries(test.agentDirectory))).toEqual([]);
     }).pipe(Effect.scoped),
@@ -172,7 +143,7 @@ describe("local CLI harness ownership", () => {
       yield* service
         .spawn({
           runtime: "claude",
-          launch: launch(),
+          launch: backendLaunch(),
           supervisor: supervisor(test.directory),
         })
         .pipe(

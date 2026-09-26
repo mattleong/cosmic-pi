@@ -10,6 +10,7 @@ import { describe, expect } from "vitest";
 import { discoverAuthResource } from "../../src/boundary/sdk-auth-discovery.ts";
 import { proposeScopes } from "../../src/auth/scopes.ts";
 import { mcpFailureReply } from "../../src/boundary/host-tool-result.ts";
+import type { McpAuthChallenge } from "../../src/auth/model.ts";
 import type { McpOAuthConfig } from "../../src/config/model.ts";
 import { startOAuthServer, type OAuthFixtureOptions } from "../fixtures/oauth-server.ts";
 
@@ -17,21 +18,26 @@ const serialize = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const network = Layer.succeed(NetworkAddresses, {
   resolve: () => Effect.succeed([{ address: "127.0.0.1", family: 4 as const }]),
 });
+const bare: McpOAuthConfig = { type: "oauth", registration: "dynamic", scopes: [] };
+const localPolicy = (origin: string) => ({
+  privateOrigins: new Set([origin]),
+  localHttpOrigins: new Set([origin]),
+});
 const discover = (
   origin: string,
-  config: McpOAuthConfig = {
-    type: "oauth",
-    registration: "dynamic",
-    scopes: [],
-    issuer: origin,
-    allowMissingResourceMetadata: true,
-  },
-  root = false,
+  config: McpOAuthConfig = { ...bare, issuer: origin, allowMissingResourceMetadata: true },
+  {
+    root = false,
+    challenge,
+  }: { readonly root?: boolean; readonly challenge?: McpAuthChallenge } = {},
 ) =>
-  discoverAuthResource(root ? origin : `${origin}/mcp`, new URL(`${origin}/mcp`), config, {
-    privateOrigins: new Set([origin]),
-    localHttpOrigins: new Set([origin]),
-  });
+  discoverAuthResource(
+    root ? origin : `${origin}/mcp`,
+    new URL(`${origin}/mcp`),
+    config,
+    localPolicy(origin),
+    challenge,
+  );
 
 describe("protected-resource challenge discovery", () => {
   for (const example of [
@@ -58,22 +64,10 @@ describe("protected-resource challenge discovery", () => {
             resourceChallenge: (origin) =>
               `Bearer resource_metadata="${origin}/oauth/resource", error="insufficient_scope", scope="get"`,
           });
-          const config: McpOAuthConfig = {
-            type: "oauth",
-            registration: "dynamic",
-            scopes: ["configured"],
-            allowMissingResourceMetadata: false,
-          };
-          const result = yield* discoverAuthResource(
-            fixture.resource,
-            new URL(fixture.resource),
-            config,
-            {
-              privateOrigins: new Set([fixture.origin]),
-              localHttpOrigins: new Set([fixture.origin]),
-            },
-            { status: 403, wwwAuthenticate: example.header },
-          );
+          const config = { ...bare, scopes: ["configured"], allowMissingResourceMetadata: false };
+          const result = yield* discover(fixture.origin, config, {
+            challenge: { status: 403, wwwAuthenticate: example.header },
+          });
           expect(result.metadata.resource).toBe(fixture.resource);
           expect(result.retained).toBe(example.retained);
           const proposal = yield* proposeScopes(config, result);
@@ -87,26 +81,13 @@ describe("protected-resource challenge discovery", () => {
       () =>
         Effect.gen(function* () {
           const fixture = yield* startOAuthServer({ challengeMetadataStatus: status });
-          const result = yield* discoverAuthResource(
-            fixture.resource,
-            new URL(fixture.resource),
-            {
-              type: "oauth",
-              registration: "dynamic",
-              scopes: [],
-              issuer: fixture.issuer,
-              allowMissingResourceMetadata: true,
-            },
-            {
-              privateOrigins: new Set([fixture.origin]),
-              localHttpOrigins: new Set([fixture.origin]),
-            },
-            {
-              status: 401,
-              wwwAuthenticate: `Bearer resource_metadata="${fixture.origin}/oauth/resource", scope="read"`,
-            },
-          ).pipe(Effect.result);
-          expect(result._tag).toBe("Failure");
+          const challenge = {
+            status: 401 as const,
+            wwwAuthenticate: `Bearer resource_metadata="${fixture.origin}/oauth/resource", scope="read"`,
+          };
+          expect(
+            yield* discover(fixture.origin, undefined, { challenge }).pipe(Effect.isFailure),
+          ).toBe(true);
           expect(fixture.requests.map((request) => request.path)).toEqual(["/oauth/resource"]);
         }).pipe(Effect.provide(network)),
     );
@@ -114,24 +95,13 @@ describe("protected-resource challenge discovery", () => {
   it.live("rejects ambiguous retained challenges before probing the endpoint", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer();
-      const result = yield* discoverAuthResource(
-        fixture.resource,
-        new URL(fixture.resource),
-        {
-          type: "oauth",
-          registration: "dynamic",
-          scopes: [],
-        },
-        {
-          privateOrigins: new Set([fixture.origin]),
-          localHttpOrigins: new Set([fixture.origin]),
-        },
-        {
-          status: 401,
-          wwwAuthenticate: `Bearer scope="read", Bearer resource_metadata="${fixture.origin}/oauth/resource"`,
-        },
-      ).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
+      const challenge = {
+        status: 401 as const,
+        wwwAuthenticate: `Bearer scope="read", Bearer resource_metadata="${fixture.origin}/oauth/resource"`,
+      };
+      expect(yield* discover(fixture.origin, bare, { challenge }).pipe(Effect.isFailure)).toBe(
+        true,
+      );
       expect(fixture.requests).toEqual([]);
     }).pipe(Effect.provide(network)),
   );
@@ -155,11 +125,7 @@ describe("protected-resource challenge discovery", () => {
           resourceChallenge: parameter,
           resourceMetadataStatuses: [404],
         });
-        const result = yield* discover(fixture.origin, {
-          type: "oauth",
-          registration: "dynamic",
-          scopes: [],
-        });
+        const result = yield* discover(fixture.origin, bare);
         expect(result.source).toBeUndefined();
         expect(result.metadata.resource).toBe(fixture.resource);
         expect(fixture.requests.map((request) => request.path)).toEqual([
@@ -240,12 +206,7 @@ describe("protected-resource challenge discovery", () => {
           resourceChallenge: (origin) => `Bearer resource_metadata="${origin}/oauth/resource"`,
           challengeMetadataStatus: status,
         });
-        const result = yield* discover(fixture.origin, {
-          type: "oauth",
-          registration: "dynamic",
-          scopes: [],
-        }).pipe(Effect.result);
-        expect(result._tag).toBe("Failure");
+        expect(yield* discover(fixture.origin, bare).pipe(Effect.isFailure)).toBe(true);
         expect(fixture.requests.map((request) => request.path)).toEqual([
           "/mcp",
           "/oauth/resource",
@@ -275,7 +236,9 @@ describe("protected-resource discovery compatibility", () => {
   it.live("supports a root endpoint without requiring a path fallback", () =>
     Effect.gen(function* () {
       const fixture = yield* startOAuthServer({ resourceMetadataStatuses: [404] });
-      expect((yield* discover(fixture.origin, undefined, true)).source).toBe("configured");
+      expect((yield* discover(fixture.origin, undefined, { root: true })).source).toBe(
+        "configured",
+      );
     }).pipe(Effect.provide(network)),
   );
 
@@ -283,7 +246,7 @@ describe("protected-resource discovery compatibility", () => {
     it.live(`applies missing metadata policy for ${mode}`, () =>
       Effect.gen(function* () {
         const fixture = yield* startOAuthServer({ resourceMetadataStatuses: [404] });
-        let config: McpOAuthConfig = { type: "oauth", registration: "dynamic", scopes: [] };
+        let config = bare;
         if (mode === "issuer-only") config = { ...config, issuer: fixture.issuer };
         if (mode === "opt-in-without-issuer")
           config = { ...config, allowMissingResourceMetadata: true };
@@ -345,16 +308,8 @@ describe("protected-resource discovery compatibility", () => {
       const result = yield* discoverAuthResource(
         `${fixture.origin}/mcp?tenant=fixture`,
         new URL("https://other.example/resource"),
-        {
-          type: "oauth",
-          registration: "dynamic",
-          scopes: [],
-          resource: "https://other.example/resource",
-        },
-        {
-          privateOrigins: new Set([fixture.origin]),
-          localHttpOrigins: new Set([fixture.origin]),
-        },
+        { ...bare, resource: "https://other.example/resource" },
+        localPolicy(fixture.origin),
       );
       expect(result).toMatchObject({
         source: "origin",
@@ -380,9 +335,7 @@ describe("protected-resource discovery compatibility", () => {
               resourceMetadataStatuses: statuses,
             });
             const result = yield* discover(fixture.origin, {
-              type: "oauth",
-              registration: "dynamic",
-              scopes: [],
+              ...bare,
               allowMissingResourceMetadata,
             });
             expect(result.source).toBeUndefined();

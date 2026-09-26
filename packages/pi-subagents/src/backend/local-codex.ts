@@ -3,6 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { deliverTerminalReport } from "./terminal-report-delivery.ts";
 import * as Stream from "effect/Stream";
@@ -18,21 +19,21 @@ import {
   SubagentProcessError,
   type SubagentError,
 } from "../run/errors.ts";
-import type { SubagentUsage } from "../run/model.ts";
+import { emptyUsage, type SubagentUsage } from "../run/model.ts";
 import {
   decodeCodexEnvelope,
   decodeCodexNotification,
-  decodeEmptyResult,
-  decodeInitializeResult,
-  decodeThreadStartResult,
-  decodeTurnStartResult,
-  decodeTurnSteerResult,
+  EmptyObject,
+  InitializeResult,
   initializedNotification,
   initializeRequest,
+  ThreadStartResult,
   threadStartRequest,
   turnInterruptRequest,
+  TurnStartResult,
   turnStartRequest,
   turnSteerRequest,
+  TurnSteerResult,
   type CodexNotification,
   type CodexRequest,
 } from "./local-codex-protocol.ts";
@@ -47,6 +48,7 @@ import { makeLocalCliRawEventOwnership } from "./local-cli-events.ts";
 import {
   correlatedRequest,
   protocolError,
+  supervisorError,
   unsupported as unsupportedCapability,
 } from "./driver-shared.ts";
 import { startLocalCli } from "./local-cli-startup.ts";
@@ -79,18 +81,13 @@ interface PendingInterrupt {
   completionSeen: boolean;
 }
 
-const outcomeCode = (method: CodexRequest["method"]): string => {
-  switch (method) {
-    case "turn/start":
-      return "start_outcome_uncertain";
-    case "turn/steer":
-      return "guidance_outcome_uncertain";
-    case "turn/interrupt":
-      return "interrupt_outcome_uncertain";
-    default:
-      return `${method.replaceAll("/", "_")}_outcome_uncertain`;
-  }
-};
+const OUTCOME_CODES = new Map<CodexRequest["method"], string>([
+  ["turn/start", "start_outcome_uncertain"],
+  ["turn/steer", "guidance_outcome_uncertain"],
+  ["turn/interrupt", "interrupt_outcome_uncertain"],
+]);
+const outcomeCode = (method: CodexRequest["method"]): string =>
+  OUTCOME_CODES.get(method) ?? `${method.replaceAll("/", "_")}_outcome_uncertain`;
 
 /**
  * Item classification: only known executable item types own a
@@ -137,13 +134,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
   let activeTurnId: string | undefined;
   let runStartedTurnId: string | undefined;
   let pendingInterrupt: PendingInterrupt | undefined;
-  let cumulativeUsage: SubagentUsage = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-  };
+  let cumulativeUsage: SubagentUsage = emptyUsage();
 
   const cancelPending = (error: SubagentError) => {
     for (const pending of responses.values())
@@ -215,7 +206,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
           assignmentEpoch,
           ...(event.item.text !== undefined &&
             event.item.text.length > 0 && { text: event.item.text }),
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+          usage: emptyUsage(),
         },
         raw,
       );
@@ -234,6 +225,13 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       },
       raw,
     );
+  };
+
+  const markTurnStarted = (turnId: string, epoch: number, raw?: LocalCliWireEvent) => {
+    activeTurnId = turnId;
+    if (runStartedTurnId === turnId) return raw ? release(raw) : Effect.void;
+    runStartedTurnId = turnId;
+    return offer({ type: "run_started", assignmentEpoch: epoch }, raw);
   };
 
   const onTurnCompleted = (event: CodexTurnCompleted, raw: LocalCliWireEvent) => {
@@ -311,12 +309,8 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         if ("turnId" in event && event.type !== "turn_started" && event.turnId !== activeTurnId)
           return release(raw);
         switch (event.type) {
-          case "turn_started": {
-            activeTurnId = event.turnId;
-            if (runStartedTurnId === event.turnId) return release(raw);
-            runStartedTurnId = event.turnId;
-            return offer({ type: "run_started", assignmentEpoch }, raw);
-          }
+          case "turn_started":
+            return markTurnStarted(event.turnId, assignmentEpoch, raw);
           case "agent_delta":
             return offer({ type: "activity", assignmentEpoch }, raw);
           case "native_activity":
@@ -452,29 +446,34 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         ),
     });
 
-  const initialize = Effect.gen(function* () {
-    yield* rpc(initializeRequest).pipe(
+  /** One correlated request whose result must decode; only decode failure is a protocol error. */
+  const rpcResult = <A>(
+    makeRequest: (id: string) => CodexRequest,
+    schema: Schema.Decoder<A>,
+    method: CodexRequest["method"],
+  ): Effect.Effect<A, SubagentError> =>
+    rpc(makeRequest).pipe(
       Effect.flatMap((value) =>
-        decodeInitializeResult(value).pipe(
-          Effect.mapError(() => protocolError("Codex returned an invalid initialize result.")),
+        Schema.decodeUnknownEffect(schema)(value).pipe(
+          Effect.mapError(() => protocolError(`Codex returned an invalid ${method} result.`)),
         ),
       ),
     );
+
+  const initialize = Effect.gen(function* () {
+    yield* rpcResult(initializeRequest, InitializeResult, "initialize");
     yield* child.send(initializedNotification());
-    const started = yield* rpc((id) =>
-      threadStartRequest(id, {
-        cwd: request.cwd,
-        model: request.model,
-        systemPrompt: request.systemPrompt,
-        writeIntent: request.writeIntent,
-        openaiFastMode: request.openaiFastMode,
-      }),
-    ).pipe(
-      Effect.flatMap((value) =>
-        decodeThreadStartResult(value).pipe(
-          Effect.mapError(() => protocolError("Codex returned an invalid thread/start result.")),
-        ),
-      ),
+    const started = yield* rpcResult(
+      (id) =>
+        threadStartRequest(id, {
+          cwd: request.cwd,
+          model: request.model,
+          systemPrompt: request.systemPrompt,
+          writeIntent: request.writeIntent,
+          openaiFastMode: request.openaiFastMode,
+        }),
+      ThreadStartResult,
+      "thread/start",
     );
     if (started.model !== request.model)
       return yield* protocolError(
@@ -486,9 +485,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       );
     threadId = started.thread.id;
     sessionId = started.thread.sessionId ?? started.thread.id;
-    yield* supervisor.awaitReady.pipe(
-      Effect.mapError((error) => processError("initialize", error.code, error.message)),
-    );
+    yield* supervisor.awaitReady.pipe(Effect.mapError(supervisorError("initialize")));
     return {
       model: started.model,
       effort: request.effort,
@@ -522,7 +519,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
         Effect.suspend(() => {
           const previousEpoch = assignmentEpoch;
           return supervisor.setAssignmentEpoch(epoch).pipe(
-            Effect.mapError((error) => processError("start", error.code, error.message)),
+            Effect.mapError(supervisorError("start")),
             Effect.andThen(requireThread()),
             Effect.tap(() =>
               Effect.sync(() => {
@@ -531,40 +528,22 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               }),
             ),
             Effect.flatMap((currentThreadId) =>
-              rpc((id) =>
-                turnStartRequest(
-                  id,
-                  currentThreadId,
-                  message,
-                  request.model,
-                  request.effort,
-                  request.writeIntent,
-                  request.openaiFastMode,
-                ),
-              ).pipe(
-                Effect.flatMap((value) =>
-                  decodeTurnStartResult(value).pipe(
-                    Effect.mapError(() =>
-                      protocolError("Codex returned an invalid turn/start result."),
-                    ),
+              rpcResult(
+                (id) =>
+                  turnStartRequest(
+                    id,
+                    currentThreadId,
+                    message,
+                    request.model,
+                    request.effort,
+                    request.writeIntent,
+                    request.openaiFastMode,
                   ),
-                ),
-                Effect.flatMap((started) =>
-                  Effect.sync(() => {
-                    activeTurnId = started.turn.id;
-                    if (runStartedTurnId === started.turn.id) return false;
-                    runStartedTurnId = started.turn.id;
-                    return true;
-                  }).pipe(
-                    Effect.flatMap((emitStarted) =>
-                      emitStarted
-                        ? offer({ type: "run_started", assignmentEpoch: epoch })
-                        : Effect.void,
-                    ),
-                  ),
-                ),
+                TurnStartResult,
+                "turn/start",
               ),
             ),
+            Effect.flatMap((started) => markTurnStarted(started.turn.id, epoch)),
             Effect.tapError((error) =>
               Effect.sync(() => {
                 const uncertain =
@@ -578,14 +557,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       steer: (message: string) =>
         requireActiveTurn().pipe(
           Effect.flatMap(({ threadId: currentThreadId, turnId }) =>
-            rpc((id) => turnSteerRequest(id, currentThreadId, turnId, message)).pipe(
-              Effect.flatMap((value) =>
-                decodeTurnSteerResult(value).pipe(
-                  Effect.mapError(() =>
-                    protocolError("Codex returned an invalid turn/steer result."),
-                  ),
-                ),
-              ),
+            rpcResult(
+              (id) => turnSteerRequest(id, currentThreadId, turnId, message),
+              TurnSteerResult,
+              "turn/steer",
+            ).pipe(
               Effect.flatMap((result) =>
                 result.turnId === turnId
                   ? Effect.void
@@ -624,18 +600,11 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
               }),
               (acquired) => {
                 if (!acquired.lifecycle) return Effect.fail(acquired.error);
-                const response = rpc((id) =>
-                  turnInterruptRequest(id, currentThreadId, turnId),
-                ).pipe(
-                  Effect.flatMap((value) =>
-                    decodeEmptyResult(value).pipe(
-                      Effect.mapError(() =>
-                        protocolError("Codex returned an invalid turn/interrupt result."),
-                      ),
-                    ),
-                  ),
-                  Effect.asVoid,
-                );
+                const response = rpcResult(
+                  (id) => turnInterruptRequest(id, currentThreadId, turnId),
+                  EmptyObject,
+                  "turn/interrupt",
+                ).pipe(Effect.asVoid);
                 return Effect.all([response, Deferred.await(acquired.lifecycle.completion)], {
                   concurrency: "unbounded",
                   discard: true,
@@ -682,9 +651,7 @@ const makeLocalCodexHandle = Effect.fn("LocalCodexBackend.makeHandle")(function*
       ),
       renameDisplay: () => Effect.fail(unsupported("rename-display")),
       reply: (requestId: string, message: string) =>
-        supervisor
-          .reply(requestId, message)
-          .pipe(Effect.mapError((error) => processError("reply", error.code, error.message))),
+        supervisor.reply(requestId, message).pipe(Effect.mapError(supervisorError("reply"))),
       notifyPeers: () => Effect.fail(unsupported("peer-notice")),
     },
     acknowledge,

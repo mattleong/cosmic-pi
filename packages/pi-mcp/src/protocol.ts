@@ -5,10 +5,4 @@ export {
   projectMcpFailurePresentation,
   type McpPresentation,
 } from "./code-mode/presentation.ts";
-
-export {
-  classifyMcpDiscoveryNotice,
-  mcpUndiscoveredNotice,
-  type McpDiscoveryNoticePolicy,
-} from "./discovery/diagnostics.ts";
 export { projectMcpCompactSummary } from "./ui/compact-summary.ts";

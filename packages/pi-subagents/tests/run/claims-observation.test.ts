@@ -7,14 +7,10 @@ import {
 
 describe("write-claim tool observation", () => {
   it("extracts Pi and Claude native file-tool paths", () => {
-    expect(observeFileWrite("write", { path: "src/pi.ts", content: "" })).toEqual({
-      toolName: "write",
-      paths: ["src/pi.ts"],
-    });
-    expect(observeFileWrite("Edit", { file_path: "/project/src/claude.ts" })).toEqual({
-      toolName: "Edit",
-      paths: ["/project/src/claude.ts"],
-    });
+    expect(observeFileWrite("write", { path: "src/pi.ts", content: "" })).toEqual(["src/pi.ts"]);
+    expect(observeFileWrite("Edit", { file_path: "/project/src/claude.ts" })).toEqual([
+      "/project/src/claude.ts",
+    ]);
   });
 
   it("extracts bounded known paths from a Codex ApplyPatch change list", () => {
@@ -26,10 +22,7 @@ describe("write-claim tool observation", () => {
           { ignored: "secret" },
         ],
       }),
-    ).toEqual({
-      toolName: "ApplyPatch",
-      paths: ["src/a.ts", "src/moved.ts", "src/b.ts"],
-    });
+    ).toEqual(["src/a.ts", "src/moved.ts", "src/b.ts"]);
   });
 
   it("classifies workspace-relative and outside-workspace observations", () => {

@@ -5,10 +5,17 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { runBoundedProcessNode } from "pi-cosmic-core";
+import { exactPaneContext } from "../backend/herdr-ownership.ts";
 import type { HerdrPaneProcessInfo } from "../backend/herdr-shell-readiness.ts";
-import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
+import {
+  invalidRequest as readinessError,
+  processError,
+  type InvalidSubagentRequestError,
+  type SubagentProcessError,
+} from "../run/errors.ts";
 import type { SubagentRuntime } from "../domain/routing.ts";
-import { hasControlCharacter } from "./harness-shared.ts";
+import { hasControlCharacter, pickEnvironment } from "./harness-shared.ts";
+import { HERDR_CLI_ENVIRONMENT_KEYS } from "./herdr-environment.ts";
 
 const HERDR_EXECUTABLE = "herdr";
 // Reviewed Herdr 0.8 and 0.9 protocols. Unknown versions still fail before mutation.
@@ -141,15 +148,10 @@ const decodeErrorEnvelopeJsonOption = Schema.decodeUnknownOption(
 const decodeUnknownJsonEffect = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeErrorEnvelopeOption = Schema.decodeUnknownOption(ErrorEnvelopeSchema);
 const decodeEnvelopeEffect = Schema.decodeUnknownEffect(EnvelopeSchema);
-const decodeSnapshotEnvelopeEffect = Schema.decodeUnknownEffect(SnapshotEnvelopeSchema);
-const decodeAgentEnvelopeEffect = Schema.decodeUnknownEffect(AgentEnvelopeSchema);
-const decodePaneEnvelopeEffect = Schema.decodeUnknownEffect(PaneEnvelopeSchema);
 const decodeSchemaDocumentEffect = Schema.decodeUnknownEffect(SchemaDocument);
 const decodeClaudeAuthStatusEffect = Schema.decodeUnknownEffect(ClaudeAuthStatusSchema);
-const decodePaneProcessInfoEnvelopeEffect = Schema.decodeUnknownEffect(
-  PaneProcessInfoEnvelopeSchema,
-);
 
+/** Projection of the ownership-relevant pane fields; labels and focus are never evidence. */
 export interface HerdrPane {
   readonly paneId: string;
   readonly terminalId: string;
@@ -157,17 +159,10 @@ export interface HerdrPane {
   readonly tabId: string;
   readonly cwd?: string | undefined;
   readonly foregroundCwd?: string | undefined;
-  readonly label?: string | undefined;
-  readonly focused: boolean;
   readonly agentStatus: "idle" | "working" | "blocked" | "done" | "unknown";
 }
 
-export interface HerdrAgentSession {
-  readonly source: string;
-  readonly agent: string;
-  readonly kind: "id" | "path";
-  readonly value: string;
-}
+export type HerdrAgentSession = typeof SessionInfo.Type;
 
 export interface HerdrAgent extends HerdrPane {
   readonly name?: string | undefined;
@@ -175,35 +170,17 @@ export interface HerdrAgent extends HerdrPane {
   readonly stateChangeSequence: number;
   readonly interactiveReady?: boolean | undefined;
   readonly agentSession?: HerdrAgentSession | undefined;
-  readonly nativeSession?: string | undefined;
 }
 
 export interface HerdrSnapshot {
-  readonly version: string;
   readonly protocol: number;
-  readonly focusedWorkspaceId?: string | undefined;
-  readonly focusedTabId?: string | undefined;
-  readonly focusedPaneId?: string | undefined;
-  readonly workspaces: ReadonlyArray<{
-    readonly workspaceId: string;
-    readonly label: string;
-    readonly focused: boolean;
-    readonly activeTabId: string;
-  }>;
-  readonly tabs: ReadonlyArray<{
-    readonly tabId: string;
-    readonly workspaceId: string;
-    readonly label: string;
-    readonly paneCount: number;
-    readonly focused: boolean;
-  }>;
+  readonly workspaces: ReadonlyArray<{ readonly workspaceId: string }>;
+  readonly tabs: ReadonlyArray<{ readonly tabId: string; readonly workspaceId: string }>;
   readonly panes: ReadonlyArray<HerdrPane>;
   readonly agents: ReadonlyArray<HerdrAgent>;
 }
 
 export interface HerdrCliContract {
-  /** The inherited Herdr socket identity used by launch-ready candidates. Never configured publicly. */
-  readonly sessionIdentity: string;
   /** The immutable calling-pane selector inherited by this Pi process, when available. */
   readonly callingPaneId: string | undefined;
   readonly preflight: (
@@ -260,70 +237,6 @@ interface CommandResult {
   readonly cleanupUnconfirmed: boolean;
   readonly dispatched: boolean;
 }
-
-const inheritedEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
-  Object.freeze(
-    Object.fromEntries(
-      [
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "PATH",
-        "SHELL",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "XDG_CONFIG_HOME",
-        "XDG_STATE_HOME",
-        "HERDR_CONFIG_PATH",
-        "HERDR_SOCKET_PATH",
-        "HERDR_SESSION",
-        "HERDR_ENV",
-        "HERDR_WORKSPACE_ID",
-        "HERDR_TAB_ID",
-        "HERDR_PANE_ID",
-        "PI_CODING_AGENT_DIR",
-        "PI_CONFIG_DIR",
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-      ].flatMap((key) => (source[key] === undefined ? [] : ([[key, source[key]]] as const))),
-    ),
-  );
-
-const readinessError = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
-
-const callingPaneTopologyMatches = (
-  snapshot: HerdrSnapshot,
-  resolved: HerdrPane,
-  callingPaneId: string,
-): boolean => {
-  const exactPanes = snapshot.panes.filter(
-    (pane) =>
-      pane.paneId === callingPaneId &&
-      pane.terminalId === resolved.terminalId &&
-      pane.workspaceId === resolved.workspaceId &&
-      pane.tabId === resolved.tabId,
-  );
-  const paneIds = snapshot.panes.filter((pane) => pane.paneId === callingPaneId);
-  const terminalIds = snapshot.panes.filter((pane) => pane.terminalId === resolved.terminalId);
-  const workspaces = snapshot.workspaces.filter(
-    (workspace) => workspace.workspaceId === resolved.workspaceId,
-  );
-  const tabs = snapshot.tabs.filter((tab) => tab.tabId === resolved.tabId);
-  return (
-    resolved.paneId === callingPaneId &&
-    exactPanes.length === 1 &&
-    paneIds.length === 1 &&
-    terminalIds.length === 1 &&
-    workspaces.length === 1 &&
-    tabs.length === 1 &&
-    tabs[0]?.workspaceId === resolved.workspaceId
-  );
-};
 
 const validateNativePreflight = (runtime: SubagentRuntime, result: CommandResult) =>
   Effect.gen(function* () {
@@ -394,6 +307,7 @@ const runEffect = (
     detached: false,
     windowsHide: true,
   }).pipe(
+    Effect.map((result) => ({ ...result, dispatched: true })),
     Effect.catch((error) =>
       Effect.succeed({
         code: null,
@@ -506,18 +420,31 @@ const decodeEnvelope = (operation: string, source: string) =>
     }),
   );
 
-const paneView = (pane: Schema.Schema.Type<typeof PaneSchema>): HerdrPane => ({
+const decodeResult =
+  <S extends Schema.ConstraintDecoder<unknown>>(
+    schema: S,
+    operation: string,
+    invalidMessage: string,
+  ) =>
+  (source: string) =>
+    decodeEnvelope(operation, source).pipe(
+      Effect.flatMap((result) =>
+        Schema.decodeUnknownEffect(schema)(result).pipe(
+          Effect.mapError(() => protocolError(operation, "herdr_protocol_invalid", invalidMessage)),
+        ),
+      ),
+    );
+
+const paneView = (pane: typeof PaneSchema.Type): HerdrPane => ({
   paneId: pane.pane_id,
   terminalId: pane.terminal_id,
   workspaceId: pane.workspace_id,
   tabId: pane.tab_id,
   ...(pane.cwd && { cwd: pane.cwd }),
   ...(pane.foreground_cwd && { foregroundCwd: pane.foreground_cwd }),
-  ...(pane.label && { label: pane.label }),
-  focused: pane.focused,
   agentStatus: pane.agent_status,
 });
-const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent => ({
+const agentView = (agent: typeof AgentSchema.Type): HerdrAgent => ({
   ...paneView(agent),
   ...(agent.name && { name: agent.name }),
   ...(agent.agent && { runtime: agent.agent }),
@@ -525,52 +452,22 @@ const agentView = (agent: Schema.Schema.Type<typeof AgentSchema>): HerdrAgent =>
   ...(agent.interactive_ready !== undefined && {
     interactiveReady: agent.interactive_ready,
   }),
-  ...(agent.agent_session && {
-    agentSession: {
-      source: agent.agent_session.source,
-      agent: agent.agent_session.agent,
-      kind: agent.agent_session.kind,
-      value: agent.agent_session.value,
-    },
-    nativeSession: agent.agent_session.value,
-  }),
+  ...(agent.agent_session && { agentSession: { ...agent.agent_session } }),
 });
 
 const decodeSnapshot = (source: string) =>
-  decodeEnvelope("session snapshot", source).pipe(
-    Effect.flatMap((result) =>
-      decodeSnapshotEnvelopeEffect(result).pipe(
-        Effect.mapError(() =>
-          processError(
-            "session snapshot",
-            "herdr_protocol_invalid",
-            "Herdr returned an invalid bounded snapshot.",
-          ),
-        ),
-      ),
-    ),
+  decodeResult(
+    SnapshotEnvelopeSchema,
+    "session snapshot",
+    "Herdr returned an invalid bounded snapshot.",
+  )(source).pipe(
     Effect.map(
       ({ snapshot }): HerdrSnapshot => ({
-        version: snapshot.version,
         protocol: snapshot.protocol,
-        ...(snapshot.focused_workspace_id && {
-          focusedWorkspaceId: snapshot.focused_workspace_id,
-        }),
-        ...(snapshot.focused_tab_id && { focusedTabId: snapshot.focused_tab_id }),
-        ...(snapshot.focused_pane_id && { focusedPaneId: snapshot.focused_pane_id }),
         workspaces: snapshot.workspaces.map((workspace) => ({
           workspaceId: workspace.workspace_id,
-          label: workspace.label,
-          focused: workspace.focused,
-          activeTabId: workspace.active_tab_id,
         })),
-        tabs: snapshot.tabs.map((tab) => ({
-          tabId: tab.tab_id,
-          workspaceId: tab.workspace_id,
-          label: tab.label,
-          paneCount: tab.pane_count,
-          focused: tab.focused,
-        })),
+        tabs: snapshot.tabs.map((tab) => ({ tabId: tab.tab_id, workspaceId: tab.workspace_id })),
         panes: snapshot.panes.map(paneView),
         agents: snapshot.agents.map(agentView),
       }),
@@ -578,52 +475,41 @@ const decodeSnapshot = (source: string) =>
   );
 
 const decodeAgentResponse = (operation: string, source: string) =>
-  decodeEnvelope(operation, source).pipe(
-    Effect.flatMap((result) =>
-      decodeAgentEnvelopeEffect(result).pipe(
-        Effect.mapError(() =>
-          protocolError(
-            operation,
-            "herdr_protocol_invalid",
-            `Herdr returned invalid agent evidence for ${operation}.`,
-          ),
-        ),
-      ),
-    ),
-    Effect.map(({ agent }) => agentView(agent)),
-  );
+  decodeResult(
+    AgentEnvelopeSchema,
+    operation,
+    `Herdr returned invalid agent evidence for ${operation}.`,
+  )(source).pipe(Effect.map(({ agent }) => agentView(agent)));
 
 export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContract => {
   // Select, sanitize, and clone ambient session/auth routing exactly once. No later process.env
   // mutation can redirect any command or native readiness probe owned by this service.
-  const environment = inheritedEnvironment(options.environment ?? process.env);
+  const environment = pickEnvironment(
+    options.environment ?? process.env,
+    HERDR_CLI_ENVIRONMENT_KEYS,
+  );
   const fixedOptions: HerdrCliLayerOptions = Object.freeze({ ...options, environment });
-  const sessionIdentity = environment.HERDR_SOCKET_PATH ?? environment.HERDR_SESSION ?? "default";
   const callingPaneId =
     environment.HERDR_ENV === "1" && environment.HERDR_PANE_ID
       ? environment.HERDR_PANE_ID
       : undefined;
-  const json = (args: ReadonlyArray<string>, operation: string, timeout?: number) =>
-    runCommand(fixedOptions, args, operation, timeout).pipe(
-      Effect.flatMap((source) => decodeEnvelope(operation, source)),
-    );
   const ok = (args: ReadonlyArray<string>, operation: string) =>
-    json(args, operation).pipe(Effect.asVoid);
+    runCommand(fixedOptions, args, operation).pipe(
+      Effect.flatMap((source) => decodeEnvelope(operation, source)),
+      Effect.asVoid,
+    );
+  const asReadiness = (error: SubagentProcessError) =>
+    readinessError(error.code ?? "herdr_unavailable", error.message);
   const currentPane = runCommand(
     fixedOptions,
     ["pane", "current", "--current"],
     "resolve calling pane",
   ).pipe(
-    Effect.flatMap((source) => decodeEnvelope("resolve calling pane", source)),
-    Effect.flatMap((result) =>
-      decodePaneEnvelopeEffect(result).pipe(
-        Effect.mapError(() =>
-          protocolError(
-            "resolve calling pane",
-            "herdr_protocol_invalid",
-            "Herdr returned invalid calling-pane ownership evidence.",
-          ),
-        ),
+    Effect.flatMap(
+      decodeResult(
+        PaneEnvelopeSchema,
+        "resolve calling pane",
+        "Herdr returned invalid calling-pane ownership evidence.",
       ),
     ),
     Effect.map(({ pane }) => paneView(pane)),
@@ -650,11 +536,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         fixedOptions,
         ["api", "schema", "--json"],
         "inspect Herdr protocol",
-      ).pipe(
-        Effect.mapError((error) =>
-          readinessError(error.code ?? "herdr_unavailable", error.message),
-        ),
-      );
+      ).pipe(Effect.mapError(asReadiness));
       const document = yield* parseJson("inspect Herdr protocol", schemaSource).pipe(
         Effect.flatMap(decodeSchemaDocumentEffect),
         Effect.mapError(() =>
@@ -672,12 +554,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         fixedOptions,
         ["api", "snapshot"],
         "inspect live Herdr session",
-      ).pipe(
-        Effect.flatMap(decodeSnapshot),
-        Effect.mapError((error) =>
-          readinessError(error.code ?? "herdr_unavailable", error.message),
-        ),
-      );
+      ).pipe(Effect.flatMap(decodeSnapshot), Effect.mapError(asReadiness));
       if (liveSnapshot.protocol !== document.protocol)
         return yield* readinessError(
           "herdr_protocol_mismatch",
@@ -691,7 +568,10 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
           ),
         ),
       );
-      if (!callingPaneTopologyMatches(liveSnapshot, resolvedCallingPane, callingPaneId))
+      if (
+        resolvedCallingPane.paneId !== callingPaneId ||
+        !exactPaneContext(resolvedCallingPane, liveSnapshot)
+      )
         return yield* readinessError(
           "herdr_calling_pane_unresolvable",
           "The inherited Herdr calling pane did not match one exact live pane/terminal/workspace/tab tuple.",
@@ -702,11 +582,7 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         "inspect Herdr integrations",
         fixedOptions.commandTimeoutMillis,
         MAX_TEXT_BYTES,
-      ).pipe(
-        Effect.mapError((error) =>
-          readinessError(error.code ?? "herdr_unavailable", error.message),
-        ),
-      );
+      ).pipe(Effect.mapError(asReadiness));
       const line = integrations
         .split(/\r?\n/u)
         .find((candidate) => candidate.startsWith(`${runtime}:`));
@@ -734,7 +610,6 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
     });
 
   return {
-    sessionIdentity,
     callingPaneId,
     preflight,
     snapshot: runCommand(fixedOptions, ["api", "snapshot"], "session snapshot").pipe(
@@ -747,25 +622,16 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         ["pane", "split", paneId, "--direction", "right", "--cwd", cwd, "--no-focus"],
         "split pane",
       ).pipe(
-        Effect.flatMap((source) => decodeEnvelope("split pane", source)),
-        Effect.flatMap((result) =>
-          decodePaneEnvelopeEffect(result).pipe(
-            Effect.mapError(() =>
-              protocolError(
-                "split pane",
-                "herdr_protocol_invalid",
-                "Herdr returned invalid pane ownership evidence.",
-              ),
-            ),
+        Effect.flatMap(
+          decodeResult(
+            PaneEnvelopeSchema,
+            "split pane",
+            "Herdr returned invalid pane ownership evidence.",
           ),
         ),
         Effect.map(({ pane }) => paneView(pane)),
       ),
-    renamePane: (paneId, label) =>
-      runCommand(fixedOptions, ["pane", "rename", paneId, label], "rename pane").pipe(
-        Effect.flatMap((source) => decodeEnvelope("rename pane", source)),
-        Effect.asVoid,
-      ),
+    renamePane: (paneId, label) => ok(["pane", "rename", paneId, label], "rename pane"),
     runPaneCommand: (paneId, command, operation) =>
       runCommand(
         fixedOptions,
@@ -789,16 +655,11 @@ export const makeHerdrCli = (options: HerdrCliLayerOptions = {}): HerdrCliContra
         ["pane", "process-info", "--pane", paneId],
         "inspect pane shell",
       ).pipe(
-        Effect.flatMap((source) => decodeEnvelope("inspect pane shell", source)),
-        Effect.flatMap((result) =>
-          decodePaneProcessInfoEnvelopeEffect(result).pipe(
-            Effect.mapError(() =>
-              processError(
-                "inspect pane shell",
-                "herdr_protocol_invalid",
-                "Herdr returned invalid bounded pane process information.",
-              ),
-            ),
+        Effect.flatMap(
+          decodeResult(
+            PaneProcessInfoEnvelopeSchema,
+            "inspect pane shell",
+            "Herdr returned invalid bounded pane process information.",
           ),
         ),
         Effect.map(

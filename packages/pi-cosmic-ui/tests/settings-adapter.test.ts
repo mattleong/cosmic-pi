@@ -26,27 +26,21 @@ const makeChild = () => {
 };
 
 describe("VimSettingsAdapter", () => {
-  it("translates modeless Vim navigation for the child list", () => {
+  // Vim navigation is translated; Space stays the built-in alternate activation key.
+  it.each([
+    ["j", "\x1b[B"],
+    ["l", "\r"],
+    ["h", "\x1b"],
+    [" ", " "],
+  ])("forwards %j to the child list as %j", (key, translated) => {
     const { child, forwarded } = makeChild();
-    const adapter = new VimSettingsAdapter(child);
-    adapter.handleInput("j");
-    adapter.handleInput("l");
-    adapter.handleInput("h");
-    expect(forwarded).toEqual(["\x1b[B", "\r", "\x1b"]);
-  });
-
-  it("preserves Space as the built-in alternate activation key", () => {
-    const { child, forwarded } = makeChild();
-    const adapter = new VimSettingsAdapter(child);
-
-    adapter.handleInput(" ");
-
-    expect(forwarded).toEqual([" "]);
+    new VimSettingsAdapter(child).handleInput(key);
+    expect(forwarded).toEqual([translated]);
   });
 
   it("owns search focus and clears the hidden filter on Esc", () => {
     const { child, forwarded, setValue, applyFilter } = makeChild();
-    const adapter = new VimSettingsAdapter(child, { search: true });
+    const adapter = new VimSettingsAdapter(child);
     adapter.focused = true;
     adapter.handleInput("/");
     adapter.handleInput("a");

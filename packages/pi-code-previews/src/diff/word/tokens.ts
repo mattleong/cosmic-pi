@@ -1,3 +1,5 @@
+import { requiredAt } from "./types";
+
 export type WordEmphasisToken = {
   value: string;
   start: number;
@@ -5,9 +7,7 @@ export type WordEmphasisToken = {
 };
 
 export function tokenAt(tokens: WordEmphasisToken[], index: number): WordEmphasisToken {
-  const token = tokens[index];
-  if (token === undefined) throw new RangeError(`Missing word-emphasis token ${index}`);
-  return token;
+  return requiredAt(tokens, index, "word-emphasis token");
 }
 
 const WORD_TOKEN_PATTERN =
@@ -78,15 +78,15 @@ export function wordEmphasisSimilarityTokenValues(tokens: WordEmphasisToken[]): 
       values.push(token.value);
       continue;
     }
-    const parts = splitIdentifierToken(token.value, 0)
-      .map((part) => part.value)
-      .filter(isIdentifierSimilarityPart);
+    const parts = identifierSimilarityParts(token.value);
     if (parts.length === 0) values.push(token.value.toLowerCase());
-    else values.push(...parts.map((part) => part.toLowerCase()));
+    else values.push(...parts);
   }
   return values;
 }
 
-export function isIdentifierSimilarityPart(value: string): boolean {
-  return !/^[$_]+$/.test(value);
+export function identifierSimilarityParts(value: string): string[] {
+  return splitIdentifierToken(value, 0)
+    .map((part) => part.value.toLowerCase())
+    .filter((part) => !/^[$_]+$/.test(part));
 }

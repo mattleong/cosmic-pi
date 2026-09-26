@@ -7,6 +7,7 @@ const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 import { McpExecution } from "../../src/tools/service.ts";
 import { makeObservations } from "../../src/observations/service.ts";
 import type { McpProgress } from "../../src/observations/model.ts";
+import { sseFrames, sseResponse } from "../fixtures/json-rpc.ts";
 import { optionalFixture, projection } from "../fixtures/optional-features.ts";
 
 it.effect("bounds UTF8 log retention and coalesces progress with fresh-leg resets", () =>
@@ -37,20 +38,18 @@ it.live(
     let requestId: string | number | undefined;
     const seen: McpProgress[] = [];
     const progressed = Deferred.makeUnsafe<void>();
-    const encode = (value: Schema.Json) =>
-      new TextEncoder().encode(`data: ${serialize(value)}\n\n`);
     const fixture = optionalFixture((request) => {
       if (request.method !== "tools/call") return undefined;
       requestId = request.id;
       const meta = Schema.decodeUnknownSync(
         Schema.Struct({ progressToken: Schema.Union([Schema.String, Schema.Number]) }),
       )(request._meta ?? request.params?._meta);
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           start(stream) {
             controller = stream;
             stream.enqueue(
-              encode({
+              sseFrames({
                 jsonrpc: "2.0",
                 method: "notifications/message",
                 params: { level: "debug", data: "below-threshold" },
@@ -58,7 +57,7 @@ it.live(
             );
             for (let i = 0; i < 200; i++) {
               stream.enqueue(
-                encode({
+                sseFrames({
                   jsonrpc: "2.0",
                   method: "notifications/progress",
                   params: {
@@ -69,7 +68,7 @@ it.live(
                 }),
               );
               stream.enqueue(
-                encode({
+                sseFrames({
                   jsonrpc: "2.0",
                   method: "notifications/message",
                   params: { level: "error", data: "token=private-value " + "😀".repeat(2) },
@@ -78,7 +77,6 @@ it.live(
             }
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     });
     return Effect.gen(function* () {
@@ -116,7 +114,7 @@ it.live(
       expect(seen.length).toBeLessThanOrEqual(64);
       expect(serialize(seen)).not.toContain("private-value");
       controller!.enqueue(
-        encode({
+        sseFrames({
           jsonrpc: "2.0",
           id: requestId!,
           result: { resultType: "complete", content: [{ type: "text", text: "done" }] },
@@ -147,7 +145,7 @@ it.live(
     }> = [];
     const fixture = optionalFixture((request) => {
       if (request.method !== "tools/call") return undefined;
-      return new Response(
+      return sseResponse(
         new ReadableStream<Uint8Array>({
           start(stream) {
             active.push({ id: request.id!, stream });
@@ -155,7 +153,6 @@ it.live(
             if (ready) Deferred.doneUnsafe(ready, Effect.void);
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       );
     });
     return Effect.gen(function* () {
@@ -184,19 +181,15 @@ it.live(
           params: { level: severity, data: message },
         });
         current.stream.enqueue(
-          new TextEncoder().encode(
-            [
-              log("below-threshold", "debug"),
-              log(text),
-              {
-                jsonrpc: "2.0",
-                id: current.id,
-                result: { resultType: "complete", content: [{ type: "text", text: "done" }] },
-              },
-              log("after-terminal", "emergency"),
-            ]
-              .map((value) => `data: ${serialize(value)}\n\n`)
-              .join(""),
+          sseFrames(
+            log("below-threshold", "debug"),
+            log(text),
+            {
+              jsonrpc: "2.0",
+              id: current.id,
+              result: { resultType: "complete", content: [{ type: "text", text: "done" }] },
+            },
+            log("after-terminal", "emergency"),
           ),
         );
         current.stream.close();

@@ -12,7 +12,7 @@ import {
   JsonHttpClient,
   usedToLeftPercent,
 } from "pi-cosmic-core";
-import type { CodexCredentialsWithSource } from "../auth/codex-auth.ts";
+import type { CodexCredentials } from "../auth/codex-auth.ts";
 
 export type UsageScope = "default" | "spark";
 export type UsageSnapshot = {
@@ -138,10 +138,9 @@ export function formatUsageSnapshot(
         label: "7d",
         leftPercent: snapshot.sevenDayLeftPercent,
         resetInSeconds: snapshot.sevenDayResetInSeconds,
-        includeDate: true,
       },
     ],
-    { ...options, resetStyle: "short" },
+    options,
     now,
     snapshot.capturedAt,
   );
@@ -158,7 +157,7 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
 }
 
 export const requestCodexUsageWithCredentials = Effect.fn("CodexUsage.requestWithCredentials")(
-  function* (credentials: CodexCredentialsWithSource, modelId?: string) {
+  function* (credentials: CodexCredentials, modelId?: string) {
     const http = yield* JsonHttpClient;
     const response = yield* http
       .request({

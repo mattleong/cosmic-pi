@@ -8,10 +8,10 @@ import { HttpServerResponse } from "effect/unstable/http";
 import { runBoundedProcessNode, type BoundedProcessResult } from "pi-cosmic-core";
 import { startHttpServer } from "../fixtures/http-server.ts";
 import {
-  JSON_SCHEMA_VALIDATOR_LIMITS,
   makeJsonSchemaValidator,
   type JsonSchemaProcessRunner,
 } from "../../src/boundary/schema-validator.ts";
+import { JSON_SCHEMA_VALIDATOR_LIMITS } from "../../src/validation/schema-policy.ts";
 
 const jsonStringSchema = Schema.fromJsonString(Schema.Json);
 const encodeJson = Schema.encodeSync(jsonStringSchema);
@@ -41,17 +41,33 @@ const processResult = (stdout: string, overrides?: Partial<BoundedProcessResult>
     overflowed: false,
     timedOut: false,
     cleanupUnconfirmed: false,
-    dispatched: true,
     ...overrides,
   }) satisfies BoundedProcessResult;
 
-const fixedRunner =
-  (stdout: string, overrides?: Partial<BoundedProcessResult>): JsonSchemaProcessRunner =>
-  (_input, onCleanup) =>
+/** A helper stand-in that reports `confirmed` cleanup and counts its admissions. */
+const countingRunner = (
+  stdout = '{"valid":true}',
+  {
+    confirmed = true,
+    ...overrides
+  }: Partial<BoundedProcessResult> & { readonly confirmed?: boolean } = {},
+) => {
+  let calls = 0;
+  const runner: JsonSchemaProcessRunner = (_input, onCleanup) =>
     Effect.sync(() => {
-      onCleanup(true);
+      calls += 1;
+      onCleanup(confirmed);
       return processResult(stdout, overrides);
     });
+  return { runner, calls: () => calls };
+};
+const fixedRunner = (stdout: string, overrides?: Partial<BoundedProcessResult>) =>
+  countingRunner(stdout, overrides).runner;
+/** The helper refuses the schema without emitting output or leaving uncertain cleanup. */
+const expectSilentRejection = (result: BoundedProcessResult) => {
+  expect(result.code).not.toBe(0);
+  expect(result).toMatchObject({ stdout: "", stderr: "", cleanupUnconfirmed: false });
+};
 
 it.live("validates remote input through the packaged SDK helper", () =>
   Effect.gen(function* () {
@@ -63,17 +79,10 @@ it.live("validates remote input through the packaged SDK helper", () =>
       additionalProperties: false,
     };
 
+    yield* validator.validateJsonSchema(schema, { name: "Ada", age: 37 }, "not-sent");
     expect(
-      yield* validator
-        .validateJsonSchema(schema, { name: "Ada", age: 37 }, "not-sent")
-        .pipe(Effect.result),
-    ).toMatchObject({ _tag: "Success" });
-    expect(
-      yield* validator.validateJsonSchema(schema, { name: 37 }, "not-sent").pipe(Effect.result),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
+      yield* validator.validateJsonSchema(schema, { name: 37 }, "not-sent").pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
   }),
 );
 
@@ -87,32 +96,57 @@ it.live("accepts the full bounded completed data allowance through the packaged 
 );
 
 it.effect(
-  "counts escaped bytes and rejects excessive depth or node populations before helper admission",
+  "bounds input documents before helper admission and preserves output operation certainty",
   () =>
     Effect.gen(function* () {
-      let dispatched = false;
-      const validator = yield* makeJsonSchemaValidator({
-        processRunner: (_input, cleanup) =>
-          Effect.sync(() => {
-            dispatched = true;
-            cleanup(true);
-            return processResult(encodeJson({ valid: true }));
-          }),
-      });
+      const { runner, calls } = countingRunner();
+      const validator = yield* makeJsonSchemaValidator({ processRunner: runner });
       let deep: Schema.Json = null;
       for (let depth = 0; depth <= JSON_SCHEMA_VALIDATOR_LIMITS.maximumDocumentDepth; depth += 1)
         deep = [deep];
+      const oversized = "x".repeat(JSON_SCHEMA_VALIDATOR_LIMITS.maximumDataBytes + 1);
+      let getterAccesses = 0;
+      const getterData: Record<string, Schema.Json> = {};
+      Object.defineProperty(getterData, "secret", {
+        enumerable: true,
+        get: () => {
+          getterAccesses += 1;
+          throw new Error("getter must not run");
+        },
+      });
+      const cyclicData: Record<string, Schema.Json> = {};
+      cyclicData.self = cyclicData;
       const inputs: ReadonlyArray<Schema.Json> = [
         "\u0000".repeat(Math.floor(JSON_SCHEMA_VALIDATOR_LIMITS.maximumDataBytes / 6) + 1),
         Array.from({ length: JSON_SCHEMA_VALIDATOR_LIMITS.maximumDocumentNodes }, () => null),
         deep,
+        oversized,
+        getterData,
+        cyclicData,
       ];
       for (const input of inputs) {
-        expect(
-          yield* validator.validateJsonSchema(true, input, "completed").pipe(Effect.flip),
-        ).toMatchObject({ outcome: "completed", kind: "invalid-input" });
+        for (const outcome of ["not-sent", "completed"] as const) {
+          expect(
+            yield* validator.validateJsonSchema(true, input, outcome).pipe(Effect.flip),
+          ).toMatchObject({ kind: "invalid-input", outcome });
+        }
       }
-      expect(dispatched).toBe(false);
+      expect(getterAccesses).toBe(0);
+      expect(calls()).toBe(0);
+
+      const outputValidator = yield* makeJsonSchemaValidator({
+        processRunner: fixedRunner('{"valid":false}'),
+      });
+      expect(
+        yield* outputValidator
+          .validateJsonSchema({ type: "string" }, 1, "completed")
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "protocol", outcome: "completed" });
+      expect(
+        yield* outputValidator
+          .validateJsonSchema({ type: "string" }, oversized, "completed")
+          .pipe(Effect.flip),
+      ).toMatchObject({ kind: "invalid-input", outcome: "completed" });
     }),
 );
 
@@ -137,8 +171,8 @@ it.live("supports nested local references without changing arguments", () =>
     expect(yield* validator.validateJsonSchema(schema, data, "not-sent")).toBeUndefined();
     expect(encodeJson(data)).toBe(before);
     expect(
-      yield* validator.validateJsonSchema(schema, { count: 0 }, "not-sent").pipe(Effect.result),
-    ).toMatchObject({ _tag: "Failure", failure: { kind: "invalid-input" } });
+      yield* validator.validateJsonSchema(schema, { count: 0 }, "not-sent").pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input" });
   }),
 );
 
@@ -174,15 +208,8 @@ it.live("preserves nested nulls and rejects unsupported __proto__ schema propert
     ).toBeUndefined();
     expect(encodeJson(protoData)).toBe(protoBefore);
 
-    let calls = 0;
-    const policyValidator = yield* makeJsonSchemaValidator({
-      processRunner: (_input, onCleanup) =>
-        Effect.sync(() => {
-          calls += 1;
-          onCleanup(true);
-          return processResult('{"valid":true}');
-        }),
-    });
+    const { runner, calls } = countingRunner();
+    const policyValidator = yield* makeJsonSchemaValidator({ processRunner: runner });
     const schema = {
       type: "object",
       properties: { ["__proto__"]: { type: "object" } },
@@ -190,41 +217,36 @@ it.live("preserves nested nulls and rejects unsupported __proto__ schema propert
     };
     const data = decodeJson('{"__proto__":{"value":null}}');
     const before = encodeJson(data);
-    const rejected = yield* policyValidator
-      .validateJsonSchema(schema, data, "not-sent")
-      .pipe(Effect.result);
-
-    expect(rejected).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
+    expect(
+      yield* policyValidator.validateJsonSchema(schema, data, "not-sent").pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
     expect(encodeJson(data)).toBe(before);
-    expect(calls).toBe(0);
+    expect(calls()).toBe(0);
   }),
 );
 
 it.effect("rejects async extensions and malformed constraints before process admission", () =>
   Effect.gen(function* () {
-    let calls = 0;
-    const validator = yield* makeJsonSchemaValidator({
-      processRunner: (_input, onCleanup) =>
-        Effect.sync(() => {
-          calls += 1;
-          onCleanup(true);
-          return processResult('{"valid":true}');
-        }),
-    });
+    const { runner, calls } = countingRunner();
+    const validator = yield* makeJsonSchemaValidator({ processRunner: runner });
     for (const schema of [
       { $async: true, type: "string" },
       { $ref: "#/annotation", annotation: { $async: true, type: "string" } },
       { required: [1] },
       { format: 1 },
+      { type: "string", nullable: true },
+      { properties: { a: { nullable: true } } },
+      { $vocabulary: { "https://example.test/required-vocabulary": true } },
+      { contentSchema: 1 },
+      { properties: { a: { $schema: "https://json-schema.org/draft-07/schema" } } },
+      { $id: "https://json-schema.org/draft/2020-12/schema", type: "integer" },
+      decodeJson('{"dependencies":{"__proto__":{"type":"string"}}}'),
     ]) {
       expect(
         yield* validator.validateJsonSchema(schema, {}, "not-sent").pipe(Effect.flip),
       ).toMatchObject({ kind: "invalid-input", outcome: "not-sent" });
     }
-    expect(calls).toBe(0);
+    expect(calls()).toBe(0);
   }),
 );
 
@@ -425,11 +447,7 @@ it.live(
         },
         { $vocabulary: { "https://example.test/required-vocabulary": true } },
       ]) {
-        const result = yield* runHelper(schema, {});
-        expect(result.code).not.toBe(0);
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toBe("");
-        expect(result.cleanupUnconfirmed).toBe(false);
+        expectSilentRejection(yield* runHelper(schema, {}));
       }
     }),
 );
@@ -481,11 +499,7 @@ it.live("guards annotation nodes promoted through pointers, identifiers, and anc
           annotation: { $id: "child", ...target, x: { $anchor: "value", type: "string" } },
         },
       ]) {
-        const result = yield* runHelper(schema, { value: null });
-        expect(result.code).not.toBe(0);
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toBe("");
-        expect(result.cleanupUnconfirmed).toBe(false);
+        expectSilentRejection(yield* runHelper(schema, { value: null }));
       }
     }
   }),
@@ -568,41 +582,33 @@ it.live.each([
     const mismatch = yield* runHelper(safe, null);
     expect(mismatch.code).toBe(0);
     expect(decodeJson(mismatch.stdout)).toEqual({ valid: false });
-    const unsafe = yield* runHelper(schema({ type: "string", nullable: true }), null);
-    expect(unsafe.code).not.toBe(0);
-    expect(unsafe.stdout).toBe("");
-    expect(unsafe.stderr).toBe("");
-    expect(unsafe.cleanupUnconfirmed).toBe(false);
+    expectSilentRejection(yield* runHelper(schema({ type: "string", nullable: true }), null));
   }),
 );
 
 it.live("rejects malformed reference encodings without diagnostic leakage", () =>
   Effect.gen(function* () {
     for (const $ref of ["#%", "#/annotation%2", "#%GGanchor", "#/annotation/%C0%AF"]) {
-      const result = yield* runHelper(
-        { $ref, annotation: { type: "string", nullable: true } },
-        null,
+      expectSilentRejection(
+        yield* runHelper({ $ref, annotation: { type: "string", nullable: true } }, null),
       );
-      expect(result.code).not.toBe(0);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe("");
     }
   }),
 );
 
 it.live("conservatively checks matching pointer targets across local resource scopes", () =>
   Effect.gen(function* () {
-    const result = yield* runHelper(
-      {
-        $id: "https://example.test/root",
-        $ref: "#/x",
-        x: { type: "string" },
-        annotation: { $id: "other", x: { type: "string", nullable: true } },
-      },
-      "valid in the root resource",
+    expectSilentRejection(
+      yield* runHelper(
+        {
+          $id: "https://example.test/root",
+          $ref: "#/x",
+          x: { type: "string" },
+          annotation: { $id: "other", x: { type: "string", nullable: true } },
+        },
+        "valid in the root resource",
+      ),
     );
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe("");
   }),
 );
 
@@ -657,78 +663,8 @@ it.live("handles boolean schemas intentionally", () =>
       yield* validator.validateJsonSchema(true, { secret: "value" }, "not-sent"),
     ).toBeUndefined();
     expect(
-      yield* validator
-        .validateJsonSchema(false, { secret: "value" }, "not-sent")
-        .pipe(Effect.result),
-    ).toMatchObject({ _tag: "Failure", failure: { kind: "invalid-input" } });
-  }),
-);
-
-it.effect("bounds input documents before spawning and preserves output operation certainty", () =>
-  Effect.gen(function* () {
-    let calls = 0;
-    const validator = yield* makeJsonSchemaValidator({
-      processRunner: (_input, onCleanup) =>
-        Effect.sync(() => {
-          calls += 1;
-          onCleanup(true);
-          return processResult('{"valid":true}');
-        }),
-    });
-    const oversized = "x".repeat(JSON_SCHEMA_VALIDATOR_LIMITS.maximumDataBytes + 1);
-    const result = yield* validator
-      .validateJsonSchema({ type: "string" }, oversized, "not-sent")
-      .pipe(Effect.result);
-    let getterAccesses = 0;
-    const getterData: Record<string, Schema.Json> = {};
-    Object.defineProperty(getterData, "secret", {
-      enumerable: true,
-      get: () => {
-        getterAccesses += 1;
-        throw new Error("getter must not run");
-      },
-    });
-    const getterResult = yield* validator
-      .validateJsonSchema({ type: "object" }, getterData, "not-sent")
-      .pipe(Effect.result);
-    const cyclicData: Record<string, Schema.Json> = {};
-    cyclicData.self = cyclicData;
-    const cycleResult = yield* validator
-      .validateJsonSchema({ type: "object" }, cyclicData, "not-sent")
-      .pipe(Effect.result);
-
-    expect(result).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(getterResult).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(cycleResult).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "not-sent" },
-    });
-    expect(getterAccesses).toBe(0);
-    expect(calls).toBe(0);
-
-    const outputValidator = yield* makeJsonSchemaValidator({
-      processRunner: fixedRunner('{"valid":false}'),
-    });
-    const output = yield* outputValidator
-      .validateJsonSchema({ type: "string" }, 1, "completed")
-      .pipe(Effect.result);
-    expect(output).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "protocol", outcome: "completed" },
-    });
-    const oversizedOutputInput = yield* outputValidator
-      .validateJsonSchema({ type: "string" }, oversized, "completed")
-      .pipe(Effect.result);
-    expect(oversizedOutputInput).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "invalid-input", outcome: "completed" },
-    });
+      yield* validator.validateJsonSchema(false, { secret: "value" }, "not-sent").pipe(Effect.flip),
+    ).toMatchObject({ kind: "invalid-input" });
   }),
 );
 
@@ -750,11 +686,8 @@ it.effect("rejects malformed and oversized helper replies without exposing their
       processRunner: fixedRunner("x".repeat(JSON_SCHEMA_VALIDATOR_LIMITS.maximumResponseBytes + 1)),
     });
     expect(
-      yield* oversized.validateJsonSchema(true, {}, "completed").pipe(Effect.result),
-    ).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "output-limit", outcome: "completed" },
-    });
+      yield* oversized.validateJsonSchema(true, {}, "completed").pipe(Effect.flip),
+    ).toMatchObject({ kind: "output-limit", outcome: "completed" });
   }),
 );
 
@@ -762,20 +695,16 @@ it.effect(
   "disables a service after unconfirmed cleanup and releases admission on cancellation",
   () =>
     Effect.gen(function* () {
-      let calls = 0;
-      const uncertain = yield* makeJsonSchemaValidator({
-        processRunner: (_input, onCleanup) =>
-          Effect.sync(() => {
-            calls += 1;
-            onCleanup(false);
-            return processResult('{"valid":true}', { cleanupUnconfirmed: true });
-          }),
+      const { runner, calls } = countingRunner(undefined, {
+        confirmed: false,
+        cleanupUnconfirmed: true,
       });
-      const first = yield* uncertain.validateJsonSchema(true, {}, "not-sent").pipe(Effect.result);
-      const second = yield* uncertain.validateJsonSchema(true, {}, "not-sent").pipe(Effect.result);
-      expect(first).toMatchObject({ _tag: "Failure", failure: { kind: "cleanup" } });
-      expect(second).toMatchObject({ _tag: "Failure", failure: { kind: "unavailable" } });
-      expect(calls).toBe(1);
+      const uncertain = yield* makeJsonSchemaValidator({ processRunner: runner });
+      const first = yield* uncertain.validateJsonSchema(true, {}, "not-sent").pipe(Effect.flip);
+      const second = yield* uncertain.validateJsonSchema(true, {}, "not-sent").pipe(Effect.flip);
+      expect(first).toMatchObject({ kind: "cleanup" });
+      expect(second).toMatchObject({ kind: "unavailable" });
+      expect(calls()).toBe(1);
 
       const started = yield* Deferred.make<void>();
       let activeCalls = 0;
@@ -798,56 +727,53 @@ it.effect(
         .validateJsonSchema(true, {}, "not-sent")
         .pipe(Effect.forkScoped);
       yield* Deferred.await(started);
-      expect(
-        yield* cancellable.validateJsonSchema(true, {}, "not-sent").pipe(Effect.result),
-      ).toMatchObject({ _tag: "Failure", failure: { kind: "unavailable", outcome: "not-sent" } });
-      expect(
-        yield* cancellable.validateJsonSchema(true, {}, "completed").pipe(Effect.result),
-      ).toMatchObject({ _tag: "Failure", failure: { kind: "unavailable", outcome: "completed" } });
+      for (const outcome of ["not-sent", "completed"] as const) {
+        expect(
+          yield* cancellable.validateJsonSchema(true, {}, outcome).pipe(Effect.flip),
+        ).toMatchObject({ kind: "unavailable", outcome });
+      }
       yield* Fiber.interrupt(pending);
       expect(activeCalls).toBe(1);
-      expect(
-        yield* cancellable.validateJsonSchema(true, {}, "not-sent").pipe(Effect.result),
-      ).toMatchObject({ _tag: "Success" });
+      yield* cancellable.validateJsonSchema(true, {}, "not-sent");
       expect(activeCalls).toBe(2);
     }),
 );
 
 it.effect("keeps uncertain helper cleanup disabled across service replacement", () =>
   Effect.gen(function* () {
-    let calls = 0;
-    const processRunner: JsonSchemaProcessRunner = (_input, onCleanup) =>
-      Effect.sync(() => {
-        calls += 1;
-        onCleanup(false);
-        return processResult('{"valid":true}', { cleanupUnconfirmed: true });
-      });
+    const { runner: processRunner, calls } = countingRunner(undefined, {
+      confirmed: false,
+      cleanupUnconfirmed: true,
+    });
     const first = yield* makeJsonSchemaValidator({ processRunner });
     const peer = yield* makeJsonSchemaValidator({ processRunner });
-    expect(yield* first.validateJsonSchema(true, {}, "not-sent").pipe(Effect.result)).toMatchObject(
-      { _tag: "Failure", failure: { kind: "cleanup" } },
-    );
+    expect(yield* first.validateJsonSchema(true, {}, "not-sent").pipe(Effect.flip)).toMatchObject({
+      kind: "cleanup",
+    });
     const replacement = yield* makeJsonSchemaValidator({ processRunner });
     for (const service of [peer, replacement]) {
       expect(
-        yield* service.validateJsonSchema(true, {}, "completed").pipe(Effect.result),
-      ).toMatchObject({ _tag: "Failure", failure: { kind: "unavailable", outcome: "completed" } });
+        yield* service.validateJsonSchema(true, {}, "completed").pipe(Effect.flip),
+      ).toMatchObject({ kind: "unavailable", outcome: "completed" });
     }
-    expect(calls).toBe(1);
+    expect(calls()).toBe(1);
   }),
 );
 
 it.live("contains pathological regex and recursive schemas in the helper process", () =>
   Effect.gen(function* () {
     const validator = yield* makeJsonSchemaValidator();
-    const regex = yield* validator
-      .validateJsonSchema({ type: "string", pattern: "^(a+)+$" }, `${"a".repeat(28)}!`, "not-sent")
-      .pipe(Effect.result);
-    expect(regex).toMatchObject({ _tag: "Failure", failure: { outcome: "not-sent" } });
-
-    const recursive = yield* validator
-      .validateJsonSchema({ $ref: "#" }, {}, "not-sent")
-      .pipe(Effect.result);
-    expect(recursive).toMatchObject({ _tag: "Failure", failure: { outcome: "not-sent" } });
+    expect(
+      yield* validator
+        .validateJsonSchema(
+          { type: "string", pattern: "^(a+)+$" },
+          `${"a".repeat(28)}!`,
+          "not-sent",
+        )
+        .pipe(Effect.flip),
+    ).toMatchObject({ outcome: "not-sent" });
+    expect(
+      yield* validator.validateJsonSchema({ $ref: "#" }, {}, "not-sent").pipe(Effect.flip),
+    ).toMatchObject({ outcome: "not-sent" });
   }),
 );

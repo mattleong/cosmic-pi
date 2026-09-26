@@ -1,26 +1,33 @@
 import {
   initTheme,
   type ExtensionAPI,
-  type ExtensionCommandContext,
   type ExtensionUIContext,
   type KeybindingsManager,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { redactDiagnosticValue } from "pi-cosmic-core";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { beforeAll, describe, vi } from "vitest";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { registerSettingsController } from "../src/settings/controller.ts";
-import { makeResolvedConfig } from "./helpers.ts";
+import { makeResolvedConfig, waitUntil } from "./helpers.ts";
 
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 type SettingsRun = Parameters<typeof registerSettingsController>[1]["run"];
-type StubRunResult = void | Schema.Json;
+type StubRunResult = Result.Result<void, Error> | Schema.Json;
 type TestCustomFactory<Value> = (
   tui: TUI,
   theme: Theme,
@@ -30,25 +37,10 @@ type TestCustomFactory<Value> = (
 
 beforeAll(() => initTheme(undefined, false));
 
-function testDouble<Value>(value: Partial<Value>): Value {
-  // SAFETY: Each call builds an owned test double for the named host contract.
-  return value as Value;
-}
-
-function deferred<Value>() {
-  const handle = Deferred.makeUnsafe<Value, Error>();
-  return {
-    promise: Effect.runPromise(Deferred.await(handle)),
-    resolve: (value: Value) => {
-      Effect.runSync(Deferred.succeed(handle, value));
-    },
-    reject: (error: Error) => {
-      Effect.runSync(Deferred.fail(handle, error));
-    },
-  };
-}
-
-function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
+function settingsHarness(
+  responses: Array<() => Promise<StubRunResult>>,
+  hostCustom?: ExtensionUIContext["custom"],
+) {
   let command: RegisteredCommand | undefined;
   let component: Component | undefined;
   let currentConfig = makeResolvedConfig({
@@ -59,31 +51,25 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   const custom: ExtensionUIContext["custom"] = <Value>(
     factory: TestCustomFactory<Value>,
   ): Promise<Value> => {
-    const completion = Deferred.makeUnsafe<Value>();
+    const completion = deferredPromise<Value>();
     const created = factory(
-      testDouble<TUI>({ requestRender }),
-      testDouble<Theme>({
-        fg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      }),
-      testDouble<KeybindingsManager>({ matches: () => false }),
-      (value) => {
-        Effect.runSync(Deferred.succeed(completion, value));
-      },
+      opaqueFixture({ requestRender }),
+      plainTheme,
+      opaqueFixture({ matches: () => false }),
+      completion.resolve,
     );
     // SAFETY: The controller's registered custom factory returns its component synchronously.
     component = created as Component;
-    return Effect.runPromise(Deferred.await(completion));
+    return completion.promise;
   };
-  const ui = testDouble<ExtensionUIContext>({ custom, notify });
-  const ctx = testDouble<ExtensionCommandContext>({
+  const ctx = extensionContextFixture({
     cwd: "/tmp",
     mode: "tui",
     hasUI: true,
     signal: undefined,
-    ui,
+    ui: { custom: hostCustom ?? custom, notify },
   });
-  const pi = testDouble<ExtensionAPI>({
+  const pi = extensionApiFixture({
     registerCommand(name: string, value: RegisteredCommand) {
       if (name === "openai-settings") command = value;
     },
@@ -99,7 +85,6 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     config: () => currentConfig,
     updateContext: vi.fn(),
     updateFooter: vi.fn(),
-    hasTerminalUI: () => true,
     formatDebugStatus: () => "diagnostics",
     fastProjection: MutableRef.make(initialFastSnapshot()),
     resetFastRoutingTransport: vi.fn(),
@@ -112,11 +97,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
   };
   const open = Effect.gen(function* () {
     const closed = invoke("");
-    yield* Effect.promise(() =>
-      vi.waitFor(() => {
-        expect(component).toBeDefined();
-      }),
-    );
+    yield* waitUntil(() => component !== undefined);
     return { closed };
   });
   const selectedComponent = () => {
@@ -130,7 +111,7 @@ function settingsHarness(responses: Array<() => Promise<StubRunResult>>) {
     };
   };
 
-  return { invoke, open, selectedComponent, setRefreshInterval, requestRender, runImpl };
+  return { invoke, open, selectedComponent, setRefreshInterval, notify, requestRender };
 }
 
 const input = {
@@ -139,41 +120,38 @@ const input = {
   escape: "\u001b",
 };
 
-function openUsageSubmenu(component: Component): void {
-  component.handleInput?.(input.down);
-  component.handleInput?.(input.down);
-  component.handleInput?.(input.enter);
-}
-
 function renderedRow(component: Component, label: string): string | undefined {
   return component.render(100).find((line) => line.includes(label));
 }
+
+// Opens the usage refresh submenu and optimistically selects 120000 while its write is pending.
+const beginRefreshWrite = Effect.gen(function* () {
+  const write = deferredPromise<StubRunResult>();
+  const h = settingsHarness([
+    () => Promise.resolve({}),
+    () => write.promise,
+    () => Promise.resolve({}),
+  ]);
+  const { closed } = yield* h.open;
+  const component = h.selectedComponent();
+  component.handleInput?.(input.down);
+  component.handleInput?.(input.down);
+  component.handleInput?.(input.enter);
+  component.handleInput?.(input.enter);
+  expect(renderedRow(component, "Usage refresh")).toContain("120000");
+  return { h, write, closed, component };
+});
 
 describe("Better OpenAI settings controller", () => {
   it.effect(
     "reconciles an optimistic submenu value from the authoritative successful projection",
     () =>
       Effect.gen(function* () {
-        const write = deferred<StubRunResult>();
-        const h = settingsHarness([
-          () => Promise.resolve({}),
-          () => write.promise,
-          () => Promise.resolve({}),
-        ]);
-        const { closed } = yield* h.open;
-        const component = h.selectedComponent();
-
-        openUsageSubmenu(component);
-        component.handleInput?.(input.enter);
-        expect(renderedRow(component, "Usage refresh")).toContain("120000");
+        const { h, write, closed, component } = yield* beginRefreshWrite;
 
         h.setRefreshInterval(15000);
-        write.resolve(undefined);
-        yield* Effect.promise(() =>
-          vi.waitFor(() => {
-            expect(renderedRow(component, "Usage refresh")).toContain("15000");
-          }),
-        );
+        write.resolve(Result.succeed(undefined));
+        yield* waitUntil(() => renderedRow(component, "Usage refresh")?.includes("15000") === true);
 
         component.handleInput?.(input.escape);
         expect(renderedRow(component, "Usage")).toContain("15s");
@@ -182,33 +160,19 @@ describe("Better OpenAI settings controller", () => {
       }),
   );
 
-  it.effect("rolls back a failed optimistic value after the picker has closed", () =>
+  it.effect("warns and rolls back a failed optimistic value after the picker has closed", () =>
     Effect.gen(function* () {
-      const write = deferred<StubRunResult>();
-      const h = settingsHarness([
-        () => Promise.resolve({}),
-        () => write.promise,
-        () => Promise.resolve({}),
-      ]);
-      const { closed } = yield* h.open;
-      const component = h.selectedComponent();
-
-      openUsageSubmenu(component);
-      component.handleInput?.(input.enter);
-      expect(renderedRow(component, "Usage refresh")).toContain("120000");
+      const { h, write, closed, component } = yield* beginRefreshWrite;
       component.handleInput?.(input.escape);
       component.handleInput?.(input.escape);
       yield* Effect.promise(() => closed);
       const rendersBeforeSettlement = h.requestRender.mock.calls.length;
 
       write.reject(new Error("runtime closed"));
-      yield* Effect.promise(() =>
-        vi.waitFor(() => {
-          expect(h.requestRender.mock.calls.length).toBeGreaterThan(rendersBeforeSettlement);
-        }),
-      );
+      yield* waitUntil(() => h.requestRender.mock.calls.length > rendersBeforeSettlement);
       expect(() => component.render(100)).not.toThrow();
       expect(renderedRow(component, "Usage")).toContain("60s");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -245,19 +209,26 @@ describe("Better OpenAI settings controller", () => {
     }),
   );
 
-  it.effect(
-    "does not enter an inactive runtime for pure command branches and contains apply rejection",
-    () =>
-      Effect.gen(function* () {
-        const h = settingsHarness([() => Promise.reject(new Error("runtime inactive"))]);
-
-        yield* Effect.promise(() => h.invoke("help"));
-        yield* Effect.promise(() => h.invoke("diagnostics"));
-        yield* Effect.promise(() => h.invoke("unknown true"));
-        expect(h.runImpl).not.toHaveBeenCalled();
-
-        yield* Effect.promise(() => h.invoke("usage.showResetTimes false"));
-        expect(h.runImpl).toHaveBeenCalledOnce();
-      }),
+  it.effect("contains a throwing picker factory and a rejecting custom surface", () =>
+    Effect.gen(function* () {
+      const hostileTheme: Theme = opaqueFixture({
+        ...plainTheme,
+        fg: () => {
+          throw new Error("host-theme-secret");
+        },
+      });
+      for (const custom of [
+        // The shared fake models pinned Pi, which rejects `custom` when its factory throws.
+        fakeCustomSurfaceHost({ theme: hostileTheme }).ctx.ui.custom,
+        () => Promise.reject(new Error("host-custom-secret")),
+      ]) {
+        const h = settingsHarness([], custom);
+        yield* Effect.promise(() => h.invoke(""));
+        expect(h.notify).toHaveBeenCalledExactlyOnceWith(
+          expect.not.stringContaining("secret"),
+          "warning",
+        );
+      }
+    }),
   );
 });

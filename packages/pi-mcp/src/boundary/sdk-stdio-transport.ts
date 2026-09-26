@@ -14,18 +14,13 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import type { DuplexProcessError, DuplexProcessHandle } from "pi-cosmic-core";
+import {
+  invokeHostCallback,
+  type DuplexProcessError,
+  type DuplexProcessHandle,
+} from "pi-cosmic-core";
 
 const WRITE_QUEUE_CAPACITY = 64;
-
-export type SdkStdioTransportErrorKind =
-  | "not-started"
-  | "closed"
-  | "cancelled"
-  | "read"
-  | "write"
-  | "input-limit"
-  | "output-limit";
 
 /** Native transport failures contain no child output or SDK diagnostics. */
 export class SdkStdioTransportError extends Schema.TaggedError<SdkStdioTransportError>()(
@@ -43,20 +38,10 @@ export class SdkStdioTransportError extends Schema.TaggedError<SdkStdioTransport
     message: Schema.String,
   },
 ) {
-  static of(kind: SdkStdioTransportErrorKind): SdkStdioTransportError {
+  static of(kind: SdkStdioTransportError["kind"]): SdkStdioTransportError {
     return new SdkStdioTransportError({ kind, message: `MCP stdio transport failed (${kind}).` });
   }
 }
-
-// SAFETY: All supported Node engines have this ES2024 API; the workspace
-// targets ES2022. This supplies its missing declaration at the SDK Promise seam.
-const NativePromise = Promise as PromiseConstructor & {
-  withResolvers<A>(): {
-    promise: Promise<A>;
-    resolve: (value: A | PromiseLike<A>) => void;
-    reject: (error: Error) => void;
-  };
-};
 
 interface PendingWrite {
   bytes: Uint8Array | undefined;
@@ -94,7 +79,7 @@ export const makeSdkStdioTransport = (
       const writeQueue = yield* Queue.bounded<PendingWrite, Cause.Done>(WRITE_QUEUE_CAPACITY);
       const start = yield* Deferred.make<void>();
       const stop = yield* Deferred.make<void>();
-      const completion = NativePromise.withResolvers<void>();
+      const completion = Promise.withResolvers<void>();
       // The SDK may not call close after a read failure. Keep rejection handled
       // while retaining the same rejected Promise for an explicit close caller.
       void completion.promise.catch(() => {});
@@ -112,11 +97,7 @@ export const makeSdkStdioTransport = (
       const notifyClose = (): void => {
         if (closeNotified || onclose === undefined) return;
         closeNotified = true;
-        try {
-          onclose();
-        } catch {
-          // Foreign callbacks cannot prevent scope cleanup.
-        }
+        invokeHostCallback(onclose, undefined);
       };
       const settle = (item: PendingWrite, error?: Error): void => {
         if (!pending.delete(item)) return;
@@ -135,13 +116,7 @@ export const makeSdkStdioTransport = (
         closed = true;
         failure = error;
         for (const item of pending) settle(item, error ?? SdkStdioTransportError.of("closed"));
-        if (error !== undefined) {
-          try {
-            onerror?.(error);
-          } catch {
-            // Error reporting is best effort.
-          }
-        }
+        if (error !== undefined) invokeHostCallback(() => onerror?.(error), undefined);
         notifyClose();
         Deferred.doneUnsafe(stop, Effect.void);
       };
@@ -264,7 +239,7 @@ export const makeSdkStdioTransport = (
           ) {
             return Promise.reject(SdkStdioTransportError.of("input-limit"));
           }
-          const completion = NativePromise.withResolvers<void>();
+          const completion = Promise.withResolvers<void>();
           {
             const abort = (): void => {
               // Shared stdio cannot retract bytes already submitted to the OS.

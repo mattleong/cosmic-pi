@@ -1,8 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { claimCompletion, completionClaimOwner, releaseCompletionClaim } from "./completion.ts";
 import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import {
   isAssignmentFinishedRunState,
   isParentActionRequiredRun,
@@ -17,12 +18,9 @@ import type {
 } from "./service.ts";
 import { snapshotView } from "./state.ts";
 
-export interface RunCompletionObservationDependencies {
-  readonly records: ReadonlyMap<string, RunRecord>;
-  /** The shared service lock. */
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+export interface RunCompletionObservationDependencies extends RunContext {
   /** The shared notification gate serializing claim acquisition against delivery. */
-  readonly withCompletionGate: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly withCompletionGate: WithRunLock;
   /** The stored immutable snapshot, captured under the shared lock to prevent missed publications. */
   readonly currentProjection: () => SubagentProjection;
   /** Waits for a service publication strictly newer than the supplied revision. */
@@ -125,7 +123,6 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
             completionClaimOwner(record, receipt.generation) !== receipt.claimToken
           )
             continue;
-          if (record.completionGenerations.get(receipt.generation) !== completion) continue;
           record.completionGenerations.delete(receipt.generation);
           record.completionClaims.delete(receipt.generation);
         }
@@ -142,11 +139,8 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     readonly missingIds: ReadonlyArray<string>;
     readonly ownsQuestions: boolean;
   }
-  const acquireCompletionClaims = (
-    ids: ReadonlyArray<string>,
-    claimAll: boolean,
-    allowMissing = false,
-  ) =>
+  /** Claiming all awaited runs requires every id; status observation tolerates missing ids. */
+  const acquireCompletionClaims = (ids: ReadonlyArray<string>, claimAll: boolean) =>
     withCompletionGate(
       withLock(
         // Wait for both permits interruptibly. Mask only insertion and finalizer installation.
@@ -157,7 +151,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
               return record ? [record] : [];
             });
             const missingIds = ids.filter((id) => !records.has(id));
-            if (!allowMissing && missingIds.length > 0)
+            if (claimAll && missingIds.length > 0)
               return yield* new InvalidSubagentRequestError({
                 code: "subagent_runs_not_found",
                 message: `Subagent runs not found: ${missingIds.join(", ")}. Use subagent_list to refresh active run IDs.`,
@@ -221,11 +215,10 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
   const withCompletionClaims = <A, E, R>(
     ids: ReadonlyArray<string>,
     claimAll: boolean,
-    allowMissing: boolean,
     use: (claim: CompletionClaim) => Effect.Effect<A, E, R>,
   ) =>
     Effect.scopedWith((scope) =>
-      acquireCompletionClaims(ids, claimAll, allowMissing).pipe(
+      acquireCompletionClaims(ids, claimAll).pipe(
         Scope.provide(scope),
         // Do not provide our private claim scope to the caller's use effect.
         Effect.flatMap(use),
@@ -240,14 +233,11 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
       projection?: ReadonlyArray<SubagentRunView>,
     ) => void,
   ): Effect.Effect<ReadonlyArray<SubagentRunObservation>, SubagentRuntimeClosedError> => {
+    // Pi partial-result delivery is best effort and cannot own the waiter.
     const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
-      Effect.sync(() => {
-        try {
-          onUpdate?.(runs, currentProjection().runs);
-        } catch {
-          // Pi partial-result delivery is best effort and cannot own the waiter.
-        }
-      });
+      Effect.sync(() =>
+        invokeHostCallback(() => onUpdate?.(runs, currentProjection().runs), undefined),
+      );
     const waitLoop = (): Effect.Effect<
       ReadonlyArray<SubagentRunObservation>,
       SubagentRuntimeClosedError
@@ -298,7 +288,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
           message: "Await requires at least one subagent run ID.",
         }),
       );
-    return withCompletionClaims(ids, true, false, (claim) =>
+    return withCompletionClaims(ids, true, (claim) =>
       waitForTerminalObservations(claim, until, onUpdate).pipe(
         Effect.flatMap((observations) =>
           use(observations).pipe(
@@ -325,7 +315,7 @@ export function makeRunCompletionObservations(dependencies: RunCompletionObserva
     );
   };
   const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
-    withCompletionClaims(ids, false, true, (claim) =>
+    withCompletionClaims(ids, false, (claim) =>
       use({
         observations: claim.selected.map((record) => observeRecord(record, claim.claimToken)),
         missingIds: claim.missingIds,

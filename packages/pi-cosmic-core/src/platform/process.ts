@@ -7,11 +7,11 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { signalProcessGroup } from "./process-tree.ts";
 
 /** Opt-in process authority. It is intentionally excluded from nodeFilePlatformLayer. */
 export const nodeProcessLayer = NodeChildProcessSpawner.layer.pipe(
@@ -60,7 +60,6 @@ export interface BoundedProcessResult {
   readonly overflowed: boolean;
   readonly timedOut: boolean;
   readonly cleanupUnconfirmed: boolean;
-  readonly dispatched: boolean;
 }
 
 interface OutputCollector {
@@ -75,12 +74,12 @@ interface TotalOutputCounter {
 
 const boundedOutput = (
   streamName: "stdout" | "stderr",
-  stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
+  handle: ChildProcessSpawner.ChildProcessHandle,
   maximumBytes: number,
   collector: OutputCollector,
   total: TotalOutputCounter,
 ) =>
-  stream.pipe(
+  handle[streamName].pipe(
     Stream.runForEach((chunk) =>
       Effect.suspend(() => {
         const remaining = Math.max(
@@ -120,36 +119,18 @@ export const effectProcessExit = (
   return { code: null, signal: /receipt of signal: '([^']+)'/u.exec(message)?.[1] ?? null };
 };
 
-const decodeOutput = (collector: OutputCollector): string => {
-  const bytes = new Uint8Array(collector.size);
-  let offset = 0;
-  for (const chunk of collector.chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(bytes);
-};
+const decodeOutput = (collector: OutputCollector): string =>
+  new TextDecoder().decode(Buffer.concat(collector.chunks));
 
 const sweepExitedProcessTree = (
   handle: ChildProcessSpawner.ChildProcessHandle,
   timeoutMillis: number,
 ): Effect.Effect<boolean> => {
   if (process.platform !== "win32")
-    return Effect.try({
-      try: () => {
-        process.kill(-Number(handle.pid), "SIGKILL");
-        return true;
-      },
-      catch: (error) =>
-        Predicate.hasProperty(error, "code") && error.code === "ESRCH"
-          ? ("absent" as const)
-          : ("failed" as const),
-    }).pipe(
-      Effect.match({
-        onFailure: (outcome) => outcome === "absent",
-        onSuccess: () => true,
-      }),
-    );
+    return Effect.sync(() => {
+      const group = signalProcessGroup(Number(handle.pid), "SIGKILL");
+      return group === "present" || group === "absent";
+    });
   return handle.kill({ killSignal: "SIGKILL" }).pipe(
     Effect.timeoutOption(Math.max(1, timeoutMillis)),
     Effect.map(Option.isSome),
@@ -242,20 +223,8 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
   );
   const observed = Effect.all(
     [
-      boundedOutput(
-        "stdout",
-        handle.stdout,
-        Math.max(0, request.stdoutLimitBytes),
-        stdout,
-        totalOutput,
-      ),
-      boundedOutput(
-        "stderr",
-        handle.stderr,
-        Math.max(0, request.stderrLimitBytes),
-        stderr,
-        totalOutput,
-      ),
+      boundedOutput("stdout", handle, request.stdoutLimitBytes, stdout, totalOutput),
+      boundedOutput("stderr", handle, request.stderrLimitBytes, stderr, totalOutput),
       Effect.exit(handle.exitCode),
     ] as const,
     { concurrency: 3 },
@@ -292,7 +261,6 @@ const runBoundedProcess = Effect.fn("BoundedProcess.run")(function* (
     overflowed: outcome._tag === "Overflow",
     timedOut: outcome._tag === "Timeout",
     cleanupUnconfirmed: !cleanupConfirmed,
-    dispatched: true,
   } satisfies BoundedProcessResult;
 });
 

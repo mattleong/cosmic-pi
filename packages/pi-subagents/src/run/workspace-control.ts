@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { WriterLease, WriterLeaseContract } from "../boundary/writer-lease.ts";
+import type { WriterLease } from "../boundary/writer-lease.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   WorkspaceHandle,
@@ -9,8 +9,8 @@ import type {
   WorkspaceRevision,
 } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
-import { InvalidSubagentRequestError, type SubagentError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
+import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
+import type { RunContext, RunRecord } from "./internal.ts";
 import {
   isActiveRunState,
   SUBAGENT_ROOT_RUN_ID,
@@ -74,23 +74,20 @@ interface Binding {
   reviewedRevision?: string | undefined;
   reviewedThrough?: number | undefined;
 }
-const invalid = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
 const mapWorkspaceError = (error: { readonly message: string }) =>
   invalid("workspace_operation_failed", error.message);
 
 /** Artifacts deliberately outlive terminal-history entries and backend scopes. */
-export function makeWorkspaceControl(dependencies: {
-  readonly engine: WorkspaceServiceContract | undefined;
-  readonly initialMode: WriterWorkspaceMode;
-  readonly ownerId: string;
-  readonly sourceCwd?: string;
-  readonly writerLeases: WriterLeaseContract;
-  readonly records: ReadonlyMap<string, RunRecord>;
-  readonly writerPools: ReadonlyMap<string, WriterPoolEntry>;
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly isClosed: () => boolean;
-}) {
+export function makeWorkspaceControl(
+  dependencies: Omit<RunContext, "writerPools"> & {
+    readonly writerPools: ReadonlyMap<string, WriterPoolEntry>;
+    readonly engine: WorkspaceServiceContract | undefined;
+    readonly initialMode: WriterWorkspaceMode;
+    readonly ownerId: string;
+    readonly sourceCwd?: string;
+    readonly isClosed: () => boolean;
+  },
+) {
   const { engine, ownerId, records, writerPools, withLock, isClosed } = dependencies;
   let mode = dependencies.initialMode;
   let reservations = 0;
@@ -461,10 +458,10 @@ export function makeWorkspaceControl(dependencies: {
             yield* Effect.gen(function* () {
               for (const cwd of sources)
                 owned.push(
-                  // acquire restores its preownership waits internally. Keep the
-                  // committed lease handoff masked until the finalizer can see it.
+                  // acquire keeps only its pre-ownership checks interruptible. Keep the
+                  // returned lease masked until the finalizer can see it.
                   yield* leases
-                    .acquire({ cwd, sessionId: ownerId, runId: workspaceId })
+                    .acquire({ cwd, runId: workspaceId })
                     .pipe(Effect.mapError(mapWorkspaceError)),
                 );
               yield* restore(Effect.void);
@@ -614,3 +611,5 @@ export function makeWorkspaceControl(dependencies: {
     setWriterWorkspaceMode,
   };
 }
+
+export type RunWorkspaceControl = ReturnType<typeof makeWorkspaceControl>;

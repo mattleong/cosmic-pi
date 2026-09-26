@@ -33,10 +33,8 @@ export const resolveParentReferenceCandidate = (
     parentPath === undefined
   )
     return undefined;
-  const ownSessionFile = input.sessionFile;
-  if (ownSessionFile === null || ownSessionFile === undefined || ownSessionFile.length === 0)
-    return undefined;
-  return parentPath === ownSessionFile ? undefined : { path: parentPath, id: marker };
+  if (!input.sessionFile || parentPath === input.sessionFile) return undefined;
+  return { path: parentPath, id: marker };
 };
 
 /** Stable reference-only instruction for a Herdr-created BTW session. */

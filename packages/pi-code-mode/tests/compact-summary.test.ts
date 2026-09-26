@@ -1,43 +1,20 @@
-import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vitest";
-import { withCodePreviewShell } from "pi-code-previews";
-import { createCompactToolShell } from "../../pi-code-previews/src/preview/compact-shell.ts";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import {
   codeModeCompactSummaryAtHost,
   syncProgressTicker,
 } from "../src/boundary/host-render-ticker.ts";
-import { callEntryDetails, type CodeModeCallEntry } from "../src/tools/format.ts";
+import { callEntryDetails } from "../src/tools/format.ts";
 import { makeCompactEvidence } from "../src/tools/compact-evidence.ts";
-import { summaryCompactIssues } from "pi-code-previews";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
-import { nestedToolDefinitionsFixture } from "./support/tools.ts";
+import { summaryCompactIssues, withCodePreviewShell } from "pi-code-previews";
+import { createToolPresentationHarness, withPresentationSettings } from "pi-code-previews/testing";
+import { opaqueFixture } from "pi-cosmic-core/testing";
+import { executeHarness } from "./support/execute.ts";
+import { ledgerDetails, summarize } from "./support/compact.ts";
+import { EMPTY_RECEIPTS } from "./support/results.ts";
 
-const summarize = <Details>(
-  details: Details,
-  options: {
-    phase?: "pending" | "running" | "settled";
-    isError?: boolean;
-    text?: string;
-    expanded?: boolean;
-  } = {},
-) =>
-  codeModeCompactSummary({
-    phase: options.phase ?? "settled",
-    args: { code: "SECRET SOURCE", intent: "Inspect the project" },
-    result: { details, content: [{ type: "text", text: options.text ?? "ordinary output" }] },
-    context: opaqueHostFixture({
-      isError: options.isError ?? false,
-      expanded: options.expanded ?? false,
-    }),
-  });
 const success = { ...callEntryDetails([]), outputKind: "text" as const };
 
 describe("Code Mode compact outcomes", () => {
@@ -55,43 +32,34 @@ describe("Code Mode compact outcomes", () => {
 
   it("does not repeat hidden v2 failures already represented by exact child issues", () => {
     for (const unclassified of [false, true]) {
-      const rows: CodeModeCallEntry[] = [];
-      const ledger = makeCompactEvidence((id, compact) => {
-        rows[id - 1] = { tool: "pi.read", status: "error", compact };
-      });
-      for (let id = 1; id <= 6; id++) {
-        ledger.admit("pi.read");
-        ledger.start(id, id);
-        ledger.observe(id, () => ({
-          subject: `file-${id}`,
-          outcome: "error",
-          issues: {
-            coverage: "complete",
-            entries: [
-              {
-                operation: "read",
-                code: "failure",
-                severity: "error",
-                cause: `read failure ${id}`,
-                recovery: [],
-              },
-            ],
+      const { details } = ledgerDetails(
+        [1, 2, 3, 4, 5, 6].map((id) => ({
+          tool: "pi.read",
+          summary: {
+            subject: `file-${id}`,
+            outcome: "error",
+            issues: {
+              coverage: "complete",
+              entries: [
+                {
+                  operation: "read",
+                  code: "failure",
+                  severity: "error",
+                  cause: `read failure ${id}`,
+                  recovery: [],
+                },
+              ],
+            },
           },
-        }));
-        ledger.end(id);
-      }
-      if (unclassified) ledger.admit("pi.read");
-      ledger.close();
-      const details = {
-        ...callEntryDetails(
-          rows,
-          unclassified
-            ? { total: 7, queued: 0, running: 0, succeeded: 0, failed: 7, cancelled: 0 }
-            : undefined,
-        ),
-        outputKind: "text" as const,
-        compactAttention: ledger.snapshot(),
-      };
+        })),
+        {
+          status: "error",
+          ...(unclassified && {
+            unstarted: ["pi.read"],
+            counts: { total: 7, queued: 0, running: 0, succeeded: 0, failed: 7, cancelled: 0 },
+          }),
+        },
+      );
       const summary = summarize(details);
       expect(summary).toBeDefined();
       expect(summary?.children?.entries).toHaveLength(6);
@@ -119,54 +87,29 @@ describe("Code Mode compact outcomes", () => {
       execute: () => Promise.reject(new Error("not executed")),
       startUiTicker: () => () => undefined,
     });
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    });
-    for (const isError of [false, true]) {
-      const shell = createCompactToolShell("border", {
-        name: "code_mode",
-        compactSummary: codeModeCompactSummary,
-      });
-      const args = { action: "result.read" as const, id: "retained-page" };
-      const state = {};
-      const result = {
-        content: [{ type: "text" as const, text: "Full retained result diagnostic" }],
-        details: { toolCalls: [] },
-      };
-      for (const expanded of [false, true, false]) {
-        const context = opaqueHostFixture<Parameters<typeof shell.renderCall>[0]>({
-          args,
-          state,
-          toolCallId: "read-page",
-          cwd: "/project",
-          lastComponent: undefined,
-          expanded,
-          isError,
-          isPartial: false,
-          executionStarted: false,
-          argsComplete: true,
-          showImages: false,
-          invalidate: () => undefined,
+    const args = { action: "result.read" as const, id: "retained-page" };
+    const result = {
+      content: [{ type: "text" as const, text: "Full retained result diagnostic" }],
+      details: { toolCalls: [] },
+    };
+    withPresentationSettings({ toolCallCollapsedStyle: "compact" }, () => {
+      for (const isError of [false, true]) {
+        // The compact border shell over the pure summary and the full result slot alone.
+        const tool = withCodePreviewShell(definition, {
+          mode: "border",
+          compactSummary: codeModeCompactSummary,
         });
-        const call = shell.renderCall(context, theme, (ctx) =>
-          definition.renderCall!(args, theme, ctx),
-        );
-        const body = shell.renderResult(
-          context,
-          theme,
-          (ctx) => definition.renderResult!(result, { expanded, isPartial: false }, theme, ctx),
-          result,
-        );
-        const text = [...call.render(200), ...body.render(200)].join("\n");
-        expect(text.includes("Full retained result diagnostic")).toBe(expanded);
-        expect(text.includes(args.id)).toBe(expanded);
-        if (!expanded) {
-          expect(text).toContain("result.read");
+        const view = createToolPresentationHarness(tool, { width: 200 });
+        for (const { expanded, text } of view.cycle(args, result, {
+          states: [false, true, false],
+          overrides: () => ({ isError, isPartial: false, executionStarted: false }),
+        })) {
+          expect(text.includes("Full retained result diagnostic")).toBe(expanded);
+          expect(text.includes(args.id)).toBe(expanded);
+          if (!expanded) expect(text).toContain("result.read");
         }
       }
-    }
+    });
   });
 
   it("includes call names and lifecycle without source, output or individual activity", () => {
@@ -255,14 +198,6 @@ describe("Code Mode compact outcomes", () => {
   });
 
   it("classifies only validated initial saved pages as informational", () => {
-    const executionReceipts = {
-      total: 0,
-      completed: 0,
-      unknown: 0,
-      notSent: 0,
-      omitted: 0,
-      calls: [],
-    };
     const initialPreview = {
       status: "page",
       id: "cm-current",
@@ -278,7 +213,7 @@ describe("Code Mode compact outcomes", () => {
       ...success,
       truncated: true,
       resultId: "cm-current",
-      executionReceipts,
+      executionReceipts: EMPTY_RECEIPTS,
       initialPreview,
     });
     expect(current?.outcome).toBe("success");
@@ -296,14 +231,14 @@ describe("Code Mode compact outcomes", () => {
         ...success,
         truncated: true,
         resultId: "cm-current",
-        executionReceipts,
+        executionReceipts: EMPTY_RECEIPTS,
         initialPreview: { ...initialPreview, id: "cm-other" },
       },
       {
         ...success,
         truncated: true,
         resultId: "cm-current",
-        executionReceipts,
+        executionReceipts: EMPTY_RECEIPTS,
         initialPreview: { ...initialPreview, next: 121 },
       },
       {
@@ -311,7 +246,7 @@ describe("Code Mode compact outcomes", () => {
         outputKind: "text",
         truncated: true,
         resultId: "cm-current",
-        executionReceipts,
+        executionReceipts: EMPTY_RECEIPTS,
         initialPreview,
       },
     ]) {
@@ -333,7 +268,7 @@ describe("Code Mode compact outcomes", () => {
       truncated: true,
       cancelled: true,
       resultId: "cm-current",
-      executionReceipts,
+      executionReceipts: EMPTY_RECEIPTS,
       initialPreview,
     });
     expect(cancelled?.outcome).toBe("cancelled");
@@ -381,7 +316,8 @@ describe("Code Mode compact outcomes", () => {
         tool: "pi.bash",
         status: "completed",
         compact: {
-          version: 1,
+          version: 2,
+          issues: { coverage: "complete", entries: [] },
           subject: "run",
           outcome: "warning",
           deliveryFailed: false,
@@ -407,7 +343,8 @@ describe("Code Mode compact outcomes", () => {
           tool: "mcp.request",
           status: "error",
           compact: {
-            version: 1,
+            version: 2,
+            issues: { coverage: "complete", entries: [] },
             subject: "remote",
             outcome: "uncertain",
             deliveryFailed: false,
@@ -427,7 +364,8 @@ describe("Code Mode compact outcomes", () => {
             tool: "mcp.request",
             status: "completed",
             compact: {
-              version: 1,
+              version: 2,
+              issues: { coverage: "complete", entries: [] },
               subject: "remote",
               outcome: "error",
               deliveryFailed: false,
@@ -468,7 +406,6 @@ describe("Code Mode compact outcomes", () => {
       { toolCalls: [] },
       callEntryDetails([]),
       { ...success, truncated: "yes" },
-      { ...success, totalToolCalls: "bad" },
       { ...success, toolCalls: [{ tool: "pi.read", status: "unknown" }] },
       { ...success, counts: { ...success.counts, total: 1 } },
     ])
@@ -507,7 +444,7 @@ describe("Code Mode compact outcomes", () => {
       phase: "running" as const,
       args: { intent: "Inspect" },
       result: { details: callEntryDetails([{ tool: "pi.read", status: "running" }]), content: [] },
-      context: opaqueHostFixture({
+      context: opaqueFixture({
         state,
         isPartial: true,
         isError: false,
@@ -520,14 +457,14 @@ describe("Code Mode compact outcomes", () => {
     expect(stops).toBe(0);
     codeModeCompactSummaryAtHost({
       ...input,
-      context: opaqueHostFixture({ state, isPartial: true, isError: false, expanded: false }),
+      context: opaqueFixture({ state, isPartial: true, isError: false, expanded: false }),
     });
     expect(stops).toBe(1);
     syncProgressTicker(true, input.context, startTicker);
     codeModeCompactSummaryAtHost({
       ...input,
       result: { content: [], details: undefined },
-      context: opaqueHostFixture({ state, isPartial: true, isError: false, expanded: false }),
+      context: opaqueFixture({ state, isPartial: true, isError: false, expanded: false }),
     });
     expect(stops).toBe(2);
     syncProgressTicker(true, input.context, startTicker);
@@ -535,62 +472,17 @@ describe("Code Mode compact outcomes", () => {
       ...input,
       phase: "settled",
       result: { details: success, content: [] },
-      context: opaqueHostFixture({ state, isPartial: false, isError: false, expanded: false }),
+      context: opaqueFixture({ state, isPartial: false, isError: false, expanded: false }),
     });
     expect(stops).toBe(3);
   });
 
-  it("leaves the default preview renderer and expanded source intact", () => {
-    const definition = buildCodeModeToolDefinition({
-      catalogBudget: 0,
-      includePowerShell: false,
-      execute: () => Promise.reject(new Error("not executed")),
-      startUiTicker: () => () => undefined,
-    });
-    const tool = withCodePreviewShell(definition, {
-      mode: "off",
-      compactSummary: codeModeCompactSummary,
-    });
-    const args = { code: "return 'SOURCE_MARKER'", intent: "Inspect" };
-    const theme = opaqueHostFixture({
-      fg: (_color: string, text: string) => text,
-      bg: (_color: string, text: string) => text,
-      bold: (text: string) => text,
-    });
-    const context = opaqueHostFixture({
-      args,
-      state: {},
-      expanded: true,
-      isPartial: false,
-      isError: false,
-      executionStarted: false,
-      argsComplete: true,
-      invalidate: () => undefined,
-    });
-    expect(tool.renderCall?.(args, theme, context).render(120).join("\n")).toContain(
-      "SOURCE_MARKER",
-    );
-    expect(tool.execute).toBe(definition.execute);
-  });
-
   it("marks final host clamping even when the runtime reports no truncation", () => {
-    const state = codeModeStateFixture({ maxOutputBytes: 10 });
-    const execute = makeCodeModeToolExecute({
-      isCurrent: () => true,
-      getState: () => state,
-      runInSession: (effect) => Effect.runPromise(effect),
-      definitions: nestedToolDefinitionsFixture({}),
-      events: createEventBus(),
-      sessionId: "compact-test",
+    const { run } = executeHarness({
+      config: { maxOutputBytes: 10 },
       executeCodeMode: () => Effect.succeed({ ok: true, value: "a".repeat(100), truncated: false }),
     });
-    return execute(
-      "clamp",
-      { code: "return 1" },
-      undefined,
-      undefined,
-      extensionContextFixture({}),
-    ).then((result) => {
+    return run("return 1").then((result) => {
       expect(result.details?.truncated).toBe(true);
       expect(summarize(result.details)?.outcome).toBe("warning");
     });

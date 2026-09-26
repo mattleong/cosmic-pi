@@ -1,11 +1,14 @@
 import {
+  MissingRequiredClientCapabilityError,
   ProtocolError,
   ProtocolErrorCode,
   ResourceNotFoundError,
+  UnsupportedProtocolVersionError,
+  UrlElicitationRequiredError,
 } from "@modelcontextprotocol/client";
 
 /** Synthetic remote failures. Private text and data must never leave the SDK boundary. */
-export const protocolErrors = [
+const protocolErrors = [
   {
     name: "method not found",
     code: ProtocolErrorCode.MethodNotFound,
@@ -76,3 +79,45 @@ protocolErrors.push({
   reason: "rpc-resource-not-found",
   error: new ResourceNotFoundError("private-resource://secret", "private-server-message"),
 });
+
+const unsupportedErrors = [
+  {
+    name: "URL elicitation",
+    error: new UrlElicitationRequiredError(
+      [
+        {
+          mode: "url",
+          url: "https://private-url.test",
+          elicitationId: "private-id",
+          message: "private-prompt",
+        },
+      ],
+      "private-server-message",
+    ),
+  },
+  {
+    name: "required client capability",
+    error: new MissingRequiredClientCapabilityError(
+      { requiredCapabilities: { experimental: { "private-capability": {} } } },
+      "private-server-message",
+    ),
+  },
+  {
+    name: "protocol version",
+    error: new UnsupportedProtocolVersionError(
+      { requested: "private-version", supported: ["private-supported"] },
+      "private-server-message",
+    ),
+  },
+];
+
+/** Every synthetic failure as the JSON-RPC error member a peer would send. */
+export const protocolResponses = [
+  ...unsupportedErrors.map((entry) => ({ ...entry, kind: "unsupported", reason: undefined })),
+  ...protocolErrors,
+].map(({ name, error, kind, reason }) => ({
+  name,
+  kind,
+  reason,
+  response: { error: { code: error.code, message: error.message, data: error.data } },
+}));

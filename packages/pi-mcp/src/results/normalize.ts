@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 import { MCP_VALIDATION_NOTICES } from "./validation-notices.ts";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
+import { utf8Prefix } from "pi-cosmic-core";
+import { snapshotBoundedJson } from "../validation/schema-policy.ts";
 import {
   MCP_RESULT_LIMITS,
   type McpAttachment,
@@ -14,17 +16,7 @@ import {
 export const utf8Bytes = (value: string): number => Buffer.byteLength(value, "utf8");
 
 /** Counts UTF-8, not UTF-16 code units, and never splits a surrogate pair. */
-export const prefixBytes = (value: string, maxBytes: number): string => {
-  let used = 0;
-  let end = 0;
-  for (const character of value) {
-    const bytes = utf8Bytes(character);
-    if (used + bytes > maxBytes) break;
-    used += bytes;
-    end += character.length;
-  }
-  return value.slice(0, end);
-};
+export const prefixBytes = utf8Prefix;
 
 export const boundedNotices = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
   [...new Set(values.map((value) => prefixBytes(value, 512)))].slice(0, 16);
@@ -32,8 +24,6 @@ export const boundedNotices = (values: ReadonlyArray<string>): ReadonlyArray<str
 const jsonArray = (value: Schema.Json): value is Schema.JsonArray => Array.isArray(value);
 const jsonObject = (value: Schema.Json): value is Schema.JsonObject =>
   Predicate.isObject(value) && !jsonArray(value);
-const jsonPrimitive = (value: Schema.Json): value is null | string | number | boolean =>
-  !Predicate.isObjectOrArray(value);
 const record = (value: Schema.Json): Schema.JsonObject | undefined =>
   jsonObject(value) ? value : undefined;
 
@@ -132,12 +122,6 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
   const notices: string[] = [];
   const attachments: McpAttachment[] = [];
   const images: McpStoredImage[] = [];
-  let nodes = 0;
-  let acceptedBytes = 0;
-  const charge = (bytes: number): void => {
-    acceptedBytes += bytes;
-    if (acceptedBytes > MCP_RESULT_LIMITS.acceptedBytes) throw new RangeError("result limit");
-  };
   const notice = (message: string): void => {
     if (notices.length < 16 && !notices.includes(message)) notices.push(message);
   };
@@ -191,29 +175,6 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     return { type: "attachment", ...descriptor };
   };
 
-  // Copy and charge every input byte, including content that normalization discards.
-  const copy = (value: Schema.Json, depth: number): Schema.Json => {
-    if (++nodes > MCP_RESULT_LIMITS.nodes || depth > MCP_RESULT_LIMITS.depth)
-      throw new RangeError("structure limit");
-    if (jsonPrimitive(value)) {
-      if (Predicate.isString(value) && utf8Bytes(value) > MCP_RESULT_LIMITS.acceptedBytes)
-        throw new RangeError("string limit");
-      charge(utf8Bytes(JSON.stringify(value)));
-      return value;
-    }
-    if (jsonArray(value)) {
-      charge(2 + value.length);
-      return value.map((item) => copy(item, depth + 1));
-    }
-    const entries = Object.entries(value);
-    charge(2 + entries.length * 2);
-    return Object.fromEntries(
-      entries.map(([key, item]) => {
-        charge(utf8Bytes(JSON.stringify(key)));
-        return [key, copy(item, depth + 1)];
-      }),
-    );
-  };
   type ContentContext = "result" | "block" | "resource" | "message" | undefined;
   const normalize = (value: Schema.Json, context?: ContentContext, root = false): Schema.Json => {
     if (jsonArray(value)) return value.map((item) => normalize(item, context));
@@ -239,7 +200,7 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     return Object.fromEntries(
       Object.entries(block).map(([key, item]) => {
         // Schema literals are JSON data, not content envelopes. Only the exact description
-        // roots are exempt, after copy has charged and bounded their entire subtrees.
+        // roots are exempt, after the snapshot has charged and bounded their entire subtrees.
         if (
           root &&
           input.action === "tools.describe" &&
@@ -262,9 +223,14 @@ export const normalizeResult = (input: McpPrepareInput): McpNormalizedResult => 
     );
   };
   try {
-    // The bounded copy charges discarded bytes and leaves the validated raw reply untouched.
+    // The bounded snapshot charges discarded bytes and leaves the validated raw reply untouched.
     // Never parse strings: only JSON objects can be recognized as binary envelopes.
-    const serialized = JSON.stringify(normalize(copy(input.reply.result, 0), "result", true));
+    const snapshot = snapshotBoundedJson(input.reply.result, {
+      bytes: MCP_RESULT_LIMITS.acceptedBytes,
+      depth: MCP_RESULT_LIMITS.depth,
+      nodes: MCP_RESULT_LIMITS.nodes,
+    });
+    const serialized = JSON.stringify(normalize(snapshot, "result", true));
     const bounded = boundedNotices([...notices, ...(input.notices ?? []).slice(0, 16)]);
     // Count all privately retained strings and descriptors, not just the text projection.
     const bytes =

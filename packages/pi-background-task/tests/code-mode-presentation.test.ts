@@ -1,9 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import {
-  backgroundTaskCompactSummary,
-  projectBackgroundTaskCompactSummary,
-} from "../src/ui/compact-summary.ts";
+import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import { projectBackgroundTaskPresentation } from "../src/code-mode/presentation.ts";
 import { projectBackgroundTaskCodeModeOutput } from "../src/code-mode/output.ts";
 import {
@@ -44,6 +41,7 @@ it("rejects inconsistent evidence and strips nonsemantic fields and terminal con
 });
 
 const args = { action: "logs" as const, id: "task-1" };
+// Older persisted logs details carried `events: []` and Pi's full TruncationResult; both decode.
 const result = {
   text: "private log text",
   details: {
@@ -90,26 +88,6 @@ it("preserves original truncation independently of unchanged guest data", () => 
     isError: false,
   });
   expect(receipt.summary?.issues).toEqual(pure?.issues);
-  const standalone = backgroundTaskCompactSummary({
-    phase: "settled",
-    args,
-    result: { ...result, content: [] },
-    context: {
-      args,
-      state: {},
-      toolCallId: "test",
-      cwd: "/",
-      invalidate() {},
-      lastComponent: undefined,
-      argsComplete: true,
-      executionStarted: true,
-      expanded: false,
-      isPartial: false,
-      isError: false,
-      showImages: true,
-    },
-  });
-  expect(pure).toEqual(standalone);
   // Display descriptions survive without changing the legacy instructions.
   expect(receipt.summary?.notices).toEqual(
     pure?.notices?.map(({ kind, text, description }) => ({
@@ -121,10 +99,19 @@ it("preserves original truncation independently of unchanged guest data", () => 
 });
 
 it("marks oversized semantic evidence incomplete instead of silently clipping", () => {
-  const receipt = projectBackgroundTaskPresentation(args, {
+  // The error fits the snapshot contract, but its task-prefixed notice exceeds the receipt bound.
+  const task = { id: "task-1", command: "test", cwd: "/tmp", state: "failed", startedAt: 1 };
+  const failed = { ...task, logCursor: 0, droppedLogBytes: 0, error: "x".repeat(2048) };
+  const receipt = projectBackgroundTaskPresentation(
+    { action: "list" },
+    { details: { action: "list", tasks: [failed] } },
+  );
+  expect(receipt).toEqual({ version: 1, incomplete: true, overflow: true });
+  // Details outside the task contract never reach a summary, so nothing overflowed.
+  const oversizedId = projectBackgroundTaskPresentation(args, {
     details: { ...result.details, logs: { ...result.details.logs, id: "x".repeat(3000) } },
   });
-  expect(receipt).toEqual({ version: 1, incomplete: true, overflow: true });
+  expect(oversizedId).toEqual({ version: 1, incomplete: true, overflow: false });
 });
 
 it("roundtrips diagnostic evidence without transporting standalone renderer ownership", () => {

@@ -2,8 +2,7 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import { AgentDirectory, nodePlatformLayer } from "pi-cosmic-core";
-import { XaiUsageService } from "./usage/controller.ts";
-import type { XaiProjection } from "./usage/projection.ts";
+import { XaiUsageService, type XaiUsageServiceOptions } from "./usage/controller.ts";
 
 /** Plain session values captured by the Pi adapter before runtime construction. */
 export interface XaiSessionInput {
@@ -13,30 +12,14 @@ export interface XaiSessionInput {
   readonly projectTrusted: boolean;
 }
 
-export interface XaiApplicationLayerOptions {
-  readonly projection: MutableRef.MutableRef<XaiProjection>;
-  readonly onChange: () => void;
-  readonly isUsageVisible: () => boolean;
-}
-
 /** Compose the complete Better xAI application dependency graph for one Pi session. */
 export const makeXaiApplicationLayer = (
   { cwd, context, projectTrusted }: XaiSessionInput,
-  options: XaiApplicationLayerOptions,
-) => {
-  const platform = Layer.merge(
-    nodePlatformLayer,
-    AgentDirectory.layerFromHost(() => getAgentDir()),
+  options: Required<Pick<XaiUsageServiceOptions, "projection" | "onChange" | "isUsageVisible">>,
+) =>
+  XaiUsageService.layer({ ...options, cwd, context, projectTrusted }).pipe(
+    Layer.provide(Layer.merge(nodePlatformLayer, AgentDirectory.layerFromHost(getAgentDir))),
   );
-  return XaiUsageService.layer({
-    context,
-    cwd,
-    projection: options.projection,
-    projectTrusted,
-    onChange: options.onChange,
-    isUsageVisible: options.isUsageVisible,
-  }).pipe(Layer.provide(platform));
-};
 
 export type XaiApplicationLayer = ReturnType<typeof makeXaiApplicationLayer>;
 export type XaiApplication = Layer.Success<XaiApplicationLayer>;

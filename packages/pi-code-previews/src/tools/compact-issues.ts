@@ -1,22 +1,6 @@
 import * as Schema from "effect/Schema";
 import type { CompactNotice, CompactSummary } from "./compact-summary";
 
-/** Presentation evidence only. Identities never grant execution or recovery authority. */
-export interface CompactIssue {
-  readonly operation: string;
-  readonly code: string;
-  readonly severity: "error" | "warning";
-  readonly cause: string;
-  /** Human-facing compact explanation. Empty means agent-only detail. Never ownership evidence. */
-  readonly description?: string | undefined;
-  readonly recovery: readonly { readonly code: string; readonly text: string }[];
-  readonly diagnostics?: readonly string[];
-}
-export interface CompactIssues {
-  readonly coverage: "complete" | "unknown";
-  readonly entries: readonly CompactIssue[];
-}
-
 const Identity = Schema.String.check(Schema.isMinLength(1));
 const IssueEvidenceSchema = Schema.Struct({
   operation: Identity,
@@ -28,13 +12,16 @@ const IssueEvidenceSchema = Schema.Struct({
 });
 const IssueSchema = Schema.Struct({
   ...IssueEvidenceSchema.fields,
+  /** Human-facing compact explanation. Empty means agent-only detail. Never ownership evidence. */
   description: Schema.optional(Schema.String.check(Schema.isMaxLength(240))),
 });
 export const CompactIssuesSchema = Schema.Struct({
   coverage: Schema.Literals(["complete", "unknown"]),
   entries: Schema.Array(IssueSchema),
 });
-export const isCompactIssues = Schema.is(CompactIssuesSchema);
+/** Presentation evidence only. Identities never grant execution or recovery authority. */
+export type CompactIssue = typeof IssueSchema.Type;
+export type CompactIssues = typeof CompactIssuesSchema.Type;
 
 /** Equal identities coalesce only when their evidence agrees. Conflicts remain visible.
  * Recovery identities are scoped to the operation, independent of the causing issue.
@@ -78,15 +65,6 @@ export function normalizeCompactIssues(collections: readonly CompactIssues[]): C
   return { coverage: complete ? "complete" : "unknown", entries };
 }
 
-/** A detached evidence snapshot, not an identity-based promise about future merges. */
-export interface CompactIssueClaim extends Omit<CompactIssue, "description"> {
-  readonly fields: {
-    readonly cause?: true;
-    readonly recovery?: readonly string[];
-    readonly diagnostics?: readonly number[];
-  };
-}
-
 export const CompactIssueClaimSchema = Schema.Struct({
   ...IssueEvidenceSchema.fields,
   fields: Schema.Struct({
@@ -95,6 +73,8 @@ export const CompactIssueClaimSchema = Schema.Struct({
     diagnostics: Schema.optionalKey(Schema.Array(Schema.Natural)),
   }),
 });
+/** A detached evidence snapshot, not an identity-based promise about future merges. */
+export type CompactIssueClaim = typeof CompactIssueClaimSchema.Type;
 const isClaim = Schema.is(CompactIssueClaimSchema);
 
 export function claimCompactIssue(
@@ -200,8 +180,6 @@ export function subtractCompactIssueClaims(
   };
 }
 
-export const withoutFailureBodyIssues = subtractCompactIssueClaims;
-
 export function compactIssueSeverity(issues: CompactIssues): "error" | "warning" | undefined {
   return issues.entries.some((issue) => issue.severity === "error")
     ? "error"
@@ -284,29 +262,18 @@ export function withCompactIssues<T extends CompactSummary>(
 
 /** Aggregate all retained children before choosing rows. Missing receipts stay conservative. */
 export function summaryCompactIssues(summary: CompactSummary, expanded = false): CompactIssues {
-  const own = summary.issues ?? legacyCompactIssues(summary.notices, "outer", expanded);
-  const informational =
-    expanded && summary.issues
-      ? legacyCompactIssues(
-          summary.notices?.filter((notice) => notice.kind === "recovery" && notice.expandedOnly),
-          "outer-information",
-          true,
-        )
-      : undefined;
+  const informational = (notices: CompactSummary["notices"], operation: string) =>
+    legacyCompactIssues(
+      notices?.filter((notice) => notice.kind === "recovery" && notice.expandedOnly),
+      `${operation}-information`,
+      true,
+    );
   return normalizeCompactIssues([
-    own,
-    ...(informational ? [informational] : []),
+    summary.issues ?? legacyCompactIssues(summary.notices, "outer", expanded),
+    ...(expanded && summary.issues ? [informational(summary.notices, "outer")] : []),
     ...(summary.children?.entries.flatMap((child, index) => [
       child.issues ?? legacyCompactIssues(child.notices, `child-${index + 1}`, expanded),
-      ...(expanded && child.issues
-        ? [
-            legacyCompactIssues(
-              child.notices?.filter((notice) => notice.kind === "recovery" && notice.expandedOnly),
-              `child-${index + 1}-information`,
-              true,
-            ),
-          ]
-        : []),
+      ...(expanded && child.issues ? [informational(child.notices, `child-${index + 1}`)] : []),
     ]) ?? []),
   ]);
 }

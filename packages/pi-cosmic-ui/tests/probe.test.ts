@@ -1,12 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { provideBuiltLayer } from "pi-cosmic-core";
-import { makeCapturedTracer } from "pi-cosmic-core/testing";
+import { capturedTelemetrySnapshot, makeCapturedTracer } from "pi-cosmic-core/testing";
 import { makeRepositoryProbe } from "../src/probe/repository-probe.ts";
-
-// Pure leak-check serialization stays outside Effect code on purpose: it scans captured
-// telemetry spans for secret path fragments.
-const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
 
 describe("repository probe", () => {
   it.effect("parses Git status/diff and captures redacted probe spans", () => {
@@ -30,9 +26,7 @@ describe("repository probe", () => {
         linesAdded: 3,
       });
       expect(yield* probe.pullRequest("/secret/project/not-recorded")).toBe(17);
-      const telemetry = serializedSnapshot(
-        captured.spans.map((span) => ({ name: span.name, attributes: [...span.attributes] })),
-      );
+      const telemetry = capturedTelemetrySnapshot(captured);
       expect(captured.spans.map((span) => span.name)).toEqual(
         expect.arrayContaining(["pi-cosmic-ui.probe.git", "pi-cosmic-ui.probe.pull-request"]),
       );

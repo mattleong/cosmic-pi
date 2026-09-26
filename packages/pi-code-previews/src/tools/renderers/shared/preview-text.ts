@@ -15,48 +15,24 @@ export function renderHighlightedPreviewText(
   lang: string | undefined,
   theme: Theme,
   invalidate?: () => void,
-  lineNumbers?: { firstLine: number; lineNumberWidth?: number },
+  firstLine?: number,
 ) {
   const preview = selectPreviewTextLines(text, limit);
-  const numbered = lineNumbers
-    ? {
-        ...lineNumbers,
-        lineNumberWidth:
-          lineNumbers.lineNumberWidth ??
-          String(lineNumbers.firstLine + Math.max(0, preview.total - 1)).length,
-      }
-    : undefined;
-  return {
-    ...renderHighlightedPreviewEntries(preview, lang, theme, invalidate, numbered),
-    total: preview.total,
-  };
-}
-
-function renderHighlightedPreviewEntries(
-  preview: {
-    entries: Array<PreviewLineEntry<string>>;
-    shown: number;
-    hidden: number;
-  },
-  lang: string | undefined,
-  theme: Theme,
-  invalidate?: () => void,
-  lineNumbers?: { firstLine: number; lineNumberWidth?: number },
-): { lines: string[]; shown: number; hidden: number } {
-  return renderChunkedPreviewEntries(preview, theme, (chunk) => {
+  const width =
+    firstLine === undefined ? 0 : String(firstLine + Math.max(0, preview.total - 1)).length;
+  const rendered = renderChunkedPreviewEntries(preview, theme, (chunk) => {
     const normalizedChunk = chunk.map((entry) => expandPreviewTabs(entry.line));
     const highlighted = renderHighlightedText(normalizedChunk.join("\n"), lang, theme, invalidate);
     return chunk.map((entry, index) => {
-      const rendered =
+      const line =
         highlighted[index] ??
         theme.fg("toolOutput", escapeControlChars(normalizedChunk[index] ?? ""));
-      if (!lineNumbers) return rendered;
-      const width =
-        lineNumbers.lineNumberWidth ?? String(lineNumbers.firstLine + entry.index).length;
-      const lineNumber = String(lineNumbers.firstLine + entry.index).padStart(width, " ");
-      return `${theme.fg("dim", `${lineNumber} │ `)}${rendered}`;
+      if (firstLine === undefined) return line;
+      const lineNumber = String(firstLine + entry.index).padStart(width, " ");
+      return `${theme.fg("dim", `${lineNumber} │ `)}${line}`;
     });
   });
+  return { ...rendered, total: preview.total };
 }
 
 export function renderSelectedOutputLines(

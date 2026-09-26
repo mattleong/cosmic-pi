@@ -14,6 +14,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  CompactionResult,
   ExtensionContext,
   SessionBeforeCompactEvent,
   SessionEntry,
@@ -22,12 +23,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { jsonHttpTestLayer } from "pi-cosmic-core/testing";
+import { provideBuiltLayer, type JsonValue } from "pi-cosmic-core";
+import { extensionContextFixture, jsonHttpTestLayer } from "pi-cosmic-core/testing";
 import {
   OpenAICompactionBoundaryError,
   OpenAICompactionClient,
   type OpenAICompactRequest,
+  type OpenAICompactResult,
   type OpenAICompactionClientContract,
 } from "../src/boundary/openai-compaction.ts";
 import { reconstructOpenAIContext } from "../src/compaction/context.ts";
@@ -40,28 +42,13 @@ import {
 } from "../src/compaction/protocol.ts";
 import { initialFastSnapshot } from "../src/fast/controller.ts";
 import { initialProjection } from "../src/usage/projection.ts";
-import { makeResolvedConfig } from "./helpers.ts";
-
-const model = (
-  id = "gpt-5.5",
-  provider: Model<Api>["provider"] = "openai",
-  api: Api = "openai-responses",
-): Model<Api> => ({
-  id,
-  name: id,
-  api,
-  provider,
-  baseUrl: "https://example.invalid",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-});
-
-// Pure leak-check serialization stays outside Effect code on purpose: it scans opaque
-// runtime failure values for secret fragments.
-const serializedSnapshot = <Value>(value: Value): string => JSON.stringify(value) ?? "";
+import {
+  assistantMessage,
+  makeResolvedConfig,
+  serializedSnapshot,
+  testModel,
+  zeroUsage,
+} from "./helpers.ts";
 
 const entry = (id: string, content: string): SessionEntry => ({
   type: "custom_message",
@@ -107,7 +94,7 @@ function fixture(options: {
   const ctxFixture = {
     modelRegistry: { streamSimple: options.streamSimple },
     thinkingLevel: "high" as const,
-    model: options.currentModel ?? model(),
+    model: options.currentModel ?? testModel(),
     getSystemPrompt: () =>
       options.manager
         ? getCurrentSystemPrompt(convertToLlm(options.manager.buildSessionContext().messages))
@@ -120,16 +107,20 @@ function fixture(options: {
       buildContextEntries: () => contextEntries,
     },
   };
-  const context = MutableRef.make(
-    // SAFETY: Service tests exercise only the context members implemented by this fixture.
-    ctxFixture as typeof ctxFixture & ExtensionContext,
-  );
+  const context = MutableRef.make(extensionContextFixture(ctxFixture));
   const projection = MutableRef.make({
     ...initialProjection(),
     config: makeResolvedConfig({ compaction: { enabled: options.enabled } }),
   });
   const fastProjection = MutableRef.make(initialFastSnapshot());
-  return { branch, contextEntries, context, projection, fastProjection };
+  const setEnabled = (enabled: boolean) =>
+    MutableRef.update(projection, (current) => ({
+      ...current,
+      config: makeResolvedConfig({ compaction: { enabled } }),
+    }));
+  const setModel = (model: Model<Api>) =>
+    MutableRef.update(context, (current) => ({ ...current, model }));
+  return { branch, contextEntries, context, projection, fastProjection, setEnabled, setModel };
 }
 
 function serviceLayer(
@@ -145,35 +136,66 @@ function serviceLayer(
   );
 }
 
+const clientLayer = (body: JsonValue) =>
+  OpenAICompactionClient.layer(() => ({
+    getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "test-api-key" }),
+  })).pipe(Layer.provide(jsonHttpTestLayer(() => Effect.succeed({ status: 200, body }))));
+
+const recordingClient = (
+  prefix: string,
+  usage: OpenAICompactResult["usage"] = { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+) => {
+  const requests: OpenAICompactRequest[] = [];
+  const client: OpenAICompactionClientContract["compact"] = (request) =>
+    Effect.sync(() => {
+      requests.push(request);
+      return {
+        output: [{ type: "compaction", encrypted_content: `${prefix}-${requests.length}` }],
+        usage,
+      };
+    });
+  return { requests, client };
+};
+
+const responsesInput = (
+  requestModel: Model<"openai-responses">,
+  messages: Parameters<typeof convertToLlm>[0],
+) =>
+  convertResponsesMessages(
+    requestModel,
+    normalizeContext({ messages: convertToLlm(messages) }),
+    new Set(["openai"]),
+    requestModel.compat,
+  );
+
+const commit = (manager: SessionManager, result: CompactionResult | undefined) => {
+  if (!result) throw new Error("Expected compaction");
+  manager.appendCompaction(
+    result.summary,
+    result.firstKeptEntryId,
+    result.tokensBefore,
+    result.details,
+    true,
+    result.usage,
+  );
+  return result;
+};
+
 describe("OpenAICompactionClient", () => {
   it.effect("retains cached input details from decoded usage", () => {
-    const layer = OpenAICompactionClient.layer(() => ({
-      getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "test-api-key" }),
-    })).pipe(
-      Layer.provide(
-        jsonHttpTestLayer(() =>
-          Effect.succeed({
-            status: 200,
-            body: {
-              object: "response.compaction",
-              output: [{ type: "compaction" }],
-              usage: {
-                input_tokens: 12,
-                input_tokens_details: { cached_tokens: 5 },
-                output_tokens: 3,
-                total_tokens: 15,
-              },
-            },
-          }),
-        ),
-      ),
-    );
+    const layer = clientLayer({
+      object: "response.compaction",
+      output: [{ type: "compaction" }],
+      usage: {
+        input_tokens: 12,
+        input_tokens_details: { cached_tokens: 5 },
+        output_tokens: 3,
+        total_tokens: 15,
+      },
+    });
     return Effect.gen(function* () {
       const client = yield* OpenAICompactionClient;
-      const result = yield* client.compact({
-        model: { ...model(), api: "openai-responses" },
-        input: [],
-      });
+      const result = yield* client.compact({ model: testModel(), input: [] });
       expect(result.usage).toEqual({
         inputTokens: 12,
         cachedInputTokens: 5,
@@ -183,36 +205,20 @@ describe("OpenAICompactionClient", () => {
     }).pipe(provideBuiltLayer(layer));
   });
   it.effect("rejects fractional usage before returning a checkpoint", () => {
-    const layer = OpenAICompactionClient.layer(() => ({
-      getApiKeyAndHeaders: () => Promise.resolve({ ok: true as const, apiKey: "test-api-key" }),
-    })).pipe(
-      Layer.provide(
-        jsonHttpTestLayer(() =>
-          Effect.succeed({
-            status: 200,
-            body: {
-              object: "response.compaction",
-              output: [{ type: "compaction" }],
-              usage: { input_tokens: 1.5, output_tokens: 2, total_tokens: 3.5 },
-            },
-          }),
-        ),
-      ),
-    );
+    const layer = clientLayer({
+      object: "response.compaction",
+      output: [{ type: "compaction" }],
+      usage: { input_tokens: 1.5, output_tokens: 2, total_tokens: 3.5 },
+    });
 
     return Effect.gen(function* () {
       const client = yield* OpenAICompactionClient;
-      // SAFETY: The fixture fixes the API discriminator to the boundary's supported API.
-      const requestModel = model() as Model<"openai-responses">;
-      const result = yield* client
-        .compact({ model: requestModel, input: [{ type: "message" }] })
-        .pipe(Effect.result);
+      const failure = yield* client
+        .compact({ model: testModel(), input: [{ type: "message" }] })
+        .pipe(Effect.flip);
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure).toBeInstanceOf(OpenAICompactionBoundaryError);
-        expect(result.failure.operation).toBe("decode");
-      }
+      expect(failure).toBeInstanceOf(OpenAICompactionBoundaryError);
+      expect(failure.operation).toBe("decode");
     }).pipe(provideBuiltLayer(layer));
   });
 });
@@ -223,9 +229,8 @@ describe("OpenAICompactionService", () => {
       `preserves native context across repeated compactions, mid-conversation=${supportsMidConvoSystemMessages}`,
       () => {
         const manager = SessionManager.inMemory("/virtual/compaction-test");
-        const requestModel: Model<"openai-responses"> = {
-          ...model(),
-          api: "openai-responses",
+        const requestModel = {
+          ...testModel(),
           compat: { supportsMidConvoSystemMessages },
           cost: {
             input: 1,
@@ -244,22 +249,17 @@ describe("OpenAICompactionService", () => {
         });
         manager.appendMessage({ role: "user", content: "first question", timestamp: 2 });
         const target = fixture({ enabled: true, currentModel: requestModel, manager });
-        const requests: OpenAICompactRequest[] = [];
-        const client: OpenAICompactionClientContract["compact"] = (request) =>
-          Effect.sync(() => {
-            requests.push(request);
-            return {
-              output: [{ type: "compaction", encrypted_content: `checkpoint-${requests.length}` }],
-              usage: { inputTokens: 12, cachedInputTokens: 5, outputTokens: 3, totalTokens: 15 },
-            };
-          });
+        const { requests, client } = recordingClient("checkpoint", {
+          inputTokens: 12,
+          cachedInputTokens: 5,
+          outputTokens: 3,
+          totalTokens: 15,
+        });
         return Effect.gen(function* () {
           const service = yield* OpenAICompactionService;
           for (let round = 0; round < 4; round++) {
             const firstId = manager.getBranch()[0]!.id;
-            const result = yield* service.compact(compactEvent(firstId));
-            expect(result).toBeDefined();
-            if (!result) throw new Error("Expected compaction");
+            const result = commit(manager, yield* service.compact(compactEvent(firstId)));
             expect(result.usage).toMatchObject({
               input: 7,
               output: 3,
@@ -274,14 +274,6 @@ describe("OpenAICompactionService", () => {
               outputTokens: 3,
               totalTokens: 15,
             });
-            manager.appendCompaction(
-              result.summary,
-              result.firstKeptEntryId,
-              result.tokensBefore,
-              result.details,
-              true,
-              result.usage,
-            );
             // Inspect before any fresh update can hide stale snapshot replay.
             const compactedMessages = manager.buildSessionContext().messages;
             const compactedPrompt = getCurrentSystemPrompt(convertToLlm(compactedMessages));
@@ -293,11 +285,9 @@ describe("OpenAICompactionService", () => {
               round === 0 ? "initial rules" : `updated rules ${round - 1}`,
             );
             const filteredCompacted = yield* service.filterContext(compactedMessages);
-            const compactedInput = convertResponsesMessages(
+            const compactedInput = responsesInput(
               requestModel,
-              normalizeContext({ messages: convertToLlm(filteredCompacted ?? compactedMessages) }),
-              new Set(["openai"]),
-              { supportsMidConvoSystemMessages },
+              filteredCompacted ?? compactedMessages,
             );
             const compactedPayload = yield* service.inject({ input: compactedInput });
             expect(compactedPayload?.input).toHaveLength(2);
@@ -325,30 +315,19 @@ describe("OpenAICompactionService", () => {
               content: `new question ${round}`,
               timestamp: 15 + round,
             });
-            manager.appendMessage({
-              role: "assistant",
-              api: requestModel.api,
-              provider: requestModel.provider,
-              model: requestModel.id,
-              content: [
-                {
-                  type: "toolCall",
-                  id: `call_${round}|fc_${round}`,
-                  name: "read",
-                  arguments: { path: `tail-${round}` },
-                },
-              ],
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "toolUse",
-              timestamp: 20 + round,
-            });
+            manager.appendMessage(
+              assistantMessage(
+                [
+                  {
+                    type: "toolCall",
+                    id: `call_${round}|fc_${round}`,
+                    name: "read",
+                    arguments: { path: `tail-${round}` },
+                  },
+                ],
+                { stopReason: "toolUse", timestamp: 20 + round },
+              ),
+            );
             manager.appendMessage({
               role: "toolResult",
               toolCallId: `call_${round}|fc_${round}`,
@@ -359,12 +338,7 @@ describe("OpenAICompactionService", () => {
             });
             const messages = manager.buildSessionContext().messages;
             const filtered = yield* service.filterContext(messages);
-            const input = convertResponsesMessages(
-              requestModel,
-              normalizeContext({ messages: convertToLlm(filtered ?? messages) }),
-              new Set(["openai"]),
-              { supportsMidConvoSystemMessages },
-            );
+            const input = responsesInput(requestModel, filtered ?? messages);
             const injected = yield* service.inject({ input });
             expect(injected?.input).toHaveLength(supportsMidConvoSystemMessages ? 6 : 5);
             expect(serializedSnapshot(injected?.input).split(`new question ${round}`)).toHaveLength(
@@ -386,32 +360,6 @@ describe("OpenAICompactionService", () => {
               .filter((entry) => entry.type === "compaction")
               .map((entry) => entry.usage?.totalTokens),
           ).toEqual([15, 15, 15, 15]);
-          for (const state of ["disabled", "model", "provider"] as const) {
-            MutableRef.set(target.projection, {
-              ...MutableRef.get(target.projection),
-              config: makeResolvedConfig({ compaction: { enabled: state !== "disabled" } }),
-            });
-            MutableRef.set(target.context, {
-              ...MutableRef.get(target.context),
-              model:
-                state === "disabled"
-                  ? requestModel
-                  : state === "model"
-                    ? model("changed")
-                    : model("changed", "anthropic", "anthropic-messages"),
-            });
-            const repaired = yield* service.filterContext(manager.buildSessionContext().messages);
-            expect(serializedSnapshot(repaired)).toContain("first question");
-            for (let round = 0; round < 4; round++) {
-              expect(serializedSnapshot(repaired)).toContain(`new question ${round}`);
-              expect(serializedSnapshot(repaired)).toContain(`result-${round}`);
-            }
-            expect(getCurrentSystemPrompt(convertToLlm(repaired!))).toContain("updated rules 3");
-            expect(getCurrentTools(convertToLlm(repaired!)).map((tool) => tool.name)).toEqual([
-              "tool-3",
-            ]);
-            expect(yield* service.inject({ input: [] })).toBeUndefined();
-          }
           manager.appendCompaction("ordinary summary", manager.getLeafId()!, 10);
           expect(yield* service.inject({ input: [] })).toBeUndefined();
           expect(
@@ -427,30 +375,10 @@ describe("OpenAICompactionService", () => {
         `counts the retained ${anchor} anchor, mid-conversation=${supportsMidConvoSystemMessages}`,
         () => {
           const manager = SessionManager.inMemory("/virtual/anchors");
-          const requestModel: Model<"openai-responses"> = {
-            ...model(),
-            api: "openai-responses",
-            compat: { supportsMidConvoSystemMessages },
-          };
-          const usage = {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          };
+          const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages } };
           manager.appendMessage({ role: "system", content: "opaque anchor rules", timestamp: 0 });
           const target = fixture({ enabled: true, currentModel: requestModel, manager });
-          const requests: OpenAICompactRequest[] = [];
-          const client: OpenAICompactionClientContract["compact"] = (request) =>
-            Effect.sync(() => {
-              requests.push(request);
-              return {
-                output: [{ type: "compaction", encrypted_content: `anchor-${requests.length}` }],
-                usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-              };
-            });
+          const { requests, client } = recordingClient("anchor");
           return Effect.gen(function* () {
             const service = yield* OpenAICompactionService;
             for (let round = 0; round < 3; round++) {
@@ -467,39 +395,21 @@ describe("OpenAICompactionService", () => {
                   timestamp: round + 10,
                 });
               if (anchor === "custom") manager.appendCustomEntry("anchor", { round });
-              if (anchor === "usage") manager.appendUsage("test", "openai", requestModel.id, usage);
+              if (anchor === "usage")
+                manager.appendUsage("test", "openai", requestModel.id, zeroUsage);
               if (anchor === "assistant")
-                manager.appendMessage({
-                  role: "assistant",
-                  api: requestModel.api,
-                  provider: requestModel.provider,
-                  model: requestModel.id,
-                  content: [{ type: "text", text: `answer-${round}` }],
-                  usage,
-                  stopReason: "stop",
-                  timestamp: round + 10,
-                });
-              const result = yield* service.compact(compactEvent());
-              if (!result) throw new Error("Expected compaction");
+                manager.appendMessage(
+                  assistantMessage([{ type: "text", text: `answer-${round}` }], {
+                    timestamp: round + 10,
+                  }),
+                );
+              const result = commit(manager, yield* service.compact(compactEvent()));
               expect(decodeOpenAICompactionDetails(result.details)?.checkpoint.rawInputCount).toBe(
                 anchor === "assistant" ? 1 : 0,
               );
-              manager.appendCompaction(
-                result.summary,
-                result.firstKeptEntryId,
-                result.tokensBefore,
-                result.details,
-                true,
-                result.usage,
-              );
               const messages = manager.buildSessionContext().messages;
               const filtered = yield* service.filterContext(messages);
-              const input = convertResponsesMessages(
-                requestModel,
-                normalizeContext({ messages: convertToLlm(filtered ?? messages) }),
-                new Set(["openai"]),
-                { supportsMidConvoSystemMessages },
-              );
+              const input = responsesInput(requestModel, filtered ?? messages);
               const injected = yield* service.inject({ input });
               expect(injected?.input).toHaveLength(2);
               expect(injected?.input[1]).toMatchObject({
@@ -535,25 +445,23 @@ describe("OpenAICompactionService", () => {
     const disabled = fixture({ enabled: false });
     const ineligible = fixture({
       enabled: true,
-      currentModel: model("gpt-5.5", "openai-codex", "openai-codex-responses"),
+      currentModel: testModel("gpt-5.5", "openai-codex", "openai-codex-responses"),
     });
 
     return Effect.gen(function* () {
-      const disabledResult = yield* Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const service = yield* OpenAICompactionService;
         expect(yield* service.compact(compactEvent())).toBeUndefined();
         expect(yield* service.filterContext([])).toBeUndefined();
         expect(yield* service.inject({ input: [] })).toBeUndefined();
       }).pipe(provideBuiltLayer(serviceLayer(disabled, client)));
 
-      const ineligibleResult = yield* Effect.gen(function* () {
+      yield* Effect.gen(function* () {
         const service = yield* OpenAICompactionService;
         expect(yield* service.compact(compactEvent())).toBeUndefined();
         expect(yield* service.inject({ input: [] })).toBeUndefined();
       }).pipe(provideBuiltLayer(serviceLayer(ineligible, client)));
 
-      expect(disabledResult).toBeUndefined();
-      expect(ineligibleResult).toBeUndefined();
       expect(requests).toBe(0);
     });
   });
@@ -623,7 +531,7 @@ describe("OpenAICompactionService", () => {
       expect(serializedSnapshot(repaired)).toContain("third turn");
       expect(serializedSnapshot(repaired)).not.toContain(OPENAI_COMPACTION_SUMMARY);
       const input = projectOpenAIResponseInput(
-        { ...model(), api: "openai-responses" },
+        testModel(),
         reconstructOpenAIContext(target.branch)!.entries,
       )!;
       const system = { role: "system", content: "system" };
@@ -659,23 +567,11 @@ describe("OpenAICompactionService", () => {
           stream.push({
             type: "done",
             reason: "stop",
-            message: {
-              role: "assistant",
+            message: assistantMessage([{ type: "text", text: "native summary" }], {
               api: requestModel.api,
               provider: requestModel.provider,
               model: requestModel.id,
-              content: [{ type: "text", text: "native summary" }],
-              stopReason: "stop",
-              timestamp: 1,
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-            },
+            }),
           });
           return stream;
         },
@@ -692,48 +588,23 @@ describe("OpenAICompactionService", () => {
       return Effect.gen(function* () {
         const service = yield* OpenAICompactionService;
         for (let i = 0; i < 2; i++) {
-          const result = yield* service.compact(compactEvent());
-          if (!result) throw new Error("Expected checkpoint");
-          manager.appendCompaction(
-            result.summary,
-            result.firstKeptEntryId,
-            result.tokensBefore,
-            result.details,
-            true,
-          );
+          commit(manager, yield* service.compact(compactEvent()));
           manager.appendMessage({ role: "user", content: `dialogue-${i}`, timestamp: 2 + i });
         }
-        if (mode === "disabled")
-          MutableRef.set(target.projection, {
-            ...MutableRef.get(target.projection),
-            config: makeResolvedConfig({ compaction: { enabled: false } }),
-          });
-        if (mode === "model" || mode === "provider")
-          MutableRef.set(target.context, {
-            ...MutableRef.get(target.context),
-            model:
-              mode === "model"
-                ? model("another-model")
-                : model("other", "anthropic", "anthropic-messages"),
-          });
+        if (mode === "disabled") target.setEnabled(false);
+        if (mode === "model") target.setModel(testModel("another-model"));
+        if (mode === "provider")
+          target.setModel(testModel("other", "anthropic", "anthropic-messages"));
         if (mode === "endpoint") failEndpoint = true;
         const repaired = yield* service.filterContext(manager.buildSessionContext().messages);
         expect(serializedSnapshot(repaired)).toContain("old dialogue");
         expect(serializedSnapshot(repaired)).toContain("dialogue-0");
-        const result = yield* service.compact(compactEvent());
-        if (!result) throw new Error("Expected native fallback");
+        const result = commit(manager, yield* service.compact(compactEvent()));
         expect(decodeOpenAICompactionDetails(result.details)).toBeUndefined();
         expect(summaries).toHaveLength(1);
         expect(summaries[0]).toContain("old dialogue");
         expect(summaries[0]).toContain("dialogue-0");
         expect(summaries[0]).toContain("retain decisions");
-        manager.appendCompaction(
-          result.summary,
-          result.firstKeptEntryId,
-          result.tokensBefore,
-          result.details,
-          true,
-        );
         expect(
           yield* service.filterContext(manager.buildSessionContext().messages),
         ).toBeUndefined();
@@ -749,11 +620,7 @@ describe("OpenAICompactionService", () => {
       `preserves native retry omissions across turns, compactions, and reload, mid-conversation=${supportsMidConvoSystemMessages}`,
       () => {
         const manager = SessionManager.inMemory("/virtual/retry-omissions");
-        const requestModel: Model<"openai-responses"> = {
-          ...model(),
-          api: "openai-responses",
-          compat: { supportsMidConvoSystemMessages },
-        };
+        const requestModel = { ...testModel(), compat: { supportsMidConvoSystemMessages } };
         manager.appendMessage({ role: "system", content: "retry rules", timestamp: 0 });
         manager.appendMessage({ role: "user", content: "original question", timestamp: 1 });
         const target = fixture({ enabled: true, manager, currentModel: requestModel });
@@ -768,45 +635,13 @@ describe("OpenAICompactionService", () => {
           text: string,
           timestamp: number,
         ) =>
-          manager.appendMessage({
-            role: "assistant",
-            api: requestModel.api,
-            provider: requestModel.provider,
-            model: requestModel.id,
-            content: [{ type: "text", text }],
-            stopReason,
-            timestamp,
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-          });
-        const requests: OpenAICompactRequest[] = [];
-        const client: OpenAICompactionClientContract["compact"] = (request) =>
-          Effect.sync(() => {
-            requests.push(request);
-            return {
-              output: [
-                { type: "compaction", encrypted_content: `retry-checkpoint-${requests.length}` },
-              ],
-              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-            };
-          });
+          manager.appendMessage(
+            assistantMessage([{ type: "text", text }], { stopReason, timestamp }),
+          );
+        const { requests, client } = recordingClient("retry-checkpoint");
         return Effect.gen(function* () {
           const service = yield* OpenAICompactionService;
-          const first = yield* service.compact(compactEvent());
-          if (!first) throw new Error("Expected checkpoint");
-          manager.appendCompaction(
-            first.summary,
-            first.firstKeptEntryId,
-            first.tokensBefore,
-            first.details,
-            true,
-          );
+          commit(manager, yield* service.compact(compactEvent()));
           manager.appendMessage({ role: "user", content: "retry question", timestamp: 2 });
           const failedId = assistant("error", "503 failed response", 3);
           omitted.add(failedId);
@@ -818,61 +653,32 @@ describe("OpenAICompactionService", () => {
           const subsequent = yield* service.filterContext(nativeMessages());
           expect(serializedSnapshot(subsequent)).toContain("successful retry");
           expect(serializedSnapshot(subsequent)).not.toContain("503 failed response");
-          const second = yield* service.compact(compactEvent());
-          if (!second) throw new Error("Expected checkpoint");
+          const second = commit(manager, yield* service.compact(compactEvent()));
           expect(
             decodeOpenAICompactionDetails(second.details)?.checkpoint.omittedEntryIds,
           ).toContain(failedId);
-          manager.appendCompaction(
-            second.summary,
-            second.firstKeptEntryId,
-            second.tokensBefore,
-            second.details,
-            true,
-          );
           manager.appendMessage({ role: "user", content: "overflow question", timestamp: 6 });
           const truncatedId = assistant("length", "TRUNCATED MUST NOT RESURRECT", 7);
           const overflowEvent = { ...compactEvent(), reason: "overflow" as const, willRetry: true };
-          const overflow = yield* service.compact(overflowEvent);
-          if (!overflow) throw new Error("Expected overflow checkpoint");
+          const overflow = commit(manager, yield* service.compact(overflowEvent));
           expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
             "TRUNCATED MUST NOT RESURRECT",
           );
           expect(
             decodeOpenAICompactionDetails(overflow.details)?.checkpoint.omittedEntryIds,
           ).toEqual([failedId, truncatedId]);
-          manager.appendCompaction(
-            overflow.summary,
-            overflow.firstKeptEntryId,
-            overflow.tokensBefore,
-            overflow.details,
-            true,
-          );
           omitted.add(truncatedId);
           const continued = yield* service.filterContext(nativeMessages());
           expect(serializedSnapshot(continued)).toContain("overflow question");
           expect(serializedSnapshot(continued)).not.toContain("TRUNCATED MUST NOT RESURRECT");
-          const input = convertResponsesMessages(
-            requestModel,
-            normalizeContext({ messages: convertToLlm(continued!) }),
-            new Set(["openai"]),
-            { supportsMidConvoSystemMessages },
-          );
+          const input = responsesInput(requestModel, continued!);
           const injected = yield* service.inject({ input });
           expect(injected?.input.filter((item) => item.type === "compaction")).toHaveLength(1);
           manager.appendMessage({ role: "user", content: "after overflow", timestamp: 8 });
           yield* service.filterContext(nativeMessages());
-          const next = yield* service.compact(compactEvent());
-          if (!next) throw new Error("Expected next checkpoint");
+          commit(manager, yield* service.compact(compactEvent()));
           expect(serializedSnapshot(requests.at(-1)?.input)).not.toContain(
             "TRUNCATED MUST NOT RESURRECT",
-          );
-          manager.appendCompaction(
-            next.summary,
-            next.firstKeptEntryId,
-            next.tokensBefore,
-            next.details,
-            true,
           );
           const reloaded = fixture({ enabled: true, manager, currentModel: requestModel });
           yield* Effect.gen(function* () {
@@ -882,13 +688,9 @@ describe("OpenAICompactionService", () => {
             expect(serializedSnapshot(restored)).toContain("overflow question");
             expect(serializedSnapshot(restored)).not.toContain("TRUNCATED MUST NOT RESURRECT");
             expect(serializedSnapshot(restored)).not.toContain("503 failed response");
-            const providerInput = convertResponsesMessages(
-              requestModel,
-              normalizeContext({ messages: convertToLlm(restored!) }),
-              new Set(["openai"]),
-              { supportsMidConvoSystemMessages },
-            );
-            const optimized = yield* fresh.inject({ input: providerInput });
+            const optimized = yield* fresh.inject({
+              input: responsesInput(requestModel, restored!),
+            });
             expect(optimized?.input.filter((item) => item.type === "compaction")).toHaveLength(1);
           }).pipe(provideBuiltLayer(serviceLayer(reloaded, client)));
         }).pipe(provideBuiltLayer(serviceLayer(target, client)));
@@ -922,28 +724,16 @@ describe("OpenAICompactionService", () => {
         });
       return Effect.gen(function* () {
         const service = yield* OpenAICompactionService;
-        const checkpoint = yield* service.compact(compactEvent());
-        if (!checkpoint) throw new Error("Expected checkpoint");
-        manager.appendCompaction(
-          checkpoint.summary,
-          checkpoint.firstKeptEntryId,
-          checkpoint.tokensBefore,
-          checkpoint.details,
-          true,
-        );
-        MutableRef.set(target.projection, {
-          ...MutableRef.get(target.projection),
-          config: makeResolvedConfig({ compaction: { enabled: false } }),
-        });
+        commit(manager, yield* service.compact(compactEvent()));
+        target.setEnabled(false);
         if (mode !== "no-cut")
           manager.appendMessage({ role: "user", content: "tail", timestamp: 2 });
         const before = serializedSnapshot(manager.getBranch());
-        const result =
+        const failure =
           mode === "prefix-mismatch"
-            ? yield* service.filterContext([]).pipe(Effect.result)
-            : yield* service.compact(event).pipe(Effect.result);
-        expect(result._tag).toBe("Failure");
-        expect(serializedSnapshot(result)).not.toContain("native-private-secret");
+            ? yield* service.filterContext([]).pipe(Effect.flip)
+            : yield* service.compact(event).pipe(Effect.flip);
+        expect(serializedSnapshot(failure)).not.toContain("native-private-secret");
         expect(nativeCalls).toBe(mode === "failure" ? 1 : 0);
         expect(serializedSnapshot(manager.getBranch())).toBe(before);
       }).pipe(provideBuiltLayer(serviceLayer(target, client)));
@@ -960,14 +750,9 @@ describe("OpenAICompactionService", () => {
 
     return Effect.gen(function* () {
       const service = yield* OpenAICompactionService;
-      const result = yield* service.compact(compactEvent()).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure._tag).toBe("OpenAICompactionError");
-        if (result.failure._tag === "OpenAICompactionError")
-          expect(result.failure.operation).toBe("context");
-        expect(serializedSnapshot(result.failure)).not.toContain("host-context-secret");
-      }
+      const failure = yield* service.compact(compactEvent()).pipe(Effect.flip);
+      expect(failure).toMatchObject({ _tag: "OpenAICompactionError", operation: "context" });
+      expect(serializedSnapshot(failure)).not.toContain("host-context-secret");
     }).pipe(provideBuiltLayer(serviceLayer(target, client)));
   });
 });

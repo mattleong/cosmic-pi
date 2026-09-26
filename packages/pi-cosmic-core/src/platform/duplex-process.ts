@@ -6,6 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 import { nodeSpawn } from "./node-builtins.ts";
+import { signalProcessGroup } from "./process-tree.ts";
 import {
   closeDuplexProcess,
   duplexProcessError,
@@ -18,7 +19,6 @@ export { DuplexProcessError, duplexProcessError } from "./duplex-process-close.t
 export type { DuplexProcessExit } from "./duplex-process-close.ts";
 
 export const DUPLEX_PROCESS_DEFAULTS = Object.freeze({
-  maxBufferBytes: 8 * 1024 * 1024,
   maxReadQueueBytes: 8 * 1024 * 1024,
   maxStderrBytes: 16 * 1024,
   maxStderrQueueBytes: 16 * 1024,
@@ -32,24 +32,15 @@ export const DUPLEX_PROCESS_DEFAULTS = Object.freeze({
   pollIntervalMs: 10,
 });
 
-export interface DuplexProcessOptions {
+type DuplexProcessLimits = { readonly [K in keyof typeof DUPLEX_PROCESS_DEFAULTS]: number };
+
+/** Omitted limits use `DUPLEX_PROCESS_DEFAULTS`; the stderr queue defaults to `maxStderrBytes`. */
+export interface DuplexProcessOptions extends Partial<DuplexProcessLimits> {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd?: string;
   /** Exact child environment. The adapter never fills this from process.env. */
   readonly environment: Readonly<Record<string, string>>;
-  readonly maxBufferBytes?: number;
-  readonly maxReadQueueBytes?: number;
-  readonly maxStderrBytes?: number;
-  readonly maxStderrQueueBytes?: number;
-  readonly maxWriteBytes?: number;
-  readonly maxWriteQueueBytes?: number;
-  readonly writeTimeoutMs?: number;
-  readonly startTimeoutMs?: number;
-  readonly gracefulTimeoutMs?: number;
-  readonly forceTimeoutMs?: number;
-  readonly cleanupTimeoutMs?: number;
-  readonly pollIntervalMs?: number;
   /** Called once when process-group cleanup is either confirmed or unconfirmed. */
   readonly onCleanup?: (confirmed: boolean) => void;
 }
@@ -67,23 +58,11 @@ export interface DuplexProcessHandle {
   readonly cleanupState: Effect.Effect<DuplexProcessCleanupState>;
 }
 
-interface NormalizedDuplexProcessOptions {
+interface NormalizedDuplexProcessOptions extends DuplexProcessLimits {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string | undefined;
   readonly environment: Readonly<Record<string, string>>;
-  readonly maxBufferBytes: number;
-  readonly maxReadQueueBytes: number;
-  readonly maxStderrBytes: number;
-  readonly maxStderrQueueBytes: number;
-  readonly maxWriteBytes: number;
-  readonly maxWriteQueueBytes: number;
-  readonly writeTimeoutMs: number;
-  readonly startTimeoutMs: number;
-  readonly gracefulTimeoutMs: number;
-  readonly forceTimeoutMs: number;
-  readonly cleanupTimeoutMs: number;
-  readonly pollIntervalMs: number;
   readonly onCleanup: ((confirmed: boolean) => void) | undefined;
 }
 
@@ -127,62 +106,31 @@ const snapshotOptions = (
         throw invalidOptions();
       }
 
-      const maxBufferBytes = positiveInteger(
-        input.maxBufferBytes,
-        DUPLEX_PROCESS_DEFAULTS.maxBufferBytes,
-      );
+      const limit = (
+        key: keyof DuplexProcessLimits,
+        allowZero = false,
+        value: number | undefined = input[key],
+      ) => positiveInteger(value, DUPLEX_PROCESS_DEFAULTS[key], allowZero);
       return {
         command: input.command,
         args,
         cwd: input.cwd,
         environment,
-        maxBufferBytes,
-        maxReadQueueBytes: positiveInteger(
-          input.maxReadQueueBytes ?? input.maxBufferBytes,
-          DUPLEX_PROCESS_DEFAULTS.maxReadQueueBytes,
-        ),
-        maxStderrBytes: positiveInteger(
-          input.maxStderrBytes,
-          DUPLEX_PROCESS_DEFAULTS.maxStderrBytes,
+        maxReadQueueBytes: limit("maxReadQueueBytes"),
+        maxStderrBytes: limit("maxStderrBytes", true),
+        maxStderrQueueBytes: limit(
+          "maxStderrQueueBytes",
           true,
-        ),
-        maxStderrQueueBytes: positiveInteger(
           input.maxStderrQueueBytes ?? input.maxStderrBytes,
-          DUPLEX_PROCESS_DEFAULTS.maxStderrQueueBytes,
-          true,
         ),
-        maxWriteBytes: positiveInteger(
-          input.maxWriteBytes ?? input.maxBufferBytes,
-          DUPLEX_PROCESS_DEFAULTS.maxWriteBytes,
-        ),
-        maxWriteQueueBytes: positiveInteger(
-          input.maxWriteQueueBytes,
-          DUPLEX_PROCESS_DEFAULTS.maxWriteQueueBytes,
-        ),
-        writeTimeoutMs: positiveInteger(
-          input.writeTimeoutMs,
-          DUPLEX_PROCESS_DEFAULTS.writeTimeoutMs,
-        ),
-        startTimeoutMs: positiveInteger(
-          input.startTimeoutMs,
-          DUPLEX_PROCESS_DEFAULTS.startTimeoutMs,
-        ),
-        gracefulTimeoutMs: positiveInteger(
-          input.gracefulTimeoutMs,
-          DUPLEX_PROCESS_DEFAULTS.gracefulTimeoutMs,
-        ),
-        forceTimeoutMs: positiveInteger(
-          input.forceTimeoutMs,
-          DUPLEX_PROCESS_DEFAULTS.forceTimeoutMs,
-        ),
-        cleanupTimeoutMs: positiveInteger(
-          input.cleanupTimeoutMs,
-          DUPLEX_PROCESS_DEFAULTS.cleanupTimeoutMs,
-        ),
-        pollIntervalMs: positiveInteger(
-          input.pollIntervalMs,
-          DUPLEX_PROCESS_DEFAULTS.pollIntervalMs,
-        ),
+        maxWriteBytes: limit("maxWriteBytes"),
+        maxWriteQueueBytes: limit("maxWriteQueueBytes"),
+        writeTimeoutMs: limit("writeTimeoutMs"),
+        startTimeoutMs: limit("startTimeoutMs"),
+        gracefulTimeoutMs: limit("gracefulTimeoutMs"),
+        forceTimeoutMs: limit("forceTimeoutMs"),
+        cleanupTimeoutMs: limit("cleanupTimeoutMs"),
+        pollIntervalMs: limit("pollIntervalMs"),
         onCleanup: input.onCleanup,
       } satisfies NormalizedDuplexProcessOptions;
     },
@@ -202,15 +150,6 @@ const childExit = (code: number | null, signal: NodeJS.Signals | null): DuplexPr
   code,
   signal,
 });
-
-const requestGroupTermination = (pid: number | undefined): void => {
-  if (!pid || !Number.isSafeInteger(pid) || pid <= 0) return;
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    // closeDuplexProcess performs the authoritative signal and group confirmation.
-  }
-};
 
 const callCleanupObserver = (
   observer: ((confirmed: boolean) => void) | undefined,
@@ -291,13 +230,7 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
       Effect.uninterruptible(
         Effect.suspend(() => io?.stop ?? Effect.void).pipe(
           Effect.andThen(
-            closeDuplexProcess(child, {
-              gracefulTimeoutMs: options.gracefulTimeoutMs,
-              forceTimeoutMs: options.forceTimeoutMs,
-              cleanupTimeoutMs: options.cleanupTimeoutMs,
-              pollIntervalMs: options.pollIntervalMs,
-              nativeClosed: Deferred.await(nativeClosed),
-            }),
+            closeDuplexProcess(child, { ...options, nativeClosed: Deferred.await(nativeClosed) }),
           ),
           Effect.matchEffect({
             onFailure: (error) =>
@@ -322,13 +255,9 @@ const createAcquired = (options: NormalizedDuplexProcessOptions) =>
     yield* Effect.addFinalizer(() => close.pipe(Effect.ignore));
 
     io = yield* makeDuplexProcessIo(child, {
-      maxReadQueueBytes: options.maxReadQueueBytes,
-      maxStderrBytes: options.maxStderrBytes,
-      maxStderrQueueBytes: options.maxStderrQueueBytes,
-      maxWriteBytes: options.maxWriteBytes,
-      maxWriteQueueBytes: options.maxWriteQueueBytes,
-      writeTimeoutMs: options.writeTimeoutMs,
-      onProcessFailure: () => requestGroupTermination(child.pid),
+      ...options,
+      // closeDuplexProcess performs the authoritative signal and group confirmation.
+      onProcessFailure: () => void signalProcessGroup(child.pid, "SIGTERM"),
     }).pipe(Effect.provideService(Scope.Scope, ioScope));
     if (didExit) io.processExit();
     if (didError) io.fail(startFailure());

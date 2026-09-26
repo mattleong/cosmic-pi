@@ -7,11 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
 import { describe, expect } from "vitest";
 import { McpActivity } from "../../src/activity/service.ts";
 import type { McpGrant } from "../../src/auth/credentials.ts";
-import type { McpAuthContract, McpLoginUi } from "../../src/auth/model.ts";
+import type { McpAuthContract } from "../../src/auth/model.ts";
 import { makeMcpAuth, McpAuth } from "../../src/auth/service.ts";
 import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
 import { McpSdkAuth, type McpSdkAuthContract } from "../../src/boundary/sdk-auth.ts";
@@ -19,19 +18,13 @@ import {
   JsonSchemaValidator,
   type JsonSchemaValidatorContract,
 } from "../../src/boundary/schema-validator.ts";
-import { McpConnector } from "../../src/boundary/sdk-connection.ts";
+import { McpConnector, type McpConnectorContract } from "../../src/boundary/sdk-connection.ts";
 import { boundedSdkInstructions } from "../../src/boundary/sdk-client.ts";
 import { makeMcpCodeModeHost } from "../../src/boundary/host-code-mode.ts";
-import {
-  MCP_CODE_MODE_QUERY,
-  MCP_CODE_MODE_VERSION,
-  normalizeMcpCodeModeCapability,
-  type McpCodeModeCapability,
-} from "../../src/code-mode/protocol.ts";
+import { type McpCodeModeCapability } from "../../src/code-mode/protocol.ts";
 import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
 import type { McpRequest } from "../../src/client/model.ts";
 import type { McpEffectiveServer, McpResolvedConfig, McpSettings } from "../../src/config/model.ts";
-import { McpConfigStore } from "../../src/config/store.ts";
 import type { McpConnectionsContract, McpOperation } from "../../src/connection/model.ts";
 import { McpConnections } from "../../src/connection/service.ts";
 import type { McpDiscoveryContract, McpMetadataSnapshot } from "../../src/discovery/model.ts";
@@ -41,7 +34,20 @@ import type { McpResultsContract } from "../../src/results/model.ts";
 import { makeMcpResults, McpResults } from "../../src/results/service.ts";
 import type { McpGatewayExecution } from "../../src/tools/model.ts";
 import { makeMcpExecution } from "../../src/tools/service.ts";
+import { queryCodeMode } from "../fixtures/application.ts";
+import { manualUi as loginUi, testGrant } from "../fixtures/auth.ts";
 import { transactionStore } from "../fixtures/credential-store.ts";
+import {
+  fakeAuth,
+  fakeConfigStore,
+  fakeConnection,
+  fakeDiscovery,
+  fakeOperation,
+  httpDefinition,
+  stdioDefinition,
+  testConfig,
+  testServer,
+} from "../fixtures/services.ts";
 
 const options = { maxOutputBytes: 4_096, images: false };
 const request = {
@@ -50,41 +56,22 @@ const request = {
   tool: "run",
   arguments: { value: 1 },
 };
-const config: McpResolvedConfig = {
-  revision: 1,
-  trusted: true,
-  diagnostics: [],
-  settings: {
-    enabled: true,
-    connectTimeoutMs: 1_000,
-    requestTimeoutMs: 5_000,
-    idleTimeoutMs: 1_000,
-    maxConcurrent: 8,
-    maxPerServer: 4,
-    maxQueued: 64,
-  },
+const config = testConfig({
+  settings: { connectTimeoutMs: 1_000, requestTimeoutMs: 5_000, idleTimeoutMs: 1_000 },
   servers: {
-    one: {
-      id: "one",
-      scope: "global",
+    one: testServer("one", {
       directory: "/trusted",
       identity: "first",
-      enabled: true,
-      definition: {
-        transport: "stdio",
-        command: "owned-fixture",
-        args: [],
-        environment: {},
-        denyTools: ["denied"],
-      },
-    },
+      definition: stdioDefinition({ command: "owned-fixture", denyTools: ["denied"] }),
+    }),
   },
-};
+});
 const initial: McpMetadataSnapshot = {
   server: "one",
   owner: "connection-1",
   identity: "first",
   configRevision: 1,
+  authorizationRevision: 0,
   revision: 1,
   support: { tools: true, resources: true, templates: true, prompts: true },
   diagnostics: [],
@@ -160,6 +147,9 @@ const makeHarness = (seams: HarnessOptions = {}) =>
         return { servers, cleanup: "confirmed" as const };
       });
     const connections: McpConnectionsContract = {
+      resourceSubscriptions: () => Effect.die("unused"),
+      unsubscribeResource: () => Effect.die("unused"),
+      readEvents: () => Effect.die("unused"),
       checkAction: () => Effect.void,
       subscribeChanges: () => Effect.void,
       config: Effect.sync(() => current),
@@ -211,18 +201,21 @@ const makeHarness = (seams: HarnessOptions = {}) =>
             }
           });
           const capabilities = { tools: true, resources: true, prompts: true };
-          const operation: McpOperation = {
+          const operation = fakeOperation({
             server,
             owner: `connection-${owner}`,
-            binding: { server: id, identity: server.identity, configRevision: captured },
+            binding: {
+              server: id,
+              identity: server.identity,
+              configRevision: captured,
+              authorizationRevision: 0,
+            },
             instructions: boundedSdkInstructions(seams.instructions),
             capabilities:
               seams.parameterHeaders === undefined
                 ? capabilities
                 : { ...capabilities, parameterHeaders: seams.parameterHeaders },
-            changes: Stream.never,
             checkCurrent,
-            commit: (effect) => checkCurrent.pipe(Effect.andThen(effect)),
             request: (input, dispatch) =>
               checkCurrent.pipe(
                 Effect.andThen(
@@ -243,28 +236,15 @@ const makeHarness = (seams: HarnessOptions = {}) =>
                   }),
                 ),
               ),
-            shared: (_key, effect) => effect(operation),
-            forkOwned: (effect) => Effect.forkChild(effect),
-          };
+          });
           yield* checkCurrent;
           const result = yield* use(operation);
           yield* checkCurrent;
           return result;
         }),
     };
-    const discovery: McpDiscoveryContract = {
-      cached: (request) =>
-        Effect.succeed({
-          family: request.family,
-          entries: [],
-          catalogs: [],
-          total: 0,
-          next: undefined,
-        }),
-      cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
-      subscribeChanges: () => Effect.void,
-      ensure: seams.ensure ?? (() => Effect.sync(() => snapshot)),
-      refresh: () => Effect.sync(() => snapshot),
+    const discovery = fakeDiscovery(() => snapshot, {
+      ...(seams.ensure && { ensure: seams.ensure }),
       query:
         seams.query ??
         ((input) =>
@@ -284,20 +264,13 @@ const makeHarness = (seams: HarnessOptions = {}) =>
           diagnostics: snapshot.diagnostics,
         },
       ]),
-    };
-    const auth: McpAuthContract = {
-      reject: () => Effect.void,
-      completeLogin: () => Effect.void,
-      finalizationFailed: () => Effect.void,
-      access: () => Effect.succeed(undefined),
-      status: () => Effect.succeed({ state: "none" }),
-      login: () => Effect.succeed({ state: "ready" }),
-      logout: () => Effect.void,
+    });
+    const auth = fakeAuth({
       revoke: Effect.sync(() => {
         revokedAuth.push(true);
       }),
       ...seams.auth,
-    };
+    });
     const results = yield* makeMcpResults();
     const execution = yield* makeMcpExecution.pipe(
       Effect.provide(
@@ -314,6 +287,8 @@ const makeHarness = (seams: HarnessOptions = {}) =>
     );
     return {
       execution,
+      read: (result: McpGatewayExecution) =>
+        execution.execute({ action: "result.read", id: resultId(result) }, options),
       sent,
       intents,
       revokedAuth,
@@ -339,105 +314,73 @@ const realFixture = (
     readonly auth?: Partial<McpAuthContract>;
     readonly closing?: Effect.Effect<void>;
     readonly request?: (input: McpRequest) => Effect.Effect<void, McpBoundaryError>;
+    readonly open?: McpConnectorContract["open"];
   } = {},
 ) => {
-  let current = {
+  const store = fakeConfigStore({
     ...(seams.config ?? config),
     settings: { ...config.settings, ...seams.settings },
-  };
-  const listeners = new Set<(next: McpResolvedConfig) => Effect.Effect<void>>();
+  });
   const sent: Array<McpRequest> = [];
-  const auth: McpAuthContract = {
-    reject: () => Effect.void,
-    completeLogin: () => Effect.void,
-    finalizationFailed: () => Effect.void,
+  const auth = fakeAuth({
     access: () => Effect.succeed("old-grant"),
     status: () => Effect.succeed({ state: "ready" }),
-    login: () => Effect.succeed({ state: "ready" }),
-    logout: () => Effect.void,
-    revoke: Effect.void,
     ...seams.auth,
-  };
+  });
+  const open: McpConnectorContract["open"] = () =>
+    fakeConnection((terminal) => ({
+      capabilities: { tools: true, resources: true, prompts: true },
+      instructions: boundedSdkInstructions(seams.instructions),
+      close: Effect.gen(function* () {
+        if (yield* Deferred.isDone(terminal)) return;
+        yield* seams.closing ?? Effect.void;
+        yield* Deferred.succeed(terminal, undefined);
+      }),
+      request: (input) =>
+        Effect.gen(function* () {
+          sent.push(input);
+          yield* seams.request?.(input) ?? Effect.void;
+          const result =
+            input.action === "tools.list"
+              ? { tools: seams.tools ?? initial.tools }
+              : input.action === "resources.list"
+                ? { resources: [] }
+                : input.action === "resources.templates"
+                  ? { resourceTemplates: [] }
+                  : input.action === "prompts.list"
+                    ? { prompts: initial.prompts }
+                    : input.action === "resources.read"
+                      ? { contents: [{ uri: "mcp://one/value", text: "private resource" }] }
+                      : {
+                          structuredContent: { value: 1 },
+                          content: [{ type: "text", text: "done" }],
+                        };
+          return {
+            action: input.action,
+            outcome: "completed" as const,
+            result: { ttlMs: 60_000, ...result },
+          };
+        }),
+    }));
   const activity = McpActivity.layer();
   const dependencies = Layer.mergeAll(
     activity,
-    Layer.succeed(McpConfigStore, {
-      snapshot: Effect.sync(() => current),
-      subscribe: (listener) =>
-        Effect.acquireRelease(
-          Effect.sync(() => {
-            listeners.add(listener);
-          }),
-          () =>
-            Effect.sync(() => {
-              listeners.delete(listener);
-            }),
-        ).pipe(Effect.andThen(listener(current))),
-      reload: Effect.sync(() => current),
-      setServer: () => Effect.succeed(current),
-      removeServer: () => Effect.succeed(current),
-      setSettings: () => Effect.succeed(current),
-    }),
+    store.layer,
     Layer.succeed(McpAuth, auth),
-    Layer.succeed(McpConnector, {
-      open: () =>
-        Effect.gen(function* () {
-          const terminal = yield* Deferred.make<void>();
-          let closed = false;
-          const close = Effect.gen(function* () {
-            if (closed) return;
-            yield* seams.closing ?? Effect.void;
-            closed = true;
-            yield* Deferred.succeed(terminal, undefined);
-          });
-          return yield* Effect.acquireRelease(
-            Effect.succeed({
-              capabilities: { tools: true, resources: true, prompts: true },
-              instructions: boundedSdkInstructions(seams.instructions),
-              changes: Stream.never,
-              terminal: Deferred.await(terminal),
-              health: Effect.sync(() => ({ closed, cleanupUnconfirmed: false })),
-              close,
-              setToken: () => Effect.void,
-              request: (input: McpRequest) =>
-                Effect.gen(function* () {
-                  sent.push(input);
-                  yield* seams.request?.(input) ?? Effect.void;
-                  const result =
-                    input.action === "tools.list"
-                      ? { tools: seams.tools ?? initial.tools }
-                      : input.action === "resources.list"
-                        ? { resources: [] }
-                        : input.action === "resources.templates"
-                          ? { resourceTemplates: [] }
-                          : input.action === "prompts.list"
-                            ? { prompts: initial.prompts }
-                            : input.action === "resources.read"
-                              ? { contents: [{ uri: "mcp://one/value", text: "private resource" }] }
-                              : {
-                                  structuredContent: { value: 1 },
-                                  content: [{ type: "text", text: "done" }],
-                                };
-                  return {
-                    action: input.action,
-                    outcome: "completed" as const,
-                    result: { ttlMs: 60_000, ...result },
-                  };
-                }),
-            }),
-            () => close,
-          );
-        }),
-    }),
+    Layer.succeed(McpConnector, { open: seams.open ?? open }),
   );
   return {
     sent,
     auth,
-    publish: (next: McpResolvedConfig) =>
+    /** The shared harness over this fixture's real connection and discovery services. */
+    harness: (extra: HarnessOptions = {}) =>
       Effect.gen(function* () {
-        current = next;
-        yield* Effect.forEach(listeners, (listener) => listener(next), { discard: true });
+        const connections = yield* McpConnections;
+        const discovery = yield* McpDiscovery;
+        const harness = yield* makeHarness({ connections, discovery, auth, ...extra });
+        return { ...harness, connections, discovery };
       }),
+    publish: store.publish,
     layer: McpDiscovery.layer.pipe(
       Layer.provideMerge(
         McpConnections.layer({ isTrusted: seams.isTrusted ?? (() => true) }).pipe(
@@ -486,11 +429,7 @@ it.effect.each([
         kind: "denied",
         outcome: "not-sent",
       });
-      expect(
-        yield* h.execution
-          .execute({ action: "result.read", id: resultId(result) }, options)
-          .pipe(Effect.flip),
-      ).toMatchObject({ kind: "denied" });
+      expect(yield* h.read(result).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
     }).pipe(Effect.provide(NodeCrypto.layer)),
 );
 
@@ -500,9 +439,7 @@ it.effect(
     const prefix = "😀".repeat(16_384);
     const f = realFixture({ instructions: prefix + "DISCARDED_SUFFIX" });
     return Effect.gen(function* () {
-      const connections = yield* McpConnections;
-      const discovery = yield* McpDiscovery;
-      const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
+      const { execution, read, connections, discovery } = yield* f.harness();
       expect((yield* connections.status).servers[0]?.state).toBe("disconnected");
       const first = yield* execution.execute(
         { action: "server.instructions", server: "one" },
@@ -522,19 +459,19 @@ it.effect(
       let serialized = "";
       let pages = 0;
       while (offset !== null) {
-        const read: McpGatewayExecution = yield* execution.execute(
+        const pageRead: McpGatewayExecution = yield* execution.execute(
           { action: "result.read", id, offset, limit: 1_000 },
           options,
         );
         const page: { readonly text: string; readonly next: number | null } =
           yield* Schema.decodeUnknownEffect(
             Schema.Struct({ text: Schema.String, next: Schema.NullOr(Schema.Natural) }),
-          )(read.reply.data);
+          )(pageRead.reply.data);
         serialized += page.text;
         offset = page.next;
         pages += 1;
-        expect(read.reply.notices.join(" ")).toMatch(/untrusted/i);
-        expect(read.reply.notices.join(" ")).toMatch(
+        expect(pageRead.reply.notices.join(" ")).toMatch(/untrusted/i);
+        expect(pageRead.reply.notices.join(" ")).toMatch(
           /discarded suffix.*not recoverable.*result\.read/i,
         );
       }
@@ -548,9 +485,7 @@ it.effect(
       expect(f.sent).toEqual([]);
       expect((yield* connections.status).servers[0]?.state).toBe("disconnected");
       yield* f.publish({ ...config, revision: 2 });
-      expect(
-        yield* execution.execute({ action: "result.read", id }, options).pipe(Effect.flip),
-      ).toMatchObject({ kind: "stale" });
+      expect(yield* read(first).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
     }).pipe(Effect.provide(f.layer));
   },
 );
@@ -605,13 +540,8 @@ it.effect(
             : Effect.void,
     });
     return Effect.gen(function* () {
-      const connections = yield* McpConnections;
-      const discovery = yield* McpDiscovery;
       const validated: Array<Schema.Json> = [];
-      const { execution } = yield* makeHarness({
-        connections,
-        discovery,
-        auth: f.auth,
+      const { execution, connections, discovery } = yield* f.harness({
         validate: (schema, data, outcome) => {
           validated.push(schema);
           return Schema.decodeUnknownEffect(Schema.Struct({ value: Schema.Finite }))(data).pipe(
@@ -637,15 +567,7 @@ it.effect(
             { signal },
           ),
       });
-      const providers: McpCodeModeCapability[] = [];
-      events.emit(MCP_CODE_MODE_QUERY, {
-        version: MCP_CODE_MODE_VERSION,
-        sessionId: "summary-test",
-        respond: <Value>(value: Value) => {
-          const provider = normalizeMcpCodeModeCapability(value);
-          if (provider) providers.push(provider);
-        },
-      });
+      const providers = queryCodeMode(events, "summary-test");
       const nested = (
         input: Parameters<McpCodeModeCapability["execute"]>[1],
         allowance = options.maxOutputBytes,
@@ -759,30 +681,19 @@ it.effect(
   },
 );
 
-const loginUi: McpLoginUi = {
-  mode: "manual",
-  openBrowser: () => Effect.void,
-  readCallback: () => Effect.succeed(undefined),
-};
 const authConfig: McpResolvedConfig = {
   ...config,
   servers: Object.fromEntries(
     ["one", "two"].map((id, index) => [
       id,
-      {
-        id,
+      testServer(id, {
         identity: `${"a".repeat(63)}${index}`,
-        scope: "global",
         directory: "/trusted",
-        enabled: true,
-        definition: {
-          transport: "http",
+        definition: httpDefinition({
           url: `https://${id}.example/mcp`,
-          headers: {},
-          denyTools: [],
           auth: { type: "oauth", registration: "pre-registered", clientId: "public", scopes: [] },
-        },
-      } satisfies McpEffectiveServer,
+        }),
+      }),
     ]),
   ),
 };
@@ -833,9 +744,7 @@ for (const mode of ["stdio", "env", "none"] as const) {
             }),
           });
           yield* Effect.gen(function* () {
-            const connections = yield* McpConnections;
-            const discovery = yield* McpDiscovery;
-            const { execution } = yield* makeHarness({ connections, discovery, auth });
+            const { execution, read, connections } = yield* f.harness({ auth });
             const saved = yield* execution.execute(request, options);
             const aggregate = yield* execution.execute({ action: "tools.list" }, options);
             const before = yield* connections.status;
@@ -862,10 +771,7 @@ for (const mode of ["stdio", "env", "none"] as const) {
             expect(closed).toBe(0);
             expect(yield* connections.status).toEqual(before);
             for (const result of [saved, aggregate])
-              expect(
-                (yield* execution.execute({ action: "result.read", id: resultId(result) }, options))
-                  .reply.isError,
-              ).toBe(false);
+              expect((yield* read(result)).reply.isError).toBe(false);
             expect((yield* execution.execute(request, options)).reply.isError).toBe(false);
             expect(f.sent.filter((input) => input.action === "tools.call")).toHaveLength(2);
             expect(closed).toBe(0);
@@ -893,14 +799,13 @@ it.effect(
       });
       yield* Effect.gen(function* () {
         const connections = yield* McpConnections;
-        const discovery = yield* McpDiscovery;
         const first = yield* connections
           .withAuth("one", () =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
           )
           .pipe(Effect.result, Effect.forkChild);
         yield* Deferred.await(entered);
-        const { execution } = yield* makeHarness({
+        const { execution } = yield* f.harness({
           connections: {
             ...connections,
             withAuth: (id, use, expected, preflight) =>
@@ -909,8 +814,6 @@ it.effect(
                 return preflight?.(server);
               }),
           },
-          discovery,
-          auth: f.auth,
         });
         const pending = yield* execution
           .login("one", loginUi)
@@ -931,20 +834,13 @@ it.effect(
     }),
 );
 
-const loginGrant = (server: McpEffectiveServer): McpGrant => ({
-  version: 1,
-  identity: server.identity,
-  issuer: "https://issuer.example",
-  resource: `https://${server.id}.example/mcp`,
-  clientId: "public",
-  registration: "pre-registered",
-  redirectUri: "http://127.0.0.1:9000/callback",
-  discovery: {},
-  resourceMetadata: {},
-  clientInformation: {},
-  tokens: { access_token: "private-grant" },
-  receivedAt: 0,
-});
+const loginGrant = (server: McpEffectiveServer) =>
+  testGrant(server.identity, {
+    resource: `https://${server.id}.example/mcp`,
+    registration: "pre-registered",
+    clientInformation: {},
+    tokens: { access_token: "private-grant" },
+  });
 const makeAuthFixture = (login: McpSdkAuthContract["login"]) =>
   Effect.gen(function* () {
     const grants = new Map<string, McpGrant>();
@@ -1007,9 +903,7 @@ it.effect(
         ),
       );
       yield* Effect.gen(function* () {
-        const connections = yield* McpConnections;
-        const discovery = yield* McpDiscovery;
-        const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
+        const { execution, read, connections, discovery } = yield* f.harness();
         const one = yield* execution.login("one", loginUi).pipe(Effect.forkChild);
         yield* Deferred.await(oneEntered);
         const two = yield* execution.login("two", loginUi).pipe(Effect.forkChild);
@@ -1032,11 +926,7 @@ it.effect(
         expect(f.grants.has(authConfig.servers.one!.identity)).toBe(false);
         expect(yield* discovery.known).toHaveLength(0);
         for (const result of [saved, aggregate])
-          expect(
-            yield* execution
-              .execute({ action: "result.read", id: resultId(result) }, options)
-              .pipe(Effect.flip),
-          ).toMatchObject({ kind: "stale" });
+          expect(yield* read(result).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
         expect(yield* execution.execute(request, options).pipe(Effect.flip)).toMatchObject({
           kind: "auth-required",
           outcome: "not-sent",
@@ -1075,9 +965,7 @@ for (const reason of ["config", "trust"] as const) {
           ),
         );
         yield* Effect.gen(function* () {
-          const connections = yield* McpConnections;
-          const discovery = yield* McpDiscovery;
-          const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
+          const { execution, connections } = yield* f.harness();
           const one = yield* execution.login("one", loginUi).pipe(Effect.result, Effect.forkChild);
           yield* Deferred.await(oneEntered);
           const two = yield* execution.login("two", loginUi).pipe(Effect.result, Effect.forkChild);
@@ -1151,9 +1039,7 @@ for (const failure of [false, true]) {
           },
         });
         yield* Effect.gen(function* () {
-          const connections = yield* McpConnections;
-          const discovery = yield* McpDiscovery;
-          const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
+          const { execution, read: readResult } = yield* f.harness();
           const read = { action: "resources.read", server: "one", uri: "mcp://one/value" };
           const saved = yield* execution.execute(read, options);
           const aggregate = yield* execution.execute({ action: "tools.list" }, options);
@@ -1165,11 +1051,7 @@ for (const failure of [false, true]) {
             });
             expect(f.sent).toHaveLength(1);
             for (const result of [saved, aggregate])
-              expect(
-                yield* execution
-                  .execute({ action: "result.read", id: resultId(result) }, options)
-                  .pipe(Effect.flip),
-              ).toMatchObject({ kind: "stale" });
+              expect(yield* readResult(result).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
           });
           yield* Deferred.await(closing);
           yield* assertSuspended;
@@ -1217,13 +1099,8 @@ for (const first of ["tools.list", "tools.describe", "tools.call"] as const) {
               : Effect.void,
         });
         return Effect.gen(function* () {
-          const connections = yield* McpConnections;
-          const discovery = yield* McpDiscovery;
           const validations: Array<string> = [];
-          const { execution } = yield* makeHarness({
-            connections,
-            discovery,
-            auth: f.auth,
+          const { execution, read, connections } = yield* f.harness({
             validate: (_schema, _data, outcome) =>
               Effect.sync(() => {
                 validations.push(outcome);
@@ -1243,10 +1120,7 @@ for (const first of ["tools.list", "tools.describe", "tools.call"] as const) {
           );
           expect(described.reply.isError).toBe(false);
           expect(described.reply.notices).toHaveLength(missingListings ? 2 : 0);
-          const recovered = yield* execution.execute(
-            { action: "result.read", id: resultId(described) },
-            options,
-          );
+          const recovered = yield* read(described);
           expect(recovered.reply.notices).toEqual(
             expect.arrayContaining([...described.reply.notices]),
           );
@@ -1282,9 +1156,7 @@ it.effect(
             : Effect.void,
       });
       yield* Effect.gen(function* () {
-        const connections = yield* McpConnections;
-        const discovery = yield* McpDiscovery;
-        const { execution } = yield* makeHarness({ connections, discovery, auth: f.auth });
+        const { execution, connections } = yield* f.harness();
         const first = yield* execution
           .execute({ action: "tools.list", server: "one" }, options)
           .pipe(Effect.forkChild);
@@ -1394,10 +1266,7 @@ describe("shared MCP execution", () => {
         isError: true,
         data: { origin: { isError: false, outputValidation: "failed" } },
       });
-      const read = yield* harness.execution.execute(
-        { action: "result.read", id: resultId(completed) },
-        options,
-      );
+      const read = yield* harness.read(completed);
       expect(read.reply).toMatchObject({
         action: "result.read",
         outcome: "completed",
@@ -1440,10 +1309,7 @@ describe("shared MCP execution", () => {
           isError: true,
           data: { origin: { outputValidation: kind === "protocol" ? "failed" : "unavailable" } },
         });
-        const read = yield* harness.execution.execute(
-          { action: "result.read", id: resultId(completed) },
-          options,
-        );
+        const read = yield* harness.read(completed);
         expect(read.reply).toMatchObject({
           outcome: "completed",
           isError: false,
@@ -1486,10 +1352,7 @@ describe("shared MCP execution", () => {
       });
       expect(completed.reply).not.toHaveProperty("data.origin.outputValidation");
       expect(completed.reply.notices).toEqual([]);
-      const read = yield* harness.execution.execute(
-        { action: "result.read", id: resultId(completed) },
-        options,
-      );
+      const read = yield* harness.read(completed);
       expect(read.reply).toMatchObject({
         outcome: "completed",
         isError: false,
@@ -1641,21 +1504,12 @@ describe("shared MCP execution", () => {
       Effect.gen(function* () {
         const harness = yield* makeHarness();
         const completed = yield* harness.execution.execute(request, options);
-        const id = resultId(completed);
         yield* harness.execution.execute({ action: "disconnect", server: "one" }, options);
-        yield* harness.execution.execute({ action: "result.read", id }, options);
+        yield* harness.read(completed);
         yield* harness.setConfig({ ...config, revision: 2 });
-        expect(
-          yield* harness.execution
-            .execute({ action: "result.read", id }, options)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "stale" });
+        expect(yield* harness.read(completed).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
         yield* harness.setConfig({ ...config, trusted: false });
-        expect(
-          yield* harness.execution
-            .execute({ action: "result.read", id }, options)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "denied" });
+        expect(yield* harness.read(completed).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
         expect(harness.sent).toHaveLength(1);
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );
@@ -1674,12 +1528,8 @@ describe("shared MCP execution", () => {
       expect(yield* harness.execution.logout("one").pipe(Effect.flip)).toMatchObject({
         kind: "unavailable",
       });
-      for (const id of [resultId(status), resultId(call)])
-        expect(
-          yield* harness.execution
-            .execute({ action: "result.read", id }, options)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "stale" });
+      for (const result of [status, call])
+        expect(yield* harness.read(result).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
       expect(harness.revokedAuth).toHaveLength(1);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
@@ -1755,11 +1605,7 @@ describe("shared MCP execution", () => {
         });
         const completed = yield* harness.execution.execute(request, options);
         changeAuthority = harness.setConfig({ ...config, trusted: false });
-        expect(
-          yield* harness.execution
-            .execute({ action: "result.read", id: resultId(completed) }, options)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "denied" });
+        expect(yield* harness.read(completed).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
 
         let loginEntered = false;
         const login = yield* makeHarness({
@@ -1773,18 +1619,10 @@ describe("shared MCP execution", () => {
         });
         yield* login.setConfig(authConfig);
         const saved = yield* login.execution.execute(request, options);
-        yield* login.execution.login("one", {
-          mode: "manual",
-          openBrowser: () => Effect.void,
-          readCallback: () => Effect.succeed(undefined),
-        });
+        yield* login.execution.login("one", loginUi);
         expect(loginEntered).toBe(true);
         expect(login.revokedAuth).toHaveLength(1);
-        expect(
-          yield* login.execution
-            .execute({ action: "result.read", id: resultId(saved) }, options)
-            .pipe(Effect.flip),
-        ).toMatchObject({ kind: "stale" });
+        expect(yield* login.read(saved).pipe(Effect.flip)).toMatchObject({ kind: "stale" });
       }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -1832,7 +1670,7 @@ describe("shared MCP execution", () => {
         data: { origin: { isError: true } },
       });
       expect(execution.reply.notices.length).toBeGreaterThan(0);
-      yield* harness.execution.execute({ action: "result.read", id: resultId(execution) }, options);
+      yield* harness.read(execution);
       expect(harness.sent).toHaveLength(1);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
@@ -1841,60 +1679,32 @@ describe("shared MCP execution", () => {
     "keeps completed publication when the real connection owner observes terminal cleanup before its reply",
     () => {
       const sent: Array<McpRequest> = [];
-      const dependencies = Layer.mergeAll(
-        McpActivity.layer(),
-        Layer.succeed(McpConfigStore, {
-          snapshot: Effect.succeed(config),
-          subscribe: (listener) => listener(config),
-          reload: Effect.succeed(config),
-          setServer: () => Effect.succeed(config),
-          removeServer: () => Effect.succeed(config),
-          setSettings: () => Effect.succeed(config),
-        }),
-        Layer.succeed(McpAuth, {
-          reject: () => Effect.void,
-          completeLogin: () => Effect.void,
-          finalizationFailed: () => Effect.void,
-          access: () => Effect.succeed(undefined),
-          status: () => Effect.succeed({ state: "none" }),
-          login: () => Effect.succeed({ state: "none" }),
-          logout: () => Effect.void,
-          revoke: Effect.void,
-        }),
-        Layer.succeed(McpConnector, {
-          open: () =>
-            Effect.gen(function* () {
-              const terminal = yield* Deferred.make<void, McpBoundaryError>();
-              return {
-                capabilities: { tools: true, resources: false, prompts: false },
-                changes: Stream.never,
-                terminal: Deferred.await(terminal),
-                health: Effect.succeed({ closed: true, cleanupUnconfirmed: true }),
-                setToken: () => Effect.void,
-                close: Effect.void,
-                request: (input: McpRequest) =>
-                  Effect.gen(function* () {
-                    sent.push(input);
-                    yield* Deferred.fail(
-                      terminal,
-                      boundaryError("cleanup", "completed", "Terminal cleanup is unconfirmed."),
-                    );
-                    yield* Effect.yieldNow;
-                    return {
-                      action: input.action,
-                      outcome: "completed" as const,
-                      cleanupUnconfirmed: true,
-                      result: {
-                        isError: true,
-                        structuredContent: { value: 1 },
-                        content: [{ type: "text", text: "accepted after terminal" }],
-                      },
-                    };
-                  }),
-              };
-            }),
-        }),
-      );
+      const f = realFixture({
+        open: () =>
+          fakeConnection((terminal) => ({
+            health: Effect.succeed({ closed: true, cleanupUnconfirmed: true }),
+            close: Effect.void,
+            request: (input) =>
+              Effect.gen(function* () {
+                sent.push(input);
+                yield* Deferred.fail(
+                  terminal,
+                  boundaryError("cleanup", "completed", "Terminal cleanup is unconfirmed."),
+                );
+                yield* Effect.yieldNow;
+                return {
+                  action: input.action,
+                  outcome: "completed" as const,
+                  cleanupUnconfirmed: true,
+                  result: {
+                    isError: true,
+                    structuredContent: { value: 1 },
+                    content: [{ type: "text", text: "accepted after terminal" }],
+                  },
+                };
+              }),
+          })),
+      });
       return Effect.gen(function* () {
         const connections = yield* McpConnections;
         const harness = yield* makeHarness({ connections });
@@ -1904,22 +1714,12 @@ describe("shared MCP execution", () => {
           isError: true,
           data: { origin: { isError: true } },
         });
-        yield* harness.execution.execute(
-          { action: "result.read", id: resultId(completed) },
-          options,
-        );
+        yield* harness.read(completed);
         const denied = yield* harness.execution.execute(request, options).pipe(Effect.flip);
         expect(["busy", "cleanup"]).toContain(denied.kind);
         expect(denied.outcome).toBe("not-sent");
         expect(sent).toHaveLength(1);
-      }).pipe(
-        Effect.provide(
-          Layer.merge(
-            McpConnections.layer({ isTrusted: () => true }).pipe(Layer.provide(dependencies)),
-            NodeCrypto.layer,
-          ),
-        ),
-      );
+      }).pipe(Effect.provide(f.layer));
     },
   );
 });

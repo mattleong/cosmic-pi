@@ -1,9 +1,16 @@
 // Long-lived shell output is decoded into a byte-bounded queue here. Effect owns spawn,
 // streams, forced cleanup, and scope lifetime; immediate graceful signal dispatch, the
-// POSIX post-leader process-group sweep, and the bounded Windows taskkill tree terminator
-// remain raw platform operations.
+// POSIX post-leader process-group sweep, and Windows taskkill run through core's
+// process-tree helpers under this boundary's graceful/force policy.
 import { StringDecoder } from "node:string_decoder";
-import { effectProcessExit, nodeProcessLayer } from "pi-cosmic-core";
+import {
+  effectProcessExit,
+  nodeProcessLayer,
+  signalProcess,
+  signalProcessGroup,
+  terminateWindowsProcessTree,
+  type ProcessTreeTerminatorSpawn,
+} from "pi-cosmic-core";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -20,12 +27,8 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 import type { BackgroundLogStream } from "../task/model.ts";
 import { utf8ByteLength, utf8Tail } from "../task/utf8.ts";
 
-const childProcessModule = process.getBuiltinModule("node:child_process");
 const nodeFsModule = process.getBuiltinModule("node:fs");
-if (!childProcessModule || !nodeFsModule) {
-  throw new Error("Node child_process/fs builtins are unavailable.");
-}
-const { spawn: spawnWindowsTreeTerminator } = childProcessModule;
+if (!nodeFsModule) throw new Error("Node fs builtin is unavailable.");
 const { stat } = nodeFsModule.promises;
 
 const INGRESS_CHUNKS = 32;
@@ -113,111 +116,23 @@ export function makeBackgroundProcessEnvironment(
   return environment;
 }
 
-function dispatchGracefulTermination(pid: number): void {
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Exit and termination can race; final settlement is observed separately.
-    }
-  }
-}
-
-export interface WindowsTreeTerminatorChild {
-  on(event: "exit" | "error", listener: (result: Error | number | null) => void): void;
-  removeListener(event: "exit" | "error", listener: (result: Error | number | null) => void): void;
-  kill(signal: NodeJS.Signals): void;
-  unref(): void;
-}
-
-export type WindowsTreeTerminatorSpawn = (
-  command: string,
-  args: ReadonlyArray<string>,
-  options: { readonly stdio: "ignore"; readonly windowsHide: true },
-) => WindowsTreeTerminatorChild;
-
-/**
- * Windows lacks POSIX process groups, so `taskkill /pid PID /T /F` is the whole-tree force
- * terminator. It runs through a raw bounded callback rather than a scoped Effect spawner
- * because interruption cleanup (typically the 2-second timeout) must stay synchronous:
- * remove the settle listeners, install a harmless late-error listener, SIGKILL the
- * terminator, and unref it without ever awaiting taskkill's own exit, so a hung taskkill
- * cannot hang the interrupting finalizer join.
- */
-export const terminateWindowsTree = (
-  pid: number,
-  spawnTerminator: WindowsTreeTerminatorSpawn = spawnWindowsTreeTerminator,
-  mode: "graceful" | "force" = "force",
-): Effect.Effect<void, LocalProcessError> =>
-  Effect.callback<void, LocalProcessError>((resume) => {
-    let killer: WindowsTreeTerminatorChild;
-    try {
-      killer = spawnTerminator(
-        "taskkill",
-        ["/pid", String(pid), "/T", ...(mode === "force" ? ["/F"] : [])],
-        { stdio: "ignore", windowsHide: true },
-      );
-    } catch {
-      resume(Effect.fail(processError("terminate")));
-      return Effect.void;
-    }
-    // Keep acquisition and listener/finalizer handoff in this synchronous callback.
-    // A throwing cleanup method must not suppress the remaining cleanup attempts.
-    const attempt = (operation: () => void): boolean => {
-      try {
-        operation();
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    let settled = false;
-    let cleaned = false;
-    const removeListeners = () => {
-      const exitRemoved = attempt(() => killer.removeListener("exit", settle));
-      const errorRemoved = attempt(() => killer.removeListener("error", settle));
-      return exitRemoved && errorRemoved;
-    };
-    const cleanup = () => {
-      if (cleaned) return;
-      cleaned = true;
-      settled = true;
-      removeListeners();
-      attempt(() => killer.on("error", () => {}));
-      attempt(() => killer.kill("SIGKILL"));
-      attempt(() => killer.unref());
-    };
-    const settle = (result: Error | number | null) => {
-      if (settled) return;
-      settled = true;
-      const detached = removeListeners();
-      if (!detached) cleanup();
-      resume(result === 0 && detached ? Effect.void : Effect.fail(processError("terminate")));
-    };
-    try {
-      killer.on("exit", settle);
-      killer.on("error", settle);
-    } catch {
-      cleanup();
-      resume(Effect.fail(processError("terminate")));
-    }
-    return Effect.sync(cleanup);
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: "2 seconds",
-      orElse: () => Effect.fail(processError("terminate")),
-    }),
-  );
+// Exit and termination can race; final settlement is observed separately.
+const dispatchGracefulTermination = (pid: number) => {
+  if (signalProcessGroup(pid, "SIGTERM") !== "present") signalProcess(pid, "SIGTERM");
+};
 
 /** Immediate graceful dispatch is owned by the process scope, not its stop waiter. */
 export const makeWindowsTreeTermination = (
   pid: number,
-  spawn: WindowsTreeTerminatorSpawn = spawnWindowsTreeTerminator,
+  spawnTaskkill?: ProcessTreeTerminatorSpawn,
 ) =>
   Effect.gen(function* () {
     const ownerScope = yield* Effect.scope;
+    // Every core terminator failure maps to the same redacted boundary error.
+    const taskkill = (mode: "graceful" | "force") =>
+      terminateWindowsProcessTree({ pid, mode, spawnTaskkill }).pipe(
+        Effect.mapError(() => processError("terminate")),
+      );
     let gracefulFiber: Fiber.Fiber<void> | undefined;
     let dispatched = false;
     const forceLock = yield* Semaphore.make(1);
@@ -227,7 +142,7 @@ export const makeWindowsTreeTermination = (
       Effect.suspend(() => {
         dispatched = true;
         return (gracefulFiber ? Fiber.interrupt(gracefulFiber) : Effect.void).pipe(
-          Effect.andThen(terminateWindowsTree(pid, spawn)),
+          Effect.andThen(taskkill("force")),
         );
       }).pipe(Effect.uninterruptible),
     );
@@ -238,7 +153,7 @@ export const makeWindowsTreeTermination = (
             Effect.gen(function* () {
               if (dispatched) return;
               dispatched = true;
-              gracefulFiber = yield* terminateWindowsTree(pid, spawn, "graceful").pipe(
+              gracefulFiber = yield* taskkill("graceful").pipe(
                 Effect.ignore,
                 Effect.forkIn(ownerScope, { startImmediately: true }),
               );
@@ -246,15 +161,9 @@ export const makeWindowsTreeTermination = (
           );
   });
 
-const terminateLingeringGroup = (pid: number): Effect.Effect<void> => {
-  return Effect.sync(() => {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      // A group-free normal exit is the common case.
-    }
-  });
-};
+// A group-free normal exit is the common case, so the sweep result is ignored.
+const terminateLingeringGroup = (pid: number) =>
+  Effect.sync(() => void signalProcessGroup(pid, "SIGKILL"));
 
 const verifyCwd = (
   cwd: string,

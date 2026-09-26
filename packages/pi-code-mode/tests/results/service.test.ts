@@ -20,9 +20,6 @@ describe("session output retention", () => {
         expect(yield* results.get(first!)).toBeUndefined();
         expect((yield* results.get(last!))?.outcome).toBe("cancelled");
         expect(yield* results.put("x".repeat(RESULT_MAX_BYTES + 1), "succeeded")).toBeUndefined();
-        yield* results.clear;
-        expect(yield* results.get(last!)).toBeUndefined();
-        expect(yield* results.put("late", "succeeded")).toBeUndefined();
       }).pipe(Effect.provide(CodeModeResults.layer)),
   );
 

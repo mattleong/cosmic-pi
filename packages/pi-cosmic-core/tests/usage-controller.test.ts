@@ -1,182 +1,222 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "../index.ts";
 import { AgentDirectory } from "../src/platform/agent-directory.ts";
-import { JsonHttpClient } from "../src/platform/json-http.ts";
+import { JsonHttpClient, type JsonHttpClientContract } from "../src/platform/json-http.ts";
+import { extensionContextFixture } from "../src/testing/host.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
-import { makeUsageRefreshController, type UsageControllerConfig } from "../src/usage-controller.ts";
-import { initialUsageProjection } from "../src/usage-projection.ts";
+import { yieldUntil } from "../src/testing/polling.ts";
+import {
+  makeUsageRefreshController,
+  type UsageControllerConfig,
+  type UsageRefreshControllerOptions,
+} from "../src/usage-controller.ts";
+import { initialUsageProjection, type UsageProjectionBase } from "../src/usage-projection.ts";
 
-type TestConfig = UsageControllerConfig;
-type TestProjection = ReturnType<typeof initialUsageProjection<TestConfig, never>>;
+type Projection = UsageProjectionBase<UsageControllerConfig, number>;
+type Options<R> = UsageRefreshControllerOptions<
+  Projection,
+  UsageControllerConfig,
+  number,
+  never,
+  never,
+  R
+>;
+
+const config: UsageControllerConfig = {
+  configPath: "/agent/usage.json",
+  projectConfigPath: "/project/usage.json",
+  globalConfigPath: "/agent/usage.json",
+  projectConfigExists: false,
+  globalConfigExists: true,
+  usage: { refreshIntervalMs: 60_000, showOnlyOnSubscriptionModels: true },
+};
+const unusedHttp = JsonHttpClient.of({
+  request: () => Effect.die("unexpected HTTP"),
+  requestJson: () => Effect.die("unexpected HTTP"),
+});
+const testLayer = Layer.mergeAll(
+  Path.layer,
+  makeInMemoryDocuments().layer,
+  AgentDirectory.layer("/agent"),
+  Layer.succeed(JsonHttpClient, unusedHttp),
+);
+
+const fixture = <R = never>(overrides: Partial<Options<R>> & Pick<Options<R>, "dependencies">) =>
+  Effect.gen(function* () {
+    const projection = MutableRef.make(initialUsageProjection<UsageControllerConfig, number>());
+    const notifications: string[] = [];
+    let observedTrust: boolean | undefined;
+    const host = { hasUI: true, ui: { notify: (text: string) => void notifications.push(text) } };
+    const controller = yield* makeUsageRefreshController<
+      Projection,
+      UsageControllerConfig,
+      number,
+      never,
+      never,
+      R
+    >({
+      spanPrefix: "test.usage",
+      logLabel: "Test",
+      context: MutableRef.make(extensionContextFixture(host)),
+      cwd: "/project",
+      projection,
+      onChange: () => undefined,
+      startPolling: false,
+      initialProjection: () => initialUsageProjection(),
+      hiddenStatusText: "ineligible",
+      missingCredentialsMessage: () => "missing",
+      clearAuthPatch: {},
+      store: {
+        resolveConfig: (_cwd, _agentDir, projectTrusted) => {
+          observedTrust = projectTrusted;
+          return Effect.succeed(config);
+        },
+        readRawConfig: () => Effect.succeed({}),
+        resolveCommittedConfig: (current) => current,
+        modifyConfig: () => Effect.die("unexpected mutation"),
+      },
+      decodeSettingUpdate: () => Effect.die("unexpected setting"),
+      eligibility: () => Effect.succeed(true),
+      fetchOutcome: () => Effect.die("unexpected fetch"),
+      formatStatusLine: (snapshot) => String(snapshot),
+      formatStatusText: (snapshot) => String(snapshot),
+      ...overrides,
+    });
+    return { controller, projection, notifications, observedTrust: () => observedTrust };
+  });
+
+const fetching = (fetch: Effect.Effect<number>) => ({
+  fetchOutcome: () =>
+    fetch.pipe(Effect.map((snapshot) => ({ _tag: "Success" as const, snapshot, patch: {} }))),
+  dependencies: Context.empty(),
+});
 
 it.effect(
   "captures dependencies for an escaped refresh and defaults project trust to false",
   () => {
-    const sharedHttp = JsonHttpClient.of({
-      request: () => Effect.die("unused HTTP request"),
-      requestJson: () => Effect.die("unused HTTP request"),
-    });
     const conflictingHttp = JsonHttpClient.of({
       request: () => Effect.die("provider HTTP client must not escape"),
       requestJson: () => Effect.die("provider HTTP client must not escape"),
     });
-    let observedTrust: boolean | undefined;
-    let observedHttp: typeof sharedHttp | undefined;
-    const memory = makeInMemoryDocuments();
-    const constructionLayer = Layer.mergeAll(
-      Path.layer,
-      memory.layer,
-      AgentDirectory.layer("/agent"),
-      Layer.succeed(JsonHttpClient, sharedHttp),
-    );
-    const config: TestConfig = {
-      configPath: "/agent/extensions/test.json",
-      projectConfigPath: "/project/.pi/extensions/test.json",
-      globalConfigPath: "/agent/extensions/test.json",
-      projectConfigExists: false,
-      globalConfigExists: true,
-      usage: {
-        refreshIntervalMs: 60_000,
-        showOnlyOnSubscriptionModels: true,
-      },
-    };
-    // SAFETY: This minimal host fixture is only observed by callbacks that ignore its fields.
-    const context = MutableRef.make({ hasUI: true } as ExtensionContext);
-    const projection = MutableRef.make<TestProjection>(initialUsageProjection<TestConfig, never>());
-
+    let observedHttp: JsonHttpClientContract | undefined;
     return Effect.gen(function* () {
-      const controller = yield* makeUsageRefreshController<
-        TestProjection,
-        TestConfig,
-        never,
-        never,
-        never,
-        JsonHttpClient
-      >({
-        spanPrefix: "test.usage",
-        logLabel: "Test",
-        context,
-        cwd: "/project",
-        projection,
-        onChange() {},
-        startPolling: false,
-        agentDir: "/agent",
-        initialProjection: () => initialUsageProjection<TestConfig, never>(),
-        hiddenStatusText: "hidden",
-        missingCredentialsMessage: () => "credentials missing",
-        clearAuthPatch: { authFound: false },
-        store: {
-          resolveConfig: (_cwd, _agentDir, projectTrusted) => {
-            observedTrust = projectTrusted;
-            return Effect.succeed(config);
-          },
-          readRawConfig: () => Effect.succeed({}),
-          resolveCommittedConfig: (current) => current,
-          modifyConfig: () => Effect.die("unused config mutation"),
-        },
-        decodeSettingUpdate: () => Effect.die("unused setting update"),
-        eligibility: () => Effect.succeed(true),
-        synchronizeState: (current) => Effect.succeed(current),
+      const h = yield* fixture({
         fetchOutcome: () =>
           Effect.gen(function* () {
             observedHttp = yield* JsonHttpClient;
             return { _tag: "Missing" } as const;
           }),
-        formatStatusLine: () => "",
-        formatStatusText: () => "",
         dependencies: Context.make(JsonHttpClient, conflictingHttp),
-      }).pipe(provideBuiltLayer(constructionLayer));
+      }).pipe(provideBuiltLayer(testLayer));
 
       // The construction Layer is closed here. The escaped effect uses its captured services.
-      yield* controller.refresh({ force: true });
+      yield* h.controller.refresh({ force: true });
 
-      expect(observedTrust).toBe(false);
-      expect(observedHttp).toBe(sharedHttp);
-      expect(observedHttp).not.toBe(conflictingHttp);
-      expect(MutableRef.get(projection)).toMatchObject({
+      expect(h.observedTrust()).toBe(false);
+      expect(observedHttp).toBe(unusedHttp);
+      expect(MutableRef.get(h.projection)).toMatchObject({
         config,
         authPath: "/agent/auth.json",
         eligible: true,
         snapshot: undefined,
-        error: "credentials missing",
-        statusText: "Usage unavailable: credentials missing",
+        error: "missing",
       });
     });
   },
 );
 
-it.effect("composes the default synchronizeState from eligibility and hiddenStatusText", () => {
-  const memory = makeInMemoryDocuments();
-  const constructionLayer = Layer.mergeAll(
-    Path.layer,
-    memory.layer,
-    AgentDirectory.layer("/agent"),
-    Layer.succeed(
-      JsonHttpClient,
-      JsonHttpClient.of({
-        request: () => Effect.die("unused HTTP request"),
-        requestJson: () => Effect.die("unused HTTP request"),
-      }),
-    ),
-  );
-  const config: TestConfig = {
-    configPath: "/agent/extensions/test.json",
-    projectConfigPath: "/project/.pi/extensions/test.json",
-    globalConfigPath: "/agent/extensions/test.json",
-    projectConfigExists: false,
-    globalConfigExists: true,
-    usage: {
-      refreshIntervalMs: 60_000,
-      showOnlyOnSubscriptionModels: true,
-    },
-  };
-  // SAFETY: This minimal host fixture is only observed by callbacks that ignore its fields.
-  const context = MutableRef.make({ hasUI: true } as ExtensionContext);
-  const projection = MutableRef.make<TestProjection>(initialUsageProjection<TestConfig, never>());
-
-  return Effect.gen(function* () {
-    yield* makeUsageRefreshController<TestProjection, TestConfig, never, never, never, never>({
-      spanPrefix: "test.usage",
-      logLabel: "Test",
-      context,
-      cwd: "/project",
-      projection,
-      onChange() {},
-      startPolling: false,
-      agentDir: "/agent",
-      initialProjection: () => initialUsageProjection<TestConfig, never>(),
-      hiddenStatusText: "hidden: model not eligible for usage display",
-      missingCredentialsMessage: () => "credentials missing",
-      clearAuthPatch: { authFound: false },
-      store: {
-        resolveConfig: () => Effect.succeed(config),
-        readRawConfig: () => Effect.succeed({}),
-        resolveCommittedConfig: (current) => current,
-        modifyConfig: () => Effect.die("unused config mutation"),
-      },
-      decodeSettingUpdate: () => Effect.die("unused setting update"),
+it.effect("composes the default synchronizeState from eligibility and hiddenStatusText", () =>
+  Effect.gen(function* () {
+    const h = yield* fixture({
       eligibility: () => Effect.succeed(false),
-      fetchOutcome: () => Effect.die("unused fetch"),
-      formatStatusLine: () => "",
-      formatStatusText: () => "",
       dependencies: Context.empty(),
-    }).pipe(provideBuiltLayer(constructionLayer));
-
+    });
     // Construction-time synchronize(true) applied the default synchronizeState path.
-    expect(MutableRef.get(projection)).toMatchObject({
+    expect(MutableRef.get(h.projection)).toMatchObject({
       config,
       authPath: "/agent/auth.json",
       eligible: false,
       snapshot: undefined,
       statusLine: undefined,
       error: undefined,
-      statusText: "hidden: model not eligible for usage display",
+      statusText: "ineligible",
     });
-  });
-});
+  }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("hidden usage skips automatic requests but permits an explicit one-time fetch", () =>
+  Effect.gen(function* () {
+    let visible = false;
+    let requests = 0;
+    const h = yield* fixture({
+      backgroundEnabled: () => visible,
+      ...fetching(Effect.sync(() => ++requests)),
+    });
+    yield* h.controller.refresh({ force: true });
+    expect(requests).toBe(0);
+    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+
+    yield* h.controller.refresh({ notify: true, force: true });
+    expect(requests).toBe(1);
+    expect(h.notifications).toEqual(["1"]);
+    yield* h.controller.refresh({ force: true });
+    expect(requests).toBe(1);
+    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+
+    visible = true;
+    yield* h.controller.contextChanged(true);
+    yield* h.controller.refresh({ force: true });
+    expect(requests).toBe(2);
+    expect(MutableRef.get(h.projection).snapshot).toBe(2);
+  }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("a request completing after usage is hidden cannot publish its stale result", () =>
+  Effect.gen(function* () {
+    let visible = true;
+    const started = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<number>();
+    const h = yield* fixture({
+      backgroundEnabled: () => visible,
+      ...fetching(
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish))),
+      ),
+    });
+    const pending = yield* h.controller.refresh({ force: true }).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    visible = false;
+    yield* Deferred.succeed(finish, 42);
+    yield* Fiber.join(pending);
+    expect(MutableRef.get(h.projection).snapshot).toBeUndefined();
+  }).pipe(provideBuiltLayer(testLayer)),
+);
+
+it.effect("polling makes no requests while hidden and resumes after visibility changes", () =>
+  Effect.gen(function* () {
+    let visible = false;
+    let requests = 0;
+    const h = yield* fixture({
+      backgroundEnabled: () => visible,
+      startPolling: true,
+      ...fetching(Effect.sync(() => ++requests)),
+    });
+    yield* TestClock.adjust("2 minutes");
+    expect(requests).toBe(0);
+    visible = true;
+    yield* h.controller.contextChanged(true);
+    yield* yieldUntil(() => requests > 0);
+    expect(requests).toBe(1);
+    visible = false;
+    yield* h.controller.contextChanged(true);
+    yield* TestClock.adjust("2 minutes");
+    expect(requests).toBe(1);
+  }).pipe(provideBuiltLayer(testLayer)),
+);

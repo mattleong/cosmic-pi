@@ -6,7 +6,10 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
 import { JsonHttpClient, mergeHeaders } from "pi-cosmic-core";
-import type { OpenAICompactionJsonObject } from "../compaction/protocol.ts";
+import type {
+  OpenAICompactionCheckpoint,
+  OpenAICompactionJsonObject,
+} from "../compaction/protocol.ts";
 
 const ProviderHeadersSchema = Schema.Record(Schema.String, Schema.NullOr(Schema.String));
 const AuthSchema = Schema.Union([
@@ -53,21 +56,8 @@ export class OpenAICompactionBoundaryError extends Schema.TaggedError<OpenAIComp
   },
 ) {}
 
-interface BoundaryErrorArgs {
-  operation: OpenAICompactionBoundaryError["operation"];
-  message: string;
-  status?: number | undefined;
-}
-
-const boundaryError = (
-  operation: OpenAICompactionBoundaryError["operation"],
-  message: string,
-  status?: number,
-) => {
-  const error: BoundaryErrorArgs = { operation, message };
-  if (status !== undefined) error.status = status;
-  return new OpenAICompactionBoundaryError(error);
-};
+const boundaryError = (operation: OpenAICompactionBoundaryError["operation"], message: string) =>
+  new OpenAICompactionBoundaryError({ operation, message });
 
 export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
@@ -78,12 +68,7 @@ export interface OpenAICompactRequest {
 
 export interface OpenAICompactResult {
   readonly output: readonly OpenAICompactionJsonObject[];
-  readonly usage: {
-    readonly inputTokens: number;
-    readonly cachedInputTokens?: number;
-    readonly outputTokens: number;
-    readonly totalTokens: number;
-  };
+  readonly usage: NonNullable<OpenAICompactionCheckpoint["usage"]>;
 }
 
 export interface OpenAICompactionClientContract {
@@ -164,11 +149,11 @@ export class OpenAICompactionClient extends Context.Service<
               }),
             );
           if (response._tag === "Rejected")
-            return yield* boundaryError(
-              "response",
-              `OpenAI compaction failed (${response.status}).`,
-              response.status,
-            );
+            return yield* new OpenAICompactionBoundaryError({
+              operation: "response",
+              message: `OpenAI compaction failed (${response.status}).`,
+              status: response.status,
+            });
           const decoded = response.body;
           if (!decoded.output.some((item) => item.type === "compaction"))
             return yield* boundaryError(

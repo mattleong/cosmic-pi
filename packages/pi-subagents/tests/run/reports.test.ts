@@ -4,23 +4,53 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
-import type { SubagentProjection } from "../../src/run/model.ts";
-import { SubagentService } from "../../src/run/service.ts";
-import { provideBuiltLayer } from "pi-cosmic-core";
+import { emptyUsage } from "../../src/run/model.ts";
+import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  acknowledgeCompletions,
   fakeRetainedBackendLayer,
   assistantMessageEndFrame,
   fakeChildLayer,
   request,
-  retainedServiceLayer,
   localServiceFixture,
   retainedRequest,
   retainedServiceFixture,
   retainedReportFrame,
+  withService,
 } from "./fixtures/service-harness.ts";
+
+const awaitAndConsume = (service: SubagentServiceContract, ids: ReadonlyArray<string>) =>
+  service.withAwaitTerminalObservations(ids, "all_finished", undefined, (observations) =>
+    service
+      .consumeCompletions(
+        observations.flatMap((observation) =>
+          observation.completionReceipt ? [observation.completionReceipt] : [],
+        ),
+      )
+      .pipe(Effect.as(observations)),
+  );
+
+const resumableBackend = () =>
+  fakeRetainedBackendLayer({ capabilities: ["steer", "interrupt", "resume", "rename-display"] });
+
+/** Pauses a close-on-report run, then forks a gated resume whose start fails as uncertain. */
+const pausedUncertainResume = (
+  service: SubagentServiceContract,
+  backend: ReturnType<typeof fakeRetainedBackendLayer>,
+  message: string,
+) =>
+  Effect.gen(function* () {
+    const run = yield* service.start(retainedRequest({ closeOnReport: true }));
+    expect((yield* service.interrupt(run.id)).state).toBe("paused");
+    const resumeGate = yield* Deferred.make<void>();
+    backend.controls[0]?.gateNextStart(resumeGate);
+    backend.controls[0]?.failNextStart("transport_outcome_uncertain");
+    const resuming = yield* service.resume(run.id, message).pipe(Effect.forkScoped);
+    yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
+    return { run, resumeGate, resuming };
+  });
 
 describe("local Pi terminal evidence", () => {
   for (const stopReason of ["error", "aborted", "length", "toolUse", "stop", undefined] as const) {
@@ -28,8 +58,7 @@ describe("local Pi terminal evidence", () => {
       `fails a settled ${stopReason ?? "missing"} attempt without accepting partial output`,
       () => {
         const { fake, projections, layer } = localServiceFixture();
-        return Effect.gen(function* () {
-          const service = yield* SubagentService;
+        return withService(layer, function* (service) {
           const run = yield* service.start(request());
           fake.controls[0]!.offer(assistantMessageEndFrame("Earlier success must not leak."));
           fake.controls[0]!.offer({ type: "message_start", message: { role: "assistant" } });
@@ -57,15 +86,14 @@ describe("local Pi terminal evidence", () => {
           if (stopReason === "error") expect(result.error).toContain("Provider unavailable.");
           fake.controls[0]!.exit(0);
           yield* yieldUntil(() => fake.controls[0]!.released() === 1);
-        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+        });
       },
     );
   }
 
   it.effect("lets automatic retries recover before final settlement", () => {
     const { fake, projections, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(request());
       fake.controls[0]!.offer({
         type: "message_end",
@@ -82,8 +110,7 @@ describe("local Pi terminal evidence", () => {
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.usage.totalTokens === 1);
       expect((yield* service.status(run.id)).state).toBe("running");
       fake.controls[0]!.offer({ type: "agent_start" });
-      fake.controls[0]!.offer(assistantMessageEndFrame("Recovered report."));
-      fake.controls[0]!.offer({ type: "agent_settled" });
+      fake.controls[0]!.settle("Recovered report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
       expect(yield* service.status(run.id)).toMatchObject({
         state: "completed",
@@ -91,15 +118,14 @@ describe("local Pi terminal evidence", () => {
         finalText: "Recovered report.",
         reportStatus: "available",
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect(
     "does not reuse the previous assistant attempt after a paused assignment resumes",
     () => {
       const { fake, projections, layer } = localServiceFixture();
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(layer, function* (service) {
         const run = yield* service.start(request());
         fake.controls[0]!.offer({
           type: "message_end",
@@ -120,7 +146,7 @@ describe("local Pi terminal evidence", () => {
           reportGeneration: 0,
           reportStatus: "missing",
         });
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
@@ -135,12 +161,9 @@ describe("local Pi terminal evidence", () => {
             initialSendGates: [{ spawnIndex: 0, type: "prompt", gate }],
           }),
         );
-        return Effect.gen(function* () {
-          const service = yield* SubagentService;
+        return withService(layer, function* (service) {
           const starting = yield* service.start(request()).pipe(Effect.forkScoped);
-          yield* yieldUntil(
-            () => fake.controls[0]?.commands.some((command) => command.type === "prompt") === true,
-          );
+          yield* yieldUntil(() => fake.controls[0]?.sent("prompt") === true);
           fake.controls[0]!.offer({
             type: "message_end",
             message: {
@@ -161,7 +184,7 @@ describe("local Pi terminal evidence", () => {
               (stopReason === "stop" ? "completed" : "failed"),
           );
           expect(projections.at(-1)?.runs[0]?.reportGeneration).toBe(stopReason === "stop" ? 1 : 0);
-        }).pipe(Effect.scoped, provideBuiltLayer(layer));
+        });
       },
     );
   }
@@ -175,11 +198,8 @@ describe("SubagentService", () => {
       const initialStartGate = Deferred.makeUnsafe<void>();
       const { backend, projections, notifications, layer } = retainedServiceFixture(
         fakeRetainedBackendLayer({ initialStartGate }),
-        {},
-        { notifications: true },
       );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(layer, function* (service) {
         const starting = yield* service
           .startSessionOwned(
             retainedRequest({
@@ -194,14 +214,7 @@ describe("SubagentService", () => {
           type: "assistant_message",
           assignmentEpoch: 1,
           text: report,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: 0,
-          },
+          usage: { ...emptyUsage(), cost: 0 },
         });
         backend.controls[0]?.offer(retainedReportFrame(id!, 1, 1, "report-during-start", report));
         yield* yieldUntil(() =>
@@ -223,19 +236,7 @@ describe("SubagentService", () => {
           expect.arrayContaining([expect.objectContaining({ text: report })]),
         );
 
-        const delivered = yield* service.withAwaitTerminalObservations(
-          [started.id],
-          "all_finished",
-          undefined,
-          (observations) =>
-            service
-              .consumeCompletions(
-                observations.flatMap((observation) =>
-                  observation.completionReceipt ? [observation.completionReceipt] : [],
-                ),
-              )
-              .pipe(Effect.as(observations)),
-        );
+        const delivered = yield* awaitAndConsume(service, [started.id]);
         expect(delivered).toHaveLength(1);
         expect(delivered[0]?.run.finalText).toBe(report);
         expect(delivered[0]?.run.sessionEvents).toEqual(
@@ -245,7 +246,7 @@ describe("SubagentService", () => {
         yield* TestClock.adjust("1 second");
         expect(notifications).toEqual([]);
         expect(yield* service.status(started.id)).not.toHaveProperty("finalText");
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
@@ -253,30 +254,13 @@ describe("SubagentService", () => {
     "replays a buffered close-on-report report when run_started precedes uncertain resume failure",
     () => {
       const report = "Completed before resume transport failure surfaced.";
-      const { backend, projections, layer } = retainedServiceFixture(
-        fakeRetainedBackendLayer({
-          capabilities: ["steer", "interrupt", "resume", "rename-display"],
-        }),
-      );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({
-            host: "herdr",
-            runtime: "claude",
-            model: "claude-retained",
-            effortWasExplicit: false,
-          }),
+      const { backend, projections, layer } = retainedServiceFixture(resumableBackend());
+      return withService(layer, function* (service) {
+        const { run, resumeGate, resuming } = yield* pausedUncertainResume(
+          service,
+          backend,
+          "Resume through an uncertain transport.",
         );
-        expect((yield* service.interrupt(run.id)).state).toBe("paused");
-
-        const resumeGate = yield* Deferred.make<void>();
-        backend.controls[0]?.gateNextStart(resumeGate);
-        backend.controls[0]?.failNextStart("transport_outcome_uncertain");
-        const resuming = yield* service
-          .resume(run.id, "Resume through an uncertain transport.")
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
         backend.controls[0]?.offer({ type: "run_started", assignmentEpoch: 2 });
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
         backend.controls[0]?.offer(
@@ -286,14 +270,7 @@ describe("SubagentService", () => {
           type: "assistant_message",
           assignmentEpoch: 2,
           text: "Buffered report barrier.",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: 0,
-          },
+          usage: { ...emptyUsage(), cost: 0 },
         });
         yield* yieldUntil(() =>
           Boolean(
@@ -317,19 +294,7 @@ describe("SubagentService", () => {
           warning: expect.stringContaining("may already have applied"),
         });
 
-        const delivered = yield* service.withAwaitTerminalObservations(
-          [run.id],
-          "all_finished",
-          undefined,
-          (observations) =>
-            service
-              .consumeCompletions(
-                observations.flatMap((observation) =>
-                  observation.completionReceipt ? [observation.completionReceipt] : [],
-                ),
-              )
-              .pipe(Effect.as(observations)),
-        );
+        const delivered = yield* awaitAndConsume(service, [run.id]);
         expect(delivered[0]).toMatchObject({
           run: { finalText: report, warning: expect.stringContaining("may already have applied") },
           completionReceipt: { id: run.id, generation: 1 },
@@ -344,7 +309,7 @@ describe("SubagentService", () => {
         );
         expect(afterDuplicate?.completionReceipt).toBeUndefined();
         expect(afterDuplicate?.run.reportGeneration).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
@@ -352,30 +317,13 @@ describe("SubagentService", () => {
     "gives a buffered close-on-report report precedence after uncertain resume failure",
     () => {
       const report = "Buffered report won over settlement.";
-      const { backend, projections, layer } = retainedServiceFixture(
-        fakeRetainedBackendLayer({
-          capabilities: ["steer", "interrupt", "resume", "rename-display"],
-        }),
-      );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
-        const run = yield* service.start(
-          request({
-            host: "herdr",
-            runtime: "claude",
-            model: "claude-retained",
-            effortWasExplicit: false,
-          }),
+      const { backend, projections, layer } = retainedServiceFixture(resumableBackend());
+      return withService(layer, function* (service) {
+        const { run, resumeGate, resuming } = yield* pausedUncertainResume(
+          service,
+          backend,
+          "Resume before start evidence arrives.",
         );
-        expect((yield* service.interrupt(run.id)).state).toBe("paused");
-
-        const resumeGate = yield* Deferred.make<void>();
-        backend.controls[0]?.gateNextStart(resumeGate);
-        backend.controls[0]?.failNextStart("transport_outcome_uncertain");
-        const resuming = yield* service
-          .resume(run.id, "Resume before start evidence arrives.")
-          .pipe(Effect.forkScoped);
-        yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs.at(-1) === 2);
         yield* Deferred.succeed(resumeGate, undefined);
         expect(yield* Fiber.join(resuming).pipe(Effect.flip)).toMatchObject({
           code: "resume_outcome_uncertain",
@@ -415,18 +363,15 @@ describe("SubagentService", () => {
           run: { finalText: report, reportGeneration: 1 },
           completionReceipt: { id: run.id, generation: 1 },
         });
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
   it.effect("starts retained follow-ups without advertising unconfirmable active steering", () => {
     const { backend, projections, layer } = retainedServiceFixture(
       fakeRetainedBackendLayer({ capabilities: ["rename-display"] }),
-      {},
-      { publishReturnsCount: true },
     );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
       const activeGuidanceFailure = yield* service
         .send(run.id, "Unconfirmed active guidance")
@@ -436,37 +381,20 @@ describe("SubagentService", () => {
         capability: "steer",
       });
 
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "retained-without-steer",
-        text: "First retained report.",
-      });
+      backend.controls[0]?.report(run.id, 1, "retained-without-steer", "First retained report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
       const followUp = yield* service.send(run.id, "Begin a new retained assignment.");
       expect(followUp).toMatchObject({ state: "running", reportGeneration: 1 });
       expect(backend.controls[0]?.prompts.at(-1)).toBe("Begin a new retained assignment.");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("keeps a retained assignment owner alive after its send waiter is cancelled", () => {
-    const { backend, projections, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer(),
-      {},
-      { publishReturnsCount: true },
-    );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "cancelled-send-owner",
-        text: "First assignment complete.",
-      });
+      backend.controls[0]?.report(run.id, 1, "cancelled-send-owner", "First assignment complete.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
       const startGate = yield* Deferred.make<void>();
@@ -490,42 +418,22 @@ describe("SubagentService", () => {
         state: "running",
         reportGeneration: 1,
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect(
     "claims retained reports, deduplicates delivery, begins the next assignment, and notifies a cancelled await exactly once",
     () => {
-      const { backend, projections, notifications, layer } = retainedServiceFixture(
-        fakeRetainedBackendLayer(),
-        {},
-        { publishReturnsCount: true, notifications: true },
-      );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      const { backend, projections, notifications, layer } = retainedServiceFixture();
+      return withService(layer, function* (service) {
         const run = yield* service.start(retainedRequest());
         expect(run).toMatchObject({ state: "running", reportGeneration: 0, pid: 22_001 });
         expect(backend.controls[0]?.prompts).toHaveLength(1);
 
-        const firstAwait = yield* service
-          .withAwaitTerminalObservations([run.id], "all_finished", undefined, (observations) =>
-            service
-              .consumeCompletions(
-                observations.flatMap((observation) =>
-                  observation.completionReceipt ? [observation.completionReceipt] : [],
-                ),
-              )
-              .pipe(Effect.as(observations)),
-          )
-          .pipe(Effect.forkScoped);
+        const firstAwait = yield* awaitAndConsume(service, [run.id]).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: run.id,
-          sequence: 1,
-          deliveryId: "report-one",
+        backend.controls[0]?.report(run.id, 1, "report-one", "First retained report.", {
           evidence: "fixture-owned-pane",
-          text: "First retained report.",
         });
         const first = yield* Fiber.join(firstAwait);
         expect(first[0]).toMatchObject({
@@ -541,13 +449,7 @@ describe("SubagentService", () => {
             claimToken: expect.any(String),
           },
         });
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: run.id,
-          sequence: 1,
-          deliveryId: "report-one",
-          text: "Duplicate must be ignored.",
-        });
+        backend.controls[0]?.report(run.id, 1, "report-one", "Duplicate must be ignored.");
         yield* Effect.yieldNow;
         const redactedStatus = yield* service.status(run.id);
         expect(redactedStatus).toMatchObject({
@@ -569,13 +471,7 @@ describe("SubagentService", () => {
           .pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(cancelledAwait);
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: run.id,
-          sequence: 2,
-          deliveryId: "report-two",
-          text: "Second retained report.",
-        });
+        backend.controls[0]?.report(run.id, 2, "report-two", "Second retained report.");
         yield* yieldUntil(
           () =>
             projections.at(-1)?.runs.find((candidate) => candidate.id === run.id)?.state ===
@@ -607,32 +503,19 @@ describe("SubagentService", () => {
         const stopped = yield* service.stop(run.id);
         expect(stopped.state).toBe("stopped");
         expect(backend.controls[0]?.released()).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
   it.effect("delivers a retained report and later failure as distinct outcome generations", () => {
-    const backend = fakeRetainedBackendLayer();
-    const notifications: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = retainedServiceLayer(backend, {
-      notify: (notification) => notifications.push(notification),
-      publish: (projection) => projections.push(projection),
-    });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, notifications, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(
         retainedRequest({
           name: "retained-failure-generation",
         }),
       );
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "retained-success",
-        text: "First report.",
-      });
+      backend.controls[0]?.report(run.id, 1, "retained-success", "First report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => notifications.length === 1);
@@ -661,13 +544,12 @@ describe("SubagentService", () => {
           },
         ],
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("ignores a retained report after terminal failure before process exit", () => {
     const { backend, projections, layer } = retainedServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
       const control = backend.controls[0]!;
       control.offer({ type: "protocol_error", message: "Process failed before report." });
@@ -675,7 +557,7 @@ describe("SubagentService", () => {
       control.offer(retainedReportFrame(run.id, 1, 1, "late", "Must not resurrect the run."));
       for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
       expect(yield* service.status(run.id)).toMatchObject({ state: "failed", reportGeneration: 0 });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   for (const terminal of ["stopped", "failed"] as const)
@@ -686,8 +568,7 @@ describe("SubagentService", () => {
             `keeps ${terminal} after late ${outcome} assignment confirmation, started=${startedObserved}, report=${bufferedReport}`,
             () => {
               const { backend, projections, layer } = retainedServiceFixture();
-              return Effect.gen(function* () {
-                const service = yield* SubagentService;
+              return withService(layer, function* (service) {
                 const run = yield* service.start(retainedRequest());
                 const control = backend.controls[0]!;
                 control.offer(retainedReportFrame(run.id, 1, 1, "first", "First report."));
@@ -738,26 +619,20 @@ describe("SubagentService", () => {
                 expect(after.finalText).toBe(before.finalText);
                 expect(after.warning).toBe(before.warning);
                 expect(control.released()).toBe(1);
-              }).pipe(Effect.scoped, provideBuiltLayer(layer));
+              });
             },
           );
 
   it.effect("settles a retained issuing assignment when the backend fails its protocol", () => {
-    const backend = fakeRetainedBackendLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = retainedServiceLayer(backend, {
-      publish: (projection) => projections.push(projection),
-    });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "before-terminal-reconcile",
-        text: "First assignment complete.",
-      });
+      backend.controls[0]?.report(
+        run.id,
+        1,
+        "before-terminal-reconcile",
+        "First assignment complete.",
+      );
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
       const startGate = yield* Deferred.make<void>();
@@ -783,18 +658,15 @@ describe("SubagentService", () => {
         code: "guidance_outcome_uncertain",
       });
       expect((yield* service.status(run.id)).state).toBe("failed");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("commits an initial report only after the matching start command confirms", () => {
     const initialStartGate = Deferred.makeUnsafe<void>();
     const { backend, projections, layer } = retainedServiceFixture(
       fakeRetainedBackendLayer({ initialStartGate }),
-      {},
-      { publishReturnsCount: true },
     );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const starting = yield* service.start(retainedRequest()).pipe(Effect.forkScoped);
       yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
       const id = projections.at(-1)?.runs[0]?.id;
@@ -810,27 +682,16 @@ describe("SubagentService", () => {
         reportGeneration: 1,
         finalText: "Fast initial report.",
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect(
     "buffers an in-flight retained report and does not poison its later valid retry",
     () => {
-      const { backend, projections, layer } = retainedServiceFixture(
-        fakeRetainedBackendLayer(),
-        {},
-        { publishReturnsCount: true },
-      );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      const { backend, projections, layer } = retainedServiceFixture();
+      return withService(layer, function* (service) {
         const run = yield* service.start(retainedRequest());
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: run.id,
-          sequence: 1,
-          deliveryId: "first-delivery",
-          text: "First assignment.",
-        });
+        backend.controls[0]?.report(run.id, 1, "first-delivery", "First assignment.");
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
         expect((yield* service.status(run.id)).finalText).toBe("First assignment.");
 
@@ -886,26 +747,15 @@ describe("SubagentService", () => {
           reportGeneration: 2,
           finalText: "Second assignment committed after start.",
         });
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
   it.effect("rejects a reused report sequence with a conflicting delivery identity", () => {
-    const { backend, projections, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer(),
-      {},
-      { publishReturnsCount: true },
-    );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "first-delivery",
-        text: "First assignment.",
-      });
+      backend.controls[0]?.report(run.id, 1, "first-delivery", "First assignment.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
       yield* service.send(run.id, "Begin the second assignment.");
@@ -931,7 +781,7 @@ describe("SubagentService", () => {
       );
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === 2);
       expect((yield* service.status(run.id)).finalText).toBe("Second assignment.");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect(
@@ -940,11 +790,8 @@ describe("SubagentService", () => {
       const initialStartGate = Deferred.makeUnsafe<void>();
       const { backend, projections, layer } = retainedServiceFixture(
         fakeRetainedBackendLayer({ initialStartGate }),
-        {},
-        { publishReturnsCount: true },
       );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(layer, function* (service) {
         const starting = yield* service.start(retainedRequest()).pipe(Effect.forkScoped);
         yield* yieldUntil(() => backend.controls[0]?.assignmentEpochs[0] === 1);
         const id = projections.at(-1)?.runs[0]?.id;
@@ -965,14 +812,13 @@ describe("SubagentService", () => {
           reportGeneration: 1,
           finalText: "Buffered in-flight report.",
         });
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
   it.effect("rejects retained reports outside Herdr read-only backends before admission", () => {
     const { fake, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const failure = yield* service.start(request({ closeOnReport: false })).pipe(Effect.flip);
       expect(failure).toMatchObject({
         _tag: "InvalidSubagentRequestError",
@@ -980,28 +826,23 @@ describe("SubagentService", () => {
       });
       expect(fake.controls).toHaveLength(0);
       expect(yield* service.list).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("reserves generation 64 for terminal failure after 63 retained reports", () => {
-    const backend = fakeRetainedBackendLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = retainedServiceLayer(backend, {
+    const { backend, projections, layer } = retainedServiceFixture(fakeRetainedBackendLayer(), {
       notify: (notification) =>
         notification.type === "completed" ? { deliveredCompletionKeys: [] } : undefined,
-      publish: (projection) => projections.push(projection),
     });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
       for (let generation = 1; generation <= 63; generation += 1) {
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: run.id,
-          sequence: generation,
-          deliveryId: `backlog-${generation}`,
-          text: `Backlog report ${generation}.`,
-        });
+        backend.controls[0]?.report(
+          run.id,
+          generation,
+          `backlog-${generation}`,
+          `Backlog report ${generation}.`,
+        );
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === generation);
         if (generation < 63) yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
       }
@@ -1039,7 +880,7 @@ describe("SubagentService", () => {
       );
       expect(afterDuplicate?.completionReceipt).toBeUndefined();
       expect(afterDuplicate?.run.reportGeneration).toBe(63);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("caps resumed runs at 64 unresolved report generations", () => {
@@ -1047,12 +888,10 @@ describe("SubagentService", () => {
       notify: (notification) =>
         notification.type === "completed" ? { deliveredCompletionKeys: [] } : undefined,
     });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "resume-backlog" }));
       for (let generation = 1; generation <= 64; generation += 1) {
-        fake.controls[generation - 1]?.offer(assistantMessageEndFrame("Assignment complete."));
-        fake.controls[generation - 1]?.offer({ type: "agent_settled" });
+        fake.controls[generation - 1]?.settle();
         yield* yieldUntil(
           () =>
             projections.at(-1)?.runs[0]?.state === "completed" &&
@@ -1068,25 +907,14 @@ describe("SubagentService", () => {
         code: "report_delivery_backlog",
       });
       expect(fake.controls).toHaveLength(64);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("rolls back a raced retained start and never reuses its assignment epoch", () => {
-    const backend = fakeRetainedBackendLayer();
-    const projections: SubagentProjection[] = [];
-    const layer = retainedServiceLayer(backend, {
-      publish: (projection) => projections.push(projection),
-    });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "rollback-report",
-        text: "Preserve this report.",
-      });
+      backend.controls[0]?.report(run.id, 1, "rollback-report", "Preserve this report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
 
       backend.controls[0]?.offer({
@@ -1181,25 +1009,14 @@ describe("SubagentService", () => {
       yield* Deferred.succeed(nextGate, undefined);
       expect((yield* Fiber.join(next)).state).toBe("running");
       expect(backend.controls[0]?.assignmentEpochs).toEqual([1, 2, 3]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("keeps outcome-uncertain retained work and ignores idle assignment events", () => {
-    const { backend, projections, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer(),
-      {},
-      { publishReturnsCount: true },
-    );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "idle-report",
-        text: "Idle report.",
-      });
+      backend.controls[0]?.report(run.id, 1, "idle-report", "Idle report.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
       const beforeIdle = projections.at(-1)?.runs[0];
       backend.controls[0]?.offer({ type: "activity", assignmentEpoch: 1 });
@@ -1277,36 +1094,28 @@ describe("SubagentService", () => {
         finalText: "Applied despite uncertain response.",
         warning: expect.stringContaining("may already have applied"),
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("drains completion generations in deterministic batches of twelve", () => {
-    const backend = fakeRetainedBackendLayer();
-    const projections: SubagentProjection[] = [];
     const batches: number[][] = [];
-    const layer = retainedServiceLayer(backend, {
-      publish: (projection) => projections.push(projection),
+    const { backend, projections, layer } = retainedServiceFixture(fakeRetainedBackendLayer(), {
       notify: (notification) => {
-        if (notification.type !== "completed") return undefined;
-        batches.push(notification.runs.map((run) => run.generation));
-        return {
-          deliveredCompletionKeys: notification.runs.map((run) => `${run.id}:${run.generation}`),
-        };
+        if (notification.type === "completed")
+          batches.push(notification.runs.map((run) => run.generation));
+        return acknowledgeCompletions(notification);
       },
     });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
       const generationCount = MAX_COMPLETION_DELIVERY_BATCH + 1;
       for (let generation = 1; generation <= generationCount; generation += 1) {
-        backend.controls[0]?.offer({
-          type: "report",
-          assignmentEpoch: generation,
-          runId: run.id,
-          sequence: generation,
-          deliveryId: `batch-${generation}`,
-          text: `Report ${generation}.`,
-        });
+        backend.controls[0]?.report(
+          run.id,
+          generation,
+          `batch-${generation}`,
+          `Report ${generation}.`,
+        );
         yield* yieldUntil(() => projections.at(-1)?.runs[0]?.reportGeneration === generation);
         if (generation < generationCount)
           yield* service.send(run.id, `Begin assignment ${generation + 1}.`);
@@ -1320,27 +1129,14 @@ describe("SubagentService", () => {
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => batches.length === 2);
       expect(batches[1]).toEqual([generationCount]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("consumes a stopped retained report claim without a later notification", () => {
-    const backend = fakeRetainedBackendLayer();
-    const projections: SubagentProjection[] = [];
-    const notifications: SubagentNotification[] = [];
-    const layer = retainedServiceLayer(backend, {
-      publish: (projection) => projections.push(projection),
-      notify: (notification) => void notifications.push(notification),
-    });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, notifications, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "stopped-claim",
-        text: "Retained before stop.",
-      });
+      backend.controls[0]?.report(run.id, 1, "stopped-claim", "Retained before stop.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
       expect((yield* service.stop(run.id)).state).toBe("stopped");
 
@@ -1349,25 +1145,19 @@ describe("SubagentService", () => {
       expect(yield* service.status(run.id)).not.toHaveProperty("finalText");
       yield* TestClock.adjust("1 second");
       expect(notifications).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("keeps an atomically committed retained report deliverable after stop", () => {
-    const { backend, projections, notifications, layer } = retainedServiceFixture(
-      fakeRetainedBackendLayer(),
-      {},
-      { publishReturnsCount: true, notifications: true },
-    );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { backend, projections, notifications, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "committed-before-stop",
-        text: "Committed before event-fiber cleanup.",
-      });
+      backend.controls[0]?.report(
+        run.id,
+        1,
+        "committed-before-stop",
+        "Committed before event-fiber cleanup.",
+      );
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
       expect((yield* service.stop(run.id)).state).toBe("stopped");
       expect(backend.controls[0]?.released()).toBe(1);
@@ -1385,7 +1175,7 @@ describe("SubagentService", () => {
           },
         ],
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("lets an accepted retained report settle a pending pause atomically", () => {
@@ -1397,21 +1187,12 @@ describe("SubagentService", () => {
         onInterruptStarted: () => Deferred.doneUnsafe(interruptStarted, Effect.void),
         capabilities: ["steer", "interrupt", "rename-display"],
       }),
-      {},
-      { publishReturnsCount: true, notifications: true },
     );
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(retainedRequest());
       const interrupting = yield* service.interrupt(run.id).pipe(Effect.forkScoped);
       yield* Deferred.await(interruptStarted);
-      backend.controls[0]?.offer({
-        type: "report",
-        runId: run.id,
-        sequence: 1,
-        deliveryId: "report-wins-pause",
-        text: "Report won the pause race.",
-      });
+      backend.controls[0]?.report(run.id, 1, "report-wins-pause", "Report won the pause race.");
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "reported");
       expect(yield* Fiber.join(interrupting).pipe(Effect.flip)).toMatchObject({
         code: "interrupt_outcome_uncertain",
@@ -1422,28 +1203,20 @@ describe("SubagentService", () => {
         type: "completed",
         runs: [{ id: run.id, finalText: "Report won the pause race." }],
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("closes an idle retained backend on session shutdown", () => {
-    const backend = fakeRetainedBackendLayer();
-    const layer = retainedServiceLayer(backend);
+    const { backend, layer } = retainedServiceFixture();
     return Effect.gen(function* () {
-      const run = yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      const run = yield* withService(layer, function* (service) {
         const started = yield* service.start(retainedRequest());
-        backend.controls[0]?.offer({
-          type: "report",
-          runId: started.id,
-          sequence: 1,
-          deliveryId: "shutdown-report",
-          text: "Idle now.",
-        });
+        backend.controls[0]?.report(started.id, 1, "shutdown-report", "Idle now.");
         yield* yieldUntil(() =>
           Boolean(backend.controls[0] && backend.controls[0].released() === 0),
         );
         return started;
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
       expect(run.id).toBeDefined();
       expect(backend.controls[0]?.released()).toBe(1);
     });

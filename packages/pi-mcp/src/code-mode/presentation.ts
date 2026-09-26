@@ -13,8 +13,12 @@ import * as Predicate from "effect/Predicate";
 import { createBoundedCompactIssuesSchema, type CompactIssues } from "pi-code-previews";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import { projectMcpIssues } from "./issues.ts";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { projectMcpIssues, type McpIssueProjection } from "./issues.ts";
+import {
+  invokeHostCallback,
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice, mcpUndiscoveredNotice } from "../discovery/diagnostics.ts";
 import { canonicalValidationWarning, isOwnedValidationNotice } from "../ui/validation-notices.ts";
 import { normalizeMcpCodeModeError } from "./protocol.ts";
@@ -35,15 +39,15 @@ export interface McpPresentation {
   readonly notices: readonly string[];
   readonly resultId?: string;
 }
-const object = <Value>(value: Value): boolean => {
-  try {
-    return Predicate.isObjectOrArray(value) && !Array.isArray(value);
-  } catch {
-    return false;
-  }
-};
+const object = <Value>(value: Value): boolean =>
+  invokeHostCallback(() => Predicate.isObjectOrArray(value) && !Array.isArray(value), false);
 
-export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => {
+/** The card decoder shares this projection's failure evidence and boundary view. */
+export interface McpEvidence extends Omit<McpIssueProjection, "issues"> {
+  readonly presentation: McpPresentation;
+}
+
+export const projectMcpEvidence = <Reply>(reply: Reply): McpEvidence => {
   let incomplete = false;
   const field = <Value>(value: Value, key: string): PresentationField => {
     const read = own(value, key);
@@ -197,36 +201,44 @@ export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation => 
     notices,
   };
   const retained = resultId ? { ...evidence, resultId } : evidence;
-  const projected = projectMcpIssues(field, reply, retained);
+  const { issues: projected, failure, boundary } = projectMcpIssues(field, reply, retained);
   const issues = Option.getOrUndefined(Schema.decodeOption(BoundedIssues)(projected));
   incomplete ||= issues === undefined;
   return {
-    ...retained,
-    incomplete,
-    issues: issues
-      ? incomplete
-        ? { ...issues, coverage: "unknown" }
-        : issues
-      : {
-          coverage: "unknown",
-          entries: [
-            {
-              operation: "mcp",
-              code: "evidence-overflow",
-              severity: "warning",
-              cause: "MCP presentation evidence exceeded its bounds.",
-              description: "Some operation details are unavailable.",
-              recovery: [
-                {
-                  code: "no-replay",
-                  text: "Inspect retained output; do not replay operations to recover output.",
-                },
-              ],
-            },
-          ],
-        },
+    failure,
+    // Compact consumers pair the view with presentation.issues; expose it only when they match.
+    boundary: issues && boundary,
+    presentation: {
+      ...retained,
+      incomplete,
+      issues: issues
+        ? incomplete
+          ? { ...issues, coverage: "unknown" }
+          : issues
+        : {
+            coverage: "unknown",
+            entries: [
+              {
+                operation: "mcp",
+                code: "evidence-overflow",
+                severity: "warning",
+                cause: "MCP presentation evidence exceeded its bounds.",
+                description: "Some operation details are unavailable.",
+                recovery: [
+                  {
+                    code: "no-replay",
+                    text: "Inspect retained output; do not replay operations to recover output.",
+                  },
+                ],
+              },
+            ],
+          },
+    },
   };
 };
+
+export const projectMcpPresentation = <Reply>(reply: Reply): McpPresentation =>
+  projectMcpEvidence(reply).presentation;
 
 export const projectMcpFailurePresentation = <Error>(error: Error): McpPresentation => {
   const failure = normalizeMcpCodeModeError({

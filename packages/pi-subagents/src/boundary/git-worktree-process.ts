@@ -14,6 +14,14 @@ export const workspaceIO = <A>(operation: string, run: () => PromiseLike<A>) =>
         "Workspace filesystem operation failed; retained artifacts may require recovery.",
       ),
   });
+/** Like workspaceIO, but a missing path (ENOENT) yields undefined. */
+export const workspaceIOIfPresent = <A>(operation: string, run: () => Promise<A>) =>
+  workspaceIO(operation, () =>
+    run().catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    }),
+  );
 
 // Deliberately construct, never spread, the environment. No inherited Git selectors,
 // config, pager, credentials, alternate object directories, hooks or shell helpers.
@@ -122,11 +130,8 @@ export const checkDirectory = (directory: string, allowMissing = false) =>
     let current = path.parse(absolute).root;
     for (const part of parts) {
       current = path.join(current, part);
-      const stat = yield* workspaceIO("path", () =>
-        fs.lstat(current).catch((error: NodeJS.ErrnoException) => {
-          if (allowMissing && error.code === "ENOENT") return undefined;
-          throw error;
-        }),
+      const stat = yield* (allowMissing ? workspaceIOIfPresent : workspaceIO)("path", () =>
+        fs.lstat(current),
       );
       if (!stat) return absolute;
       if (!stat.isDirectory() || stat.isSymbolicLink())

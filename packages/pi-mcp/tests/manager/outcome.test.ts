@@ -1,52 +1,48 @@
 import { expect, it } from "vitest";
-import type * as Schema from "effect/Schema";
-import { readableMcpOutcome } from "../../src/manager/controller.ts";
+import type { McpMetadataSummary } from "../../src/discovery/model.ts";
+import { readableMcpOutcome, successfulMcpOutcome } from "../../src/manager/controller.ts";
 
-const refresh = (data: Schema.Json, isError = false) =>
-  readableMcpOutcome({
-    action: "refresh",
-    outcome: "completed",
-    isError,
-    data,
-    notices: [],
-  });
+const summary = (
+  tools: number,
+  supported = true,
+  diagnostics: McpMetadataSummary["diagnostics"] = [],
+): McpMetadataSummary => ({
+  server: "demo",
+  revision: 1,
+  tools,
+  resources: 0,
+  templates: 0,
+  prompts: 0,
+  support: { tools: supported, resources: true, templates: true, prompts: true },
+  diagnostics,
+});
+const refresh = (...args: Parameters<typeof summary>) =>
+  successfulMcpOutcome("refresh", summary(...args));
 
-it.each([0, 1, 125])("reports a validated supported tools count: %s", (tools) => {
-  expect(refresh({ result: { tools, support: { tools: true } } })).toMatch(
-    new RegExp(`\\b${tools}\\b`),
-  );
+it.each([0, 1, 125])("reports a supported tools count: %s", (tools) => {
+  expect(refresh(tools)).toMatch(new RegExp(`\\b${tools}\\b`));
 });
 it("does not describe an unsupported tools catalog as a loaded empty catalog", () => {
-  const text = refresh({
-    result: { tools: 0, support: { tools: false }, diagnostics: [{ family: "tools" }] },
-  });
+  const text = refresh(0, false, [{ family: "tools", reason: "rpc-method-not-found" }]);
   expect(text).toMatch(/unavailable/i);
   expect(text).not.toMatch(/\b0\b/);
 });
 it("keeps unavailable non-tools catalogs visible alongside a successful tools count", () => {
-  const text = refresh({
-    result: { tools: 12, support: { tools: true }, diagnostics: [{ family: "resources" }] },
-  });
+  const text = refresh(12, true, [{ family: "resources", reason: "rpc-method-not-found" }]);
   expect(text).toMatch(/\b12\b/);
   expect(text).toMatch(/unavailable/i);
 });
-it("omits unvalidated counts, raw values, and error-result counts from success feedback", () => {
-  for (const data of [
-    null,
-    { text: "private-secret" },
-    { result: { tools: "private-secret", support: { tools: true } } },
-    { result: { tools: -987, support: { tools: true } } },
-  ]) {
-    const text = refresh(data);
-    expect(text).not.toMatch(/private-secret|987/);
+it("never echoes gateway reply data or counts outside refresh feedback", () => {
+  for (const isError of [false, true]) {
+    const data = { text: "private-secret", result: { tools: 125, support: { tools: true } } };
+    const text = readableMcpOutcome({
+      action: "refresh",
+      outcome: "completed",
+      isError,
+      data,
+      notices: [],
+    });
+    expect(text).not.toMatch(/private-secret|125/);
   }
-  expect(refresh({ result: { tools: 125, support: { tools: true } } }, true)).not.toMatch(
-    /\b125\b/,
-  );
-});
-it("keeps Connect feedback separate from discovery counts", () => {
-  const reply = { action: "connect", outcome: "completed" as const, isError: false, notices: [] };
-  expect(
-    readableMcpOutcome({ ...reply, data: { result: { tools: 125, support: { tools: true } } } }),
-  ).toBe(readableMcpOutcome({ ...reply, data: null }));
+  expect(successfulMcpOutcome("connect", summary(125))).toBe(successfulMcpOutcome("connect"));
 });

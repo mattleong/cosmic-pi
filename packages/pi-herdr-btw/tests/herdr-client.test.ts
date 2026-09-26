@@ -29,7 +29,6 @@ const success = (stdout: string) =>
     overflowed: false,
     timedOut: false,
     cleanupUnconfirmed: false,
-    dispatched: true,
   }) as const;
 
 const responseFor = (request: BoundedProcessRequest) => {
@@ -226,19 +225,17 @@ it.effect("confirms only mutation failures that occur before process dispatch", 
       const processRunner: HerdrProcessRunner = () =>
         Effect.fail(new BoundedProcessError({ operation, message: "bounded fixture failure" }));
       const client = makeHerdrClient({}, { processRunner });
-      const result = yield* Effect.result(
+      const error = yield* Effect.flip(
         client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
       );
 
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code:
-            operation === "spawn"
-              ? "herdr_split_btw_pane_failed"
-              : "herdr_split_btw_pane_outcome_uncertain",
-          outcome: operation === "spawn" ? "confirmed" : "uncertain",
-        });
+      expect(error).toMatchObject({
+        code:
+          operation === "spawn"
+            ? "herdr_split_btw_pane_failed"
+            : "herdr_split_btw_pane_outcome_uncertain",
+        outcome: operation === "spawn" ? "confirmed" : "uncertain",
+      });
     }
   }),
 );
@@ -249,23 +246,15 @@ it.effect("classifies transport uncertainty from the owned operation's mutation 
       const processRunner: HerdrProcessRunner = () =>
         Effect.succeed({ ...success('{"protocol":19}'), [flag]: true });
       const client = makeHerdrClient({}, { processRunner });
-      const read = yield* Effect.result(client.inspectProtocol());
-      const mutation = yield* Effect.result(
-        client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
-      );
-
-      expect(read._tag).toBe("Failure");
-      expect(mutation._tag).toBe("Failure");
-      if (read._tag === "Failure")
-        expect(read.failure).toMatchObject({
-          code: "herdr_inspect_protocol_failed",
-          outcome: "confirmed",
-        });
-      if (mutation._tag === "Failure")
-        expect(mutation.failure).toMatchObject({
-          code: "herdr_split_btw_pane_outcome_uncertain",
-          outcome: "uncertain",
-        });
+      expect(yield* Effect.flip(client.inspectProtocol())).toMatchObject({
+        code: "herdr_inspect_protocol_failed",
+        outcome: "confirmed",
+      });
+      expect(
+        yield* Effect.flip(
+          client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
+        ),
+      ).toMatchObject({ code: "herdr_split_btw_pane_outcome_uncertain", outcome: "uncertain" });
     }
   }),
 );
@@ -279,7 +268,7 @@ it.effect("keeps the owned start precondition rejection confirmed", () =>
         stderr: JSON.stringify({ error: { code: "agent_pane_busy", message: "busy" } }),
       });
     const client = makeHerdrClient({}, { processRunner });
-    const result = yield* Effect.result(
+    const error = yield* Effect.flip(
       client.startSideSessionPi({
         agentName: "btw-agent",
         paneId: "w1:p2",
@@ -290,13 +279,11 @@ it.effect("keeps the owned start precondition rejection confirmed", () =>
       }),
     );
 
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure")
-      expect(result.failure).toMatchObject({
-        code: "herdr_start_side_session_pi_rejected",
-        outcome: "confirmed",
-        herdrCode: "agent_pane_busy",
-      });
+    expect(error).toMatchObject({
+      code: "herdr_start_side_session_pi_rejected",
+      outcome: "confirmed",
+      herdrCode: "agent_pane_busy",
+    });
   }),
 );
 
@@ -311,22 +298,19 @@ it.effect("sanitizes and bounds uncertain mutation exit diagnostics", () =>
       });
     const client = makeHerdrClient({}, { processRunner });
 
-    const result = yield* Effect.result(
+    const error = yield* Effect.flip(
       client.splitPane({ parentPaneId: "w1:p1", direction: "right", cwd: "/project" }),
     );
 
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        code: "herdr_split_btw_pane_outcome_uncertain",
-        outcome: "uncertain",
-      });
-      expect(result.failure.message).toContain("password=[REDACTED]");
-      expect(result.failure.message).not.toContain(credential);
-      expect(result.failure.message).not.toContain("\u0000");
-      expect(result.failure.message).toMatch(/…$/u);
-      expect(result.failure.message.length).toBeLessThanOrEqual(2_100);
-    }
+    expect(error).toMatchObject({
+      code: "herdr_split_btw_pane_outcome_uncertain",
+      outcome: "uncertain",
+    });
+    expect(error.message).toContain("password=[REDACTED]");
+    expect(error.message).not.toContain(credential);
+    expect(error.message).not.toContain("\u0000");
+    expect(error.message).toMatch(/…$/u);
+    expect(error.message.length).toBeLessThanOrEqual(2_100);
   }),
 );
 
@@ -347,12 +331,7 @@ it.effect("keeps undecodable mutation exits and responses outcome-uncertain", ()
     );
     const input = { parentPaneId: "w1:p1", direction: "right" as const, cwd: "/project" };
 
-    for (const result of [
-      yield* Effect.result(exitClient.splitPane(input)),
-      yield* Effect.result(decodeClient.splitPane(input)),
-    ]) {
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure).toMatchObject({ outcome: "uncertain" });
-    }
+    for (const client of [exitClient, decodeClient])
+      expect(yield* Effect.flip(client.splitPane(input))).toMatchObject({ outcome: "uncertain" });
   }),
 );

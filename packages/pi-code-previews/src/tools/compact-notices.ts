@@ -1,18 +1,17 @@
 import * as Predicate from "effect/Predicate";
-import { codePreviewSettings } from "../config/state";
-import { codePreviewPerformanceConfig } from "../config/env";
 import { getObjectValue } from "../shared/helpers";
 import { escapeControlChars } from "../shared/terminal-text";
 import { getBashWarnings } from "../warnings/bash";
 import { getWriteDiffGuard, getWriteDiffSkipReason, hasWriteDiffSizeEvidence } from "../write/diff";
+import type { BuiltinCompactPolicy } from "./builtin-projection";
 import type { CompactNotice } from "./compact-summary";
 import { isTruncated, splitReadContinuationNotice } from "./data/results";
 import { getPreviewSecretWarnings } from "./renderers/shared/secret-preview";
 
 export function secretNotices(
   sources: readonly string[],
-  enabled = codePreviewSettings.secretWarnings,
-  limit = codePreviewPerformanceConfig.secretScanChars,
+  enabled: boolean,
+  limit: number,
 ): CompactNotice[] {
   const warnings = new Set(
     sources.flatMap((source) => getPreviewSecretWarnings(source, enabled, limit)),
@@ -29,10 +28,7 @@ export function secretNotices(
     : [];
 }
 
-export function bashCommandNotices(
-  command: string,
-  enabled = codePreviewSettings.bashWarnings,
-): CompactNotice[] | undefined {
+export function bashCommandNotices(command: string, enabled: boolean): CompactNotice[] | undefined {
   if (!enabled) return [];
   // Do not partially scan a command and hide warnings in its unscanned middle.
   if (command.length > 16 * 1024) return undefined;
@@ -108,15 +104,13 @@ export function readNotices<Details>(
 interface CompactResultProjection {
   notices: CompactNotice[];
   metadata: string[];
-  counters?: string[];
 }
 
 export function outputLimitProjection<Details>(
   tool: "bash" | "grep" | "find" | "ls",
   details: Details,
-): CompactResultProjection {
+) {
   const notices: CompactNotice[] = [];
-  const metadata: string[] = [];
   const counters: string[] = [];
   if (isTruncated(details))
     notices.push({
@@ -133,7 +127,7 @@ export function outputLimitProjection<Details>(
         kind: "recovery",
         text: `Full output: ${escapeControlChars(path)}`,
       });
-    return { notices, metadata };
+    return { notices, counters };
   }
   const field =
     tool === "grep"
@@ -152,18 +146,13 @@ export function outputLimitProjection<Details>(
       kind: "recovery",
       text: "Some lines truncated. Use read tool to see full lines.",
     });
-  return { notices, metadata, counters };
+  return { notices, counters };
 }
 
 export function writeDiffProjection<Before>(
   before: Before,
   content: string,
-  policy = {
-    secretWarnings: codePreviewSettings.secretWarnings,
-    secretScanChars: codePreviewPerformanceConfig.secretScanChars,
-    maxWriteDiffBytes: codePreviewPerformanceConfig.maxWriteDiffBytes,
-    maxWriteDiffChangedLineCells: codePreviewPerformanceConfig.maxWriteDiffChangedLineCells,
-  },
+  policy: Omit<BuiltinCompactPolicy, "bashWarnings">,
 ): CompactResultProjection {
   // Validate the owned skipped-snapshot shape before using its size evidence.
   // Do not classify prose reasons or let large new content mask missing history.

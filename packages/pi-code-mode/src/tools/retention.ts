@@ -1,6 +1,4 @@
-import { copyCompactAttention, freezeReceipt } from "./compact-evidence.ts";
-import { copyFailurePresentation } from "./failure-evidence.ts";
-import { copyMcpEvidence } from "./mcp-evidence.ts";
+import { freezeSnapshot } from "pi-cosmic-core";
 import type { CodeModeToolDetails } from "./format.ts";
 
 /** Bounded one-shot handoff for details Pi otherwise drops when tool execution throws. */
@@ -27,16 +25,15 @@ export const makeFailureDetailsRetention = (capacity = 16): FailureDetailsRetent
         details.toolCalls.map((row) =>
           Object.freeze({
             ...row,
-            ...(row.compact !== undefined && { compact: freezeReceipt(row.compact) }),
+            ...(row.compact !== undefined && { compact: freezeSnapshot(row.compact) }),
           }),
         ),
       ),
     };
     if (copied.failurePresentation !== undefined)
-      copied.failurePresentation = copyFailurePresentation(copied.failurePresentation);
+      copied.failurePresentation = freezeSnapshot(copied.failurePresentation);
     if (copied.compactAttention !== undefined)
-      copied.compactAttention = copyCompactAttention(copied.compactAttention);
-    if (copied.mcpEvidence !== undefined) copied.mcpEvidence = copyMcpEvidence(copied.mcpEvidence);
+      copied.compactAttention = freezeSnapshot(copied.compactAttention);
     if (copied.counts !== undefined) copied.counts = Object.freeze({ ...copied.counts });
     return Object.freeze(copied);
   };

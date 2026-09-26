@@ -12,6 +12,7 @@ import {
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
@@ -91,19 +92,14 @@ function deactivateSubagentTools(pi: ExtensionAPI): ReadonlyArray<string> {
 
 function reactivateSubagentTools(pi: ExtensionAPI, names: ReadonlyArray<string>): void {
   if (names.length === 0) return;
-  try {
-    pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
-  } catch {
-    // Recovery remains best effort when the host has already gone stale.
-  }
+  invokeHostCallback(
+    () => pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]),
+    undefined,
+  );
 }
 
 function notifyActivationFailure(ctx: ExtensionContext, message: string): void {
-  try {
-    if (ctx.hasUI) ctx.ui.notify(message, "error");
-  } catch {
-    // A stale host UI cannot turn failed activation into an unhandled callback error.
-  }
+  invokeHostCallback(() => ctx.hasUI && ctx.ui.notify(message, "error"), undefined);
 }
 
 export function registerSubagentApplication(
@@ -189,7 +185,6 @@ export function registerSubagentApplication(
                 pi,
                 { cwd: caller.cwd, projectTrusted: activation.projectTrusted },
                 input,
-                undefined,
                 undefined,
                 activation.ctx,
                 callerRunId,
@@ -360,10 +355,7 @@ export function registerSubagentApplication(
             const session = yield* profiles.capture;
             return { ...persistent, session };
           }),
-        ).then((inspection) => {
-          if (currentActivation !== activation) throw new Error("Subagents session was replaced.");
-          return inspection;
-        }),
+        ),
       ),
     inspectWriterWorkspace: () =>
       run(SubagentService.use((service) => service.inspectWriterWorkspace)),
@@ -396,7 +388,6 @@ export function registerSubagentApplication(
         ),
       ),
     patchProfile: withConfigStore((store) => store.patchProfile),
-    patchProfileWithReceipt: withConfigStore((store) => store.patchProfileWithReceipt),
     restoreProfileDeclaration: withConfigStore((store) => store.restoreProfileDeclaration),
     patchDefaultProfileSet: withConfigStore((store) => store.patchDefaultProfileSet),
     createProfileSetFromSnapshot: (request) =>
@@ -419,21 +410,13 @@ export function registerSubagentApplication(
     renameProfileSet: withConfigStore((store) => store.renameProfileSet),
     deleteProfileSet: withConfigStore((store) => store.deleteProfileSet),
     patchNesting: withConfigStore((store) => store.patchNesting),
-    patchSessionProfileWithReceipt: (patch) =>
+    patchSessionProfile: (patch) =>
       withCurrentActivation(() =>
         run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))),
       ),
-    replaceSessionProfilesWithReceipt: (patch) =>
+    replaceSessionProfiles: (patch) =>
       withCurrentActivation(() =>
         run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))),
-      ),
-    patchSessionProfile: (patch) =>
-      run(SubagentProfileService.use((profiles) => profiles.patchSessionProfile(patch))).then(
-        () => undefined,
-      ),
-    replaceSessionProfiles: (patch) =>
-      run(SubagentProfileService.use((profiles) => profiles.replaceSessionProfiles(patch))).then(
-        () => undefined,
       ),
     patchSessionNesting: (patch) =>
       run(SubagentProfileService.use((profiles) => profiles.patchSessionNesting(patch))).then(
@@ -469,18 +452,15 @@ export function registerSubagentApplication(
       notifyActivationFailure(ctx, "Subagents failed to capture the session environment.");
       return shutdown;
     }
-    const sessionKey = profileReloadSessionKey(ctx);
-    const activationBase = {
+    const activation: CapturedActivation = {
       ctx,
       cwd: captured.cwd,
       projectTrusted,
       agentDirectory,
       preserveSessionOverrides,
       restoreReloadHandoff,
+      sessionKey: profileReloadSessionKey(ctx),
     };
-    const activation: CapturedActivation = sessionKey
-      ? { ...activationBase, sessionKey }
-      : activationBase;
     return slot.start(activation, captured.signal).then(() => undefined);
   };
 

@@ -117,32 +117,19 @@ export function createWritePreviewTool(cwd: string) {
         : getCodePreviewBeforeWrite(renderContext.toolCallId, result.details);
       renderContext.state[stateKey] = before;
       const beforeContent = getObjectValue(before, "content");
+      const applied = (note: string) =>
+        new Text(theme.fg("success", "✓ Write applied") + note, 0, 0);
       const skipReason = getWriteDiffSkipReason(before, content);
-      if (skipReason)
-        return new Text(
-          theme.fg("success", "✓ Write applied") +
-            theme.fg("muted", ` · diff skipped: ${skipReason}`),
-          0,
-          0,
-        );
+      if (skipReason) return applied(theme.fg("muted", ` · diff skipped: ${skipReason}`));
       if (Predicate.isString(beforeContent) && beforeContent !== content) {
         if (!expanded && !codePreviewSettings.writeContentPreview)
-          return new Text(
-            `${theme.fg("success", "✓ Write applied")}${formatOptionalHiddenHint(
-              hiddenPreviewExpandHintForShell(renderContext.state, theme),
-            )}`,
-            0,
-            0,
+          return applied(
+            formatOptionalHiddenHint(hiddenPreviewExpandHintForShell(renderContext.state, theme)),
           );
         const guard = getWriteDiffGuard(beforeContent, content);
         if (guard) {
           const skippedFor = guard === "size" ? "large content" : "complex rewrite";
-          return new Text(
-            theme.fg("success", "✓ Write applied") +
-              theme.fg("muted", ` · diff skipped for ${skippedFor}`),
-            0,
-            0,
-          );
+          return applied(theme.fg("muted", ` · diff skipped for ${skippedFor}`));
         }
         const render = () =>
           renderWriteDiffPreview(
@@ -177,12 +164,7 @@ export function createWritePreviewTool(cwd: string) {
       if (Predicate.isString(beforeContent))
         return new Text(theme.fg("muted", "✓ Write applied · no changes"), 0, 0);
       if (!isKnownNewWrite(before, result.details))
-        return new Text(
-          theme.fg("success", "✓ Write applied") +
-            theme.fg("muted", " · previous content unavailable"),
-          0,
-          0,
-        );
+        return applied(theme.fg("muted", " · previous content unavailable"));
       return new Text(
         theme.fg("success", `✓ New file (${countLabel(countContentLines(content), "line")})`),
         0,

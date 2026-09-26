@@ -25,9 +25,8 @@ export interface SafeFileContract {
   ) => Effect.Effect<SafeFileResult, SafeFileError>;
 }
 
-interface FileHandleWithClose {
-  readonly close: () => Promise<void>;
-}
+const READ_FAILURE = "Unable to read a stable contained regular file.";
+const OPEN_FAILURE = "Unable to open a stable regular file.";
 
 const safeFileError = (operation: string, message: string) => () =>
   new SafeFileError({ operation, message });
@@ -39,19 +38,9 @@ const nodePromise = <Value>(
 ): Effect.Effect<Value, SafeFileError> =>
   Effect.tryPromise({ try: evaluate, catch: safeFileError(operation, message) });
 
-const failRead = () =>
-  Effect.fail(
-    new SafeFileError({
-      operation: "read",
-      message: "Unable to read a stable contained regular file.",
-    }),
-  );
-
-/** Internal Promise adapter kept exported for focused typed-error regression coverage. */
-export const closeSafeFileHandle = (
-  handle: FileHandleWithClose,
-): Effect.Effect<void, SafeFileError> =>
-  nodePromise("close", "Unable to close a stable regular file.", () => handle.close());
+const readStep = <Value>(evaluate: () => PromiseLike<Value>) =>
+  nodePromise("read", READ_FAILURE, evaluate);
+const failRead = () => Effect.fail(safeFileError("read", READ_FAILURE)());
 
 const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(function* (
   path: string,
@@ -61,34 +50,20 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
   const paths = yield* Path.Path;
   const maximumSize = yield* Effect.try({
     try: () => BigInt(maximumBytes),
-    catch: safeFileError("size", "Unable to open a stable regular file."),
+    catch: safeFileError("size", OPEN_FAILURE),
   });
-  const before = yield* nodePromise("open", "Unable to open a stable regular file.", () =>
-    fs.lstat(path, { bigint: true }),
-  );
-  if (!before.isFile())
-    return yield* new SafeFileError({
-      operation: "open",
-      message: "Unable to open a stable regular file.",
-    });
-  if (before.size > maximumSize)
-    return yield* new SafeFileError({
-      operation: "size",
-      message: "Unable to open a stable regular file.",
-    });
+  const before = yield* nodePromise("open", OPEN_FAILURE, () => fs.lstat(path, { bigint: true }));
+  if (!before.isFile()) return yield* safeFileError("open", OPEN_FAILURE)();
+  if (before.size > maximumSize) return yield* safeFileError("size", OPEN_FAILURE)();
 
   const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
   return yield* Effect.acquireUseRelease(
-    nodePromise("open", "Unable to open a stable regular file.", () =>
+    nodePromise("open", OPEN_FAILURE, () =>
       fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | noFollow),
     ),
     (handle) =>
       Effect.gen(function* () {
-        const opened = yield* nodePromise(
-          "read",
-          "Unable to read a stable contained regular file.",
-          () => handle.stat({ bigint: true }),
-        );
+        const opened = yield* readStep(() => handle.stat({ bigint: true }));
         if (
           !opened.isFile() ||
           opened.size > maximumSize ||
@@ -99,12 +74,8 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
 
         const [resolvedPath, resolvedRoot] = yield* Effect.all(
           [
-            nodePromise("read", "Unable to read a stable contained regular file.", () =>
-              fs.realpath(path),
-            ),
-            nodePromise("read", "Unable to read a stable contained regular file.", () =>
-              fs.realpath(containmentRoot),
-            ),
+            readStep(() => fs.realpath(path)),
+            readStep(() => fs.realpath(containmentRoot)),
           ] as const,
           { concurrency: 2 },
         );
@@ -114,24 +85,12 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
         )
           return yield* failRead();
 
-        const visible = yield* nodePromise(
-          "read",
-          "Unable to read a stable contained regular file.",
-          () => fs.stat(resolvedPath, { bigint: true }),
-        );
+        const visible = yield* readStep(() => fs.stat(resolvedPath, { bigint: true }));
         if (!visible.isFile() || visible.dev !== opened.dev || visible.ino !== opened.ino)
           return yield* failRead();
 
-        const bytes = yield* nodePromise(
-          "read",
-          "Unable to read a stable contained regular file.",
-          () => handle.readFile(),
-        );
-        const after = yield* nodePromise(
-          "read",
-          "Unable to read a stable contained regular file.",
-          () => handle.stat({ bigint: true }),
-        );
+        const bytes = yield* readStep(() => handle.readFile());
+        const after = yield* readStep(() => handle.stat({ bigint: true }));
         if (
           after.dev !== opened.dev ||
           after.ino !== opened.ino ||
@@ -142,7 +101,10 @@ const readContainedRegularFile = Effect.fn("SafeFile.readContainedRegularFile")(
           return yield* failRead();
         return { path: resolvedPath, bytes: new Uint8Array(bytes) } satisfies SafeFileResult;
       }),
-    (handle) => closeSafeFileHandle(handle).pipe(Effect.ignore),
+    (handle) =>
+      nodePromise("close", "Unable to close a stable regular file.", () => handle.close()).pipe(
+        Effect.ignore,
+      ),
   );
 });
 

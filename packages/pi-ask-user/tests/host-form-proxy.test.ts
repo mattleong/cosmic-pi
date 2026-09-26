@@ -1,37 +1,11 @@
 import * as Effect from "effect/Effect";
 import { expect, vi } from "vitest";
 import { it } from "@effect/vitest";
-import { registerOwnedFormCapability } from "../src/boundary/host-form-proxy.ts";
-import {
-  queryOwnedFormCapability,
-  type FormOutcome,
-  type QuestionnaireEvents,
-} from "../src/protocol.ts";
-import { controlled } from "./support/host.ts";
-
-const request = { kind: "form", message: "private", fields: [] } as const;
-const owner = {
-  extensionId: "pi-mcp",
-  operationId: "operation",
-  requestId: "request",
-  label: "MCP",
-};
-const events = (): QuestionnaireEvents => {
-  const callbacks = new Map<string, Set<Parameters<QuestionnaireEvents["on"]>[1]>>();
-  return {
-    on: (name, listener) => {
-      const listeners = callbacks.get(name) ?? new Set();
-      listeners.add(listener);
-      callbacks.set(name, listeners);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    emit: (name, data) => {
-      for (const callback of callbacks.get(name) ?? []) callback(data);
-    },
-  };
-};
+import { registerOwnedFormCapability } from "../src/boundary/host-owned-calls.ts";
+import { queryOwnedFormCapability, type FormOutcome } from "../src/protocol.ts";
+import { deferredPromise } from "pi-cosmic-core/testing";
+import { makeEventBus as events } from "./support/host.ts";
+import { emptyForm as request, formOwner as owner } from "./support/questionnaire.ts";
 
 it.effect(
   "separates extension ownership, rejects collisions and joins exact cancellation cleanup",
@@ -40,7 +14,7 @@ it.effect(
       const bus = events();
       const runs: {
         signal: AbortSignal;
-        completion: ReturnType<typeof controlled<FormOutcome>>;
+        completion: ReturnType<typeof deferredPromise<FormOutcome>>;
       }[] = [];
       const dispose = registerOwnedFormCapability({
         events: bus,
@@ -49,7 +23,7 @@ it.effect(
         isCurrent: () => true,
         canQueue: () => true,
         run: (_effect, signal) => {
-          const completion = controlled<FormOutcome>();
+          const completion = deferredPromise<FormOutcome>();
           runs.push({ signal, completion });
           return completion.promise;
         },
@@ -93,7 +67,7 @@ it.effect("rejects stale captured capabilities and late answers after generation
   Effect.gen(function* () {
     const bus = events();
     let current = true;
-    const completion = controlled<FormOutcome>();
+    const completion = deferredPromise<FormOutcome>();
     const dispose = registerOwnedFormCapability({
       events: bus,
       sessionId: "session",
@@ -121,7 +95,7 @@ it.effect("rejects stale captured capabilities and late answers after generation
 it.effect("bounds live owned calls and honors prompt admission without running hidden work", () =>
   Effect.gen(function* () {
     const bus = events();
-    const completion = controlled<FormOutcome>();
+    const completion = deferredPromise<FormOutcome>();
     let canQueue = false;
     const run = vi.fn(() => completion.promise);
     const dispose = registerOwnedFormCapability({

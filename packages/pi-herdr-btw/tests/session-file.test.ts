@@ -39,6 +39,8 @@ const writeSession = (name: string, firstLine: string, rest = ""): string => {
   writeFileSync(path, `${firstLine}\n${rest}`);
   return path;
 };
+const writeHeader = (name: string, id: string): string =>
+  writeSession(name, JSON.stringify({ type: "session", id, timestamp: "t", cwd: "/project" }));
 
 describe("session-file validation", () => {
   it("reads a valid header with id and parentSession", () => {
@@ -61,10 +63,7 @@ describe("session-file validation", () => {
   });
 
   it("reads a root header without parentSession", () => {
-    const path = writeSession(
-      "root.jsonl",
-      JSON.stringify({ type: "session", id: "root-id", timestamp: "t", cwd: "/project" }),
-    );
+    const path = writeHeader("root.jsonl", "root-id");
     expect(probeSessionHeader(path)).toEqual({
       _tag: "valid",
       header: { id: "root-id", parentSession: undefined },
@@ -75,10 +74,7 @@ describe("session-file validation", () => {
     const missing = join(dir, "missing.jsonl");
     const nested = join(dir, "a-directory");
     mkdirSync(nested);
-    const target = writeSession(
-      "symlink-target.jsonl",
-      JSON.stringify({ type: "session", id: "linked-id", timestamp: "t", cwd: "/project" }),
-    );
+    const target = writeHeader("symlink-target.jsonl", "linked-id");
     const link = join(dir, "link.jsonl");
     symlinkSync(target, link);
 
@@ -116,10 +112,7 @@ describe("session-file validation", () => {
 
 describe("session-file identity", () => {
   it("matches normalized lexical aliases and descriptor-identical hardlinks", () => {
-    const original = writeSession(
-      "identity-original.jsonl",
-      JSON.stringify({ type: "session", id: "identity", timestamp: "t", cwd: "/project" }),
-    );
+    const original = writeHeader("identity-original.jsonl", "identity");
     const lexicalAlias = `${dir}${sep}.${sep}identity-original.jsonl`;
     const hardlink = join(dir, "identity-hardlink.jsonl");
     linkSync(original, hardlink);
@@ -129,23 +122,14 @@ describe("session-file identity", () => {
   });
 
   it("reports distinct only when both descriptor probes succeed", () => {
-    const first = writeSession(
-      "identity-first.jsonl",
-      JSON.stringify({ type: "session", id: "first", timestamp: "t", cwd: "/project" }),
-    );
-    const second = writeSession(
-      "identity-second.jsonl",
-      JSON.stringify({ type: "session", id: "second", timestamp: "t", cwd: "/project" }),
-    );
+    const first = writeHeader("identity-first.jsonl", "first");
+    const second = writeHeader("identity-second.jsonl", "second");
 
     expect(compareSessionFileIdentity(first, second)).toBe("distinct");
   });
 
   it("treats symlinks, missing files, and invalid paths as unavailable", () => {
-    const target = writeSession(
-      "identity-target.jsonl",
-      JSON.stringify({ type: "session", id: "target", timestamp: "t", cwd: "/project" }),
-    );
+    const target = writeHeader("identity-target.jsonl", "target");
     const symlink = join(dir, "identity-symlink.jsonl");
     symlinkSync(target, symlink);
     const missing = join(dir, "identity-missing.jsonl");
@@ -184,7 +168,7 @@ describe("createBlankChildSessionFile", () => {
     }),
   );
 
-  it.effect("fails closed on an exclusive-create collision or invalid directory", () =>
+  it.effect("fails closed on a collision, invalid directory, or malformed session ID", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(SECOND_TIMESTAMP));
       const input = {
@@ -200,6 +184,12 @@ describe("createBlankChildSessionFile", () => {
           sessionDir: join(dir, "missing-directory"),
         }),
       ).toEqual({ _tag: "invalid" });
+      // The ID becomes a filename and an argv marker, so separator-bearing and overlong IDs fail
+      // closed. Without the grammar check, "x/../escape" would normalize to a creatable file.
+      for (const sessionId of ["x/../escape", "a".repeat(129)])
+        expect(yield* createBlankChildSessionFile({ ...input, sessionId })).toEqual({
+          _tag: "invalid",
+        });
     }),
   );
 });

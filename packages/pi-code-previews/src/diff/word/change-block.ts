@@ -1,6 +1,5 @@
 import {
   changedLineTokens,
-  indexedChangedLine,
   normalizedChangedContent,
   type IndexedChangedLine,
 } from "./changed-line";
@@ -13,7 +12,7 @@ import {
   type ParsedDiffLine,
   type RemovedDiffLine,
 } from "../parse";
-import { changedRangesForTokensWithConfidence } from "./emphasis";
+import { changedRangesWithConfidence } from "./emphasis";
 import type { ConfidentWordChangeRanges } from "./types";
 
 type ChangedLineBlockAnalysis = {
@@ -34,11 +33,9 @@ export function analyzeChangedLineBlock(
 ): ChangedLineBlockAnalysis {
   const removed: Array<IndexedChangedLine<RemovedDiffLine>> = [];
   const added: Array<IndexedChangedLine<AddedDiffLine>> = [];
-  for (let index = 0; index < block.length; index++) {
-    const line = block[index];
-    if (line === undefined) continue;
-    if (isRemovedDiffLine(line)) removed.push(indexedChangedLine(index, line));
-    else if (isAddedDiffLine(line)) added.push(indexedChangedLine(index, line));
+  for (const [index, line] of block.entries()) {
+    if (isRemovedDiffLine(line)) removed.push({ index, line });
+    else if (isAddedDiffLine(line)) added.push({ index, line });
   }
   const removedByIndex = new Map(removed.map((line) => [line.index, line]));
   const addedByIndex = new Map(added.map((line) => [line.index, line]));
@@ -51,12 +48,12 @@ export function analyzeChangedLineBlock(
     if (!removedLine || !addedLine) continue;
     ranges.push({
       pair,
-      ranges: changedRangesForTokensWithConfidence(
+      ranges: changedRangesWithConfidence(
         normalizedChangedContent(removedLine),
         normalizedChangedContent(addedLine),
+        wordEmphasis,
         changedLineTokens(removedLine),
         changedLineTokens(addedLine),
-        wordEmphasis,
       ),
     });
   }

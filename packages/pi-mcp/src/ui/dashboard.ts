@@ -5,7 +5,7 @@ import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { detailFieldRows, listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { McpManagerServer, McpManagerSnapshot } from "../manager/model.ts";
-import { authExplanation, blockedExplanation } from "../manager/policy.ts";
+import { authExplanation, blockedExplanation, blockedLabel } from "../manager/policy.ts";
 import { discoveryNotices } from "../discovery/diagnostics.ts";
 
 export const dashboardRows = (snapshot: McpManagerSnapshot, query: string) =>
@@ -18,19 +18,17 @@ interface DashboardStatus {
   readonly label: string;
   readonly tone: "muted" | "warning" | "error" | "success";
 }
+const blockedTone = {
+  "cleanup-unconfirmed": "error",
+  "cleanup-running": "muted",
+  "auth-running": "muted",
+  "auth-suspended": "warning",
+} satisfies Record<NonNullable<McpManagerServer["blockedReason"]>, DashboardStatus["tone"]>;
 const dashboardStatus = (row: McpManagerServer): DashboardStatus => {
   if (row.invalid) return { label: "Invalid config", tone: "error" };
   if (!row.enabled) return { label: "Disabled", tone: "muted" };
-  switch (row.blockedReason) {
-    case "cleanup-unconfirmed":
-      return { label: "Cleanup unconfirmed", tone: "error" };
-    case "cleanup-running":
-      return { label: "Disconnecting", tone: "muted" };
-    case "auth-running":
-      return { label: "Signing in", tone: "muted" };
-    case "auth-suspended":
-      return { label: "Auth interrupted", tone: "warning" };
-  }
+  const blocked = row.blockedReason;
+  if (blocked) return { label: blockedLabel[blocked], tone: blockedTone[blocked] };
   if (row.state === "connecting") return { label: "Connecting", tone: "muted" };
   if (row.state === "closing") return { label: "Disconnecting", tone: "muted" };
   if (row.state === "blocked") return { label: "Blocked", tone: "warning" };

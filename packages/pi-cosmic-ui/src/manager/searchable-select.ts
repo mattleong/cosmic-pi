@@ -221,10 +221,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         this.list = this.buildList();
         break;
       }
-      case "pending-first":
-      case "previous-pane":
-      case "next-pane":
-        break;
     }
   }
 
@@ -334,14 +330,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const inner = safeWidth - 2;
     const title = truncateToWidth(` ${this.options.breadcrumb} `, inner, "");
     const frame = listDetailFrame(theme, "list");
-    if (height === 1)
-      return framedScreen(frame, {
-        width: safeWidth,
-        height,
-        top: title,
-        bottom: "",
-        body: () => [],
-      });
     const activeNotice = this.feedback ?? this.options.notice;
     const body: string[] = [];
     if (height < 10) {

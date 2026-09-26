@@ -4,7 +4,7 @@ import { renderMcpCallContent } from "../ui/call-content.ts";
 import { boundaryError } from "../client/errors.ts";
 import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import { progressData } from "../ui/remote-events.ts";
-import type { McpProgress } from "../observations/model.ts";
+import { McpLogLevel, type McpProgress } from "../observations/model.ts";
 import { renderMcpCall, renderMcpResult, renderMcpExpandedContent } from "../ui/tool-renderer.ts";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { mcpCompactSummary } from "../ui/compact-summary.ts";
@@ -14,7 +14,12 @@ import {
   type McpErrorReceipts,
   type McpActivationMarker,
 } from "../boundary/host-tool-result.ts";
-import { MCP_INLINE_BYTES, type McpGatewayExecution, type McpGatewayReply } from "./model.ts";
+import {
+  MCP_GATEWAY_ACTIONS,
+  MCP_INLINE_BYTES,
+  type McpGatewayExecution,
+  type McpGatewayReply,
+} from "./model.ts";
 
 // Pi requires a JSON tool schema. The shared execution service performs closed,
 // action-specific Effect Schema decoding again, including calls bypassing Pi middleware.
@@ -22,28 +27,7 @@ export const McpToolParameters = Type.Object(
   {
     action: Type.Optional(
       Type.String({
-        enum: [
-          "status",
-          "connect",
-          "disconnect",
-          "refresh",
-          "server.instructions",
-          "completion.complete",
-          "events.read",
-          "resources.subscribe",
-          "resources.unsubscribe",
-          "resources.subscriptions",
-          "tools.list",
-          "tools.search",
-          "tools.describe",
-          "tools.call",
-          "resources.list",
-          "resources.templates",
-          "resources.read",
-          "prompts.list",
-          "prompts.get",
-          "result.read",
-        ],
+        enum: [...MCP_GATEWAY_ACTIONS],
         description: "Defaults to status. Supply only fields used by the selected action.",
       }),
     ),
@@ -56,7 +40,7 @@ export const McpToolParameters = Type.Object(
     ),
     logLevel: Type.Optional(
       Type.String({
-        enum: ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"],
+        enum: [...McpLogLevel.literals],
         description:
           "Optional deprecated modern HTTP-only request logging on tools.call, resources.read, prompts.get, completion.complete only.",
       }),

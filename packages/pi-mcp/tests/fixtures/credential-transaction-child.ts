@@ -9,8 +9,7 @@ import * as Schema from "effect/Schema";
 import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
 import { McpSdkAuth } from "../../src/boundary/sdk-auth.ts";
 import { makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
-import type { McpEffectiveServer } from "../../src/config/model.ts";
-import type { McpGrant } from "../../src/auth/credentials.ts";
+import { oauthServer, preRegistered, testGrant } from "./auth.ts";
 
 const [directory, mode, agentDirectory] = process.argv.slice(2);
 const identity = "a".repeat(64);
@@ -21,35 +20,18 @@ process.on("message", (message) => {
   if (message === "revoke") trusted = false;
 });
 const file = join(directory!, "credential.json");
-const server: McpEffectiveServer = {
+const server = {
+  ...oauthServer(identity, { ...preRegistered, clientId: "test" }),
   id: "test",
-  identity,
-  enabled: true,
-  scope: "global",
   directory: agentDirectory!,
-  definition: {
-    transport: "http",
-    url: "https://resource.example/mcp",
-    headers: {},
-    denyTools: [],
-    auth: { type: "oauth", registration: "pre-registered", clientId: "test", scopes: [] },
-  },
 };
-const grant: McpGrant = {
-  version: 1,
-  identity,
-  issuer: "https://issuer.example",
-  resource: "https://resource.example/mcp",
+const grant = testGrant(identity, {
   clientId: "test",
   registration: "pre-registered",
-  redirectUri: "http://127.0.0.1:9000/callback",
-  discovery: {},
-  resourceMetadata: {},
   clientInformation: {},
   tokens: { access_token: "old", refresh_token: "rotate-once" },
-  receivedAt: 0,
   expiresAt: 1,
-};
+});
 const wait = () => {
   const completion = Promise.withResolvers<void>();
   const receive = (message: string) => {
@@ -101,7 +83,7 @@ const program = Effect.scoped(
   Effect.gen(function* () {
     const store = yield* McpCredentialStore;
     if (mode === "seed" || mode === "write-hold" || mode === "write-cancel") {
-      yield* store.write(identity, grant);
+      yield* store.withTransaction(identity, (tx) => tx.write(grant));
       return;
     }
     const auth = yield* makeMcpAuthWithAuthority({

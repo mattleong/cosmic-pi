@@ -2,16 +2,23 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { deferredPromise } from "pi-cosmic-core/testing";
+import { createModelPickerChoices } from "pi-cosmic-ui/manager/model-picker";
 import type { NativeRuntimeModel } from "../src/boundary/native-model-catalog.ts";
 import type { ProfileCandidate } from "../src/profiles/model.ts";
 import {
   loadCandidateModelPicker,
+  type CandidateModelPickerData,
+  type CandidateModelPickerInput,
   preferredHerdrPiSelector,
   ProfileModelCatalog,
   type ProfileModelRegistry,
   type ProfileModelRegistryRefreshResult,
 } from "../src/settings/profile-model-catalog.ts";
+import type { ProfileModelOption } from "../src/settings/ui/model-picker.ts";
 import { modelFixture } from "./fixtures/pi-host.ts";
+import { profileCandidate } from "./fixtures/profiles.ts";
 
 const piModel = (provider: string, id: string, name = id) =>
   modelFixture({
@@ -22,25 +29,34 @@ const piModel = (provider: string, id: string, name = id) =>
     thinkingLevelMap: { low: "low", high: "high" },
   });
 
-const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  host: "local",
-  runtime: "pi",
-  model: "openai/gpt-old",
-  effort: "high",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  closeOnReport: true,
-  ...overrides,
-});
+const staticCatalog = (
+  models: ReadonlyArray<Model<Api>>,
+  scoped?: ReadonlyArray<Model<Api>>,
+): ProfileModelCatalog =>
+  new ProfileModelCatalog(
+    {
+      getAvailable: () => models,
+      getError: () => undefined,
+      refresh: () => Promise.resolve({ aborted: false }),
+    },
+    scoped,
+  );
 
-const deferred = () => {
-  const cell = Deferred.makeUnsafe<ProfileModelRegistryRefreshResult>();
-  return {
-    promise: Effect.runPromise(Deferred.await(cell)),
-    resolve: () => Deferred.doneUnsafe(cell, Effect.succeed({ aborted: false })),
-  };
-};
+const loadPicker = (
+  catalog: ProfileModelCatalog,
+  candidate: ProfileCandidate,
+  overrides: Partial<CandidateModelPickerInput> = {},
+) =>
+  Effect.promise(() =>
+    loadCandidateModelPicker({
+      profile: "reviewer",
+      candidateIndex: 0,
+      candidate,
+      listNativeModels: () => Promise.resolve([]),
+      piCatalog: catalog.capture(),
+      ...overrides,
+    }),
+  );
 
 const hasTerminalControls = (value: string): boolean => {
   for (let index = 0; index < value.length; index += 1) {
@@ -86,7 +102,7 @@ describe("profile model catalog", () => {
     Effect.gen(function* () {
       let models = [piModel("openai", "gpt-old")];
       let registryError: string | undefined;
-      let refresh = deferred();
+      let refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
       const registry: ProfileModelRegistry = {
         getAvailable: () => models,
         getError: () => registryError,
@@ -104,7 +120,7 @@ describe("profile model catalog", () => {
       const updating = Effect.runPromise(catalog.refresh());
       models = [piModel("openai", "gpt-new")];
       expect(catalog.capture()).toBe(initial);
-      refresh.resolve();
+      refresh.resolve({ aborted: false });
       expect(yield* Effect.promise(() => updating)).toBe("updated");
       const updated = catalog.capture();
       expect(updated).toMatchObject({
@@ -114,20 +130,18 @@ describe("profile model catalog", () => {
       expect(updated.piModels.some((model) => model.id === "gpt-old")).toBe(false);
 
       registryError = "registry refresh failed";
-      refresh = deferred();
+      refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
       const failing = Effect.runPromise(catalog.refresh());
       models = [piModel("openai", "gpt-failed")];
-      refresh.resolve();
+      refresh.resolve({ aborted: false });
       expect(yield* Effect.promise(() => failing)).toBe("failed");
       expect(catalog.capture()).toBe(updated);
 
       registryError = undefined;
-      refresh = deferred();
-      const controller = new AbortController();
-      const aborting = Effect.runPromise(catalog.refresh(controller.signal));
+      refresh = deferredPromise<ProfileModelRegistryRefreshResult>();
+      const aborting = Effect.runPromise(catalog.refresh());
       models = [piModel("openai", "gpt-aborted")];
-      controller.abort();
-      refresh.resolve();
+      refresh.resolve({ aborted: true });
       expect(yield* Effect.promise(() => aborting)).toBe("aborted");
       expect(catalog.capture()).toBe(updated);
     }),
@@ -153,93 +167,55 @@ describe("profile model catalog", () => {
   it.effect("projects scoped Pi models separately from all authenticated models", () =>
     Effect.gen(function* () {
       const scoped = piModel("openai", "scoped");
-      const registry: ProfileModelRegistry = {
-        getAvailable: () => [scoped, piModel("anthropic", "all-only")],
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
-      };
-      const catalog = new ProfileModelCatalog(registry, [scoped]);
-      const picker = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "reviewer",
-          candidateIndex: 0,
-          candidate: candidate({ model: "openai/scoped" }),
-          listNativeModels: () => Promise.resolve([]),
-          piCatalog: catalog.capture(),
-        }),
-      );
-      expect(picker.scopedChoices?.some((entry) => entry.item.value === "openai/scoped")).toBe(
-        true,
-      );
-      expect(picker.scopedChoices?.some((entry) => entry.item.value === "anthropic/all-only")).toBe(
-        false,
-      );
-      expect(picker.choices.some((entry) => entry.item.value === "anthropic/all-only")).toBe(true);
+      const catalog = staticCatalog([scoped, piModel("anthropic", "all-only")], [scoped]);
+      const picker = yield* loadPicker(catalog, profileCandidate("openai/scoped"));
+      const selectors = (options: ReadonlyArray<ProfileModelOption> = []) =>
+        options.map((option) => option.selector);
+      expect(selectors(picker.scopedChoices)).toContain("openai/scoped");
+      expect(selectors(picker.scopedChoices)).not.toContain("anthropic/all-only");
+      expect(selectors(picker.choices)).toContain("anthropic/all-only");
     }),
   );
 
   it.effect("marks a retained unavailable current model as non-selectable", () =>
     Effect.gen(function* () {
-      const available = piModel("openai", "available");
-      const catalog = new ProfileModelCatalog({
-        getAvailable: () => [available],
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
-      });
-      const picker = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "reviewer",
-          candidateIndex: 0,
-          candidate: candidate({ model: "openai/missing" }),
-          listNativeModels: () => Promise.resolve([]),
-          piCatalog: catalog.capture(),
-        }),
-      );
-      const retained = picker.choices.find((entry) => entry.item.value === "openai/missing");
+      const catalog = staticCatalog([piModel("openai", "available")]);
+      const picker = yield* loadPicker(catalog, profileCandidate("openai/missing"));
+      const retained = picker.choices.find((option) => option.selector === "openai/missing");
 
-      expect(retained).toMatchObject({ enabled: false });
+      expect(retained).toMatchObject({ available: false, fastModeAvailable: false });
       expect(retained?.unavailableReason).toBeTruthy();
     }),
   );
 
   it.effect("sanitizes Pi and native display text without changing selector identity", () =>
     Effect.gen(function* () {
-      const registry: ProfileModelRegistry = {
-        getAvailable: () => [
-          piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
-          piModel("openai", "gpt-next", "Next\u0007\tmodel"),
-        ],
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
+      const catalog = staticCatalog([
+        piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
+        piModel("openai", "gpt-next", "Next\u0007\tmodel"),
+      ]);
+      // Pi rows use the shared picker's default text, so check what the picker displays.
+      const displayed = (picker: CandidateModelPickerData) => {
+        const choices = createModelPickerChoices(picker.choices, picker.current);
+        for (const choice of choices) {
+          expect(hasTerminalControls(choice.item.label)).toBe(false);
+          expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);
+          expect(hasTerminalControls(choice.searchText)).toBe(false);
+        }
+        return choices;
       };
-      const catalog = new ProfileModelCatalog(registry);
-      const piPicker = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "reviewer",
-          candidateIndex: 0,
-          candidate: candidate(),
-          listNativeModels: () => Promise.resolve([]),
-          piCatalog: catalog.capture(),
+      const pi = displayed(
+        yield* loadPicker(catalog, profileCandidate("openai/gpt-old"), {
           parentSelector: "openai/gpt-old",
         }),
       );
-      const selected = piPicker.choices.find(
-        (choice) => choice.choice.kind === "model" && choice.choice.selector === "openai/gpt-old",
-      );
-      expect(selected?.item.value).toBe("openai/gpt-old");
-      expect(selected?.choice).toEqual({ kind: "model", selector: "openai/gpt-old" });
-      expect(piPicker.choices.some((choice) => choice.choice.kind === "parent")).toBe(true);
-      for (const choice of piPicker.choices) {
-        expect(hasTerminalControls(choice.item.label)).toBe(false);
-        expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);
-        expect(hasTerminalControls(choice.searchText)).toBe(false);
-      }
+      const renamed = pi.find((choice) => choice.value === "openai/gpt-old");
+      expect(renamed?.payload.selector).toBe("openai/gpt-old");
+      expect(renamed?.item.description).toContain("renamed");
+      expect(pi.some((choice) => choice.payload.selector === "parent")).toBe(true);
 
-      const nativePicker = yield* Effect.promise(() =>
-        loadCandidateModelPicker({
-          profile: "reviewer",
-          candidateIndex: 0,
-          candidate: candidate({ runtime: "claude", model: "claude-safe" }),
+      const native = displayed(
+        yield* loadPicker(catalog, profileCandidate("claude-safe", { runtime: "claude" }), {
           listNativeModels: () =>
             Promise.resolve([
               {
@@ -251,14 +227,10 @@ describe("profile model catalog", () => {
                 isDefault: true,
               },
             ]),
-          piCatalog: catalog.capture(),
         }),
-      );
-      const native = nativePicker.choices.find((choice) => choice.item.value === "claude-safe");
-      expect(native?.choice).toEqual({ kind: "model", selector: "claude-safe" });
-      expect(hasTerminalControls(native?.item.label ?? "")).toBe(false);
-      expect(hasTerminalControls(native?.item.description ?? "")).toBe(false);
-      expect(hasTerminalControls(native?.searchText ?? "")).toBe(false);
+      ).find((choice) => choice.value === "claude-safe");
+      expect(native?.payload.selector).toBe("claude-safe");
+      expect(native?.item.description).toContain("Safe");
     }),
   );
 
@@ -266,30 +238,15 @@ describe("profile model catalog", () => {
     "keeps trusted extension-provider models eligible for Herdr and uses live Codex tiers",
     () =>
       Effect.gen(function* () {
-        const registry: ProfileModelRegistry = {
-          getAvailable: () => [piModel("openai-codex", "gpt-5.6-sol")],
-          getError: () => undefined,
-          refresh: () => Promise.resolve({ aborted: false }),
-        };
-        const catalog = new ProfileModelCatalog(registry);
-        const herdr = yield* Effect.promise(() =>
-          loadCandidateModelPicker({
-            profile: "reviewer",
-            candidateIndex: 0,
-            candidate: candidate({ host: "herdr", model: "openai-codex/gpt-5.6-sol" }),
-            listNativeModels: () => Promise.resolve([]),
-            piCatalog: catalog.capture(),
-          }),
+        const catalog = staticCatalog([piModel("openai-codex", "gpt-5.6-sol")]);
+        const herdr = yield* loadPicker(
+          catalog,
+          profileCandidate("openai-codex/gpt-5.6-sol", { host: "herdr" }),
         );
         expect(herdr.warning).toBeUndefined();
-        expect(herdr.choices.find((choice) => choice.choice.kind === "model")?.choice).toEqual({
-          kind: "model",
-          selector: "openai-codex/gpt-5.6-sol",
-        });
-        expect(
-          herdr.choices.find((choice) => choice.item.value === "openai-codex/gpt-5.6-sol")
-            ?.fastModeAvailable,
-        ).toBe(true);
+        expect(herdr.choices).toMatchObject([
+          { selector: "openai-codex/gpt-5.6-sol", fastModeAvailable: true },
+        ]);
 
         const advertised: NativeRuntimeModel = {
           selector: "future-codex",
@@ -299,34 +256,21 @@ describe("profile model catalog", () => {
           supportedServiceTiers: ["priority"],
           isDefault: true,
         };
-        const codexCandidate = candidate({ runtime: "codex", model: advertised.selector });
-        const live = yield* Effect.promise(() =>
-          loadCandidateModelPicker({
-            profile: "worker",
-            candidateIndex: 0,
-            candidate: codexCandidate,
-            listNativeModels: () => Promise.resolve([advertised]),
-            piCatalog: catalog.capture(),
-          }),
-        );
-        expect(
-          live.choices.find((choice) => choice.item.value === advertised.selector)
-            ?.fastModeAvailable,
-        ).toBe(true);
+        const codexCandidate = profileCandidate(advertised.selector, { runtime: "codex" });
+        const fastModeFor = (picker: CandidateModelPickerData) =>
+          picker.choices.find((option) => option.selector === advertised.selector)
+            ?.fastModeAvailable;
+        const live = yield* loadPicker(catalog, codexCandidate, {
+          profile: "worker",
+          listNativeModels: () => Promise.resolve([advertised]),
+        });
+        expect(fastModeFor(live)).toBe(true);
 
-        const fallback = yield* Effect.promise(() =>
-          loadCandidateModelPicker({
-            profile: "worker",
-            candidateIndex: 0,
-            candidate: codexCandidate,
-            listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
-            piCatalog: catalog.capture(),
-          }),
-        );
-        expect(
-          fallback.choices.find((choice) => choice.item.value === advertised.selector)
-            ?.fastModeAvailable,
-        ).toBe(false);
+        const fallback = yield* loadPicker(catalog, codexCandidate, {
+          profile: "worker",
+          listNativeModels: () => Promise.reject(new Error("catalog\u001b[2J failed")),
+        });
+        expect(fastModeFor(fallback)).toBe(false);
         expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
       }),
   );

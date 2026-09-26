@@ -8,9 +8,11 @@ import {
   nodeHomeDirectory,
   nodePath as path,
 } from "./node-builtins.ts";
+import { signalProcess } from "./process-tree.ts";
 
 export interface NativeLockOptions {
-  /** Owned test boundary only. Production defaults to one private OS-user directory. */
+  /** Defaults to one private OS-user directory. A caller may own a private production root
+   * (mode 0700, same uid); exclusion then covers only callers sharing that root. */
   readonly directory?: string;
   /** Positive finite milliseconds, at most 2^31 - 1. Defaults to 50. */
   readonly pollMs?: number;
@@ -28,7 +30,8 @@ type Owner = typeof Owner.Type;
 const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Owner));
 const encode = Schema.encodeSync(Schema.fromJsonString(Owner));
 const recovery = () => new CrossProcessLockError({ reason: "recovery-required" });
-const code = (expected: string) => Schema.is(Schema.Struct({ code: Schema.Literal(expected) }));
+const code = (...expected: string[]) =>
+  Schema.is(Schema.Struct({ code: Schema.Literals(expected) }));
 const uid = () => {
   if (!process.getuid) throw recovery();
   return process.getuid();
@@ -37,7 +40,6 @@ const privateDirectory = (directory: string) => {
   const stat = fs.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid() || stat.mode & 0o077)
     throw recovery();
-  return stat;
 };
 const syncDirectory = (directory: string) => {
   const fd = fs.openSync(directory, flags.O_RDONLY | flags.O_NOFOLLOW);
@@ -81,14 +83,7 @@ const writeOwner = (directory: string, owner: Owner) => {
   fs.renameSync(temporary, path.join(directory, "owner.json"));
   syncDirectory(directory);
 };
-const dead = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return code("ESRCH")(error);
-  }
-};
+const dead = (pid: number) => signalProcess(pid, 0) === "absent";
 /** Nonempty token tombstones must remain: they prevent stale reclaimers moving a successor. */
 const retire = (directory: string, owner: Owner, root: string) => {
   const current = readOwner(directory);
@@ -112,10 +107,15 @@ const cleanReleased = (directory: string, owner: Owner) => {
   }
 };
 
-/** Synchronous, bounded filesystem commits keep ownership handoff free of cancellation gaps. */
+/**
+ * Synchronous, bounded filesystem commits keep ownership handoff free of cancellation gaps.
+ * With `retryAfterRetire`, one attempt follows retiring a dead quiescent owner, so
+ * `undefined` then means another owner holds the slot.
+ */
 export const acquireNativeLock = (
   namespace: string,
   options: NativeLockOptions,
+  retryAfterRetire = false,
 ): CrossProcessLease | undefined => {
   const root = options.directory ?? path.join(nodeHomeDirectory(), ".cosmic-pi-locks-v1");
   try {
@@ -145,15 +145,9 @@ export const acquireNativeLock = (
     try {
       retire(directory, previous, root);
     } catch (retireError) {
-      if (
-        code("ENOENT")(retireError) ||
-        code("ENOTEMPTY")(retireError) ||
-        code("EEXIST")(retireError)
-      )
-        return undefined;
-      throw retireError;
+      if (!code("ENOENT", "ENOTEMPTY", "EEXIST")(retireError)) throw retireError;
     }
-    return undefined;
+    return retryAfterRetire ? acquireNativeLock(namespace, options) : undefined;
   }
   const owner: Owner = {
     version: 1,
@@ -171,7 +165,7 @@ export const acquireNativeLock = (
   } catch (error) {
     fs.unlinkSync(path.join(candidate, "owner.json"));
     fs.rmdirSync(candidate);
-    if (code("EEXIST")(error) || code("ENOTEMPTY")(error)) return undefined;
+    if (code("EEXIST", "ENOTEMPTY")(error)) return undefined;
     throw error;
   }
   try {
@@ -190,6 +184,14 @@ export const acquireNativeLock = (
   let releaseRequested = false;
   let released = false;
   let uncertain = false;
+  const uncertainOnFailure = (commit: () => void) => {
+    try {
+      commit();
+    } catch (error) {
+      uncertain = true;
+      throw error;
+    }
+  };
   const check = () => {
     if (released || uncertain || readOwner(directory).token !== owner.token) throw recovery();
   };
@@ -198,15 +200,10 @@ export const acquireNativeLock = (
     if (released || pending || uncertain) return;
     check();
     const destination = `${directory}.released-${owner.token}`;
-    try {
-      // A dead reclaimer observes PID death BEFORE its final exact-token check.
-      // It cannot pass that check for this live owner. Old reclaimers targeting a
-      // predecessor remain fenced by that predecessor's permanent nonempty retired path.
-      fs.renameSync(directory, destination);
-    } catch (error) {
-      uncertain = true;
-      throw error;
-    }
+    // A dead reclaimer observes PID death BEFORE its final exact-token check.
+    // It cannot pass that check for this live owner. Old reclaimers targeting a
+    // predecessor remain fenced by that predecessor's permanent nonempty retired path.
+    uncertainOnFailure(() => fs.renameSync(directory, destination));
     // Relinquishment is final even if durability or owned cleanup fails afterward.
     released = true;
     syncDirectory(root);
@@ -217,22 +214,12 @@ export const acquireNativeLock = (
       check();
       if (pending || releaseRequested) throw recovery();
       pending = true;
-      try {
-        writeOwner(directory, { ...owner, phase: "native-pending" });
-      } catch (error) {
-        uncertain = true;
-        throw error;
-      }
+      uncertainOnFailure(() => writeOwner(directory, { ...owner, phase: "native-pending" }));
     },
     mutationSettled: () => {
       check();
       if (!pending) throw recovery();
-      try {
-        writeOwner(directory, owner);
-      } catch (error) {
-        uncertain = true;
-        throw error;
-      }
+      uncertainOnFailure(() => writeOwner(directory, owner));
       pending = false;
       if (releaseRequested) release();
     },

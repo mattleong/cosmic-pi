@@ -7,21 +7,40 @@ import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
+import type { SubagentRunView } from "../../src/run/model.ts";
 import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
+  executeTool,
   invokeOptionalTool,
-  context,
-  fallbackProfileService,
-  startCapturingService,
   view,
 } from "./fixtures/tool-harness.ts";
+import { containedWriter, violationAudit } from "../fixtures/run-view.ts";
 
 const resultText = (result: {
   readonly content: ReadonlyArray<AgentToolResult<unknown>["content"][number]>;
 }): string =>
   result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+
+/** Awaits one run whose terminal observation is already available. */
+const awaitSingle = (run: SubagentRunView) =>
+  invokeOptionalTool(
+    captureSubagentTools(
+      subagentServiceDouble({
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
+      }),
+    ).get("subagent_await"),
+    { runIds: [run.id], until: "all_finished" },
+  );
+
+/** Asserts each needle's first occurrence in order, then `last` after the final needle. */
+const expectInOrder = (text: string, needles: ReadonlyArray<string>, last: string) => {
+  const indexes = needles.map((needle) => text.indexOf(needle));
+  indexes.push(text.indexOf(last, indexes.at(-1)));
+  expect(indexes.every((index) => index >= 0)).toBe(true);
+  indexes.slice(1).forEach((index, position) => expect(indexes[position]).toBeLessThan(index));
+};
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
@@ -110,11 +129,7 @@ describe("subagent tool", () => {
         runCount: 1,
         cards: [{ id: "agent-1" }],
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const listDetails = listed?.details as
-        | { cards?: ReadonlyArray<{ finalText?: string }> }
-        | undefined;
-      expect(listDetails?.cards?.[0]?.finalText).toBeUndefined();
+      expect(listed?.details).not.toHaveProperty("cards.0.finalText");
     },
   );
 
@@ -205,7 +220,6 @@ describe("subagent tool", () => {
     });
     const completed = view({ ...target, state: "completed", endedAt: 2 });
     const service = subagentServiceDouble({
-      ...startCapturingService([]),
       withAwaitTerminalObservations: (_ids, _until, onUpdate, use) =>
         Effect.sync(() => {
           onUpdate?.([target], [target, child]);
@@ -226,9 +240,7 @@ describe("subagent tool", () => {
   });
 
   effectTest("handles tool-level await cancellation with retained attention", function* () {
-    const base = startCapturingService([]);
     const noProgressService = subagentServiceDouble({
-      ...base,
       withAwaitTerminalObservations: () => Effect.never,
     });
     const waiting = view({
@@ -237,25 +249,20 @@ describe("subagent tool", () => {
       question: { requestId: "question", message: "Which fixture?", createdAt: 2 },
     });
     const cancelService = subagentServiceDouble({
-      ...base,
       withAwaitTerminalObservations: (_ids, _until, onUpdate) =>
         Effect.sync(() => onUpdate?.([waiting])).pipe(Effect.andThen(Effect.never)),
     });
     const updates: string[] = [];
     const controller = new AbortController();
-    const executing = captureSubagentTools(cancelService)
-      .get("subagent_await")
-      ?.execute(
-        "call",
-        { runIds: [waiting.id], until: "all_finished" },
-        controller.signal,
-        (result) => updates.push(resultText(result)),
-        context,
-      );
+    const executing = executeTool(
+      captureSubagentTools(cancelService).get("subagent_await")!,
+      { runIds: [waiting.id], until: "all_finished" },
+      { signal: controller.signal, update: (result) => updates.push(resultText(result)) },
+    );
     yield* step(() => Promise.resolve());
     yield* step(() => Promise.resolve());
     controller.abort();
-    const result = yield* step(() => executing!);
+    const result = yield* step(() => executing);
     expect(result.details).toMatchObject({
       action: "await",
       cancelled: true,
@@ -272,16 +279,15 @@ describe("subagent tool", () => {
     const immediateUpdates: string[] = [];
     const immediateController = new AbortController();
     immediateController.abort();
-    const immediate = captureSubagentTools(noProgressService)
-      .get("subagent_await")
-      ?.execute(
-        "call",
-        { runIds: [waiting.id], until: "all_finished" },
-        immediateController.signal,
-        (result) => immediateUpdates.push(resultText(result)),
-        context,
-      );
-    const immediateResult = yield* step(() => immediate!);
+    const immediate = executeTool(
+      captureSubagentTools(noProgressService).get("subagent_await")!,
+      { runIds: [waiting.id], until: "all_finished" },
+      {
+        signal: immediateController.signal,
+        update: (result) => immediateUpdates.push(resultText(result)),
+      },
+    );
+    const immediateResult = yield* step(() => immediate);
     expect(immediateResult.details).toMatchObject({
       action: "await",
       cancelled: true,
@@ -301,7 +307,6 @@ describe("subagent tool", () => {
       let released = false;
       let returned = false;
       const service = subagentServiceDouble({
-        ...startCapturingService([]),
         withAwaitTerminalObservations: () =>
           Effect.acquireUseRelease(
             Deferred.succeed(started, undefined),
@@ -318,19 +323,14 @@ describe("subagent tool", () => {
           ),
       });
       const controller = new AbortController();
-      const executing = captureSubagentTools(service)
-        .get("subagent_await")!
-        .execute(
-          "call",
-          { runIds: ["agent-one"], until: "all_finished" },
-          controller.signal,
-          undefined,
-          context,
-        )
-        .then((result) => {
-          returned = true;
-          return result;
-        });
+      const executing = executeTool(
+        captureSubagentTools(service).get("subagent_await")!,
+        { runIds: ["agent-one"], until: "all_finished" },
+        { signal: controller.signal },
+      ).then((result) => {
+        returned = true;
+        return result;
+      });
       yield* Deferred.await(started);
       controller.abort();
       yield* Deferred.await(closing);
@@ -359,63 +359,41 @@ describe("subagent tool", () => {
           message: "Actual failure",
         });
         const service = subagentServiceDouble({
-          ...startCapturingService([]),
           withAwaitTerminalObservations: () =>
             (defect ? Effect.die(error) : Effect.fail(error)).pipe(
               Effect.ensuring(Effect.sync(() => controller.abort())),
             ),
         });
-        const executing = captureSubagentTools(service)
-          .get("subagent_await")!
-          .execute(
-            "call",
-            { runIds: ["agent-one"], until: "all_finished" },
-            controller.signal,
-            undefined,
-            context,
-          );
+        const executing = executeTool(
+          captureSubagentTools(service).get("subagent_await")!,
+          { runIds: ["agent-one"], until: "all_finished" },
+          { signal: controller.signal },
+        );
         yield* step(() => expect(executing).rejects.toBeDefined());
       },
     );
   }
 
   effectTest("scopes persistent await presentation to tool execution", function* () {
-    const service = subagentServiceDouble({
-      ...startCapturingService([]),
-      withAwaitTerminalObservations: () => Effect.never,
-    });
+    const service = subagentServiceDouble({ withAwaitTerminalObservations: () => Effect.never });
     const release = vi.fn();
     const presentation = {
       beginStart: vi.fn(() => () => undefined),
       beginAwait: vi.fn(() => release),
       isLiveHierarchyAvailable: vi.fn(() => true),
     };
-    const tools = captureSubagentTools(
-      service,
-      ["read"],
-      fallbackProfileService,
-      undefined,
-      { cwd: "/project", projectTrusted: true },
-      "high",
-      undefined,
-      presentation,
-    );
     const controller = new AbortController();
-    const executing = tools
-      .get("subagent_await")
-      ?.execute(
-        "call",
-        { runIds: ["agent-1"], until: "all_finished" },
-        controller.signal,
-        undefined,
-        context,
-      );
+    const executing = executeTool(
+      captureSubagentTools(service, { toolPresentation: presentation }).get("subagent_await")!,
+      { runIds: ["agent-1"], until: "all_finished" },
+      { signal: controller.signal },
+    );
 
     yield* step(() => Promise.resolve());
     expect(presentation.beginAwait).toHaveBeenCalledWith(["agent-1"], "all_finished");
     expect(release).not.toHaveBeenCalled();
     controller.abort();
-    const cancelled = yield* step(() => executing!);
+    const cancelled = yield* step(() => executing);
     expect(cancelled.details).toMatchObject({ cancelled: true });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -477,21 +455,18 @@ describe("subagent tool", () => {
   );
 
   effectTest("rejects lifecycle messages for actions that cannot deliver them", function* () {
-    const service = {
-      ...startCapturingService([]),
+    const service = subagentServiceDouble({
       interrupt: () => Effect.succeed(view({ state: "paused" })),
-    };
-    const tool = captureSubagentTools(service).get("subagent_lifecycle");
+    });
+    const tool = captureSubagentTools(service).get("subagent_lifecycle")!;
 
     yield* step(() =>
       expect(
-        tool?.execute(
-          "call",
-          { action: "interrupt", runIds: ["agent-1"], message: "Pause after this step." },
-          undefined,
-          undefined,
-          context,
-        ),
+        executeTool(tool, {
+          action: "interrupt",
+          runIds: ["agent-1"],
+          message: "Pause after this step.",
+        }),
       ).rejects.toThrow('message is valid only when action="resume"'),
     );
   });
@@ -500,10 +475,9 @@ describe("subagent tool", () => {
     "deduplicates repeated target IDs before applying management operations",
     function* () {
       const sent: string[] = [];
-      const service = {
-        ...startCapturingService([]),
-        send: (id: string) => Effect.sync(() => (sent.push(id), view({ id }))),
-      };
+      const service = subagentServiceDouble({
+        send: (id) => Effect.sync(() => (sent.push(id), view({ id }))),
+      });
       const tool = captureSubagentTools(service).get("subagent_send");
 
       yield* invokeOptionalTool(tool, { runIds: ["agent-1", "agent-1"], message: "Conclude." });
@@ -515,11 +489,9 @@ describe("subagent tool", () => {
   effectTest(
     "acknowledges retained-send next assignments distinctly from steering guidance",
     function* () {
-      const base = startCapturingService([]);
       const retainedView = (id: string) =>
         view({ id, closeOnReport: false, host: "herdr", state: "running", reportGeneration: 1 });
       const allRetained = subagentServiceDouble({
-        ...base,
         send: (id) => Effect.succeed(retainedView(id)),
       });
       const retainedResult = yield* invokeOptionalTool(
@@ -531,7 +503,6 @@ describe("subagent tool", () => {
       );
 
       const mixed = subagentServiceDouble({
-        ...base,
         send: (id) => Effect.succeed(id === "agent-r1" ? retainedView(id) : view({ id })),
       });
       const mixedResult = yield* invokeOptionalTool(
@@ -583,13 +554,7 @@ describe("subagent tool", () => {
     const tool = captureSubagentTools(service).get("subagent_send")!;
     yield* step(() =>
       expect(
-        tool.execute(
-          "test",
-          { runIds: ["agent-1"], message: "Continue" },
-          undefined,
-          undefined,
-          context,
-        ),
+        executeTool(tool, { runIds: ["agent-1"], message: "Continue" }, { callID: "test" }),
       ).rejects.toThrow("broken invariant"),
     );
   });
@@ -614,12 +579,10 @@ describe("subagent tool", () => {
       });
       const signal = new AbortController();
       const tool = captureSubagentTools(service).get("subagent_send")!;
-      const promise = tool.execute(
-        "test",
+      const promise = executeTool(
+        tool,
         { runIds: ["agent-1"], message: "Continue" },
-        signal.signal,
-        undefined,
-        context,
+        { callID: "test", signal: signal.signal },
       );
       const settled = Promise.allSettled([promise]);
       yield* Effect.gen(function* () {
@@ -636,9 +599,7 @@ describe("subagent tool", () => {
   );
 
   effectTest("renders state-aware stop acknowledgements for terminal no-ops", function* () {
-    const base = startCapturingService([]);
     const service = subagentServiceDouble({
-      ...base,
       stop: (id) =>
         Effect.succeed(
           view({
@@ -663,18 +624,17 @@ describe("subagent tool", () => {
   effectTest(
     "returns structured failures for single-target reply and rename operations",
     function* () {
-      const service = {
-        ...startCapturingService([]),
-        reply: (id: string) =>
+      const service = subagentServiceDouble({
+        reply: (id) =>
           Effect.fail(
             new InvalidSubagentRequestError({
               code: "no_parent_question",
               message: `Subagent ${id} has no pending parent question.`,
             }),
           ),
-        rename: (id: string) =>
+        rename: (id) =>
           Effect.fail(new SubagentNotFoundError({ id, message: `Subagent run not found: ${id}` })),
-      };
+      });
       const tools = captureSubagentTools(service);
 
       const replied = yield* invokeOptionalTool(tools.get("subagent_reply"), {
@@ -745,15 +705,13 @@ describe("subagent tool", () => {
 
   effectTest("returns status for found IDs and model-visible failures for stale IDs", function* () {
     const completed = view({ state: "completed", finalText: "Done." });
-    const withStatusObservations: SubagentServiceContract["withStatusObservations"] = (ids, use) =>
-      use({
-        observations: ids.includes("agent-1") ? [{ run: completed }] : [],
-        missingIds: ids.filter((id) => id !== "agent-1"),
-      });
-    const service = {
-      ...startCapturingService([]),
-      withStatusObservations,
-    };
+    const service = subagentServiceDouble({
+      withStatusObservations: (ids, use) =>
+        use({
+          observations: ids.includes("agent-1") ? [{ run: completed }] : [],
+          missingIds: ids.filter((id) => id !== "agent-1"),
+        }),
+    });
     const tool = captureSubagentTools(service).get("subagent_status");
 
     const result = yield* invokeOptionalTool(tool, { runIds: ["agent-1", "agent-stale"] });
@@ -789,22 +747,15 @@ describe("subagent tool", () => {
     });
     yield* step(() =>
       expect(
-        tools
-          .get("subagent_status")!
-          .execute("call", { runIds: [completed.id] }, undefined, undefined, context),
+        executeTool(tools.get("subagent_status")!, { runIds: [completed.id] }),
       ).rejects.toThrow("detail projection failed"),
     );
     yield* step(() =>
       expect(
-        tools
-          .get("subagent_await")!
-          .execute(
-            "call",
-            { runIds: [completed.id], until: "all_finished" },
-            undefined,
-            undefined,
-            context,
-          ),
+        executeTool(tools.get("subagent_await")!, {
+          runIds: [completed.id],
+          until: "all_finished",
+        }),
       ).rejects.toThrow("detail projection failed"),
     );
     expect(consumed).toEqual([]);
@@ -828,15 +779,7 @@ describe("subagent tool", () => {
         createdAt: 2,
       },
     });
-    const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
-      (_ids, _until, _onUpdate, use) => use([{ run: waiting }]);
-    const service = {
-      ...startCapturingService([]),
-      withAwaitTerminalObservations,
-    };
-    const tool = captureSubagentTools(service).get("subagent_await");
-
-    const result = yield* invokeOptionalTool(tool, { runIds: ["agent-1"], until: "all_finished" });
+    const result = yield* awaitSingle(waiting);
 
     expect(result?.content[0]?.text).toContain(
       'Reply with subagent_reply({ runId: "agent-1", message: "..." }), then call subagent_await again.',
@@ -850,39 +793,20 @@ describe("subagent tool", () => {
   });
 
   effectTest("returns ordered recovery for a contained paused writer", function* () {
-    const paused = view({
-      id: "agent-writer",
-      name: "paused-writer",
-      state: "paused",
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts"],
-      writeAdmissionPaused: true,
-      writeViolationOffender: true,
-      writeAudit: {
-        observedFileWrites: ["src/b.ts"],
-        violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
-        bashWriteHints: 0,
-      },
-    });
-    const service = subagentServiceDouble({
-      ...startCapturingService([]),
-      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: paused }]),
-    });
-    const tool = captureSubagentTools(service).get("subagent_await");
+    const paused = containedWriter({ id: "agent-writer", name: "paused-writer", state: "paused" });
 
-    const result = yield* invokeOptionalTool(tool, { runIds: [paused.id], until: "all_finished" });
+    const result = yield* awaitSingle(paused);
     const text = result?.content[0]?.text ?? "";
-    const review = text.indexOf("subagent_status");
-    const grant = text.indexOf('subagent_claims({ action: "grant"');
-    const admission = text.indexOf('subagent_claims({ action: "resume_admission"');
-    const resume = text.indexOf('subagent_lifecycle({ action: "resume"');
-    const awaitAgain = text.indexOf("subagent_await", resume);
-
-    expect([review, grant, admission, resume, awaitAgain].every((index) => index >= 0)).toBe(true);
-    expect(review).toBeLessThan(grant);
-    expect(grant).toBeLessThan(admission);
-    expect(admission).toBeLessThan(resume);
-    expect(resume).toBeLessThan(awaitAgain);
+    expectInOrder(
+      text,
+      [
+        "subagent_status",
+        'subagent_claims({ action: "grant"',
+        'subagent_claims({ action: "resume_admission"',
+        'subagent_lifecycle({ action: "resume"',
+      ],
+      "subagent_await",
+    );
     expect(text).not.toContain("subagent_reply");
     expect(result?.details).toMatchObject({
       action: "await",
@@ -899,29 +823,13 @@ describe("subagent tool", () => {
   });
 
   effectTest("branches after status while offender containment is still in progress", function* () {
-    const transitioning = view({
-      id: "agent-transitioning-writer",
-      name: "transitioning-writer",
-      state: "running",
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts"],
-      writeAdmissionPaused: true,
-      writeViolationOffender: true,
-      writeAudit: {
-        observedFileWrites: ["src/b.ts"],
-        violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
-        bashWriteHints: 0,
-      },
-    });
-    const service = subagentServiceDouble({
-      ...startCapturingService([]),
-      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
-        use([{ run: transitioning }]),
-    });
-    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_await"), {
-      runIds: [transitioning.id],
-      until: "all_finished",
-    });
+    const result = yield* awaitSingle(
+      containedWriter({
+        id: "agent-transitioning-writer",
+        name: "transitioning-writer",
+        state: "running",
+      }),
+    );
     const text = result?.content[0]?.text ?? "";
 
     expect(text).toContain("Containment is in progress");
@@ -933,67 +841,43 @@ describe("subagent tool", () => {
   });
 
   effectTest("does not recommend granting an outside-workspace violation", function* () {
-    const stopped = view({
-      id: "agent-outside",
-      name: "outside-writer",
-      state: "stopped",
-      capabilities: ["interrupt"],
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts"],
-      writeAdmissionPaused: true,
-      writeViolationOffender: true,
-      writeAudit: {
-        observedFileWrites: ["<outside workspace>"],
-        violations: [{ path: "<outside workspace>", toolName: "edit", observedAt: 2 }],
-        bashWriteHints: 0,
-      },
-    });
-    const service = subagentServiceDouble({
-      ...startCapturingService([]),
-      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: stopped }]),
-    });
-    const tool = captureSubagentTools(service).get("subagent_await");
-
-    const result = yield* invokeOptionalTool(tool, { runIds: [stopped.id], until: "all_finished" });
+    const result = yield* awaitSingle(
+      containedWriter({
+        id: "agent-outside",
+        name: "outside-writer",
+        state: "stopped",
+        capabilities: ["interrupt"],
+        writeAudit: violationAudit("<outside workspace>"),
+      }),
+    );
     const text = result?.content[0]?.text ?? "";
-    const cleanup = text.indexOf("Confirm process and writer cleanup");
-    const admission = text.indexOf('subagent_claims({ action: "resume_admission"');
-    const replacement = text.indexOf("subagent_start");
-    const awaitReplacement = text.indexOf("subagent_await", replacement);
 
     expect(text).toContain("<outside workspace>");
     expect(text).not.toContain('action: "grant"');
-    expect([cleanup, admission, replacement, awaitReplacement].every((index) => index >= 0)).toBe(
-      true,
+    expectInOrder(
+      text,
+      [
+        "Confirm process and writer cleanup",
+        'subagent_claims({ action: "resume_admission"',
+        "subagent_start",
+      ],
+      "subagent_await",
     );
-    expect(cleanup).toBeLessThan(admission);
-    expect(admission).toBeLessThan(replacement);
-    expect(replacement).toBeLessThan(awaitReplacement);
     expect(result?.details).toMatchObject({ action: "await", attentionRequired: true });
   });
 
   effectTest("does not treat a peer's historical audit as the current offender", function* () {
-    const peer = view({
-      id: "agent-repaired-peer",
-      name: "repaired-peer",
-      state: "running",
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts", "src/old.ts"],
-      writeAdmissionPaused: true,
-      writeAudit: {
-        observedFileWrites: ["src/old.ts"],
-        violations: [{ path: "src/old.ts", toolName: "edit", observedAt: 1 }],
-        bashWriteHints: 0,
-      },
-    });
-    const service = subagentServiceDouble({
-      ...startCapturingService([]),
-      withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run: peer }]),
-    });
-    const result = yield* invokeOptionalTool(captureSubagentTools(service).get("subagent_await"), {
-      runIds: [peer.id],
-      until: "all_finished",
-    });
+    const result = yield* awaitSingle(
+      view({
+        id: "agent-repaired-peer",
+        name: "repaired-peer",
+        state: "running",
+        writeIntent: "writer",
+        writeClaims: ["src/a.ts", "src/old.ts"],
+        writeAdmissionPaused: true,
+        writeAudit: violationAudit("src/old.ts", 1),
+      }),
+    );
     const text = result?.content[0]?.text ?? "";
 
     expect(text).toContain("Do not change this peer's claims");
@@ -1026,20 +910,12 @@ describe("subagent tool", () => {
             consumed.push(...receipts);
           }),
       });
-      const tool = captureSubagentTools(service).get("subagent_status");
+      const tool = captureSubagentTools(service).get("subagent_status")!;
 
       yield* step(() =>
-        expect(
-          tool?.execute(
-            "call",
-            {
-              runIds: runs.map((run) => run.id),
-            },
-            undefined,
-            undefined,
-            context,
-          ),
-        ).rejects.toThrow("at most 12 targets"),
+        expect(executeTool(tool, { runIds: runs.map((run) => run.id) })).rejects.toThrow(
+          "at most 12 targets",
+        ),
       );
 
       const result = yield* invokeOptionalTool(tool, {
@@ -1104,7 +980,6 @@ describe("subagent tool", () => {
     } satisfies ProfileRouteContinuation;
     const requests: Array<Parameters<SubagentServiceContract["startRetrySessionOwned"]>[0]> = [];
     const service = subagentServiceDouble({
-      ...startCapturingService([]),
       claimRetryContinuation: () =>
         Effect.succeed({ source: failed, continuation: route, claimToken: "retry-1" }),
       startRetrySessionOwned: (request, onOwned) =>
@@ -1123,7 +998,12 @@ describe("subagent tool", () => {
     });
     const tool = captureSubagentTools(service).get("subagent_lifecycle");
 
-    const result = yield* invokeOptionalTool(tool, { action: "retry", runIds: ["agent-1"] });
+    // Root retry accepts and ignores a message; only interrupt, stop, and resume reject one.
+    const result = yield* invokeOptionalTool(tool, {
+      action: "retry",
+      runIds: ["agent-1"],
+      message: "Ignored by retry.",
+    });
 
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
@@ -1158,7 +1038,6 @@ describe("subagent tool", () => {
         writeAdmissionPaused: true,
       });
       const service = subagentServiceDouble({
-        ...startCapturingService([]),
         withStatusObservations: (_ids, use) =>
           use({ observations: [{ run: claimed }], missingIds: [] }),
         grantWriteClaims: (id, paths) =>
@@ -1173,11 +1052,7 @@ describe("subagent tool", () => {
               state: "stopped",
               writeAdmissionPaused: undefined,
               writeViolationOffender: undefined,
-              writeAudit: {
-                observedFileWrites: ["src/b.ts"],
-                violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
-                bashWriteHints: 0,
-              },
+              writeAudit: violationAudit("src/b.ts"),
             }),
           ),
       });
@@ -1222,7 +1097,6 @@ describe("subagent tool", () => {
           model: `provider/${"m".repeat(8_000)}`,
         }),
       );
-      const base = startCapturingService([]);
       const failStart: SubagentServiceContract["start"] = () =>
         Effect.fail(
           new InvalidSubagentRequestError({
@@ -1231,7 +1105,6 @@ describe("subagent tool", () => {
           }),
         );
       const service = subagentServiceDouble({
-        ...base,
         list: Effect.succeed(oversizedRuns),
         start: failStart,
         startSessionOwned: failStart,
@@ -1241,7 +1114,7 @@ describe("subagent tool", () => {
       expect(listed?.content[0]?.text.length).toBeLessThanOrEqual(48_000);
       expect(listed?.content[0]?.text).toContain("tool output truncated; narrow the request");
 
-      const emptyService = subagentServiceDouble({ ...base, list: Effect.succeed([]) });
+      const emptyService = subagentServiceDouble({ list: Effect.succeed([]) });
       const empty = yield* invokeOptionalTool(
         captureSubagentTools(emptyService).get("subagent_list"),
         {},

@@ -15,6 +15,7 @@ import {
   MAX_TARGET_RUNS,
 } from "../run/limits.ts";
 import { MAX_NAME_CHARS, MAX_TASK_CHARS } from "../run/state.ts";
+import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
 
 const NONBLANK_PATTERN = ".*\\S.*";
 const strictObjectOptions = { additionalProperties: false } as const;
@@ -81,7 +82,7 @@ const MessageParameters = Type.String({
   pattern: NONBLANK_PATTERN,
 });
 
-export const ModelsParameters = Type.Object(
+const ModelsParameters = Type.Object(
   {
     profile: Type.Optional(
       StringEnum(PROFILE_IDS, {
@@ -92,7 +93,7 @@ export const ModelsParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const StartParameters = Type.Object(
+const StartParameters = Type.Object(
   {
     agents: Type.Array(StartSpecParameters, {
       description:
@@ -104,16 +105,16 @@ export const StartParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const ListParameters = Type.Object({}, strictObjectOptions);
+const ListParameters = Type.Object({}, strictObjectOptions);
 
-export const StatusParameters = Type.Object(
+const StatusParameters = Type.Object(
   {
     runIds: RunIdsParameters,
   },
   strictObjectOptions,
 );
 
-export const AwaitParameters = Type.Object(
+const AwaitParameters = Type.Object(
   {
     runIds: RunIdsParameters,
     until: StringEnum(["all_finished", "any_finished"] as const, {
@@ -124,7 +125,7 @@ export const AwaitParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const SendParameters = Type.Object(
+const SendParameters = Type.Object(
   {
     runIds: RunIdsParameters,
     message: MessageParameters,
@@ -132,7 +133,7 @@ export const SendParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const ReplyParameters = Type.Object(
+const ReplyParameters = Type.Object(
   {
     runId: Type.String({
       ...runIdOptions,
@@ -143,7 +144,7 @@ export const ReplyParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const LifecycleParameters = Type.Object(
+const LifecycleParameters = Type.Object(
   {
     action: StringEnum(["resume", "interrupt", "stop", "retry"] as const, {
       description:
@@ -155,7 +156,7 @@ export const LifecycleParameters = Type.Object(
   strictObjectOptions,
 );
 
-export const RenameParameters = Type.Object(
+const RenameParameters = Type.Object(
   {
     runId: Type.String({
       ...runIdOptions,
@@ -176,7 +177,7 @@ const WritePathsParameters = Type.Array(
   { minItems: 1, maxItems: MAX_WRITE_CLAIMS, uniqueItems: true },
 );
 
-export const ClaimsParameters = Type.Object(
+const ClaimsParameters = Type.Object(
   {
     action: StringEnum(["list", "grant", "revoke", "resume_admission"] as const, {
       description:
@@ -265,14 +266,9 @@ const WORKSPACE_ACTION_FIELDS = {
     readonly optional: ReadonlyArray<WorkspaceField>;
   }
 >;
-const WORKSPACE_FIELDS: ReadonlyArray<WorkspaceField> = [
-  "workspaceId",
-  "revisionId",
-  "preparationId",
-  "offset",
-  "limit",
-  "message",
-];
+const WORKSPACE_FIELDS = Object.keys(WorkspaceParameters.properties).filter(
+  (field): field is WorkspaceField => field !== "action",
+);
 
 /** Enforce action-specific requirements without provider-incompatible union tool schemas. */
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
@@ -296,27 +292,67 @@ export const workspaceOperationError = (operation: SubagentWorkspaceInput): stri
 export type SubagentStartSpec = Static<typeof StartSpecParameters>;
 export type SubagentModelsInput = Static<typeof ModelsParameters>;
 export type SubagentStartInput = Static<typeof StartParameters>;
-export type SubagentListInput = Static<typeof ListParameters>;
-export type SubagentStatusInput = Static<typeof StatusParameters>;
-export type SubagentAwaitInput = Static<typeof AwaitParameters>;
-export type SubagentSendInput = Static<typeof SendParameters>;
-export type SubagentReplyInput = Static<typeof ReplyParameters>;
 export type SubagentLifecycleInput = Static<typeof LifecycleParameters>;
-export type SubagentRenameInput = Static<typeof RenameParameters>;
 export type SubagentClaimsInput = Static<typeof ClaimsParameters>;
 
-export type SubagentToolInput =
-  | ({ readonly action: "models" } & SubagentModelsInput)
-  | ({ readonly action: "start" } & SubagentStartInput)
-  | ({ readonly action: "list" } & SubagentListInput)
-  | ({ readonly action: "status" } & SubagentStatusInput)
-  | ({ readonly action: "await" } & SubagentAwaitInput)
-  | ({ readonly action: "send" } & SubagentSendInput)
-  | ({ readonly action: "reply" } & SubagentReplyInput)
-  | SubagentLifecycleInput
-  | ({ readonly action: "rename" } & SubagentRenameInput)
-  | { readonly action: "claims"; readonly operation: SubagentClaimsInput }
-  | { readonly action: "workspace"; readonly operation: SubagentWorkspaceInput };
+/** Proxy decoding rejects this; the root path reports it only for interrupt, stop, and resume. */
+export const lifecycleMessageError = (input: SubagentLifecycleInput): string | undefined =>
+  input.action !== "resume" && input.message !== undefined
+    ? 'subagent_lifecycle message is valid only when action="resume".'
+    : undefined;
+
+/** The one tool catalog: each Pi parameter schema plus any cross-field rule it cannot express. */
+export const SUBAGENT_TOOL_SCHEMAS = {
+  [SUBAGENT_TOOL_NAME.models]: { parameters: ModelsParameters },
+  [SUBAGENT_TOOL_NAME.start]: { parameters: StartParameters },
+  [SUBAGENT_TOOL_NAME.list]: { parameters: ListParameters },
+  [SUBAGENT_TOOL_NAME.status]: { parameters: StatusParameters },
+  [SUBAGENT_TOOL_NAME.await]: { parameters: AwaitParameters },
+  [SUBAGENT_TOOL_NAME.send]: { parameters: SendParameters },
+  [SUBAGENT_TOOL_NAME.reply]: { parameters: ReplyParameters },
+  [SUBAGENT_TOOL_NAME.lifecycle]: {
+    parameters: LifecycleParameters,
+    validate: lifecycleMessageError,
+  },
+  [SUBAGENT_TOOL_NAME.rename]: { parameters: RenameParameters },
+  [SUBAGENT_TOOL_NAME.claims]: { parameters: ClaimsParameters, validate: claimsOperationError },
+  [SUBAGENT_TOOL_NAME.workspace]: {
+    parameters: WorkspaceParameters,
+    validate: workspaceOperationError,
+  },
+} as const;
+
+export type SubagentToolParameters<N extends SubagentToolName> =
+  (typeof SUBAGENT_TOOL_SCHEMAS)[N]["parameters"];
+export type SubagentToolArgs<N extends SubagentToolName> = Static<SubagentToolParameters<N>>;
+
+/** One public tool call, keyed by tool name; its args are exactly the tool's wire arguments. */
+export type SubagentToolInput<N extends SubagentToolName = SubagentToolName> = {
+  readonly [P in N]: { readonly tool: P; readonly args: SubagentToolArgs<P> };
+}[N];
+
+type ToolNameAction = keyof typeof SUBAGENT_TOOL_NAME;
+/** Lifecycle carries its own action; every other tool's action is its SUBAGENT_TOOL_NAME key. */
+type ToolAction<I extends SubagentToolInput> =
+  I extends SubagentToolInput<typeof SUBAGENT_TOOL_NAME.lifecycle>
+    ? I["args"]["action"]
+    : {
+        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends I["tool"]
+          ? A
+          : never;
+      }[ToolNameAction];
+export type SubagentToolAction = ToolAction<SubagentToolInput>;
+
+const TOOL_NAME_ACTIONS = new Map<string, string>(
+  Object.entries(SUBAGENT_TOOL_NAME).map(([action, tool]) => [tool, action]),
+);
+
+/** The persisted details action for a call, and the subject of its argument errors. */
+export const subagentToolAction = <I extends SubagentToolInput>(input: I): ToolAction<I> =>
+  // SAFETY: ToolAction mirrors this lookup for every catalog tool.
+  (input.tool === SUBAGENT_TOOL_NAME.lifecycle
+    ? input.args.action
+    : TOOL_NAME_ACTIONS.get(input.tool)) as ToolAction<I>;
 
 export const prepareSubagentStartArguments = <ArgsInput>(args: ArgsInput): SubagentStartInput => {
   // Pi performs the authoritative TypeBox validation immediately after this friendly preflight.

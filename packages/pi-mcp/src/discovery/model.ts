@@ -96,8 +96,7 @@ export interface McpDiscoveryQueryResult {
   readonly notices: ReadonlyArray<string>;
 }
 export interface McpMetadataSnapshot extends McpMetadataFreshness {
-  /** Omitted only by fixtures, where the authorization epoch is zero. */
-  readonly authorizationRevision?: number;
+  readonly authorizationRevision: number;
   readonly server: string;
   readonly identity: string;
   readonly owner: string;
@@ -110,27 +109,22 @@ export interface McpMetadataSnapshot extends McpMetadataFreshness {
   readonly templates: ReadonlyArray<McpTemplateMetadata>;
   readonly prompts: ReadonlyArray<McpPromptMetadata>;
 }
-export interface McpMetadataSummary {
-  readonly server: string;
-  readonly revision: number;
-  readonly support: Readonly<Record<McpCachedFamily, boolean>>;
-  readonly diagnostics: ReadonlyArray<McpDiscoveryDiagnostic>;
-  readonly tools: number;
-  readonly resources: number;
-  readonly templates: number;
-  readonly prompts: number;
-}
+export type McpMetadataSummary = Pick<
+  McpMetadataSnapshot,
+  "server" | "revision" | "support" | "diagnostics"
+> &
+  Readonly<Record<McpCachedFamily, number>>;
+export const MCP_DISCOVERY_ACTIONS = [
+  "tools.list",
+  "tools.search",
+  "tools.describe",
+  "resources.list",
+  "resources.templates",
+  "prompts.list",
+] as const;
 export type McpDiscoveryRequest = Extract<
   McpDataRequest,
-  {
-    readonly action:
-      | "tools.list"
-      | "tools.search"
-      | "tools.describe"
-      | "resources.list"
-      | "resources.templates"
-      | "prompts.list";
-  }
+  { readonly action: (typeof MCP_DISCOVERY_ACTIONS)[number] }
 >;
 export type McpCachedFamily = "tools" | "resources" | "templates" | "prompts";
 export interface McpCachedRequest {
@@ -180,10 +174,7 @@ export interface McpCachedPage {
   readonly total: number;
   readonly next: string | undefined;
 }
-export interface McpCachedDetail {
-  readonly ref: McpCachedRef;
-  readonly name: string;
-  readonly description: string;
+export interface McpCachedDetail extends McpCachedEntry {
   readonly metadata: string;
   readonly truncated: boolean;
 }

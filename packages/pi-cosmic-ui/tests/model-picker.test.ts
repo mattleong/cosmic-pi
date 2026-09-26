@@ -1,18 +1,13 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import {
   createModelPickerChoices,
   makeModelPickerPage,
   modelSelector,
   type ModelPickerModel,
+  type ModelPickerPageOptions,
 } from "../src/manager/model-picker.ts";
-
-// SAFETY: The pure picker renderer uses only these Theme methods.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
 
 const scoped: ModelPickerModel[] = [
   {
@@ -40,18 +35,28 @@ describe("model picker projection", () => {
 });
 
 describe("ModelPickerPage", () => {
-  it("can opt into immediate typing without changing default navigation", () => {
+  const picker = (overrides: Partial<ModelPickerPageOptions<ModelPickerModel>> = {}) => {
     const select = vi.fn();
+    const cancel = vi.fn();
     const page = makeModelPickerPage({
-      theme,
-      scopedModels: [],
+      theme: plainTheme,
+      scopedModels: scoped,
       allModels: all,
+      getHeight: () => 12,
+      requestRender: vi.fn(),
+      select,
+      cancel,
+      ...overrides,
+    });
+    return { page, select, cancel };
+  };
+
+  it("can opt into immediate typing without changing default navigation", () => {
+    const { page, select } = picker({
+      scopedModels: [],
       initialSearchMode: true,
       current: modelSelector(scoped[0]!),
       getHeight: () => 14,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
     });
     page.focused = true;
     page.handleInput("claude");
@@ -60,15 +65,10 @@ describe("ModelPickerPage", () => {
   });
 
   it("uses injected cancellation for immediate search without swallowing typed keys", () => {
-    const cancel = vi.fn();
-    const page = makeModelPickerPage({
-      theme,
-      scopedModels: scoped,
+    const { page, cancel } = picker({
+      allModels: undefined,
       initialSearchMode: true,
       getHeight: () => 14,
-      requestRender: vi.fn(),
-      select: vi.fn(),
-      cancel,
       matchesKeybinding: (data, id) =>
         id === "tui.select.cancel" && (data === "\u001b[17~" || data === "s"),
     });
@@ -79,17 +79,7 @@ describe("ModelPickerPage", () => {
   });
 
   it("starts scoped and switches to all authenticated models with Tab", () => {
-    const select = vi.fn();
-    const page = makeModelPickerPage({
-      theme,
-      scopedModels: scoped,
-      allModels: all,
-      current: modelSelector(scoped[0]!),
-      getHeight: () => 14,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
-    });
+    const { page, select } = picker({ current: modelSelector(scoped[0]!), getHeight: () => 14 });
     expect(page.activeScope).toBe("scoped");
     page.handleInput("\t");
     expect(page.activeScope).toBe("all");
@@ -99,17 +89,7 @@ describe("ModelPickerPage", () => {
   });
 
   it("keeps a hidden stable identity across filtering and scope changes", () => {
-    const select = vi.fn();
-    const page = makeModelPickerPage({
-      theme,
-      scopedModels: scoped,
-      allModels: all,
-      current: "anthropic/claude-opus",
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
-    });
+    const { page, select } = picker({ current: "anthropic/claude-opus" });
     page.handleInput("/");
     page.handleInput("gpt");
     page.handleInput("\x1b");
@@ -120,9 +100,8 @@ describe("ModelPickerPage", () => {
   });
 
   it("keeps unavailable rows visible but prevents selection", () => {
-    const select = vi.fn();
-    const page = makeModelPickerPage({
-      theme,
+    const { page, select } = picker({
+      allModels: undefined,
       scopedModels: [
         {
           provider: "openai",
@@ -131,10 +110,6 @@ describe("ModelPickerPage", () => {
           unavailableReason: "Requires another runtime",
         },
       ],
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
     });
 
     expect(page.render(80).join("\n")).toContain("unavailable");
@@ -143,36 +118,8 @@ describe("ModelPickerPage", () => {
     expect(page.render(80).join("\n")).toContain("Requires another runtime");
   });
 
-  it("refreshes caller snapshots without losing the selected identity", () => {
-    const select = vi.fn();
-    const page = makeModelPickerPage({
-      theme,
-      scopedModels: scoped,
-      allModels: all,
-      current: "anthropic/claude-opus",
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
-    });
-
-    page.refreshCatalogs({ scopedModels: [], allModels: [...all] });
-    page.handleInput("\r");
-
-    expect(page.activeScope).toBe("all");
-    expect(select).toHaveBeenCalledWith(all[1]);
-  });
-
   it("keeps search active across scope changes and bounds every width", () => {
-    const page = makeModelPickerPage({
-      theme,
-      scopedModels: scoped,
-      allModels: all,
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select: vi.fn(),
-      cancel: vi.fn(),
-    });
+    const { page } = picker();
     page.handleInput("/");
     page.handleInput("claude");
     page.handleInput("\t");

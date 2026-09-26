@@ -9,6 +9,24 @@ import {
   mergeRefreshRequest,
   type RefreshRequest,
 } from "../src/coordination/refresh-coordinator.ts";
+import { interruptingScheduler } from "../testing.ts";
+
+/** Records every request and blocks only the first run until released. */
+const gated = <R>() =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const requests: R[] = [];
+    const operation = (request: R) =>
+      Effect.gen(function* () {
+        requests.push(request);
+        if (requests.length === 1) {
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+        }
+      });
+    return { started, release, requests, operation };
+  });
 
 describe("RefreshCoordinator", () => {
   it.effect("remains reusable across every scheduler interruption point in admission", () =>
@@ -17,19 +35,8 @@ describe("RefreshCoordinator", () => {
       // Reuse is checked by a completion probe rather than a TestClock timeout.
       for (let interruptAt = 1; interruptAt <= 100; interruptAt++) {
         const coordinator = yield* makeRefreshCoordinatorWith<number>((_, next) => next);
-        const scheduler = new Scheduler.MixedScheduler();
         let checkpoints = 0;
-        const admissionScheduler: Scheduler.Scheduler = {
-          executionMode: scheduler.executionMode,
-          makeDispatcher: () => scheduler.makeDispatcher(),
-          shouldYield: (fiber) => {
-            if (++checkpoints === interruptAt) {
-              fiber.interruptUnsafe();
-              return true;
-            }
-            return false;
-          },
-        };
+        const admissionScheduler = interruptingScheduler(() => ++checkpoints === interruptAt);
         const owner = yield* coordinator
           .run(1, () => Effect.void)
           .pipe(Effect.provideService(Scheduler.Scheduler, admissionScheduler), Effect.forkScoped);
@@ -54,17 +61,7 @@ describe("RefreshCoordinator", () => {
     () =>
       Effect.gen(function* () {
         const coordinator = yield* makeRefreshCoordinatorWith<number>((_, next) => next);
-        const started = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const requests: number[] = [];
-        const operation = (request: number) =>
-          Effect.gen(function* () {
-            requests.push(request);
-            if (request === 1) {
-              yield* Deferred.succeed(started, undefined);
-              yield* Deferred.await(release);
-            }
-          });
+        const { started, release, requests, operation } = yield* gated<number>();
         const owner = yield* coordinator.run(1, operation).pipe(Effect.forkScoped);
         yield* Deferred.await(started);
         const joiner = yield* coordinator.run(2, operation).pipe(Effect.forkScoped);
@@ -84,17 +81,7 @@ describe("RefreshCoordinator", () => {
       const coordinator = yield* makeRefreshCoordinatorWith<RefreshRequest, string>(
         mergeRefreshRequest,
       );
-      const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const requests: RefreshRequest[] = [];
-      const operation = (request: RefreshRequest) =>
-        Effect.gen(function* () {
-          requests.push(request);
-          if (requests.length === 1) {
-            yield* Deferred.succeed(started, undefined);
-            yield* Deferred.await(release);
-          }
-        });
+      const { started, release, requests, operation } = yield* gated<RefreshRequest>();
       const owner = yield* coordinator.run({}, operation).pipe(Effect.forkScoped);
       yield* Deferred.await(started);
       const forced = yield* coordinator.run({ force: true }, operation).pipe(Effect.forkScoped);
@@ -108,55 +95,23 @@ describe("RefreshCoordinator", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("runs a falsy queued follow-up request", () =>
+  it.effect.each([
+    [1, 0],
+    [undefined, undefined],
+  ] as const)("runs a falsy or undefined queued follow-up: %j", ([first, next]) =>
     Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinatorWith<number>((_current, next) => next);
-      const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const requests: number[] = [];
-      const operation = (request: number) =>
-        Effect.gen(function* () {
-          requests.push(request);
-          if (requests.length === 1) {
-            yield* Deferred.succeed(started, undefined);
-            yield* Deferred.await(release);
-          }
-        });
-
-      const owner = yield* coordinator.run(1, operation).pipe(Effect.forkScoped);
+      const coordinator = yield* makeRefreshCoordinatorWith<number | undefined>(
+        (_current, request) => request,
+      );
+      const { started, release, requests, operation } = yield* gated<number | undefined>();
+      const owner = yield* coordinator.run(first, operation).pipe(Effect.forkScoped);
       yield* Deferred.await(started);
-      const waiter = yield* coordinator.run(0, operation).pipe(Effect.forkScoped);
+      const waiter = yield* coordinator.run(next, operation).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(owner);
       yield* Fiber.join(waiter);
-      expect(requests).toEqual([1, 0]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("distinguishes an undefined request from no queued follow-up", () =>
-    Effect.gen(function* () {
-      const coordinator = yield* makeRefreshCoordinatorWith<undefined>((_current, next) => next);
-      const started = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      let calls = 0;
-      const operation = () =>
-        Effect.gen(function* () {
-          calls++;
-          if (calls === 1) {
-            yield* Deferred.succeed(started, undefined);
-            yield* Deferred.await(release);
-          }
-        });
-
-      const owner = yield* coordinator.run(undefined, operation).pipe(Effect.forkScoped);
-      yield* Deferred.await(started);
-      const waiter = yield* coordinator.run(undefined, operation).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(owner);
-      yield* Fiber.join(waiter);
-      expect(calls).toBe(2);
+      expect(requests).toEqual([first, next]);
     }).pipe(Effect.scoped),
   );
 

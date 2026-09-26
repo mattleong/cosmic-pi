@@ -13,6 +13,8 @@ import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
 } from "pi-cosmic-core";
+import { listDetailHeading } from "pi-cosmic-ui/manager/list-detail-shell";
+import { managerTone } from "pi-cosmic-ui/manager/style";
 import {
   hasSubagentCapability,
   isActiveRunState,
@@ -20,21 +22,14 @@ import {
   type SubagentRunView,
   type SubagentSessionEvent,
 } from "../run/model.ts";
-import { formatDuration, formatRelativeAge, formatUsage } from "./metrics.ts";
+import { aggregateUsage, formatDuration, formatRelativeAge } from "./metrics.ts";
 import { animatedRunStateGlyph, runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 
 export interface SessionOutputRenderOptions {
   readonly now?: number;
   readonly showTechnicalDetails?: boolean;
-  /** Pure presentation hook for the fleet pane; transcript output keeps its own heading. */
-  readonly renderHeading?: (sanitizedName: string) => string;
-  readonly renderSubtitle?: (parts: {
-    readonly policy: string;
-    readonly profile: string;
-    readonly context: string;
-    readonly model: string;
-    readonly duration: string;
-  }) => string;
+  /** Whether the fleet detail pane owns focus; it accents the heading. */
+  readonly detailFocused?: boolean;
 }
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
@@ -149,7 +144,21 @@ const NOTICE_STYLES = {
   parent: { glyph: "←", color: "muted" },
   question: { glyph: "?", color: "warning" },
   warning: { glyph: "!", color: "warning" },
+  progress: { glyph: "…", color: "muted" },
 } as const;
+
+const addStyledRow = (
+  container: Container,
+  style: (typeof NOTICE_STYLES)[keyof typeof NOTICE_STYLES],
+  text: string,
+  theme: Theme,
+): void =>
+  void container.addChild(
+    new HangingText(
+      `${theme.fg(style.color, style.glyph)} `,
+      theme.fg(style.color, sanitizeTerminalLine(text)),
+    ),
+  );
 
 /** Per-state guidance shown when a run has no activity, notices, or live fields at all. */
 const EMPTY_ACTIVITY_LABELS = {
@@ -180,36 +189,19 @@ const addLiveActivity = (
   const items = activityItems(run.sessionEvents);
   const frame = Math.floor(now / 160);
   for (const item of items) {
-    if (item.type === "tools") {
-      addToolGroup(container, item.events, theme, frame);
-      continue;
-    }
-    const style = NOTICE_STYLES[item.event.kind];
-    container.addChild(
-      new HangingText(
-        `${theme.fg(style.color, style.glyph)} `,
-        theme.fg(style.color, sanitizeTerminalLine(item.event.text)),
-      ),
-    );
+    if (item.type === "tools") addToolGroup(container, item.events, theme, frame);
+    else addStyledRow(container, NOTICE_STYLES[item.event.kind], item.event.text, theme);
   }
   const noticeKinds = new Set(
     items.flatMap((item) => (item.type === "notice" ? [item.event.kind] : [])),
   );
   const liveFields = [
-    {
-      covered: noticeKinds.has("question"),
-      glyph: "?",
-      color: "warning",
-      text: run.question?.message,
-    },
-    { covered: noticeKinds.has("warning"), glyph: "!", color: "warning", text: run.warning },
-    { covered: false, glyph: "…", color: "muted", text: run.progress },
+    [noticeKinds.has("question"), NOTICE_STYLES.question, run.question?.message],
+    [noticeKinds.has("warning"), NOTICE_STYLES.warning, run.warning],
+    [false, NOTICE_STYLES.progress, run.progress],
   ] as const;
-  for (const { covered, glyph, color, text } of liveFields) {
-    if (covered || text === undefined) continue;
-    container.addChild(
-      new HangingText(`${theme.fg(color, glyph)} `, theme.fg(color, sanitizeTerminalLine(text))),
-    );
+  for (const [covered, style, text] of liveFields) {
+    if (!covered && text !== undefined) addStyledRow(container, style, text, theme);
   }
   const showedLive =
     items.length > 0 ||
@@ -262,7 +254,7 @@ const addAssistantConclusion = (container: Container, run: SubagentRunView, them
       new Text(theme.fg("error", `Error: ${sanitizeTerminalLine(run.error)}`), 0, 0),
     );
   }
-  const usage = formatUsage(run.usage);
+  const usage = aggregateUsage([run]);
   if (usage) {
     container.addChild(new Spacer(1));
     container.addChild(new Text(theme.fg("dim", usage), 0, 0));
@@ -360,33 +352,31 @@ export function renderSubagentSessionOutput(
     run.state === "completed" || run.state === "reported"
       ? ` ${formatRelativeAge(now - (run.endedAt ?? run.lastActivityAt))}`
       : "";
-  const subtitle = sanitizeTerminalLine(
-    `${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""} · ${run.profile ? `${run.profile} · ` : ""}${run.context} · ${run.model}:${run.effort} · ${duration}`,
+  const heading = listDetailHeading(
+    theme,
+    name,
+    options.detailFocused === true,
+    managerTone.identity,
   );
+  const profile = sanitizeTerminalLine(run.profile ?? "");
+  const subtitle = [
+    theme.fg(
+      "muted",
+      sanitizeTerminalLine(`${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`),
+    ),
+    ...(profile ? [theme.fg(managerTone.identity, profile)] : []),
+    theme.fg(managerTone.value, sanitizeTerminalLine(run.context)),
+    theme.fg(managerTone.value, sanitizeTerminalLine(`${run.model}:${run.effort}`)),
+    theme.fg("muted", sanitizeTerminalLine(duration)),
+  ].join(" · ");
   container.addChild(
     new Text(
-      `${options.renderHeading ? options.renderHeading(name) : theme.fg("toolTitle", theme.bold(name))}  ${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`)}`,
+      `${heading}  ${theme.fg(runStateColor(run.state), `${runStateGlyph(run.state)} ${runStateLabel(run.state)}${age}`)}`,
       0,
       0,
     ),
   );
-  container.addChild(
-    new Text(
-      options.renderSubtitle
-        ? options.renderSubtitle({
-            policy: sanitizeTerminalLine(
-              `${run.writeIntent}${run.openaiFastMode ? " · ⚡ fast" : ""}`,
-            ),
-            profile: sanitizeTerminalLine(run.profile ?? ""),
-            context: sanitizeTerminalLine(run.context),
-            model: sanitizeTerminalLine(`${run.model}:${run.effort}`),
-            duration: sanitizeTerminalLine(duration),
-          })
-        : theme.fg("dim", subtitle),
-      0,
-      0,
-    ),
-  );
+  container.addChild(new Text(subtitle, 0, 0));
   container.addChild(new Spacer(1));
   container.addChild(new Text(theme.fg("muted", theme.bold("Task")), 0, 0));
   container.addChild(

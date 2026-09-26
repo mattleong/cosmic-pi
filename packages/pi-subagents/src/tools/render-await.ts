@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
+import { invokeHostCallback, sanitizeTerminalLine, synchronousNow } from "pi-cosmic-core";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { isAssignmentFinishedRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
@@ -8,8 +8,9 @@ import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
+import type { SemanticOutcomeBanner } from "./render-management.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
-import { renderResponsiveRunRows, runTiming } from "./render-run-rows.ts";
+import { renderResponsiveRunRows, runTiming, type RunHierarchy } from "./render-run-rows.ts";
 
 export interface AwaitProgressRun {
   readonly id: string;
@@ -50,6 +51,21 @@ const firstFinishedRun = (
         .filter((run) => isAssignmentFinishedRunState(run.state))
         .sort((left, right) => (left.endedAt ?? Infinity) - (right.endedAt ?? Infinity))[0]
     : undefined;
+
+/** Settled waits color any_finished by the first finished run; live progress never settles. */
+export const awaitSummaryColor = (
+  runs: ReadonlyArray<AwaitProgressRun>,
+  until: SubagentAwaitUntil,
+  outcome: AwaitSummaryOutcome,
+): SemanticOutcomeBanner["color"] => {
+  if (interruptedOutcome(outcome)) return "warning";
+  const first = outcome.settled === true ? firstFinishedRun(runs, until) : undefined;
+  if (first) return first.state === "failed" ? "error" : "accent";
+  if (runs.some((run) => run.state === "failed")) return "error";
+  return runs.length > 0 && runs.every((run) => isAssignmentFinishedRunState(run.state))
+    ? "success"
+    : "warning";
+};
 
 const awaitHeading = (
   until: SubagentAwaitUntil,
@@ -131,11 +147,6 @@ export const formatAwaitProgress = (
   ].join("\n");
 };
 
-interface AwaitProgressHierarchy {
-  readonly awaitedRunIds?: ReadonlySet<string> | undefined;
-  readonly contextOmitted?: boolean | undefined;
-}
-
 interface SubagentToolRendererState extends Record<string, unknown> {
   piSubagentsAwaitTicker?: (() => void) | undefined;
   piSubagentsAwaitInvalidate?: (() => void) | undefined;
@@ -164,13 +175,7 @@ export const syncAwaitProgressTicker = (
     if (!context.state.piSubagentsAwaitTicker) {
       const weakState = new WeakRef(context.state);
       let stopTimer = () => {};
-      const cleanup = () => {
-        try {
-          stopTimer();
-        } catch {
-          // Renderer teardown is best effort while the host tool row is settling.
-        }
-      };
+      const cleanup = () => invokeHostCallback(stopTimer, undefined);
       stopTimer = startTicker(160, () => {
         const active = weakState.deref();
         if (active) active.piSubagentsAwaitInvalidate?.();
@@ -184,11 +189,7 @@ export const syncAwaitProgressTicker = (
   if (!stop) return;
   context.state.piSubagentsAwaitTicker = undefined;
   context.state.piSubagentsAwaitInvalidate = undefined;
-  try {
-    stop();
-  } catch {
-    // Renderer teardown is best effort while the host tool row is settling.
-  }
+  invokeHostCallback(stop, undefined);
 };
 
 export const renderAwaitProgressComponent = (
@@ -196,7 +197,7 @@ export const renderAwaitProgressComponent = (
   targets: ReadonlyArray<SubagentRunCard>,
   until: SubagentAwaitUntil,
   theme: Theme,
-  hierarchy: AwaitProgressHierarchy,
+  hierarchy: RunHierarchy,
   outcome: AwaitSummaryOutcome = {},
 ): Component =>
   renderComponent((width) => {
@@ -212,14 +213,7 @@ export const renderAwaitProgressComponent = (
     return [
       truncateToWidth(
         theme.fg(
-          interruptedOutcome(outcome)
-            ? "warning"
-            : targets.some((run) => run.state === "failed")
-              ? "error"
-              : targets.length > 0 &&
-                  targets.every((run) => isAssignmentFinishedRunState(run.state))
-                ? "success"
-                : "warning",
+          awaitSummaryColor(targets, until, outcome),
           formatAwaitSummary(targets, until, usage, summary),
         ),
         safeWidth,

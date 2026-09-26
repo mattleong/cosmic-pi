@@ -1,13 +1,14 @@
-import { defaultQuestion } from "./support/questionnaire.ts";
+import { cancelled, defaultQuestion, submitted } from "./support/questionnaire.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { controlled, makeTuiHost, opaqueHostFixture } from "./support/host.ts";
+import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
+import { makeTuiHost } from "./support/host.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 import { makeAskUserHost } from "../src/boundary/host-dialogs.ts";
 import { makeAskUserDialogBridge, type AskUserDialogBridge } from "../src/boundary/host-ui.ts";
-import type { AskUserOutcome } from "../src/questionnaire/model.ts";
+import type { AskUserAnswer, AskUserOutcome } from "../src/questionnaire/model.ts";
 import { MAX_NOTE_LENGTH, type AskUserRequest } from "../src/questionnaire/schema.ts";
 
 const request = {
@@ -20,6 +21,13 @@ const request = {
     },
   ],
 } satisfies AskUserRequest;
+const multiple: AskUserRequest = { questions: [{ ...request.questions[0]!, mode: "multiple" }] };
+const chooseB = {
+  key: "library",
+  kind: "choices",
+  values: ["b"],
+  labels: ["B"],
+} satisfies AskUserAnswer;
 
 const run = (
   ctx: ExtensionContext,
@@ -29,6 +37,22 @@ const run = (
   Effect.runPromise(
     makeAskUserHost(ctx, options?.bridge ?? makeAskUserDialogBridge())(selectedRequest),
     options?.signal ? { signal: options.signal } : undefined,
+  );
+
+// Native RPC dialogs; members a test does not script are inert.
+const rpc = <Ui extends object>(
+  ui: Ui,
+  selectedRequest: AskUserRequest = request,
+  options?: Parameters<typeof run>[2],
+) =>
+  run(
+    opaqueFixture({
+      mode: "rpc",
+      hasUI: true,
+      ui: { select: vi.fn(), input: vi.fn(), notify: vi.fn(), ...ui },
+    }),
+    selectedRequest,
+    options,
   );
 
 const scriptedSelect = (...indexes: number[]) => {
@@ -51,47 +75,35 @@ describe("RPC questionnaire boundary", () => {
       .mockResolvedValueOnce(" initial\nanswer ")
       .mockResolvedValueOnce(" context ")
       .mockResolvedValueOnce(" bq1234\nrevised ");
-    const select = scriptedSelect(1, 1, 0, 0);
     const notify = vi.fn();
-    return run(
-      opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify } }),
-      textRequest,
-    ).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "details", kind: "text", text: "bq1234\nrevised", note: "context" }],
-      });
-      expect(notify).toHaveBeenCalledTimes(2);
-      expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
-    });
+    return rpc({ input, select: scriptedSelect(1, 1, 0, 0), notify }, textRequest).then(
+      (outcome) => {
+        expect(outcome).toEqual(
+          submitted({ key: "details", kind: "text", text: "bq1234\nrevised", note: "context" }),
+        );
+        expect(notify).toHaveBeenCalledTimes(2);
+        expect(input.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
+      },
+    );
   });
 
   it.each(["input", "review"])("discards text when RPC %s is dismissed", (at) => {
     const select = at === "review" ? scriptedSelect(0, 99) : vi.fn();
     const input = vi.fn(() => Promise.resolve(at === "input" ? undefined : "draft"));
-    return expect(
-      run(
-        opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify: vi.fn() } }),
-        textRequest,
-      ),
-    ).resolves.toEqual({ outcome: "cancelled", answers: [] });
+    return expect(rpc({ input, select }, textRequest)).resolves.toEqual(cancelled);
   });
 
   it("aborts a pending native text input without publishing drafts", () => {
-    const entered = controlled<AbortSignal>();
+    const entered = deferredPromise<AbortSignal>();
     const input = (_title: string, _placeholder: string, options: { signal: AbortSignal }) => {
-      const answer = controlled<string | undefined>();
+      const answer = deferredPromise<string | undefined>();
       options.signal.addEventListener("abort", () => answer.resolve(undefined), { once: true });
       entered.resolve(options.signal);
       return answer.promise;
     };
     const select = vi.fn();
     const controller = new AbortController();
-    const pending = run(
-      opaqueHostFixture({ mode: "rpc", hasUI: true, ui: { input, select, notify: vi.fn() } }),
-      textRequest,
-      { signal: controller.signal },
-    );
+    const pending = rpc({ input, select }, textRequest, { signal: controller.signal });
     const rejected = expect(pending).rejects.toBeDefined();
     return entered.promise.then((signal) => {
       controller.abort();
@@ -102,14 +114,8 @@ describe("RPC questionnaire boundary", () => {
   });
   it("uses interruption-linked native dialogs and returns stable values after review", () => {
     const select = scriptedSelect(1, 0, 0);
-    const ui = { select, input: vi.fn(), notify: vi.fn() };
-    const ctx = opaqueHostFixture({ mode: "rpc", hasUI: true, ui });
-
-    return run(ctx).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "library", kind: "choices", values: ["b"], labels: ["B"] }],
-      });
+    return rpc({ select }).then((outcome) => {
+      expect(outcome).toEqual(submitted(chooseB));
       expect(select).toHaveBeenCalledTimes(3);
       expect(select.mock.calls.every((call) => call[2]?.signal instanceof AbortSignal)).toBe(true);
     });
@@ -126,11 +132,8 @@ describe("RPC questionnaire boundary", () => {
             return delay(10_000, undefined, { signal: nativeSignal });
           },
         );
-        const ui = { select, input: vi.fn(), notify: vi.fn() };
         const controller = new AbortController();
-        const pending = run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), request, {
-          signal: controller.signal,
-        });
+        const pending = rpc({ select }, request, { signal: controller.signal });
 
         yield* Effect.promise(() =>
           vi.waitFor(() => expect(nativeSignal).toBeInstanceOf(AbortSignal)),
@@ -142,25 +145,20 @@ describe("RPC questionnaire boundary", () => {
       }),
   );
 
-  it("treats a dismissed RPC dialog as cancellation without returning drafts", () => {
-    const ui = {
-      select: vi.fn(() => Promise.resolve(undefined)),
-      input: vi.fn(),
-      notify: vi.fn(),
-    };
-    return expect(run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }))).resolves.toEqual({
-      outcome: "cancelled",
-      answers: [],
-    });
+  it.each([
+    ["a dismissed RPC dialog", [99]],
+    ["an explicit Cancel from review", [0, 1, -1]],
+  ])("treats %s as cancellation without leaking answers or notes", (_, script) => {
+    const input = vi.fn(() => Promise.resolve("A private draft note."));
+    return expect(rpc({ select: scriptedSelect(...script), input })).resolves.toEqual(cancelled);
   });
 
   it("returns to single-select choices when the custom-answer input is dismissed", () => {
-    const select = scriptedSelect(-1, 0, 0, 0);
     const notify = vi.fn(() => {
       throw new Error("stale notification host");
     });
-    const ui = { select, input: vi.fn(() => Promise.resolve(undefined)), notify };
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
+    const input = vi.fn(() => Promise.resolve(undefined));
+    return rpc({ select: scriptedSelect(-1, 0, 0, 0), input, notify }).then((outcome) => {
       expect(outcome).toMatchObject({
         outcome: "submitted",
         answers: [{ key: "library", values: ["a"] }],
@@ -182,21 +180,9 @@ describe("RPC questionnaire boundary", () => {
       return Promise.resolve(options[index]);
     });
     const notify = vi.fn();
-    const ui = { select, input, notify };
 
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [
-          {
-            key: "library",
-            kind: "choices",
-            values: ["b"],
-            labels: ["B"],
-            note,
-          },
-        ],
-      });
+    return rpc({ select, input, notify }).then((outcome) => {
+      expect(outcome).toEqual(submitted({ ...chooseB, note }));
       expect(reviewTitle).toBeDefined();
       expect(reviewTitle).not.toContain(escape);
       expect(input).toHaveBeenCalledTimes(2);
@@ -205,64 +191,30 @@ describe("RPC questionnaire boundary", () => {
     });
   });
 
-  it("reviews answers, edits a choice, and preserves its existing note", () => {
-    const note = "Keep this context.";
-    const select = scriptedSelect(0, 1, 1, 1, 0, 0);
-    const ui = { select, input: vi.fn(() => Promise.resolve(note)), notify: vi.fn() };
-
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [
-          {
-            key: "library",
-            kind: "choices",
-            values: ["b"],
-            labels: ["B"],
-            note,
-          },
-        ],
-      });
-    });
-  });
-
-  it("can remove an existing note while editing an answer", () => {
-    const select = scriptedSelect(0, 1, 1, 1, 2, 0);
-    const ui = {
-      select,
-      input: vi.fn(() => Promise.resolve("Remove this context.")),
-      notify: vi.fn(),
-    };
-
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui })).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "library", kind: "choices", values: ["b"], labels: ["B"] }],
-      });
-    });
-  });
+  it.each([
+    ["preserves", 0, { ...chooseB, note: "Existing context." }],
+    ["removes", 2, chooseB],
+  ] as const)(
+    "reviews answers, edits a choice, and %s its existing note",
+    (_, noteAction, answer) => {
+      const input = vi.fn(() => Promise.resolve("Existing context."));
+      return expect(
+        rpc({ select: scriptedSelect(0, 1, 1, 1, noteAction, 0), input }),
+      ).resolves.toEqual(submitted(answer));
+    },
+  );
 
   it("makes custom answers an explicit multi-select path", () => {
-    const multiple: AskUserRequest = {
-      questions: [{ ...request.questions[0]!, mode: "multiple" }],
-    };
-    const select = scriptedSelect(1, 0, 0);
     const input = vi.fn(() => Promise.resolve("Use a hybrid instead."));
-    const ui = { select, input, notify: vi.fn() };
-
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), multiple).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "library", kind: "custom", text: "Use a hybrid instead." }],
-      });
+    return rpc({ select: scriptedSelect(1, 0, 0), input }, multiple).then((outcome) => {
+      expect(outcome).toEqual(
+        submitted({ key: "library", kind: "custom", text: "Use a hybrid instead." }),
+      );
       expect(input).toHaveBeenCalledOnce();
     });
   });
 
   it("re-prompts mixed, nonnumeric, and out-of-range listed selections", () => {
-    const multiple: AskUserRequest = {
-      questions: [{ ...request.questions[0]!, mode: "multiple" }],
-    };
     const input = vi
       .fn()
       .mockResolvedValueOnce("both")
@@ -270,10 +222,8 @@ describe("RPC questionnaire boundary", () => {
       .mockResolvedValueOnce("5")
       .mockResolvedValueOnce("1,2");
     const notify = vi.fn();
-    const select = scriptedSelect(0, 0, 0);
-    const ui = { select, input, notify };
 
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), multiple).then((outcome) => {
+    return rpc({ select: scriptedSelect(0, 0, 0), input, notify }, multiple).then((outcome) => {
       expect(outcome).toMatchObject({
         outcome: "submitted",
         answers: [{ key: "library", values: ["a", "b"] }],
@@ -284,62 +234,43 @@ describe("RPC questionnaire boundary", () => {
   });
 
   it("preserves first-entered RPC choice order while deduplicating repeated values", () => {
-    const multiple: AskUserRequest = {
-      questions: [{ ...request.questions[0]!, mode: "multiple" }],
-    };
-    const select = scriptedSelect(0, 0, 0);
-    const ui = {
-      select,
-      input: vi.fn(() => Promise.resolve("2,1,2,1")),
-      notify: vi.fn(),
-    };
-
-    return run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), multiple).then((outcome) => {
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "library", kind: "choices", values: ["b", "a"], labels: ["B", "A"] }],
-      });
-    });
+    const input = vi.fn(() => Promise.resolve("2,1,2,1"));
+    return expect(rpc({ select: scriptedSelect(0, 0, 0), input }, multiple)).resolves.toEqual(
+      submitted({ key: "library", kind: "choices", values: ["b", "a"], labels: ["B", "A"] }),
+    );
   });
 
   effectIt.effect("fails closed when an RPC client returns an option that was not offered", () =>
     Effect.gen(function* () {
       for (const stage of ["answer-mode", "note", "review"] as const) {
-        const multiple: AskUserRequest = {
-          questions: [{ ...request.questions[0]!, mode: "multiple" }],
-        };
         const invalidAt = { "answer-mode": 0, note: 1, review: 2 }[stage];
         let selectCall = 0;
         const select = vi.fn((_title: string, options: string[]) =>
           Promise.resolve(selectCall++ === invalidAt ? "unexpected option" : options[0]),
         );
-        const ui = {
-          select,
-          input: vi.fn(() => Promise.resolve("1")),
-          notify: vi.fn(),
-        };
+        const input = vi.fn(() => Promise.resolve("1"));
         const selectedRequest = stage === "answer-mode" ? multiple : request;
 
         yield* Effect.promise(() =>
-          expect(
-            run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }), selectedRequest),
-          ).resolves.toEqual({ outcome: "cancelled", answers: [] }),
+          expect(rpc({ select, input }, selectedRequest)).resolves.toEqual(cancelled),
         );
       }
     }),
   );
-
-  it("cancels from review without leaking answers or notes", () => {
-    const input = vi.fn(() => Promise.resolve("A private draft note."));
-    const select = scriptedSelect(0, 1, -1);
-    const ui = { select, input, notify: vi.fn() };
-
-    return expect(run(opaqueHostFixture({ mode: "rpc", hasUI: true, ui }))).resolves.toEqual({
-      outcome: "cancelled",
-      answers: [],
-    });
-  });
 });
+
+// Opens and mounts the real dialog, then lets the test decide how the custom Promise settles.
+const mountOnCustom = (
+  host: ReturnType<typeof makeTuiHost>,
+  settle: (completed: Promise<AskUserOutcome>) => Promise<AskUserOutcome>,
+) => {
+  const open = host.ui.custom.getMockImplementation()!;
+  host.ui.custom.mockImplementation((factory, options) => {
+    const completed = open(factory, options);
+    host.mount!();
+    return settle(completed);
+  });
+};
 
 describe("TUI questionnaire boundary", () => {
   effectIt.effect("stops an interrupted lazy open before settings or UI mutation", () =>
@@ -368,28 +299,19 @@ describe("TUI questionnaire boundary", () => {
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
       const host = makeTuiHost();
-      const {
-        ctx,
-        done,
-        ui: { custom },
-      } = host;
-      const open = custom.getMockImplementation()!;
-      custom.mockImplementation((factory, options) => {
-        const completed = open(factory, options);
-        host.mount!();
+      mountOnCustom(host, (completed) => {
         host.component!.handleInput?.("1");
         host.component!.handleInput?.("\r");
         return completed;
       });
 
-      const outcome = yield* Effect.promise(() => run(ctx, request, { bridge }));
+      const outcome = yield* Effect.promise(() => run(host.ctx, request, { bridge }));
 
-      expect(outcome).toEqual({
-        outcome: "submitted",
-        answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
-      });
-      expect(done).toHaveBeenCalledOnce();
-      expect(done).toHaveBeenCalledWith(outcome);
+      expect(outcome).toEqual(
+        submitted({ key: "library", kind: "choices", values: ["a"], labels: ["A"] }),
+      );
+      expect(host.done).toHaveBeenCalledOnce();
+      expect(host.done).toHaveBeenCalledWith(outcome);
       expect(bridge.resume()).toBe(false);
     }),
   );
@@ -417,61 +339,29 @@ describe("TUI questionnaire boundary", () => {
     }),
   );
 
-  effectIt.effect("interrupts a nonsettling custom Promise and closes exactly once", () =>
+  effectIt.effect.each([
+    ["closes exactly once", false],
+    ["clears only its bridge token when a replacement wins during the open", true],
+  ] as const)("interrupts a nonsettling custom Promise and %s", ([, replacement]) =>
     Effect.gen(function* () {
       const bridge = makeAskUserDialogBridge();
       const host = makeTuiHost();
-      const {
-        ctx,
-        done,
-        ui: { custom },
-      } = host;
-      const open = custom.getMockImplementation()!;
-      custom.mockImplementation((factory, options) => {
-        open(factory, options);
-        host.mount!();
-        return controlled<AskUserOutcome>().promise;
-      });
-      const controller = new AbortController();
-      const opening = run(ctx, request, { bridge, signal: controller.signal });
-
-      yield* Effect.promise(() => vi.waitFor(() => expect(custom).toHaveBeenCalledOnce()));
-      controller.abort();
-      yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
-
-      expect(done).toHaveBeenCalledOnce();
-      expect(done).toHaveBeenCalledWith({ outcome: "cancelled", answers: [] });
-      expect(bridge.resume()).toBe(false);
-    }),
-  );
-
-  effectIt.effect("clears only its bridge token when a replacement wins during the open", () =>
-    Effect.gen(function* () {
-      const bridge = makeAskUserDialogBridge();
-      const host = makeTuiHost();
-      const {
-        ctx,
-        done,
-        ui: { custom },
-      } = host;
       const replacementResume = vi.fn();
-      const open = custom.getMockImplementation()!;
-      custom.mockImplementation((factory, options) => {
-        open(factory, options);
-        host.mount!();
-        bridge.activate(replacementResume);
-        return controlled<AskUserOutcome>().promise;
+      mountOnCustom(host, () => {
+        if (replacement) bridge.activate(replacementResume);
+        return deferredPromise<AskUserOutcome>().promise;
       });
       const controller = new AbortController();
-      const opening = run(ctx, request, { bridge, signal: controller.signal });
+      const opening = run(host.ctx, request, { bridge, signal: controller.signal });
 
-      yield* Effect.promise(() => vi.waitFor(() => expect(custom).toHaveBeenCalledOnce()));
+      yield* Effect.promise(() => vi.waitFor(() => expect(host.ui.custom).toHaveBeenCalledOnce()));
       controller.abort();
       yield* Effect.promise(() => expect(opening).rejects.toBeDefined());
 
-      expect(done).toHaveBeenCalledOnce();
-      expect(bridge.resume()).toBe(true);
-      expect(replacementResume).toHaveBeenCalledOnce();
+      expect(host.done).toHaveBeenCalledOnce();
+      expect(host.done).toHaveBeenCalledWith(cancelled);
+      expect(bridge.resume()).toBe(replacement);
+      expect(replacementResume).toHaveBeenCalledTimes(replacement ? 1 : 0);
     }),
   );
 });

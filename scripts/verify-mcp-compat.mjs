@@ -254,7 +254,7 @@ async function verifyGateway(filesystem, playwright, fixture, url) {
         connectionLayer,
         discoveryLayer,
         McpResults.layer(),
-        JsonSchemaValidator.layer(),
+        JsonSchemaValidator.layer,
         authLayer,
       ),
     ),

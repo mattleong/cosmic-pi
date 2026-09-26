@@ -1,8 +1,8 @@
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { toolError, type ToolError } from "../boundary/codemode-runtime.ts";
+import { decodeOption } from "./format.ts";
 
 const SafeNatural = Schema.Natural.check(Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER));
 const PositiveSafeInteger = SafeNatural.check(Schema.isGreaterThan(0));
@@ -59,23 +59,15 @@ export type ReadGuestData = string | StructuredReadResult;
 
 export type ReadGuestInput = typeof ReadGuestInputSchema.Type;
 
-interface NativeCompletenessFields {
-  truncatedBy?: "lines" | "bytes";
-  nextOffset?: number;
-}
-
 const decodeNativeReadResult = Schema.decodeUnknownEffect(NativeReadResultSchema);
 
-export const decodeReadGuestInput = <Input>(input: Input): ReadGuestInput | undefined => {
-  const decoded = Schema.decodeUnknownOption(ReadGuestInputSchema)(input);
-  return Option.isSome(decoded) ? decoded.value : undefined;
-};
+export const decodeReadGuestInput = <Input>(input: Input): ReadGuestInput | undefined =>
+  decodeOption(ReadGuestInputSchema, input);
 
 const nativeTruncation = <Details>(details: Details) => {
-  const decoded = Schema.decodeUnknownOption(NativeReadDetailsSchema)(details);
-  if (Option.isNone(decoded)) return undefined;
-  const truncation = decoded.value.truncation;
+  const truncation = decodeOption(NativeReadDetailsSchema, details)?.truncation;
   if (
+    truncation === undefined ||
     !truncation.truncated ||
     truncation.truncatedBy === null ||
     truncation.outputLines > truncation.totalLines ||
@@ -121,11 +113,10 @@ export const projectReadCompleteness = <Details>(
     return { completeness: "unknown", reason: "metadata-unavailable" };
   }
   const nextOffset = truncation === undefined ? undefined : continuationOffset(input, truncation);
-  const nativeFields: NativeCompletenessFields = {};
-  if (truncation !== undefined && truncation.truncatedBy !== null) {
-    nativeFields.truncatedBy = truncation.truncatedBy;
-    if (nextOffset !== undefined) nativeFields.nextOffset = nextOffset;
-  }
+  const nativeFields = truncation?.truncatedBy && {
+    truncatedBy: truncation.truncatedBy,
+    ...(nextOffset !== undefined && { nextOffset }),
+  };
 
   if (input.offset !== undefined && input.offset > 1) {
     return { completeness: "partial", reason: "offset", ...nativeFields };

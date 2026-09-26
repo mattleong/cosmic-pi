@@ -3,7 +3,11 @@ import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, getKeybindings, Text } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import {
+  getTextContent,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
@@ -59,12 +63,7 @@ export function registerBackgroundTaskTool(
       );
     },
     renderResult(result, { isPartial, expanded }, theme) {
-      let text = sanitizeTerminalText(
-        result.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
-      );
+      let text = sanitizeTerminalText(getTextContent(result.content));
       // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
       const details = result.details as BackgroundTaskToolDetails | undefined;
       let collapsedLogFooter: string | undefined;
@@ -113,12 +112,7 @@ export function registerBackgroundTaskTool(
         renderResult(result, _options, theme) {
           // Preserve fetched output and cursor text verbatim apart from terminal controls.
           // Task attention is projected from typed details, never parsed from this body.
-          let text = sanitizeTerminalText(
-            result.content
-              .filter((part) => part.type === "text")
-              .map((part) => part.text)
-              .join("\n"),
-          );
+          let text = sanitizeTerminalText(getTextContent(result.content));
           // SAFETY: The owned executor constructs this union; compact projection validates its snapshot.
           const details = result.details as BackgroundTaskToolDetails | undefined;
           if (

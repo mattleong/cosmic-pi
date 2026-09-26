@@ -1,8 +1,8 @@
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Predicate from "effect/Predicate";
 import type { DuplexProcessChild } from "./node-builtins.ts";
+import { signalProcessGroup } from "./process-tree.ts";
 
 export type { DuplexProcessChild } from "./node-builtins.ts";
 
@@ -47,18 +47,6 @@ type CleanupChild = Pick<
   "pid" | "exitCode" | "signalCode" | "stdin" | "stdout" | "stderr"
 >;
 
-type GroupResult = "absent" | "present" | "permission" | "failed";
-
-const signalGroup = (pid: number, signal: NodeJS.Signals | 0): GroupResult => {
-  try {
-    process.kill(-pid, signal);
-    return "present";
-  } catch (error) {
-    const code = Predicate.hasProperty(error, "code") ? error.code : undefined;
-    return code === "ESRCH" ? "absent" : code === "EPERM" ? "permission" : "failed";
-  }
-};
-
 const destroyStreams = (child: CleanupChild): void => {
   for (const stream of [child.stdin, child.stdout, child.stderr]) {
     try {
@@ -97,13 +85,13 @@ export const closeDuplexProcess = (
       const checkedSignal = (signal: NodeJS.Signals): Effect.Effect<void, DuplexProcessError> =>
         Effect.suspend(() => {
           if (pid === undefined) return Effect.void;
-          const result = signalGroup(pid, signal);
+          const result = signalProcessGroup(pid, signal);
           return result === "failed" ? Effect.fail(closeFailure(result)) : Effect.void;
         });
       const awaitGone = (until: number): Effect.Effect<boolean, DuplexProcessError> =>
         Effect.gen(function* () {
           while (true) {
-            const group = pid === undefined ? "absent" : signalGroup(pid, 0);
+            const group = pid === undefined ? "absent" : signalProcessGroup(pid, 0);
             if (group === "failed") return yield* closeFailure(group);
             groupGone = group === "absent";
             const rootExited = child.exitCode !== null || child.signalCode !== null;
@@ -156,8 +144,7 @@ export const closeDuplexProcess = (
       yield* terminate.pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            if (!groupGone && pid !== undefined && Number.isSafeInteger(pid) && pid > 0)
-              signalGroup(pid, "SIGKILL");
+            if (!groupGone) signalProcessGroup(pid, "SIGKILL");
             destroyStreams(child);
           }),
         ),

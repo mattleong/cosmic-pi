@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { freezeSnapshot, invokeHostCallback } from "pi-cosmic-core";
 import type { BackgroundTaskSnapshot, StartBackgroundTask } from "../task/model.ts";
 import {
   backgroundTaskStartCommandResult,
@@ -11,23 +12,14 @@ import {
   type BackgroundTaskCodeModeOutput,
 } from "./protocol.ts";
 
-const borrowOutput = (result: BackgroundTaskCommandResult): BackgroundTaskCodeModeOutput => {
-  const details = result.details;
-  if (details.action === "logs") {
-    return {
-      action: details.action,
-      text: result.text,
-      logs: {
-        id: details.logs.id,
-        nextCursor: details.logs.nextCursor,
-        earliestAvailableCursor: details.logs.earliestAvailableCursor,
-        droppedBytes: details.logs.droppedBytes,
-        state: details.logs.state,
-      },
-    };
-  }
-  return { text: result.text, ...details };
-};
+// Logs drop the display-only truncation here because the byte-size check runs before decoding.
+const borrowOutput = ({
+  text,
+  details,
+}: BackgroundTaskCommandResult): BackgroundTaskCodeModeOutput =>
+  details.action === "logs"
+    ? { action: details.action, text, logs: details.logs }
+    : { text, ...details };
 
 /**
  * Proves that any successful initial start snapshot fits before the service allocates a task id.
@@ -74,26 +66,8 @@ export const backgroundTaskCodeModeOutputFits = (
   maxOutputBytes: number,
 ): boolean => {
   const limit = Number.isSafeInteger(maxOutputBytes) && maxOutputBytes >= 0 ? maxOutputBytes : 0;
-  try {
-    return Buffer.byteLength(JSON.stringify(output)) <= limit;
-  } catch {
-    // Cyclic or non-JSON-representable hostile payloads are refused, never accepted.
-    return false;
-  }
-};
-
-/**
- * Recursively freezes a detached, acyclic, function-free decoded value, including nested payload
- * leaves such as `logs` metadata or `wait` snapshots.
- */
-const deepFreeze = <T>(value: T): void => {
-  if (Array.isArray(value)) {
-    for (const child of value) deepFreeze(child);
-  } else if (value !== null && value instanceof Object) {
-    for (const child of Object.values(value)) deepFreeze(child);
-  }
-  // SAFETY: freezing a primitive leaf is a no-op; containers are schema-produced plain data.
-  Object.freeze(value as object);
+  // Cyclic or non-JSON-representable hostile payloads are refused, never accepted.
+  return invokeHostCallback(() => Buffer.byteLength(JSON.stringify(output)) <= limit, false);
 };
 
 const decodeOutput = Schema.decodeUnknownOption(BackgroundTaskCodeModeOutputSchema);
@@ -113,6 +87,5 @@ export const projectBackgroundTaskCodeModeOutput = (
   }
   const decoded = Option.getOrUndefined(decodeOutput(borrowed));
   if (!decoded) return { _tag: "Refused" };
-  deepFreeze(decoded);
-  return { _tag: "Accepted", output: decoded };
+  return { _tag: "Accepted", output: freezeSnapshot(decoded) };
 };

@@ -11,14 +11,13 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
 import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
-import { McpBoundaryError } from "../client/errors.ts";
-import { projectMcpPresentation, type McpPresentation } from "../code-mode/presentation.ts";
+import { projectMcpEvidence, type McpPresentation } from "../code-mode/presentation.ts";
 
 import { MCP_DISPLAY_LIMITS, mcpContentPreview, type McpDisplayCut } from "./content-preview.ts";
 
 import { isOwnedValidationNotice } from "./validation-notices.ts";
+import { credentialMutationBlocked, type McpBoundaryView } from "./boundary-failure.ts";
 
-export const MCP_CARD_LIMITS = MCP_DISPLAY_LIMITS;
 interface McpRenderField {
   readonly value: unknown;
 }
@@ -56,8 +55,6 @@ export interface McpCardDetails {
   readonly isError: boolean;
   readonly known: boolean;
   readonly counts: readonly string[];
-  readonly counters: readonly string[];
-  readonly metadata: readonly string[];
   readonly notices: readonly string[];
   readonly noticesComplete: boolean;
   readonly warnings: readonly string[];
@@ -74,21 +71,15 @@ export interface McpCardDetails {
     readonly next: number | null;
     readonly total: number;
   };
-  readonly failureKind?: McpBoundaryError["kind"];
-  readonly failureReason?: McpBoundaryError["reason"];
-  readonly undiscoveredCount: number;
   readonly preview: string;
   readonly failurePreview: string;
   readonly resultId?: string;
   readonly origin?: McpCardOrigin;
   readonly recoveryHint?: string;
   readonly diagnostic?: McpDiagnostic;
+  /** The shared nested view, only for a known envelope whose raw preview is uncut. */
+  readonly boundary?: McpBoundaryView;
 }
-const failureEvidenceSchema = Schema.Struct({
-  kind: McpBoundaryError.fields.kind,
-  reason: McpBoundaryError.fields.reason,
-});
-
 const legacyDetails = <Result>(result: Result): McpRenderField => {
   const details = own(result, "details").value;
   if (details !== undefined && details !== null) return { value: details };
@@ -127,7 +118,7 @@ const attachments = <Value>(value: Value) => {
   let limited = false;
   const visit = <Current>(current: Current, depth: number): void => {
     if (!Predicate.isObjectOrArray(current) || seen.has(current)) return;
-    if (++nodes > MCP_CARD_LIMITS.nodes || depth > MCP_CARD_LIMITS.depth) {
+    if (++nodes > MCP_DISPLAY_LIMITS.nodes || depth > MCP_DISPLAY_LIMITS.depth) {
       limited = true;
       return;
     }
@@ -146,7 +137,7 @@ const attachments = <Value>(value: Value) => {
     try {
       let fields = 0;
       for (const key in current) {
-        if (++fields > 32 || nodes > MCP_CARD_LIMITS.nodes) {
+        if (++fields > 32 || nodes > MCP_DISPLAY_LIMITS.nodes) {
           limited = true;
           break;
         }
@@ -166,16 +157,10 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   const currentOutcome = outcome(own(details, "outcome").value);
   const action = safeText(own(details, "action").value, 64) ?? "MCP result";
   const currentError = own(details, "isError").value === true;
-  const rawEvidence = { kind: own(data, "kind").value };
-  const rawReason = own(data, "reason").value;
-  const evidence = Option.getOrUndefined(
-    Schema.decodeUnknownOption(failureEvidenceSchema)(
-      rawReason === undefined ? rawEvidence : { ...rawEvidence, reason: rawReason },
-    ),
-  );
+  const { presentation, failure, boundary } = projectMcpEvidence(details);
   const diagnostic =
-    currentError && evidence
-      ? mcpDiagnostic({ ...evidence, outcome: currentOutcome ?? "unknown" }, { action })
+    currentError && failure
+      ? mcpDiagnostic({ ...failure, outcome: currentOutcome ?? "unknown" }, { action })
       : undefined;
   const rawOrigin = own(data, "origin").value;
   const originOutcome = outcome(own(rawOrigin, "outcome").value);
@@ -202,25 +187,14 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     const text = safeText(entry);
     return text ? [text] : [];
   });
-  const presentation = projectMcpPresentation(details);
   const warnings = [...presentation.notices];
-  if (
-    evidence?.reason === "oauth-mutation-unresolved" ||
-    evidence?.reason === "oauth-finalization-failed" ||
-    evidence?.reason === "oauth-deletion-failed"
-  )
-    warnings.push(mcpDiagnostic({ ...evidence, outcome: "not-sent" }).explanation);
-  const truncated = presentation.truncated;
+  if (failure && credentialMutationBlocked(failure.reason))
+    warnings.push(mcpDiagnostic({ ...failure, outcome: "not-sent" }).explanation);
   const counts: string[] = [];
-  const counters: string[] = [];
-  const metadata: string[] = [];
-  const addCounter = (label: string) => {
-    counts.push(label);
-    counters.push(label);
-  };
   for (const key of counterKeys) {
     const length = arrayLength(own(payload, key).value);
-    if (length !== undefined) addCounter(`${length} ${key === "content" ? "content blocks" : key}`);
+    if (length !== undefined)
+      counts.push(`${length} ${key === "content" ? "content blocks" : key}`);
   }
   const returned = arrayLength(own(rawPage, "items").value);
   const rawTotal = natural(own(rawPage, "total").value);
@@ -234,18 +208,15 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
           hasMore: Predicate.isString(cursor) && cursor.length > 0,
         };
   if (page) {
-    addCounter(
+    counts.push(
       page.total === undefined
         ? `${page.returned} entries returned`
         : `${page.returned} of ${page.total} entries returned`,
     );
-    if (page.hasMore) {
-      counts.push("more metadata available");
-      metadata.push("more metadata available");
-    }
+    if (page.hasMore) counts.push("more metadata available");
   }
   const undiscoveredCount = arrayLength(undiscovered) ?? 0;
-  if (undiscoveredCount) addCounter(`${undiscoveredCount} undiscovered servers`);
+  if (undiscoveredCount) counts.push(`${undiscoveredCount} undiscovered servers`);
   const descriptors = attachments(payload);
   const attachmentCount = Math.max(
     descriptors.count,
@@ -254,7 +225,6 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   const imageCount = list(own(result, "content").value, 128).filter(
     (item) => own(item, "type").value === "image",
   ).length;
-  const resultId = presentation.resultId;
   const historicalText =
     currentOutcome === undefined
       ? list(own(result, "content").value, 128)
@@ -266,24 +236,22 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
     historicalText?.length ? { details, content: historicalText } : (data ?? details),
     own(data, "result").value !== undefined,
   );
+  const known = currentOutcome !== undefined && Predicate.isBoolean(own(details, "isError").value);
   let projection: McpCardDetails = {
     presentation,
     action,
     isError: currentError,
-    known: currentOutcome !== undefined && Predicate.isBoolean(own(details, "isError").value),
+    known,
     counts,
-    counters,
-    metadata,
     notices,
     noticesComplete,
     warnings,
-    truncated,
+    truncated: presentation.truncated,
     displayCuts: preview.cuts,
     hasCompleteReadableText: preview.readable !== undefined && preview.readableCuts.length === 0,
     attachmentCount,
     attachmentsLimited: descriptors.limited,
     imageCount,
-    undiscoveredCount,
     failurePreview: preview.readable ?? preview.combined,
     preview:
       details === undefined
@@ -293,13 +261,8 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   if (currentOutcome) projection = { ...projection, outcome: currentOutcome };
   if (origin) projection = { ...projection, origin };
   if (page) projection = { ...projection, page };
-  if (diagnostic && evidence)
-    projection = {
-      ...projection,
-      diagnostic,
-      failureKind: evidence.kind,
-      failureReason: evidence.reason,
-    };
+  if (diagnostic) projection = { ...projection, diagnostic };
+  if (boundary && known && preview.cuts.length === 0) projection = { ...projection, boundary };
   if (action === "result.read" && currentOutcome === "completed" && !currentError) {
     const offset = natural(own(data, "offset").value);
     const total = natural(own(data, "total").value);
@@ -322,6 +285,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
       };
     }
   }
+  const { resultId } = presentation;
   if (resultId !== undefined)
     projection = { ...projection, resultId, recoveryHint: `/mcp result ${resultId}` };
   else if (diagnostic?.recovery.length)

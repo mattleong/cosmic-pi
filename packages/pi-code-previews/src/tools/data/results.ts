@@ -15,7 +15,7 @@ export function getEditDiff<DetailsInput>(details: DetailsInput): string | undef
 }
 
 export function getTextContent(
-  content: Array<{ type: string; text?: string }> | undefined,
+  content: ReadonlyArray<{ readonly type: string; readonly text?: string }> | undefined,
 ): string {
   return (
     content

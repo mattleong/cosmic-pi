@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { CompactIssuesSchema, CompactIssueClaimSchema } from "./compact-issues";
 
 const Outcome = Schema.Literals(["success", "warning", "error", "cancelled", "uncertain"]);
@@ -71,9 +72,5 @@ const isSummary = Schema.is(Summary);
 
 /** Reject malformed provider evidence before it can hide original results. */
 export function isSafeCompactSummary<Value>(value: Value): boolean {
-  try {
-    return isSummary(value);
-  } catch {
-    return false;
-  }
+  return invokeHostCallback(() => isSummary(value), false);
 }

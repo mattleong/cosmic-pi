@@ -74,7 +74,7 @@ export interface McpManagerComponentOptions {
   readonly height: () => number;
   readonly requestRender: () => void;
   readonly load: (request: McpViewRequest) => void;
-  readonly finish: (action?: McpManagerClose) => void;
+  readonly finish: (action: McpManagerClose | undefined) => void;
   readonly matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) => boolean;
   readonly keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) => string;
 }
@@ -280,14 +280,8 @@ export class McpManagerComponent implements Component, Focusable {
             selected: undefined,
           };
           this.input.setValue("");
-          this.cursor = undefined;
-          this.cursors.length = 0;
-          this.update();
+          this.restartBrowse();
         } else this.options.finish({ action, row, selection: this.selection });
-        this.requestRender();
-      },
-      cancel: () => {
-        this.menu = undefined;
         this.requestRender();
       },
     });
@@ -300,7 +294,16 @@ export class McpManagerComponent implements Component, Focusable {
       requestRender: () => this.requestRender(),
       matchesKeybinding: this.options.matchesKeybinding,
       keybindingLabel: this.options.keybindingLabel,
+      cancel: () => {
+        this.menu = undefined;
+        this.requestRender();
+      },
     };
+  }
+  private restartBrowse(): void {
+    this.cursor = undefined;
+    this.cursors.length = 0;
+    this.update();
   }
   private serverFilter(): void {
     this.menu = new SearchableSelectPage({
@@ -325,13 +328,7 @@ export class McpManagerComponent implements Component, Focusable {
       select: (server) => {
         this.menu = undefined;
         this.selection = { ...this.selection, server, selected: undefined };
-        this.cursor = undefined;
-        this.cursors.length = 0;
-        this.update();
-      },
-      cancel: () => {
-        this.menu = undefined;
-        this.requestRender();
+        this.restartBrowse();
       },
     });
     this.menu.focused = this._focused;
@@ -370,9 +367,7 @@ export class McpManagerComponent implements Component, Focusable {
           family: cachedFamilies[(index + (resolution.key === "]" ? 1 : 3)) % 4]!,
           selected: undefined,
         };
-        this.cursor = undefined;
-        this.cursors.length = 0;
-        this.update();
+        this.restartBrowse();
       } else if (resolution.key === "v" && this.selection.screen === "result") {
         if (this.result.toggleMode()) {
           this.shell.resetDetailWindow();
@@ -406,7 +401,7 @@ export class McpManagerComponent implements Component, Focusable {
         this.searching = false;
         this.focused = this._focused;
       } else if (this.selection.screen === "result" && (action === "cancel" || action === "back"))
-        this.options.finish();
+        this.options.finish(undefined);
       else if (action === "confirm") {
         if (this.selection.screen !== "result") this.inspect();
       } else if (action === "help") this.moreHelp = !this.moreHelp;
@@ -417,7 +412,7 @@ export class McpManagerComponent implements Component, Focusable {
             rowCount: this.ids().length,
             hasSelection: this.ids().length > 0 || this.selection.screen === "result",
           });
-          if (result._tag === "Close") this.options.finish();
+          if (result._tag === "Close") this.options.finish(undefined);
           else if (result._tag === "Update" && result.movedSelection) {
             this.shell.select(result.state.selected, this.ids());
             this.selection = { ...this.selection, selected: this.shell.state.selectedId };
@@ -434,9 +429,7 @@ export class McpManagerComponent implements Component, Focusable {
       if (query !== value) this.input.setValue(query);
       if (query !== this.selection.query) {
         this.selection = { ...this.selection, query };
-        this.cursor = undefined;
-        this.cursors.length = 0;
-        this.update();
+        this.restartBrowse();
       }
     }
     this.requestRender();

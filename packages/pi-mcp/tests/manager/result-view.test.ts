@@ -1,11 +1,9 @@
+import type * as Schema from "effect/Schema";
 import { expect, it } from "vitest";
 import { McpResultNavigation, resultPage } from "../../src/ui/result-view.ts";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
 
-const retained = (
-  text: string,
-  patch: { format?: string; offset?: number; next?: number | null; total?: number } = {},
-): McpGatewayReply => ({
+const retained = (text: string, patch: Schema.JsonObject = {}): McpGatewayReply => ({
   action: "result.read",
   outcome: "completed",
   isError: false,
@@ -27,24 +25,19 @@ const page = (
   text: string,
   outputValidation: "failed" | "unavailable" = "failed",
 ) =>
-  resultPage({
-    action: "result.read",
-    outcome: "completed",
-    isError: false,
-    notices: [],
-    data: {
+  resultPage(
+    retained(text, {
       offset,
       next,
       total: 40,
-      text,
       origin: {
         action: "tools.call",
         outcome: "completed",
         isError: outputValidation === "failed",
         outputValidation,
       },
-    },
-  });
+    }),
+  );
 it("successful retrieval preserves originating failure and uses the returned Unicode-safe next offset", () => {
   const first = page(0, 7, "a🙂text")!;
   expect(first.next).toBe(7);

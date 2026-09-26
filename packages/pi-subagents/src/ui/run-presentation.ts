@@ -1,3 +1,4 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core";
 import { formatDuration } from "./metrics.ts";
 
@@ -48,19 +49,18 @@ export const projectRunRoutePresentation = (
   };
 };
 
-export const formatRunRoute = (
-  host: string,
-  runtime: string,
-  model: string,
-  effort: string,
-  openaiFastMode?: boolean,
-): string => {
-  const route = projectRunRoutePresentation({
-    host,
-    runtime,
-    model,
-    effort,
-    openaiFastMode,
-  });
+export const formatRunRoute = (run: RunRoutePresentationInput): string => {
+  const route = projectRunRoutePresentation(run);
   return `${route.hostRuntime} · ${route.model}`;
+};
+
+/** The wide `profile → host/runtime · model` line, themed when a theme is supplied. */
+export const formatRunRouteLine = (
+  run: RunRoutePresentationInput,
+  theme?: Pick<Theme, "fg">,
+): string => {
+  const { profile, hostRuntime, model } = projectRunRoutePresentation(run);
+  return theme
+    ? `${theme.fg("muted", profile)} ${theme.fg("dim", "→")} ${theme.fg("toolOutput", `${hostRuntime} · ${model}`)}`
+    : `${profile} → ${hostRuntime} · ${model}`;
 };

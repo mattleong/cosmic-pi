@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resultReadCompactSummary } from "../src/ui/result-read-summary.ts";
 import { resultReadFailure } from "../src/results/read-presentation.ts";
 import { callEntryDetails } from "../src/tools/format.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { renderCompactToolCall } from "../../pi-code-previews/src/preview/compact-tool-call.ts";
-import { testTheme } from "../../pi-code-previews/tests/support/render.ts";
+import { presentationView, restorePresentationSettings } from "./support/presentation.ts";
+import { EMPTY_RECEIPTS } from "./support/results.ts";
+
+afterEach(restorePresentationSettings);
 
 const page = {
   status: "page",
@@ -56,36 +58,32 @@ describe("retained-read summaries", () => {
   it("retains page coordinates at narrow widths and reserves routine instructions for expansion", () => {
     const id = "cm--88ju67vnzx--1zwbiguwetb-1";
     for (const next of [20, null]) {
-      const projected = resultReadCompactSummary(
-        {
-          resultRead: {
-            ...page,
-            id,
-            originalOutcome: "failed",
-            total: next === null ? 20 : 30,
-            next,
-          },
+      const details = {
+        resultRead: {
+          ...page,
+          id,
+          originalOutcome: "failed",
+          total: next === null ? 20 : 30,
+          next,
         },
-        id,
-      )!;
+      };
+      const projected = resultReadCompactSummary(details, id)!;
       const issue = projected.issues!.entries[0]!;
+      const { view } = presentationView("off", "compact");
+      const render = (expanded: boolean, width: number) => {
+        view.call({ action: "result.read", id }, { expanded });
+        view.result({ content: [{ type: "text", text: "PAGE" }], details }, { expanded });
+        return view.render(width).join("\n");
+      };
       for (const width of [60, 80]) {
-        const collapsed = renderCompactToolCall(
-          { name: "code_mode", phase: "settled", summary: projected },
-          testTheme(),
-          width,
-        ).join("\n");
+        const collapsed = render(false, width);
         expect(collapsed).toContain(projected.counters![0]);
         expect(collapsed).toContain(issue.description);
         expect(collapsed).not.toContain(issue.cause);
         for (const diagnostic of issue.diagnostics ?? [])
           expect(collapsed).not.toContain(diagnostic);
       }
-      const expanded = renderCompactToolCall(
-        { name: "code_mode", phase: "settled", summary: projected, expanded: true },
-        testTheme(),
-        300,
-      ).join("\n");
+      const expanded = render(true, 300);
       for (const diagnostic of issue.diagnostics ?? []) expect(expanded).toContain(diagnostic);
     }
   });
@@ -161,14 +159,7 @@ describe("retained-read summaries", () => {
       outputKind: "text",
       truncated: true,
       resultId: id,
-      executionReceipts: {
-        total: 0,
-        completed: 0,
-        unknown: 0,
-        notSent: 0,
-        omitted: 0,
-        calls: [],
-      },
+      executionReceipts: EMPTY_RECEIPTS,
       initialPreview,
     };
     expect(decodeCodeModeRenderDetails(details).initialPreview).toMatchObject({

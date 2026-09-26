@@ -29,7 +29,7 @@ import {
   type XaiProjection,
 } from "./projection.ts";
 
-interface XaiUsageServiceOptions {
+export interface XaiUsageServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
   readonly cwd: string;
   readonly projection: MutableRef.MutableRef<XaiProjection>;
@@ -48,20 +48,6 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
     make: Effect.fnUntraced(function* (options: XaiUsageServiceOptions) {
       const registryAuth = yield* ModelRegistryAuth;
       const requestUsage = options.requestUsage ?? requestXaiUsage;
-      const subscriptionEligibility = (ctx: ExtensionContext, cfg: ResolvedConfig) => {
-        const model = ctx.model;
-        if (!model || model.provider !== "xai") return Effect.succeed(false);
-        if (!cfg.usage.showOnlyOnSubscriptionModels)
-          return Effect.succeed(isXaiSubscriptionModel(ctx, cfg));
-        return registryAuth.isUsingOAuth(model).pipe(
-          Effect.map((isUsingOAuth) => isXaiSubscriptionModel(ctx, cfg, isUsingOAuth)),
-          Effect.catch(() =>
-            Effect.logWarning("Better xAI authentication recovery: oauth_status_unavailable.").pipe(
-              Effect.as(false),
-            ),
-          ),
-        );
-      };
       const controller = yield* makeUsageRefreshController<
         XaiProjection,
         ResolvedConfig,
@@ -87,9 +73,9 @@ export class XaiUsageService extends Context.Service<XaiUsageService>()(
         clearAuthPatch: { authFound: false, teamId: undefined },
         store: { resolveConfig, readRawConfig, resolveCommittedConfig, modifyConfig },
         decodeSettingUpdate,
-        eligibility: subscriptionEligibility,
-        fetchOutcome: ({ authPath }) =>
-          timedDiagnosticResult(requestUsage(authPath), "xAI usage request timed out.").pipe(
+        eligibility: (ctx, cfg) => Effect.sync(() => isXaiSubscriptionModel(ctx, cfg)),
+        fetchOutcome: () =>
+          timedDiagnosticResult(requestUsage(), "xAI usage request timed out.").pipe(
             Effect.map(
               (result): UsageFetchOutcome<UsageSnapshot, Partial<XaiProjection>> =>
                 Result.isFailure(result)

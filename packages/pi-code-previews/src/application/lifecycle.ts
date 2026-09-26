@@ -24,8 +24,8 @@ import { registerSettingsCommand } from "../settings/controller";
 import { CodePreviewSyntaxService } from "../syntax/service";
 import {
   clearCodePreviewSessionCapability,
-  CodePreviewSessionUnavailable,
   installCodePreviewSessionCapability,
+  rejectInactiveCodePreviewSession,
 } from "./capability";
 import { CodePreviewSchedulerService, type CodePreviewSchedulerServiceContract } from "./scheduler";
 import type { CodePreviewToolName } from "../tools/names";
@@ -90,14 +90,10 @@ const defaultDependencies: CodePreviewExtensionDependencies = {
   registerRenderers: registerToolRenderers,
 };
 
-export function registerCodePreviewApplication(pi: ExtensionAPI): Promise<void> {
-  return codePreviewsWithDependencies(pi, defaultDependencies);
-}
-
-/** Internal seam for lifecycle/finalizer tests. */
+/** Pi registration; `dependencies` is the seam for lifecycle/finalizer tests. */
 export function codePreviewsWithDependencies(
   pi: ExtensionAPI,
-  dependencies: CodePreviewExtensionDependencies,
+  dependencies: CodePreviewExtensionDependencies = defaultDependencies,
 ): Promise<void> {
   const ownedTools = new Set<CodePreviewToolName>();
   const installedTools = new Set<CodePreviewToolName>();
@@ -130,12 +126,7 @@ export function codePreviewsWithDependencies(
         run: (effect, signal) =>
           slot.isCurrent(token)
             ? slot.run(effect, signal)
-            : Promise.reject(
-                new CodePreviewSessionUnavailable({
-                  operation: "run",
-                  message: "Code preview session is not active.",
-                }),
-              ),
+            : rejectInactiveCodePreviewSession("run"),
         defer: scheduler.defer,
         schedule: scheduler.schedule,
       });

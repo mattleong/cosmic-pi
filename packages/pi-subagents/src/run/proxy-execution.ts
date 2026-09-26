@@ -40,45 +40,31 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
         Effect.forkIn(ownerScope, { startImmediately: true }),
         Effect.asVoid,
       );
+    const reject = (code: string, message: string) =>
+      event
+        .respond(false, encodeSubagentProxyPayload({ code, message }) ?? "{}")
+        .pipe(Effect.ignore);
     if (
       (event.tool === "ask_user" ? !executeQuestionnaire : !executeProxy) ||
       record.view.runtime !== "pi" ||
       record.stoppedByParent ||
       !isActiveRunState(record.view.state)
     )
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_caller_disconnected",
-            message: "Nested Pi coordinator access is unavailable for this run.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
+      return reject(
+        "proxy_caller_disconnected",
+        "Nested Pi coordinator access is unavailable for this run.",
+      );
     const runKeyPrefix = `${record.view.id}:`;
     let concurrent = 0;
     for (const [candidateKey] of executions)
       if (candidateKey.startsWith(runKeyPrefix)) concurrent += 1;
     if (concurrent >= 16)
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_capacity",
-            message: "Nested Pi has too many concurrent coordinator calls.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
+      return reject("proxy_capacity", "Nested Pi has too many concurrent coordinator calls.");
     if (FiberMap.hasUnsafe(executions, key))
-      return event
-        .respond(
-          false,
-          encodeSubagentProxyPayload({
-            code: "proxy_request_conflict",
-            message: "Nested Pi reused an active coordinator request identity.",
-          }) ?? "{}",
-        )
-        .pipe(Effect.ignore);
+      return reject(
+        "proxy_request_conflict",
+        "Nested Pi reused an active coordinator request identity.",
+      );
     const questionnaire =
       event.tool === "ask_user" ? decodeQuestionnaireProxyRequest(event) : undefined;
     const dispatch =
@@ -89,25 +75,15 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
           : executeProxy!(record.view.id, event);
     const execute = dispatch.pipe(
       Effect.matchEffect({
-        onFailure: (error) =>
-          event.respond(
-            false,
-            encodeSubagentProxyPayload({
-              code: subagentErrorCode(error),
-              message: error.message,
-            }) ?? "{}",
-          ),
+        onFailure: (error) => reject(subagentErrorCode(error), error.message),
         onSuccess: (result) =>
           Effect.suspend(() => {
             const payloadJson = encodeSubagentProxyPayload(result);
             return payloadJson
               ? event.respond(true, payloadJson)
-              : event.respond(
-                  false,
-                  encodeSubagentProxyPayload({
-                    code: "proxy_response_oversized",
-                    message: "Nested Pi coordinator response exceeded its bound.",
-                  }) ?? "{}",
+              : reject(
+                  "proxy_response_oversized",
+                  "Nested Pi coordinator response exceeded its bound.",
                 );
           }),
       }),
@@ -117,3 +93,5 @@ export function makeRunProxyExecution(dependencies: RunProxyExecutionDependencie
     return FiberMap.run(executions, key, execute, { onlyIfMissing: true }).pipe(Effect.asVoid);
   };
 }
+
+export type RunProxyExecution = ReturnType<typeof makeRunProxyExecution>;

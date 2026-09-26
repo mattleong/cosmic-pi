@@ -17,7 +17,7 @@ interface ResourceDiscovery {
   readonly metadata: OAuthProtectedResourceMetadata;
   /** Absent on grants backed by discovered metadata, including existing grants. */
   readonly source?: "configured" | "origin";
-  readonly challenge?: BearerChallenge;
+  readonly challenge?: BearerChallenge | undefined;
   readonly retained: boolean;
 }
 
@@ -51,10 +51,7 @@ export const discoverAuthResource = (
       // to the original rejection. Empty or realm-only evidence has no such authority.
       if (retained?.scope === undefined && retained?.error === undefined) challenge = probed;
     }
-    const evidence: Pick<ResourceDiscovery, "retained" | "challenge"> = {
-      retained: retained !== undefined && challenge === retained,
-    };
-    if (challenge) Object.assign(evidence, { challenge });
+    const evidence = { retained: retained !== undefined && challenge === retained, challenge };
     let rawMetadata: string | undefined;
     const result = yield* withAuthFetch(policy, (fetch) => {
       const metadataFetch = missingOnlyMetadataFetch(fetch);

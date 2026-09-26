@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import type { CodePreviewSchedulerService } from "pi-code-previews";
 import * as Effect from "effect/Effect";
 import { boundaryError } from "./client/errors.ts";
-import { AgentDirectory, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { AgentDirectory, invokeHostCallback, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { McpAuth } from "./auth/service.ts";
 import { McpAuthFlow } from "./auth/flow.ts";
 import { McpActivity } from "./activity/service.ts";
@@ -33,13 +33,7 @@ export const makeMcpLayer = (input: McpLayerInput) => {
     AgentDirectory.layerFromHost(getAgentDir),
   );
   const config = McpConfigStore.layer(input).pipe(Layer.provide(platform));
-  const isTrusted = () => {
-    try {
-      return input.isTrusted() === true;
-    } catch {
-      return false;
-    }
-  };
+  const isTrusted = () => invokeHostCallback(() => input.isTrusted() === true, false);
   const auth = Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* McpConfigStore;
@@ -75,7 +69,7 @@ export const makeMcpLayer = (input: McpLayerInput) => {
     connections,
     discovery,
     results,
-    JsonSchemaValidator.layer(),
+    JsonSchemaValidator.layer,
     McpInteraction.layer(input.interaction),
     auth,
   );

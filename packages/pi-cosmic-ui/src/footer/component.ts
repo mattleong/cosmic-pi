@@ -15,11 +15,11 @@ import {
   applyTextDecorations,
   builtinContributions,
   orderedContributions,
+  type FooterRepositoryProjection,
   type FooterStatusPlacements,
-  type FooterTotals,
 } from "./builtin-contributions.ts";
-import { type FooterGitStatus } from "./git.ts";
-import { combineSurface, renderContributionLine, renderModelContextLine } from "./layout.ts";
+import { renderContributionLine } from "./contributions.ts";
+import { renderModelContextLine } from "./layout.ts";
 import { renderMetricsLines } from "./metrics.ts";
 import { renderProviderUsageLines } from "./provider-usage.ts";
 import {
@@ -30,27 +30,17 @@ import {
   type FooterContextUsage,
   type FooterModel,
 } from "../boundary/host-footer-projection.ts";
-import { footerSurfaces, type FooterRegistrySnapshot } from "./registry.ts";
-
-export type { FooterTotals } from "./builtin-contributions.ts";
-
-export interface FooterContributionView {
-  readonly snapshot: () => FooterRegistrySnapshot;
-  readonly invalidate: () => void;
-}
+import type { FooterRegistry } from "./registry.ts";
 
 export function createFooterComponent(options: {
   pi: ExtensionAPI;
   ctx(): ExtensionContext;
-  homeDirectory(): string | undefined;
   footerData: ReadonlyFooterDataProvider;
   theme: CosmicFooterTheme;
-  registry: FooterContributionView;
+  registry: Pick<FooterRegistry, "snapshot">;
   callbacks: HostCallbackBoundaryContract;
   config(): ResolvedCosmicUiConfig;
-  totals(): FooterTotals;
-  gitStatus(): FooterGitStatus | undefined;
-  pullRequestNumber(): number | undefined;
+  projection(): FooterRepositoryProjection;
 }) {
   const { pi, footerData, theme, registry } = options;
   let contextUsageCached = false;
@@ -85,10 +75,7 @@ export function createFooterComponent(options: {
   }
 
   return {
-    invalidate() {
-      invalidateContextUsage();
-      registry.invalidate();
-    },
+    invalidate: invalidateContextUsage,
     invalidateContextUsage,
     render(width: number): string[] {
       if (width <= 0) return [];
@@ -117,14 +104,7 @@ export function createFooterComponent(options: {
             ),
           );
           const contributions: CosmicFooterContribution[] = [
-            ...builtinContributions(
-              host,
-              options.totals(),
-              options.gitStatus(),
-              options.pullRequestNumber(),
-              options.homeDirectory(),
-              statusPlacements,
-            ),
+            ...builtinContributions(host, options.projection(), statusPlacements),
             ...registrySnapshot.contributions,
           ];
           const text = applyTextDecorations(
@@ -155,7 +135,7 @@ export function createFooterComponent(options: {
           const otherDetails = details.filter(
             (entry) => entry.label === undefined && !entry.id.startsWith("extension."),
           );
-          let lines: string[] = [];
+          const lines: string[] = [];
           if (modelIdentity.length || contextVisible)
             lines.push(
               contextVisible
@@ -187,36 +167,7 @@ export function createFooterComponent(options: {
           } else if (otherDetails.length && width >= 64) {
             lines.push(renderContributionLine(otherDetails, width, theme, true));
           }
-          const surface = footerSurfaces(registrySnapshot).find(
-            (entry) => !config.footer.hidden.includes(entry.id),
-          );
-          if (surface) {
-            const requestedPlacement =
-              config.footer.mediaPlacement ?? surface.preferredPlacement ?? "inline-right";
-            const placement =
-              requestedPlacement !== "stacked" &&
-              requestedPlacement !== "habitat" &&
-              width < surface.preferredWidth + 32
-                ? "stacked"
-                : requestedPlacement;
-            const surfaceWidth =
-              placement === "stacked" || placement === "habitat"
-                ? width
-                : Math.min(surface.preferredWidth, Math.max(1, width - 20));
-            lines = options.callbacks.invoke(
-              "surface-render",
-              () =>
-                combineSurface(
-                  surface.render({ width: surfaceWidth, placement, theme }),
-                  lines,
-                  width,
-                  placement,
-                  surfaceWidth,
-                ),
-              lines,
-            );
-          }
-          return surface ? lines : lines.map((line) => truncateToWidth(line, width, ""));
+          return lines.map((line) => truncateToWidth(line, width, ""));
         },
         [],
       );

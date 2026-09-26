@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { invokeHostCallback } from "pi-cosmic-core";
 
 /** Activation-owned cancellation, separate from the settings runtime. */
 export function makeHostExecutionOwner() {
@@ -15,13 +16,8 @@ export function makeHostExecutionOwner() {
       const abort = () => linked.abort();
       const sources = caller ? [controller.signal, caller] : [controller.signal];
       const release = () => {
-        for (const source of sources) {
-          try {
-            source.removeEventListener("abort", abort);
-          } catch {
-            // A hostile caller signal cannot prevent owned listener cleanup.
-          }
-        }
+        for (const source of sources)
+          invokeHostCallback(() => source.removeEventListener("abort", abort), undefined);
       };
       for (const source of sources) {
         try {

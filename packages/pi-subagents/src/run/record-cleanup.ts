@@ -3,31 +3,18 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import type { WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { SubagentProcessError } from "./errors.ts";
-import type { RunRecord } from "./internal.ts";
-import { appendNoticeSessionEvent } from "./session-events.ts";
-import { projectRunWarning, setRunWarning } from "./warnings.ts";
-import { makeWriterPreparation } from "./writer-preparation.ts";
-import type { WriterPoolEntry } from "./writer-pool.ts";
-
-export interface RunRecordCleanupDependencies {
-  /** The shared service lock guarding every RunRecord mutation. */
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly publish: Effect.Effect<void>;
-  readonly writerLeases: WriterLeaseContract;
-  readonly writerPools: Map<string, WriterPoolEntry>;
-}
+import type { RunContext, RunRecord } from "./internal.ts";
+import { recordRunWarning } from "./warnings.ts";
 
 /**
  * Owns spawn-settlement → backend scope cleanup → token-confirmed lease release
  * ordering plus run-state reclamation and fail-closed cleanup quarantine for a
  * run record. Every field mutation stays under the shared service lock.
  */
-export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies) {
-  const { withLock, publish, writerLeases, writerPools } = dependencies;
+export function makeRunRecordCleanup(dependencies: RunContext) {
+  const { withLock, publish, writerPools } = dependencies;
 
-  const prepareWriterLeaseForSpawn = makeWriterPreparation({ withLock, writerLeases });
   const reclaimRecordRunState = (record: RunRecord) =>
     Effect.gen(function* () {
       const claimed = yield* withLock(
@@ -39,38 +26,35 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
       );
       if (!claimed) return;
       const reclaim = record.driver.reclaimRunState;
-      if (!reclaim) {
-        yield* withLock(Effect.sync(() => void (record.runStateReclaimState = "reclaimed")));
-        return;
-      }
-      yield* reclaim({
-        parentSessionId: record.launch.parentSessionId,
-        runId: record.view.id,
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: "5 seconds",
-          orElse: () =>
-            Effect.fail(
-              new SubagentProcessError({
-                operation: "reclaim private run state",
-                code: "run_state_reclaim_timeout",
-                message: "Timed out while reclaiming private subagent run state.",
+      if (reclaim)
+        yield* reclaim({
+          parentSessionId: record.launch.parentSessionId,
+          runId: record.view.id,
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: "5 seconds",
+            orElse: () =>
+              Effect.fail(
+                new SubagentProcessError({
+                  operation: "reclaim private run state",
+                  code: "run_state_reclaim_timeout",
+                  message: "Timed out while reclaiming private subagent run state.",
+                }),
+              ),
+          }),
+          Effect.tapError((error) =>
+            withLock(
+              Effect.sync(() => {
+                record.runStateReclaimState = "pending";
               }),
-            ),
-        }),
-        Effect.tapError((error) =>
-          withLock(
-            Effect.sync(() => {
-              record.runStateReclaimState = "pending";
-            }),
-          ).pipe(
-            Effect.andThen(
-              Effect.logWarning(`Could not reclaim private subagent run state: ${error.message}`),
+            ).pipe(
+              Effect.andThen(
+                Effect.logWarning(`Could not reclaim private subagent run state: ${error.message}`),
+              ),
             ),
           ),
-        ),
-        Effect.annotateLogs("runId", record.view.id),
-      );
+          Effect.annotateLogs("runId", record.view.id),
+        );
       yield* withLock(Effect.sync(() => void (record.runStateReclaimState = "reclaimed")));
     });
   const markCleanupPending = (record: RunRecord) =>
@@ -136,21 +120,14 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
             : "Subagent cleanup could not be fully confirmed; this run remains quarantined for the session.";
           record.cleanupPending = true;
           record.cleanupDisposition = "quarantined";
-          record.warningSlots = setRunWarning(record.warningSlots, "system", warning);
           record.view = {
             ...record.view,
             retryBlocked:
               record.view.state === "failed" && (record.view.remainingCandidateCount ?? 0) > 0
                 ? true
                 : record.view.retryBlocked,
-            ...projectRunWarning(record.warningSlots, "system"),
+            ...recordRunWarning(record, record.view.sessionEvents, "system", warning, now),
             writeAdmissionPaused: record.writerPool ? true : record.view.writeAdmissionPaused,
-            sessionEvents: appendNoticeSessionEvent(
-              record.view.sessionEvents,
-              "warning",
-              warning,
-              now,
-            ),
           };
           yield* publish;
           return true;
@@ -209,8 +186,14 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
   const closeRecordScope = (
     record: RunRecord,
     scope: Scope.Closeable = record.scope,
-  ): Effect.Effect<void> =>
-    Effect.uninterruptibleMask((restore) =>
+  ): Effect.Effect<void> => {
+    const quarantine = (message: string) =>
+      retainCleanupQuarantine(record, scope).pipe(
+        Effect.andThen(
+          Effect.logWarning(message).pipe(Effect.annotateLogs("runId", record.view.id)),
+        ),
+      );
+    return Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const closeSettled = yield* Deferred.make<void>();
         const claim = yield* withLock(
@@ -275,28 +258,15 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
           Effect.flatMap((exit) =>
             Exit.isSuccess(exit)
               ? clearCleanupPending(record, scope)
-              : retainCleanupQuarantine(record, scope).pipe(
-                  Effect.andThen(
-                    Effect.logWarning("Subagent cleanup failed; the run remains quarantined.").pipe(
-                      Effect.annotateLogs("runId", record.view.id),
-                    ),
-                  ),
-                ),
+              : quarantine("Subagent cleanup failed; the run remains quarantined."),
           ),
-          Effect.catch((error) =>
-            retainCleanupQuarantine(record, scope).pipe(
-              Effect.andThen(
-                Effect.logWarning(`Subagent cleanup failed: ${error.message}`).pipe(
-                  Effect.annotateLogs("runId", record.view.id),
-                ),
-              ),
-            ),
-          ),
+          Effect.catch((error) => quarantine(`Subagent cleanup failed: ${error.message}`)),
           Effect.onInterrupt(() => retainCleanupQuarantine(record, scope)),
           Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(closeSettled, Effect.void))),
         );
       }),
     );
+  };
   const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
     withLock(
       Effect.sync(() => {
@@ -319,12 +289,13 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     );
 
   return {
-    /** Durably prepares and token-confirms the writer lease before any driver spawn. */
-    prepareWriterLeaseForSpawn,
     /** Exclusive pending→running→reclaimed private run-state reclamation; failure re-arms. */
     reclaimRecordRunState,
     markCleanupPending,
-    /** Fail-closed quarantine retaining process capacity and writer ownership for the session. */
+    /**
+     * Fail-closed quarantine retaining process capacity and writer ownership for the session.
+     * Launch also quarantines uncertain/partial eviction reclamation so the old run cannot resume.
+     */
     retainCleanupQuarantine,
     /** Spawn settlement → scope close → lease release → clear/quarantine, exactly once per scope. */
     closeRecordScope,
@@ -332,3 +303,5 @@ export function makeRunRecordCleanup(dependencies: RunRecordCleanupDependencies)
     closeExitedScope,
   };
 }
+
+export type RunRecordCleanup = ReturnType<typeof makeRunRecordCleanup>;

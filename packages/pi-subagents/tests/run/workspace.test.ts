@@ -6,9 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
 import * as os from "node:os";
-import { WriterLeaseService, writerLeasePath } from "../../src/boundary/writer-lease.ts";
-import { provideBuiltLayer } from "pi-cosmic-core";
-import { SubagentService } from "../../src/run/service.ts";
+import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import {
   WorkspaceError,
   type UnavailableWorkspaceArtifact,
@@ -16,12 +14,45 @@ import {
   type WorkspaceTarget,
 } from "../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../src/workspace/service.ts";
+import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
   fakeWriterLeaseLayer,
   request,
   serviceLayer,
+  withService,
 } from "./fixtures/service-harness.ts";
+
+const record = (
+  workspaceId: string,
+  ownerId: string,
+  sourceRoot: string,
+  status: WorkspaceRecord["status"],
+): WorkspaceRecord => ({
+  version: 1,
+  handle: {
+    workspaceId,
+    ownerId,
+    sourceRoot,
+    sourceCwd: sourceRoot,
+    cwd: `/private/${workspaceId}`,
+  },
+  status,
+  baseline: "baseline",
+});
+
+/** Expects a writer-mode switch to be refused as busy before its persist effect runs. */
+const expectModeSwitchBlocked = (service: SubagentServiceContract) =>
+  Effect.gen(function* () {
+    let persisted = false;
+    const persist = Effect.sync(() => {
+      persisted = true;
+    });
+    expect(
+      yield* service.setWriterWorkspaceMode("shared-checkout", persist).pipe(Effect.flip),
+    ).toMatchObject({ code: "workspace_mode_busy" });
+    expect(persisted).toBe(false);
+  });
 
 function fixture(
   sourceCwd = "/repo",
@@ -166,8 +197,7 @@ describe("writer workspace orchestration", () => {
             ),
       });
       const f = fixture(root, (directory) => directory, wrapped);
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(f.layer, function* (service) {
         const run = yield* service.start(request({ cwd: root, writeIntent: "writer" }));
         yield* service.stop(run.id);
         const id = run.workspaceId!;
@@ -182,43 +212,19 @@ describe("writer workspace orchestration", () => {
           .pipe(Effect.forkChild);
         expect(Exit.isFailure(yield* Fiber.await(integrating))).toBe(true);
         expect(f.entries.get(id)?.status).toBe("prepared");
-        expect(
-          yield* Effect.promise(() =>
-            fs.access(writerLeasePath(temporary, cwd.digest)).then(
-              () => true,
-              () => false,
-            ),
-          ),
-        ).toBe(false);
-        const replacement = yield* leases.acquire({
-          cwd,
-          sessionId: "other",
-          runId: "replacement",
-        });
+        // Re-acquiring proves the interrupted integration released the source lease.
+        const replacement = yield* leases.acquire({ cwd, runId: "replacement" });
         yield* leases.release(replacement);
-      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+      });
     }).pipe(Effect.scoped),
   );
   it.effect("shows repository orphans through a cwd alias and blocks mode changes", () => {
     const f = fixture("/alias/package", (cwd) =>
       cwd === "/alias/package" ? "/repo/package" : cwd,
     );
-    const orphan = (workspaceId: string, sourceRoot: string): WorkspaceRecord => ({
-      version: 1,
-      handle: {
-        workspaceId,
-        ownerId: "old-session/root",
-        sourceCwd: sourceRoot,
-        sourceRoot,
-        cwd: `/private/${workspaceId}`,
-      },
-      status: "active",
-      baseline: "original-base",
-    });
-    f.entries.set("orphan", orphan("orphan", "/repo"));
-    f.entries.set("unrelated", orphan("unrelated", "/repo-other"));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    f.entries.set("orphan", record("orphan", "old-session/root", "/repo", "active"));
+    f.entries.set("unrelated", record("unrelated", "old-session/root", "/repo-other", "active"));
+    return withService(f.layer, function* (service) {
       const reader = yield* service.start(
         request({ cwd: "/alias/package", writeIntent: "read-only" }),
       );
@@ -230,25 +236,14 @@ describe("writer workspace orchestration", () => {
         (yield* service.workspaceList()).records.map((entry) => entry.handle.workspaceId),
       ).toEqual(["orphan"]);
       expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: false });
-      let persisted = false;
-      expect(
-        yield* service
-          .setWriterWorkspaceMode(
-            "shared-checkout",
-            Effect.sync(() => {
-              persisted = true;
-            }),
-          )
-          .pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_mode_busy" });
-      expect(persisted).toBe(false);
+      yield* expectModeSwitchBlocked(service);
       expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
         code: "workspace_owner_unavailable",
       });
       f.entries.set("orphan", { ...f.entries.get("orphan")!, status: "discarded" });
       expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: true });
       expect(f.acquired).toEqual([]);
-    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    });
   });
 
   it.effect(
@@ -261,8 +256,7 @@ describe("writer workspace orchestration", () => {
         reason: "recovery-record-unavailable",
       } as const;
       f.unavailable.push(artifact);
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(f.layer, function* (service) {
         const reader = yield* service.start(request({ cwd: "/repo", writeIntent: "read-only" }));
         expect(f.canonicalized).toEqual([]);
         for (const [workspaceId, ownerId, sourceRoot, status] of [
@@ -270,18 +264,7 @@ describe("writer workspace orchestration", () => {
           ["nested", `session-1/${reader.id}`, "/repo", "integrated"],
           ["unrelated", "old-session/root", "/elsewhere", "active"],
         ] as const) {
-          f.entries.set(workspaceId, {
-            version: 1,
-            handle: {
-              workspaceId,
-              ownerId,
-              sourceRoot,
-              sourceCwd: sourceRoot,
-              cwd: `/private/${workspaceId}`,
-            },
-            status,
-            baseline: "baseline",
-          });
+          f.entries.set(workspaceId, record(workspaceId, ownerId, sourceRoot, status));
         }
         const root = yield* service.workspaceList();
         expect(root.records.map((entry) => entry.handle.workspaceId)).toEqual([
@@ -293,18 +276,7 @@ describe("writer workspace orchestration", () => {
         expect(nested.records.map((entry) => entry.handle.workspaceId)).toEqual(["nested"]);
         expect(nested.unavailable).toEqual([]);
         expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: false });
-        let persisted = false;
-        expect(
-          yield* service
-            .setWriterWorkspaceMode(
-              "shared-checkout",
-              Effect.sync(() => {
-                persisted = true;
-              }),
-            )
-            .pipe(Effect.flip),
-        ).toMatchObject({ code: "workspace_mode_busy" });
-        expect(persisted).toBe(false);
+        yield* expectModeSwitchBlocked(service);
         for (const operation of [
           service.workspaceReview(artifact.workspaceId),
           service.workspacePrepare(artifact.workspaceId, "revision"),
@@ -319,7 +291,7 @@ describe("writer workspace orchestration", () => {
         expect(f.unavailable).toEqual([artifact]);
         f.unavailable.length = 0;
         expect(yield* service.inspectWriterWorkspace).toMatchObject({ canSwitch: true });
-      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+      });
     },
   );
 
@@ -330,8 +302,7 @@ describe("writer workspace orchestration", () => {
       status: "unavailable",
       reason: "recovery-record-unavailable",
     });
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(f.layer, function* (service) {
       const writer = yield* service.start(request({ cwd: "/repo", writeIntent: "writer" }));
       yield* service.stop(writer.id);
       const workspaceId = writer.workspaceId!;
@@ -343,15 +314,14 @@ describe("writer workspace orchestration", () => {
       const prepared = yield* service.workspacePrepare(workspaceId, first.revisionId);
       expect(prepared.revisionId).toBe(first.revisionId);
       expect((yield* service.workspaceList()).unavailable).toHaveLength(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    });
   });
 
   it.effect(
     "nested readers inspect their parent's effective cwd but nested writers fail before artifact creation",
     () => {
       const f = fixture();
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(f.layer, function* (service) {
         const parent = yield* service.start(request({ cwd: "/repo", writeIntent: "writer" }));
         const child = yield* service.startSessionOwnedFrom(
           parent.id,
@@ -365,14 +335,13 @@ describe("writer workspace orchestration", () => {
           .pipe(Effect.flip);
         expect(failure).toMatchObject({ code: "workspace_nested_writer_unsupported" });
         expect(f.entries.size).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+      });
     },
   );
 
   it.effect("launches simultaneous claimless writers in distinct private cwd leases", () => {
     const f = fixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(f.layer, function* (service) {
       const runs = yield* Effect.all(
         [
           service.start(request({ cwd: "/repo", writeIntent: "writer" })),
@@ -391,15 +360,14 @@ describe("writer workspace orchestration", () => {
       expect(yield* service.workspaceReview(runs[0]!.workspaceId!).pipe(Effect.flip)).toMatchObject(
         { code: "workspace_process_unsettled" },
       );
-    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    });
   });
 
   it.effect(
     "requires complete immutable review and source lease before uncommitted integration",
     () => {
       const f = fixture();
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(f.layer, function* (service) {
         const run = yield* service.start(request({ cwd: "/repo", writeIntent: "writer" }));
         const id = run.workspaceId!;
         yield* service.stop(run.id);
@@ -422,14 +390,13 @@ describe("writer workspace orchestration", () => {
         expect(f.released).toContain("/repo/packages/b");
         expect(f.entries.get(id)?.status).toBe("integrated");
         expect((yield* service.inspectWriterWorkspace).canSwitch).toBe(true);
-      }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+      });
     },
   );
 
   it.effect("revision successor retains artifact and invalidates old approval", () => {
     const f = fixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(f.layer, function* (service) {
       const first = yield* service.start(request({ cwd: "/repo", writeIntent: "writer" }));
       yield* service.stop(first.id);
       const review = yield* service.workspaceReview(first.workspaceId!);
@@ -446,13 +413,12 @@ describe("writer workspace orchestration", () => {
       expect(
         yield* service.workspaceDiscard(first.workspaceId!, "sibling").pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_owner_unavailable" });
-    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    });
   });
 
   it.effect("keeps read-only launches in source and atomically persists mode switches", () => {
     const f = fixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(f.layer, function* (service) {
       const readOnly = yield* service.start(request({ cwd: "/repo", writeIntent: "read-only" }));
       expect(readOnly.cwd).toBe("/repo");
       expect(readOnly.workspaceId).toBeUndefined();
@@ -482,6 +448,6 @@ describe("writer workspace orchestration", () => {
       expect(
         yield* service.setWriterWorkspaceMode("worktree", Effect.void).pipe(Effect.flip),
       ).toMatchObject({ code: "workspace_mode_busy" });
-    }).pipe(Effect.scoped, provideBuiltLayer(f.layer));
+    });
   });
 });

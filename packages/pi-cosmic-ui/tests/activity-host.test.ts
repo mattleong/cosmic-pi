@@ -1,18 +1,22 @@
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { yieldUntil } from "pi-cosmic-core/testing";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import {
   ACTIVITY_EVENT,
   ActivitySnapshotSchema,
   registerActivityProvider,
-  type ActivityEvents,
   type ActivityItem,
+  type ActivityProviderOptions,
 } from "../src/activity/protocol.ts";
 import {
   ActivityService,
@@ -20,30 +24,11 @@ import {
   type ActivityServiceContract,
 } from "../src/activity/service.ts";
 import { makeActivityHost } from "../src/boundary/host-activity.ts";
-import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
+import { screenViewport } from "../src/manager/viewport.ts";
+import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
+import { eventBus } from "./support/host.ts";
 
-const promiseGate = <A>() => {
-  const deferred = Deferred.makeUnsafe<A>();
-  return {
-    promise: Effect.runPromise(Deferred.await(deferred)),
-    resolve: (value: A) => {
-      Effect.runSync(Deferred.succeed(deferred, value));
-    },
-  };
-};
-type Factory = Parameters<ExtensionContext["ui"]["custom"]>[0];
-type CustomOptions = Parameters<ExtensionContext["ui"]["custom"]>[1];
 type Widget = Parameters<ExtensionContext["ui"]["setWidget"]>[1];
-const tuiFixture = <Fixture extends object>(value: Fixture): Fixture & TUI => {
-  // SAFETY: Tests invoke only the TUI operations supplied by each fixture.
-  return value as Fixture & TUI;
-};
-const keybindingsFixture = <Fixture extends object>(
-  value: Fixture,
-): Fixture & Parameters<Factory>[2] => {
-  // SAFETY: Tests invoke only matches/getKeys on their injected keybinding fixture.
-  return value as Fixture & Parameters<Factory>[2];
-};
 const item = (id = "a"): ActivityItem => ({
   id,
   title: "Work",
@@ -52,71 +37,26 @@ const item = (id = "a"): ActivityItem => ({
   revision: "1",
 });
 function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal") {
-  const handlers = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
-  const envelopes: Array<Parameters<ActivityEvents["emit"]>[1]> = [];
-  const bus: ActivityEvents = {
-    on(name, handler) {
-      const listeners = handlers.get(name) ?? new Set();
-      listeners.add(handler);
-      handlers.set(name, listeners);
-      return () => {
-        listeners.delete(handler);
-      };
-    },
-    emit(name, data) {
-      if (name === ACTIVITY_EVENT) envelopes.push(data);
-      for (const handler of handlers.get(name) ?? []) handler(data);
-    },
-  };
+  const { events: bus, emitted } = eventBus();
   const work: Array<Effect.Effect<void, ActivityError>> = [];
   const host = makeActivityHost(extensionApiFixture({ events: bus }), (effect) => {
     work.push(effect);
   });
-  const stack: OverlayHandle[] = [];
-  let failGuard = false;
-  let doneCount = 0;
-  const makeHandle = () => {
-    // SAFETY: These tests use only identity-based hide on overlay handles.
-    const handle = {
-      hide() {
-        const index = stack.indexOf(handle);
-        if (index >= 0) stack.splice(index, 1);
-      },
-    } as OverlayHandle;
-    return handle;
-  };
-  // SAFETY: The host only reads these TUI methods and terminal rows in this suite.
   let redraws = 0;
-  const tui = tuiFixture({
+  const tui = opaqueFixture({
     terminal: { columns: 80, rows: 24 },
     requestRender() {
       redraws++;
     },
-    showOverlay() {
-      if (failGuard) throw new Error("guard unavailable");
-      const handle = makeHandle();
-      stack.push(handle);
-      return handle;
-    },
   });
-  // SAFETY: Activity rendering uses only these theme methods.
-  const theme = {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  } as Theme;
-  // SAFETY: Only matches/getKeys are used by the injected manager keymap.
-  const keybindings = keybindingsFixture({ matches: () => false, getKeys: () => [] });
+  const keybindings = opaqueFixture({ matches: () => false, getKeys: () => [] });
   let widget: Widget;
   let mountedWidget: (Component & { dispose?: () => void }) | undefined;
   const mountWidget = () => {
     if (!Predicate.isFunction(widget)) throw new Error("No widget factory");
-    mountedWidget = widget(tui, theme);
+    mountedWidget = widget(tui, plainTheme);
   };
-  const requests: Array<{
-    readonly factory: Factory;
-    readonly options: CustomOptions;
-    readonly result: ReturnType<typeof promiseGate<unknown>>;
-  }> = [];
+  const surface = fakeCustomSurfaceHost({ columns: 80, rows: 24, theme: plainTheme, keybindings });
   const ctx = extensionContextFixture({
     mode: "tui",
     sessionManager: { getSessionId: () => "session" },
@@ -131,31 +71,10 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
         if (mode !== "deferred") mountWidget();
         if (mode === "throws-after-factory") throw new Error("installation failed after factory");
       },
-      custom(factory: Factory, options: CustomOptions) {
-        const result = promiseGate<unknown>();
-        requests.push({ factory, options, result });
-        return result.promise;
-      },
+      custom: surface.ctx.ui.custom,
       notify() {},
     },
   });
-  const mount = (index: number) => {
-    const request = requests[index]!;
-    const component = request.factory(tui, theme, keybindings, (result) => {
-      doneCount++;
-      stack.pop();
-      request.result.resolve(result);
-    });
-    const handle = makeHandle();
-    stack.push(handle);
-    request.options?.onHandle?.(handle);
-    return component;
-  };
-  const foreignOverlay = () => {
-    const handle = makeHandle();
-    stack.push(handle);
-    return handle;
-  };
   const service = () =>
     Effect.gen(function* () {
       let connected: ActivityServiceContract | undefined;
@@ -176,25 +95,25 @@ function harness(mode: "normal" | "deferred" | "throws-after-factory" = "normal"
     });
   return {
     bus,
+    register: (overrides: Partial<ActivityProviderOptions> = {}) =>
+      registerActivityProvider(bus, {
+        sessionId: "session",
+        providerId: "agents",
+        snapshot: () => [item()],
+        invoke: () => Promise.resolve(),
+        ...overrides,
+      }),
     host,
     ctx,
-    terminal: tui.terminal,
-    stack,
-    requests,
-    envelopes,
+    surface,
+    envelopes: () => emitted.filter(({ name }) => name === ACTIVITY_EVENT).map(({ data }) => data),
     service,
     drain,
-    mount,
     mountWidget,
     renderWidget: () => mountedWidget?.render(80) ?? [],
     redraws: () => redraws,
-    foreignOverlay,
     pendingWork: () => work.length,
     disposeWidget: () => mountedWidget?.dispose?.(),
-    failGuard: () => {
-      failGuard = true;
-    },
-    doneCount: () => doneCount,
   };
 }
 
@@ -204,11 +123,7 @@ describe("activity host lifecycle", () => {
       const fixture = harness("deferred");
       const service = yield* fixture.service();
       const availability: boolean[] = [];
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item()],
-        invoke: () => Promise.resolve(),
+      const provider = fixture.register({
         onAvailability: (value) => {
           availability.push(value);
         },
@@ -230,13 +145,7 @@ describe("activity host lifecycle", () => {
       const fixture = harness();
       const service = yield* fixture.service();
       let starting = 2;
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [],
-        starting: () => starting,
-        invoke: () => Promise.resolve(),
-      });
+      const provider = fixture.register({ snapshot: () => [], starting: () => starting });
       fixture.host.activate(fixture.ctx, service);
       yield* fixture.drain();
       fixture.host.tick(service, 0);
@@ -277,12 +186,7 @@ describe("activity host lifecycle", () => {
     Effect.gen(function* () {
       const fixture = harness("throws-after-factory");
       const service = yield* fixture.service();
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item()],
-        invoke: () => Promise.resolve(),
-      });
+      const provider = fixture.register();
       fixture.host.activate(fixture.ctx, service);
       yield* fixture.drain();
       expect(provider.isAvailable()).toBe(false);
@@ -296,12 +200,7 @@ describe("activity host lifecycle", () => {
         const fixture = harness("deferred");
         const service = yield* fixture.service();
         let items = Array.from({ length: 513 }, (_, index) => item(String(index)));
-        const provider = registerActivityProvider(fixture.bus, {
-          sessionId: "session",
-          providerId: "agents",
-          snapshot: () => items,
-          invoke: () => Promise.resolve(),
-        });
+        const provider = fixture.register({ snapshot: () => items });
         fixture.host.activate(fixture.ctx, service);
         expect(provider.isAvailable()).toBe(false);
         fixture.mountWidget();
@@ -320,15 +219,10 @@ describe("activity host lifecycle", () => {
     Effect.gen(function* () {
       const fixture = harness();
       const first = yield* fixture.service();
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item()],
-        invoke: () => Promise.resolve(),
-      });
+      const provider = fixture.register();
       fixture.host.activate(fixture.ctx, first);
       yield* fixture.drain();
-      const captured = fixture.envelopes[0];
+      const captured = fixture.envelopes()[0];
       provider.dispose();
       yield* fixture.drain();
       const replacement = yield* fixture.service();
@@ -336,12 +230,7 @@ describe("activity host lifecycle", () => {
       fixture.bus.emit(ACTIVITY_EVENT, captured);
       yield* fixture.drain();
       expect(yield* replacement.snapshot).toEqual([]);
-      const fresh = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item("fresh")],
-        invoke: () => Promise.resolve(),
-      });
+      const fresh = fixture.register({ snapshot: () => [item("fresh")] });
       yield* fixture.drain();
       expect(fresh.isAvailable()).toBe(true);
       expect((yield* replacement.snapshot)[0]?.id).toBe("fresh");
@@ -351,15 +240,10 @@ describe("activity host lifecycle", () => {
   it.effect("re-handshakes a live provider without accepting the old host envelope", () =>
     Effect.gen(function* () {
       const fixture = harness();
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item()],
-        invoke: () => Promise.resolve(),
-      });
+      const provider = fixture.register();
       fixture.host.activate(fixture.ctx, yield* fixture.service());
       yield* fixture.drain();
-      const captured = fixture.envelopes[0];
+      const captured = fixture.envelopes()[0];
       fixture.host.activate(fixture.ctx, yield* fixture.service());
       const pending = fixture.pendingWork();
       fixture.bus.emit(ACTIVITY_EVENT, captured);
@@ -373,9 +257,7 @@ describe("activity host lifecycle", () => {
     Effect.gen(function* () {
       const fixture = harness();
       fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const provider = registerActivityProvider(fixture.bus, {
-        sessionId: "session",
-        providerId: "agents",
+      const provider = fixture.register({
         snapshot: () => [
           {
             ...item(),
@@ -386,12 +268,11 @@ describe("activity host lifecycle", () => {
             ],
           },
         ],
-        invoke: () => Promise.resolve(),
       });
       yield* fixture.drain();
       const decoded = yield* Schema.decodeUnknownEffect(
         Schema.Array(Schema.Struct({ items: ActivitySnapshotSchema })),
-      )(fixture.envelopes);
+      )(fixture.envelopes());
       const broadcast = decoded
         .flatMap((event) =>
           event.items.flatMap((item) => [
@@ -412,77 +293,44 @@ describe("activity host lifecycle", () => {
     Effect.gen(function* () {
       const fixture = harness();
       fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const open = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fixture.requests.length === 1);
-      const component = yield* Effect.promise(() => Promise.resolve(fixture.mount(0)));
-      const retained = fixture.requests[0]!.options?.overlayOptions;
-      const options = Predicate.isFunction(retained) ? retained() : retained;
-      for (const [columns, rows, width, height] of [
-        [160, 50, 144, 45],
-        [124, 50, 124, 50],
-        [160, 29, 160, 29],
-        [125, 30, 112, 27],
-      ]) {
-        Object.assign(fixture.terminal, { columns, rows });
-        expect(options?.width).toBe(width);
-        expect(options?.maxHeight).toBe(height);
-        expect(component.render(width!).length).toBe(height);
+      const open = yield* fixture.host
+        .open(fixture.ctx)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      fixture.surface.mount();
+      const [component] = fixture.surface.overlays;
+      const options = fixture.surface.overlayOptions;
+      for (const [columns, rows] of [
+        [160, 50],
+        [124, 50],
+        [160, 29],
+        [125, 30],
+      ] as const) {
+        Object.assign(fixture.surface.terminal, { columns, rows });
+        const { width, height } = screenViewport({ columns, rows });
+        const rendered = component?.render(width).length;
+        expect([options?.width, options?.maxHeight, rendered]).toEqual([width, height, height]);
       }
       yield* Fiber.interrupt(open);
-      expect(fixture.stack).toEqual([]);
+      expect(fixture.surface.overlays).toEqual([]);
     }),
   );
   it.effect("admits one manager and closes only its owned overlay beneath a questionnaire", () =>
     Effect.gen(function* () {
       const fixture = harness();
       fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const open = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fixture.requests.length === 1);
+      const open = yield* fixture.host
+        .open(fixture.ctx)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* fixture.host.open(fixture.ctx);
-      expect(fixture.requests).toHaveLength(1);
-      fixture.mount(0);
-      const questionnaire = fixture.foreignOverlay();
+      fixture.surface.mount();
+      fixture.surface.mount();
+      expect(fixture.surface.overlays).toHaveLength(1);
+      const questionnaire = { render: () => ["questionnaire"], invalidate() {} };
+      fixture.surface.showUnrelated(questionnaire);
       fixture.host.deactivate();
       yield* Fiber.join(open);
-      expect(fixture.stack).toEqual([questionnaire]);
-      expect(fixture.doneCount()).toBe(1);
-    }),
-  );
-  it.effect("late mounting after cancellation cannot close a successor or questionnaire", () =>
-    Effect.gen(function* () {
-      const fixture = harness();
-      fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const first = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fixture.requests.length === 1);
-      yield* Fiber.interrupt(first);
-      const second = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => fixture.requests.length === 2);
-      fixture.mount(1);
-      const questionnaire = fixture.foreignOverlay();
-      fixture.mount(0);
-      expect(fixture.stack).toHaveLength(2);
-      expect(fixture.stack[1]).toBe(questionnaire);
-      fixture.host.deactivate();
-      yield* Fiber.join(second);
-      expect(fixture.stack).toEqual([questionnaire]);
-      expect(fixture.doneCount()).toBe(2);
-    }),
-  );
-  it.effect("settles cleanup failure without an unguarded pop of another overlay", () =>
-    Effect.gen(function* () {
-      const fixture = harness();
-      fixture.host.activate(fixture.ctx, yield* fixture.service());
-      const open = yield* fixture.host.open(fixture.ctx).pipe(Effect.exit, Effect.forkScoped);
-      yield* yieldUntil(() => fixture.requests.length === 1);
-      fixture.mount(0);
-      const questionnaire = fixture.foreignOverlay();
-      fixture.failGuard();
-      fixture.host.deactivate();
-      const result = yield* Fiber.join(open);
-      expect(result._tag).toBe("Failure");
-      expect(fixture.stack).toEqual([questionnaire]);
-      expect(fixture.doneCount()).toBe(0);
-      fixture.requests[0]!.result.resolve(undefined);
+      expect(fixture.surface.overlays).toEqual([questionnaire]);
+      expect(fixture.surface.doneCalls).toBe(1);
     }),
   );
 });

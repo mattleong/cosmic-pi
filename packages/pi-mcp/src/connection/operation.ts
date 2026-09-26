@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import { withAuthFailureReason } from "../auth/diagnostics.ts";
 import { terminalExchange } from "../boundary/sdk-elicitation.ts";
@@ -43,11 +44,14 @@ export const makeOperationFactory = (
         ),
       );
     const checkCurrent = withLock(checkAuthority);
-    const checkContinuation = Effect.gen(function* () {
-      yield* withLock(checkAuthority.pipe(Effect.andThen(registry.acceptingLocked(owner))));
-      const token = yield* registry
+    // Access is resolved at each dispatch; credential state can change between legs.
+    const accessToken = () =>
+      registry
         .access(owner.server)
         .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
+    const checkContinuation = Effect.gen(function* () {
+      yield* withLock(checkAuthority.pipe(Effect.andThen(registry.acceptingLocked(owner))));
+      const token = yield* accessToken();
       yield* withLock(
         Effect.gen(function* () {
           yield* checkAuthority;
@@ -72,15 +76,6 @@ export const makeOperationFactory = (
     let incomplete = false;
     let leg = 0;
     let displayed = 0;
-    const nativeExchange = (
-      input: McpRequest,
-      options?: McpDispatchOptions,
-    ): Effect.Effect<McpExchange, McpBoundaryError> =>
-      connection.exchange
-        ? connection.exchange(input, options)
-        : connection
-            .request(input, options)
-            .pipe(Effect.map((reply) => ({ kind: "complete" as const, reply })));
     const exchange = (
       input: McpRequest,
       options?: McpDispatchOptions,
@@ -93,9 +88,7 @@ export const makeOperationFactory = (
             Effect.gen(function* () {
               yield* Deferred.await(waiter.ready);
               yield* dispatchCheck(input);
-              const token = yield* registry
-                .access(owner.server)
-                .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
+              const token = yield* accessToken();
               yield* withLock(registry.checkTokenLocked(owner, token));
               yield* dispatchCheck(input);
               const definition = owner.server.definition;
@@ -115,68 +108,56 @@ export const makeOperationFactory = (
                   "MCP request-scoped logging is unavailable.",
                 );
               let observing = true;
+              const observable = () =>
+                observing &&
+                ticket.current &&
+                owner.current &&
+                owner.accepting &&
+                owner.authorizationRevision === authorizationRevision &&
+                registry.isAvailable();
               const progressLeg = ++leg;
               if (recordsOutcome) ticket.outcome = "unknown";
-              const reply = yield* nativeExchange(input, {
-                ...options,
-                onlog: (event) => {
-                  if (
-                    !options?.logLevel ||
-                    !observing ||
-                    !ticket.current ||
-                    !owner.current ||
-                    !owner.accepting ||
-                    owner.authorizationRevision !== authorizationRevision ||
-                    !registry.isAvailable()
-                  )
-                    return;
-                  registry.observations.publish(owner.server.id, event);
-                },
-                onprogress: (progress) => {
-                  if (
-                    !observing ||
-                    !ticket.current ||
-                    !owner.current ||
-                    !owner.accepting ||
-                    owner.authorizationRevision !== authorizationRevision ||
-                    !registry.isAvailable()
-                  )
-                    return;
-                  const observed = registry.observations.publish(owner.server.id, {
-                    ...progress,
-                    kind: "progress",
-                    operation: `${owner.id}:${ticket.id}`,
-                    leg: progressLeg,
-                  });
-                  if (observed?.kind === "progress" && options?.onprogress && displayed++ < 64) {
-                    try {
-                      options.onprogress(observed);
-                    } catch {
-                      /* Display never changes execution certainty. */
-                    }
-                  }
-                },
-              }).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    observing = false;
-                  }),
-                ),
-                Effect.tapError((error) =>
-                  withLock(
-                    Effect.gen(function* () {
-                      if (recordsOutcome) ticket.outcome = error.outcome;
-                      if (error.kind === "auth-required")
-                        yield* registry.rejectAuthLocked(owner, {
-                          credentialUsed: token !== undefined,
-                          error,
-                        });
-                      if (error.kind === "cleanup") yield* registry.terminalLocked(owner, true);
+              const reply = yield* connection
+                .exchange(input, {
+                  ...options,
+                  onlog: (event) => {
+                    if (!options?.logLevel || !observable()) return;
+                    registry.observations.publish(owner.server.id, event);
+                  },
+                  onprogress: (progress) => {
+                    if (!observable()) return;
+                    const observed = registry.observations.publish(owner.server.id, {
+                      ...progress,
+                      kind: "progress",
+                      operation: `${owner.id}:${ticket.id}`,
+                      leg: progressLeg,
+                    });
+                    // Display never changes execution certainty.
+                    if (observed?.kind === "progress" && options?.onprogress && displayed++ < 64)
+                      invokeHostCallback(() => options.onprogress?.(observed), undefined);
+                  },
+                })
+                .pipe(
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      observing = false;
                     }),
                   ),
-                ),
-                Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
-              );
+                  Effect.tapError((error) =>
+                    withLock(
+                      Effect.gen(function* () {
+                        if (recordsOutcome) ticket.outcome = error.outcome;
+                        if (error.kind === "auth-required")
+                          yield* registry.rejectAuthLocked(owner, {
+                            credentialUsed: token !== undefined,
+                            error,
+                          });
+                        if (error.kind === "cleanup") yield* registry.terminalLocked(owner, true);
+                      }),
+                    ),
+                  ),
+                  Effect.mapError((error) => withAuthFailureReason(owner.server, error)),
+                );
               yield* withLock(
                 Effect.gen(function* () {
                   if (reply.kind === "input-required") incomplete = true;
@@ -218,7 +199,7 @@ export const makeOperationFactory = (
               yield* registry.acceptingLocked(owner);
               const existing = owner.shared.get(key);
               if (existing) return existing;
-              const fresh = admission.issueDependency(owner.server.id, now);
+              const fresh = admission.issue(owner.server.id, now, /* dependency */ true);
               if (fresh instanceof McpBoundaryError) return yield* fresh;
               owner.operations += 1;
               owner.idleGeneration += 1;
@@ -281,9 +262,7 @@ export const makeOperationFactory = (
               Effect.gen(function* () {
                 yield* Deferred.await(waiter.ready);
                 yield* checkCurrent;
-                const token = yield* registry
-                  .access(owner.server)
-                  .pipe(Effect.mapError((error) => withAuthFailureReason(owner.server, error)));
+                const token = yield* accessToken();
                 yield* withLock(registry.checkTokenLocked(owner, token));
                 yield* checkCurrent;
                 ticket.outcome = "unknown";

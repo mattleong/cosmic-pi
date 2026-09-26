@@ -1,9 +1,11 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { beforeAll, expect, it, vi } from "vitest";
-import { CURSOR_MARKER, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, matchesKey } from "@earendil-works/pi-tui";
 import { OwnedFormDialog } from "../src/ui/form-dialog.ts";
 import type { FormOutcome, OwnedFormRequest } from "../src/protocol.ts";
-import { opaqueHostFixture, theme } from "./support/host.ts";
+import { opaqueFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { formOwner } from "./support/questionnaire.ts";
+import { expectWithin, pageViews } from "./support/viewport.ts";
 
 beforeAll(() => initTheme("dark", false));
 const enter = "\r",
@@ -14,12 +16,12 @@ const make = (request: OwnedFormRequest, getHeight: () => number = () => 24) => 
   const dialog = new OwnedFormDialog({
     request,
     getHeight,
-    owner: { extensionId: "pi-mcp", operationId: "o", requestId: "r", label: "MCP" },
-    tui: opaqueHostFixture({ requestRender: vi.fn(), terminal: { rows: 60, columns: 120 } }),
+    owner: formOwner,
+    tui: opaqueFixture({ requestRender: vi.fn(), terminal: { rows: 60, columns: 120 } }),
     theme,
-    keybindings: opaqueHostFixture({ matches: (data: string) => matchesKey(data, "escape") }),
+    keybindings: opaqueFixture({ matches: (data: string) => matchesKey(data, "escape") }),
     done,
-    onCollapse: vi.fn(),
+    collapse: vi.fn(),
   });
   return { dialog, done };
 };
@@ -28,7 +30,7 @@ const acceptReview = (dialog: OwnedFormDialog, fields: number) => {
   dialog.handleInput(enter);
 };
 
-it("preserves long private text, editor focus and final review through resize and hide/resume", () => {
+it("preserves long private text, editor focus and final review through resize", () => {
   let height = 7;
   const { dialog, done } = make(
     {
@@ -45,16 +47,12 @@ it("preserves long private text, editor focus and final review through resize an
   for (const width of [80, 24, 8, 1]) {
     height = width <= 8 ? 1 : 7;
     const lines = dialog.render(width);
-    expect(lines.length).toBeLessThanOrEqual(height);
-    expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    expectWithin(lines, width, height);
     expect(lines.join("\n")).toContain(CURSOR_MARKER);
   }
   dialog.focused = false;
   expect(dialog.render(24).join("\n")).not.toContain(CURSOR_MARKER);
   dialog.focused = true;
-  dialog.collapse();
-  dialog.handleInput("ignored");
-  dialog.resume();
   dialog.handleInput(enter);
   expect(done).not.toHaveBeenCalled();
   expect(dialog.render(24).join("\n")).not.toContain(CURSOR_MARKER);
@@ -75,14 +73,7 @@ it("allows complete URL review in a tiny viewport before an inert consent result
     },
     () => height,
   );
-  const views: string[] = [];
-  dialog.handleInput("\x1b[H");
-  for (let page = 0; page < 120; page++) {
-    const lines = dialog.render(24);
-    expect(lines.length).toBeLessThanOrEqual(height);
-    views.push(lines.join(""));
-    dialog.handleInput("\x1b[6~");
-  }
+  const views = pageViews(dialog, 24, 120, { height, join: "" });
   expect(views.some((view) => view.includes("example.test"))).toBe(true);
   expect(views.some((view) => view.includes("URL-END"))).toBe(true);
   expect(views.some((view) => view.includes("MESSAGE-END"))).toBe(true);
@@ -104,9 +95,7 @@ it.each([
     { kind: "url", url: "https://example.test/", message: "request" },
     () => height,
   );
-  const lines = dialog.render(width);
-  expect(lines.length).toBeLessThanOrEqual(height);
-  expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+  expectWithin(dialog.render(width), width, height);
   expect(done).not.toHaveBeenCalled();
 });
 
@@ -239,18 +228,8 @@ it("keeps the full normalized host, URL and caller prose reachable by paging at 
     url: `https://${host.toUpperCase()}/${"a".repeat(1000)}#`,
     message: `${"Caller prose\n".repeat(12)}MESSAGE-END`,
   });
-  const views: string[] = [];
-  dialog.handleInput("\x1b[H");
-  for (let page = 0; page < 20; page++) {
-    const lines = dialog.render(24);
-    const visible = lines.join("");
-    expect(visible).toContain(host);
-    expect(lines.length).toBeLessThanOrEqual(24);
-    expect(lines.every((line) => visibleWidth(line) <= 24)).toBe(true);
-    views.push(visible);
-    dialog.handleInput("\x1b[6~");
-  }
-  expect(views[0]).toContain(host);
+  const views = pageViews(dialog, 24, 20, { height: 24, join: "" });
+  expect(views.every((view) => view.includes(host))).toBe(true);
   expect(views[0]).toContain("https://");
   expect(views.some((view) => view.includes("#"))).toBe(true);
   expect(views.some((view) => view.includes("MESSAGE-END"))).toBe(true);
@@ -268,7 +247,7 @@ it("keeps URL consent inert, sanitizes presentation and exposes the complete URL
   });
   const lines = dialog.render(50);
   expect(lines.join("\n")).not.toContain("\x1b]8");
-  expect(lines.every((line) => visibleWidth(line) <= 50)).toBe(true);
+  expectWithin(lines, 50);
   for (let i = 0; i < 100; i++) dialog.handleInput("\x1b[6~");
   expect(dialog.render(50).join("\n")).toContain("END");
   dialog.handleInput(enter);

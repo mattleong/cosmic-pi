@@ -1,10 +1,21 @@
-import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
+import * as Effect from "effect/Effect";
+import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import { firstWriteClaimConflict } from "../domain/write-claims.ts";
-import { SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
+import { invalidRequest, SubagentCapacityError, SubagentWriterConflictError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "./model.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
 import { writerPoolUnavailable } from "./writer-pool.ts";
+
+/** Canonicalizes a writer cwd; failure rejects the request rather than the backend. */
+export const canonicalizeWriterCwd = (writerLeases: WriterLeaseContract, cwd: string) =>
+  writerLeases
+    .canonicalize(cwd)
+    .pipe(
+      Effect.mapError((error) =>
+        invalidRequest("writer_cwd_canonicalization_failed", error.message),
+      ),
+    );
 
 const ownsProcessSlot = (record: RunRecord): boolean =>
   record.cleanupPending ||

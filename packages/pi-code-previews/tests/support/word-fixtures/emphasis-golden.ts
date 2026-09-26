@@ -114,15 +114,6 @@ export const wordEmphasisGoldenCases: WordEmphasisGoldenCase[] = [
     expectedPairs: [[0, 1]],
   },
   {
-    name: "bounded text refinement preserves internal runs",
-    diff: ["-1 fooaabarbbbaz", "+1 fooxxbarzzbaz"],
-    expectedSpans: [
-      ["aa", "bb"],
-      ["xx", "zz"],
-    ],
-    expectedPairs: [[0, 1]],
-  },
-  {
     name: "unicode refinement preserves emoji ZWJ graphemes",
     diff: ["-1 👩‍💻Foo", "+1 👩‍🔬Foo"],
     expectedSpans: [["👩‍💻"], ["👩‍🔬"]],

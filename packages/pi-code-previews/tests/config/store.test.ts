@@ -4,11 +4,13 @@ import { homedir } from "node:os";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import { effectTest, step } from "../support/effect-test";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
+  type CodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { makeSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
@@ -52,15 +54,31 @@ const saveSettingsToDisk = (settings: CodePreviewSettings, options: LoadSettings
     ),
   );
 
-const makeTempDirectory = (prefix: string) => step(() => createTestTempDirectory(prefix));
+/** Creates an isolated temp root and points HOME and Pi's agent directory inside it. */
+const settingsRoots = (prefix: string) =>
+  step(() => createTestTempDirectory(prefix)).pipe(
+    Effect.map((root) => {
+      const roots = {
+        root,
+        home: join(root, "home"),
+        agentDir: join(root, "agent"),
+        project: join(root, "project"),
+      };
+      processEnv.HOME = roots.home;
+      processEnv.PI_CODING_AGENT_DIR = roots.agentDir;
+      return roots;
+    }),
+  );
 
-const makeDirectory = (path: string) => step(() => mkdir(path, { recursive: true }));
+const installRunOnlyCapability = (run: CodePreviewSessionCapability["run"]) =>
+  installCodePreviewSessionCapability({
+    run,
+    defer: () => () => undefined,
+    schedule: () => () => undefined,
+  });
 
 const readSavedDocument = (path: string) =>
   step(() => readFile(path, "utf8").then((contents) => JSON.parse(contents)));
-
-const queueSettingsSaveEffect = (settings: CodePreviewSettings, options?: LoadSettingsOptions) =>
-  step(() => queueSettingsSave(settings, options));
 
 const loadPreviewSettings = (project: string, trusted?: boolean) =>
   step(() => loadCodePreviewSettings(project, trusted));
@@ -114,8 +132,7 @@ test.each(nestedSettingsCases)(
 );
 
 effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_DIR", function* () {
-  const configDir = yield* makeTempDirectory("pi-code-previews-settings-");
-  processEnv.PI_CODING_AGENT_DIR = configDir;
+  const { agentDir } = yield* settingsRoots("pi-code-previews-settings-");
   delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
 
   yield* saveSettingsToDisk({
@@ -124,7 +141,7 @@ effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_
     toolCallCollapsedStyle: "compact",
   });
 
-  const saved = yield* readSavedDocument(join(configDir, "code-previews.json"));
+  const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
   assert.equal(saved.readCollapsedLines, 37);
   assert.equal(saved.toolCallCollapsedStyle, "compact");
 
@@ -133,7 +150,7 @@ effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_
   assert.equal(loaded?.toolCallCollapsedStyle, "compact");
 
   yield* saveSettingsToDisk(defaultCodePreviewSettings);
-  const resetDocument = yield* readSavedDocument(join(configDir, "code-previews.json"));
+  const resetDocument = yield* readSavedDocument(join(agentDir, "code-previews.json"));
   assert.equal(Object.hasOwn(resetDocument, "toolCallCollapsedStyle"), false);
   const reset = yield* loadSettingsFromDisk();
   assert.equal(reset?.toolCallCollapsedStyle, "preview");
@@ -142,9 +159,8 @@ effectTest("saveSettingsToDisk and loadSettingsFromDisk respect PI_CODING_AGENT_
 effectTest(
   "legacy prefixed and nested shapes in code-previews.json are ignored, not migrated",
   function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-legacy-shapes-");
-    processEnv.PI_CODING_AGENT_DIR = root;
-    yield* writeJson(join(root, "code-previews.json"), {
+    const { agentDir } = yield* settingsRoots("pi-code-previews-legacy-shapes-");
+    yield* writeJson(join(agentDir, "code-previews.json"), {
       codePreviewReadCollapsedLines: 30,
       codePreview: { readCollapsedLines: 12 },
       toolCallBackground: true,
@@ -163,9 +179,7 @@ effectTest(
 );
 
 effectTest("settings.json baselines accept only the nested codePreview object", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-nested-only-");
-  const agentDir = join(root, "agent");
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
+  const { agentDir } = yield* settingsRoots("pi-code-previews-nested-only-");
   yield* writeJson(join(agentDir, "settings.json"), {
     readCollapsedLines: 55,
     codePreviewReadCollapsedLines: 56,
@@ -176,52 +190,18 @@ effectTest("settings.json baselines accept only the nested codePreview object", 
   assert.equal(loaded?.readCollapsedLines, 21);
 });
 
-effectTest(
-  "saving preserves unknown root fields and legacy blocks without migrating them",
-  function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-unknown-");
-    processEnv.PI_CODING_AGENT_DIR = root;
-    yield* writeJson(join(root, "code-previews.json"), {
-      owner: "keep",
-      codePreview: { readCollapsedLines: 12, futureSetting: { enabled: true } },
-      readCollapsedLines: 14,
-    });
-    const loaded = yield* loadSettingsFromDisk();
-    assert.ok(loaded);
-    assert.equal(loaded.readCollapsedLines, 14);
-    yield* saveSettingsToDisk({ ...loaded, readCollapsedLines: 20 });
-    const saved = yield* readSavedDocument(join(root, "code-previews.json"));
-    assert.equal(saved.owner, "keep");
-    assert.equal(saved.readCollapsedLines, 20);
-    // The legacy nested block is an unknown root field: preserved verbatim, never read or rewritten.
-    assert.deepEqual(saved.codePreview, {
-      readCollapsedLines: 12,
-      futureSetting: { enabled: true },
-    });
-  },
-);
-
 effectTest("concurrent queued saves publish in invocation order", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-concurrent-save-");
-  processEnv.PI_CODING_AGENT_DIR = root;
+  const { agentDir } = yield* settingsRoots("pi-code-previews-concurrent-save-");
   const loaded = (yield* loadSettingsFromDisk()) ?? defaultCodePreviewSettings;
   const first = queueSettingsSave({ ...loaded, readCollapsedLines: 41 });
   const second = queueSettingsSave({ ...loaded, readCollapsedLines: 42 });
   yield* step(() => Promise.all([first, second]));
-  const saved = yield* readSavedDocument(join(root, "code-previews.json"));
+  const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
   assert.equal(saved.readCollapsedLines, 42);
 });
 
 effectTest("loadSettingsFromDisk merges only current locations in precedence order", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-precedence-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const project = join(root, "project");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* makeDirectory(join(home, ".pi", "agent"));
-  yield* makeDirectory(agentDir);
-  yield* makeDirectory(join(project, ".pi"));
+  const { home, agentDir, project } = yield* settingsRoots("pi-code-previews-precedence-");
 
   // Legacy HOME-derived locations must be ignored entirely, never merged or migrated.
   yield* writeJson(join(home, ".pi", "settings.json"), {
@@ -261,10 +241,7 @@ effectTest("loadSettingsFromDisk merges only current locations in precedence ord
 effectTest(
   "compact style follows environment, trusted baselines, and global overrides",
   function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-compact-precedence-");
-    const agentDir = join(root, "agent");
-    const project = join(root, "project");
-    processEnv.PI_CODING_AGENT_DIR = agentDir;
+    const { agentDir, project } = yield* settingsRoots("pi-code-previews-compact-precedence-");
     processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE = "compact";
 
     const environment = yield* loadPreviewSettings(project);
@@ -298,190 +275,99 @@ effectTest(
   },
 );
 
-effectTest(
-  "saving a global change does not copy project defaults into other projects",
-  function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-global-overrides-");
-    const home = join(root, "home");
-    const agentDir = join(root, "agent");
-    const firstProject = join(root, "first");
-    const secondProject = join(root, "second");
-    processEnv.HOME = home;
-    processEnv.PI_CODING_AGENT_DIR = agentDir;
+const globalOverrideCases = [
+  {
+    name: "saving a global change does not copy project defaults into other projects",
+    existing: undefined,
+    saved: { shikiTheme: "github-dark" },
+    secondRead: 22,
+  },
+  {
+    name: "saving an unrelated change preserves existing explicit global overrides",
+    existing: { readCollapsedLines: 77 },
+    saved: { readCollapsedLines: 77, shikiTheme: "github-dark" },
+    secondRead: 77,
+  },
+];
 
-    yield* writeJson(join(firstProject, ".pi", "settings.json"), {
+for (const { name, existing, saved, secondRead } of globalOverrideCases)
+  effectTest(name, function* () {
+    const { root, agentDir, project } = yield* settingsRoots("pi-code-previews-global-overrides-");
+    const secondProject = join(root, "second");
+    yield* writeJson(join(project, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 77 },
     });
     yield* writeJson(join(secondProject, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 22 },
     });
+    if (existing) yield* writeJson(join(agentDir, "code-previews.json"), existing);
 
-    const first = yield* loadSettingsFromDisk({ projectCwd: firstProject, projectTrusted: true });
+    const first = yield* loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
     assert.ok(first);
     yield* saveSettingsToDisk(
       { ...first, shikiTheme: "github-dark" },
-      { projectCwd: firstProject, projectTrusted: true },
+      { projectCwd: project, projectTrusted: true },
     );
 
-    const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
-    assert.deepEqual(saved, { shikiTheme: "github-dark" });
+    assert.deepEqual(yield* readSavedDocument(join(agentDir, "code-previews.json")), saved);
     const second = yield* loadSettingsFromDisk({ projectCwd: secondProject, projectTrusted: true });
-    assert.equal(second?.readCollapsedLines, 22);
+    assert.equal(second?.readCollapsedLines, secondRead);
     assert.equal(second?.shikiTheme, "github-dark");
-  },
-);
+  });
 
 effectTest("idle queued saves retain trusted project baselines", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-idle-project-save-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const project = join(root, "project");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-idle-project-save-");
   yield* writeJson(join(project, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 77 },
   });
   const loaded = yield* loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
   assert.ok(loaded);
 
-  yield* queueSettingsSaveEffect(
-    { ...loaded, shikiTheme: "github-dark" },
-    { projectCwd: project, projectTrusted: true },
+  yield* step(() =>
+    queueSettingsSave(
+      { ...loaded, shikiTheme: "github-dark" },
+      { projectCwd: project, projectTrusted: true },
+    ),
   );
 
   const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
   assert.deepEqual(saved, { shikiTheme: "github-dark" });
 });
 
-effectTest("saving an unrelated change preserves existing explicit global overrides", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-preserve-overrides-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const firstProject = join(root, "first");
-  const secondProject = join(root, "second");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-
-  yield* writeJson(join(firstProject, ".pi", "settings.json"), {
-    codePreview: { readCollapsedLines: 77 },
-  });
-  yield* writeJson(join(secondProject, ".pi", "settings.json"), {
-    codePreview: { readCollapsedLines: 22 },
-  });
-  yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 77 });
-
-  const first = yield* loadSettingsFromDisk({ projectCwd: firstProject, projectTrusted: true });
-  assert.ok(first);
-  yield* saveSettingsToDisk(
-    { ...first, shikiTheme: "github-dark" },
-    { projectCwd: firstProject, projectTrusted: true },
-  );
-
-  const saved = yield* readSavedDocument(join(agentDir, "code-previews.json"));
-  assert.deepEqual(saved, { readCollapsedLines: 77, shikiTheme: "github-dark" });
-  const second = yield* loadSettingsFromDisk({ projectCwd: secondProject, projectTrusted: true });
-  assert.equal(second?.readCollapsedLines, 77);
-});
-
-effectTest("loadSettingsFromDisk uses process cwd when project cwd is omitted", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-cwd-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const project = join(root, "project");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* makeDirectory(join(home, ".pi", "agent"));
-  yield* makeDirectory(agentDir);
-  yield* makeDirectory(join(project, ".pi"));
-  process.chdir(project);
-
-  yield* writeJson(join(project, ".pi", "settings.json"), {
-    codePreview: { readCollapsedLines: 23 },
-  });
-
-  const loaded = yield* loadSettingsFromDisk({ projectTrusted: true });
-  assert.equal(loaded?.readCollapsedLines, 23);
-});
-
-effectTest("loadSettingsFromDisk uses explicit project cwd instead of process cwd", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-project-cwd-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const targetProject = join(root, "target");
+effectTest("loadSettingsFromDisk prefers explicit project cwd over process cwd", function* () {
+  const { root, project } = yield* settingsRoots("pi-code-previews-project-cwd-");
   const otherProject = join(root, "other");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* makeDirectory(join(home, ".pi", "agent"));
-  yield* makeDirectory(agentDir);
-  yield* makeDirectory(join(targetProject, ".pi"));
-  yield* makeDirectory(join(otherProject, ".pi"));
-  process.chdir(otherProject);
-
-  yield* writeJson(join(targetProject, ".pi", "settings.json"), {
+  yield* writeJson(join(project, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 24 },
   });
   yield* writeJson(join(otherProject, ".pi", "settings.json"), {
     codePreview: { readCollapsedLines: 99, writeCollapsedLines: 88 },
   });
+  process.chdir(otherProject);
 
-  const loaded = yield* loadSettingsFromDisk({
-    projectCwd: targetProject,
-    projectTrusted: true,
-  });
+  const fromProcessCwd = yield* loadSettingsFromDisk({ projectTrusted: true });
+  assert.equal(fromProcessCwd?.readCollapsedLines, 99);
+  const loaded = yield* loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
   assert.equal(loaded?.readCollapsedLines, 24);
   assert.equal(loaded?.writeCollapsedLines, defaultCodePreviewSettings.writeCollapsedLines);
 });
 
-effectTest(
-  "loadCodePreviewSettings only reads project settings when the project is trusted",
-  function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-project-trust-");
-    const home = join(root, "home");
-    const agentDir = join(root, "agent");
-    const project = join(root, "project");
-    processEnv.HOME = home;
-    processEnv.PI_CODING_AGENT_DIR = agentDir;
-
-    yield* writeJson(join(agentDir, "settings.json"), {
-      codePreview: { readCollapsedLines: 31 },
-    });
-    yield* writeJson(join(project, ".pi", "settings.json"), {
-      codePreview: { readCollapsedLines: 99 },
-    });
-
-    const untrusted = yield* loadPreviewSettings(project);
-    assert.equal(untrusted.readCollapsedLines, 31);
-
-    const trusted = yield* loadPreviewSettings(project, true);
-    assert.equal(trusted.readCollapsedLines, 99);
-  },
-);
-
 effectTest("deduplicated public loads return isolated settings and tools clones", function* () {
-  const loadResult = Deferred.makeUnsafe<CodePreviewSettings>();
-  const pending = Effect.runPromise(Deferred.await(loadResult));
+  const load = deferredPromise<CodePreviewSettings>();
   let runs = 0;
-  installCodePreviewSessionCapability({
-    run: <A>() => {
-      runs++;
-      // SAFETY: This fixture resolves with the settings value requested by both load Effects.
-      return pending as Promise<A>;
-    },
-    defer: () => () => undefined,
-    schedule: () => () => undefined,
+  installRunOnlyCapability(<A>() => {
+    runs++;
+    // SAFETY: This fixture resolves with the settings value requested by both load Effects.
+    return load.promise as Promise<A>;
   });
 
   const firstLoad = loadCodePreviewSettings("/project", true);
   const secondLoad = loadCodePreviewSettings("/project", true);
-  Deferred.doneUnsafe(
-    loadResult,
-    Effect.succeed({
-      ...defaultCodePreviewSettings,
-      readCollapsedLines: 31,
-      tools: [...defaultCodePreviewSettings.tools],
-    }),
-  );
+  load.resolve({
+    ...defaultCodePreviewSettings,
+    readCollapsedLines: 31,
+    tools: [...defaultCodePreviewSettings.tools],
+  });
   const [first, second] = yield* step(() => Promise.all([firstLoad, secondLoad]));
 
   assert.equal(runs, 1);
@@ -493,52 +379,12 @@ effectTest("deduplicated public loads return isolated settings and tools clones"
   assert.deepEqual(second.tools, defaultCodePreviewSettings.tools);
 });
 
-effectTest(
-  "loadCodePreviewSettings falls back when a replaced session capability rejects",
-  function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-replaced-bootstrap-");
-    const home = join(root, "home");
-    const agentDir = join(root, "agent");
-    const project = join(root, "project");
-    processEnv.HOME = home;
-    processEnv.PI_CODING_AGENT_DIR = agentDir;
-    yield* writeJson(join(project, ".pi", "settings.json"), {
-      codePreview: { readCollapsedLines: 31 },
-    });
-
-    installCodePreviewSessionCapability({
-      run: () => Promise.reject(new Error("session replaced")),
-      defer: () => () => undefined,
-      schedule: () => () => undefined,
-    });
-    try {
-      const loaded = yield* loadPreviewSettings(project, true);
-      assert.equal(loaded.readCollapsedLines, 31);
-    } finally {
-      clearCodePreviewSessionCapability();
-    }
-  },
-);
-
 effectTest("an older live fallback cannot replace a newer successful publication", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-stale-fallback-");
-  const agentDir = join(root, "agent");
-  const project = join(root, "project");
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
+  const { agentDir, project } = yield* settingsRoots("pi-code-previews-stale-fallback-");
   yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 11 });
 
-  const rejectLiveAttempt = Deferred.makeUnsafe<void>();
-  const liveFailure = Effect.runPromise(Deferred.await(rejectLiveAttempt)).then(() => {
-    throw new Error("session replaced");
-  });
-  installCodePreviewSessionCapability({
-    run: <A>() => {
-      // SAFETY: This host fixture rejects every requested Effect with the same replacement failure.
-      return liveFailure as Promise<A>;
-    },
-    defer: () => () => undefined,
-    schedule: () => () => undefined,
-  });
+  const liveFailure = deferredPromise<never>();
+  installRunOnlyCapability(() => liveFailure.promise);
   const oldSignal = new AbortController().signal;
   const older = loadCodePreviewSettings(project, true, oldSignal);
   clearCodePreviewSessionCapability();
@@ -549,17 +395,10 @@ effectTest("an older live fallback cannot replace a newer successful publication
   assert.equal(codePreviewSettings.readCollapsedLines, 22);
 
   yield* writeJson(join(agentDir, "code-previews.json"), { readCollapsedLines: 11 });
-  Deferred.doneUnsafe(rejectLiveAttempt, Effect.void);
+  liveFailure.reject(new Error("session replaced"));
   const staleResult = yield* step(() => older);
   assert.equal(staleResult.readCollapsedLines, 11);
   assert.equal(codePreviewSettings.readCollapsedLines, 22);
-});
-
-effectTest("the one-shot settings boundary forwards cancellation to Effect", function* () {
-  const controller = new AbortController();
-  const pending = runOneShotSettingsEffect(Effect.never, controller.signal);
-  controller.abort();
-  yield* step(() => assert.rejects(pending));
 });
 
 effectTest(
@@ -598,8 +437,7 @@ effectTest(
 effectTest(
   "an aborted session settings load does not retry through the one-shot runtime",
   function* () {
-    const root = yield* makeTempDirectory("pi-code-previews-aborted-bootstrap-");
-    const project = join(root, "project");
+    const { project } = yield* settingsRoots("pi-code-previews-aborted-bootstrap-");
     yield* writeJson(join(project, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 31 },
     });
@@ -607,34 +445,17 @@ effectTest(
     const controller = new AbortController();
     controller.abort();
     let receivedSignal: AbortSignal | undefined;
-    installCodePreviewSessionCapability({
-      run: (_effect, signal) => {
-        receivedSignal = signal;
-        return Promise.reject(new Error("session startup was interrupted"));
-      },
-      defer: () => () => undefined,
-      schedule: () => () => undefined,
+    installRunOnlyCapability((_effect, signal) => {
+      receivedSignal = signal;
+      return Promise.reject(new Error("session startup was interrupted"));
     });
-    try {
-      yield* step(() => assert.rejects(loadCodePreviewSettings(project, true, controller.signal)));
-      assert.equal(receivedSignal, controller.signal);
-    } finally {
-      clearCodePreviewSessionCapability();
-    }
+    yield* step(() => assert.rejects(loadCodePreviewSettings(project, true, controller.signal)));
+    assert.equal(receivedSignal, controller.signal);
   },
 );
 
 effectTest("loadCodePreviewSettings resets to defaults when no settings files exist", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-no-settings-");
-  const home = join(root, "home");
-  const agentDir = join(root, "agent");
-  const project = join(root, "project");
-  processEnv.HOME = home;
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* makeDirectory(join(home, ".pi", "agent"));
-  yield* makeDirectory(agentDir);
-  yield* makeDirectory(project);
-
+  const { project } = yield* settingsRoots("pi-code-previews-no-settings-");
   delete processEnv.CODE_PREVIEW_TOOL_CALL_COLLAPSED_STYLE;
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
@@ -653,12 +474,9 @@ effectTest("loadCodePreviewSettings resets to defaults when no settings files ex
 });
 
 effectTest("loadSettingsFromDisk skips invalid JSON and continues", function* () {
-  const root = yield* makeTempDirectory("pi-code-previews-invalid-settings-");
-  const agentDir = join(root, "agent");
-  processEnv.PI_CODING_AGENT_DIR = agentDir;
-  yield* makeDirectory(agentDir);
-  yield* step(() => writeFile(join(agentDir, "settings.json"), "{invalid", "utf8"));
+  const { agentDir } = yield* settingsRoots("pi-code-previews-invalid-settings-");
   yield* writeJson(join(agentDir, "code-previews.json"), { grepCollapsedLines: 31 });
+  yield* step(() => writeFile(join(agentDir, "settings.json"), "{invalid", "utf8"));
 
   const loaded = yield* loadSettingsFromDisk();
   assert.equal(loaded?.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);

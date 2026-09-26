@@ -25,7 +25,6 @@ const success: BoundedProcessResult = {
   overflowed: false,
   timedOut: false,
   cleanupUnconfirmed: false,
-  dispatched: true,
 };
 
 it.effect("decodes only bounded format metadata from the owned runner", () =>
@@ -47,15 +46,13 @@ for (const patch of [
   { signal: "SIGKILL" },
   { overflowed: true },
   { timedOut: true },
-  { dispatched: false },
 ]) {
   it.effect(`sanitizes invalid decoder result ${JSON.stringify(patch)}`, () =>
     Effect.gen(function* () {
-      const result = yield* makeSharpAdapter(() => Effect.succeed({ ...success, ...patch }))
+      const failure = yield* makeSharpAdapter(() => Effect.succeed({ ...success, ...patch }))
         .decode(bytes)
-        .pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      expect(inspect(result)).not.toContain("secret");
+        .pipe(Effect.flip);
+      expect(inspect(failure)).not.toContain("secret");
     }),
   );
 }
@@ -78,9 +75,8 @@ it.effect("sanitizes runner failures and restores admission", () =>
     const failed = makeSharpAdapter(() =>
       Effect.fail(new BoundedProcessError({ operation: "spawn", message: "secret path" })),
     );
-    const result = yield* failed.decode(bytes).pipe(Effect.result);
-    expect(result._tag).toBe("Failure");
-    expect(inspect(result)).not.toContain("secret");
+    const failure = yield* failed.decode(bytes).pipe(Effect.flip);
+    expect(inspect(failure)).not.toContain("secret");
     expect(yield* makeSharpAdapter(() => Effect.succeed(success)).decode(bytes)).toEqual({
       format: "png",
     });

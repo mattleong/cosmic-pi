@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import { invokeHostCallback } from "pi-cosmic-core";
 
 export type HostCallbackOperation =
   | "host-query"
@@ -7,11 +8,6 @@ export type HostCallbackOperation =
   | "protocol-remove"
   | "protocol-invalidate"
   | "request-render"
-  | "surface-attach"
-  | "surface-detach"
-  | "surface-invalidate"
-  | "surface-dispose"
-  | "surface-render"
   | "footer-render"
   | "footer-install"
   | "footer-remove"
@@ -20,14 +16,9 @@ export type HostCallbackOperation =
   | "event-unsubscribe"
   | "notify";
 
-export interface HostCallbackDiagnostic {
-  readonly operation: HostCallbackOperation;
-}
-
 export interface HostCallbackBoundaryContract {
   /** Invokes a hostile synchronous host/extension callback without exposing its error or data. */
   readonly invoke: <A>(operation: HostCallbackOperation, callback: () => A, fallback: A) => A;
-  readonly diagnostics: () => readonly HostCallbackDiagnostic[];
 }
 
 export interface HostAbortSignalSnapshot {
@@ -46,24 +37,8 @@ export class HostCallbackBoundary extends Context.Service<
 }
 
 /** Creates the single synchronous callback boundary shared by pre-session and session code. */
-export function makeHostCallbackBoundary(maxDiagnostics = 32): HostCallbackBoundaryContract {
-  const capacity = Math.max(1, Math.floor(maxDiagnostics));
-  const failures: HostCallbackDiagnostic[] = [];
-  const record = (operation: HostCallbackOperation) => {
-    if (failures.length === capacity) failures.shift();
-    failures.push(Object.freeze({ operation }));
-  };
-  return {
-    invoke: (operation, callback, fallback) => {
-      try {
-        return callback();
-      } catch {
-        record(operation);
-        return fallback;
-      }
-    },
-    diagnostics: () => Object.freeze([...failures]),
-  };
+export function makeHostCallbackBoundary(): HostCallbackBoundaryContract {
+  return { invoke: (_operation, callback, fallback) => invokeHostCallback(callback, fallback) };
 }
 
 /** Owns a native abort forwarder so capture-to-registration races cannot lose a host abort. */

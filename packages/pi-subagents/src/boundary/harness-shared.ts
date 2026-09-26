@@ -14,12 +14,44 @@ export const MAX_PATH_CHARS = 4_096;
 /** Quotes a value as a TOML basic string (Codex config.toml / channel connection.toml). */
 export const tomlString = (value: string): string => JSON.stringify(value);
 
+/** Quotes a value as one POSIX shell single-quoted word. */
+export const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+export const CODEX_DISABLED_FEATURES =
+  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
+    " ",
+  );
+
+/** The Codex `[features]` table: every reviewed feature off except opted-in fast mode. */
+export const codexFeatureLines = (
+  openaiFastMode: boolean,
+  hooks: boolean,
+): ReadonlyArray<string> => [
+  "[features]",
+  ...CODEX_DISABLED_FEATURES.map(
+    (feature) => `${feature} = ${feature === "fast_mode" && openaiFastMode}`,
+  ),
+  "multi_agent = true",
+  `hooks = ${hooks}`,
+];
+
 export const nodeErrorCode = <ErrorInput>(error: ErrorInput): string | undefined =>
   error && hasObjectRuntimeType(error) && "code" in error && Predicate.isString(error.code)
     ? error.code
     : undefined;
 
 export { hasControlCharacter };
+
+/** Frozen copy of the defined `keys` of `source`, in allowlist order. */
+export const pickEnvironment = (
+  source: NodeJS.ProcessEnv,
+  keys: ReadonlyArray<string>,
+): NodeJS.ProcessEnv =>
+  Object.freeze(
+    Object.fromEntries(
+      keys.flatMap((key) => (source[key] === undefined ? [] : ([[key, source[key]]] as const))),
+    ),
+  );
 
 export const ensurePrivateDirectory = (path: string): Promise<void> =>
   fs
@@ -71,6 +103,13 @@ export const safeAgentDirectory = (agentDirectory: string): Promise<string> => {
     );
 };
 
+/** Removes an owned private directory tree, refusing a symlink or non-directory. */
+export const removePrivateDirectory = (directory: string): Promise<void> =>
+  fs.lstat(directory).then((stat) => {
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
+    return fs.rm(directory, { recursive: true, force: false });
+  });
+
 export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): boolean => {
   if (depth > 16) return false;
   if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
@@ -90,32 +129,10 @@ export const boundedJsonValue = <ValueInput>(value: ValueInput, depth = 0): bool
 
 export const safeCodexSourceHome = (
   sourceEnvironment: NodeJS.ProcessEnv,
-): Promise<string | undefined> => {
-  const configured = sourceEnvironment.CODEX_HOME;
-  const source =
-    configured === undefined ? join(sourceEnvironment.HOME || homedir(), ".codex") : configured;
-  if (
-    !isAbsolute(source) ||
-    source.length < 1 ||
-    source.length > MAX_PATH_CHARS ||
-    hasControlCharacter(source)
-  )
-    return Promise.resolve(undefined);
-  return Promise.resolve()
-    .then(() => {
-      const requested = resolve(source);
-      return fs.lstat(requested).then((requestedStat) => {
-        if (!requestedStat.isDirectory() || requestedStat.isSymbolicLink()) return undefined;
-        return fs.realpath(requested).then((canonical) =>
-          fs.lstat(canonical).then((canonicalStat) => {
-            if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) return undefined;
-            return canonical;
-          }),
-        );
-      });
-    })
-    .catch(() => undefined);
-};
+): Promise<string | undefined> =>
+  safeAgentDirectory(
+    sourceEnvironment.CODEX_HOME ?? join(sourceEnvironment.HOME || homedir(), ".codex"),
+  ).catch(() => undefined);
 
 const readValidatedCodexAuthFromHome = (sourceHome: string): Promise<string | undefined> => {
   const path = join(sourceHome, "auth.json");

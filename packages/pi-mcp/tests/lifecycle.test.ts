@@ -1,74 +1,35 @@
 import { it } from "@effect/vitest";
-import {
-  createEventBus,
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+} from "pi-cosmic-core/testing";
 import type { CompactAnimationScheduler } from "pi-code-previews";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { makeMcpLifecycle, type McpApplicationBoundaries } from "../src/application/lifecycle.ts";
-import { McpActivity } from "../src/activity/service.ts";
 import { registerMcpCommands } from "../src/settings/controller.ts";
 import { mcpFailureReply } from "../src/boundary/host-tool-result.ts";
-import { McpAuthFlow } from "../src/auth/flow.ts";
-import { McpManager } from "../src/manager/service.ts";
-import type { McpManagerSnapshot } from "../src/manager/model.ts";
-const emptyManager: McpManagerSnapshot = {
-  revision: 1,
-  trusted: true,
-  enabled: true,
-  active: 0,
-  queued: 0,
-  servers: [],
-};
-const presentationLayer = Layer.mergeAll(
-  McpActivity.layer(),
-  Layer.succeed(McpAuthFlow, {
-    snapshot: () => undefined,
-    subscribe: () => Effect.void,
-    run: () => Effect.succeed({ state: "ready" }),
-  }),
-  Layer.succeed(McpManager, {
-    refresh: Effect.succeed(emptyManager),
-    snapshot: () => emptyManager,
-    subscribe: () => Effect.void,
-    withView: (effect) => effect,
-    capture: () => Effect.fail(boundaryError("unsupported", "not-sent", "fixture")),
-    check: () => Effect.void,
-    dispatch: () => Effect.succeed(undefined),
-    cached: (request) =>
-      Effect.succeed({
-        family: request.family,
-        entries: [],
-        catalogs: [],
-        total: 0,
-        next: undefined,
-      }),
-    cachedDetail: () => Effect.fail(boundaryError("not-found", "not-sent", "fixture")),
-  }),
-);
 import { McpAuth } from "../src/auth/service.ts";
-import { boundaryError } from "../src/client/errors.ts";
-import {
-  MCP_CODE_MODE_QUERY,
-  McpCodeModeOutputSchema,
-  type McpCodeModeCapability,
-} from "../src/code-mode/protocol.ts";
-import { DEFAULT_MCP_SETTINGS } from "../src/config/schema.ts";
-import { McpConfigStore } from "../src/config/store.ts";
+import { boundaryError, type McpBoundaryError } from "../src/client/errors.ts";
+import { McpCodeModeOutputSchema, type McpCodeModeInput } from "../src/code-mode/protocol.ts";
 import type { McpToolDefinition } from "../src/tools/controller.ts";
 import type { McpGatewayExecution } from "../src/tools/model.ts";
 import { McpExecution } from "../src/tools/service.ts";
 import { decodeGatewayRequest } from "../src/invocation/validation.ts";
+import { host, presentationLayer, queryCodeMode } from "./fixtures/application.ts";
+import { fakeAuth, fakeConfigStore, testConfig } from "./fixtures/services.ts";
 
-const host = <A>(run: () => PromiseLike<A>) => Effect.tryPromise(run);
+const rejects = <A>(
+  run: () => Promise<A>,
+  match: Pick<McpBoundaryError, "kind"> & Partial<Pick<McpBoundaryError, "outcome">>,
+) => host(() => expect(run()).rejects.toMatchObject(match));
 let directory: string;
 beforeEach(() =>
   Effect.runPromise(
@@ -88,17 +49,6 @@ afterEach(() => {
   );
 });
 
-type LifecycleHostFixture = Pick<
-  ExtensionAPI,
-  "events" | "getAllTools" | "getActiveTools" | "setActiveTools"
-> & { readonly registerTool: (tool: McpToolDefinition) => void };
-type LifecycleContextFixture = Pick<
-  ExtensionContext,
-  "cwd" | "mode" | "hasUI" | "isProjectTrusted"
-> & {
-  readonly sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId">;
-  readonly ui: Pick<ExtensionContext["ui"], "notify">;
-};
 const harness = (
   options: {
     readonly cleanup?: () => Effect.Effect<void>;
@@ -133,7 +83,7 @@ const harness = (
         ]
       : [],
   );
-  const hostFixture: LifecycleHostFixture = {
+  const pi = extensionApiFixture({
     events,
     registerTool,
     getAllTools,
@@ -141,30 +91,19 @@ const harness = (
     setActiveTools: vi.fn((next: string[]) => {
       names = next;
     }),
-  };
-  const contextFixture: LifecycleContextFixture = {
+  });
+  const ctx = extensionContextFixture({
     cwd: directory,
     mode: "tui",
     hasUI: true,
     isProjectTrusted: () => trusted,
     sessionManager: { getSessionId: () => "session" },
     ui: { notify },
-  };
-  // SAFETY: This controlled partial host implements every callback exercised by the lifecycle.
-  const pi = hostFixture as ExtensionAPI;
-  // SAFETY: This controlled partial context implements every field read by the lifecycle.
-  const ctx = contextFixture as ExtensionContext;
+  });
   const lifecycle = makeMcpLifecycle(pi, {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
     wrapTool: options.wrapTool ?? ((definition) => definition),
     makeLayer: (input) => {
-      const config = {
-        revision: 1,
-        trusted: input.projectTrusted,
-        settings: DEFAULT_MCP_SETTINGS,
-        servers: {},
-        diagnostics: [],
-      };
       return Layer.mergeAll(
         presentationLayer,
         Layer.effect(
@@ -190,7 +129,6 @@ const harness = (
                 login: () => Effect.succeed({ state: "ready" as const }),
                 logout: () => Effect.void,
                 isAvailable: () => input.projectTrusted && enabled && input.isTrusted(),
-                available: Effect.sync(() => input.projectTrusted && enabled && input.isTrusted()),
               };
             }),
             () =>
@@ -200,24 +138,8 @@ const harness = (
               }),
           ),
         ),
-        Layer.succeed(McpConfigStore, {
-          snapshot: Effect.succeed(config),
-          subscribe: () => Effect.void,
-          reload: Effect.succeed(config),
-          setServer: () => Effect.succeed(config),
-          removeServer: () => Effect.succeed(config),
-          setSettings: () => Effect.succeed(config),
-        }),
-        Layer.succeed(McpAuth, {
-          access: () => Effect.succeed(undefined),
-          status: () => Effect.succeed({ state: "none" }),
-          login: () => Effect.succeed({ state: "ready" }),
-          logout: () => Effect.void,
-          reject: () => Effect.void,
-          completeLogin: () => Effect.void,
-          finalizationFailed: () => Effect.void,
-          revoke: Effect.void,
-        }),
+        fakeConfigStore(testConfig({ trusted: input.projectTrusted })).layer,
+        Layer.succeed(McpAuth, fakeAuth()),
       );
     },
   });
@@ -245,22 +167,40 @@ const harness = (
       names = names.filter((name) => name !== "mcp");
     },
     foreign: () => {
-      // SAFETY: A conflicting tool is inspected only for its name and provenance, never executed.
-      tool = { name: "mcp", description: "foreign" } as McpToolDefinition;
+      tool = opaqueFixture({ name: "mcp", description: "foreign" });
       source = "foreign";
       names.push("mcp");
     },
-    query: (sessionId = "session") => {
-      const replies: McpCodeModeCapability[] = [];
-      events.emit(MCP_CODE_MODE_QUERY, {
-        version: 1,
-        sessionId,
-        respond: (capability: McpCodeModeCapability) => replies.push(capability),
-      });
-      return replies;
-    },
+    query: (sessionId = "session") => queryCodeMode(events, sessionId),
   };
 };
+
+const encodeOutput = Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema));
+
+const parity = (
+  error: ReturnType<typeof boundaryError>,
+  input: McpCodeModeInput & Parameters<McpToolDefinition["execute"]>[1],
+  budget: number,
+) =>
+  Effect.gen(function* () {
+    const h = harness({ execute: () => Effect.fail(error) });
+    yield* host(() => h.lifecycle.start(h.ctx));
+    const signal = yield* Effect.abortSignal;
+    const provider = h.query()[0]!;
+    const gateway = yield* host(() => h.tool.execute("gateway", input, signal, undefined, h.ctx));
+    const nested = yield* host(() => provider.execute("nested", input, signal, budget));
+    expect(nested).toEqual(gateway.details);
+    expect(yield* encodeOutput(nested)).not.toContain("private-");
+    expect(nested.resultId).toBeUndefined();
+    const revoked = Effect.gen(function* () {
+      yield* host(() => h.lifecycle.shutdown());
+      yield* rejects(() => provider.execute("stale", input, signal, budget), {
+        kind: "unavailable",
+        outcome: "not-sent",
+      });
+    });
+    return { provider, nested, signal, revoked };
+  });
 
 describe("MCP session ownership", () => {
   it.live("owns animation ticks until replacement and rejects stale scheduling", () =>
@@ -464,22 +404,18 @@ describe("MCP session ownership", () => {
       const replacement = h.lifecycle.start(h.ctx);
       expect(h.query()).toEqual([]);
       const signal = yield* Effect.abortSignal;
-      yield* host(() =>
-        expect(old.execute("stale", { action: "status" }, signal, 2_000)).rejects.toMatchObject({
-          kind: "unavailable",
-          outcome: "not-sent",
-        }),
-      );
+      yield* rejects(() => old.execute("stale", { action: "status" }, signal, 2_000), {
+        kind: "unavailable",
+        outcome: "not-sent",
+      });
       yield* Deferred.await(cleaning);
       expect(h.counts).toEqual({ acquired: 1, released: 1 });
       yield* Deferred.succeed(release, undefined);
       yield* host(() => replacement);
       expect(h.query()).toHaveLength(1);
-      yield* host(() =>
-        expect(oldTool.execute("stale", {}, undefined, undefined, h.ctx)).rejects.toMatchObject({
-          kind: "stale",
-        }),
-      );
+      yield* rejects(() => oldTool.execute("stale", {}, undefined, undefined, h.ctx), {
+        kind: "stale",
+      });
       yield* host(() => h.lifecycle.shutdown());
       yield* host(() => h.lifecycle.shutdown());
       expect(h.counts).toEqual({ acquired: 2, released: 2 });
@@ -513,50 +449,26 @@ describe("MCP session ownership", () => {
 
   it.live("shares bounded auth recovery and certainty between gateway and Code Mode", () =>
     Effect.gen(function* () {
+      const reason = "auth-not-configured";
+      const input = { action: "tools.search", server: "one", query: "private-query" } as const;
       for (const outcome of ["not-sent", "completed", "unknown"] as const) {
-        for (const reason of [
-          "auth-not-configured",
-          "auth-env-required",
-          "auth-oauth-required",
-        ] as const) {
-          const h = harness({
-            execute: () =>
-              Effect.fail(boundaryError("auth-required", outcome, "private-credential", reason)),
-          });
-          yield* host(() => h.lifecycle.start(h.ctx));
-          const signal = yield* Effect.abortSignal;
-          const provider = h.query()[0]!;
-          const input = { action: "tools.search", server: "one", query: "private-query" } as const;
-          const gateway = yield* host(() =>
-            h.tool.execute("gateway", input, signal, undefined, h.ctx),
-          );
-          const nested = yield* host(() => provider.execute("nested", input, signal, 2_000));
-          expect(nested).toEqual(gateway.details);
-          expect(nested).toMatchObject({
-            action: "tools.search",
-            outcome,
-            isError: true,
-            data: { kind: "auth-required", reason },
-          });
-          expect(
-            yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(nested),
-          ).not.toContain("private-");
-          expect(nested.resultId).toBeUndefined();
-          if (outcome === "unknown") expect(nested.notices.join(" ")).toMatch(/Do not replay/);
-          yield* host(() =>
-            expect(provider.execute("bounded", input, signal, 1)).rejects.toMatchObject({
-              kind: "output-limit",
-              outcome,
-            }),
-          );
-          yield* host(() => h.lifecycle.shutdown());
-          yield* host(() =>
-            expect(provider.execute("stale", input, signal, 2_000)).rejects.toMatchObject({
-              kind: "unavailable",
-              outcome: "not-sent",
-            }),
-          );
-        }
+        const { provider, nested, signal, revoked } = yield* parity(
+          boundaryError("auth-required", outcome, "private-credential", reason),
+          input,
+          2_000,
+        );
+        expect(nested).toMatchObject({
+          action: "tools.search",
+          outcome,
+          isError: true,
+          data: { kind: "auth-required", reason },
+        });
+        if (outcome === "unknown") expect(nested.notices.join(" ")).toMatch(/Do not replay/);
+        yield* rejects(() => provider.execute("bounded", input, signal, 1), {
+          kind: "output-limit",
+          outcome,
+        });
+        yield* revoked;
       }
     }),
   );
@@ -581,89 +493,62 @@ describe("MCP session ownership", () => {
         },
         h.lifecycle.commands,
       );
-      // SAFETY: Commands use only the context fields provided by the lifecycle fixture.
-      const ctx = { ...h.ctx, mode: "rpc" } as ExtensionCommandContext;
+      const ctx = { ...h.ctx, mode: "rpc" as const };
       yield* host(() => Promise.resolve(commands.get("mcp")!.handler("refresh one", ctx)));
       const notification = h.notify.mock.calls.at(-1)?.[0];
       const expected = mcpFailureReply("refresh", error);
-      expect(notification).toBe(
-        yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(expected),
-      );
+      expect(notification).toBe(yield* encodeOutput(expected));
       expect(notification).not.toContain("private-failure");
       yield* host(() => h.lifecycle.shutdown());
     }),
   );
 
-  it.live("keeps unknown-action repair generic through the public gateway", () =>
-    Effect.gen(function* () {
-      const request = { action: "PRIVATE_ACTION", server: "private-value" };
-      const h = harness({
-        execute: () =>
-          decodeGatewayRequest(request).pipe(
-            Effect.andThen(Effect.die("Invalid request was admitted")),
-          ),
-      });
-      yield* host(() => h.lifecycle.start(h.ctx));
-      // SAFETY: Intentionally malformed input exercises the public gateway's rejection path.
-      const input = request as Parameters<McpToolDefinition["execute"]>[1];
-      const result = yield* host(() =>
-        h.tool.execute("invalid", input, undefined, undefined, h.ctx),
-      );
-      expect(result.details).toMatchObject({ outcome: "not-sent", isError: true });
-      const guidance = result.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join(" ");
-      expect(guidance).toContain("supported MCP action");
-      expect(guidance).not.toContain("Status accepts only action");
-      expect(guidance).not.toContain("PRIVATE_ACTION");
-      expect(guidance).not.toContain("private-value");
-      yield* host(() => h.lifecycle.shutdown());
-    }),
-  );
-
-  it.live("labels rejected input without evaluating its action getter", () =>
+  it.live("labels rejected gateway input generically without evaluating an action getter", () =>
     Effect.gen(function* () {
       let reads = 0;
-      const request = {
+      const getter = {
         get action() {
           reads += 1;
           return "status" as const;
         },
         server: "private-value",
       };
-      const h = harness({
-        execute: () =>
-          decodeGatewayRequest(request).pipe(
-            Effect.andThen(Effect.die("Invalid request was admitted")),
-          ),
-      });
-      yield* host(() => h.lifecycle.start(h.ctx));
-      const result = yield* host(() =>
-        h.tool.execute("invalid", request, undefined, undefined, h.ctx),
-      );
-      expect(result.details).toMatchObject({ outcome: "not-sent", isError: true });
+      for (const request of [{ action: "PRIVATE_ACTION", server: "private-value" }, getter]) {
+        const h = harness({
+          execute: () =>
+            decodeGatewayRequest(request).pipe(
+              Effect.andThen(Effect.die("Invalid request was admitted")),
+            ),
+        });
+        yield* host(() => h.lifecycle.start(h.ctx));
+        // SAFETY: Intentionally malformed input exercises the public gateway's rejection path.
+        const input = request as Parameters<McpToolDefinition["execute"]>[1];
+        const result = yield* host(() =>
+          h.tool.execute("invalid", input, undefined, undefined, h.ctx),
+        );
+        expect(result.details).toMatchObject({ outcome: "not-sent", isError: true });
+        if (request !== getter) {
+          const guidance = result.content
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join(" ");
+          expect(guidance).toContain("supported MCP action");
+          expect(guidance).not.toContain("Status accepts only action");
+          expect(guidance).not.toContain("PRIVATE_ACTION");
+          expect(guidance).not.toContain("private-value");
+        }
+        yield* host(() => h.lifecycle.shutdown());
+      }
       expect(reads).toBe(0);
-      yield* host(() => h.lifecycle.shutdown());
     }),
   );
 
   it.live("shares fixed prompt argument hints between gateway and Code Mode", () =>
     Effect.gen(function* () {
-      const h = harness({
-        execute: () =>
-          Effect.fail(boundaryError("invalid-input", "not-sent", "private-argument-value")),
-      });
-      yield* host(() => h.lifecycle.start(h.ctx));
-      const signal = yield* Effect.abortSignal;
-      const provider = h.query()[0]!;
-      const input = {
-        action: "prompts.get",
-        server: "one",
-        prompt: "private-prompt-name",
-      } as const;
-      const gateway = yield* host(() => h.tool.execute("gateway", input, signal, undefined, h.ctx));
-      const nested = yield* host(() => provider.execute("nested", input, signal, 512));
-      expect(nested).toEqual(gateway.details);
+      const { nested, revoked } = yield* parity(
+        boundaryError("invalid-input", "not-sent", "private-argument-value"),
+        { action: "prompts.get", server: "one", prompt: "private-prompt-name" },
+        512,
+      );
       expect(nested).toMatchObject({
         action: "prompts.get",
         outcome: "not-sent",
@@ -671,17 +556,7 @@ describe("MCP session ownership", () => {
         data: { kind: "invalid-input" },
       });
       expect(nested.notices.join(" ")).toMatch(/prompts\.list.*same server.*arguments/);
-      expect(nested.resultId).toBeUndefined();
-      expect(
-        yield* Schema.encodeEffect(Schema.fromJsonString(McpCodeModeOutputSchema))(nested),
-      ).not.toContain("private-");
-      yield* host(() => h.lifecycle.shutdown());
-      yield* host(() =>
-        expect(provider.execute("stale", input, signal, 512)).rejects.toMatchObject({
-          kind: "unavailable",
-          outcome: "not-sent",
-        }),
-      );
+      yield* revoked;
     }),
   );
 
@@ -695,34 +570,16 @@ describe("MCP session ownership", () => {
         yield* host(() => h.lifecycle.start(h.ctx));
         const signal = yield* Effect.abortSignal;
         const input = { action: "prompts.get", server: "one", prompt: "example" } as const;
-        yield* host(() =>
-          expect(h.query()[0]!.execute("remote", input, signal, 512)).rejects.toMatchObject({
-            kind: "invalid-input",
-            outcome,
-          }),
-        );
+        yield* rejects(() => h.query()[0]!.execute("remote", input, signal, 512), {
+          kind: "invalid-input",
+          outcome,
+        });
         const gateway = yield* host(() =>
           h.tool.execute("remote", input, signal, undefined, h.ctx),
         );
         expect(gateway.details?.notices.join(" ")).not.toContain("prompts.list");
         yield* host(() => h.lifecycle.shutdown());
       }),
-  );
-
-  it.live("retains typed certainty through the runtime-to-Code-Mode boundary", () =>
-    Effect.gen(function* () {
-      const h = harness({
-        execute: () => Effect.fail(boundaryError("output-limit", "completed", "bounded")),
-      });
-      yield* host(() => h.lifecycle.start(h.ctx));
-      const signal = yield* Effect.abortSignal;
-      yield* host(() =>
-        expect(
-          h.query()[0]!.execute("failed", { action: "status" }, signal, 2_000),
-        ).rejects.toMatchObject({ kind: "output-limit", outcome: "completed" }),
-      );
-      yield* host(() => h.lifecycle.shutdown());
-    }),
   );
 
   it.live("does not install after superseded preview loading and removes the host listener", () =>

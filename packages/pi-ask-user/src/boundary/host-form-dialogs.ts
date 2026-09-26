@@ -4,7 +4,7 @@ import { stripTerminalControls } from "pi-cosmic-core";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import { formContent, initialFormValues } from "../questionnaire/form-model.ts";
 import type { FormField, FormValue } from "../questionnaire/form-protocol.ts";
-import type { OwnedFormHost } from "../questionnaire/form-service.ts";
+import type { OwnedFormHost } from "../questionnaire/service.ts";
 import {
   parseFormInput,
   validateFormOutcome,
@@ -158,11 +158,6 @@ export const makeOwnedFormDialogsHost =
       return yield* Effect.acquireUseRelease(
         acquire,
         () => run,
-        (release) =>
-          Effect.try({
-            try: () => release?.(),
-            catch: () =>
-              new AskUserHostError({ operation: "close", message: "Private form cleanup failed." }),
-          }).pipe(Effect.ignore),
+        (release) => Effect.try(() => release?.()).pipe(Effect.ignore),
       );
     });

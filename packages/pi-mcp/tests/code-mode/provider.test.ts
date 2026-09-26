@@ -3,15 +3,14 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
-  MCP_CODE_MODE_QUERY,
-  MCP_CODE_MODE_VERSION,
-  normalizeMcpCodeModeCapability,
   normalizeMcpCodeModeError,
   type McpCodeModeCapability,
   type McpCodeModeInput,
   type McpCodeModeOutput,
 } from "../../src/code-mode/protocol.ts";
 import { makeMcpCodeModeHost } from "../../src/boundary/host-code-mode.ts";
+import type { McpBoundaryError } from "../../src/client/errors.ts";
+import { queryCodeMode } from "../fixtures/application.ts";
 
 const reply = (): McpCodeModeOutput => ({
   action: "status",
@@ -23,19 +22,7 @@ const reply = (): McpCodeModeOutput => ({
 const harness = () => {
   const events = createEventBus();
   const host = makeMcpCodeModeHost(events);
-  const query = (sessionId = "session") => {
-    const found: McpCodeModeCapability[] = [];
-    events.emit(MCP_CODE_MODE_QUERY, {
-      version: MCP_CODE_MODE_VERSION,
-      sessionId,
-      respond: <Value>(value: Value) => {
-        const candidate = normalizeMcpCodeModeCapability(value);
-        if (candidate) found.push(candidate);
-      },
-    });
-    return found;
-  };
-  return { events, host, query };
+  return { events, host, query: (sessionId = "session") => queryCodeMode(events, sessionId) };
 };
 const activation = (
   execute: McpCodeModeCapability["execute"] = () => Promise.resolve(reply()),
@@ -48,6 +35,11 @@ const activation = (
 });
 const invoke = (capability: McpCodeModeCapability) =>
   capability.execute("outer/mcp/1", { action: "status" }, new AbortController().signal, 1024);
+
+const rejects = <A>(
+  run: () => Promise<A>,
+  match: Pick<McpBoundaryError, "kind"> & Partial<Pick<McpBoundaryError, "outcome">>,
+) => Effect.promise(() => expect(run()).rejects.toMatchObject(match));
 
 const invokeRejected = <Input extends object>(capability: McpCodeModeCapability, input: Input) =>
   capability.execute(
@@ -76,12 +68,7 @@ describe("MCP session capability producer", () => {
         expect(h.query("other")).toHaveLength(0);
         enabled = false;
         expect(h.query()).toHaveLength(0);
-        yield* Effect.promise(() =>
-          expect(invoke(candidate)).rejects.toMatchObject({
-            kind: "unavailable",
-            outcome: "not-sent",
-          }),
-        );
+        yield* rejects(() => invoke(candidate), { kind: "unavailable", outcome: "not-sent" });
         expect(executed).toBe(false);
         h.host.dispose();
       }
@@ -95,14 +82,10 @@ describe("MCP session capability producer", () => {
       h.host.activate(activation());
       const old = h.query()[0]!;
       h.host.activate(activation());
-      yield* Effect.promise(() =>
-        expect(invoke(old)).rejects.toMatchObject({ kind: "unavailable" }),
-      );
+      yield* rejects(() => invoke(old), { kind: "unavailable" });
       const current = h.query()[0]!;
       h.host.deactivate();
-      yield* Effect.promise(() =>
-        expect(invoke(current)).rejects.toMatchObject({ kind: "unavailable" }),
-      );
+      yield* rejects(() => invoke(current), { kind: "unavailable" });
       h.host.dispose();
       h.host.activate(activation());
       expect(h.query()).toHaveLength(0);
@@ -144,67 +127,46 @@ describe("MCP session capability producer", () => {
             return Promise.resolve(reply());
           }),
         );
-        yield* Effect.promise(() =>
-          expect(invoke(h.query()[0]!)).rejects.toMatchObject({
-            kind: "stale",
-            outcome: "completed",
-          }),
-        );
+        yield* rejects(() => invoke(h.query()[0]!), { kind: "stale", outcome: "completed" });
         h.host.activate(activation(() => Promise.resolve({ ...reply(), data: "x".repeat(2000) })));
-        yield* Effect.promise(() =>
-          expect(invoke(h.query()[0]!)).rejects.toMatchObject({
-            kind: "output-limit",
-            outcome: "completed",
-          }),
-        );
+        yield* rejects(() => invoke(h.query()[0]!), { kind: "output-limit", outcome: "completed" });
         h.host.dispose();
       }),
   );
 
-  it.effect(
-    "passes schema literals and retained text without granting nested descriptions an exemption",
-    () =>
-      Effect.gen(function* () {
-        const h = harness();
-        const literals = [
-          { blob: "literal-blob" },
-          { base64: "literal-base64" },
-          { type: "image", data: "literal-image" },
-        ];
-        const schema = { const: literals, default: literals, enum: [literals], examples: literals };
-        const result = { inputSchema: schema, outputSchema: schema };
-        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(result);
-        for (const action of ["tools.describe", "result.read"] as const) {
-          const input =
+  it.effect("exempts schema literals and retained description text by reply action", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const literals = [
+        { blob: "literal-blob" },
+        { base64: "literal-base64" },
+        { type: "image", data: "literal-image" },
+      ];
+      const schema = { const: literals, default: literals, enum: [literals], examples: literals };
+      const result = { inputSchema: schema, outputSchema: schema };
+      const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(result);
+      for (const action of ["tools.describe", "result.read"] as const) {
+        const input =
+          action === "tools.describe"
+            ? { action, server: "one", tool: "run" }
+            : { action, id: "retained" };
+        const source: McpCodeModeOutput = {
+          ...reply(),
+          action,
+          data:
             action === "tools.describe"
-              ? { action, server: "one", tool: "run" }
-              : { action, id: "retained" };
-          const source: McpCodeModeOutput = {
-            ...reply(),
-            action,
-            data:
-              action === "tools.describe"
-                ? { result }
-                : { origin: { action: "tools.describe" }, text },
-          };
-          h.host.activate(activation(() => Promise.resolve(source)));
-          const call = (budget = 8_192) =>
-            h.query()[0]!.execute("schema", input, new AbortController().signal, budget);
-          expect(yield* Effect.promise(() => call())).toEqual(source);
+              ? { result }
+              : { origin: { action: "tools.describe" }, text },
+        };
+        h.host.activate(activation(() => Promise.resolve(source)));
+        expect(
           yield* Effect.promise(() =>
-            expect(call(512)).rejects.toMatchObject({ kind: "output-limit", outcome: "completed" }),
-          );
-          const rejected =
-            action === "tools.describe"
-              ? { result: { nested: { origin: { action: "tools.describe" }, result } } }
-              : { origin: { action: "tools.describe" }, result };
-          h.host.activate(activation(() => Promise.resolve({ ...source, data: rejected })));
-          yield* Effect.promise(() =>
-            expect(call()).rejects.toMatchObject({ kind: "protocol", outcome: "completed" }),
-          );
-        }
-        h.host.dispose();
-      }),
+            h.query()[0]!.execute("schema", input, new AbortController().signal, 8_192),
+          ),
+        ).toEqual(source);
+      }
+      h.host.dispose();
+    }),
   );
 
   it.effect("repairs rejected capability inputs without dispatch or rejected data", () =>
@@ -315,12 +277,7 @@ describe("MCP session capability producer", () => {
           }),
         ),
       );
-      yield* Effect.promise(() =>
-        expect(invoke(h.query()[0]!)).rejects.toMatchObject({
-          kind: "protocol",
-          outcome: "completed",
-        }),
-      );
+      yield* rejects(() => invoke(h.query()[0]!), { kind: "protocol", outcome: "completed" });
       h.host.dispose();
     }),
   );

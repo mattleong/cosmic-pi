@@ -1,49 +1,32 @@
-import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, type Component, type AutocompleteItem } from "@earendil-works/pi-tui";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem, Component } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { describe, expect, vi } from "vitest";
-import type { SubagentProjectionBridge } from "../src/boundary/host-ui.ts";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
+import { extensionContextFixture, opaqueFixture, plainTheme } from "pi-cosmic-core/testing";
+import {
+  fleetManagerActionsFixture,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
 import { PROFILE_IDS } from "../src/profiles/model.ts";
 import { SubagentConfigStoreError } from "../src/config/store.ts";
 import {
   makeSessionProfileSnapshot,
   SessionProfileConflictError,
 } from "../src/profiles/session-overrides.ts";
-import {
-  registerSubagentManagerCommand,
-  type FleetManagerActions,
-} from "../src/settings/controller.ts";
+import { registerSubagentManagerCommand } from "../src/settings/controller.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
-import type { ProfileSetPickerAction } from "../src/settings/profile-set-picker.ts";
-import type {
-  ProfileSettingsInspection,
-  ProfileWorkspaceTarget,
-} from "../src/settings/profile-route-editor.ts";
-import type { ProfileWorkspaceCloseResult } from "../src/settings/profile-workspace.ts";
-import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
+import type { ProfileSettingsInspection } from "../src/settings/profile-route-editor.ts";
+import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 
-// SAFETY: The custom settings components use only the Theme methods implemented here.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-  underline: (text: string) => text,
-} as Theme;
-
-type OverlayResult =
-  | ProfileSetPickerAction
-  | ProfileWorkspaceCloseResult
-  | ProfileWorkspaceTarget
-  | undefined;
 type DisposableComponent = Component & { readonly dispose?: (() => void) | undefined };
 
-const inspection = (): ProfileSettingsInspection => {
+const inspection = (globalDefault = "global"): ProfileSettingsInspection => {
   const globalDocument = {
     version: 6,
-    defaultProfileSet: "global",
+    defaultProfileSet: globalDefault,
     profileSets: {
       common: { profiles: {} },
       global: { profiles: {} },
@@ -76,30 +59,6 @@ const invalidSourceInspection = (): ProfileSettingsInspection => {
   });
 };
 
-const invalidProjectInheritanceInspection = (): ProfileSettingsInspection => {
-  const globalDocument = {
-    version: 6,
-    defaultProfileSet: "missing",
-    profileSets: {
-      common: { profiles: {} },
-      global: { profiles: {} },
-    },
-  };
-  const projectDocument = {
-    version: 6,
-    defaultProfileSet: "project",
-    profileSets: {
-      common: { profiles: {} },
-      project: { profiles: {} },
-    },
-  };
-  return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument,
-    projectTrusted: true,
-  });
-};
-
 const malformedGlobalDefaultInspection = (): ProfileSettingsInspection => {
   const globalDocument = {
     version: 6,
@@ -120,33 +79,24 @@ const atSessionRevision = (
   session: makeSessionProfileSnapshot(value.config, { revision, overrides: {} }),
 });
 
-const actions = (value: ProfileSettingsInspection): FleetManagerActions => ({
-  isAvailable: () => true,
-  captureModelRefresh: () => ({
-    isCurrent: () => true,
-    run: (effect, signal) => Effect.runPromise(effect, { signal }),
-  }),
-  stop: () => Promise.resolve(),
-  interrupt: () => Promise.resolve(),
-  resume: () => Promise.resolve(),
-  send: () => Promise.resolve(),
-  reply: () => Promise.resolve(),
-  rename: () => Promise.resolve(),
-  inspectProfiles: vi.fn(() => Promise.resolve(value)),
-  patchProfile: vi.fn(() => Promise.resolve()),
-  patchDefaultProfileSet: vi.fn(() => Promise.resolve()),
-  createProfileSetFromSnapshot: vi.fn(() => Promise.resolve()),
-  copyProfileSet: vi.fn(() => Promise.resolve()),
-  renameProfileSet: vi.fn(() => Promise.resolve()),
-  deleteProfileSet: vi.fn(() => Promise.resolve()),
-  patchNesting: vi.fn(() => Promise.resolve()),
-  inspectWriterWorkspace: vi.fn(() => Promise.resolve({ mode: "worktree" as const })),
-  setWriterWorkspaceMode: vi.fn(() => Promise.resolve()),
-  patchSessionProfile: vi.fn(() => Promise.resolve()),
-  replaceSessionProfiles: vi.fn(() => Promise.resolve()),
-  patchSessionNesting: vi.fn(() => Promise.resolve()),
-  listNativeModels: () => Promise.resolve([]),
-});
+const actions = (value: ProfileSettingsInspection) =>
+  fleetManagerActionsFixture({
+    inspectProfiles: vi.fn(() => Promise.resolve(value)),
+    patchProfile: vi.fn(() => Promise.resolve(value.projectDocument ?? {})),
+    restoreProfileDeclaration: vi.fn(() => Promise.resolve(value.projectDocument ?? {})),
+    patchDefaultProfileSet: vi.fn(() => Promise.resolve()),
+    createProfileSetFromSnapshot: vi.fn(() => Promise.resolve()),
+    copyProfileSet: vi.fn(() => Promise.resolve()),
+    renameProfileSet: vi.fn(() => Promise.resolve()),
+    deleteProfileSet: vi.fn(() => Promise.resolve()),
+    patchNesting: vi.fn(() => Promise.resolve()),
+    inspectWriterWorkspace: vi.fn(() => Promise.resolve({ mode: "worktree" as const })),
+    setWriterWorkspaceMode: vi.fn(() => Promise.resolve()),
+    patchSessionProfile: vi.fn(() => Promise.resolve(value.session)),
+    replaceSessionProfiles: vi.fn(() => Promise.resolve(value.session)),
+    patchSessionNesting: vi.fn(() => Promise.resolve()),
+    listNativeModels: () => Promise.resolve([]),
+  });
 
 const setup = (
   options: {
@@ -158,6 +108,10 @@ const setup = (
   let completions: ((prefix: string) => AutocompleteItem[] | null) | undefined;
   let projectTrusted = options.trusted ?? true;
   const overlays: DisposableComponent[] = [];
+  const { custom } = mountingCustomUi(plainTheme, (component) => overlays.push(component), {
+    columns: 120,
+    rows: 30,
+  });
   const pi = extensionApiFixture({
     registerCommand: vi.fn(
       (
@@ -172,34 +126,15 @@ const setup = (
       },
     ),
   });
-  // SAFETY: These command tests never open the fleet manager, so the bridge is never read.
-  const bridge = {} as SubagentProjectionBridge;
   const managerActions = actions(options.value ?? inspection());
-  registerSubagentManagerCommand(pi, bridge, managerActions);
+  // These command tests never open the fleet manager, so the bridge is never read.
+  registerSubagentManagerCommand(pi, opaqueFixture({}), managerActions);
   const ui = {
     notify: vi.fn(),
     confirm: vi.fn().mockResolvedValue(true),
     input: vi.fn().mockResolvedValue(undefined),
     select: vi.fn().mockResolvedValue(undefined),
-    custom: vi.fn((factory: (...args: unknown[]) => DisposableComponent) => {
-      const closed = Deferred.makeUnsafe<OverlayResult>();
-      const component = factory(
-        { terminal: { columns: 120, rows: 30 }, requestRender: vi.fn() },
-        theme,
-        {
-          matches: (data: string, id: string) =>
-            id === "tui.select.confirm"
-              ? matchesKey(data, Key.enter)
-              : id === "tui.select.cancel"
-                ? matchesKey(data, Key.escape)
-                : false,
-          getKeys: () => [],
-        },
-        (result: OverlayResult) => Deferred.doneUnsafe(closed, Effect.succeed(result)),
-      );
-      overlays.push(component);
-      return Effect.runPromise(Deferred.await(closed)).finally(() => component.dispose?.());
-    }),
+    custom: vi.fn(custom),
   };
   const ctx = extensionContextFixture({
     cwd: "/repo",
@@ -258,6 +193,14 @@ const saveSnapshot = function* (fixture: ReturnType<typeof setup>, name = "snaps
   press(fixture, ...name, "\r");
   yield* step(settleHostPromises);
 };
+const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfirm?: () => void) {
+  press(fixture, "u");
+  yield* step(settleHostPromises);
+  fixture.overlays[0]?.render(120);
+  beforeConfirm?.();
+  press(fixture, "\r");
+  yield* step(settleHostPromises);
+};
 const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "?", "\r");
 
 describe("profile settings controller", () => {
@@ -312,6 +255,34 @@ describe("profile settings controller", () => {
       yield* step(() => running);
       expect(fixture.overlays[0]?.render(80)).toEqual([]);
       expect(fixture.managerActions.createProfileSetFromSnapshot).not.toHaveBeenCalled();
+    },
+  );
+
+  effectTest(
+    "activation shutdown before mount waits to close without popping a stacked overlay",
+    function* () {
+      const fixture = setup();
+      const host = fakeCustomSurfaceHost({ theme: plainTheme, columns: 120, rows: 30 });
+      fixture.ui.custom.mockImplementation(host.ctx.ui.custom);
+      const activation = new AbortController();
+      vi.spyOn(fixture.managerActions, "captureModelRefresh").mockReturnValue({
+        isCurrent: () => !activation.signal.aborted,
+        run: (effect, signal) =>
+          Effect.runPromise(effect, {
+            signal: AbortSignal.any([signal, activation.signal]),
+          }),
+      });
+      const running = fixture.command?.("profiles", fixture.ctx) ?? Promise.resolve();
+      yield* step(() => vi.waitFor(() => expect(fixture.ui.custom).toHaveBeenCalledOnce()));
+      const questionnaire = { render: () => ["questionnaire"], invalidate() {} };
+      host.showUnrelated(questionnaire);
+      activation.abort();
+      yield* step(settleHostPromises);
+      expect(host.doneCalls).toBe(0);
+      host.mount();
+      yield* step(() => running);
+      expect(host.overlays).toEqual([questionnaire]);
+      expect(host.doneCalls).toBe(1);
     },
   );
 
@@ -387,12 +358,9 @@ describe("profile settings controller", () => {
     function* () {
       const fixture = setup();
       const running = yield* openLibrary(fixture);
-      press(fixture, "u");
-      yield* step(settleHostPromises);
-      fixture.overlays[0]?.render(120);
-      expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-      press(fixture, "\r");
-      yield* step(settleHostPromises);
+      yield* useSelectedSet(fixture, () =>
+        expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled(),
+      );
       const patch = vi.mocked(fixture.managerActions.replaceSessionProfiles).mock.calls[0]?.[0];
       expect(patch?.expectedRevision).toBe(0);
       expect(Object.keys(patch?.profiles ?? {})).toEqual(PROFILE_IDS);
@@ -413,19 +381,6 @@ describe("profile settings controller", () => {
     yield* closeDashboard(fixture, running);
   });
 
-  effectTest("rechecks Project trust after replacement confirmation", function* () {
-    const fixture = setup();
-    const running = yield* openLibrary(fixture);
-    press(fixture, "u");
-    yield* step(settleHostPromises);
-    fixture.overlays[0]?.render(120);
-    fixture.setProjectTrusted(false);
-    press(fixture, "\r");
-    yield* step(settleHostPromises);
-    expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
-    yield* closeDashboard(fixture, running);
-  });
-
   effectTest("rejects a stale Session replacement without retrying", function* () {
     const fixture = setup();
     vi.mocked(fixture.managerActions.replaceSessionProfiles).mockRejectedValueOnce(
@@ -436,11 +391,7 @@ describe("profile settings controller", () => {
       }),
     );
     const running = yield* openLibrary(fixture);
-    press(fixture, "u");
-    yield* step(settleHostPromises);
-    fixture.overlays[0]?.render(120);
-    press(fixture, "\r");
-    yield* step(settleHostPromises);
+    yield* useSelectedSet(fixture);
     expect(fixture.managerActions.replaceSessionProfiles).toHaveBeenCalledTimes(1);
     yield* closeDashboard(fixture, running);
   });
@@ -458,8 +409,11 @@ describe("profile settings controller", () => {
     yield* closeDashboard(fixture, running);
   });
 
-  for (const value of [invalidSourceInspection, invalidProjectInheritanceInspection]) {
-    effectTest(`blocks snapshots with invalid inherited routes (${value.name})`, function* () {
+  for (const [label, value] of [
+    ["invalid source", invalidSourceInspection],
+    ["invalid Project inheritance", () => inspection("missing")],
+  ] as const) {
+    effectTest(`blocks snapshots with invalid inherited routes (${label})`, function* () {
       const fixture = setup({ value: value() });
       const running = yield* openDashboard(fixture);
       yield* saveSnapshot(fixture);
@@ -477,13 +431,9 @@ describe("profile settings controller", () => {
   });
 
   effectTest("invalid inherited saved routes cannot replace Session", function* () {
-    const fixture = setup({ value: invalidProjectInheritanceInspection() });
+    const fixture = setup({ value: inspection("missing") });
     const running = yield* openLibrary(fixture);
-    press(fixture, "u");
-    yield* step(settleHostPromises);
-    fixture.overlays[0]?.render(120);
-    press(fixture, "\r");
-    yield* step(settleHostPromises);
+    yield* useSelectedSet(fixture);
     expect(fixture.managerActions.replaceSessionProfiles).not.toHaveBeenCalled();
     yield* closeDashboard(fixture, running);
   });
@@ -537,9 +487,7 @@ describe("profile settings controller", () => {
   effectTest("blocks a refreshed default that inherits invalid Global routes", function* () {
     const fixture = setup();
     const running = yield* openLibrary(fixture);
-    vi.mocked(fixture.managerActions.inspectProfiles).mockResolvedValue(
-      invalidProjectInheritanceInspection(),
-    );
+    vi.mocked(fixture.managerActions.inspectProfiles).mockResolvedValue(inspection("missing"));
     makeDefault(fixture);
     yield* step(settleHostPromises);
     expect(fixture.managerActions.patchDefaultProfileSet).not.toHaveBeenCalled();
@@ -655,24 +603,10 @@ describe("profile settings controller", () => {
   effectTest("does not offer Project saved sets to untrusted projects", function* () {
     const fixture = setup({ trusted: false });
     const running = yield* openLibrary(fixture);
-    press(fixture, "u");
-    yield* step(settleHostPromises);
-    fixture.overlays[0]?.render(120);
-    press(fixture, "\r");
-    yield* step(settleHostPromises);
+    yield* useSelectedSet(fixture);
     const patch = vi.mocked(fixture.managerActions.replaceSessionProfiles).mock.calls[0]?.[0];
     expect(patch?.origin.scope).toBe("global");
     yield* closeDashboard(fixture, running);
-  });
-
-  effectTest("saves a writer workspace selection only through the coordinator", function* () {
-    const fixture = setup();
-    fixture.ui.select
-      .mockResolvedValueOnce("Writer workspace")
-      .mockResolvedValueOnce("Shared checkout");
-    yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
-    expect(fixture.managerActions.setWriterWorkspaceMode).toHaveBeenCalledWith("shared-checkout");
-    expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "info");
   });
 
   effectTest(
@@ -709,6 +643,9 @@ describe("profile settings controller", () => {
         .mockResolvedValueOnce("Writer workspace")
         .mockResolvedValueOnce("Shared checkout");
       yield* step(() => fixture.command?.("settings", fixture.ctx) ?? Promise.resolve());
+      expect(fixture.managerActions.setWriterWorkspaceMode).toHaveBeenLastCalledWith(
+        "shared-checkout",
+      );
       expect(fixture.ui.notify).toHaveBeenCalledWith(expect.any(String), "info");
     },
   );

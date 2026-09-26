@@ -1,20 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
-import type { SubagentProjection } from "../../src/run/model.ts";
-import { SubagentService } from "../../src/run/service.ts";
 import {
   contactParentFrame,
-  fakeChildLayer,
+  expectInterruptBeforeUse,
   localServiceFixture,
   request,
-  serviceLayer,
+  useProbe,
+  withService,
 } from "./fixtures/service-harness.ts";
 
 const questions = (items: ReadonlyArray<SubagentNotification>) =>
@@ -25,13 +22,8 @@ const questions = (items: ReadonlyArray<SubagentNotification>) =>
 describe("question notification ownership", () => {
   for (const ending of ["cancel", "defect", "success"] as const)
     it.effect(`hands a question to an active await on ${ending}`, () => {
-      const fake = fakeChildLayer();
-      const delivered: SubagentNotification[] = [];
-      const layer = serviceLayer({
-        notify: (notification) => void delivered.push(notification),
-      }).pipe(Layer.provide(fake.layer));
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      const { fake, notifications: delivered, layer } = localServiceFixture();
+      return withService(layer, function* (service) {
         const run = yield* service.start(request({ name: `await-${ending}` }));
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -61,17 +53,12 @@ describe("question notification ownership", () => {
         yield* TestClock.adjust("100 millis");
         if (ending !== "success") yield* yieldUntil(() => questions(delivered).length === 1);
         expect(questions(delivered)).toHaveLength(ending === "success" ? 0 : 1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     });
 
   it.effect("keeps an unrendered question in the outbox after a bounded await result", () => {
-    const fake = fakeChildLayer();
-    const delivered: SubagentNotification[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => void delivered.push(notification),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { fake, notifications: delivered, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "bounded-await" }));
       let admitted = false;
       const waiter = yield* service
@@ -96,61 +83,33 @@ describe("question notification ownership", () => {
         requestId: "bounded-question",
         message: "Full question?",
       });
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("cancels await admission while an ancestor owns the question send", () => {
     const { fake, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const parent = yield* service.start(request({ name: "parent" }));
       const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
       const releaseSend = yield* Deferred.make<void>();
       fake.controls[0]!.gateNextIpcType("proxy_notification", releaseSend);
       fake.controls[1]!.offerIpc(contactParentFrame("blocked-send", "question", "Reply?"));
-      yield* yieldUntil(() =>
-        fake.controls[0]!.ipc.some((message) => message.type === "proxy_notification"),
-      );
-      let enteredUse = false;
+      yield* yieldUntil(() => fake.controls[0]!.sentIpc("proxy_notification"));
+      const probe = useProbe();
       const waiter = yield* service
-        .withAwaitTerminalObservations([child.id], "all_finished", undefined, () =>
-          Effect.sync(() => {
-            enteredUse = true;
-          }),
-        )
+        .withAwaitTerminalObservations([child.id], "all_finished", undefined, probe.use)
         .pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
-      let cancelled = false;
-      const cancelling = yield* Fiber.interrupt(waiter).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            cancelled = true;
-          }),
-        ),
-        Effect.forkScoped,
-      );
-      yield* Effect.gen(function* () {
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-        expect(cancelled).toBe(true);
-        expect(enteredUse).toBe(false);
-      }).pipe(Effect.ensuring(Deferred.succeed(releaseSend, undefined)));
-      yield* Fiber.join(cancelling);
+      yield* expectInterruptBeforeUse(waiter, probe, releaseSend);
       expect(
         fake.controls[0]!.ipc.filter((message) => message.type === "proxy_notification"),
       ).toHaveLength(1);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("does not acknowledge a replacement question with the previous await receipt", () => {
-    const fake = fakeChildLayer();
-    const delivered: SubagentNotification[] = [];
-    const projections: SubagentProjection[] = [];
-    const layer = serviceLayer({
-      notify: (notification) => void delivered.push(notification),
-      publish: (projection) => void projections.push(projection),
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    const { fake, projections, notifications: delivered, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "replacement-question" }));
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -192,37 +151,38 @@ describe("question notification ownership", () => {
       expect(
         questions(delivered).map((item) => [item.requestId, item.generation, item.message]),
       ).toEqual([["old", 2, "New question?"]]);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 
   it.effect("retries an accept-then-throw without losing the exact question", () => {
-    const fake = fakeChildLayer();
-    const delivered: SubagentNotification[] = [];
     let attempts = 0;
-    const layer = serviceLayer({
+    const { fake, projections, notifications, layer } = localServiceFixture({
       notify: (notification) => {
         if (notification.type !== "question") return undefined;
         attempts += 1;
-        delivered.push(notification);
         if (attempts === 1) throw new Error("accepted, but acknowledgement lost");
         return { actionAccepted: true };
       },
-    }).pipe(Layer.provide(fake.layer));
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    });
+    return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "uncertain-ack" }));
       fake.controls[0]?.offerIpc(contactParentFrame("retry", "question", "Try again?"));
       yield* yieldUntil(() => attempts === 1);
+      // A warning stays in status and neither produces nor wakes question delivery.
+      fake.controls[0]?.offerIpc(contactParentFrame("warning", "warning", "Status only."));
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.warning === "Status only.");
+      expect(attempts).toBe(1);
       yield* TestClock.adjust("200 millis");
       yield* yieldUntil(() => attempts === 2);
       expect(
-        questions(delivered).map((item) => [item.id, item.generation, item.requestId]),
+        questions(notifications).map((item) => [item.id, item.generation, item.requestId]),
       ).toEqual([
         [run.id, 1, "retry"],
         [run.id, 1, "retry"],
       ]);
       yield* TestClock.adjust("30 seconds");
       expect(attempts).toBe(2);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      expect((yield* service.status(run.id)).state).toBe("waiting_for_parent");
+    });
   });
 });

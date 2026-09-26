@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import {
   confirmEffectProcessClose,
+  hasControlCharacter,
   nodeFilePlatformLayer,
   provideNodeProcess,
   SafeFile,
@@ -27,7 +28,7 @@ import {
   claudeInitializeFrame,
   type ClaudeInitializeFrame,
 } from "../backend/local-claude-protocol.ts";
-import type { SubagentEffort } from "../domain/routing.ts";
+import { SUBAGENT_EFFORTS, type SubagentEffort } from "../domain/routing.ts";
 import {
   codexArgv,
   prepareCodexCatalogHarness,
@@ -43,23 +44,10 @@ const MAX_DESCRIPTION_CHARS = 4_096;
 const CATALOG_TIMEOUT_MILLIS = 10_000;
 const CATALOG_REQUEST_ID = "pi-subagents-model-catalog";
 
-const containsNoTerminalControls = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 32 || (code >= 127 && code <= 159)) return false;
-  }
-  return true;
-};
-const containsOnlySafeDescriptionControls = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 159))
-      return false;
-  }
-  return true;
-};
-const hasNoTerminalControls = Schema.makeFilter(containsNoTerminalControls);
-const hasOnlySafeDescriptionControls = Schema.makeFilter(containsOnlySafeDescriptionControls);
+const hasNoTerminalControls = Schema.makeFilter((value: string) => !hasControlCharacter(value));
+const hasOnlySafeDescriptionControls = Schema.makeFilter(
+  (value: string) => !hasControlCharacter(value.replace(/[\t\n\r]/gu, "")),
+);
 const Selector = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_SELECTOR_CHARS),
@@ -148,16 +136,10 @@ const CodexCatalogResponse = Schema.Struct({
   }),
 });
 
-const decodeClaudeCatalogCorrelatedFrameOption = Schema.decodeUnknownOption(
-  ClaudeCatalogCorrelatedFrame,
-);
-const decodeCodexCatalogCorrelatedFrameOption = Schema.decodeUnknownOption(
-  CodexCatalogCorrelatedFrame,
-);
-const decodeClaudeCatalogErrorResponseOption = Schema.decodeUnknownOption(
-  ClaudeCatalogErrorResponse,
-);
-const decodeCodexCatalogErrorResponseOption = Schema.decodeUnknownOption(CodexCatalogErrorResponse);
+const isClaudeCatalogCorrelatedFrame = Schema.is(ClaudeCatalogCorrelatedFrame);
+const isCodexCatalogCorrelatedFrame = Schema.is(CodexCatalogCorrelatedFrame);
+const isClaudeCatalogErrorResponse = Schema.is(ClaudeCatalogErrorResponse);
+const isCodexCatalogErrorResponse = Schema.is(CodexCatalogErrorResponse);
 const decodeClaudeCatalogResponseEffect = Schema.decodeUnknownEffect(ClaudeCatalogResponse);
 const decodeCodexCatalogResponseEffect = Schema.decodeUnknownEffect(CodexCatalogResponse);
 
@@ -193,21 +175,14 @@ export interface NativeModelCatalogLayerOptions {
   readonly executables?: { readonly claude: string; readonly codex: string } | undefined;
   /** Package-test seam only. */
   readonly environment?: NodeJS.ProcessEnv | undefined;
-  /** Package-test seam only. */
-  readonly timeoutMillis?: number | undefined;
 }
 
 const catalogError = (runtime: LocalCliRuntime, code: string, message: string) =>
   new NativeModelCatalogError({ runtime, code, message });
 
-const supportedEffortSet: ReadonlySet<string> = new Set([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+const supportedEffortSet: ReadonlySet<string> = new Set(
+  SUBAGENT_EFFORTS.filter((effort) => effort !== "off"),
+);
 
 const normalizeEfforts = (values: ReadonlyArray<string>): ReadonlyArray<SubagentEffort> =>
   values.filter((value): value is SubagentEffort => supportedEffortSet.has(value));
@@ -254,9 +229,6 @@ type CatalogRequestFrame =
   | CodexInitializedNotification
   | CodexModelListRequest;
 
-type ClaudeCatalogErrorFrame = Schema.Schema.Type<typeof ClaudeCatalogErrorResponse>;
-type CodexCatalogErrorFrame = Schema.Schema.Type<typeof CodexCatalogErrorResponse>;
-
 const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFrame> =>
   runtime === "claude"
     ? [claudeInitializeFrame(CATALOG_REQUEST_ID)]
@@ -270,34 +242,22 @@ const catalogFrames = (runtime: LocalCliRuntime): ReadonlyArray<CatalogRequestFr
         },
       ];
 
-const isClaudeCatalogErrorResponse = <ValueInput>(
-  value: ValueInput,
-): value is ValueInput & ClaudeCatalogErrorFrame =>
-  Option.isSome(decodeClaudeCatalogErrorResponseOption(value));
-
-const isCodexCatalogErrorResponse = <ValueInput>(
-  value: ValueInput,
-): value is ValueInput & CodexCatalogErrorFrame =>
-  Option.isSome(decodeCodexCatalogErrorResponseOption(value));
-
 const runCatalogProcess = (
   runtime: LocalCliRuntime,
   executable: string,
   args: ReadonlyArray<string>,
-  frames: ReadonlyArray<CatalogRequestFrame>,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  timeoutMillis: number,
 ): Effect.Effect<unknown, NativeModelCatalogError> =>
   Effect.scoped(
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const decodeCorrelatedFrameOption =
-          runtime === "codex"
-            ? decodeCodexCatalogCorrelatedFrameOption
-            : decodeClaudeCatalogCorrelatedFrameOption;
+        const isCorrelated =
+          runtime === "codex" ? isCodexCatalogCorrelatedFrame : isClaudeCatalogCorrelatedFrame;
         const input = new TextEncoder().encode(
-          `${frames.map((frame) => JSON.stringify(frame)).join("\n")}\n`,
+          `${catalogFrames(runtime)
+            .map((frame) => JSON.stringify(frame))
+            .join("\n")}\n`,
         );
         const child = yield* restore(
           ChildProcess.make(executable, [...args], {
@@ -320,29 +280,32 @@ const runCatalogProcess = (
             ),
           ),
         );
-        let stdoutBytes = 0;
-        const reply = child.stdout.pipe(
-          Stream.mapEffect((bytes) => {
-            stdoutBytes += bytes.byteLength;
-            return stdoutBytes > MAX_OUTPUT_BYTES
-              ? Effect.fail(
-                  catalogError(
+        const bounded = <E>(stream: Stream.Stream<Uint8Array, E>, label: string) => {
+          let bytes = 0;
+          return stream.pipe(
+            Stream.mapEffect((chunk) =>
+              (bytes += chunk.byteLength) > MAX_OUTPUT_BYTES
+                ? Effect.fail(
+                    catalogError(
+                      runtime,
+                      "catalog_output_unbounded",
+                      `${runtime} model catalog output exceeded its bounded limit.`,
+                    ),
+                  )
+                : Effect.succeed(chunk),
+            ),
+            Stream.mapError((error) =>
+              error instanceof NativeModelCatalogError
+                ? error
+                : catalogError(
                     runtime,
-                    "catalog_output_unbounded",
-                    `${runtime} model catalog output exceeded its bounded limit.`,
+                    "catalog_transport_unavailable",
+                    `${runtime} catalog ${label} failed.`,
                   ),
-                )
-              : Effect.succeed(bytes);
-          }),
-          Stream.mapError((error) =>
-            error instanceof NativeModelCatalogError
-              ? error
-              : catalogError(
-                  runtime,
-                  "catalog_transport_unavailable",
-                  `${runtime} catalog output failed.`,
-                ),
-          ),
+            ),
+          );
+        };
+        const reply = bounded(child.stdout, "output").pipe(
           Stream.decodeText,
           Stream.splitLines,
           Stream.mapEffect((line) => {
@@ -356,9 +319,8 @@ const runCatalogProcess = (
                   `${runtime} catalog emitted invalid JSONL.`,
                 ),
               );
-            const correlated = decodeCorrelatedFrameOption(parsed.value);
             return Effect.succeed(
-              correlated._tag === "Some" ? Option.some(parsed.value) : Option.none(),
+              isCorrelated(parsed.value) ? Option.some(parsed.value) : Option.none(),
             );
           }),
           Stream.filter(Option.isSome),
@@ -376,35 +338,13 @@ const runCatalogProcess = (
                 ),
           ),
         );
-        let diagnosticBytes = 0;
-        const diagnostics = child.stderr.pipe(
-          Stream.mapEffect((bytes) => {
-            diagnosticBytes += bytes.byteLength;
-            return diagnosticBytes > MAX_OUTPUT_BYTES
-              ? Effect.fail(
-                  catalogError(
-                    runtime,
-                    "catalog_output_unbounded",
-                    `${runtime} model catalog output exceeded its bounded limit.`,
-                  ),
-                )
-              : Effect.void;
-          }),
-          Stream.mapError((error) =>
-            error instanceof NativeModelCatalogError
-              ? error
-              : catalogError(
-                  runtime,
-                  "catalog_transport_unavailable",
-                  `${runtime} catalog diagnostics failed.`,
-                ),
-          ),
+        const diagnostics = bounded(child.stderr, "diagnostics").pipe(
           Stream.runDrain,
           // Stderr can close before the stdout decoder drains the final reply.
           // Stay pending after clean EOF while still surfacing overflow/stream failures.
           Effect.andThen(Effect.never),
         );
-        const deadline = Effect.sleep(timeoutMillis).pipe(
+        const deadline = Effect.sleep(CATALOG_TIMEOUT_MILLIS).pipe(
           Effect.andThen(
             Effect.fail(
               catalogError(
@@ -472,22 +412,19 @@ const decodeCodexModels = <ValueInput>(value: ValueInput) =>
 
 const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
   runtime: LocalCliRuntime,
-  executable: string,
   cwd: string,
-  sourceEnvironment: NodeJS.ProcessEnv,
-  timeoutMillis: number,
   options: NativeModelCatalogLayerOptions,
   probeSelector: string,
 ) {
+  const executable = options.executables?.[runtime] ?? runtime;
+  const sourceEnvironment = options.environment ?? process.env;
   if (runtime !== "codex" || !options.agentDirectory)
     return yield* runCatalogProcess(
       runtime,
       executable,
       runtime === "claude" ? claudeArgs(probeSelector) : codexArgv(),
-      catalogFrames(runtime),
       cwd,
       sanitizeLocalCliEnvironment(sourceEnvironment, runtime),
-      timeoutMillis,
     );
   return yield* Effect.acquireUseRelease(
     prepareCodexCatalogHarness({
@@ -498,16 +435,7 @@ const discoverCatalog = Effect.fn("NativeModelCatalog.discover")(function* (
         catalogError(runtime, "catalog_failed", "Unable to prepare the Codex model catalog."),
       ),
     ),
-    (harness) =>
-      runCatalogProcess(
-        runtime,
-        executable,
-        harness.args,
-        catalogFrames(runtime),
-        cwd,
-        harness.env,
-        timeoutMillis,
-      ),
+    (harness) => runCatalogProcess(runtime, executable, harness.args, cwd, harness.env),
     (harness) =>
       harness.release.pipe(
         Effect.mapError(() =>
@@ -533,18 +461,8 @@ const loadNativeModelCatalog =
     key: CatalogCacheKey,
   ): Effect.Effect<ReadonlyArray<NativeRuntimeModel>, NativeModelCatalogError> => {
     const { runtime, cwd } = key;
-    const executable = options.executables?.[runtime] ?? runtime;
-    const sourceEnvironment = options.environment ?? process.env;
     const load = (probeSelector: string) =>
-      discoverCatalog(
-        runtime,
-        executable,
-        cwd,
-        sourceEnvironment,
-        options.timeoutMillis ?? CATALOG_TIMEOUT_MILLIS,
-        options,
-        probeSelector,
-      ).pipe(
+      discoverCatalog(runtime, cwd, options, probeSelector).pipe(
         Effect.flatMap((value) => {
           if (
             (runtime === "codex" && isCodexCatalogErrorResponse(value)) ||

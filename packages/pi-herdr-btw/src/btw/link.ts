@@ -1,6 +1,7 @@
 // Versioned durable link between a parent Pi session and its reusable BTW session.
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core";
 import { HerdrBtwSessionIdSchema } from "./marker.ts";
 
 export const HERDR_BTW_LINK_ENTRY_TYPE = "pi-herdr-btw/reusable-link";
@@ -61,9 +62,7 @@ export const restoreHerdrBtwLink = (
   for (const entry of entries) {
     const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(CustomEntrySchema)(entry));
     if (decoded?.customType !== HERDR_BTW_LINK_ENTRY_TYPE) continue;
-    const linkOwner = Option.getOrUndefined(
-      Schema.decodeUnknownOption(HerdrBtwLinkOwnerSchema)(decoded.data),
-    );
+    const linkOwner = decodeUnknownOrUndefined(HerdrBtwLinkOwnerSchema, decoded.data);
     if (!linkOwner) {
       restoration = { _tag: "malformed" };
       continue;
@@ -73,9 +72,7 @@ export const restoreHerdrBtwLink = (
       linkOwner.parentSessionPath !== owner.sessionPath
     )
       continue;
-    const link = Option.getOrUndefined(
-      Schema.decodeUnknownOption(HerdrBtwLinkSchema)(decoded.data),
-    );
+    const link = decodeUnknownOrUndefined(HerdrBtwLinkSchema, decoded.data);
     restoration = link ? { _tag: "restored", link } : { _tag: "malformed" };
   }
   return restoration;

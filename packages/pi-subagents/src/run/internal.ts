@@ -8,13 +8,47 @@ import type {
   BackendLaunchRequest,
   BackendReport,
   BackendResumeToken,
+  BackendStartupState,
 } from "../backend/model.ts";
-import type { CanonicalWriterCwd } from "../boundary/writer-lease.ts";
+import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
-import type { SubagentError } from "./errors.ts";
-import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import {
+  type SubagentError,
+  type SubagentNotFoundError,
+  UnsupportedSubagentCapabilityError,
+} from "./errors.ts";
+import {
+  hasSubagentCapability,
+  isTerminalRunState,
+  type SubagentCapability,
+  type SubagentRunView,
+} from "./model.ts";
+import { snapshotView } from "./state.ts";
 import type { RunWarningSlots } from "./warnings.ts";
 import type { WriterPoolEntry } from "./writer-pool.ts";
+
+/** Runs an effect while holding a service semaphore, such as the run lock or completion gate. */
+export type WithRunLock = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+
+/**
+ * Service-owned primitives shared by run modules. Cross-module operations are wired by
+ * explicit name and typed from their producer; only launch receives the registry mutably.
+ */
+export interface RunContext {
+  /** Service scope for owner-scoped commits and background workers. */
+  readonly ownerScope: Scope.Scope;
+  /** The shared lock guarding every RunRecord mutation; `*Locked` operations require it. */
+  readonly withLock: WithRunLock;
+  readonly publish: Effect.Effect<void>;
+  readonly records: ReadonlyMap<string, RunRecord>;
+  /** One session-owned cross-process writer pool per canonical cwd digest. */
+  readonly writerPools: Map<string, WriterPoolEntry>;
+  readonly writerLeases: WriterLeaseContract;
+  readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
+  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
+  /** Service-owned assignment-attempt token allocation, invoked under the service lock. */
+  readonly allocateAssignmentAttemptToken: () => string;
+}
 
 export interface PendingInitializationSettlement {
   readonly state: "completed" | "failed" | "stopped";
@@ -126,9 +160,80 @@ export const clearRunNativeActivity = (record: RunRecord): void => {
     };
 };
 
-export const completeRunInitialization = (record: RunRecord): void => {
+/** Commits a pause of the current assignment and returns its snapshot; caller holds the lock. */
+export const commitRunPauseLocked = (record: RunRecord, now: number): SubagentRunView => {
+  record.pauseRequested = false;
+  record.pausedAssignmentEpoch = record.assignment.epoch;
+  record.activeTools.clear();
+  clearRunNativeActivity(record);
+  record.view = {
+    ...record.view,
+    state: "paused",
+    question: undefined,
+    currentTool: undefined,
+    lastActivityAt: now,
+  };
+  return snapshotView(record.view);
+};
+
+/** Wakes initialization waiters and takes the settlement deferred until startup committed. */
+export const completeRunInitialization = (
+  record: RunRecord,
+): PendingInitializationSettlement | undefined => {
   record.initializationPending = false;
   const settled = record.initializationSettled;
   record.initializationSettled = undefined;
   if (settled) Deferred.doneUnsafe(settled, Effect.void);
+  const pending = record.pendingInitializationSettlement;
+  record.pendingInitializationSettlement = undefined;
+  return pending;
 };
+
+/** Commits backend startup state for launch and resume; caller holds the service lock. */
+export const commitRunInitialization = (record: RunRecord, state: BackendStartupState) => {
+  const pending = completeRunInitialization(record);
+  record.resumeToken = state.resumeToken;
+  record.view = {
+    ...record.view,
+    model: state.model ?? record.view.model,
+    effort: state.effort,
+    sessionId: state.sessionId,
+    ...(state.sessionFile && { sessionFile: state.sessionFile }),
+  };
+  return pending;
+};
+
+const unsupportedCapabilityMessage = (
+  backend: string,
+  capability: SubagentCapability,
+  id: string,
+): string => {
+  switch (capability) {
+    case "steer":
+      return `${backend} subagents do not support mid-turn guidance. Await with subagent_await({ runIds: ["${id}"], until: "all_finished" }), inspect with subagent_status({ runIds: ["${id}"] }), or stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }).`;
+    case "interrupt":
+      return `${backend} subagents do not support interruption. Stop with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) or wait with subagent_await.`;
+    case "parent-contact":
+      return `${backend} subagents do not support parent questions or subagent_reply; use subagent_await or subagent_status instead.`;
+    default:
+      return `${backend} subagents do not support ${capability}. Inspect supported operations with subagent_status({ runIds: ["${id}"] }).`;
+  }
+};
+
+export const requireCapability = (
+  record: RunRecord,
+  capability: SubagentCapability,
+): Effect.Effect<void, UnsupportedSubagentCapabilityError> =>
+  hasSubagentCapability(record.view, capability)
+    ? Effect.void
+    : Effect.fail(
+        new UnsupportedSubagentCapabilityError({
+          backend: `${record.view.host}/${record.view.runtime}`,
+          capability,
+          message: unsupportedCapabilityMessage(
+            `${record.view.host}/${record.view.runtime}`,
+            capability,
+            record.view.id,
+          ),
+        }),
+      );

@@ -2,6 +2,7 @@ import type { FetchLike, RequestId } from "@modelcontextprotocol/client";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { captureSdkHttpChallenge } from "./sdk-http-challenge.ts";
 import { makeSseBudget } from "./mcp-protocol/shared/sse-budget.ts";
 
@@ -144,11 +145,8 @@ const makeBoundedBody = (
     cancelling = true;
     // Do not await this from pull/cancel: a foreign source may never settle. The
     // consumer settles now; Effect separately joins the source within its budget.
-    try {
-      void reader.cancel().then(finish, () => undefined);
-    } catch {
-      // Retain source ownership when cancellation cannot be confirmed.
-    }
+    // Retain source ownership when cancellation cannot be confirmed.
+    invokeHostCallback(() => void reader.cancel().then(finish, () => undefined), undefined);
   };
   const errorConsumer = (error: Error) => {
     if (terminal) return;

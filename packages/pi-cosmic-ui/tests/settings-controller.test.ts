@@ -14,20 +14,21 @@ import {
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+  plainTheme,
+} from "pi-cosmic-core/testing";
 import { makeHostCallbackBoundary } from "../src/boundary/host-callback.ts";
 import { makeDefaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import type { CosmicUiService } from "../src/protocol/service.ts";
 import { registerSettingsCommand } from "../src/settings/controller.ts";
-import { extensionApiFixture, extensionContextFixture } from "./support/host.ts";
 
 const flushSettlements = Effect.promise(() => Promise.resolve()).pipe(
   Effect.andThen(Effect.promise(() => Promise.resolve())),
 );
-
-const opaqueHostFixture = <Value>(value: Value): never => {
-  // SAFETY: These tests supply every opaque host member exercised by the settings controller.
-  return value as never;
-};
 
 function settingsHarness() {
   initTheme();
@@ -36,15 +37,11 @@ function settingsHarness() {
   let surface: Component | undefined;
   let config = makeDefaultResolvedCosmicUiConfig();
   const updates: Array<Deferred.Deferred<unknown, Error>> = [];
-  const modal = Deferred.makeUnsafe<unknown>();
+  const modal = deferredPromise<unknown>();
   const notify = vi.fn();
   const requestRender = vi.fn();
-  const tui: TUI = opaqueHostFixture({ requestRender });
-  const theme: Theme = opaqueHostFixture({
-    bold: (text: string) => text,
-    fg: (_color: string, text: string) => text,
-  });
-  const keybindings: KeybindingsManager = opaqueHostFixture({ matches: () => false });
+  const tui: TUI = opaqueFixture({ requestRender });
+  const keybindings: KeybindingsManager = opaqueFixture({ matches: () => false });
   const custom = <T>(
     factory: (
       tui: TUI,
@@ -53,13 +50,11 @@ function settingsHarness() {
       done: (result: T) => void,
     ) => Component | Promise<Component>,
   ): Promise<T> => {
-    const created = factory(tui, theme, keybindings, (result) => {
-      Effect.runSync(Deferred.succeed(modal, result));
-    });
+    const created = factory(tui, plainTheme, keybindings, modal.resolve);
     if (created instanceof Promise) throw new Error("Expected a synchronous settings surface.");
     surface = created;
-    // SAFETY: The modal Deferred receives only values supplied to the generic done callback.
-    return Effect.runPromise(Deferred.await(modal)) as Promise<T>;
+    // SAFETY: The modal settles only with values supplied to the generic done callback.
+    return modal.promise as Promise<T>;
   };
   const ctx = extensionContextFixture({
     mode: "tui" as const,
@@ -112,7 +107,7 @@ function settingsHarness() {
   const setDensity = (density: "auto" | "comfortable" | "compact") => {
     config = { ...config, footer: { ...config.footer, density } };
   };
-  const close = () => Effect.runSync(Deferred.succeed(modal, undefined));
+  const close = () => modal.resolve(undefined);
   return {
     close,
     densityLine,
@@ -129,113 +124,105 @@ function settingsHarness() {
   };
 }
 
+/** Opens the settings surface around the body, then closes it and awaits the command. */
+const withSettings = <A, E>(body: (h: ReturnType<typeof settingsHarness>) => Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const h = settingsHarness();
+    const opened = h.open();
+    yield* body(h);
+    h.close();
+    yield* Effect.promise(() => opened);
+  });
+
 describe("Cosmic UI settings controller", () => {
   it.effect(
     "settles automatic and hidden usage choices against the single visibility preference",
-    () => {
-      const h = settingsHarness();
-      return Effect.gen(function* () {
-        const opened = h.open();
-        // Search selects the contribution without depending on its position in the menu.
-        h.input("/");
-        for (const character of "OpenAI usage") h.input(character);
-        h.input();
-        expect(h.updates).toHaveLength(1);
-        h.setUsageVisible(false);
-        yield* Deferred.succeed(h.updates[0]!, undefined);
-        yield* flushSettlements;
-        expect(h.usageLine()).toContain("hidden");
-        h.input();
-        expect(h.updates).toHaveLength(2);
-        yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
-        yield* flushSettlements;
-        expect(h.usageLine()).toContain("hidden");
-        h.close();
-        yield* Effect.promise(() => opened);
-      });
-    },
+    () =>
+      withSettings((h) =>
+        Effect.gen(function* () {
+          // Search selects the contribution without depending on its position in the menu.
+          h.input("/");
+          for (const character of "OpenAI usage") h.input(character);
+          h.input();
+          expect(h.updates).toHaveLength(1);
+          h.setUsageVisible(false);
+          yield* Deferred.succeed(h.updates[0]!, undefined);
+          yield* flushSettlements;
+          expect(h.usageLine()).toContain("hidden");
+          h.input();
+          expect(h.updates).toHaveLength(2);
+          yield* Deferred.fail(h.updates[1]!, new Error("write failed"));
+          yield* flushSettlements;
+          expect(h.usageLine()).toContain("hidden");
+        }),
+      ),
   );
 
-  it.effect("ignores stale success and failure settlements for a newer optimistic edit", () => {
-    const h = settingsHarness();
-    return Effect.gen(function* () {
-      const opened = h.open();
-      h.input();
-      expect(h.enabledLine()).toContain("false");
-      h.input();
-      expect(h.enabledLine()).toContain("true");
-      expect(h.updates).toHaveLength(2);
+  it.effect("ignores stale success and failure settlements for a newer optimistic edit", () =>
+    withSettings((h) =>
+      Effect.gen(function* () {
+        h.input();
+        expect(h.enabledLine()).toContain("false");
+        h.input();
+        expect(h.enabledLine()).toContain("true");
+        expect(h.updates).toHaveLength(2);
 
-      h.setEnabled(false);
-      yield* Deferred.succeed(h.updates[0]!, undefined);
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("true");
+        h.setEnabled(false);
+        yield* Deferred.succeed(h.updates[0]!, undefined);
+        yield* flushSettlements;
+        expect(h.enabledLine()).toContain("true");
 
-      h.input();
-      expect(h.enabledLine()).toContain("false");
-      expect(h.updates).toHaveLength(3);
-      h.setEnabled(true);
-      yield* Deferred.fail(h.updates[1]!, new Error("stale failure"));
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("false");
-      expect(h.notify).not.toHaveBeenCalled();
+        h.input();
+        expect(h.enabledLine()).toContain("false");
+        expect(h.updates).toHaveLength(3);
+        h.setEnabled(true);
+        yield* Deferred.fail(h.updates[1]!, new Error("stale failure"));
+        yield* flushSettlements;
+        expect(h.enabledLine()).toContain("false");
+        expect(h.notify).not.toHaveBeenCalled();
 
-      h.setEnabled(false);
-      yield* Deferred.succeed(h.updates[2]!, undefined);
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("false");
-      h.close();
-      yield* Effect.promise(() => opened);
-    });
-  });
+        h.setEnabled(false);
+        yield* Deferred.succeed(h.updates[2]!, undefined);
+        yield* flushSettlements;
+        expect(h.enabledLine()).toContain("false");
+      }),
+    ),
+  );
 
-  it.effect("keeps generations independent across setting rows", () => {
-    const h = settingsHarness();
-    return Effect.gen(function* () {
-      const opened = h.open();
-      h.input();
-      expect(h.enabledLine()).toContain("false");
-      h.input("j");
-      h.input();
-      expect(h.densityLine()).toContain("comfortable");
-      expect(h.updates).toHaveLength(2);
+  it.effect("keeps generations independent across setting rows and rolls failures back", () =>
+    withSettings((h) =>
+      Effect.gen(function* () {
+        h.input();
+        expect(h.enabledLine()).toContain("false");
+        h.input("j");
+        h.input();
+        expect(h.densityLine()).toContain("comfortable");
+        expect(h.updates).toHaveLength(2);
 
-      h.setEnabled(true);
-      yield* Deferred.fail(h.updates[0]!, new Error("enabled failure"));
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("true");
-      expect(h.notify).toHaveBeenCalledOnce();
+        h.setEnabled(true);
+        yield* Deferred.fail(h.updates[0]!, new Error("enabled failure"));
+        yield* flushSettlements;
+        expect(h.enabledLine()).toContain("true");
+        expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "error");
+        expect(h.requestRender).toHaveBeenCalled();
 
-      h.setDensity("comfortable");
-      yield* Deferred.succeed(h.updates[1]!, undefined);
-      yield* flushSettlements;
-      h.close();
-      yield* Effect.promise(() => opened);
-    });
-  });
+        h.setDensity("comfortable");
+        yield* Deferred.succeed(h.updates[1]!, undefined);
+        yield* flushSettlements;
+      }),
+    ),
+  );
 
-  it.effect("settles current updates from the latest projection and rolls failures back", () => {
-    const h = settingsHarness();
-    return Effect.gen(function* () {
-      const opened = h.open();
-      h.input();
-      expect(h.enabledLine()).toContain("false");
-      h.setEnabled(true);
-      yield* Deferred.succeed(h.updates[0]!, undefined);
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("true");
-
-      h.input();
-      expect(h.enabledLine()).toContain("false");
-      h.setEnabled(true);
-      yield* Deferred.fail(h.updates[1]!, new Error("current failure"));
-      yield* flushSettlements;
-      expect(h.enabledLine()).toContain("true");
-      expect(h.notify).toHaveBeenCalledOnce();
-      expect(h.notify).toHaveBeenCalledWith("Unable to update Cosmic UI configuration.", "error");
-      expect(h.requestRender).toHaveBeenCalled();
-      h.close();
-      yield* Effect.promise(() => opened);
-    });
-  });
+  it.effect("settles a current update from the latest projection", () =>
+    withSettings((h) =>
+      Effect.gen(function* () {
+        h.input();
+        expect(h.enabledLine()).toContain("false");
+        h.setEnabled(true);
+        yield* Deferred.succeed(h.updates[0]!, undefined);
+        yield* flushSettlements;
+        expect(h.enabledLine()).toContain("true");
+      }),
+    ),
+  );
 });

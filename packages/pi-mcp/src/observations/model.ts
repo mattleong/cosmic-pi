@@ -11,16 +11,8 @@ export const McpLogLevel = Schema.Literals([
   "emergency",
 ]);
 export type McpLogLevel = typeof McpLogLevel.Type;
-export const logSeverity = {
-  debug: 0,
-  info: 1,
-  notice: 2,
-  warning: 3,
-  error: 4,
-  critical: 5,
-  alert: 6,
-  emergency: 7,
-} as const satisfies Readonly<Record<McpLogLevel, number>>;
+/** McpLogLevel lists its literals in RFC 5424 severity order, lowest first. */
+export const logSeverity = (level: McpLogLevel): number => McpLogLevel.literals.indexOf(level);
 export interface McpProgress {
   readonly progress: number;
   readonly total?: number | undefined;

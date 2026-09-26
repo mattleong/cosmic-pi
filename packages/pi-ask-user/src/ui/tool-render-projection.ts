@@ -1,22 +1,15 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { decodeUnknownOrUndefined, stripTerminalControls } from "pi-cosmic-core";
 import { toolStatusLine } from "pi-cosmic-ui/tool";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
 import { MAX_CHOICES, MAX_QUESTIONS } from "../questionnaire/schema.ts";
 
 /** Decodes untrusted replay data; hostile getters and mismatches yield undefined. */
-export const projection = <S extends Schema.ConstraintDecoder<unknown>>(schema: S) => {
-  const decode = Schema.decodeUnknownOption(schema);
-  return <Input>(input: Input): S["Type"] | undefined => {
-    try {
-      return Option.getOrUndefined(decode(input));
-    } catch {
-      return undefined;
-    }
-  };
-};
+export const projection =
+  <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
+  <Input>(input: Input): S["Type"] | undefined =>
+    decodeUnknownOrUndefined(schema, input);
 
 // Blocking replay deliberately never reads notes; async replay validates them.
 export const outcomeProjection = <Fields extends Schema.Struct.Fields>(fields: Fields) =>

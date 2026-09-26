@@ -49,10 +49,10 @@ import {
 import {
   openPiSupervisorBridge,
   type PiSupervisorBridgeClient,
+  type PiSupervisorBridgeError,
 } from "./pi-supervisor-bridge-client.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { subagentChildRunId } from "./host-environment.ts";
-import type { RpcSessionError } from "./rpc-session.ts";
 
 const MessageParameters = Type.Object(
   {
@@ -143,7 +143,7 @@ export default function registerPiSubagentSupervisorBridge(
     SupervisorBridgeSessionInput,
     SupervisorBridge | CodePreviewSchedulerService,
     never,
-    RpcSessionError,
+    PiSupervisorBridgeError,
     CodePreviewSchedulerServiceContract
   >({
     makeRuntime: ({ configPath }) =>
@@ -152,20 +152,11 @@ export default function registerPiSubagentSupervisorBridge(
         Layer.effect(
           SupervisorBridge,
           dependencies.openBridge(configPath, {
-            onNotification: (message) => {
-              try {
-                pi.sendMessage(
-                  {
-                    customType: "pi-subagents-proxy-notification",
-                    content: message,
-                    display: true,
-                  },
-                  { deliverAs: "steer", triggerTurn: true },
-                );
-              } catch {
-                // Session shutdown can race a confirmed helper notification.
-              }
-            },
+            onNotification: (message) =>
+              pi.sendMessage(
+                { customType: "pi-subagents-proxy-notification", content: message, display: true },
+                { deliverAs: "steer", triggerTurn: true },
+              ),
           }),
         ).pipe(Layer.merge(CodePreviewSchedulerService.layer)),
       ),
@@ -343,8 +334,7 @@ export default function registerPiSubagentSupervisorBridge(
     registerSubagentTools(pi, {
       scheduleAnimation,
       environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
-      proxyCall: (input, signal, _onUpdate, _ctx, onInterruption) =>
-        proxyCall(input, signal, onInterruption),
+      proxyCall,
       run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
     });
     const runId = subagentChildRunId();

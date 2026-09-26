@@ -14,35 +14,38 @@ import {
   PI_CHILD_COMPETING_ORCHESTRATOR_TOOL_ARGUMENT,
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
-import { InvalidSubagentRequestError, processError, SubagentProcessError } from "../run/errors.ts";
+import {
+  invalidRequest as readinessError,
+  processError,
+  SubagentProcessError,
+  type InvalidSubagentRequestError,
+} from "../run/errors.ts";
 import { subagentRuntimeEfforts, type SubagentRuntime } from "../domain/routing.ts";
 import { SUPERVISOR_MCP_TOOL_NAMES } from "../supervisor/mcp-contract.ts";
 import { isSafeNativeModelSelector } from "../profiles/model.ts";
-import {
-  claudeAllowedTools,
-  claudeSettings,
-  CLAUDE_DENIED_TOOLS,
-  CLAUDE_NATIVE_AGENT_TOOLS,
-  CLAUDE_READ_TOOLS,
-  CLAUDE_WRITE_TOOLS,
-} from "../backend/claude-policy.ts";
+import { claudePolicyArgv, claudeSettings } from "../backend/claude-policy.ts";
 import { claudeWriterCwdPolicy } from "./claude-writer-cwd.ts";
 import {
   prepareHerdrStartupAttestation,
   type HerdrStartupAttestation,
 } from "./herdr-attestation.ts";
 import {
-  isHerdrCodexHooksError,
+  HerdrCodexHooksError,
   makeHerdrCodexHooks,
   type HerdrCodexHooksContract,
-  type HerdrCodexHooksError,
 } from "./herdr-codex-hooks.ts";
+import { HERDR_HARNESS_ENVIRONMENT_KEYS } from "./herdr-environment.ts";
 import {
+  CODEX_DISABLED_FEATURES,
+  codexFeatureLines,
   ensurePrivateDirectory,
   hasControlCharacter,
   MAX_PATH_CHARS,
+  pickEnvironment,
   readValidatedCodexAuth,
+  removePrivateDirectory,
   safeAgentDirectory,
+  shellQuote,
   tomlString,
   writeExclusive,
 } from "./harness-shared.ts";
@@ -53,10 +56,6 @@ const { isAbsolute, join } = nodePath;
 
 const HARNESS_ROOT = "herdr-host-v1";
 const MAX_INTEGRATION_BYTES = 256 * 1024;
-const SAFE_ENVIRONMENT_KEYS =
-  "HOME USER LOGNAME PATH SHELL TMPDIR TMP TEMP LANG LC_ALL LC_CTYPE TERM COLORTERM SSL_CERT_FILE SSL_CERT_DIR XDG_CONFIG_HOME XDG_STATE_HOME HERDR_CONFIG_PATH HERDR_SOCKET_PATH HERDR_SESSION PI_CODING_AGENT_DIR PI_CONFIG_DIR CLAUDE_CONFIG_DIR".split(
-    " ",
-  );
 // Reviewed hooks shipped with Herdr 0.8 and 0.9. CLI preflight separately requires
 // the installed hook to be current for the selected Herdr executable.
 const HERDR_INTEGRATION_VERSIONS = { pi: [8], claude: [7, 9], codex: [7, 8] } satisfies Readonly<
@@ -64,14 +63,15 @@ const HERDR_INTEGRATION_VERSIONS = { pi: [8], claude: [7, 9], codex: [7, 8] } sa
 >;
 const CODEX_BOOTSTRAP_PROMPT =
   "Initialize the private Herdr lifecycle hook. This bootstrap turn must stop before inference.";
-const CODEX_DISABLED_FEATURES =
-  "apps auth_elicitation browser_use computer_use fast_mode goals guardian_approval image_generation in_app_browser memories plugins remote_plugin skill_search standalone_web_search tool_suggest workspace_dependencies".split(
-    " ",
-  );
+const PI_SUPERVISOR_EXTENSION = fileURLToPath(
+  new URL("./host-pi-supervisor-extension.ts", import.meta.url),
+);
+const CODEX_SESSION_HOOK = fileURLToPath(
+  new URL("./herdr-codex-session-hook.mjs", import.meta.url),
+);
 
 export interface HerdrPreparedHarness {
   readonly directory: string;
-  readonly runtime: SubagentRuntime;
   readonly argv: ReadonlyArray<string>;
   readonly environmentCommand: (topology: {
     readonly paneId: string;
@@ -103,28 +103,16 @@ export interface HerdrHarnessLayerOptions {
   readonly agentDirectory: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly integrationPaths?: Partial<Record<SubagentRuntime, string>> | undefined;
-  readonly harnessFault?: "after-claude-settings" | "after-codex-auth" | undefined;
+  readonly harnessFault?: "after-claude-settings" | undefined;
   readonly harnessCleanupFault?: boolean | undefined;
   readonly codexHooks?: HerdrCodexHooksContract | undefined;
   readonly platform?: NodeJS.Platform | undefined;
 }
 
-const readinessError = (code: string, message: string) =>
-  new InvalidSubagentRequestError({ code, message });
-const shellQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 const controlFreeArgv = (argv: ReadonlyArray<string>): ReadonlyArray<string> => {
   if (argv.some(hasControlCharacter)) throw new Error("herdr-agent-argument-invalid");
   return argv;
 };
-
-const harnessEnvironment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
-  Object.freeze(
-    Object.fromEntries(
-      [...SAFE_ENVIRONMENT_KEYS, "CODEX_HOME", "OPENAI_API_KEY"].flatMap((key) =>
-        source[key] === undefined ? [] : ([[key, source[key]]] as const),
-      ),
-    ),
-  );
 
 const integrationPath = (
   options: HerdrHarnessLayerOptions,
@@ -188,11 +176,7 @@ const fixedEnvironmentCommand = (
   fixedOverrides: Readonly<Record<string, string>> = {},
 ): string => {
   const fixed = {
-    ...Object.fromEntries(
-      SAFE_ENVIRONMENT_KEYS.flatMap((key) =>
-        environment[key] === undefined ? [] : [[key, environment[key]]],
-      ),
-    ),
+    ...pickEnvironment(environment, HERDR_HARNESS_ENVIRONMENT_KEYS),
     ...fixedOverrides,
     HERDR_ENV: "1",
     HERDR_PANE_ID: topology.paneId,
@@ -207,47 +191,6 @@ const fixedEnvironmentCommand = (
     .join(" ");
   const bootstrap = `${environmentReceiptCommand} && exec /bin/sh`;
   return `exec /usr/bin/env -i ${assignments} /bin/sh -c ${shellQuote(bootstrap)}`;
-};
-
-const claudeArgv = (
-  request: BackendLaunchRequest,
-  settingsPath: string,
-  mcpPath: string,
-  promptPath: string,
-): ReadonlyArray<string> => {
-  const tools = request.writeIntent === "writer" ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS;
-  const writerPolicy = claudeWriterCwdPolicy(request.cwd);
-  const allowed = [
-    ...claudeAllowedTools(request.writeIntent, writerPolicy),
-    ...CLAUDE_NATIVE_AGENT_TOOLS,
-  ];
-  return [
-    "--name",
-    request.name,
-    "--model",
-    request.model,
-    "--effort",
-    request.effort,
-    "--no-chrome",
-    "--disable-slash-commands",
-    "--setting-sources",
-    "",
-    "--settings",
-    settingsPath,
-    "--strict-mcp-config",
-    "--mcp-config",
-    mcpPath,
-    "--permission-mode",
-    "dontAsk",
-    "--tools",
-    tools.join(","),
-    "--allowedTools",
-    allowed.join(","),
-    "--disallowedTools",
-    CLAUDE_DENIED_TOOLS.join(","),
-    "--system-prompt-file",
-    promptPath,
-  ];
 };
 
 const piArgv = (
@@ -274,7 +217,7 @@ const piArgv = (
     "--extension",
     integration,
     "--extension",
-    fileURLToPath(new URL("./host-pi-supervisor-extension.ts", import.meta.url)),
+    PI_SUPERVISOR_EXTENSION,
     "--no-skills",
     "--no-prompt-templates",
     "--no-context-files",
@@ -308,12 +251,7 @@ const codexConfig = (
     "enabled = true",
     "[shell_environment_policy]",
     'inherit = "none"',
-    "[features]",
-    ...CODEX_DISABLED_FEATURES.map(
-      (feature) => `${feature} = ${feature === "fast_mode" && request.openaiFastMode}`,
-    ),
-    "multi_agent = true",
-    "hooks = true",
+    ...codexFeatureLines(request.openaiFastMode, true),
     `[projects.${tomlString(request.cwd)}]`,
     'trust_level = "untrusted"',
     supervisor.codexMcp.tomlFragment,
@@ -356,7 +294,7 @@ const cleanupError = () =>
   );
 const defectReason = <Error>(reason: Cause.Reason<Error>): Cause.Reason<never> =>
   Cause.isFailReason(reason) ? Cause.makeDieReason(reason.error) : reason;
-const defectCause = <Error>(cause: Cause.Cause<Error>): Cause.Cause<never> =>
+export const defectCause = <Error>(cause: Cause.Cause<Error>): Cause.Cause<never> =>
   Cause.fromReasons(cause.reasons.map(defectReason));
 const attemptPromise = <Value>(
   attempt: () => Promise<Value>,
@@ -366,6 +304,12 @@ const ownedMutation = <Value>(
   attempt: () => Promise<Value>,
 ): Effect.Effect<Value, SubagentProcessError> =>
   attemptPromise(attempt).pipe(Effect.uninterruptible);
+const removeOwnedHarness = (options: HerdrHarnessLayerOptions, directory: string) =>
+  Effect.suspend(() =>
+    options.harnessCleanupFault
+      ? Effect.fail(prepareStageError())
+      : attemptPromise(() => removePrivateDirectory(directory)),
+  );
 const prepareHarness = (
   options: HerdrHarnessLayerOptions,
   runtime: SubagentRuntime,
@@ -395,17 +339,13 @@ const prepareHarness = (
           original.reasons.some(
             (reason) =>
               Cause.isFailReason(reason) &&
-              isHerdrCodexHooksError(reason.error) &&
+              reason.error instanceof HerdrCodexHooksError &&
               reason.error.code === "codex_herdr_hook_cleanup_unconfirmed",
           )
         )
           return Effect.failCause(original);
-        const cleanup = Effect.suspend(() =>
-          options.harnessCleanupFault
-            ? Effect.fail(prepareStageError())
-            : attemptPromise(() => removeHarness(directory)),
-        ).pipe(Effect.uninterruptible);
-        return cleanup.pipe(
+        return removeOwnedHarness(options, directory).pipe(
+          Effect.uninterruptible,
           Effect.catchCause((cleanupFailure) =>
             Effect.failCause(
               Cause.fromReasons([
@@ -425,30 +365,28 @@ const prepareHarness = (
       const startupAttestation = yield* restore(
         attemptPromise(() => prepareHerdrStartupAttestation(directory)),
       ).pipe(Effect.catchCause(failOwned));
-      const runIdentityEnvironment = {
-        PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
-        PI_SUBAGENT_RUN_ID: request.runId,
-      };
-      const environmentCommand = (topology: Parameters<typeof fixedEnvironmentCommand>[1]) =>
-        fixedEnvironmentCommand(
-          environment,
-          topology,
-          startupAttestation.environmentReadyReceipt.command,
-          runIdentityEnvironment,
-        );
       const promptPath = join(directory, "system-prompt.md");
       const write = (path: string, source: string) =>
         ownedMutation(() => writeExclusive(path, source));
       const complete = (
         argv: ReadonlyArray<string>,
         secretCommand?: string,
-        command = environmentCommand,
+        extraEnvironment: Readonly<Record<string, string>> = {},
       ): PreparedHarnessResource => {
         const harness = {
           directory,
-          runtime,
           argv: controlFreeArgv(argv),
-          environmentCommand: command,
+          environmentCommand: (topology: Parameters<typeof fixedEnvironmentCommand>[1]) =>
+            fixedEnvironmentCommand(
+              environment,
+              topology,
+              startupAttestation.environmentReadyReceipt.command,
+              {
+                PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
+                PI_SUBAGENT_RUN_ID: request.runId,
+                ...extraEnvironment,
+              },
+            ),
           startupAttestation,
           withholdCleanup,
           authorizeCleanup,
@@ -462,9 +400,9 @@ const prepareHarness = (
       const buildClaude = Effect.gen(function* () {
         const settingsPath = join(directory, "claude-settings.json");
         const mcpPath = join(directory, "claude-mcp.json");
-        const base = claudeSettings(request, claudeWriterCwdPolicy(request.cwd));
+        const writerPolicy = claudeWriterCwdPolicy(request.cwd);
         const settings = {
-          ...base,
+          ...claudeSettings(request, writerPolicy),
           env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
           hooks: {
             SessionStart: [
@@ -487,15 +425,13 @@ const prepareHarness = (
           writeExclusive(mcpPath, `${JSON.stringify(supervisor.claudeMcp)}\n`),
         );
         return complete(
-          claudeArgv(request, settingsPath, mcpPath, promptPath),
+          [
+            "--name",
+            request.name,
+            ...claudePolicyArgv(request, { settingsPath, mcpPath, promptPath }, writerPolicy),
+          ],
           undefined,
-          (topology) =>
-            fixedEnvironmentCommand(
-              environment,
-              topology,
-              startupAttestation.environmentReadyReceipt.command,
-              { ...runIdentityEnvironment, CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1" },
-            ),
+          { CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1" },
         );
       });
 
@@ -533,15 +469,11 @@ const prepareHarness = (
         const apiKey = approvedApiKey(environment);
         if (auth) yield* write(join(codexHome, "auth.json"), auth);
         else if (!apiKey) return yield* prepareStageError();
-        if (options.harnessFault === "after-codex-auth") return yield* prepareStageError();
 
-        const sessionHook = fileURLToPath(
-          new URL("./herdr-codex-session-hook.mjs", import.meta.url),
-        );
         const fallbackTranscript = join(directory, "codex-session-anchor.jsonl");
         const hookCommand = [
           shellQuote(process.execPath),
-          shellQuote(sessionHook),
+          shellQuote(CODEX_SESSION_HOOK),
           shellQuote(integration),
           shellQuote(fallbackTranscript),
         ].join(" ");
@@ -591,11 +523,6 @@ const prepareHarness = (
       return yield* restore(build).pipe(Effect.catchCause(failOwned));
     }),
   );
-const removeHarness = (directory: string): Promise<void> =>
-  fs.lstat(directory).then((stat) => {
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe-harness-cleanup");
-    return fs.rm(directory, { recursive: true, force: false });
-  });
 const readinessPromise = <Value>(
   attempt: () => Promise<Value>,
   failure: InvalidSubagentRequestError,
@@ -603,20 +530,19 @@ const readinessPromise = <Value>(
   Effect.tryPromise({ try: attempt, catch: () => failure });
 
 export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnessContract => {
-  const fixedOptions: HerdrHarnessLayerOptions = Object.freeze(
-    (() => {
-      const environment = harnessEnvironment(options.environment ?? process.env);
-      const baseResult = {
-        ...options,
-        environment,
-        codexHooks: options.codexHooks ?? makeHerdrCodexHooks({ environment }),
-      };
-      const withIntegrationPaths = options.integrationPaths
-        ? { ...baseResult, integrationPaths: Object.freeze({ ...options.integrationPaths }) }
-        : baseResult;
-      return withIntegrationPaths;
-    })(),
-  );
+  const environment = pickEnvironment(options.environment ?? process.env, [
+    ...HERDR_HARNESS_ENVIRONMENT_KEYS,
+    "CODEX_HOME",
+    "OPENAI_API_KEY",
+  ]);
+  const fixedOptions: HerdrHarnessLayerOptions = Object.freeze({
+    ...options,
+    environment,
+    codexHooks: options.codexHooks ?? makeHerdrCodexHooks({ environment }),
+    ...(options.integrationPaths && {
+      integrationPaths: Object.freeze({ ...options.integrationPaths }),
+    }),
+  });
   return {
     preflight: (runtime, request) =>
       Effect.gen(function* () {
@@ -682,14 +608,10 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           ),
         );
         if (runtime === "pi") {
-          const extension = fileURLToPath(
-            new URL("./host-pi-supervisor-extension.ts", import.meta.url),
-          );
-          const helper = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
           yield* readinessPromise(
             () =>
-              Promise.all([fs.lstat(extension), fs.lstat(helper)]).then((stats) => {
-                if (stats.some((stat) => !stat.isFile() || stat.isSymbolicLink() || stat.size < 1))
+              fs.lstat(PI_SUPERVISOR_EXTENSION).then((stat) => {
+                if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
                   throw new Error("missing-bridge");
               }),
             readinessError(
@@ -699,12 +621,9 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
           );
         }
         if (runtime === "codex") {
-          const sessionHook = fileURLToPath(
-            new URL("./herdr-codex-session-hook.mjs", import.meta.url),
-          );
           yield* readinessPromise(
             () =>
-              fs.lstat(sessionHook).then((stat) => {
+              fs.lstat(CODEX_SESSION_HOOK).then((stat) => {
                 if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1)
                   throw new Error("missing-codex-session-hook");
               }),
@@ -743,11 +662,7 @@ export const makeHerdrHarness = (options: HerdrHarnessLayerOptions): HerdrHarnes
         acquisition,
         (resource) =>
           resource.cleanupAllowed()
-            ? Effect.suspend(() =>
-                fixedOptions.harnessCleanupFault
-                  ? Effect.fail(prepareStageError())
-                  : attemptPromise(() => removeHarness(resource.harness.directory)),
-              ).pipe(
+            ? removeOwnedHarness(fixedOptions, resource.harness.directory).pipe(
                 Effect.catchCause((cause) =>
                   Effect.failCause(
                     defectCause(

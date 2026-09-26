@@ -256,7 +256,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
     yield* server.serve(handler).pipe(Effect.provide(services));
     const configured = (
       registration: McpOAuthConfig["registration"],
-      identity = "a".repeat(64),
+      patch: Partial<McpOAuthConfig> = {},
     ): McpEffectiveServer => {
       const client: FixtureClient = {};
       if (registration === "pre-registered") client.clientId = "fixture-public-client";
@@ -264,7 +264,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
         client.clientMetadataUrl = "https://client.example/metadata.json";
       return {
         id: "fixture",
-        identity,
+        identity: "a".repeat(64),
         enabled: true,
         scope: "global",
         directory: "/fixture",
@@ -280,6 +280,7 @@ export const startOAuthServer = (options: OAuthFixtureOptions = {}) =>
             scopes: ["tools"],
             redirectUri: "http://127.0.0.1:49191/callback",
             ...client,
+            ...patch,
           },
         },
       };

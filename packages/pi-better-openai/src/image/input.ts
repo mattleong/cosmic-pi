@@ -3,7 +3,7 @@ import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import { isStrictlyInsidePathWith, type SafeFileContract } from "pi-cosmic-core";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
-import { MAX_IMAGE_INPUTS, fail } from "./types.ts";
+import { MAX_IMAGE_INPUTS, fail, failWith, type ImageInput } from "./types.ts";
 
 const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_INPUT_BYTES = 50 * 1024 * 1024;
@@ -32,7 +32,6 @@ export const makeImageInputReader = (dependencies: {
   const { fs, path, safeFile, sharp } = dependencies;
   const isInside = (root: string, child: string) =>
     isStrictlyInsidePathWith(path, path.resolve(root), path.resolve(child));
-  const imageError = (operation: string, message: string) => () => fail(operation, message);
   const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
     inputPath: string,
     realWorkspace: string,
@@ -41,7 +40,7 @@ export const makeImageInputReader = (dependencies: {
       .realPath(inputPath)
       .pipe(
         Effect.mapError(
-          imageError(
+          failWith(
             "input",
             `Image input must be a file inside the current workspace: ${inputPath}`,
           ),
@@ -67,14 +66,13 @@ export const makeImageInputReader = (dependencies: {
     const metadata = yield* sharp
       .decode(verified.bytes)
       .pipe(
-        Effect.mapError(imageError("sharp", `Image input is not a readable image: ${inputPath}`)),
+        Effect.mapError(failWith("sharp", `Image input is not a readable image: ${inputPath}`)),
       );
     if (!metadata.format || !SUPPORTED_INPUT_IMAGE_FORMATS.has(metadata.format))
       return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
     return {
       path: verified.path,
       data: verified.bytes,
-      size: verified.bytes.byteLength,
       mimeType: inputMimeType(metadata.format),
     };
   });
@@ -88,12 +86,7 @@ export const makeImageInputReader = (dependencies: {
       .realPath(workspace)
       .pipe(Effect.catch(() => Effect.succeed(workspace)));
     const seen = new Set<string>();
-    const validated: Array<{
-      path: string;
-      data: Uint8Array;
-      size: number;
-      mimeType: string;
-    }> = [];
+    const validated: ImageInput[] = [];
     let total = 0;
     for (const raw of rawPaths ?? []) {
       const trimmed = raw.trim();
@@ -108,15 +101,15 @@ export const makeImageInputReader = (dependencies: {
       if (seen.has(input.path)) continue;
       if (validated.length >= MAX_IMAGE_INPUTS)
         return yield* fail("input", `Too many image inputs (max ${MAX_IMAGE_INPUTS}).`);
-      total += input.size;
+      total += input.data.byteLength;
       if (total > MAX_TOTAL_IMAGE_INPUT_BYTES)
         return yield* fail("input", "Image inputs are too large in total (max 50 MB).");
       seen.add(input.path);
-      validated.push(input);
+      validated.push({
+        mimeType: input.mimeType,
+        data: Buffer.from(input.data).toString("base64"),
+      });
     }
-    return validated.map((input) => ({
-      mimeType: input.mimeType,
-      data: Buffer.from(input.data).toString("base64"),
-    }));
+    return validated;
   });
 };

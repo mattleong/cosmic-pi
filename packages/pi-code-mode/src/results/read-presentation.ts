@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { clampModelVisibleText } from "../tools/limits.ts";
-import type { ExecutionOutcome } from "./model.ts";
 
 export const resultReadFailures = {
   "invalid-input": {
@@ -63,26 +62,9 @@ export const InitialPreviewPresentationSchema = Schema.Struct({
   receiptMode: Schema.Literals(["none", "read-only", "full"]),
 });
 
-export interface ResultPagePresentation {
-  readonly status: "page";
-  readonly id: string;
-  readonly originalOutcome: ExecutionOutcome;
-  readonly offset: number;
-  readonly end: number;
-  readonly next: number | null;
-  readonly total: number;
-}
-
 /** Metadata for the first retained-output page returned by the execution call itself. */
-export interface InitialPreviewPresentation extends ResultPagePresentation {
-  readonly originalOutcome: "succeeded";
-  readonly kind: "output";
-  readonly receiptMode: "none" | "read-only" | "full";
-}
-
-export type ResultReadPresentation =
-  | ResultPagePresentation
-  | { readonly status: "error"; readonly code: keyof typeof resultReadFailures };
+export type InitialPreviewPresentation = typeof InitialPreviewPresentationSchema.Type;
+export type ResultReadPresentation = typeof ResultReadPresentationSchema.Type;
 
 export interface ResultReadProjection {
   readonly text: string;

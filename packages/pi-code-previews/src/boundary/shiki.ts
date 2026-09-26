@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import { createHighlighter } from "shiki";
 
 export type ShikiHighlighter = Awaited<ReturnType<typeof createHighlighter>>;
@@ -46,23 +47,16 @@ export function disposeShikiHighlighterSafely(highlighter: ShikiHighlighter): bo
   }
 }
 
-type HighlighterDisposal = "AlreadyDisposed" | "Deferred" | "Disposed" | "Failed";
-
 function attemptHighlighterDisposal(
   highlighter: ShikiHighlighter,
   state: HighlighterUseState,
-): HighlighterDisposal {
-  if (state.disposalAttempted) return "AlreadyDisposed";
+): void {
+  if (state.disposalAttempted) return;
   state.disposalRequested = true;
-  if (state.activeLoads > 0) return "Deferred";
+  if (state.activeLoads > 0) return;
   state.disposalAttempted = true;
-  if (disposeShikiHighlighterSafely(highlighter)) return "Disposed";
-  try {
-    state.reportDisposalFailure?.();
-  } catch {
-    // A logger captured from the owning runtime is still a hostile callback.
-  }
-  return "Failed";
+  if (!disposeShikiHighlighterSafely(highlighter))
+    invokeHostCallback(() => state.reportDisposalFailure?.(), undefined);
 }
 
 function beginHighlighterLoad(highlighter: ShikiHighlighter): boolean {
@@ -96,13 +90,7 @@ export function disposeShikiHighlighter(
         logLevel: "Warn" as const,
         message: "Shiki failed to dispose cleanly; continuing lifecycle cleanup.",
       };
-      for (const logger of loggers) {
-        try {
-          logger.log(options);
-        } catch {
-          // One hostile logger must not prevent the remaining captured loggers.
-        }
-      }
+      for (const logger of loggers) invokeHostCallback(() => logger.log(options), undefined);
     };
     attemptHighlighterDisposal(highlighter, state);
   });

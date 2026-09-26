@@ -21,10 +21,11 @@ import type {
   SubagentNotification,
   SubagentNotificationDelivery,
 } from "./boundary/host-notifier.ts";
-import type { ResolvedSubagentConfig } from "./config/options.ts";
 import { SubagentConfigStore, subagentConfigStoreLayer } from "./config/store.ts";
-import { subagentProfileServiceLayer } from "./profiles/service.ts";
-import type { SessionProfileOverrideSeed } from "./profiles/session-overrides.ts";
+import {
+  subagentProfileServiceLayer,
+  type SubagentProfileLayerOptions,
+} from "./profiles/service.ts";
 import type { SubagentProjection } from "./run/model.ts";
 import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
@@ -47,15 +48,8 @@ const subagentBackendRegistryLayer = Layer.effect(
   }),
 );
 
-export interface SubagentLayerOptions {
+export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly workspaceOwnerId?: string;
-  readonly cwd: string;
-  readonly agentDirectory: string;
-  readonly projectTrusted: boolean;
-  readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
-  readonly publishSessionBaseConfig?: ((config: ResolvedSubagentConfig) => void) | undefined;
-  readonly initialSessionOverrides?: SessionProfileOverrideSeed | undefined;
-  readonly publishSessionOverrides?: ((seed: SessionProfileOverrideSeed) => void) | undefined;
   readonly publish: (projection: SubagentProjection) => void;
   readonly notify: (notification: SubagentNotification) => SubagentNotificationDelivery | undefined;
   readonly proxyHandler?: SubagentServiceOptions["proxyHandler"] | undefined;
@@ -65,13 +59,7 @@ export interface SubagentLayerOptions {
 export const makeSubagentLayer = (options: SubagentLayerOptions) => {
   // The store remains the single persistence door and is exposed for the human settings command.
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
-  const profiles = subagentProfileServiceLayer({
-    ...options,
-    ...(options.sessionBaseConfig && { baseConfig: options.sessionBaseConfig }),
-    ...(options.publishSessionBaseConfig && {
-      publishBaseConfig: options.publishSessionBaseConfig,
-    }),
-  }).pipe(Layer.provide(configStore));
+  const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
   const herdrEnvironment = captureHerdrEnvironment();
   const herdrBoundaries = Layer.merge(
     HerdrCli.layer({ environment: herdrEnvironment }),

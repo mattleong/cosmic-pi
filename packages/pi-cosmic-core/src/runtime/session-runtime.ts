@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import type * as Types from "effect/Types";
+import { invokeHostCallback } from "../host-session.ts";
 import type { PiApi } from "./pi-api.ts";
 import type { PiManagedRuntime } from "./runtime.ts";
 
@@ -42,13 +43,7 @@ type Active<Input, R, RuntimeError> = {
 };
 
 /** Host callbacks cannot take ownership away from the runtime slot. */
-const runBestEffort = (operation: () => void): void => {
-  try {
-    operation();
-  } catch {
-    // Best effort at this host boundary.
-  }
-};
+const runBestEffort = (operation: () => void): void => invokeHostCallback(operation, undefined);
 
 /**
  * The minimal imperative island that owns the runtime which cannot own its own creation.

@@ -19,7 +19,8 @@ import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
 import { renderSelectedOutputLines } from "./shared/preview-text";
-import { renderHiddenPreviewPrelude, renderResultPrelude } from "./shared/result-prelude";
+import { renderResultPrelude } from "./shared/result-prelude";
+import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 
 export function createGrepPreviewTool(cwd: string) {
   const originalGrep = createGrepToolDefinition(cwd);
@@ -50,13 +51,8 @@ export function createGrepPreviewTool(cwd: string) {
         errorText: (expanded ? output : output.split("\n")[0]) || "Grep failed",
       });
       if (prelude) return prelude;
-      const hiddenPrelude = renderHiddenPreviewPrelude({
-        expanded,
-        state: renderContext.state,
-        theme,
-        hidePreview: !codePreviewSettings.grepResultPreview,
-      });
-      if (hiddenPrelude) return hiddenPrelude;
+      if (!expanded && !codePreviewSettings.grepResultPreview)
+        return renderHiddenPreviewExpandHint(renderContext.state, theme);
       if (!output || output === "No matches found")
         return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 

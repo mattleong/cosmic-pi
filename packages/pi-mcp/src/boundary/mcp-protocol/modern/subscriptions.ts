@@ -2,6 +2,7 @@ import type { Client, SubscriptionFilter } from "@modelcontextprotocol/client";
 import * as Effect from "effect/Effect";
 import { boundaryError } from "../../../client/errors.ts";
 import type { SdkEvents } from "../../sdk-events.ts";
+import { boundedSdkCleanup } from "../shared/bounded-cleanup.ts";
 import { mapSubscriptionFailure } from "../shared/subscription-failure.ts";
 
 /** SDK timeout bounds acknowledgement only. The connection scope owns stream lifetime. */
@@ -42,18 +43,12 @@ export const ownSubscription = (
       );
       const close = yield* Effect.cached(
         Effect.uninterruptible(
-          Effect.tryPromise({
-            try: () => traffic.run(() => subscription.close()),
-            catch: () => boundaryError("cleanup", "unknown", "MCP subscription cleanup failed."),
-          }).pipe(
-            Effect.interruptible,
-            Effect.timeoutOrElse({
-              duration: cleanupTimeoutMs,
-              orElse: () =>
-                Effect.fail(
-                  boundaryError("cleanup", "unknown", "MCP subscription cleanup timed out."),
-                ),
-            }),
+          boundedSdkCleanup(
+            () => traffic.run(() => subscription.close()),
+            cleanupTimeoutMs,
+            boundaryError("cleanup", "unknown", "MCP subscription cleanup failed."),
+            boundaryError("cleanup", "unknown", "MCP subscription cleanup timed out."),
+          ).pipe(
             Effect.ensuring(
               traffic.close.pipe(
                 Effect.tapError(() => Effect.sync(events.cleanupFailed)),

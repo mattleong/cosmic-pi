@@ -35,7 +35,6 @@ For each paired line, changed spans are computed over normalized rendered text s
 - alignment-gap-aware refinement, so insertions and replacements are not compared across unrelated gaps
 - compound identifier refinement
 - single-token text refinement, including separator-only edits and `value1000` -> `value1001`
-- bounded grapheme alignment for meaningful shared text inside short tokens
 - soft token substitution alignment for similar identifiers/numbers/operators
 - extended-grapheme-safe ranges for emoji and combining sequences
 - smart filtering that suppresses low-signal syntax noise while retaining Unicode symbols
@@ -78,7 +77,7 @@ tests/support/word-fixtures/emphasis-golden.ts
 The test runner renders each diff and compares the extracted emphasized spans:
 
 ```text
-tests/diff/word/emphasis-golden.test.ts
+tests/diff/word/emphasis-accuracy.test.ts
 ```
 
 When real diffs reveal a miss, add the smallest representative case to the corpus. Prefer real examples over synthetic threshold tuning.
@@ -97,10 +96,9 @@ before tuning similarity or ambiguity thresholds.
 ## Telemetry in benchmarks
 
 `pnpm bench:word-pathology` prints both performance and confidence summaries. It includes the
-32x32/33x33 full-matrix boundary, high- and medium-confidence sparse reorders, internal-token
-refinement, Unicode symbol filtering, and extended grapheme refinement. Use it before changing
-thresholds or tokenization so accuracy improvements do not accidentally increase skipped pairs or
-pathological render time.
+32x32/33x33 full-matrix boundary, high- and medium-confidence sparse reorders, Unicode symbol
+filtering, and extended grapheme refinement. Use it before changing thresholds or tokenization so
+accuracy improvements do not accidentally increase skipped pairs or pathological render time.
 
 ## Current limitations
 

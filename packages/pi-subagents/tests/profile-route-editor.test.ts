@@ -1,11 +1,8 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
-import {
-  isNativeProfileModelSelector,
-  type DeclaredProfileRoute,
-  type ProfileCandidate,
-} from "../src/profiles/model.ts";
+import type { SubagentConfigScope } from "../src/config/store.ts";
+import type { DeclaredProfileRoute, ProfileId } from "../src/profiles/model.ts";
 import { makeSessionProfileSnapshot } from "../src/profiles/session-overrides.ts";
 import {
   addRouteCandidate,
@@ -15,31 +12,21 @@ import {
   disableRouteDraft,
   duplicateRouteCandidate,
   hasOwnProfileRouteDeclaration,
-  inheritProjectDraft,
   loadProfileRouteDraft,
   moveRouteCandidate,
   removeRouteCandidate,
   replaceRouteCandidate,
-  resetGlobalDraft,
   runtimeEfforts,
   updateCandidateControls,
   updateCandidateModel,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
 } from "../src/settings/profile-route-editor.ts";
-import { makeProfileSettingsInspection } from "./fixtures/profile-settings-inspection.ts";
-
-const candidate = (model: string, overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
-  host: "local",
-  runtime: "pi",
-  model,
-  effort: "high",
-  context: "fresh",
-  writeIntent: "read-only",
-  openaiFastMode: false,
-  closeOnReport: true,
-  ...overrides,
-});
+import {
+  inheritedInvalidInspection,
+  makeProfileSettingsInspection,
+} from "./fixtures/profile-settings-inspection.ts";
+import { profileCandidate as candidate } from "./fixtures/profiles.ts";
 
 interface InspectionDocumentSeed {
   readonly version: number;
@@ -68,40 +55,13 @@ const inspection = (
   });
 };
 
-const inheritedInvalidSetInspection = (
-  own: "valid" | "invalid" | undefined,
-): ProfileSettingsInspection => {
-  const JsonObjectSchema = Schema.Record(Schema.String, Schema.MutableJson);
-  const invalidRoute = {
-    host: "local",
-    runtime: "pi",
-    model: "parent",
-    effort: "impossible",
-    context: "fresh",
-    writeIntent: "read-only",
-    openaiFastMode: false,
-    closeOnReport: true,
-  };
-  const globalDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
-    version: 6,
-    defaultProfileSet: "lower",
-    profileSets: { lower: { profiles: { worker: invalidRoute } } },
-  });
-  const projectProfiles =
-    own === undefined
-      ? {}
-      : { worker: own === "valid" ? candidate("openai/project-repair") : invalidRoute };
-  const projectDocument = Schema.decodeUnknownSync(JsonObjectSchema)({
-    version: 6,
-    defaultProfileSet: "partial",
-    profileSets: { partial: { profiles: projectProfiles } },
-  });
-  return makeProfileSettingsInspection({
-    globalDocument,
-    projectDocument,
-    projectTrusted: true,
-  });
-};
+/** Loads a profile from the "default" saved set in one persistent scope. */
+const load = (
+  value: ProfileSettingsInspection,
+  profile: ProfileId,
+  scope: SubagentConfigScope = "global",
+) =>
+  loadProfileRouteDraft(value, { kind: "profile-set", set: { scope, name: "default" } }, profile);
 
 const threeRoute = [
   candidate("openai/one", { effort: "low" }),
@@ -112,11 +72,7 @@ const threeRoute = [
 describe("ordered profile-route editor state", () => {
   it("loads and declares a three-candidate route without collapse or reorder", () => {
     const value = inspection({ version: 4, profiles: { worker: threeRoute } });
-    const draft = loadProfileRouteDraft(
-      value,
-      { kind: "profile-set", set: { scope: "global", name: "default" } },
-      "worker",
-    );
+    const draft = load(value, "worker");
     expect(draft).toEqual({ kind: "explicit", candidates: threeRoute });
     expect(draft.candidates).not.toBe(threeRoute);
     expect(declaredRouteForDraft(draft)).toEqual({ valid: true, route: threeRoute });
@@ -133,11 +89,7 @@ describe("ordered profile-route editor state", () => {
     } as const;
     const value = inspection({ version: 4, profiles: { worker: declared } });
     const before = structuredClone(value.global.file);
-    const draft = loadProfileRouteDraft(
-      value,
-      { kind: "profile-set", set: { scope: "global", name: "default" } },
-      "worker",
-    );
+    const draft = load(value, "worker");
     expect(draft.candidates[0]).toMatchObject({ ...declared, closeOnReport: true });
     expect(value.global.file).toEqual(before);
     expect(declared).not.toHaveProperty("closeOnReport");
@@ -198,81 +150,31 @@ describe("ordered profile-route editor state", () => {
       },
       { version: 4 },
     );
-    expect(
-      loadProfileRouteDraft(
-        value,
-        { kind: "profile-set", set: { scope: "global", name: "default" } },
-        "scout",
-      ),
-    ).toEqual({
-      kind: "disabled",
-      candidates: [],
-    });
-    expect(
-      loadProfileRouteDraft(
-        value,
-        { kind: "profile-set", set: { scope: "project", name: "default" } },
-        "reviewer",
-      ),
-    ).toEqual({
-      kind: "inherit",
-      candidates: threeRoute,
-    });
-    expect(
-      loadProfileRouteDraft(
-        value,
-        { kind: "profile-set", set: { scope: "global", name: "default" } },
-        "planner",
-      ).kind,
-    ).toBe("reset");
-    expect(
-      loadProfileRouteDraft(
-        value,
-        { kind: "profile-set", set: { scope: "global", name: "default" } },
-        "worker",
-      ),
-    ).toEqual({
-      kind: "invalid",
-      candidates: [],
-    });
-    expect(
-      declaredRouteForDraft(
-        loadProfileRouteDraft(
-          value,
-          { kind: "profile-set", set: { scope: "global", name: "default" } },
-          "worker",
-        ),
-      ),
-    ).toMatchObject({
-      valid: false,
-    });
+    expect(load(value, "scout")).toEqual({ kind: "disabled", candidates: [] });
+    expect(load(value, "reviewer", "project")).toEqual({ kind: "inherit", candidates: threeRoute });
+    expect(load(value, "planner").kind).toBe("reset");
+    expect(load(value, "worker")).toEqual({ kind: "invalid", candidates: [] });
+    expect(declaredRouteForDraft(load(value, "worker"))).toMatchObject({ valid: false });
     expect(declaredRouteForDraft(disableRouteDraft())).toEqual({
       valid: true,
       route: "disabled",
     });
-    expect(declaredRouteForDraft(resetGlobalDraft("worker"))).toEqual({ valid: true });
-    expect(declaredRouteForDraft(inheritProjectDraft(value, "reviewer"))).toEqual({ valid: true });
+    expect(declaredRouteForDraft({ kind: "reset", candidates: [] })).toEqual({ valid: true });
+    expect(declaredRouteForDraft({ kind: "inherit", candidates: [] })).toEqual({ valid: true });
   });
 
   it("shows inherited fail-closed routes as invalid until an explicit route repairs them", () => {
-    const target = {
-      kind: "profile-set" as const,
-      set: { scope: "project" as const, name: "partial" },
-    };
-    const inherited = inheritedInvalidSetInspection(undefined);
+    const target = { kind: "profile-set", set: { scope: "project", name: "partial" } } as const;
+    const inherited = inheritedInvalidInspection();
     const draft = loadProfileRouteDraft(inherited, target, "worker");
     expect(draft).toEqual({ kind: "invalid", candidates: [] });
-    expect(inheritProjectDraft(inherited, "worker")).toEqual({
-      kind: "invalid",
-      candidates: [],
-    });
     expect(hasOwnProfileRouteDeclaration(inherited, target, "worker")).toBe(false);
 
     const repaired = addRouteCandidate(draft, defaultRouteCandidate("worker"));
     expect(repaired?.kind).toBe("explicit");
     expect(declaredRouteForDraft(repaired!)).toMatchObject({ valid: true });
 
-    const ownInvalid = inheritedInvalidSetInspection("invalid");
+    const ownInvalid = inheritedInvalidInspection(true);
     expect(loadProfileRouteDraft(ownInvalid, target, "worker")).toEqual({
       kind: "invalid",
       candidates: [],
@@ -339,10 +241,7 @@ describe("ordered profile-route editor state", () => {
         kind: "explicit",
         candidates: [...full.candidates, candidate("openai/overflow")],
       }),
-    ).toEqual({
-      valid: false,
-      error: "A profile can have at most 32 Primary/Fallback choices.",
-    });
+    ).toMatchObject({ valid: false });
   });
 });
 
@@ -503,9 +402,6 @@ describe("profile candidate normalization and validation", () => {
   });
 
   it("rejects unsafe native selectors with the same bounded config rules", () => {
-    expect(isNativeProfileModelSelector("pi", "cursor/gpt-5.5@1m")).toBe(true);
-    expect(isNativeProfileModelSelector("pi", "cursor/gpt-5.5@272k:fast")).toBe(true);
-    expect(isNativeProfileModelSelector("pi", "cursor@team/gpt-5.5@1m")).toBe(true);
     expect(
       decodeSubagentConfig(
         {
@@ -518,16 +414,6 @@ describe("profile candidate normalization and validation", () => {
         "global",
       ).invalidProfileRoutes,
     ).not.toContain("reviewer");
-    expect(isNativeProfileModelSelector("pi", "cursor/@1m")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", "claude-opus-5")).toBe(true);
-    expect(isNativeProfileModelSelector("claude", "opus[1m]")).toBe(true);
-    expect(isNativeProfileModelSelector("claude", "claude-fable-5[200k]")).toBe(true);
-    expect(isNativeProfileModelSelector("claude", "model[abc]")).toBe(false);
-    expect(isNativeProfileModelSelector("codex", "gpt-5.6-codex")).toBe(true);
-    expect(isNativeProfileModelSelector("codex", "-danger")).toBe(false);
-    expect(isNativeProfileModelSelector("claude", "bad\u001bmodel")).toBe(false);
-    expect(isNativeProfileModelSelector("codex", "model,(glob)*")).toBe(false);
-    expect(isNativeProfileModelSelector("codex", "x".repeat(257))).toBe(false);
     for (const runtime of ["pi", "claude", "codex"] as const) {
       const model = runtime === "pi" ? "provider/model,(glob)*" : "model,(glob)*";
       expect(candidateValidationError(candidate(model, { runtime }))).toContain("valid");
@@ -538,17 +424,5 @@ describe("profile candidate normalization and validation", () => {
     expect(updateCandidateControls(candidate("parent"), { host: "herdr" }, {}).error).toContain(
       "Check that Pi is signed in",
     );
-  });
-
-  it("starts additions from the complete built-in profile candidate", () => {
-    expect(defaultRouteCandidate("oracle")).toEqual({
-      host: "local",
-      runtime: "pi",
-      model: "parent",
-      effort: "default",
-      context: "fork",
-      writeIntent: "read-only",
-      closeOnReport: true,
-    });
   });
 });

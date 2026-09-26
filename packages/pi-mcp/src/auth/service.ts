@@ -356,7 +356,7 @@ export const makeMcpAuthWithAuthority = (
         pendingLogins.delete(server.identity);
         observed.set(server.identity, { state: "required" });
       });
-    const finishLogin = (server: McpEffectiveServer, status: McpAuthStatus, succeeded: boolean) =>
+    const finishLogin: McpAuthContract["finishLogin"] = (server, status, succeeded) =>
       Effect.gen(function* () {
         const mutation = yield* store.mutation(server.identity);
         const receipt = pendingLogins.get(server.identity);
@@ -377,10 +377,6 @@ export const makeMcpAuthWithAuthority = (
               : "unavailable",
         });
       });
-    const completeLogin: McpAuthContract["completeLogin"] = (server, status) =>
-      finishLogin(server, status, true);
-    const finalizationFailed: McpAuthContract["finalizationFailed"] = (server, status) =>
-      finishLogin(server, status, false);
     return {
       access,
       login,
@@ -388,8 +384,7 @@ export const makeMcpAuthWithAuthority = (
       status,
       revoke,
       reject,
-      completeLogin,
-      finalizationFailed,
+      finishLogin,
     } satisfies McpAuthContract;
   });
 /** Owned service tests inject stores and SDK boundaries without a Pi host. */

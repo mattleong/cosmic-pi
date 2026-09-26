@@ -2,13 +2,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { JsonDocumentError } from "./errors.ts";
-import { ProcessCoordinator } from "./process-coordinator.ts";
+import { withProcessLock } from "./process-coordinator.ts";
 
 /** Mutable JSON value accepted by the document store. */
 export type JsonValue = Schema.MutableJson;
@@ -70,23 +69,7 @@ export interface JsonDocumentStoreContract {
     path: string,
     document: JsonObject,
   ) => Effect.Effect<void, JsonDocumentError>;
-  /** Optional additive capability for effectful mutation under the process lock. */
-  readonly modifyObject?: <A, E, R, AfterCommitR = never>(
-    path: string,
-    modify: (
-      document: JsonObject,
-    ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
-    options?: JsonDocumentReadOptions,
-  ) => Effect.Effect<A, JsonDocumentError | E, R | AfterCommitR>;
-  readonly updateObject: (
-    path: string,
-    update: (document: JsonObject) => JsonObject,
-    options?: JsonDocumentReadOptions,
-  ) => Effect.Effect<JsonObject, JsonDocumentError>;
-}
-
-/** A document store that guarantees effectful read-modify-write transactions. */
-export interface AtomicJsonDocumentStoreContract extends JsonDocumentStoreContract {
+  /** Effectful read-modify-write transaction under the per-path process lock. */
   readonly modifyObject: <A, E, R, AfterCommitR = never>(
     path: string,
     modify: (
@@ -105,7 +88,6 @@ export class JsonDocumentStore extends Context.Service<
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
-      const coordinator = yield* ProcessCoordinator;
 
       const mapError = (operation: string, path: string, message: string) => () =>
         new JsonDocumentError({ operation, path, message });
@@ -116,7 +98,7 @@ export class JsonDocumentStore extends Context.Service<
           .pipe(Effect.mapError(mapError("exists", path, "Unable to inspect JSON document path."))),
       );
 
-      const readObjectUnlocked = Effect.fn("JsonDocumentStore.readObjectUnlocked")(function* (
+      const readObject = Effect.fn("JsonDocumentStore.readObject")(function* (
         path: string,
         options?: JsonDocumentReadOptions,
       ) {
@@ -143,24 +125,19 @@ export class JsonDocumentStore extends Context.Service<
                   }),
                 );
         const source = yield* readSource.pipe(
-          Effect.map(Option.some),
           Effect.catch((error) =>
             error._tag === "JsonDocumentError"
               ? Effect.fail(error)
               : error.reason._tag === "NotFound"
-                ? Effect.succeedNone
+                ? Effect.succeed(undefined)
                 : Effect.fail(mapError("read", path, "Unable to read JSON document.")()),
           ),
         );
-        if (Option.isNone(source)) return undefined;
-        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source.value).pipe(
+        if (source === undefined) return undefined;
+        return yield* Schema.decodeUnknownEffect(JsonObjectFromString)(source).pipe(
           Effect.mapError(mapError("decode", path, "JSON document must contain an object.")),
         );
       });
-
-      const readObject = Effect.fn("JsonDocumentStore.readObject")(
-        (path: string, options?: JsonDocumentReadOptions) => readObjectUnlocked(path, options),
-      );
 
       const encodeObject = (path: string, document: JsonObject) =>
         Schema.encodeUnknownEffect(JsonObjectFromString)(document).pipe(
@@ -239,13 +216,13 @@ export class JsonDocumentStore extends Context.Service<
 
       const writeObject = Effect.fn("JsonDocumentStore.writeObject")(
         (path: string, document: JsonObject) =>
-          coordinator.withLock(
+          withProcessLock(
             pathService.resolve(path),
             writeObjectUnlocked(path, document, Effect.void),
           ),
       );
 
-      const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = Effect.fn(
+      const modifyObject: JsonDocumentStoreContract["modifyObject"] = Effect.fn(
         "JsonDocumentStore.modifyObject",
       )(function* <A, E, R, AfterCommitR = never>(
         path: string,
@@ -254,10 +231,10 @@ export class JsonDocumentStore extends Context.Service<
         ) => Effect.Effect<JsonDocumentModification<A, AfterCommitR>, E, R>,
         options?: JsonDocumentReadOptions,
       ) {
-        return yield* coordinator.withLock(
+        return yield* withProcessLock(
           pathService.resolve(path),
           Effect.gen(function* () {
-            const current = (yield* readObjectUnlocked(path, options)) ?? {};
+            const current = (yield* readObject(path, options)) ?? {};
             const modification = yield* modify(current);
             if (modification.write !== false)
               yield* writeObjectUnlocked(
@@ -271,27 +248,7 @@ export class JsonDocumentStore extends Context.Service<
         );
       });
 
-      const updateObject: JsonDocumentStoreContract["updateObject"] = Effect.fn(
-        "JsonDocumentStore.updateObject",
-      )((path, update, options) =>
-        modifyObject(
-          path,
-          (current) =>
-            Effect.try({
-              try: () => {
-                const next = update(current);
-                return {
-                  value: next,
-                  document: next,
-                } satisfies JsonDocumentModification<JsonObject>;
-              },
-              catch: mapError("update", path, "Unable to update JSON document."),
-            }),
-          options,
-        ),
-      );
-
-      return JsonDocumentStore.of({ exists, readObject, writeObject, modifyObject, updateObject });
+      return JsonDocumentStore.of({ exists, readObject, writeObject, modifyObject });
     }),
   );
 }

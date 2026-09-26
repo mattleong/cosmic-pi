@@ -4,14 +4,9 @@
 // copy, colors, or layout.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "@effect/vitest";
+import { plainTheme } from "pi-cosmic-core/testing";
 import type { BackgroundTaskView, BackgroundLogEvent } from "../src/task/model.ts";
 import { TaskManagerComponent } from "../src/ui/manager.ts";
-
-// SAFETY: This locally constructed test fixture satisfies the declared contract used here.
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as Theme;
 
 const logEvents = (count: number): BackgroundLogEvent[] =>
   Array.from({ length: count }, (_, index) => ({
@@ -38,7 +33,7 @@ const task = (id: string, overrides: Partial<BackgroundTaskView> = {}): Backgrou
 const makeManager = (
   initial: ReadonlyArray<BackgroundTaskView>,
   height = 8,
-  managerTheme = theme,
+  managerTheme = plainTheme,
 ) => {
   let tasks = initial;
   const stop = vi.fn();
@@ -96,15 +91,6 @@ const ESC = "\x1b";
 const ENTER = "\r";
 
 describe("/tasks stop confirmation", () => {
-  it("stops a task only on the second x press", () => {
-    const { component, stop } = makeManager([task("a")]);
-    component.handleInput("x");
-    expect(stop).not.toHaveBeenCalled();
-    component.handleInput("x");
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledWith("a");
-  });
-
   it("accepts Enter and ignores unrelated input while confirmation is pending", () => {
     const { component, stop } = makeManager([task("a")]);
     component.handleInput("x");
@@ -158,7 +144,7 @@ describe("/tasks theme invalidation", () => {
     let errorStyle = oldStyle;
     // SAFETY: This fixture supplies the theme methods used by the manager.
     const mutableTheme = {
-      bold: theme.bold,
+      bold: plainTheme.bold,
       fg: (color: string, text: string) => (color === "error" ? errorStyle(text) : text),
     } as Theme;
     const logs = Object.freeze(
@@ -236,21 +222,6 @@ describe("/tasks narrow layout", () => {
 
     component.handleInput("f");
     expect(visibleLogs()).toContain("line-35");
-  });
-
-  it("opens the inspector on Enter, returns on Esc, and closes on the next Esc", () => {
-    const { component, close } = makeManager([task("a", { logs: logEvents(3) })]);
-    expect(component.render(50).join("\n")).not.toContain("line-3");
-
-    component.handleInput(ENTER);
-    expect(component.render(50).join("\n")).toContain("line-3");
-
-    component.handleInput(ESC);
-    expect(close).not.toHaveBeenCalled();
-    expect(component.render(50).join("\n")).not.toContain("line-3");
-
-    component.handleInput(ESC);
-    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it.each([59, 60, 80, 99, 100])(

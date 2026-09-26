@@ -1,5 +1,5 @@
 import {
-  registerActivityProvider,
+  registerRevisionedActivityProvider,
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
@@ -17,7 +17,7 @@ import {
   type SubagentActivityPresentationSnapshot,
 } from "../ui/activity-panel.ts";
 import type { SubagentProjectionBridge } from "./host-ui.ts";
-import { projectRunRoutePresentation } from "../ui/run-presentation.ts";
+import { formatRunRoute } from "../ui/run-presentation.ts";
 
 const PROVIDER = "pi-subagents";
 const RUN_STATUS = {
@@ -55,7 +55,7 @@ export function subagentActivityItems(
 ): readonly ActivityItem[] {
   const awaited = new Set(presentation.awaits.flatMap((lease) => lease.runIds));
   const runs = projectFleetTree(projection.runs, "root", new Set()).rows.map(({ run }) => {
-    const item: ActivityItem = {
+    return Object.freeze({
       id: run.id,
       kind: "agent" as const,
       title: sanitizeDiagnosticContent(run.name, { maximumLength: 512 }),
@@ -95,21 +95,14 @@ export function subagentActivityItems(
             : []),
         ].map((action) => Object.freeze(action)),
       ),
-    };
-    const route = projectRunRoutePresentation(run);
-    Object.assign(item, {
-      route: sanitizeDiagnosticContent(`${route.hostRuntime} · ${route.model}`, {
-        maximumLength: 512,
-      }),
-    });
-    if (run.profile !== undefined) Object.assign(item, { profile: run.profile });
-    if (run.endedAt !== undefined) Object.assign(item, { endedAt: run.endedAt });
-    if (run.parentRunId && run.parentRunId !== "root")
-      return Object.freeze({
-        ...item,
-        parent: Object.freeze({ providerId: PROVIDER, itemId: run.parentRunId }),
-      });
-    return Object.freeze(item);
+      route: sanitizeDiagnosticContent(formatRunRoute(run), { maximumLength: 512 }),
+      ...(run.profile !== undefined && { profile: run.profile }),
+      ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
+      ...(run.parentRunId &&
+        run.parentRunId !== "root" && {
+          parent: Object.freeze({ providerId: PROVIDER, itemId: run.parentRunId }),
+        }),
+    } satisfies ActivityItem);
   });
   return Object.freeze(runs);
 }
@@ -152,55 +145,28 @@ export function registerSubagentActivity(options: {
     signal: AbortSignal,
   ) => Promise<void>;
 }): () => void {
-  let live = true;
-  const current = () => live && options.isCurrent();
-  const snapshot = () =>
-    subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation());
-  const lookup = (id: string, revision: string) => {
-    if (!current()) throw new Error("Subagents session was replaced.");
-    const item = snapshot().find((item) => item.id === id && item.revision === revision);
-    if (!item) throw new Error("Subagent activity changed.");
-    return item;
-  };
-  const registration = registerActivityProvider(options.events, {
+  const dispose = registerRevisionedActivityProvider(options.events, {
     sessionId: options.sessionId,
     providerId: PROVIDER,
-    snapshot: () => (current() ? snapshot() : []),
+    isCurrent: options.isCurrent,
+    items: () =>
+      subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation()),
     starting: () =>
-      current()
-        ? options.bridge
-            .getActivityPresentation()
-            .starts.reduce((total, lease) => total + lease.requestedCount, 0)
-        : 0,
-    getDetail: (id, revision, signal) =>
-      Promise.resolve().then(() => {
-        if (signal.aborted) throw new Error("Activity detail request was cancelled.");
-        const item = lookup(id, revision);
-        return subagentActivityDetail(options.bridge.get(), id) ?? item.title;
-      }),
-    invoke: (id, action, revision, signal) =>
-      Promise.resolve().then(() => {
-        if (signal.aborted) throw new Error("Activity action was cancelled.");
-        const item = lookup(id, revision);
-        if (
-          !item.actions?.some((allowed) => allowed.id === action) ||
-          (action !== "stop" && action !== "interrupt" && action !== "resume")
-        )
-          throw new Error("Subagent action is unavailable.");
-        return options.act(id, action, signal);
-      }),
-    onAvailability: (available) => options.bridge.setActivityAvailable(current() && available),
+      options.bridge
+        .getActivityPresentation()
+        .starts.reduce((total, lease) => total + lease.requestedCount, 0),
+    detail: (item) => subagentActivityDetail(options.bridge.get(), item.id) ?? item.title,
+    act: (item, action, signal) => {
+      if (action !== "stop" && action !== "interrupt" && action !== "resume")
+        throw new Error("Subagent action is unavailable.");
+      return options.act(item.id, action, signal);
+    },
+    subscriptions: [options.bridge.subscribe, options.bridge.subscribeActivityPresentation],
+    onAvailability: (available, current) =>
+      options.bridge.setActivityAvailable(current() && available),
   });
-  const unsubscribe = options.bridge.subscribe(() => registration.publish());
-  const unsubscribePresentation = options.bridge.subscribeActivityPresentation(() =>
-    registration.publish(),
-  );
-  registration.publish();
   return () => {
-    live = false;
-    unsubscribe();
-    unsubscribePresentation();
-    registration.dispose();
+    dispose();
     options.bridge.setActivityAvailable(false);
   };
 }

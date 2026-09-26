@@ -67,14 +67,16 @@ const configuredMatch = (
   matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
 ): boolean => Boolean(matchesKeybinding?.(data, id));
 
-const selectionMatch = (
-  data: string,
-  id: FullScreenSelectionKeybindingId,
-  key: KeyId,
-  matchesKeybinding: FullScreenKeymapOptions["matchesKeybinding"],
-  allowConfigured = true,
-): boolean =>
-  matchesKey(data, key) || (allowConfigured && configuredMatch(data, id, matchesKeybinding));
+const SELECTION_MOTIONS: ReadonlyArray<
+  readonly [KeyId, FullScreenAction, FullScreenSelectionKeybindingId?]
+> = [
+  [Key.up, "up", "tui.select.up"],
+  [Key.down, "down", "tui.select.down"],
+  [Key.home, "first"],
+  [Key.end, "last"],
+  [Key.pageUp, "full-page-up", "tui.select.pageUp"],
+  [Key.pageDown, "full-page-down", "tui.select.pageDown"],
+];
 
 export const FULL_SCREEN_NAVIGATION_SHORTCUTS: ReadonlySet<string> = new Set([
   "g",
@@ -137,7 +139,8 @@ export class FullScreenKeymap {
     if (mode === "confirmation") {
       this.resetChord();
       if (printable?.toLowerCase() === "q") return action("cancel");
-      return selectionMatch(data, "tui.select.confirm", Key.enter, matchesKeybinding)
+      return matchesKey(data, Key.enter) ||
+        configuredMatch(data, "tui.select.confirm", matchesKeybinding)
         ? action("confirm")
         : undefined;
     }
@@ -157,56 +160,16 @@ export class FullScreenKeymap {
       return undefined;
     }
 
-    if (
-      selectionMatch(data, "tui.select.up", Key.up, matchesKeybinding, !sharedActionOwnsPrintable)
-    ) {
-      this.resetChord();
-      return action("up");
-    }
-    if (
-      selectionMatch(
-        data,
-        "tui.select.down",
-        Key.down,
-        matchesKeybinding,
-        !sharedActionOwnsPrintable,
-      )
-    ) {
-      this.resetChord();
-      return action("down");
-    }
-
-    if (matchesKey(data, Key.home)) {
-      this.resetChord();
-      return action("first");
-    }
-    if (matchesKey(data, Key.end)) {
-      this.resetChord();
-      return action("last");
-    }
-    if (
-      selectionMatch(
-        data,
-        "tui.select.pageUp",
-        Key.pageUp,
-        matchesKeybinding,
-        !sharedActionOwnsPrintable,
-      )
-    ) {
-      this.resetChord();
-      return action("full-page-up");
-    }
-    if (
-      selectionMatch(
-        data,
-        "tui.select.pageDown",
-        Key.pageDown,
-        matchesKeybinding,
-        !sharedActionOwnsPrintable,
-      )
-    ) {
-      this.resetChord();
-      return action("full-page-down");
+    for (const [key, motion, id] of SELECTION_MOTIONS) {
+      if (
+        matchesKey(data, key) ||
+        (id !== undefined &&
+          !sharedActionOwnsPrintable &&
+          configuredMatch(data, id, matchesKeybinding))
+      ) {
+        this.resetChord();
+        return action(motion);
+      }
     }
 
     if (mode === "search") {

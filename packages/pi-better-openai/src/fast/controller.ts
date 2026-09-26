@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
 import { freezeSnapshot } from "pi-cosmic-core";
-import { fastModelKey, supportsFastModel } from "./models.ts";
+import { FAST_SERVICE_TIER, fastModelKey, supportsFastModel } from "./models.ts";
 
 export interface FastSnapshot {
   readonly desiredActive: boolean;
@@ -46,25 +46,20 @@ export function injectProviderPayload(
   event: { payload?: unknown },
   ctx: ExtensionContext,
   snapshot: FastSnapshot,
-  serviceTier: string,
   recordInjection: (event: { readonly model: string; readonly tier: string }) => void,
 ) {
   if (!isFastActive(ctx, snapshot) || !Predicate.isObject(event.payload)) return undefined;
-  recordInjection({ model: currentModelKey(ctx), tier: serviceTier });
-  return { ...event.payload, service_tier: serviceTier };
+  recordInjection({ model: currentModelKey(ctx), tier: FAST_SERVICE_TIER });
+  return { ...event.payload, service_tier: FAST_SERVICE_TIER };
 }
 
-export function fastDebugLines(
-  ctx: ExtensionContext,
-  snapshot: FastSnapshot,
-  serviceTier: string,
-): string[] {
+export function fastDebugLines(ctx: ExtensionContext, snapshot: FastSnapshot): string[] {
   return [
     `Fast desired: ${snapshot.desiredActive}`,
     `Fast active: ${isFastActive(ctx, snapshot)}`,
     `Current model: ${currentModelKey(ctx)}`,
     `Supported model: ${supportsFast(ctx)}`,
-    `Configured service_tier: ${serviceTier}`,
+    `Configured service_tier: ${FAST_SERVICE_TIER}`,
     `Last injected: ${snapshot.lastInjectedModel ? `${snapshot.lastInjectedModel}, ${snapshot.lastInjectedTier}` : "never"}`,
   ];
 }

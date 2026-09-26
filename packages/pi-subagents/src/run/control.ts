@@ -2,66 +2,53 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import type * as Scope from "effect/Scope";
+import { hasSubagentCapability, isTerminalRunState, type SubagentRunView } from "./model.ts";
 import {
-  hasSubagentCapability,
-  isTerminalRunState,
-  type SubagentCapability,
-  type SubagentRunView,
-} from "./model.ts";
-import { clearRunNativeActivity, type RunRecord } from "./internal.ts";
+  clearRunNativeActivity,
+  commitRunPauseLocked,
+  requireCapability,
+  type RunContext,
+  type RunRecord,
+} from "./internal.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest,
+  type InvalidSubagentRequestError,
   isOutcomeUncertain,
   type SubagentError,
   SubagentProcessError,
-  SubagentNotFoundError,
-  UnsupportedSubagentCapabilityError,
 } from "./errors.ts";
 import { hasRetainedAssignmentCapacity } from "./completion.ts";
-import { isCurrentIssuingAssignment } from "./assignment.ts";
+import {
+  beginNextAssignmentLocked,
+  isCurrentIssuingAssignment,
+  type RunAssignment,
+} from "./assignment.ts";
+import type { RunProcessControls } from "./process-lifecycle.ts";
+import type { RunRecordCleanup } from "./record-cleanup.ts";
+import type { RunSettlement } from "./settlement.ts";
 import { validateParentMessage } from "./tool-policy.ts";
 import { appendNoticeSessionEvent } from "./session-events.ts";
 import { runSessionOwned } from "./session-owned.ts";
 import { MAX_ERROR_CHARS, sanitizeDiagnosticText, sanitizeName, snapshotView } from "./state.ts";
-import { emptyRunWarningSlots, projectRunWarning, setRunWarning } from "./warnings.ts";
+import { recordRunWarning } from "./warnings.ts";
 
-export interface RunControlDependencies {
-  readonly ownerScope: Scope.Scope;
-  readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
-  readonly requireCapability: (
-    record: RunRecord,
-    capability: SubagentCapability,
-  ) => Effect.Effect<void, UnsupportedSubagentCapabilityError>;
-  readonly steerBackend: (record: RunRecord, message: string) => Effect.Effect<void, SubagentError>;
-  readonly beginAssignmentBackend: (
-    record: RunRecord,
-    message: string,
-    attemptToken: string,
-  ) => Effect.Effect<SubagentRunView, SubagentError>;
-  readonly allocateAssignmentAttemptToken: () => string;
-  readonly retainUncertainAssignment: (
-    record: RunRecord,
-    attemptToken: string,
-    warning: string,
-  ) => Effect.Effect<void>;
-  readonly interruptBackend: (record: RunRecord) => Effect.Effect<void, SubagentError>;
+/** Service-owned turn-input admission. */
+export interface RunTurnInputAdmission {
   /** Called only while the service state lock is held. */
   readonly admitTurnInput: (record: RunRecord) => void;
   readonly releaseTurnInput: (record: RunRecord) => Effect.Effect<void>;
   /** Called only while the service state lock is held. */
   readonly claimTurnInputDrain: (record: RunRecord, drained: Deferred.Deferred<void>) => void;
-  readonly renameBackend: (record: RunRecord, name: string) => Effect.Effect<void, SubagentError>;
-  readonly publish: Effect.Effect<void>;
-  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
-  readonly failPendingResponses: (record: RunRecord, error: SubagentError) => void;
-  readonly closeRecordScope: (record: RunRecord) => Effect.Effect<void>;
-  readonly settle: (
-    record: RunRecord,
-    state: "completed" | "failed" | "stopped",
-    error?: string,
-  ) => Effect.Effect<SubagentRunView>;
+}
+
+export interface RunControlDependencies extends RunContext, RunTurnInputAdmission {
+  readonly steerBackend: RunProcessControls["steer"];
+  readonly submitPrompt: RunAssignment["submitPrompt"];
+  readonly retainUncertainAssignment: RunAssignment["retainUncertainAssignment"];
+  readonly interruptBackend: RunProcessControls["interrupt"];
+  readonly renameBackend: RunProcessControls["renameDisplay"];
+  readonly closeRecordScope: RunRecordCleanup["closeRecordScope"];
+  readonly settle: RunSettlement["settle"];
 }
 
 export function makeRunControls(dependencies: RunControlDependencies) {
@@ -69,9 +56,8 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     ownerScope,
     withLock,
     requireRecord,
-    requireCapability,
     steerBackend,
-    beginAssignmentBackend,
+    submitPrompt,
     allocateAssignmentAttemptToken,
     retainUncertainAssignment,
     interruptBackend,
@@ -81,7 +67,6 @@ export function makeRunControls(dependencies: RunControlDependencies) {
     renameBackend,
     publish,
     sendPeerNotices,
-    failPendingResponses,
     closeRecordScope,
     settle,
   } = dependencies;
@@ -93,21 +78,22 @@ export function makeRunControls(dependencies: RunControlDependencies) {
       yield* withLock(
         Effect.gen(function* () {
           if (isTerminalRunState(record.view.state) || record.view.state === "stopping") return;
-          record.warningSlots = setRunWarning(record.warningSlots, "system", diagnostic);
           record.view = {
             ...record.view,
-            ...projectRunWarning(record.warningSlots, "system"),
-            sessionEvents: appendNoticeSessionEvent(
-              record.view.sessionEvents,
-              "warning",
-              diagnostic,
-              now,
-            ),
+            ...recordRunWarning(record, record.view.sessionEvents, "system", diagnostic, now),
           };
           yield* publish;
         }),
       );
     });
+
+  const recordParentNoticeLocked = (record: RunRecord, text: string, now: number) => {
+    record.view = {
+      ...record.view,
+      lastActivityAt: now,
+      sessionEvents: appendNoticeSessionEvent(record.view.sessionEvents, "parent", text, now),
+    };
+  };
 
   const finalizeGuidance = (
     record: RunRecord,
@@ -120,25 +106,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         Effect.gen(function* () {
           if (allowReported && record.view.state === "reported") return snapshotView(record.view);
           if (record.view.state !== "running")
-            return yield* new InvalidSubagentRequestError({
-              code: "guidance_outcome_uncertain",
-              message: `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
-            });
+            return yield* invalidRequest(
+              "guidance_outcome_uncertain",
+              `Subagent ${record.view.id} changed state after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+            );
           if (record.replyPendingRequestId)
-            return yield* new InvalidSubagentRequestError({
-              code: "guidance_outcome_uncertain",
-              message: `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
-            });
-          record.view = {
-            ...record.view,
-            lastActivityAt: now,
-            sessionEvents: appendNoticeSessionEvent(
-              record.view.sessionEvents,
-              "parent",
-              `Guidance: ${message}`,
-              now,
-            ),
-          };
+            return yield* invalidRequest(
+              "guidance_outcome_uncertain",
+              `Subagent ${record.view.id} claimed a parent reply after guidance was sent, so delivery may already have applied. Inspect with subagent_status before retrying.`,
+            );
+          recordParentNoticeLocked(record, `Guidance: ${message}`, now);
           yield* publish;
           return snapshotView(record.view);
         }),
@@ -154,21 +131,21 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             Effect.gen(function* () {
               const selected = yield* requireRecord(id);
               if (selected.view.state === "waiting_for_parent")
-                return yield* new InvalidSubagentRequestError({
-                  code: "run_waiting_for_parent",
-                  message: `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
-                });
+                return yield* invalidRequest(
+                  "run_waiting_for_parent",
+                  `Subagent ${id} is waiting for a parent reply; use subagent_reply({ runId: "${id}", message: "..." }).`,
+                );
               if (selected.replyPendingRequestId)
-                return yield* new InvalidSubagentRequestError({
-                  code: "reply_in_flight",
-                  message: `Subagent ${id} already has a parent reply in flight.`,
-                });
+                return yield* invalidRequest(
+                  "reply_in_flight",
+                  `Subagent ${id} already has a parent reply in flight.`,
+                );
               if (selected.view.state === "reported" && selected.view.closeOnReport === false) {
                 if (!hasRetainedAssignmentCapacity(selected))
-                  return yield* new InvalidSubagentRequestError({
-                    code: "report_delivery_backlog",
-                    message: `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
-                  });
+                  return yield* invalidRequest(
+                    "report_delivery_backlog",
+                    `Subagent ${id} has ${selected.completionGenerations.size} unresolved report generations; wait for parent delivery or claim the latest report before beginning another assignment.`,
+                  );
                 const attemptToken = allocateAssignmentAttemptToken();
                 const previous = {
                   view: snapshotView(selected.view),
@@ -180,29 +157,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                   pauseOutcome: selected.pauseOutcome,
                   replyPendingRequestId: selected.replyPendingRequestId,
                 };
-                selected.pausedAssignmentEpoch = undefined;
-                selected.latestAssistantText = undefined;
-                selected.warningSlots = emptyRunWarningSlots();
-                selected.assignment = {
-                  epoch: selected.nextAssignmentEpoch++,
-                  phase: "issuing",
-                  attemptToken,
-                  startedObserved: false,
-                  outcomeUncertain: false,
-                  pendingRunSettled: false,
-                };
-                selected.view = {
-                  ...selected.view,
-                  state: "starting",
-                  endedAt: undefined,
+                beginNextAssignmentLocked(selected, attemptToken, yield* Clock.currentTimeMillis, {
                   finalText: undefined,
                   progress: undefined,
-                  warning: undefined,
-                  warningSource: undefined,
-                  systemWarning: undefined,
-                  error: undefined,
-                  lastActivityAt: yield* Clock.currentTimeMillis,
-                };
+                });
                 yield* publish;
                 return {
                   record: selected,
@@ -218,26 +176,26 @@ export function makeRunControls(dependencies: RunControlDependencies) {
                 const recovery = hasSubagentCapability(selected.view, "resume")
                   ? `resume it with subagent_lifecycle({ action: "resume", runIds: ["${id}"] }) before sending guidance`
                   : `this backend cannot resume it; stop it with subagent_lifecycle({ action: "stop", runIds: ["${id}"] }) and start a replacement`;
-                return yield* new InvalidSubagentRequestError({
-                  code: "run_not_running",
-                  message: `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
-                });
+                return yield* invalidRequest(
+                  "run_not_running",
+                  `Subagent ${id} is ${selected.view.state}; ${recovery}.`,
+                );
               }
               if (selected.view.state === "starting")
-                return yield* new InvalidSubagentRequestError({
-                  code: "run_starting",
-                  message: `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
-                });
+                return yield* invalidRequest(
+                  "run_starting",
+                  `Subagent ${id} is still starting; wait for it to start before retrying subagent_send.`,
+                );
               if (selected.view.state !== "running")
-                return yield* new InvalidSubagentRequestError({
-                  code: "run_not_running",
-                  message: `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
-                });
+                return yield* invalidRequest(
+                  "run_not_running",
+                  `Subagent ${id} is ${selected.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+                );
               if (selected.pauseRequested)
-                return yield* new InvalidSubagentRequestError({
-                  code: "interrupt_in_flight",
-                  message: `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
-                });
+                return yield* invalidRequest(
+                  "interrupt_in_flight",
+                  `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+                );
               return { record: selected, retained: false as const };
             }),
           );
@@ -245,7 +203,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
 
           const record = selected.record;
           const commit = Effect.gen(function* () {
-            yield* beginAssignmentBackend(record, normalized, selected.attemptToken).pipe(
+            yield* submitPrompt(record, normalized, "resume", selected.attemptToken).pipe(
               Effect.tapError((error) => {
                 if (error._tag === "SubagentProcessError" && isOutcomeUncertain(error))
                   return retainUncertainAssignment(record, selected.attemptToken, error.message);
@@ -288,15 +246,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
           Effect.gen(function* () {
             const current = yield* requireRecord(id);
             if (current !== record || current.view.state !== "running")
-              return yield* new InvalidSubagentRequestError({
-                code: "run_not_running",
-                message: `Subagent ${id} is ${current.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
-              });
+              return yield* invalidRequest(
+                "run_not_running",
+                `Subagent ${id} is ${current.view.state} and cannot receive guidance; inspect it with subagent_status or start a replacement run.`,
+              );
             if (current.pauseRequested)
-              return yield* new InvalidSubagentRequestError({
-                code: "interrupt_in_flight",
-                message: `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
-              });
+              return yield* invalidRequest(
+                "interrupt_in_flight",
+                `Subagent ${id} already has an interrupt pending and cannot receive new guidance.`,
+              );
             admitTurnInput(current);
             return current;
           }),
@@ -325,20 +283,20 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             yield* requireCapability(record, "parent-contact");
             const question = record.view.question;
             if (record.view.state !== "waiting_for_parent" || !question)
-              return yield* new InvalidSubagentRequestError({
-                code: "parent_question_missing",
-                message: `Subagent ${id} has no pending parent question.`,
-              });
+              return yield* invalidRequest(
+                "parent_question_missing",
+                `Subagent ${id} has no pending parent question.`,
+              );
             if (record.replyPendingRequestId)
-              return yield* new InvalidSubagentRequestError({
-                code: "reply_in_flight",
-                message: `Subagent ${id} already has a reply in flight.`,
-              });
+              return yield* invalidRequest(
+                "reply_in_flight",
+                `Subagent ${id} already has a reply in flight.`,
+              );
             if (record.pauseRequested)
-              return yield* new InvalidSubagentRequestError({
-                code: "interrupt_in_flight",
-                message: `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
-              });
+              return yield* invalidRequest(
+                "interrupt_in_flight",
+                `Subagent ${id} already has an interrupt pending and cannot receive a parent reply.`,
+              );
             const process = record.process;
             if (!process)
               return yield* new SubagentProcessError({
@@ -380,16 +338,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               Effect.gen(function* () {
                 if (claimed.record.replyPendingRequestId === claimed.question.requestId)
                   claimed.record.replyPendingRequestId = undefined;
-                claimed.record.view = {
-                  ...claimed.record.view,
-                  lastActivityAt: now,
-                  sessionEvents: appendNoticeSessionEvent(
-                    claimed.record.view.sessionEvents,
-                    "parent",
-                    `Reply: ${normalized}`,
-                    now,
-                  ),
-                };
+                recordParentNoticeLocked(claimed.record, `Reply: ${normalized}`, now);
                 yield* publish;
                 return snapshotView(claimed.record.view);
               }),
@@ -402,22 +351,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               // Keep the exact request claim until a distinct question or lifecycle event resolves
               // the ambiguity, so a duplicate contact cannot invite a second reply.
               return retainControlWarning(claimed.record, error.message);
-            if (
+            const questionClosed =
               error._tag === "SubagentProcessError" &&
               (error.code === "question_transport_closed" ||
-                error.code === "question_ownership_mismatch")
-            )
-              return withLock(
-                Effect.sync(() => {
-                  if (claimed.record.replyPendingRequestId === claimed.question.requestId)
-                    claimed.record.replyPendingRequestId = undefined;
-                }),
-              );
+                error.code === "question_ownership_mismatch");
             return withLock(
               Effect.gen(function* () {
                 if (claimed.record.replyPendingRequestId !== claimed.question.requestId) return;
                 claimed.record.replyPendingRequestId = undefined;
                 if (
+                  !questionClosed &&
                   claimed.record.view.state === "running" &&
                   claimed.record.view.question === undefined
                 ) {
@@ -446,15 +389,15 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             const selected = yield* requireRecord(id);
             yield* requireCapability(selected, "interrupt");
             if (selected.view.state !== "running" && selected.view.state !== "waiting_for_parent")
-              return yield* new InvalidSubagentRequestError({
-                code: "interrupt_state_invalid",
-                message: `Subagent ${id} cannot be interrupted while ${selected.view.state}.`,
-              });
+              return yield* invalidRequest(
+                "interrupt_state_invalid",
+                `Subagent ${id} cannot be interrupted while ${selected.view.state}.`,
+              );
             if (selected.pauseRequested)
-              return yield* new InvalidSubagentRequestError({
-                code: "interrupt_in_flight",
-                message: `Subagent ${id} already has an interrupt pending.`,
-              });
+              return yield* invalidRequest(
+                "interrupt_in_flight",
+                `Subagent ${id} already has an interrupt pending.`,
+              );
             selected.pauseRequested = true;
             selected.pauseOutcome = pauseOutcome;
             claimTurnInputDrain(selected, turnInputsDrained);
@@ -497,23 +440,12 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             Effect.gen(function* () {
               if (record.view.state === "paused") return snapshotView(record.view);
               if (record.view.state !== "running" && record.view.state !== "waiting_for_parent")
-                return yield* new InvalidSubagentRequestError({
-                  code: "interrupt_outcome_uncertain",
-                  message: `Subagent ${id} stopped before interruption completed.`,
-                });
-              record.pauseRequested = false;
+                return yield* invalidRequest(
+                  "interrupt_outcome_uncertain",
+                  `Subagent ${id} stopped before interruption completed.`,
+                );
               if (record.pauseOutcome === pauseOutcome) record.pauseOutcome = undefined;
-              record.pausedAssignmentEpoch = record.assignment.epoch;
-              record.activeTools.clear();
-              clearRunNativeActivity(record);
-              record.view = {
-                ...record.view,
-                state: "paused",
-                question: undefined,
-                currentTool: undefined,
-                lastActivityAt: now,
-              };
-              const view = snapshotView(record.view);
+              const view = commitRunPauseLocked(record, now);
               yield* publish;
               return view;
             }),
@@ -524,20 +456,16 @@ export function makeRunControls(dependencies: RunControlDependencies) {
   const rename = (id: string, rawName: string): Effect.Effect<SubagentRunView, SubagentError> =>
     Effect.gen(function* () {
       const name = sanitizeName(rawName);
-      if (!name)
-        return yield* new InvalidSubagentRequestError({
-          code: "name_required",
-          message: "Subagent name is required.",
-        });
+      if (!name) return yield* invalidRequest("name_required", "Subagent name is required.");
       const selected = yield* withLock(
         Effect.gen(function* () {
           const record = yield* requireRecord(id);
           yield* requireCapability(record, "rename-display");
           if (record.view.state === "stopping")
-            return yield* new InvalidSubagentRequestError({
-              code: "rename_state_invalid",
-              message: `Subagent ${id} cannot be renamed while stopping.`,
-            });
+            return yield* invalidRequest(
+              "rename_state_invalid",
+              `Subagent ${id} cannot be renamed while stopping.`,
+            );
           if (
             record.view.state !== "running" &&
             record.view.state !== "waiting_for_parent" &&
@@ -563,10 +491,10 @@ export function makeRunControls(dependencies: RunControlDependencies) {
             selected.record.view.state === "stopping" ||
             isTerminalRunState(selected.record.view.state)
           )
-            return yield* new InvalidSubagentRequestError({
-              code: "rename_outcome_uncertain",
-              message: `Subagent ${id} stopped before rename completed.`,
-            });
+            return yield* invalidRequest(
+              "rename_outcome_uncertain",
+              `Subagent ${id} stopped before rename completed.`,
+            );
           selected.record.launch = { ...selected.record.launch, name };
           selected.record.view = { ...selected.record.view, name };
           yield* publish;
@@ -608,7 +536,7 @@ export function makeRunControls(dependencies: RunControlDependencies) {
               question: undefined,
               currentTool: undefined,
             };
-            failPendingResponses(selected, stopError);
+            selected.process?.cancelPending(stopError);
             yield* publish;
             return { record: selected, cleanupRequired: true as const };
           }),

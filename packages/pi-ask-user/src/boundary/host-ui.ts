@@ -9,21 +9,9 @@ export interface DialogActivity {
   readonly phase: "open" | "hidden" | "closing";
 }
 
-export interface AskUserDialogBridge {
-  readonly setActivity: (listener: ((event: DialogActivity) => void) | undefined) => void;
-  readonly setRequest: (id: string) => void;
-  readonly setManaged: (managed: boolean) => void;
-  readonly markOpened: (token: number) => void;
-  readonly setContext: (ctx: ExtensionContext | undefined) => void;
-  readonly activate: (resume: () => void) => number;
-  readonly markCollapsed: (token: number) => void;
-  readonly resume: (token?: number) => boolean;
-  readonly clear: (token?: number) => void;
-}
-
 const setStatus = makeSetStatusSafely(STATUS_KEY);
 
-export function makeAskUserDialogBridge(): AskUserDialogBridge {
+export function makeAskUserDialogBridge() {
   let context: ExtensionContext | undefined;
   let nextToken = 1;
   let requestId: string | undefined;
@@ -39,38 +27,38 @@ export function makeAskUserDialogBridge(): AskUserDialogBridge {
   const status = () =>
     setStatus(context, !managed && hidden ? "questions hidden · /ask-user to resume" : undefined);
   return {
-    setActivity: (next) => {
+    setActivity: (next: ((event: DialogActivity) => void) | undefined) => {
       listener = next;
     },
-    setRequest: (id) => {
+    setRequest: (id: string) => {
       requestId = id;
     },
-    setManaged: (next) => {
+    setManaged: (next: boolean) => {
       managed = next;
       status();
     },
-    markOpened: (token) => {
+    markOpened: (token: number) => {
       if (active?.token === token) publish("open");
     },
-    setContext: (next) => {
+    setContext: (next: ExtensionContext | undefined) => {
       if (context && context !== next) setStatus(context, undefined);
       context = next;
       if (!active) setStatus(context, undefined);
     },
-    activate: (resume) => {
+    activate: (resume: () => void) => {
       const token = nextToken++;
       active = { token, id: requestId, resume };
       hidden = false;
       setStatus(context, undefined);
       return token;
     },
-    markCollapsed: (token) => {
+    markCollapsed: (token: number) => {
       if (active?.token !== token) return;
       hidden = true;
       publish("hidden");
       status();
     },
-    resume: (token) => {
+    resume: (token?: number) => {
       if (!active || (token !== undefined && active.token !== token)) return false;
       try {
         active.resume();
@@ -82,7 +70,7 @@ export function makeAskUserDialogBridge(): AskUserDialogBridge {
         return false;
       }
     },
-    clear: (token) => {
+    clear: (token?: number) => {
       if (token !== undefined && active?.token !== token) return;
       publish("closing");
       active = undefined;
@@ -92,3 +80,5 @@ export function makeAskUserDialogBridge(): AskUserDialogBridge {
     },
   };
 }
+
+export type AskUserDialogBridge = ReturnType<typeof makeAskUserDialogBridge>;

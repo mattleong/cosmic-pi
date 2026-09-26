@@ -6,10 +6,8 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as os from "node:os";
 import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
 import { nodeFsPromises as fs, nodePath as path } from "../../src/boundary/node-builtins.ts";
-import { git, workspaceIO } from "../../src/boundary/git-worktree-process.ts";
 import { listWorkspaceRecords } from "../../src/boundary/git-worktree-recovery.ts";
 import * as store from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
@@ -18,8 +16,8 @@ import {
   WorkspaceRecordSchema,
   type WorkspaceRecord,
 } from "../../src/workspace/model.ts";
+import { commitRepository, io, readText, temporaryDirectory } from "./fixtures/repository.ts";
 
-const io = <A>(run: () => PromiseLike<A>) => workspaceIO("fixture", run);
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 const id = (ordinal: number) =>
   `${ordinal.toString(16).padStart(8, "0")}-1111-1111-1111-111111111111`;
@@ -37,12 +35,7 @@ const record = (workspaceId: string): WorkspaceRecord => ({
 });
 const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const root = yield* Effect.acquireRelease(
-      io(() =>
-        fs.mkdtemp(path.join(os.tmpdir(), "workspace-listing-")).then((dir) => fs.realpath(dir)),
-      ),
-      (dir) => io(() => fs.rm(dir, { recursive: true, force: true })).pipe(Effect.orDie),
-    );
+    const root = yield* temporaryDirectory("workspace-listing-");
     const registry = path.join(root, "git-workspaces");
     yield* io(() => fs.mkdir(registry, { mode: 0o700 }));
     return yield* test(root, registry);
@@ -102,13 +95,9 @@ it.live(
         expect(yield* io(() => fs.readdir(registry))).toEqual(before);
         for (const [index, content] of corrupt.entries()) {
           if (content !== undefined)
-            expect(
-              yield* io(() =>
-                fs.readFile(path.join(registry, id(index + 2), "record.json"), "utf8"),
-              ),
-            ).toBe(content);
+            expect(yield* readText(registry, id(index + 2), "record.json")).toBe(content);
         }
-        expect(yield* io(() => fs.readFile(externalRecord, "utf8"))).toBe(externalBytes);
+        expect(yield* readText(externalRecord)).toBe(externalBytes);
         // Single-record reads remain strict; a directory-name diagnostic is never a handle.
         for (const artifact of listing.unavailable) {
           expect(
@@ -214,11 +203,7 @@ it.live("leaves healthy workspaces operable but denies recovery of an incomplete
   fixture((root, registry) =>
     Effect.gen(function* () {
       const source = path.join(root, "source");
-      yield* io(() => fs.mkdir(source));
-      yield* git(source, ["init", "--template="]);
-      yield* io(() => fs.writeFile(path.join(source, "main.ts"), "baseline\n"));
-      yield* git(source, ["add", "main.ts"]);
-      yield* git(source, ["commit", "-m", "fixture"]);
+      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
       yield* Effect.gen(function* () {
         const service = yield* WorkspaceService;
         const handle = yield* service.create({ sourceCwd: source, ownerId: "parent" });
@@ -245,9 +230,7 @@ it.live("leaves healthy workspaces operable but denies recovery of an incomplete
             .pipe(Effect.flip),
         ).toMatchObject({ _tag: "WorkspaceError" });
         expect(yield* io(() => fs.readdir(artifact))).toEqual(["preserve-me"]);
-        expect(yield* io(() => fs.readFile(path.join(source, "main.ts"), "utf8"))).toBe(
-          "baseline\n",
-        );
+        expect(yield* readText(source, "main.ts")).toBe("baseline\n");
       }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: root })));
     }),
   ).pipe(Effect.scoped),

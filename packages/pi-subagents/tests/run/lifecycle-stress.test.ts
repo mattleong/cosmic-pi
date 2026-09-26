@@ -10,16 +10,16 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import {
-  assistantMessageEndFrame,
+  contactParentFrame,
   fakeChildLayer,
   fakeWriterLeaseLayer,
+  localServiceFixture,
   request,
   serviceLayer,
-  contactParentFrame,
+  withService,
 } from "./fixtures/service-harness.ts";
 
 const cycles = 4;
@@ -41,8 +41,7 @@ describe("SubagentService lifecycle stress", () => {
         const parent = yield* service.start(request());
         const child = yield* service.startSessionOwnedFrom(parent.id, request());
         fake.controls[1]!.gateRelease(release);
-        fake.controls[1]!.offer(assistantMessageEndFrame("Assignment complete."));
-        fake.controls[1]!.offer({ type: "agent_settled" });
+        fake.controls[1]!.settle();
         yield* yieldUntil(
           () => projection?.runs.find((run) => run.id === child.id)?.state === "completed",
         );
@@ -125,8 +124,7 @@ describe("SubagentService lifecycle stress", () => {
       const layer = serviceLayer({ publish: (value) => void (projection = value) }).pipe(
         Layer.provide(fake.layer),
       );
-      return Effect.gen(function* () {
-        const service = yield* SubagentService;
+      return withService(layer, function* (service) {
         for (let cycle = 0; cycle < cycles; cycle++) {
           const release = yield* Deferred.make<void>();
           yield* Effect.gen(function* () {
@@ -171,8 +169,7 @@ describe("SubagentService lifecycle stress", () => {
             expect(stoppingChild.pollUnsafe()).toBeUndefined();
 
             // An unrelated root completes and resumes while descendant cleanup is blocked.
-            siblingControl.offer(assistantMessageEndFrame("Assignment complete."));
-            siblingControl.offer({ type: "agent_settled" });
+            siblingControl.settle();
             yield* yieldUntil(() => siblingControl.released() === 1);
             expect((yield* service.resume(sibling.id, "Next assignment")).state).toBe("running");
             const resumedControl = fake.controls.at(-1)!;
@@ -209,7 +206,7 @@ describe("SubagentService lifecycle stress", () => {
             ]);
           }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
         }
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     },
   );
 
@@ -220,13 +217,7 @@ describe("SubagentService lifecycle stress", () => {
         for (let cycle = 0; cycle < cycles; cycle++) {
           const release = yield* Deferred.make<void>();
           yield* Effect.gen(function* () {
-            const fake = fakeChildLayer();
-            const notifications: SubagentNotification[] = [];
-            const projections: SubagentProjection[] = [];
-            const layer = serviceLayer({
-              publish: (value) => void projections.push(value),
-              notify: (value) => void notifications.push(value),
-            }).pipe(Layer.provide(fake.layer));
+            const { fake, projections, notifications, layer } = localServiceFixture();
             const owner = yield* Scope.make();
             yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void));
             const context = yield* Layer.buildWithScope(layer, owner);

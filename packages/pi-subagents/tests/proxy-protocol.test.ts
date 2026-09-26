@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../src/run/limits.ts";
-import { SUBAGENT_TOOL_NAME, SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
+import { SUBAGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import {
   decodeSubagentProxyRequest,
   decodeSubagentProxyResult,
@@ -9,77 +9,36 @@ import {
 } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
 
-const proxyRoundTripCases = [
+const proxyRoundTripCases: ReadonlyArray<SubagentToolInput> = [
+  { tool: "subagent_models", args: { profile: "reviewer" } },
   {
-    label: "models",
-    tool: "subagent_models",
-    input: { action: "models", profile: "reviewer" },
-  },
-  {
-    label: "start",
     tool: "subagent_start",
-    input: {
-      action: "start",
-      agents: [{ task: "Inspect the package", profile: "scout" }],
-    },
+    args: { agents: [{ task: "Inspect the package", profile: "scout" }] },
   },
-  { label: "list", tool: "subagent_list", input: { action: "list" } },
+  { tool: "subagent_list", args: {} },
+  { tool: "subagent_status", args: { runIds: ["agent-1"] } },
+  { tool: "subagent_await", args: { runIds: ["agent-1"], until: "all_finished" } },
+  { tool: "subagent_send", args: { runIds: ["agent-1"], message: "Continue." } },
+  { tool: "subagent_reply", args: { runId: "agent-1", message: "Use the fixture." } },
   {
-    label: "status",
-    tool: "subagent_status",
-    input: { action: "status", runIds: ["agent-1"] },
-  },
-  {
-    label: "await",
-    tool: "subagent_await",
-    input: { action: "await", runIds: ["agent-1"], until: "all_finished" },
-  },
-  {
-    label: "send",
-    tool: "subagent_send",
-    input: { action: "send", runIds: ["agent-1"], message: "Continue." },
-  },
-  {
-    label: "reply",
-    tool: "subagent_reply",
-    input: { action: "reply", runId: "agent-1", message: "Use the fixture." },
-  },
-  {
-    label: "lifecycle",
     tool: "subagent_lifecycle",
-    input: { action: "resume", runIds: ["agent-1"], message: "Continue carefully." },
+    args: { action: "resume", runIds: ["agent-1"], message: "Continue carefully." },
   },
+  { tool: "subagent_rename", args: { runId: "agent-1", name: "reviewer" } },
   {
-    label: "rename",
-    tool: "subagent_rename",
-    input: { action: "rename", runId: "agent-1", name: "reviewer" },
-  },
-  {
-    label: "claims",
     tool: "subagent_claims",
-    input: {
-      action: "claims",
-      operation: { action: "grant", runId: "agent-1", paths: ["src/fixture.ts"] },
-    },
+    args: { action: "grant", runId: "agent-1", paths: ["src/fixture.ts"] },
   },
   {
-    label: "workspace",
     tool: "subagent_workspace",
-    input: {
-      action: "workspace",
-      operation: {
-        action: "integrate",
-        workspaceId: "workspace-1",
-        revisionId: "revision-1",
-        preparationId: "prepared-1",
-      },
+    args: {
+      action: "integrate",
+      workspaceId: "workspace-1",
+      revisionId: "revision-1",
+      preparationId: "prepared-1",
     },
   },
-] satisfies ReadonlyArray<{
-  readonly label: string;
-  readonly tool: string;
-  readonly input: SubagentToolInput;
-}>;
+];
 
 describe("nested Pi proxy protocol", () => {
   it.each([
@@ -106,15 +65,13 @@ describe("nested Pi proxy protocol", () => {
       }),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
-  it("keeps the named map frozen and the ordered tuple stable", () => {
-    expect(Object.isFrozen(SUBAGENT_TOOL_NAME)).toBe(true);
+  it("covers every subagent tool with a proxy round-trip case in tuple order", () => {
     expect(SUBAGENT_TOOL_NAMES).toEqual(proxyRoundTripCases.map(({ tool }) => tool));
   });
 
-  it.each(proxyRoundTripCases)("round-trips $label inputs", ({ input, tool }) => {
+  it.each(proxyRoundTripCases)("round-trips $tool inputs", (input) => {
     const encoded = encodeSubagentProxyInput(input);
-    expect(encoded.tool).toBe(tool);
-    if (input.action === "start") expect(encoded.argumentsJson).not.toContain("parentRunId");
+    expect(encoded).toEqual({ tool: input.tool, argumentsJson: JSON.stringify(input.args) });
     expect(decodeSubagentProxyRequest(encoded)).toEqual(input);
   });
 
@@ -192,7 +149,8 @@ describe("nested Pi proxy protocol", () => {
     const maximum = 2 * 1024 * 1024;
     const bounded = `{${" ".repeat(maximum - 2)}}`;
     expect(decodeSubagentProxyRequest({ tool: "subagent_list", argumentsJson: bounded })).toEqual({
-      action: "list",
+      tool: "subagent_list",
+      args: {},
     });
     expect(
       decodeSubagentProxyRequest({ tool: "subagent_list", argumentsJson: `${bounded} ` }),
@@ -210,17 +168,34 @@ describe("nested Pi proxy protocol", () => {
     expect(decodeSubagentProxyRequest(request(33))).toBeInstanceOf(InvalidSubagentRequestError);
   });
 
-  it("rejects spoofed ancestry, excess fields, and unknown tools", () => {
-    for (const request of [
+  it.each([
+    ["spoofed ancestry", "subagent_start", { agents: [{ task: "spoof", parentRunId: "sibling" }] }],
+    ["excess fields", "subagent_list", { extra: true }],
+    ["a retry message", "subagent_lifecycle", { action: "retry", runIds: ["a"], message: "m" }],
+    [
+      "an interrupt message",
+      "subagent_lifecycle",
+      { action: "interrupt", runIds: ["a"], message: "m" },
+    ],
+    ["a claims operation error", "subagent_claims", { action: "grant", runId: "agent-1" }],
+  ])("rejects %s", (_label, tool, args) => {
+    expect(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })).toMatchObject(
       {
-        tool: "subagent_start",
-        argumentsJson: JSON.stringify({
-          agents: [{ task: "spoof", parentRunId: "sibling" }],
-        }),
+        code: "proxy_request_invalid",
+        message: `Nested ${tool} arguments failed strict validation.`,
       },
-      { tool: "subagent_list", argumentsJson: JSON.stringify({ extra: true }) },
-      { tool: "subagent_unknown", argumentsJson: "{}" },
-    ])
-      expect(decodeSubagentProxyRequest(request)).toBeInstanceOf(InvalidSubagentRequestError);
+    );
   });
+
+  it.each(["subagent_unknown", "ask_user", "constructor", "__proto__", "toString"])(
+    "rejects the unknown coordinator tool %s",
+    (tool) => {
+      const decoded = decodeSubagentProxyRequest({ tool, argumentsJson: "{}" });
+      expect(decoded).toBeInstanceOf(InvalidSubagentRequestError);
+      expect(decoded).toMatchObject({
+        code: "proxy_request_invalid",
+        message: "Nested Pi requested an unknown coordinator tool.",
+      });
+    },
+  );
 });

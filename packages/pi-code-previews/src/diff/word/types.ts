@@ -12,3 +12,9 @@ export type ConfidentWordChangeRanges = WordChangeRanges & {
 export function hasWordChangeRanges(ranges: WordChangeRanges): boolean {
   return ranges.removed.length > 0 || ranges.added.length > 0;
 }
+
+export function requiredAt<T>(values: ArrayLike<T>, index: number, label: string): T {
+  const value = values[index];
+  if (value === undefined) throw new RangeError(`Missing ${label} ${index}`);
+  return value;
+}

@@ -4,7 +4,7 @@ import { describeNestedSubject, MAX_NESTED_SUBJECT_LENGTH } from "../src/tools/c
 import { callEntryDetails } from "../src/tools/format.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { decodeCodeModeRenderDetails } from "../src/ui/tool-render-details.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { opaqueFixture } from "pi-cosmic-core/testing";
 
 describe("nested compact targets", () => {
   it.each([
@@ -89,7 +89,7 @@ describe("nested compact targets", () => {
       phase: "settled",
       args: { intent: "Inspect" },
       result: { content: [], details },
-      context: opaqueHostFixture({ isError: false, cwd: "/different-project" }),
+      context: opaqueFixture({ isError: false, cwd: "/different-project" }),
     });
     expect(summary?.children?.entries[0]).toEqual({
       label: "read",

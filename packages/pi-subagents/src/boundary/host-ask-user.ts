@@ -1,8 +1,7 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Predicate from "effect/Predicate";
-import * as Option from "effect/Option";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
 import {
   decodeQuestionnaireOutcome,
   decodeQuestionnaireRequest,
@@ -17,14 +16,7 @@ import {
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 
-const RelayQuerySchema = Schema.Struct({
-  version: Schema.Literal(1),
-  sessionId: Schema.String,
-  respond: Schema.declare<(relay: QuestionnaireRelay) => void>(
-    (value): value is (relay: QuestionnaireRelay) => void => Predicate.isFunction(value),
-  ),
-});
-const decodeRelayQuery = Schema.decodeUnknownOption(RelayQuerySchema);
+const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
 
 const unavailable = () =>
   new InvalidSubagentRequestError({
@@ -133,8 +125,7 @@ export const publishChildQuestionnaireRelay = (
     },
   };
   return events.on(QUESTIONNAIRE_RELAY_QUERY, (input) => {
-    const query = decodeRelayQuery(input);
-    if (isCurrent() && Option.isSome(query) && query.value.sessionId === sessionId)
-      query.value.respond(relay);
+    const query = relayQueries.normalizeQuery(input);
+    if (query !== undefined && isCurrent() && query.sessionId === sessionId) query.respond(relay);
   });
 };

@@ -1,6 +1,6 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { plainTheme as theme } from "pi-cosmic-core/testing";
 import {
   renderAsyncCall,
   renderAsyncContent,
@@ -8,8 +8,6 @@ import {
   renderAsyncResult,
 } from "../src/ui/async-tool-render.ts";
 
-// SAFETY: The fixture supplies every theme operation used by these renderers.
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as Theme;
 const output = (component: Component) => component.render(240).join("\n");
 const outcome = {
   outcome: "submitted",
@@ -73,22 +71,6 @@ describe("async questionnaire replay rendering", () => {
         expect(rendered).toContain("string fallback");
         expect(rendered).not.toContain("Scenic");
       }
-    }
-  });
-
-  it("isolates throwing content parts from valid siblings", () => {
-    const hostile = Object.defineProperty({ type: "text" }, "text", {
-      get() {
-        throw new Error("hostile text");
-      },
-    });
-    const content = [{ type: "text", text: "before" }, hostile, { type: "text", text: "after" }];
-    for (const rendered of [
-      result(null, false, content),
-      output(renderAsyncMessage({ content }, { expanded: false, outputPad: 0 }, theme)),
-    ]) {
-      expect(rendered).toContain("before");
-      expect(rendered).toContain("after");
     }
   });
 
@@ -157,19 +139,6 @@ describe("async questionnaire replay rendering", () => {
     ).toBe("raw fallback");
   });
 
-  it("renders six-question calls and all six submitted answers", () => {
-    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
-    const answers = Array.from({ length: 6 }, (_, index) => ({
-      key: `answer-${index + 1}`,
-      kind: "custom",
-      text: `value-${index + 1}`,
-    }));
-    expect(output(renderAsyncCall({ questions }, theme, false))).toContain("Question 6");
-    expect(result({ ...snapshot, outcome: { outcome: "submitted", answers } })).toContain(
-      "value-6",
-    );
-  });
-
   it("prefers a valid single snapshot over an invalid list", () => {
     const details = { ...snapshot, requests: [{ ...snapshot, delivery: 123 }] };
     expect(result(details)).toContain("Avoid tolls");
@@ -206,38 +175,54 @@ describe("async questionnaire replay rendering", () => {
     ).not.toContain("Scenic");
   });
 
-  it("falls back safely for malformed, oversized, and hostile replay data", () => {
+  it("renders six questions and answers but falls back safely beyond them and for hostile data", () => {
     const hostile = Object.defineProperty({}, "details", {
       get() {
         throw new Error("hostile getter");
       },
     });
+    const questions = Array.from({ length: 6 }, (_, index) => ({ title: `Question ${index + 1}` }));
+    const answers = Array.from({ length: 7 }, (_, index) => ({
+      key: `answer-${index + 1}`,
+      kind: "custom",
+      text: `value-${index + 1}`,
+    }));
+    expect(output(renderAsyncCall({ questions }, theme, false))).toContain("Question 6");
+    expect(
+      result({ ...snapshot, outcome: { outcome: "submitted", answers: answers.slice(0, 6) } }),
+    ).toContain("value-6");
     const invalid = [
       null,
       { ...snapshot, outcome: { outcome: "submitted", answers: [{ kind: "custom" }] } },
       { requests: Array.from({ length: 17 }, () => snapshot) },
-      {
-        ...snapshot,
-        outcome: {
-          outcome: "submitted",
-          answers: Array.from({ length: 7 }, () => outcome.answers[0]),
-        },
-      },
+      { ...snapshot, outcome: { outcome: "submitted", answers } },
     ];
+    const throwingPart = Object.defineProperty({ type: "text" }, "text", {
+      get() {
+        throw new Error("hostile text");
+      },
+    });
     const content = [
       { type: "text", text: "safe\u001b[31m fallback" },
       { type: "image", data: "secret" },
       { type: "text", text: 123 },
       null,
+      throwingPart,
+      { type: "text", text: "after" },
     ];
     const hostileId = Object.defineProperty({ ...snapshot }, "requestId", {
       get() {
         throw new Error("hostile ID getter");
       },
     });
-    for (const details of [...invalid, hostileId, { requests: [hostileId] }]) {
-      const rendered = result(details, false, content);
+    for (const rendered of [
+      ...[...invalid, hostileId, { requests: [hostileId] }].map((details) =>
+        result(details, false, content),
+      ),
+      output(renderAsyncMessage({ content }, { expanded: false, outputPad: 0 }, theme)),
+    ]) {
       expect(rendered).toContain("safe fallback");
+      expect(rendered).toContain("after");
       expect(rendered).not.toContain("secret");
       expect(rendered).not.toContain("\u001b");
     }

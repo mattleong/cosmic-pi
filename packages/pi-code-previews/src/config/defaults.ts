@@ -30,19 +30,7 @@ const defaults: CodePreviewSettings = {
 Object.freeze(defaults.tools);
 export const defaultCodePreviewSettings = Object.freeze(defaults);
 
-export interface CodePreviewPerformanceConfig {
-  readonly asyncRenderChars: number;
-  readonly maxHighlightChars: number;
-  readonly cacheLimit: number;
-  readonly cacheCharLimit: number;
-  readonly contentLanguageDetectionChars: number;
-  readonly diffWrapRows: number;
-  readonly secretScanChars: number;
-  readonly maxWriteDiffBytes: number;
-  readonly maxWriteDiffChangedLineCells: number;
-}
-
-export const defaultCodePreviewPerformanceConfig: CodePreviewPerformanceConfig = Object.freeze({
+const performanceDefaults = {
   asyncRenderChars: 8_000,
   maxHighlightChars: 80_000,
   cacheLimit: 192,
@@ -52,4 +40,6 @@ export const defaultCodePreviewPerformanceConfig: CodePreviewPerformanceConfig =
   secretScanChars: 200_000,
   maxWriteDiffBytes: 200_000,
   maxWriteDiffChangedLineCells: 1_000_000,
-});
+};
+export type CodePreviewPerformanceConfig = Readonly<typeof performanceDefaults>;
+export const defaultCodePreviewPerformanceConfig = Object.freeze(performanceDefaults);

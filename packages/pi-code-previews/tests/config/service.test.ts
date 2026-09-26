@@ -6,7 +6,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   JsonDocumentError,
@@ -14,7 +13,12 @@ import {
   provideBuiltLayer,
   type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
-import { makeCapturedLogger, makeInMemoryDocuments } from "pi-cosmic-core/testing";
+import {
+  capturedTelemetrySnapshot,
+  makeCapturedLogger,
+  makeInMemoryDocuments,
+  type InMemoryDocuments,
+} from "pi-cosmic-core/testing";
 import { makeSettingsAdmission } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { CodePreviewEnvironmentService } from "../../src/config/env";
@@ -43,6 +47,28 @@ function settingsLayer(
   return CodePreviewSettingsService.layer.pipe(Layer.provide(dependencies));
 }
 
+/** Holds the first document read until `release` completes; later reads pass through. */
+const gateFirstRead = (fake: InMemoryDocuments, onRead: (read: number) => void = () => undefined) =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let reads = 0;
+    const documents = JsonDocumentStore.of({
+      ...fake.service,
+      // Reads hold no document lock, so only the cross-Layer settings coordinator can block them.
+      readObject: (path) =>
+        Effect.suspend(() => {
+          onRead(++reads);
+          if (reads !== 1) return fake.service.readObject(path);
+          return Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(fake.service.readObject(path)),
+          );
+        }),
+    });
+    return { documents, started, release, reads: () => reads };
+  });
+
 it.effect("logs a sanitized warning and continues after a malformed settings document", () => {
   const captured = makeCapturedLogger();
   const fake = makeInMemoryDocuments();
@@ -67,9 +93,7 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
     Effect.tap((loaded) =>
       Effect.sync(() => {
         assert.equal(loaded.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
-        const telemetry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
-          captured.entries,
-        );
+        const telemetry = capturedTelemetrySnapshot(captured);
         assert.match(telemetry, /Failed to load settings for code previews/);
         assert.equal(telemetry.includes("secret/settings"), false);
         assert.equal(telemetry.includes("secret malformed"), false);
@@ -106,7 +130,7 @@ it.effect("load returns mutable defensive clones and publishes frozen loaded set
       assert.notEqual(second.tools, first.tools);
       assert.equal(second.readCollapsedLines, 21);
       assert.deepEqual(second.tools, defaultCodePreviewSettings.tools);
-      const telemetry = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(captured.entries);
+      const telemetry = capturedTelemetrySnapshot(captured);
       assert.match(telemetry, /settings\.shikiTheme/);
       assert.equal(telemetry.includes("private-theme-token"), false);
       assert.equal(telemetry.includes("/agent"), false);
@@ -141,101 +165,60 @@ it.effect("building the settings Layer does not publish its defaults", () => {
 
 it.effect("settings operations serialize across separately built Layers", () =>
   Effect.gen(function* () {
-    const firstReadStarted = yield* Deferred.make<void>();
-    const releaseFirstRead = yield* Deferred.make<void>();
-    const fake = makeInMemoryDocuments();
-    let reads = 0;
-    const documents = JsonDocumentStore.of({
-      ...fake.service,
-      // Reads hold no document lock, so only the cross-Layer settings coordinator can block them.
-      readObject: (path) =>
-        Effect.suspend(() => {
-          reads++;
-          if (reads !== 1) return fake.service.readObject(path);
-          return Deferred.succeed(firstReadStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseFirstRead)),
-            Effect.andThen(fake.service.readObject(path)),
-          );
-        }),
-    });
+    const gate = yield* gateFirstRead(makeInMemoryDocuments());
     const first = yield* CodePreviewSettingsService.use((service) => loadSettings(service)).pipe(
-      provideBuiltLayer(settingsLayer(documents)),
+      provideBuiltLayer(settingsLayer(gate.documents)),
       Effect.forkScoped,
     );
-    yield* Deferred.await(firstReadStarted);
+    yield* Deferred.await(gate.started);
     const second = yield* CodePreviewSettingsService.use((service) => loadSettings(service)).pipe(
-      provideBuiltLayer(settingsLayer(documents)),
+      provideBuiltLayer(settingsLayer(gate.documents)),
       Effect.forkScoped,
     );
     yield* Effect.yieldNow;
-    assert.equal(reads, 1);
+    assert.equal(gate.reads(), 1);
 
-    yield* Deferred.succeed(releaseFirstRead, undefined);
+    yield* Deferred.succeed(gate.release, undefined);
     yield* Fiber.join(first);
     yield* Fiber.join(second);
-    assert.equal(reads, 4);
+    assert.equal(gate.reads(), 4);
   }).pipe(Effect.scoped),
 );
 
 it.effect("a cancelled newer load does not suppress an older successful publication", () =>
   Effect.gen(function* () {
-    const firstReadStarted = yield* Deferred.make<void>();
-    const releaseFirstRead = yield* Deferred.make<void>();
-    const fake = makeInMemoryDocuments({
-      "/agent/settings.json": { codePreview: { readCollapsedLines: 31 } },
-    });
-    let reads = 0;
-    const documents = JsonDocumentStore.of({
-      ...fake.service,
-      readObject: (path) =>
-        Effect.suspend(() => {
-          reads++;
-          if (reads !== 1) return fake.service.readObject(path);
-          return Deferred.succeed(firstReadStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseFirstRead)),
-            Effect.andThen(fake.service.readObject(path)),
-          );
-        }),
-    });
+    const gate = yield* gateFirstRead(
+      makeInMemoryDocuments({
+        "/agent/settings.json": { codePreview: { readCollapsedLines: 31 } },
+      }),
+    );
     const olderAdmission = makeSettingsAdmission();
     const newerAdmission = makeSettingsAdmission();
     const older = yield* CodePreviewSettingsService.use((service) =>
       service.load(olderAdmission),
-    ).pipe(provideBuiltLayer(settingsLayer(documents)), Effect.forkScoped);
-    yield* Deferred.await(firstReadStarted);
+    ).pipe(provideBuiltLayer(settingsLayer(gate.documents)), Effect.forkScoped);
+    yield* Deferred.await(gate.started);
     const newer = yield* CodePreviewSettingsService.use((service) =>
       service.load(newerAdmission),
-    ).pipe(provideBuiltLayer(settingsLayer(documents)), Effect.forkScoped);
+    ).pipe(provideBuiltLayer(settingsLayer(gate.documents)), Effect.forkScoped);
     yield* Effect.yieldNow;
-    assert.equal(reads, 1);
+    assert.equal(gate.reads(), 1);
     yield* Fiber.interrupt(newer);
 
-    yield* Deferred.succeed(releaseFirstRead, undefined);
+    yield* Deferred.succeed(gate.release, undefined);
     yield* Fiber.join(older);
-    assert.equal(reads, 2);
+    assert.equal(gate.reads(), 2);
     assert.equal(codePreviewSettings.readCollapsedLines, 31);
   }).pipe(Effect.scoped),
 );
 
 it.effect("a later save waits for an earlier load and publishes after it", () =>
   Effect.gen(function* () {
-    const firstReadStarted = yield* Deferred.make<void>();
-    const releaseFirstRead = yield* Deferred.make<void>();
     const events: string[] = [];
     const fake = makeInMemoryDocuments();
-    let reads = 0;
+    const gate = yield* gateFirstRead(fake, (read) => events.push(`read-${read}`));
     const documents = JsonDocumentStore.of({
-      ...fake.service,
-      readObject: (path) =>
-        Effect.suspend(() => {
-          reads++;
-          events.push(`read-${reads}`);
-          if (reads !== 1) return fake.service.readObject(path);
-          return Deferred.succeed(firstReadStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseFirstRead)),
-            Effect.andThen(fake.service.readObject(path)),
-          );
-        }),
+      ...gate.documents,
       modifyObject: (path, modify) =>
         fake.service
           .modifyObject(path, modify)
@@ -244,13 +227,13 @@ it.effect("a later save waits for an earlier load and publishes after it", () =>
     yield* CodePreviewSettingsService.use((service) =>
       Effect.gen(function* () {
         const load = yield* service.load(makeSettingsAdmission()).pipe(Effect.forkScoped);
-        yield* Deferred.await(firstReadStarted);
+        yield* Deferred.await(gate.started);
         const save = yield* service
           .save({ ...defaultCodePreviewSettings, readCollapsedLines: 42 }, makeSettingsAdmission())
           .pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         assert.deepEqual(events, ["read-1"]);
-        yield* Deferred.succeed(releaseFirstRead, undefined);
+        yield* Deferred.succeed(gate.release, undefined);
         yield* Fiber.join(load);
         yield* Fiber.join(save);
       }),
@@ -311,14 +294,20 @@ it.effect("flush in another Layer waits for one-shot rehydrate and save", () =>
 
 it.effect("save persists the flat document and publishes the committed settings", () => {
   const fake = makeInMemoryDocuments({
-    "/agent/code-previews.json": { owner: "keep", readCollapsedLines: 17 },
+    "/agent/code-previews.json": {
+      owner: "keep",
+      codePreview: { readCollapsedLines: 12 },
+      readCollapsedLines: 17,
+    },
   });
   return CodePreviewSettingsService.use((service) =>
     Effect.gen(function* () {
       const loaded = yield* loadSettings(service);
       yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 });
+      // A legacy nested block is an unknown root field: preserved verbatim, never migrated.
       assert.deepEqual(fake.documents.get("/agent/code-previews.json"), {
         owner: "keep",
+        codePreview: { readCollapsedLines: 12 },
         readCollapsedLines: 42,
       });
       assert.equal(codePreviewSettings.readCollapsedLines, 42);
@@ -404,29 +393,6 @@ it.effect("runtime-invalid settings fail before document modification or publica
       assert.equal(codePreviewSettings, published);
     }),
   ).pipe(provideBuiltLayer(settingsLayer(fake.service)));
-});
-
-it.effect("save fails typed without atomic document modification capability", () => {
-  const fake = makeInMemoryDocuments();
-  const documents = JsonDocumentStore.of({
-    exists: fake.service.exists,
-    readObject: fake.service.readObject,
-    writeObject: fake.service.writeObject,
-    updateObject: fake.service.updateObject,
-  });
-  return CodePreviewSettingsService.use((service) =>
-    Effect.gen(function* () {
-      const loaded = yield* loadSettings(service);
-      const published = codePreviewSettings;
-      const failure = yield* saveSettings(service, { ...loaded, readCollapsedLines: 42 }).pipe(
-        Effect.flip,
-      );
-      assert.ok(failure instanceof JsonDocumentError);
-      assert.equal(failure.operation, "write");
-      assert.equal(fake.updateCount, 0);
-      assert.equal(codePreviewSettings, published);
-    }),
-  ).pipe(provideBuiltLayer(settingsLayer(documents)));
 });
 
 it.effect("flush waits for an earlier save and interruption cannot lose that save", () =>

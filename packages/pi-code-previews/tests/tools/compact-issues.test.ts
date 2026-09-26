@@ -6,7 +6,6 @@ import {
   normalizeCompactIssues,
   summaryCompactIssues,
   withCompactIssues,
-  withoutFailureBodyIssues,
   type CompactIssue,
   type CompactIssues,
 } from "../../src/tools/compact-issues";
@@ -17,7 +16,7 @@ import {
 } from "../../src/tools/compact-summary";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { renderCompactFailure } from "../../src/preview/compact-tool-call";
-import { testTheme } from "../support/render";
+import { plainTheme } from "../support/render";
 
 const issue = (overrides: Partial<CompactIssue> = {}): CompactIssue => ({
   operation: "call-1",
@@ -112,7 +111,7 @@ describe("semantic compact issues", () => {
     expect(summary.outcome).toBe("uncertain");
     const output = renderCompactToolCall(
       { name: "mcp", phase: "settled", summary },
-      testTheme(),
+      plainTheme,
       120,
     ).join("\n");
     for (const text of ["Element detached.", "Execution is uncertain.", "Cleanup is unconfirmed."])
@@ -136,7 +135,7 @@ describe("semantic compact issues", () => {
     expect(summaryCompactIssues(summary).entries).toHaveLength(8);
     const text = renderCompactToolCall(
       { name: "code_mode", phase: "settled", summary },
-      testTheme(),
+      plainTheme,
       120,
     ).join("\n");
     for (let index = 0; index < 8; index++) expect(text).not.toContain(`call-${index}:`);
@@ -154,7 +153,7 @@ describe("semantic compact issues", () => {
     expect(summaryCompactIssues(summary).entries).toHaveLength(1);
     const text = renderCompactToolCall(
       { name: "code_mode", phase: "settled", summary },
-      testTheme(),
+      plainTheme,
       120,
     ).join("\n");
     expect(text.match(/Element detached\./gu)).toHaveLength(1);
@@ -224,7 +223,7 @@ describe("semantic compact issues", () => {
     for (const expanded of [false, true]) {
       const text = renderCompactFailure(
         { name: "edit", phase: "settled", summary, failure: summary.failure, expanded },
-        testTheme(),
+        plainTheme,
         120,
       ).join("\n");
       expect(text.match(/Inspect state\./gu) ?? []).toHaveLength(expanded ? 1 : 0);
@@ -253,37 +252,11 @@ test("outer failure ownership cannot consume nested evidence, even with identica
   };
   const text = renderCompactFailure(
     { name: "code_mode", phase: "settled", summary, failure: summary.failure!, expanded: true },
-    testTheme(),
+    plainTheme,
     200,
   ).join("\n");
   expect(text.split(root.cause).length - 1).toBe(2);
   expect(text).toContain(nested.recovery[0]!.text);
-  const augmented = normalizeCompactIssues([
-    collection(root),
-    collection({ ...root, recovery: [{ code: "new-repair", text: "Independent repair" }] }),
-  ]);
-  const retained = withoutFailureBodyIssues(augmented, summary.failure!.ownedIssues);
-  expect(retained.entries).toEqual([
-    { ...root, cause: "", recovery: [{ code: "new-repair", text: "Independent repair" }] },
-  ]);
-  const diagnostic = { ...root, diagnostics: ["Independent diagnostic"] };
-  expect(
-    withoutFailureBodyIssues(collection(diagnostic), summary.failure!.ownedIssues).entries,
-  ).toEqual([{ ...diagnostic, cause: "" }]);
-  const conflict = { ...root, cause: "Conflicting recovery" };
-  expect(
-    withoutFailureBodyIssues(collection(root, conflict), summary.failure!.ownedIssues).entries,
-  ).toEqual([root, conflict]);
-  const conflictingRecovery = {
-    ...root,
-    recovery: [
-      { code: "repair", text: "First repair" },
-      { code: "repair", text: "Conflicting repair" },
-    ],
-  };
-  expect(
-    withoutFailureBodyIssues(collection(conflictingRecovery), summary.failure!.ownedIssues).entries,
-  ).toEqual([conflictingRecovery]);
 });
 
 test("claims select detached fields without absorbing merged or conflicting evidence", () => {

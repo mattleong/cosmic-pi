@@ -1,6 +1,6 @@
 /** Shared receipt projection for collapsed and expanded nested calls. */
 import type { CompactChild, CompactPhase } from "pi-code-previews";
-import { isCompactPiTool } from "../tools/mcp-evidence.ts";
+import { isCompactPiTool } from "../tools/compact-subject.ts";
 import type { CodeModeCallEntry } from "../tools/format.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
@@ -37,7 +37,7 @@ export const codeModeCallRows = (
         ...(call.compact.counters !== undefined && { counters: call.compact.counters }),
         ...(call.compact.metadata !== undefined && { metadata: call.compact.metadata }),
         notices: call.compact.notices,
-        ...(call.compact.version === 2 && { issues: call.compact.issues }),
+        issues: call.compact.issues,
       }),
       ...(durationMs !== undefined && { durationMs }),
       // Delivery failure takes precedence over a successful operation receipt.

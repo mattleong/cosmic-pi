@@ -51,11 +51,28 @@ export const makeMcpLoginUi = (
     "A browser-open request is still settling.",
   );
   const revoked = stale();
+  const live = () => current() && isProjectTrusted(ctx) && mcpHasLoginUi(ctx);
   const check = () =>
     Effect.suspend(() => {
       if (!invokeHostCallback(current, false) || !isProjectTrusted(ctx))
         return Effect.fail(stale());
       return mcpHasLoginUi(ctx) ? Effect.void : Effect.fail(unavailable());
+    });
+  /** One stock dialog bounded by the owner's deadline and rechecked on both sides. */
+  const dialog = <A>(
+    deadline: number,
+    open: (options: { readonly signal: AbortSignal; readonly timeout: number }) => Promise<A>,
+  ) =>
+    Effect.gen(function* () {
+      yield* check();
+      const timeout = yield* remaining(deadline);
+      const value = yield* Effect.tryPromise({
+        try: (signal) => open({ signal, timeout }),
+        catch: (error) => (error === revoked ? revoked : unavailable()),
+      });
+      yield* check();
+      yield* remaining(deadline);
+      return value;
     });
   // The SDK auth boundary checks issuer, resource and resolved addresses before handing
   // us this URL. This second check prevents the browser adapter accepting another scheme.
@@ -75,29 +92,17 @@ export const makeMcpLoginUi = (
         const requested = yield* validateScopes(proposal.requested);
         const additions = yield* validateScopes(proposal.additions);
         if (additions.some((scope) => !requested.includes(scope))) return yield* invalidScopes();
-        const timeout = yield* remaining(deadline);
         // Only this fixed title enters Pi prompt events. Permission names stay in the
         // private stock confirmation message, never auth progress, tool data, or logs.
-        const confirmed = yield* Effect.tryPromise({
-          try: (signal) => {
-            if (
-              signal.aborted ||
-              !invokeHostCallback(
-                () => current() && isProjectTrusted(ctx) && mcpHasLoginUi(ctx),
-                false,
-              )
-            )
-              return Promise.reject(revoked);
-            return ctx.ui.confirm(
-              "MCP sign-in: approve permissions",
-              `The server proposed these permission names. They are untrusted labels, not instructions.\nRequested: ${requested.join(" ")}\nAdditional permissions: ${additions.join(" ")}\nAllow this sign-in to request them?`,
-              { signal, timeout },
-            );
-          },
-          catch: (error) => (error === revoked ? revoked : unavailable()),
-        });
-        yield* check();
-        yield* remaining(deadline);
+        const confirmed = yield* dialog(deadline, (options) =>
+          options.signal.aborted || !invokeHostCallback(live, false)
+            ? Promise.reject(revoked)
+            : ctx.ui.confirm(
+                "MCP sign-in: approve permissions",
+                `The server proposed these permission names. They are untrusted labels, not instructions.\nRequested: ${requested.join(" ")}\nAdditional permissions: ${additions.join(" ")}\nAllow this sign-in to request them?`,
+                options,
+              ),
+        );
         return confirmed === true;
       }),
     openBrowser: (value, mayOpen) =>
@@ -108,16 +113,7 @@ export const makeMcpLoginUi = (
         if (process.platform !== "darwin") return yield* browserFailed();
         yield* Effect.tryPromise({
           try: (signal) => {
-            if (
-              !invokeHostCallback(
-                () =>
-                  (!mayOpen || mayOpen()) &&
-                  current() &&
-                  isProjectTrusted(ctx) &&
-                  mcpHasLoginUi(ctx),
-                false,
-              )
-            )
+            if (!invokeHostCallback(() => (!mayOpen || mayOpen()) && live(), false))
               return Promise.reject(revoked);
             if (nativeOpening) return Promise.reject(browserBusy);
             nativeOpening = true;
@@ -146,31 +142,19 @@ export const makeMcpLoginUi = (
         yield* check();
         const url = yield* browserUrl(value);
         const deadline = applicableDeadline ?? (yield* Clock.currentTimeMillis) + 180_000;
-        const displayTimeout = yield* remaining(deadline);
         // Pi publishes only prompt titles through ui_prompt_start. The URL belongs
         // solely to the stock user dialog's private message field, including RPC.
-        const confirmed = yield* Effect.tryPromise({
-          try: (signal) =>
-            ctx.ui.confirm(
-              "MCP sign-in: open browser",
-              `Open this authorization URL in your browser. Continue when ready to paste the full callback URL.\n${url.href}`,
-              { signal, timeout: displayTimeout },
-            ),
-          catch: unavailable,
-        });
-        yield* check();
-        const inputTimeout = yield* remaining(deadline);
+        const confirmed = yield* dialog(deadline, (options) =>
+          ctx.ui.confirm(
+            "MCP sign-in: open browser",
+            `Open this authorization URL in your browser. Continue when ready to paste the full callback URL.\n${url.href}`,
+            options,
+          ),
+        );
         if (!confirmed) return undefined;
-        const callback = yield* Effect.tryPromise({
-          try: (signal) =>
-            ctx.ui.input("MCP sign-in: callback", "Full callback URL", {
-              signal,
-              timeout: inputTimeout,
-            }),
-          catch: unavailable,
-        });
-        yield* check();
-        yield* remaining(deadline);
+        const callback = yield* dialog(deadline, (options) =>
+          ctx.ui.input("MCP sign-in: callback", "Full callback URL", options),
+        );
         if (callback !== undefined && callback.length > 8_192) {
           return yield* boundaryError("invalid-input", "not-sent", "OAuth callback was rejected.");
         }
@@ -179,24 +163,15 @@ export const makeMcpLoginUi = (
   };
   if (!manual && invokeHostCallback(() => ctx.mode === "rpc", false)) {
     const nextAction: NonNullable<McpLoginUi["nextAction"]> = (deadline, failedOpen) =>
-      Effect.gen(function* () {
-        yield* check();
-        const timeout = yield* remaining(deadline);
-        const action = yield* Effect.tryPromise({
-          try: (signal) =>
-            ctx.ui.select(
-              failedOpen
-                ? "MCP sign-in: browser did not open"
-                : "MCP sign-in: waiting for browser approval",
-              ["Reopen browser", "Cancel sign-in"],
-              { signal, timeout },
-            ),
-          catch: unavailable,
-        });
-        yield* check();
-        yield* remaining(deadline);
-        return action === "Reopen browser" ? "reopen" : "cancel";
-      });
+      dialog(deadline, (options) =>
+        ctx.ui.select(
+          failedOpen
+            ? "MCP sign-in: browser did not open"
+            : "MCP sign-in: waiting for browser approval",
+          ["Reopen browser", "Cancel sign-in"],
+          options,
+        ),
+      ).pipe(Effect.map((action) => (action === "Reopen browser" ? "reopen" : "cancel")));
     Object.assign(ui, { nextAction });
   }
   return ui;

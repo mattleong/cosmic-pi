@@ -1,8 +1,13 @@
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import {
+  decodeUnknownOrUndefined,
+  makeSessionCapabilityProtocol,
+  type SessionCapabilityQuery,
+} from "pi-cosmic-core";
 import { McpBoundaryError } from "../client/errors.ts";
 import { McpDataRequestSchema, McpGatewayReplySchema } from "../tools/model.ts";
+import { ownPresentationField } from "./presentation-evidence.ts";
 import { mcpRequestGuidance } from "../tools/request-guidance.ts";
 
 export const MCP_CODE_MODE_VERSION = 1 as const;
@@ -65,7 +70,7 @@ export const mcpCodeModeError = (
 ): McpCodeModeError => {
   const action =
     kind === "invalid-input" && outcome === "not-sent"
-      ? decodeSafely(RequestAction, requestAction)
+      ? decodeUnknownOrUndefined(RequestAction, requestAction)
       : undefined;
   if (action === undefined)
     return new McpCodeModeError({ kind, outcome, message: failureMessages[kind] });
@@ -77,30 +82,12 @@ export const mcpCodeModeError = (
   });
 };
 
-const decodeSafely = <S extends Schema.ConstraintDecoder<unknown>, Value>(
-  schema: S,
-  value: Value,
-): S["Type"] | undefined => {
-  try {
-    return Option.getOrUndefined(Schema.decodeUnknownOption(schema)(value));
-  } catch {
-    return undefined;
-  }
-};
-
 const decodeOwnField = <S extends Schema.ConstraintDecoder<unknown>, Value>(
   schema: S,
   value: Value,
   key: string,
-): S["Type"] | undefined => {
-  try {
-    if (!Predicate.isObjectOrArray(value)) return undefined;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return descriptor && "value" in descriptor ? decodeSafely(schema, descriptor.value) : undefined;
-  } catch {
-    return undefined;
-  }
-};
+): S["Type"] | undefined =>
+  decodeUnknownOrUndefined(schema, ownPresentationField(value, key).value);
 
 /** Capture only an admitted, recognized action; never read request accessors or rejected values. */
 export const mcpCodeModeInputError = <Value>(input: Value): McpCodeModeError =>
@@ -114,7 +101,7 @@ export const mcpCodeModeInputError = <Value>(input: Value): McpCodeModeError =>
 
 /** Preserve checked certainty and action, never a rejection's message, cause, or accessors. */
 export const normalizeMcpCodeModeError = <Value>(value: Value): McpCodeModeError => {
-  const decoded = decodeSafely(FailureMetadata, {
+  const decoded = decodeUnknownOrUndefined(FailureMetadata, {
     _tag: decodeOwnField(FailureMetadata.fields._tag, value, "_tag"),
     kind: decodeOwnField(FailureMetadata.fields.kind, value, "kind"),
     outcome: decodeOwnField(FailureMetadata.fields.outcome, value, "outcome"),
@@ -131,7 +118,7 @@ export const normalizeMcpCodeModeError = <Value>(value: Value): McpCodeModeError
 const OutcomeSchema = Schema.Struct({ outcome: McpBoundaryError.fields.outcome });
 /** Projection failure must not relabel a known completed operation as not-sent. */
 export const mcpCodeModeOutcome = <Value>(value: Value): McpCodeModeOutput["outcome"] =>
-  decodeSafely(OutcomeSchema, value)?.outcome ?? "unknown";
+  decodeUnknownOrUndefined(OutcomeSchema, value)?.outcome ?? "unknown";
 
 export interface McpCodeModeCapability {
   readonly version: typeof MCP_CODE_MODE_VERSION;
@@ -144,63 +131,20 @@ export interface McpCodeModeCapability {
   ) => Promise<McpCodeModeOutput>;
 }
 
-export interface McpCodeModeQuery {
-  readonly version: typeof MCP_CODE_MODE_VERSION;
-  readonly sessionId: string;
-  readonly respond: <Candidate>(candidate: Candidate) => void;
-}
-
-const SessionId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024));
-const QuerySchema = Schema.Struct({
-  version: Schema.Literal(MCP_CODE_MODE_VERSION),
-  sessionId: SessionId,
-  respond: Schema.Unknown,
-});
-const CapabilitySchema = Schema.Struct({
-  version: Schema.Literal(MCP_CODE_MODE_VERSION),
-  sessionId: SessionId,
-  execute: Schema.Unknown,
+const codeModeProtocol = makeSessionCapabilityProtocol({
+  version: MCP_CODE_MODE_VERSION,
+  maxSessionIdChars: 1024,
 });
 
-const containThenable = <Value>(value: Value): void => {
-  try {
-    if (!Predicate.isObjectOrArray(value) && !Predicate.isFunction(value)) return;
-    // SAFETY: Only inspect the optional then field after narrowing to an object or function.
-    const then = (value as { readonly then?: unknown }).then;
-    if (Predicate.isFunction(then))
-      then.call(
-        value,
-        () => undefined,
-        () => undefined,
-      );
-  } catch {
-    // Response callbacks cannot escape this synchronous event boundary.
-  }
-};
+export type McpCodeModeQuery = SessionCapabilityQuery<typeof MCP_CODE_MODE_VERSION>;
 
-export const normalizeMcpCodeModeQuery = <Value>(value: Value): McpCodeModeQuery | undefined => {
-  const decoded = decodeSafely(QuerySchema, value);
-  if (!decoded || !Predicate.isFunction(decoded.respond)) return undefined;
-  const respond = decoded.respond;
-  return Object.freeze({
-    version: decoded.version,
-    sessionId: decoded.sessionId,
-    respond: <Candidate>(candidate: Candidate): void => {
-      try {
-        const outcome: unknown = respond(candidate);
-        containThenable(outcome);
-      } catch {
-        // Response callbacks cannot escape this synchronous event boundary.
-      }
-    },
-  });
-};
+export const normalizeMcpCodeModeQuery = codeModeProtocol.normalizeQuery;
 
 export const normalizeMcpCodeModeCapability = <Value>(
   value: Value,
 ): McpCodeModeCapability | undefined => {
-  const decoded = decodeSafely(CapabilitySchema, value);
-  if (!decoded || !Predicate.isFunction(decoded.execute)) return undefined;
+  const decoded = codeModeProtocol.decodeCapability(value);
+  if (!decoded) return undefined;
   const execute = decoded.execute;
   return Object.freeze({
     version: decoded.version,

@@ -12,12 +12,13 @@ import {
   type ProfileResolutionEnvironment,
 } from "./resolve.ts";
 import {
+  conflict,
   makeSessionProfileSnapshot,
   patchSessionNestingSnapshot,
   patchSessionProfileSnapshot,
   replaceSessionProfileSnapshot,
   sessionProfileSeed,
-  SessionProfileConflictError,
+  type SessionProfileConflictError,
   type SessionNestingPatch,
   type SessionProfileOverrideSeed,
   type SessionProfilePatch,
@@ -57,8 +58,8 @@ export interface SubagentProfileLayerOptions {
   readonly cwd: string;
   readonly agentDirectory: string;
   readonly projectTrusted: boolean;
-  readonly baseConfig?: ResolvedSubagentConfig | undefined;
-  readonly publishBaseConfig?: ((config: ResolvedSubagentConfig) => void) | undefined;
+  readonly sessionBaseConfig?: ResolvedSubagentConfig | undefined;
+  readonly publishSessionBaseConfig?: ((config: ResolvedSubagentConfig) => void) | undefined;
   readonly initialSessionOverrides?: SessionProfileOverrideSeed | undefined;
   readonly publishSessionOverrides?: ((seed: SessionProfileOverrideSeed) => void) | undefined;
 }
@@ -104,13 +105,10 @@ export const makeSubagentProfileService = (
           R
         > => {
           if (current.revision !== expectedRevision)
-            return Effect.fail(
-              new SessionProfileConflictError({
-                expectedRevision,
-                actualRevision: current.revision,
-                message:
-                  "Current Session changed while the saved-set write was pending; review it and try again.",
-              }),
+            return conflict(
+              current,
+              expectedRevision,
+              "Current Session changed while the saved-set write was pending; review it and try again.",
             );
           return operation(current).pipe(Effect.map((result) => [result, current] as const));
         },
@@ -139,10 +137,9 @@ export const subagentProfileServiceLayer = (options: SubagentProfileLayerOptions
     Effect.gen(function* () {
       const store = yield* SubagentConfigStore;
       const config =
-        options.baseConfig ??
+        options.sessionBaseConfig ??
         (yield* store.load(options.cwd, options.agentDirectory, options.projectTrusted));
-      if (options.publishBaseConfig)
-        yield* Effect.try(() => options.publishBaseConfig?.(config)).pipe(Effect.ignore);
+      yield* Effect.try(() => options.publishSessionBaseConfig?.(config)).pipe(Effect.ignore);
       if (config.diagnostics.length > 0)
         yield* Effect.logWarning(
           `Invalid Subagents configuration fields were ignored or failed closed: ${config.diagnostics.join(", ")}.`,

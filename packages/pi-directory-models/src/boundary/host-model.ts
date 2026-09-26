@@ -94,11 +94,5 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     try: () => pi.setThinkingLevel(preference.thinkingLevel),
     catch: hostError("thinking", "Unable to restore the remembered thinking level."),
   });
-  const effectiveThinking = yield* readThinkingLevel(pi);
-  return makeDirectoryModelPreference(
-    preference.cwd,
-    preference.provider,
-    preference.model,
-    effectiveThinking,
-  );
+  return { ...preference, thinkingLevel: yield* readThinkingLevel(pi) };
 });

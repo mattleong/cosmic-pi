@@ -6,6 +6,7 @@ import * as Queue from "effect/Queue";
 import * as Predicate from "effect/Predicate";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { invokeHostCallback } from "../host-session.ts";
 import {
   duplexProcessError,
   type DuplexProcessChild,
@@ -49,17 +50,6 @@ const writeFailure = (): DuplexProcessError =>
   duplexProcessError("write", "failed", "Unable to write to child process input.");
 const overflowError = (): DuplexProcessError =>
   duplexProcessError("write", "overflow", "Child process input queue exceeded its byte limit.");
-
-const invokeFailureObserver = (
-  observer: (error: DuplexProcessError) => void,
-  error: DuplexProcessError,
-): void => {
-  try {
-    observer(error);
-  } catch {
-    // Native event callbacks cannot propagate observer failures.
-  }
-};
 
 /** One scope owns native ingress, a byte budget, and exactly one stdin writer. */
 export const makeDuplexProcessIo = (
@@ -108,7 +98,7 @@ export const makeDuplexProcessIo = (
       if (inputFailure || closed) return;
       inputFailure = error;
       failPendingWrites(error);
-      invokeFailureObserver(options.onProcessFailure, error);
+      invokeHostCallback(() => options.onProcessFailure(error), undefined);
     };
     const failStdout = (error: DuplexProcessError): void => {
       if (stdoutFailed || closed) return;

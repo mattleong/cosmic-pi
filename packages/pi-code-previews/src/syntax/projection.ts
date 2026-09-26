@@ -21,7 +21,6 @@ export type ShikiStatus = ShikiProjectionStatus &
  * `codeToTokensBase`; all lifecycle and language loading remains owned by the session service.
  */
 export type CodePreviewSyntaxSnapshot = Readonly<{
-  generation: number;
   theme: string | undefined;
   highlighter: ShikiHighlighter | undefined;
   loadedLanguages: readonly string[];

@@ -1,3 +1,5 @@
+import { requiredAt } from "./types";
+
 const ALIGNMENT_SCORE_EPSILON = 1e-9;
 
 type PairScoreAt = (beforeIndex: number, afterIndex: number) => number;
@@ -80,7 +82,5 @@ export function suffixAlignmentScore(
 }
 
 function numericAt(values: ArrayLike<number>, index: number): number {
-  const value = values[index];
-  if (value === undefined) throw new RangeError(`Missing alignment cell ${index}`);
-  return value;
+  return requiredAt(values, index, "alignment cell");
 }

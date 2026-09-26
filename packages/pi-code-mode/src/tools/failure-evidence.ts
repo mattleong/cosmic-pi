@@ -1,10 +1,10 @@
 /** Bounded semantic provenance for the outer diagnostic; never retains its body. */
 import * as Schema from "effect/Schema";
 import { projectBuiltinFailure } from "pi-code-previews";
-import { sanitizeDiagnosticContent } from "pi-cosmic-core";
 import type { CodeModeFailure } from "../boundary/codemode-runtime.ts";
 import { FailureEvidenceSchema } from "./compact-evidence.ts";
 import { decodeOption } from "./format.ts";
+import { cleanDiagnosticText } from "./issue-evidence.ts";
 
 const Builtin = Schema.Literals(["read", "bash", "write", "edit", "grep", "find", "ls"]);
 export const FailurePresentationSchema = Schema.Struct({
@@ -41,23 +41,14 @@ export const projectFailurePresentation = (
       tool,
       evidence: {
         ...projected.failureEvidence,
-        cause: sanitizeDiagnosticContent(projected.failureEvidence.cause, {
-          maximumLength: Number.MAX_SAFE_INTEGER,
-        }),
+        cause: cleanDiagnosticText(projected.failureEvidence.cause),
       },
       notices: projected.notices.map((notice) => ({
         kind: notice.kind,
-        text: sanitizeDiagnosticContent(notice.text, { maximumLength: Number.MAX_SAFE_INTEGER }),
+        text: cleanDiagnosticText(notice.text),
       })),
     });
   } catch {
     return undefined;
   }
 };
-
-export const copyFailurePresentation = (value: FailurePresentation): FailurePresentation =>
-  Object.freeze({
-    ...value,
-    evidence: Object.freeze({ ...value.evidence }),
-    notices: Object.freeze(value.notices.map((notice) => Object.freeze({ ...notice }))),
-  });

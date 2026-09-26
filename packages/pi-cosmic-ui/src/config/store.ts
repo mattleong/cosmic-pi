@@ -1,5 +1,4 @@
 import * as Predicate from "effect/Predicate";
-import { hasObjectRuntimeType } from "pi-cosmic-core";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -9,6 +8,7 @@ import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
   decodeTolerantFields,
+  isJsonObject,
   JsonDocumentStore,
   makeConfigDocumentErrorFactory,
   makeScopedConfigStore,
@@ -19,7 +19,6 @@ import {
 import {
   DEFAULT_CONFIG,
   FooterDensitySchema,
-  MediaPlacementSchema,
   type CosmicUiConfigFile,
   type ResolvedCosmicUiConfig,
 } from "./schema.ts";
@@ -46,18 +45,12 @@ function decodeConfig<ValueInput>(value: ValueInput): CosmicUiConfigFile {
   ).value;
   const footer = decodeTolerantFields(
     root.footer,
-    {
-      enabled: Schema.Boolean,
-      density: FooterDensitySchema,
-      mediaPlacement: MediaPlacementSchema,
-    },
+    { enabled: Schema.Boolean, density: FooterDensitySchema },
     { path: "footer" },
   ).value;
   const order = stringArray(root.footer?.order);
   const hidden = stringArray(root.footer?.hidden);
-  const base = { ...footer };
-  const withOrder = order !== undefined ? { ...base, order } : base;
-  return { footer: hidden !== undefined ? { ...withOrder, hidden } : withOrder };
+  return { footer: { ...footer, ...(order && { order }), ...(hidden && { hidden }) } };
 }
 
 const resolveDocuments = (
@@ -68,13 +61,7 @@ const resolveDocuments = (
   const footer = Object.assign({}, DEFAULT_CONFIG.footer, global?.footer, project?.footer);
   return {
     ...metadata,
-    footer: {
-      enabled: footer.enabled,
-      density: footer.density,
-      order: [...footer.order],
-      hidden: [...footer.hidden],
-      mediaPlacement: footer.mediaPlacement,
-    },
+    footer: { ...footer, order: [...footer.order], hidden: [...footer.hidden] },
   };
 };
 
@@ -135,11 +122,7 @@ const modifyFooterConfig = Effect.fn("pi-cosmic-ui.config.modify-footer")(functi
 
   return yield* store
     .modifyConfig(fresh.configPath, (raw) => {
-      // SAFETY: Configuration decoding validates the persisted value before this typed access.
-      const currentFooter =
-        hasObjectRuntimeType(raw.footer) && raw.footer !== null && !Array.isArray(raw.footer)
-          ? (raw.footer as JsonObject)
-          : {};
+      const currentFooter = isJsonObject(raw.footer) ? raw.footer : {};
       const committed = { ...raw, footer: update(currentFooter, fresh) };
       const next = store.resolveCommittedConfig(fresh, committed, global);
       return {
@@ -167,7 +150,6 @@ export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")
       if (patch.density !== undefined) updated.density = patch.density;
       if (patch.order !== undefined) updated.order = [...patch.order];
       if (patch.hidden !== undefined) updated.hidden = [...patch.hidden];
-      if (patch.mediaPlacement !== undefined) updated.mediaPlacement = patch.mediaPlacement;
       return updated;
     },
     projectTrusted,

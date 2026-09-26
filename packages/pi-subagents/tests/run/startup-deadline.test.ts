@@ -3,10 +3,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { provideBuiltLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { SubagentService } from "../../src/run/service.ts";
-import { fakeChildLayer, localServiceFixture, request } from "./fixtures/service-harness.ts";
+import {
+  fakeChildLayer,
+  localServiceFixture,
+  request,
+  withService,
+} from "./fixtures/service-harness.ts";
 
 describe("local Pi startup deadline", () => {
   it.effect("allows slow initialization without sending the task before readiness", () =>
@@ -16,23 +19,20 @@ describe("local Pi startup deadline", () => {
         initialSendGates: [{ spawnIndex: 0, type: "get_state", gate: ready }],
       });
       const { layer, projections } = localServiceFixture({}, fake);
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         const starting = yield* service.start(request()).pipe(Effect.forkScoped);
-        yield* yieldUntil(
-          () => fake.controls[0]?.commands.some((c) => c.type === "get_state") ?? false,
-        );
+        yield* yieldUntil(() => fake.controls[0]?.sent("get_state") === true);
         yield* TestClock.adjust("20 seconds");
         expect(projections.at(-1)?.runs[0]?.state).toBe("starting");
         expect(fake.controls[0]?.released()).toBe(0);
-        expect(fake.controls[0]?.commands.some((c) => c.type === "prompt")).toBe(false);
+        expect(fake.controls[0]?.sent("prompt")).toBe(false);
         yield* Deferred.succeed(ready, undefined);
         const run = yield* Fiber.join(starting);
         expect(run.state).toBe("running");
-        expect(fake.controls[0]?.commands.some((c) => c.type === "prompt")).toBe(true);
+        expect(fake.controls[0]?.sent("prompt")).toBe(true);
         yield* service.stop(run.id);
         expect(fake.controls[0]?.released()).toBe(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     }),
   );
 
@@ -41,8 +41,7 @@ describe("local Pi startup deadline", () => {
       const release = yield* Deferred.make<void>();
       const fake = fakeChildLayer(Effect.void, { dropInitialState: true });
       const { layer } = localServiceFixture({}, fake);
-      yield* Effect.gen(function* () {
-        const service = yield* SubagentService;
+      yield* withService(layer, function* (service) {
         let settled = false;
         const starting = yield* service.start(request()).pipe(
           Effect.flip,
@@ -53,9 +52,7 @@ describe("local Pi startup deadline", () => {
           ),
           Effect.forkScoped,
         );
-        yield* yieldUntil(
-          () => fake.controls[0]?.commands.some((c) => c.type === "get_state") ?? false,
-        );
+        yield* yieldUntil(() => fake.controls[0]?.sent("get_state") === true);
         const child = fake.controls[0]!;
         child.gateRelease(release);
         // Unrelated replies cannot establish readiness for this request.
@@ -69,30 +66,27 @@ describe("local Pi startup deadline", () => {
           code: "get_state_outcome_uncertain",
         });
         expect(child.released()).toBe(1);
-        expect(child.commands.map((c) => c.type)).toEqual(["get_state"]);
+        expect(child.commandTypes()).toEqual(["get_state"]);
         expect(fake.controls).toHaveLength(1);
-      }).pipe(Effect.scoped, provideBuiltLayer(layer));
+      });
     }),
   );
 
   it.effect("keeps the shorter deadline for ordinary commands after startup", () => {
     const { fake, layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const service = yield* SubagentService;
+    return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "original" }));
       fake.controls[0]!.dropNext("set_session_name");
       const renaming = yield* service
         .rename(run.id, "new name")
         .pipe(Effect.flip, Effect.forkScoped);
-      yield* yieldUntil(
-        () => fake.controls[0]?.commands.some((c) => c.type === "set_session_name") ?? false,
-      );
+      yield* yieldUntil(() => fake.controls[0]?.sent("set_session_name") === true);
       yield* TestClock.adjust("11 seconds");
       expect(yield* Fiber.join(renaming)).toMatchObject({
         _tag: "SubagentProcessError",
         code: "rename_outcome_uncertain",
       });
       expect((yield* service.status(run.id)).name).toBe("original");
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
+    });
   });
 });

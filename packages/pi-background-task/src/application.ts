@@ -9,6 +9,7 @@ import {
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
@@ -59,13 +60,10 @@ export function registerBackgroundTaskApplication(
     { readonly showFooterStatus: boolean; readonly scheduler: CodePreviewSchedulerServiceContract }
   >({
     makeRuntime: (input) =>
-      makePiManagedRuntime(
-        pi,
-        makeBackgroundTaskLayer(input, {
-          publish: bridge.publish,
-        }),
-        { agentDirectory: getAgentDir, packageName: "pi-background-task" },
-      ),
+      makePiManagedRuntime(pi, makeBackgroundTaskLayer(input, bridge.publish), {
+        agentDirectory: getAgentDir,
+        packageName: "pi-background-task",
+      }),
     startup: (input) =>
       Effect.gen(function* () {
         // The slot has already deactivated any prior runtime, so no tool call can target the
@@ -92,13 +90,8 @@ export function registerBackgroundTaskApplication(
         sessionId: backgroundTaskCodeModeSessionId(ctx),
         sessionCwd: cwd,
         tokenCurrent: () => slot.isCurrent(token),
-        toolActive: () => {
-          try {
-            return pi.getActiveTools().includes("background_task");
-          } catch {
-            return false;
-          }
-        },
+        toolActive: () =>
+          invokeHostCallback(() => pi.getActiveTools().includes("background_task"), false),
         run,
       });
       bridge.setFooterEnabled(prepared.showFooterStatus);

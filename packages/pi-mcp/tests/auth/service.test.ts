@@ -6,74 +6,47 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe, expect } from "vitest";
+import type { McpGrant, McpRegistrationReceipt } from "../../src/auth/credentials.ts";
 import {
-  decodeGrant,
-  encodeGrant,
-  type McpGrant,
-  type McpRegistrationReceipt,
-} from "../../src/auth/credentials.ts";
+  decodeCredentialRecord,
+  encodeCredentialRecord,
+} from "../../src/auth/credential-record.ts";
 import { getAuthChallenge, setAuthChallenge } from "../../src/auth/challenge.ts";
-import type { McpLoginOptions, McpLoginUi } from "../../src/auth/model.ts";
-import { transactionStore } from "../fixtures/credential-store.ts";
+import type { McpAuthContract, McpLoginOptions } from "../../src/auth/model.ts";
+import { transactionStore, type FlatCredentialStore } from "../fixtures/credential-store.ts";
 import { makeMcpAuth, makeMcpAuthWithAuthority } from "../../src/auth/service.ts";
 import type { McpAuthLiveAuthority } from "../../src/auth/authority.ts";
-import {
-  McpCredentialStore,
-  type McpCredentialStoreContract,
-} from "../../src/boundary/credential-store.ts";
+import { McpCredentialStore } from "../../src/boundary/credential-store.ts";
 import { McpSdkAuth, type McpSdkAuthContract } from "../../src/boundary/sdk-auth.ts";
-import { boundaryError } from "../../src/client/errors.ts";
-import { makeKeychainStore, type KeychainEntryFactory } from "../../src/boundary/keychain.ts";
-import type { McpEffectiveServer } from "../../src/config/model.ts";
+import { boundaryError, type McpBoundaryError } from "../../src/client/errors.ts";
+import { makeKeychainStore } from "../../src/boundary/keychain.ts";
+import type { McpEffectiveServer, McpHttpAuth } from "../../src/config/model.ts";
+import {
+  manualUi as ui,
+  oauthServer,
+  preRegistered,
+  testGrant,
+  testRegistration,
+} from "../fixtures/auth.ts";
+import { heldKeychain } from "../fixtures/keychain.ts";
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-const server = (digit: string): McpEffectiveServer => ({
-  id: "owned",
-  identity: digit.repeat(64),
-  enabled: true,
-  scope: "global",
-  directory: "/fixture",
-  definition: {
-    transport: "http",
-    url: "https://resource.example/mcp",
-    headers: {},
-    denyTools: [],
-    auth: { type: "oauth", registration: "pre-registered", clientId: "public", scopes: [] },
-  },
-});
-const grant = (identity: string, expiresAt = 1): McpGrant => ({
-  version: 1,
-  identity,
-  issuer: "https://issuer.example",
-  resource: "https://resource.example/mcp",
-  clientId: "public",
-  registration: "pre-registered",
-  redirectUri: "http://127.0.0.1:9000/callback",
-  discovery: {},
-  resourceMetadata: {},
-  clientInformation: {},
-  tokens: { access_token: "private-token" },
-  receivedAt: 0,
-  expiresAt,
-});
-const ui: McpLoginUi = {
-  mode: "manual",
-  openBrowser: () => Effect.void,
-  readCallback: () => Effect.succeed(undefined),
-};
+const server = (digit: string, auth?: McpHttpAuth, url?: string) =>
+  oauthServer(digit.repeat(64), auth, url);
+const grant = (identity: string, expiresAt = 1) =>
+  testGrant(identity, {
+    registration: "pre-registered",
+    clientInformation: {},
+    tokens: { access_token: "private-token" },
+    expiresAt,
+  });
 const sdk: McpSdkAuthContract = {
   login: (server) => Effect.succeed(grant(server.identity)),
   refresh: (_server, value) => Effect.succeed(value),
   token: () => Effect.succeed("private-token"),
 };
 const make = (
-  store: Omit<
-    McpCredentialStoreContract,
-    "mutation" | "readRegistration" | "writeRegistration" | "withTransaction"
-  > &
-    Partial<
-      Pick<McpCredentialStoreContract, "mutation" | "readRegistration" | "writeRegistration">
-    >,
+  store: Partial<FlatCredentialStore> = {},
   auth: McpSdkAuthContract = sdk,
   live?: McpAuthLiveAuthority,
 ) =>
@@ -82,6 +55,9 @@ const make = (
       McpCredentialStore,
       transactionStore({
         mutation: () => Effect.succeed("idle"),
+        read: () => Effect.succeed(undefined),
+        write: () => Effect.void,
+        remove: () => Effect.void,
         readRegistration: () => Effect.succeed(undefined),
         writeRegistration: () => Effect.void,
         ...store,
@@ -89,25 +65,52 @@ const make = (
     ),
     Effect.provideService(McpSdkAuth, auth),
   );
+/** In-memory grant storage; logout clears it. */
+const memory = (initial?: McpGrant) => {
+  let value = initial;
+  return {
+    get value() {
+      return value;
+    },
+    read: () => Effect.sync(() => value),
+    write: (_identity: string, next: McpGrant) =>
+      Effect.sync(() => {
+        value = next;
+      }),
+    remove: () =>
+      Effect.sync(() => {
+        value = undefined;
+      }),
+  };
+};
+/** A fenced credential stays blocked on repeat, after revoke, and for a replacement owner. */
+const expectFenced = <R>(
+  auth: McpAuthContract,
+  replacement: Effect.Effect<McpAuthContract, never, R>,
+  current: McpEffectiveServer,
+  reason: string,
+  inspect: (blocked: McpBoundaryError) => void = () => undefined,
+) =>
+  Effect.gen(function* () {
+    for (const check of ["first", "repeat", "revoked", "replacement"]) {
+      if (check === "revoked") yield* auth.revoke;
+      const owner = check === "replacement" ? yield* replacement : auth;
+      const blocked = yield* owner.access(current).pipe(Effect.flip);
+      expect(blocked).toMatchObject({ kind: "auth-required", reason, outcome: "not-sent" });
+      expect(yield* owner.status(current)).toEqual({ state: "required" });
+      inspect(blocked);
+    }
+  });
 
 describe("user-only authentication ownership", () => {
   it.effect("rejects remote plaintext bearer destinations before environment lookup", () =>
     Effect.gen(function* () {
-      const current: McpEffectiveServer = {
-        ...server("plaintext"),
-        definition: {
-          transport: "http",
-          url: "http://remote.example/mcp",
-          headers: {},
-          denyTools: [],
-          auth: { type: "env", env: "MISSING_PLAINTEXT_TOKEN" },
-        },
-      };
-      const auth = yield* make({
-        read: () => Effect.die("Unexpected storage lookup"),
-        write: () => Effect.void,
-        remove: () => Effect.void,
-      });
+      const current = server(
+        "plaintext",
+        { type: "env", env: "MISSING_PLAINTEXT_TOKEN" },
+        "http://remote.example/mcp",
+      );
+      const auth = yield* make({ read: () => Effect.die("Unexpected storage lookup") });
       expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({ kind: "denied" });
     }),
   );
@@ -137,7 +140,6 @@ describe("user-only authentication ownership", () => {
                   Effect.as(grant(current.identity)),
                 ),
               write: () => forbidden,
-              remove: () => Effect.void,
             },
             { ...sdk, refresh: () => forbidden, token: () => forbidden },
             live,
@@ -159,7 +161,6 @@ describe("user-only authentication ownership", () => {
         {
           read: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
           write: () => Effect.die("Revoked write"),
-          remove: () => Effect.void,
         },
         sdk,
         { isTrusted: () => trusted, check: () => Effect.void },
@@ -175,16 +176,7 @@ describe("user-only authentication ownership", () => {
   for (const activation of ["challenge", "user-check", "login"] as const)
     it.effect(`keeps implicit OAuth anonymous until ${activation}, then uses stored grants`, () =>
       Effect.gen(function* () {
-        const current = server(`implicit-${activation}`);
-        if (current.definition?.transport !== "http" || current.definition.auth.type !== "oauth")
-          return yield* Effect.die("Missing OAuth fixture.");
-        const implicit = {
-          ...current,
-          definition: {
-            ...current.definition,
-            auth: { ...current.definition.auth, implicit: true as const },
-          },
-        };
+        const implicit = server(`implicit-${activation}`, { ...preRegistered, implicit: true });
         let activated = false;
         let saved: McpGrant | undefined;
         const auth = yield* make({
@@ -194,7 +186,6 @@ describe("user-only authentication ownership", () => {
             Effect.sync(() => {
               saved = value;
             }),
-          remove: () => Effect.void,
         });
         expect(yield* auth.access(implicit)).toBeUndefined();
         expect(yield* auth.access(implicit)).toBeUndefined();
@@ -202,7 +193,7 @@ describe("user-only authentication ownership", () => {
         activated = true;
         if (activation === "login") {
           const receipt = yield* auth.login(implicit, ui);
-          yield* auth.completeLogin(implicit, receipt);
+          yield* auth.finishLogin(implicit, receipt, true);
         } else {
           if (activation === "challenge") yield* auth.reject(implicit);
           expect(
@@ -215,7 +206,7 @@ describe("user-only authentication ownership", () => {
             outcome: "not-sent",
           });
           expect(yield* auth.status(implicit)).toEqual({ state: "required" });
-          saved = grant(current.identity, Number.MAX_SAFE_INTEGER);
+          saved = grant(implicit.identity, Number.MAX_SAFE_INTEGER);
         }
         expect(yield* auth.access(implicit)).toBe("private-token");
         expect(yield* auth.status(implicit)).toEqual({ state: "ready" });
@@ -235,7 +226,7 @@ describe("user-only authentication ownership", () => {
       }),
     );
   it.effect(
-    "explains non-OAuth login and missing environment credentials without starting sign-in",
+    "explains non-OAuth login without starting sign-in or invalidating checked credentials",
     () =>
       Effect.gen(function* () {
         const forbidden = Effect.die("non-OAuth recovery touched OAuth or storage");
@@ -243,65 +234,28 @@ describe("user-only authentication ownership", () => {
           { read: () => forbidden, write: () => forbidden, remove: () => forbidden },
           { login: () => forbidden, refresh: () => forbidden, token: () => forbidden },
         );
-        for (const mode of [
-          { type: "none" as const },
-          { type: "env" as const, env: "PRIVATE_MISSING_ENV" },
-        ]) {
-          const current: McpEffectiveServer = {
-            ...server("diagnostic"),
-            definition: {
-              transport: "http",
-              url: "https://resource.example/mcp",
-              headers: {},
-              denyTools: [],
-              auth: mode,
-            },
-          };
-          expect(yield* auth.login(current, ui).pipe(Effect.flip)).toMatchObject({
-            kind: mode.type === "none" ? "auth-required" : "unsupported",
-            outcome: "not-sent",
-            reason: mode.type === "none" ? "auth-not-configured" : "auth-env-sign-in-unsupported",
-          });
-          if (mode.type === "none") expect(yield* auth.access(current)).toBeUndefined();
-          else
+        for (const { name, mode, token } of [
+          { name: "none", mode: { type: "none" }, token: undefined },
+          { name: "env", mode: { type: "env", env: "PRIVATE_ENV" }, token: "private-token" },
+          { name: "missing", mode: { type: "env", env: "PRIVATE_MISSING_ENV" }, token: null },
+        ] as const) {
+          const current = server(name, mode);
+          if (token === null)
             expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
               kind: "auth-required",
               outcome: "not-sent",
               reason: "auth-env-required",
             });
+          else expect(yield* auth.access(current)).toBe(token);
+          const before = yield* auth.status(current);
+          if (token) expect(before.state).toBe("ready");
+          expect(yield* auth.login(current, ui).pipe(Effect.flip)).toMatchObject({
+            kind: mode.type === "none" ? "auth-required" : "unsupported",
+            outcome: "not-sent",
+            reason: mode.type === "none" ? "auth-not-configured" : "auth-env-sign-in-unsupported",
+          });
+          expect(yield* auth.status(current)).toEqual(before);
         }
-      }).pipe(
-        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({})),
-      ),
-  );
-  it.effect(
-    "unsupported browser sign-in does not invalidate a checked environment credential",
-    () =>
-      Effect.gen(function* () {
-        const forbidden = Effect.die("environment sign-in touched OAuth or storage");
-        const auth = yield* make(
-          { read: () => forbidden, write: () => forbidden, remove: () => forbidden },
-          { login: () => forbidden, refresh: () => forbidden, token: () => forbidden },
-        );
-        const current: McpEffectiveServer = {
-          ...server("env-login"),
-          definition: {
-            transport: "http",
-            url: "https://resource.example/mcp",
-            headers: {},
-            denyTools: [],
-            auth: { type: "env", env: "PRIVATE_ENV" },
-          },
-        };
-        expect(yield* auth.access(current)).toBe("private-token");
-        const before = yield* auth.status(current);
-        expect(before.state).toBe("ready");
-        expect(yield* auth.login(current, ui).pipe(Effect.flip)).toMatchObject({
-          kind: "unsupported",
-          outcome: "not-sent",
-          reason: "auth-env-sign-in-unsupported",
-        });
-        expect(yield* auth.status(current)).toEqual(before);
       }).pipe(
         Effect.provideService(
           ConfigProvider.ConfigProvider,
@@ -318,16 +272,11 @@ describe("user-only authentication ownership", () => {
         remove: () => forbidden,
       });
       expect(yield* auth.status(server("1"))).toEqual({ state: "unchecked" });
-      const env: McpEffectiveServer = {
-        ...server("1"),
-        definition: {
-          transport: "http",
-          url: "https://resource.example",
-          headers: {},
-          denyTools: [],
-          auth: { type: "env", env: "PI_MCP_MUST_NOT_READ" },
-        },
-      };
+      const env = server(
+        "1",
+        { type: "env", env: "PI_MCP_MUST_NOT_READ" },
+        "https://resource.example",
+      );
       expect(yield* auth.status(env)).toEqual({ state: "unchecked" });
     }),
   );
@@ -341,30 +290,21 @@ describe("user-only authentication ownership", () => {
           write: () => forbidden,
           remove: () => forbidden,
         });
-        for (const definition of [
+        const url = "https://resource.example";
+        for (const current of [
+          server("9", { type: "env", env: "PI_MCP_ENV_GRANT" }, url),
+          server("9", { type: "none" }, url),
           {
-            transport: "http" as const,
-            url: "https://resource.example",
-            headers: {},
-            denyTools: [],
-            auth: { type: "env" as const, env: "PI_MCP_ENV_GRANT" },
-          },
-          {
-            transport: "http" as const,
-            url: "https://resource.example",
-            headers: {},
-            denyTools: [],
-            auth: { type: "none" as const },
-          },
-          {
-            transport: "stdio" as const,
-            command: "owned-fixture",
-            args: [],
-            environment: {},
-            denyTools: [],
+            ...server("9"),
+            definition: {
+              transport: "stdio" as const,
+              command: "owned-fixture",
+              args: [],
+              environment: {},
+              denyTools: [],
+            },
           },
         ]) {
-          const current = { ...server("9"), definition };
           const token = yield* auth.access(current);
           const status = yield* auth.status(current);
           expect(yield* auth.logout(current).pipe(Effect.flip)).toMatchObject({
@@ -387,24 +327,10 @@ describe("user-only authentication ownership", () => {
       Effect.gen(function* () {
         const currentServer = server("2");
         const now = yield* Clock.currentTimeMillis;
-        let stored: McpGrant | undefined = grant(currentServer.identity);
+        const store = memory(grant(currentServer.identity));
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let refreshes = 0;
-        const store = transactionStore({
-          mutation: () => Effect.succeed("idle"),
-          readRegistration: () => Effect.succeed(undefined),
-          writeRegistration: () => Effect.void,
-          read: () => Effect.sync(() => stored),
-          write: (_identity, value) =>
-            Effect.sync(() => {
-              stored = value;
-            }),
-          remove: () =>
-            Effect.sync(() => {
-              stored = undefined;
-            }),
-        });
         const auth = yield* make(store, {
           ...sdk,
           refresh: (_server, value) =>
@@ -429,7 +355,7 @@ describe("user-only authentication ownership", () => {
         const values = yield* Effect.all(calls.map((fiber) => Fiber.join(fiber)));
         expect(values).toEqual(Array(8).fill("rotated-token"));
         expect(refreshes).toBe(1);
-        expect(stored?.tokens).toEqual({ access_token: "rotated-token" });
+        expect(store.value?.tokens).toEqual({ access_token: "rotated-token" });
       }),
   );
   it.effect("does not publish a refreshed token when durable storage fails", () =>
@@ -438,7 +364,6 @@ describe("user-only authentication ownership", () => {
       const auth = yield* make({
         read: () => Effect.succeed(grant(currentServer.identity)),
         write: () => Effect.fail(boundaryError("unavailable", "not-sent", "Store unavailable.")),
-        remove: () => Effect.void,
       });
       expect((yield* auth.access(currentServer).pipe(Effect.result))._tag).toBe("Failure");
       expect(yield* auth.status(currentServer)).toEqual({ state: "required" });
@@ -453,7 +378,6 @@ describe("user-only authentication ownership", () => {
         let persisted = false;
         const auth = yield* make(
           {
-            read: () => Effect.succeed(undefined),
             write: () =>
               Effect.sync(() => {
                 persisted = true;
@@ -479,44 +403,34 @@ describe("user-only authentication ownership", () => {
       const entered = yield* Deferred.make<void>();
       let finish: (value: McpGrant) => void = () => undefined;
       let first = true;
-      let stored: McpGrant | undefined;
-      const auth = yield* make(
-        {
-          read: () => Effect.sync(() => stored),
-          write: (_identity, value) =>
-            Effect.sync(() => {
-              stored = value;
-            }),
-          remove: () => Effect.void,
-        },
-        {
-          ...sdk,
-          login: () =>
-            Effect.suspend(() => {
-              if (!first) return Effect.succeed(grant(currentServer.identity));
-              first = false;
-              return Effect.tryPromise({
-                try: () => {
-                  // Native SDK settlement deliberately ignores cancellation for this lifecycle test.
-                  const completion = Promise.withResolvers<McpGrant>();
-                  finish = completion.resolve;
-                  Deferred.doneUnsafe(entered, Effect.void);
-                  return completion.promise;
-                },
-                catch: () => boundaryError("unavailable", "not-sent", "Native failure."),
-              });
-            }),
-        },
-      );
+      const store = memory();
+      const auth = yield* make(store, {
+        ...sdk,
+        login: () =>
+          Effect.suspend(() => {
+            if (!first) return Effect.succeed(grant(currentServer.identity));
+            first = false;
+            return Effect.tryPromise({
+              try: () => {
+                // Native SDK settlement deliberately ignores cancellation for this lifecycle test.
+                const completion = Promise.withResolvers<McpGrant>();
+                finish = completion.resolve;
+                Deferred.doneUnsafe(entered, Effect.void);
+                return completion.promise;
+              },
+              catch: () => boundaryError("unavailable", "not-sent", "Native failure."),
+            });
+          }),
+      });
       const login = yield* auth.login(currentServer, ui).pipe(Effect.result, Effect.forkScoped);
       yield* Deferred.await(entered);
       yield* auth.revoke;
       expect((yield* Fiber.join(login))._tag).toBe("Failure");
-      expect(stored).toBeUndefined();
+      expect(store.value).toBeUndefined();
       expect(yield* auth.login(currentServer, ui)).toEqual({ state: "ready" });
       finish(grant("f".repeat(64)));
       yield* Effect.yieldNow;
-      expect(stored?.identity).toBe(currentServer.identity);
+      expect(store.value?.identity).toBe(currentServer.identity);
     }),
   );
   it.effect(
@@ -524,52 +438,35 @@ describe("user-only authentication ownership", () => {
     () =>
       Effect.gen(function* () {
         const currentServer = server("7");
-        const entered = yield* Deferred.make<void>();
-        let release: () => void = () => undefined;
-        let password: string | undefined;
-        let deleted = false;
-        const factory: KeychainEntryFactory = () =>
-          Promise.resolve({
-            getPassword: () => Promise.resolve(password),
-            setPassword: (value) => {
-              const completion = Promise.withResolvers<void>();
-              release = () => {
-                password = value;
-                completion.resolve();
-              };
-              Deferred.doneUnsafe(entered, Effect.void);
-              return completion.promise;
-            },
-            deleteCredential: () => {
-              deleted = true;
-              password = undefined;
-              return Promise.resolve(true);
-            },
-          });
-        const native = yield* makeKeychainStore({ entryFactory: factory });
+        const held = yield* heldKeychain();
+        const native = yield* makeKeychainStore({ entryFactory: held.factory });
         const auth = yield* make({
           read: (identity) =>
             native
               .read(identity)
               .pipe(
                 Effect.flatMap((value) =>
-                  value === undefined ? Effect.succeed(undefined) : decodeGrant(value),
+                  value === undefined
+                    ? Effect.succeed(undefined)
+                    : Effect.map(decodeCredentialRecord(value), (record) => record.grant),
                 ),
               ),
-          write: (identity, value) =>
-            encodeGrant(value).pipe(Effect.flatMap((encoded) => native.write(identity, encoded))),
+          write: (identity, grant) =>
+            encodeCredentialRecord({ version: 2, grant }).pipe(
+              Effect.flatMap((encoded) => native.write(identity, encoded)),
+            ),
           remove: native.remove,
           mutation: native.mutation,
         });
         const login = yield* auth.login(currentServer, ui).pipe(Effect.result, Effect.forkScoped);
-        yield* Deferred.await(entered);
+        yield* Deferred.await(held.entered);
         const logout = yield* auth.logout(currentServer).pipe(Effect.forkScoped);
         expect((yield* Fiber.join(login))._tag).toBe("Failure");
-        expect(deleted).toBe(false);
-        release();
+        expect(held.deleted()).toBe(false);
+        held.release();
         yield* Fiber.join(logout);
-        expect(password).toBeUndefined();
-        expect(deleted).toBe(true);
+        expect(held.value()).toBeUndefined();
+        expect(held.deleted()).toBe(true);
         expect((yield* auth.access(currentServer).pipe(Effect.result))._tag).toBe("Failure");
       }),
   );
@@ -580,8 +477,6 @@ describe("user-only authentication ownership", () => {
         {
           read: () =>
             Effect.fail(boundaryError("unavailable", "not-sent", "Keychain unavailable.")),
-          write: () => Effect.void,
-          remove: () => Effect.void,
         },
         {
           ...sdk,
@@ -599,29 +494,25 @@ describe("user-only authentication ownership", () => {
   it.effect("publishes ready only from the exact still-current outer login receipt", () =>
     Effect.gen(function* () {
       const current = server("a");
-      const auth = yield* make({
-        read: () => Effect.succeed(undefined),
-        write: () => Effect.void,
-        remove: () => Effect.void,
-      });
+      const auth = yield* make();
       const first = yield* auth.login(current, ui);
       expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
-      yield* auth.completeLogin(current, { state: "ready" });
+      yield* auth.finishLogin(current, { state: "ready" }, true);
       expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
-      yield* auth.completeLogin(current, first);
+      yield* auth.finishLogin(current, first, true);
       expect(yield* auth.status(current)).toEqual({ state: "ready" });
       const second = yield* auth.login(current, ui);
-      yield* auth.finalizationFailed(current, second);
+      yield* auth.finishLogin(current, second, false);
       expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
-      yield* auth.completeLogin(current, second);
+      yield* auth.finishLogin(current, second, true);
       expect(yield* auth.status(current)).toEqual({ state: "unavailable" });
       const third = yield* auth.login(current, ui);
       yield* auth.reject(current);
-      yield* auth.completeLogin(current, third);
+      yield* auth.finishLogin(current, third, true);
       expect(yield* auth.status(current)).toEqual({ state: "required" });
       const fourth = yield* auth.login(current, ui);
       yield* auth.revoke;
-      yield* auth.completeLogin(current, fourth);
+      yield* auth.finishLogin(current, fourth, true);
       expect(yield* auth.status(current)).toEqual({ state: "unchecked" });
     }),
   );
@@ -632,11 +523,7 @@ describe("user-only authentication ownership", () => {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const auth = yield* make(
-        {
-          read: () => Effect.succeed(grant(current.identity)),
-          write: () => Effect.void,
-          remove: () => Effect.void,
-        },
+        { read: () => Effect.succeed(grant(current.identity)) },
         {
           ...sdk,
           token: () =>
@@ -667,8 +554,6 @@ describe("user-only authentication ownership", () => {
             reads++;
             return undefined;
           }),
-        write: () => Effect.void,
-        remove: () => Effect.void,
         mutation: () => Effect.succeed("pending"),
       });
       expect(yield* auth.status(server("d"))).toEqual({ state: "unavailable" });
@@ -706,7 +591,6 @@ describe("user-only authentication ownership", () => {
               if (failure === "replacement-save-after-write" && !value.quarantine)
                 return yield* failed();
             }),
-          remove: () => Effect.void,
         };
         const boundary: McpSdkAuthContract = {
           ...sdk,
@@ -743,16 +627,7 @@ describe("user-only authentication ownership", () => {
           expect(stored.tokens).toEqual({ access_token: "replacement" });
         expect(refreshes).toBe(failure === "marker-save" ? 0 : 1);
         const before = { refreshes, writes };
-        for (const check of ["first", "repeat", "revoked", "replacement"]) {
-          if (check === "revoked") yield* auth.revoke;
-          const owner = check === "replacement" ? yield* make(storage, boundary) : auth;
-          expect(yield* owner.access(current).pipe(Effect.flip)).toMatchObject({
-            kind: "auth-required",
-            reason: "oauth-refresh-unresolved",
-            outcome: "not-sent",
-          });
-          expect(yield* owner.status(current)).toEqual({ state: "required" });
-        }
+        yield* expectFenced(auth, make(storage, boundary), current, "oauth-refresh-unresolved");
         expect({ refreshes, writes }).toEqual(before);
       }),
     );
@@ -765,76 +640,53 @@ describe("user-only authentication ownership", () => {
         ...grant(current.identity, Number.MAX_SAFE_INTEGER),
         quarantine: "refresh",
       };
-      const storage = {
-        read: () => Effect.succeed(stored),
-        write: () => forbidden,
-        remove: () => Effect.void,
-      };
+      const storage = { read: () => Effect.succeed(stored), write: () => forbidden };
       const boundary = { ...sdk, token: () => forbidden, refresh: () => forbidden };
       const auth = yield* make(storage, boundary);
       expect(yield* auth.status(current)).toEqual({ state: "unchecked" });
-      for (const check of ["first", "repeat", "revoked", "replacement"]) {
-        if (check === "revoked") yield* auth.revoke;
-        const owner = check === "replacement" ? yield* make(storage, boundary) : auth;
-        expect(yield* owner.access(current).pipe(Effect.flip)).toMatchObject({
-          kind: "auth-required",
-          reason: "oauth-refresh-unresolved",
-          outcome: "not-sent",
-        });
-        expect(yield* owner.status(current)).toEqual({ state: "required" });
-      }
+      yield* expectFenced(auth, make(storage, boundary), current, "oauth-refresh-unresolved");
     }),
   );
 
   it.effect("ignored native refresh cancellation cannot commit after a replacement login", () =>
     Effect.gen(function* () {
       const current = server("late-refresh");
-      let stored = grant(current.identity);
+      const store = memory(grant(current.identity));
       let finish: (value: McpGrant) => void = () => undefined;
       const entered = yield* Deferred.make<void>();
       const fresh = {
         ...grant(current.identity, Number.MAX_SAFE_INTEGER),
         tokens: { access_token: "explicit-login" },
       };
-      const auth = yield* make(
-        {
-          read: () => Effect.sync(() => stored),
-          write: (_identity, value) =>
-            Effect.sync(() => {
-              stored = value;
-            }),
-          remove: () => Effect.void,
-        },
-        {
-          ...sdk,
-          login: () => Effect.succeed(fresh),
-          refresh: () =>
-            Effect.tryPromise({
-              try: () => {
-                const pending = Promise.withResolvers<McpGrant>();
-                finish = pending.resolve;
-                Deferred.doneUnsafe(entered, Effect.void);
-                return pending.promise;
-              },
-              catch: () => boundaryError("unavailable", "not-sent", "Refresh failed."),
-            }),
-        },
-      );
+      const auth = yield* make(store, {
+        ...sdk,
+        login: () => Effect.succeed(fresh),
+        refresh: () =>
+          Effect.tryPromise({
+            try: () => {
+              const pending = Promise.withResolvers<McpGrant>();
+              finish = pending.resolve;
+              Deferred.doneUnsafe(entered, Effect.void);
+              return pending.promise;
+            },
+            catch: () => boundaryError("unavailable", "not-sent", "Refresh failed."),
+          }),
+      });
       const attempt = yield* auth.access(current).pipe(Effect.result, Effect.forkScoped);
       yield* Deferred.await(entered);
       yield* auth.revoke;
       expect((yield* Fiber.join(attempt))._tag).toBe("Failure");
-      expect(stored.quarantine).toBe("refresh");
+      expect(store.value?.quarantine).toBe("refresh");
       expect(yield* auth.access(current).pipe(Effect.flip)).toMatchObject({
         kind: "auth-required",
         reason: "oauth-refresh-unresolved",
         outcome: "not-sent",
       });
       const receipt = yield* auth.login(current, ui);
-      yield* auth.completeLogin(current, receipt);
+      yield* auth.finishLogin(current, receipt, true);
       finish({ ...fresh, tokens: { access_token: "late-token" } });
       yield* Effect.yieldNow;
-      expect(stored).toEqual(fresh);
+      expect(store.value).toEqual(fresh);
       expect(yield* auth.status(current)).toEqual({ state: "ready" });
     }),
   );
@@ -859,7 +711,6 @@ describe("user-only authentication ownership", () => {
                   stored = value;
                 }),
               ),
-            remove: () => Effect.void,
           },
           {
             ...sdk,
@@ -901,7 +752,6 @@ describe("user-only authentication ownership", () => {
                 Effect.sync(() => {
                   stored = value;
                 }),
-              remove: () => Effect.void,
             };
             const auth = yield* make(storage, {
               ...sdk,
@@ -919,25 +769,22 @@ describe("user-only authentication ownership", () => {
             expect(yield* auth.access(current)).toBe("private-token");
             yield* auth.reject(current, { credentialUsed: true, error: rejection });
             const before = reads;
-            for (const check of ["first", "repeat", "revoked", "replacement"]) {
-              if (check === "revoked") yield* auth.revoke;
-              const owner = check === "replacement" ? yield* make(storage) : auth;
-              const blocked = yield* owner.access(current).pipe(Effect.flip);
-              expect(blocked).toMatchObject({
-                kind: "auth-required",
-                reason: rejectionReason ?? "oauth-token-rejected",
-                outcome: "not-sent",
-              });
-              expect(getAuthChallenge(blocked)).toBeUndefined();
-              expect(serialize(blocked)).not.toContain("PRIVATE_");
-              expect(yield* owner.status(current)).toEqual({ state: "required" });
-              expect(reads).toBe(before);
-            }
+            yield* expectFenced(
+              auth,
+              make(storage),
+              current,
+              rejectionReason ?? "oauth-token-rejected",
+              (blocked) => {
+                expect(getAuthChallenge(blocked)).toBeUndefined();
+                expect(serialize(blocked)).not.toContain("PRIVATE_");
+                expect(reads).toBe(before);
+              },
+            );
             expect(serialize(rejection)).toBe(original);
             expect(rejection.outcome).toBe("unknown");
             expect(getAuthChallenge(rejection)).toEqual(challenge);
             const receipt = yield* auth.login(current, ui);
-            yield* auth.completeLogin(current, receipt);
+            yield* auth.finishLogin(current, receipt, true);
             expect(yield* auth.access(current)).toBe("private-token");
             expect(yield* auth.status(current)).toEqual({ state: "ready" });
             yield* auth.logout(current);
@@ -963,11 +810,7 @@ describe("user-only authentication ownership", () => {
         const seen: Array<McpLoginOptions | undefined> = [];
         let fail = true;
         const auth = yield* make(
-          {
-            read: () => Effect.succeed(undefined),
-            write: () => Effect.void,
-            remove: () => Effect.void,
-          },
+          {},
           {
             ...sdk,
             login: (server, _ui, options) =>
@@ -1006,34 +849,23 @@ describe("user-only authentication ownership", () => {
       Effect.gen(function* () {
         const current = server("checkpoint-cancel");
         const previous = grant(current.identity, Number.MAX_SAFE_INTEGER);
-        let stored = previous;
+        const store = memory(previous);
         let registration: McpRegistrationReceipt | undefined;
         let callback: McpLoginOptions["saveRegistration"];
-        const receipt: McpRegistrationReceipt = {
-          identity: current.identity,
-          issuer: previous.issuer,
-          resource: previous.resource,
-          registration: "dynamic",
-          redirectUri: previous.redirectUri,
+        const receipt = testRegistration(previous, {
           clientInformation: { client_id: "new-client" },
-          scopes: ["read"],
-        };
+        });
         let checkpoints = 0;
         let credentialsSaved = false;
         const auth = yield* make(
           {
-            read: () => Effect.sync(() => stored),
+            ...store,
             readRegistration: () => Effect.sync(() => registration),
             writeRegistration: (_identity, value) =>
               Effect.sync(() => {
                 registration = structuredClone(value);
                 checkpoints++;
               }),
-            write: (_identity, value) =>
-              Effect.sync(() => {
-                stored = value;
-              }),
-            remove: () => Effect.void,
           },
           {
             ...sdk,
@@ -1057,7 +889,7 @@ describe("user-only authentication ownership", () => {
               }),
           })
           .pipe(Effect.result);
-        expect(stored).toEqual(previous);
+        expect(store.value).toEqual(previous);
         expect(registration).toEqual(receipt);
         expect(credentialsSaved).toBe(false);
         expect(yield* auth.access(current)).toBe("private-token");

@@ -7,6 +7,7 @@ import {
   type ProfileId,
 } from "../profiles/model.ts";
 import {
+  loadProfileRouteDraft,
   profileWorkspaceScope,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
@@ -14,10 +15,7 @@ import {
 } from "./profile-route-editor.ts";
 import type { ProfileWorkspaceOptions } from "./profile-workspace.ts";
 import type { makeProfileModelPickerPage } from "./ui/model-picker.ts";
-import {
-  targetProfileRouteDraft,
-  type ProfileWorkspaceField,
-} from "./ui/profile-workspace-model.ts";
+import type { ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
 import { profileWorkspaceRows } from "./ui/profile-workspace-rows.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { isWorkspaceNavigationKey } from "./ui/profile-workspace-keys.ts";
@@ -89,8 +87,7 @@ export abstract class ProfileWorkspaceState {
     }
     this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? PROFILE_IDS[0]));
     this.candidateIndex = options.initialCandidateIndex ?? 0;
-    this.pane =
-      options.initialFocus === "profiles" || !options.initialFocus ? "profiles" : "fields";
+    this.pane = options.initialFocus ?? "profiles";
     this.advancedExpanded = options.initialAdvancedExpanded ?? false;
     this.reconcile();
     this.selectField(options.initialField ?? "model");
@@ -144,7 +141,7 @@ export abstract class ProfileWorkspaceState {
     const field = this.rows()[this.fieldIndex]?.field ?? "model";
     const previous = this.draft();
     const selected = previous.candidates[this.candidateIndex];
-    const next = targetProfileRouteDraft(inspection, this.options.target, this.profile());
+    const next = loadProfileRouteDraft(inspection, this.options.target, this.profile());
     this.remapSelection(previous, next);
     const moved = selected
       ? next.candidates.findIndex((candidate) => sameProfileCandidate(candidate, selected))
@@ -169,7 +166,7 @@ export abstract class ProfileWorkspaceState {
   protected draft(): ProfileRouteDraft {
     if (this.optimisticDraft && this.optimisticProfile === this.profile())
       return this.optimisticDraft;
-    return targetProfileRouteDraft(this.inspection, this.options.target, this.profile());
+    return loadProfileRouteDraft(this.inspection, this.options.target, this.profile());
   }
   protected selection(): Selection {
     let selection = this.selections.get(this.profile());
@@ -295,7 +292,6 @@ export abstract class ProfileWorkspaceState {
   protected abstract openModelPicker(
     candidate: ProfileCandidate,
     preferAdvertisedDefault?: boolean,
-    description?: string,
     priorNotices?: ReadonlyArray<string>,
   ): void;
 }

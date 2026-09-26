@@ -4,6 +4,7 @@ import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
 } from "../../src/tools/details-schema.ts";
+import { containedWriter } from "../fixtures/run-view.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
 describe("subagent detail evidence", () => {
@@ -43,18 +44,7 @@ describe("subagent detail evidence", () => {
     ).toBeUndefined();
   });
   it("round-trips only the current offender bit", () => {
-    const offender = view({
-      state: "paused",
-      writeIntent: "writer",
-      writeClaims: ["src/a.ts"],
-      writeAdmissionPaused: true,
-      writeViolationOffender: true,
-      writeAudit: {
-        observedFileWrites: ["src/b.ts"],
-        violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
-        bashWriteHints: 0,
-      },
-    });
+    const offender = containedWriter({ state: "paused" });
     const details = makeCompactToolDetails({ action: "claims", runs: [offender] });
 
     expect(details).toMatchObject({

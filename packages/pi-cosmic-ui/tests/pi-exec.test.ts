@@ -2,13 +2,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { makePiExec, PiExecError } from "../src/boundary/host-exec.ts";
+import { execOk } from "./support/host.ts";
 
 describe("Pi exec", () => {
   it.effect("builds a boundary that disables Git locks without changing gh arguments", () => {
     const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = [];
     const exec: ExtensionAPI["exec"] = (command, args) => {
       calls.push({ command, args: [...args] });
-      return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+      return execOk();
     };
     const boundary = makePiExec(exec);
 

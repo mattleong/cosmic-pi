@@ -1,14 +1,14 @@
 import { hasObjectRuntimeType, type JsonObject } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import { MAX_PROFILE_CANDIDATES } from "../profiles/model.ts";
-import { decodeProfileCandidate } from "./schema.ts";
+import { decodeProfileCandidate, isSupportedConfigVersion } from "./schema.ts";
 
 /** Validate without normalizing: omission, explicit false, and route array shape are data. */
 export function captureRestoreDeclaration(
   declaration: JsonObject[string] | undefined,
   sourceVersion: number,
 ): { readonly declaration: JsonObject[string] | undefined } | undefined {
-  if (sourceVersion !== 4 && sourceVersion !== 5 && sourceVersion !== 6) return undefined;
+  if (!isSupportedConfigVersion(sourceVersion)) return undefined;
   if (declaration === undefined || declaration === "disabled") return { declaration };
   try {
     const candidate = (input: JsonObject[string]): JsonObject | undefined => {
@@ -58,3 +58,34 @@ export function captureRestoreDeclaration(
     return undefined;
   }
 }
+
+export const isRecord = (value: JsonObject[string] | undefined): value is JsonObject =>
+  hasObjectRuntimeType(value) && value !== null && !Array.isArray(value);
+
+/** Sorted-key JSON so equal documents compare equal regardless of key order. */
+export const stableJson = <ValueInput>(value: ValueInput): string => {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (hasObjectRuntimeType(value) && value !== null) {
+    // SAFETY: Configuration decoding validates the persisted value before this typed access.
+    const record = value as Readonly<JsonObject>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+};
+
+const legacyCandidateJson = ({ fastMode, ...candidate }: JsonObject): JsonObject => ({
+  ...candidate,
+  ...(fastMode === true && { openaiFastMode: true }),
+});
+
+export const migrateLegacyRouteJson = (value: JsonObject[string]): JsonObject[string] => {
+  if (value === "disabled") return value;
+  if (Array.isArray(value))
+    return value.map((candidate) =>
+      isRecord(candidate) ? legacyCandidateJson(candidate) : candidate,
+    );
+  return isRecord(value) ? legacyCandidateJson(value) : value;
+};

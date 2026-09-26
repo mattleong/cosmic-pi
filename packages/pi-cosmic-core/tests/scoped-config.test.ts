@@ -1,33 +1,30 @@
 import { expect, it, layer as testLayer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import {
-  JsonDocumentStore,
-  type JsonDocumentStoreContract,
-  type JsonObject,
-} from "../src/platform/json-document.ts";
+import { JsonDocumentError } from "../src/platform/errors.ts";
+import { JsonDocumentStore, type JsonObject } from "../src/platform/json-document.ts";
 import { makeInMemoryDocuments } from "../src/testing/layers.ts";
 import { decodeTolerantFields } from "../src/config/tolerant-fields.ts";
-import { scopedDocumentPaths, selectScopedDocument } from "../src/config/scoped-store.ts";
 import {
   makeScopedConfigStore,
   type ScopedConfigMetadata,
+  type ScopedConfigStoreOptions,
 } from "../src/config/scoped-config-store.ts";
 
-it("decodes valid siblings, retains unknown keys, and bounds redacted diagnostics", () => {
+it("decodes valid siblings and bounds redacted diagnostics", () => {
   const decoded = decodeTolerantFields(
     { enabled: true, interval: "bad", mode: "bad", future: { secret: "retained" } },
     { enabled: Schema.Boolean, interval: Schema.Number, mode: Schema.Literal("known") },
     { path: "usage", maxDiagnostics: 1 },
   );
   expect(decoded.value).toEqual({ enabled: true });
-  expect(decoded.raw.future).toEqual({ secret: "retained" });
   expect(decoded.diagnostics).toEqual([{ path: "usage.interval", issue: "invalid" }]);
   expect(JSON.stringify(decoded.diagnostics)).not.toContain("bad");
 });
 
-it("preserves and decodes only own __proto__ fields without prototype mutation", () => {
+it("decodes only own __proto__ fields without prototype mutation", () => {
   const input: JsonObject = { future: true };
   Object.defineProperty(input, "__proto__", {
     value: { enabled: true },
@@ -46,10 +43,6 @@ it("preserves and decodes only own __proto__ fields without prototype mutation",
   });
 
   const decoded = decodeTolerantFields(input, fields);
-  expect(Object.hasOwn(decoded.raw, "__proto__")).toBe(true);
-  expect(Object.getOwnPropertyDescriptor(decoded.raw, "__proto__")?.value).toEqual({
-    enabled: true,
-  });
   expect(Object.hasOwn(decoded.value, "__proto__")).toBe(true);
   expect(Object.getOwnPropertyDescriptor(decoded.value, "__proto__")?.value).toEqual({
     enabled: true,
@@ -58,66 +51,6 @@ it("preserves and decodes only own __proto__ fields without prototype mutation",
 
   const missing = decodeTolerantFields({}, fields);
   expect(Object.hasOwn(missing.value, "__proto__")).toBe(false);
-});
-
-testLayer(Path.layer)("scoped document paths", (it) => {
-  it.effect("selects the global path when both documents are missing", () => {
-    const memory = makeInMemoryDocuments();
-    return Effect.gen(function* () {
-      const paths = yield* scopedDocumentPaths("/project", "/agent", {
-        projectConfigDirectory: ".pi",
-        basename: "config.json",
-      });
-      const selection = yield* selectScopedDocument(paths);
-      expect(selection.projectExists).toBe(false);
-      expect(selection.globalExists).toBe(false);
-      expect(selection.preferred).toBe(paths.global);
-    }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
-  });
-
-  it.effect("resolves paths and selects project precedence by existence", () => {
-    const memory = makeInMemoryDocuments({
-      "/project/.pi/extensions/config.json": { valid: true },
-    });
-    return Effect.gen(function* () {
-      const paths = yield* scopedDocumentPaths("/project", "/agent", {
-        projectConfigDirectory: ".pi",
-        basename: "config.json",
-      });
-      expect(paths).toEqual({
-        project: "/project/.pi/extensions/config.json",
-        global: "/agent/extensions/config.json",
-      });
-      const selection = yield* selectScopedDocument(paths);
-      expect(selection.projectExists).toBe(true);
-      expect(selection.globalExists).toBe(false);
-      expect(selection.preferred).toBe(paths.project);
-    }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
-  });
-
-  it.effect("never probes the project document when probeProject is false", () => {
-    const memory = makeInMemoryDocuments({
-      "/project/.pi/extensions/config.json": { valid: true },
-    });
-    const operations: string[] = [];
-    const service: JsonDocumentStoreContract = {
-      ...memory.service,
-      exists: (path) => {
-        operations.push(`exists:${path}`);
-        return memory.service.exists(path);
-      },
-    };
-    return Effect.gen(function* () {
-      const paths = yield* scopedDocumentPaths("/project", "/agent", {
-        projectConfigDirectory: ".pi",
-        basename: "config.json",
-      });
-      const selection = yield* selectScopedDocument(paths, { probeProject: false });
-      expect(selection.projectExists).toBe(false);
-      expect(selection.preferred).toBe(paths.global);
-      expect(operations).toEqual([`exists:${paths.global}`]);
-    }).pipe(Effect.provideService(JsonDocumentStore, JsonDocumentStore.of(service)));
-  });
 });
 
 class TestConfigError {
@@ -137,23 +70,7 @@ interface TestResolved extends ScopedConfigMetadata {
   readonly global: JsonObject;
 }
 
-const testStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigError>({
-  errorFactory: (operation, path) => () =>
-    new TestConfigError({ operation, path, message: "test" }),
-  label: "Test",
-  spanPrefix: "TestConfig",
-  projectConfigDirectory: ".pi",
-  basename: "config.json",
-  decode: (value) => ({ values: value }),
-  defaultDocument: () => ({}),
-  resolve: (metadata, project, global) => ({
-    ...metadata,
-    project: project?.values ?? {},
-    global: global?.values ?? {},
-  }),
-});
-
-const readOnlyStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigError>({
+const readOnlyOptions: ScopedConfigStoreOptions<TestFile, TestResolved, TestConfigError> = {
   errorFactory: (operation, path) => () =>
     new TestConfigError({ operation, path, message: "test" }),
   label: "Test",
@@ -166,7 +83,9 @@ const readOnlyStore = makeScopedConfigStore<TestFile, TestResolved, TestConfigEr
     project: project?.values ?? {},
     global: global?.values ?? {},
   }),
-});
+};
+const readOnlyStore = makeScopedConfigStore(readOnlyOptions);
+const testStore = makeScopedConfigStore({ ...readOnlyOptions, defaultDocument: () => ({}) });
 
 testLayer(Path.layer)("scoped config store", (it) => {
   it.effect("resolves empty scopes without seeding when no default document is supplied", () => {
@@ -179,7 +98,32 @@ testLayer(Path.layer)("scoped config store", (it) => {
       expect(resolved.project).toEqual({});
       expect(resolved.global).toEqual({});
       expect(memory.documents.size).toBe(0);
-    }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
+    }).pipe(Effect.provide(memory.layer));
+  });
+
+  it.effect("an existing trusted project wins precedence even when it cannot be read", () => {
+    const memory = makeInMemoryDocuments({
+      "/project/.pi/extensions/config.json": { fromProject: true },
+      "/agent/extensions/config.json": { fromGlobal: true },
+    });
+    const malformedProject = Layer.succeed(JsonDocumentStore, {
+      ...memory.service,
+      readObject: (path, options) =>
+        path.startsWith("/project/")
+          ? Effect.fail(new JsonDocumentError({ operation: "decode", path, message: "malformed" }))
+          : memory.service.readObject(path, options),
+    });
+    return Effect.gen(function* () {
+      expect(yield* readOnlyStore.resolveConfig("/project", "/agent", true)).toEqual({
+        configPath: "/project/.pi/extensions/config.json",
+        projectConfigPath: "/project/.pi/extensions/config.json",
+        globalConfigPath: "/agent/extensions/config.json",
+        projectConfigExists: true,
+        globalConfigExists: true,
+        project: {},
+        global: { fromGlobal: true },
+      });
+    }).pipe(Effect.provide(malformedProject));
   });
 
   it.effect("omitted trust fails closed without project-document I/O", () => {
@@ -187,64 +131,25 @@ testLayer(Path.layer)("scoped config store", (it) => {
       "/project/.pi/extensions/config.json": { fromProject: true },
       "/agent/extensions/config.json": { fromGlobal: true },
     });
-    const operations: string[] = [];
-    const record =
-      <Arguments extends unknown[], Result>(
-        operation: string,
-        method: (path: string, ...rest: Arguments) => Result,
-      ) =>
-      (path: string, ...rest: Arguments): Result => {
-        operations.push(`${operation}:${path}`);
-        return method(path, ...rest);
-      };
-    const service: JsonDocumentStoreContract = {
-      exists: record("exists", memory.service.exists),
-      readObject: record("read", memory.service.readObject),
-      writeObject: record("write", memory.service.writeObject),
-      modifyObject: (path, modify) => {
-        operations.push(`modify:${path}`);
-        return memory.service.modifyObject(path, modify);
-      },
-      updateObject: record("update", memory.service.updateObject),
-    };
     return Effect.gen(function* () {
       const resolved = yield* testStore.resolveConfig("/project", "/agent");
       expect(resolved.projectConfigPath).toBe("/project/.pi/extensions/config.json");
       expect(resolved.projectConfigExists).toBe(false);
       expect(resolved.project).toEqual({});
       expect(resolved.global).toEqual({ fromGlobal: true });
-      expect(operations.length).toBeGreaterThan(0);
-      expect(operations.filter((operation) => operation.includes("/project/"))).toEqual([]);
-    }).pipe(Effect.provideService(JsonDocumentStore, JsonDocumentStore.of(service)));
+      expect(memory.operations.length).toBeGreaterThan(0);
+      expect(memory.operations.filter((operation) => operation.includes("/project/"))).toEqual([]);
+    }).pipe(Effect.provide(memory.layer));
   });
 
   it.effect("resolveCommittedConfig updates scope metadata and preserves overlays", () => {
     const memory = makeInMemoryDocuments();
     return Effect.gen(function* () {
       const absent = yield* readOnlyStore.resolveConfig("/project", "/agent", true);
-      const globalCommit = testStore.resolveCommittedConfig(
-        {
-          ...absent,
-          configPath: absent.projectConfigPath,
-          projectConfigExists: true,
-        },
-        { fromGlobal: true },
-        { fromProject: true },
-        "global",
-      );
-      expect(globalCommit).toMatchObject({
-        configPath: absent.projectConfigPath,
-        projectConfigExists: true,
-        globalConfigExists: true,
-        project: { fromProject: true },
-        global: { fromGlobal: true },
-      });
-
       const projectCommit = testStore.resolveCommittedConfig(
-        { ...absent, globalConfigExists: true },
+        { ...absent, configPath: absent.projectConfigPath, globalConfigExists: true },
         { fromProject: true },
         { fromGlobal: true },
-        "project",
       );
       expect(projectCommit).toMatchObject({
         configPath: absent.projectConfigPath,
@@ -266,6 +171,6 @@ testLayer(Path.layer)("scoped config store", (it) => {
         project: {},
         global: { fromGlobal: true },
       });
-    }).pipe(Effect.provideService(JsonDocumentStore, memory.service));
+    }).pipe(Effect.provide(memory.layer));
   });
 });

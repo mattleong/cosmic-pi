@@ -1,4 +1,4 @@
-import { withCompactIssues, type CodePreviewShellOptions } from "pi-code-previews";
+import { getTextContent, withCompactIssues, type CodePreviewShellOptions } from "pi-code-previews";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -67,12 +67,7 @@ export function createParentExpandedContent(
         result,
         context,
       });
-      const text = summary
-        ? ""
-        : result.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n");
+      const text = summary ? "" : getTextContent(result.content);
       return new Text(theme.fg("toolOutput", stripTerminalControls(text)), 0, 0);
     },
   };

@@ -1,17 +1,20 @@
-import { defaultQuestion } from "./support/questionnaire.ts";
-import { controlled, makeTuiHost as asyncUi } from "./support/host.ts";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionHandler,
-} from "@earendil-works/pi-coding-agent";
+import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
+import { makeEventBus, makeTuiHost, waitMounted } from "./support/host.ts";
+import type { ExtensionContext, ExtensionHandler } from "@earendil-works/pi-coding-agent";
 import { layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  opaqueFixture,
+} from "pi-cosmic-core/testing";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { askUserWithDependencies } from "../src/application.ts";
+import { queryOwnedFormCapability } from "../src/protocol.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type {
   AskUserRequest,
@@ -69,6 +72,7 @@ const harness = (
     let tool: CapturedTool | undefined;
     const tools = new Map<string, CapturedTool>();
     const fixture = {
+      events: makeEventBus(),
       on(name: string, handler: Handler) {
         handlers.set(name, handler);
       },
@@ -83,19 +87,15 @@ const harness = (
         tools.set(definition.name, definition);
       }),
     };
-    // SAFETY: The application uses only the ExtensionAPI methods supplied by this lifecycle fixture.
-    const pi = fixture as typeof fixture & ExtensionAPI;
-    askUserWithDependencies(pi, loadPreviewSettings);
-    const contextFixture = {
+    askUserWithDependencies(extensionApiFixture(fixture), loadPreviewSettings);
+    const ctx = extensionContextFixture({
       cwd,
       hasUI: true,
       mode: "rpc",
       ui: { notify: vi.fn() },
       isProjectTrusted: () => true,
       ...overrides,
-    };
-    // SAFETY: The startup path reads only the context fields supplied by this fixture.
-    const ctx = contextFixture as typeof contextFixture & ExtensionContext;
+    });
     const emit = (name: string) => Promise.resolve(handlers.get(name)?.({}, ctx));
     return {
       ctx,
@@ -112,24 +112,44 @@ const harness = (
     };
   });
 
+type Harness = Effect.Success<ReturnType<typeof harness>>;
+
+// Loads previews immediately and supplies the owned TUI host used by async dialogs.
+const tuiHarness = (overrides: Partial<ExtensionContext> = {}) =>
+  Effect.gen(function* () {
+    const ui = makeTuiHost();
+    const h = yield* harness(() => Promise.resolve(), {
+      mode: "tui",
+      ui: opaqueFixture(ui.ui),
+      ...overrides,
+    });
+    return { h, ui };
+  });
+
+// Opens ask_user_async, acknowledges the mount, and returns the acquisition receipt.
+const openMounted = (
+  h: Harness,
+  ui: ReturnType<typeof makeTuiHost>,
+  id: string,
+  signal?: AbortSignal,
+) =>
+  Effect.gen(function* () {
+    const opening = h.tools
+      .get("ask_user_async")!
+      .execute(id, asyncRequest, signal, undefined, h.ctx);
+    yield* waitMounted(ui);
+    ui.mount!();
+    return yield* Effect.promise(() => opening);
+  });
+
 const request = {
   questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
 } satisfies AskUserRequest;
 
-const asyncRequest: AskUserAsyncRequest = {
-  ...request,
-  independentWork: "Inspect fixtures",
-  blockedWork: "Implement choice",
-  questions: request.questions.map((question) => ({
-    ...question,
-    choices: [...question.choices, { value: "b", label: "B", description: "Choose B." }],
-  })),
-};
-
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
   it.effect("defers tool registration until preview settings resolve", () =>
     Effect.gen(function* () {
-      const preview = controlled();
+      const preview = deferredPromise();
       let loadSignal: AbortSignal | undefined;
       const h = yield* harness((_cwd, _projectTrusted, signal) => {
         loadSignal = signal;
@@ -156,7 +176,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
 
   it.effect("rejects a stale tool call while replacement startup is pending", () =>
     Effect.gen(function* () {
-      const replacement = controlled();
+      const replacement = deferredPromise();
       let loads = 0;
       const h = yield* harness(() => {
         loads += 1;
@@ -195,8 +215,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       const notify = vi.fn(() => {
         throw new Error("stale UI");
       });
-      // SAFETY: The captured handler reads only the notify field supplied here.
-      yield* Effect.promise(() => command.handler("", { ui: { notify } } as never));
+      yield* Effect.promise(() => command.handler("", extensionContextFixture({ ui: { notify } })));
       expect(notify).toHaveBeenCalledOnce();
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
@@ -226,23 +245,13 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     "TUI async acquisition returns before answer, survives tool abort, and tree replacement revokes it",
     () =>
       Effect.gen(function* () {
-        const ui = asyncUi();
         const turn = new AbortController();
-        // SAFETY: This UI fake supplies the custom/notification/status members used by the TUI flow.
-        const h = yield* harness(() => Promise.resolve(), {
-          mode: "tui",
-          ui: ui.ui as never,
-          signal: turn.signal,
-        });
+        const { h, ui } = yield* tuiHarness({ signal: turn.signal });
         yield* Effect.promise(() => h.emit("session_start"));
         expect(h.tools.has("ask_user_async")).toBe(true);
-        const start = h.tools.get("ask_user_async")!;
         const control = h.tools.get("ask_user_async_control")!;
         const signal = new AbortController();
-        const opening = start.execute("call", asyncRequest, signal.signal, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
-        ui.mount!();
-        const receipt = yield* Effect.promise(() => opening);
+        const receipt = yield* openMounted(h, ui, "call", signal.signal);
         expect(receipt.details).toMatchObject({ status: "pending" });
         if (!("requestId" in receipt.details)) throw new Error("Missing async receipt");
         const requestId = receipt.details.requestId;
@@ -275,28 +284,16 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     "tree replacement preserves already-recorded answers but filters late old steering",
     () =>
       Effect.gen(function* () {
-        const ui = asyncUi();
         const branch: Array<
           | { type: "custom_message"; customType: string; details: object }
           | { type: "custom"; customType: string; data: object }
         > = [];
-        // SAFETY: Startup and history filtering read only getBranch on this session manager fixture.
-        const sessionManager: ExtensionContext["sessionManager"] = {
+        const sessionManager: ExtensionContext["sessionManager"] = opaqueFixture({
           getBranch: () => branch,
-        } as never;
-        // SAFETY: The fake supplies only the UI methods used by this questionnaire flow.
-        const h = yield* harness(() => Promise.resolve(), {
-          mode: "tui",
-          ui: ui.ui as never,
-          sessionManager,
         });
+        const { h, ui } = yield* tuiHarness({ sessionManager });
         yield* Effect.promise(() => h.emit("session_start"));
-        const opening = h.tools
-          .get("ask_user_async")!
-          .execute("open", asyncRequest, undefined, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
-        ui.mount!();
-        yield* Effect.promise(() => opening);
+        yield* openMounted(h, ui, "open");
         ui.component!.handleInput?.("1");
         ui.component!.handleInput?.("\r");
         yield* Effect.promise(() =>
@@ -337,9 +334,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
 
   it.effect("async admission respects unrelated coalesced UI prompts", () =>
     Effect.gen(function* () {
-      const ui = asyncUi();
-      // SAFETY: The fixture supplies the UI members used by this flow.
-      const h = yield* harness(() => Promise.resolve(), { mode: "tui", ui: ui.ui as never });
+      const { h, ui } = yield* tuiHarness();
       yield* Effect.promise(() => h.emit("session_start"));
       yield* Effect.promise(() => h.emit("ui_prompt_start"));
       const start = h.tools.get("ask_user_async")!;
@@ -350,10 +345,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       );
       expect(ui.mount).toBeUndefined();
       yield* Effect.promise(() => h.emit("ui_prompt_end"));
-      const pending = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
-      yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
-      ui.mount!();
-      yield* Effect.promise(() => pending);
+      yield* openMounted(h, ui, "open");
       yield* Effect.promise(() => h.emit("session_shutdown"));
     }),
   );
@@ -361,8 +353,7 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
   for (const lateResult of ["success", "rejection"] as const) {
     it.effect(`replacement joins editor termination and TUI restoration (${lateResult})`, () =>
       Effect.gen(function* () {
-        const ui = asyncUi();
-        const terminated = controlled();
+        const terminated = deferredPromise();
         let editorSignal: AbortSignal | undefined;
         const edit = vi
           .spyOn(externalEditor, "editWithExternalEditor")
@@ -376,14 +367,10 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
               return "late edited text";
             });
           });
-        // SAFETY: This fixture implements the UI methods consumed by the host.
-        const h = yield* harness(() => Promise.resolve(), { mode: "tui", ui: ui.ui as never });
+        const { h, ui } = yield* tuiHarness();
         yield* Effect.promise(() => h.emit("session_start"));
         const start = h.tools.get("ask_user_async")!;
-        const opening = start.execute("open", asyncRequest, undefined, undefined, h.ctx);
-        yield* Effect.promise(() => vi.waitFor(() => expect(ui.mount).toBeDefined()));
-        ui.mount!();
-        yield* Effect.promise(() => opening);
+        yield* openMounted(h, ui, "open");
         const oldComponent = ui.component!;
         oldComponent.handleInput?.("n");
         oldComponent.handleInput?.("external");
@@ -423,6 +410,23 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       }),
     );
   }
+
+  it.effect("does not advertise owned forms without a real UI", () =>
+    Effect.gen(function* () {
+      const sessionManager: ExtensionContext["sessionManager"] = opaqueFixture({
+        getSessionId: () => "session",
+        getBranch: () => [],
+      });
+      const h = yield* harness(() => Promise.resolve(), {
+        hasUI: false,
+        mode: "print",
+        sessionManager,
+      });
+      yield* Effect.promise(() => h.emit("session_start"));
+      expect(queryOwnedFormCapability(h.fixture.events, "session")).toBeUndefined();
+      yield* Effect.promise(() => h.emit("session_shutdown"));
+    }),
+  );
 
   it.effect("RPC retains only the compatible blocking tool", () =>
     Effect.gen(function* () {

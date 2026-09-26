@@ -14,6 +14,7 @@ import {
 import {
   bestEffortHostBootstrap,
   captureSessionHost,
+  invokeHostCallback,
   isProjectTrusted,
   makePiManagedRuntime,
   makePiSessionRuntimeSlot,
@@ -29,8 +30,10 @@ import {
   makeQuestionnaireActivity,
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
-import { registerQuestionnaireCapability } from "./boundary/host-proxy.ts";
-import { registerOwnedFormCapability } from "./boundary/host-form-proxy.ts";
+import {
+  registerOwnedFormCapability,
+  registerQuestionnaireCapability,
+} from "./boundary/host-owned-calls.ts";
 import { askAtQuestionnaireBoundary, requiresQuestionnaireRelay } from "./boundary/host-relay.ts";
 import { registerAsyncAskUserTools } from "./tools/ask-user-async.ts";
 import { makeAskUserPromptGate } from "./boundary/host-prompt.ts";
@@ -113,21 +116,23 @@ export function askUserWithDependencies(
     onActivated: (input, token, scheduler) => {
       const scheduleAnimation: CompactAnimationScheduler = (interval, tick) =>
         input.active && slot.isCurrent(token) ? scheduler.schedule(interval, tick) : undefined;
+      const runCurrent = <A, E>(
+        effect: Effect.Effect<A, E, AskUserApplication>,
+        signal: AbortSignal | undefined,
+        message = "The ask-user session runtime is not active.",
+        current = slot.isCurrent(token),
+      ) =>
+        current
+          ? slot.run(effect, signal)
+          : Promise.reject(new AskUserRuntimeClosedError({ message }));
       const { ctx } = input;
       input.active = true;
       currentGeneration = input.generation;
       bridge.setContext(ctx);
-      let sessionId = "";
-      try {
-        sessionId = ctx.sessionManager.getSessionId();
-      } catch {
-        /* No public session identity. */
-      }
-      try {
-        if (sessionId) input.activity?.activate(pi.events, sessionId);
-      } catch {
-        /* Activity is optional; questionnaires still open without it. */
-      }
+      const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), "");
+      // Activity is optional; questionnaires still open without it.
+      if (sessionId)
+        invokeHostCallback(() => input.activity?.activate(pi.events, sessionId), undefined);
       if (sessionId && !requiresQuestionnaireRelay()) {
         try {
           input.revokeCapability = registerQuestionnaireCapability({
@@ -136,13 +141,7 @@ export function askUserWithDependencies(
             generation: input.generation,
             isCurrent: () => input.active && slot.isCurrent(token),
             run: (effect, signal) =>
-              slot.isCurrent(token)
-                ? slot.run(effect, signal)
-                : Promise.reject(
-                    new AskUserRuntimeClosedError({
-                      message: "The root questionnaire session was replaced.",
-                    }),
-                  ),
+              runCurrent(effect, signal, "The root questionnaire session was replaced."),
           });
         } catch {
           /* Missing host event bus leaves local questionnaires available. */
@@ -166,13 +165,7 @@ export function askUserWithDependencies(
             isCurrent,
             canQueue: () => promptGate.canQueue(),
             run: (effect, signal) =>
-              isCurrent()
-                ? slot.run(effect, signal)
-                : Promise.reject(
-                    new AskUserRuntimeClosedError({
-                      message: "The owned form session was replaced.",
-                    }),
-                  ),
+              runCurrent(effect, signal, "The owned form session was replaced.", isCurrent()),
           });
         } catch {
           /* Optional local-extension capability. */
@@ -181,42 +174,24 @@ export function askUserWithDependencies(
       registerAskUserTool(
         pi,
         (request, signal) =>
-          slot.isCurrent(token)
-            ? slot.run(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal)
-            : Promise.reject(
-                new AskUserRuntimeClosedError({
-                  message: "The ask-user session runtime is not active.",
-                }),
-              ),
+          runCurrent(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal),
         scheduleAnimation,
       );
       if (ctx.mode === "tui" && !requiresQuestionnaireRelay())
         registerAsyncAskUserTools(
           pi,
           (request, signal) =>
-            slot.isCurrent(token)
-              ? !promptGate.canQueue()
-                ? Promise.reject(asyncBusy())
-                : slot.run(
-                    AskUserService.use((service) => service.startAsync(request)),
-                    signal,
-                  )
-              : Promise.reject(
-                  new AskUserRuntimeClosedError({
-                    message: "The ask-user session runtime is not active.",
-                  }),
+            slot.isCurrent(token) && !promptGate.canQueue()
+              ? Promise.reject(asyncBusy())
+              : runCurrent(
+                  AskUserService.use((service) => service.startAsync(request)),
+                  signal,
                 ),
           (input, signal) =>
-            slot.isCurrent(token)
-              ? slot.run(
-                  AskUserService.use((service) => service.controlAsync(input)),
-                  signal,
-                )
-              : Promise.reject(
-                  new AskUserRuntimeClosedError({
-                    message: "The ask-user session runtime is not active.",
-                  }),
-                ),
+            runCurrent(
+              AskUserService.use((service) => service.controlAsync(input)),
+              signal,
+            ),
           scheduleAnimation,
         );
     },

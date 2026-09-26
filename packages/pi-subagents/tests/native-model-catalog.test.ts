@@ -1,19 +1,23 @@
 // Live filesystem/process checks protect preference freshness and isolated no-inference discovery.
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 import * as Config from "effect/Config";
 import { afterEach, describe, expect } from "vitest";
-import { makeNativeModelCatalog } from "../src/boundary/native-model-catalog.ts";
+import {
+  makeNativeModelCatalog,
+  type NativeModelCatalogContract,
+} from "../src/boundary/native-model-catalog.ts";
 import { effectTest, step } from "./support/effect-test.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
+import {
+  makeTemporaryDirectory,
+  removeTemporaryDirectories,
+} from "./support/temporary-directories.ts";
 
 const { join } = nodePath;
-const directories: string[] = [];
 const fixture = fileURLToPath(new URL("./fixtures/model-catalog-fixture.mjs", import.meta.url));
 const setupEffect = Effect.gen(function* () {
-  const directory = yield* step(() => fs.mkdtemp(join(tmpdir(), "pi-subagents-catalog-")));
-  directories.push(directory);
+  const directory = yield* step(() => makeTemporaryDirectory("pi-subagents-catalog-"));
   const home = yield* step(() => fs.realpath(directory));
   const executable = join(home, "catalog.mjs");
   yield* step(() => fs.copyFile(fixture, executable));
@@ -41,10 +45,13 @@ const setupEffect = Effect.gen(function* () {
   };
 });
 const setup = () => Effect.runPromise(setupEffect);
+const selectorAt = (catalog: NativeModelCatalogContract, cwd: string, index: number) =>
+  catalog.list("claude", cwd).pipe(
+    Effect.orDie,
+    Effect.map((models) => models[index]?.selector),
+  );
 
-afterEach(() =>
-  Promise.all(directories.splice(0).map((path) => fs.rm(path, { recursive: true, force: true }))),
-);
+afterEach(removeTemporaryDirectories);
 
 describe("Claude catalog preference", () => {
   effectTest(
@@ -80,9 +87,7 @@ describe("Claude catalog preference", () => {
         "other-alias[1m]",
       ]);
       yield* step(() => fs.unlink(test.settings));
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-        "default",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
     },
   );
 
@@ -91,9 +96,7 @@ describe("Claude catalog preference", () => {
     function* () {
       const test = yield* step(setup);
       const catalog = yield* makeNativeModelCatalog(test.options);
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-        "default",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
       for (const settings of [
         "{",
         "null",
@@ -108,20 +111,14 @@ describe("Claude catalog preference", () => {
         JSON.stringify({ model: "oversized", padding: "x".repeat(64 * 1024) }),
       ]) {
         yield* step(() => fs.writeFile(test.settings, settings));
-        expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-          "default",
-        );
+        expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
       }
       yield* step(() => fs.unlink(test.settings));
       yield* step(() => fs.symlink(join(test.home, "missing-settings.json"), test.settings));
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-        "default",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
       yield* step(() => fs.unlink(test.settings));
       yield* step(() => fs.mkdir(test.settings));
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-        "default",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
     },
   );
 
@@ -133,17 +130,11 @@ describe("Claude catalog preference", () => {
       yield* step(() => fs.writeFile(target, '{"model":"dotfile-alias[1m]"}'));
       yield* step(() => fs.symlink(target, test.settings));
       const catalog = yield* makeNativeModelCatalog(test.options);
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[2]?.selector).toBe(
-        "dotfile-alias[1m]",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("dotfile-alias[1m]");
       yield* step(() => fs.writeFile(target, '{"model":"updated-dotfile[1m]"}'));
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[2]?.selector).toBe(
-        "updated-dotfile[1m]",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("updated-dotfile[1m]");
       yield* step(() => fs.writeFile(target, "malformed"));
-      expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[1]?.selector).toBe(
-        "default",
-      );
+      expect(yield* selectorAt(catalog, test.cwd, 1)).toBe("default");
     },
   );
 
@@ -157,8 +148,6 @@ describe("Claude catalog preference", () => {
     expect(JSON.stringify(result)).not.toContain(test.home);
     expect(JSON.stringify(result)).not.toContain("private-api-key");
     yield* step(() => fs.writeFile(test.settings, '{"model":"recovered[1m]"}'));
-    expect((yield* catalog.list("claude", test.cwd).pipe(Effect.orDie))[2]?.selector).toBe(
-      "recovered[1m]",
-    );
+    expect(yield* selectorAt(catalog, test.cwd, 2)).toBe("recovered[1m]");
   });
 });

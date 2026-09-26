@@ -115,29 +115,32 @@ export const makeLocalPiParentIpcChannel = (
   };
 };
 
-const parentPort = (child: NodeChildProcess): LocalPiIpcPort<LocalPiParentControl> => ({
-  connected: () => child.connected,
-  send: (message, callback) => {
-    child.send(message, callback);
-  },
-  addMessageListener: (listener) => {
-    child.on("message", listener);
-  },
-  removeMessageListener: (listener) => {
-    child.off("message", listener);
-  },
-  addDisconnectListener: (listener) => {
-    child.on("disconnect", listener);
-  },
-  removeDisconnectListener: (listener) => {
-    child.off("disconnect", listener);
-  },
+/** Adapts one Node IPC endpoint's `message`/`disconnect` events to a port. */
+const eventPort = <Outbound>(
+  target: Pick<NodeJS.EventEmitter, "on" | "off">,
+  connected: LocalPiIpcPort<Outbound>["connected"],
+  send: LocalPiIpcPort<Outbound>["send"],
+): LocalPiIpcPort<Outbound> => ({
+  connected,
+  send,
+  addMessageListener: (listener) => void target.on("message", listener),
+  removeMessageListener: (listener) => void target.off("message", listener),
+  addDisconnectListener: (listener) => void target.on("disconnect", listener),
+  removeDisconnectListener: (listener) => void target.off("disconnect", listener),
 });
 
 export const attachLocalPiParentIpc = (
   child: NodeChildProcess,
   handlers: LocalPiParentIpcHandlers,
-): LocalPiParentIpcChannel => makeLocalPiParentIpcChannel(parentPort(child), handlers);
+): LocalPiParentIpcChannel =>
+  makeLocalPiParentIpcChannel(
+    eventPort<LocalPiParentControl>(
+      child,
+      () => child.connected,
+      (message, callback) => void child.send(message, callback),
+    ),
+    handlers,
+  );
 
 export interface LocalPiChildIpcHandlers {
   readonly onControl: (control: LocalPiParentControl) => void;
@@ -177,26 +180,15 @@ export const makeLocalPiChildIpcChannel = (
     ),
 });
 
-const childPort = (): LocalPiIpcPort<LocalPiContact> => ({
-  connected: () => process.send !== undefined && process.connected,
-  send: (message, callback) => {
-    const send = process.send;
-    if (!send) throw new Error("Node IPC is unavailable.");
-    send.call(process, message, callback);
-  },
-  addMessageListener: (listener) => {
-    process.on("message", listener);
-  },
-  removeMessageListener: (listener) => {
-    process.off("message", listener);
-  },
-  addDisconnectListener: (listener) => {
-    process.on("disconnect", listener);
-  },
-  removeDisconnectListener: (listener) => {
-    process.off("disconnect", listener);
-  },
-});
-
 export const openLocalPiChildIpc = (): LocalPiChildIpcChannel =>
-  makeLocalPiChildIpcChannel(childPort());
+  makeLocalPiChildIpcChannel(
+    eventPort<LocalPiContact>(
+      process,
+      () => process.send !== undefined && process.connected,
+      (message, callback) => {
+        const send = process.send;
+        if (!send) throw new Error("Node IPC is unavailable.");
+        send.call(process, message, callback);
+      },
+    ),
+  );

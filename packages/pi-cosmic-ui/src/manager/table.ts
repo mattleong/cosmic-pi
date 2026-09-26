@@ -45,22 +45,14 @@ export const managerTable = (
     widths[column.index]! += extra;
     remaining -= extra;
   }
+  const cell = (text: string, column: number): string =>
+    padListDetailRow(truncateToWidth(text, widths[column] ?? 0), widths[column] ?? 0);
   return {
     widths,
-    cell: (text: string, column: number): string =>
-      padListDetailRow(truncateToWidth(text, widths[column] ?? 0), widths[column] ?? 0),
+    cell,
     row: (cells: ReadonlyArray<string>): string =>
       columns
-        .flatMap((_, index) =>
-          widths[index]
-            ? [
-                padListDetailRow(
-                  truncateToWidth(cells[index] ?? "", widths[index]!),
-                  widths[index]!,
-                ),
-              ]
-            : [],
-        )
+        .flatMap((_, index) => (widths[index] ? [cell(cells[index] ?? "", index)] : []))
         .join(gap),
   };
 };

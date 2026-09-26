@@ -80,7 +80,6 @@ describe.skipIf(!enabled)("installed Herdr Codex no-inference smoke", () => {
         yield* herdr.preflight({ runtime: "codex", ...request });
         const channel = yield* supervisors.open({ runId });
         const hosted = yield* herdr.launch("codex", request, channel.metadata);
-        expect(hosted.nativeSession).toBeTruthy();
         yield* channel.awaitReady;
         yield* hosted.close;
         const after = yield* cli.snapshot;

@@ -7,10 +7,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import {
-  type AtomicJsonDocumentStoreContract,
   JsonDocumentStore,
   JsonObjectFromString,
-  type JsonDocumentModification,
   type JsonDocumentReadOptions,
   validateJsonDocumentReadOptions,
   type JsonDocumentStoreContract,
@@ -25,16 +23,29 @@ import {
 import { JsonDocumentError, JsonHttpError, StreamingHttpError } from "../platform/errors.ts";
 import {
   StreamingHttpClient,
-  type StreamingHttpClientContract,
   type StreamingHttpRequest,
   type StreamingHttpResponse,
+  withStreamingJsonBody,
 } from "../platform/streaming-http.ts";
 
+/** Clone-on-read, clone-on-write view of the stored documents. */
+interface InMemoryDocumentMap {
+  readonly size: number;
+  readonly get: (path: string) => JsonObject | undefined;
+  readonly has: (path: string) => boolean;
+  readonly set: (path: string, document: JsonObject) => void;
+  readonly delete: (path: string) => boolean;
+  readonly keys: () => IterableIterator<string>;
+  readonly values: () => IterableIterator<JsonObject>;
+}
+
 export interface InMemoryDocuments {
-  /** Mutable compatibility handle for simulating external document changes in tests. */
-  readonly documents: Map<string, JsonObject>;
-  readonly service: AtomicJsonDocumentStoreContract;
+  /** Mutable handle for simulating external document changes in tests. */
+  readonly documents: InMemoryDocumentMap;
+  readonly service: JsonDocumentStoreContract;
   readonly layer: Layer.Layer<JsonDocumentStore>;
+  /** `operation:path` for each executed public store call, e.g. to prove absent project I/O. */
+  readonly operations: readonly string[];
   readonly injectBeforeNextUpdate: (update: (current: JsonObject) => JsonObject) => void;
   readonly blockNextUpdateBeforeCommit: (
     started: Deferred.Deferred<void>,
@@ -58,69 +69,20 @@ const cloneInitialDocument = (document: JsonObject): JsonObject => {
   return Schema.decodeUnknownSync(JsonObjectFromString)(source);
 };
 
-class JsonDocumentMapView implements Map<string, JsonObject> {
-  readonly [Symbol.toStringTag] = "Map";
-  private readonly stored: Map<string, JsonObject>;
-
-  constructor(stored: Map<string, JsonObject>) {
-    this.stored = stored;
-  }
-
-  private snapshot(): Map<string, JsonObject> {
-    return new Map(
-      Array.from(this.stored, ([path, document]) => [path, cloneInitialDocument(document)]),
-    );
-  }
-
-  get size(): number {
-    return this.stored.size;
-  }
-
-  get(path: string): JsonObject | undefined {
-    const document = this.stored.get(path);
+const documentView = (stored: Map<string, JsonObject>): InMemoryDocumentMap => ({
+  get size() {
+    return stored.size;
+  },
+  get: (path) => {
+    const document = stored.get(path);
     return document === undefined ? undefined : cloneInitialDocument(document);
-  }
-
-  has(path: string): boolean {
-    return this.stored.has(path);
-  }
-
-  set(path: string, document: JsonObject): this {
-    this.stored.set(path, cloneInitialDocument(document));
-    return this;
-  }
-
-  delete(path: string): boolean {
-    return this.stored.delete(path);
-  }
-
-  clear(): void {
-    this.stored.clear();
-  }
-
-  entries(): MapIterator<[string, JsonObject]> {
-    return this.snapshot().entries();
-  }
-
-  keys(): MapIterator<string> {
-    return this.stored.keys();
-  }
-
-  values(): MapIterator<JsonObject> {
-    return this.snapshot().values();
-  }
-
-  forEach<ThisArgInput>(
-    callback: (value: JsonObject, key: string, map: Map<string, JsonObject>) => void,
-    thisArg?: ThisArgInput,
-  ): void {
-    for (const [path, document] of this.entries()) callback.call(thisArg, document, path, this);
-  }
-
-  [Symbol.iterator](): MapIterator<[string, JsonObject]> {
-    return this.entries();
-  }
-}
+  },
+  has: (path) => stored.has(path),
+  set: (path, document) => void stored.set(path, cloneInitialDocument(document)),
+  delete: (path) => stored.delete(path),
+  keys: () => stored.keys(),
+  values: () => Array.from(stored.values(), cloneInitialDocument).values(),
+});
 
 // Match the live store's serialized representation, including its trailing newline.
 const cloneDocument = (
@@ -161,11 +123,14 @@ export function makeInMemoryDocuments(
   const storedDocuments = new Map(
     Object.entries(initial).map(([path, document]) => [path, cloneInitialDocument(document)]),
   );
-  const documents = new JsonDocumentMapView(storedDocuments);
+  const documents = documentView(storedDocuments);
   const pathSemaphores = new Map<string, Semaphore.Semaphore>();
   let beforeNextUpdate: ((current: JsonObject) => JsonObject) | undefined;
   let nextUpdateGate: JsonDocumentUpdateGate | undefined;
   let updateCount = 0;
+  const operations: string[] = [];
+  const record = (operation: string, path: string) =>
+    Effect.sync(() => void operations.push(`${operation}:${path}`));
   const semaphoreFor = (path: string): Semaphore.Semaphore => {
     const existing = pathSemaphores.get(path);
     if (existing !== undefined) return existing;
@@ -173,7 +138,7 @@ export function makeInMemoryDocuments(
     pathSemaphores.set(path, created);
     return created;
   };
-  const modifyObject: AtomicJsonDocumentStoreContract["modifyObject"] = (path, modify, options) =>
+  const modifyObject: JsonDocumentStoreContract["modifyObject"] = (path, modify, options) =>
     semaphoreFor(path).withPermit(
       Effect.gen(function* () {
         const limits = yield* validateJsonDocumentReadOptions(path, options);
@@ -210,48 +175,34 @@ export function makeInMemoryDocuments(
         return value;
       }),
     );
-  const updateObject: JsonDocumentStoreContract["updateObject"] = (path, update, options) =>
-    modifyObject(
-      path,
-      (document) =>
-        Effect.try({
-          try: () => {
-            const next = update(document);
-            return {
-              value: next,
-              document: next,
-            } satisfies JsonDocumentModification<JsonObject>;
-          },
-          catch: () =>
-            new JsonDocumentError({
-              operation: "update",
-              path,
-              message: "Unable to update JSON document.",
-            }),
-        }),
-      options,
-    );
-  const service: AtomicJsonDocumentStoreContract = {
-    exists: (path) => Effect.sync(() => storedDocuments.has(path)),
+  const service: JsonDocumentStoreContract = {
+    exists: (path) =>
+      record("exists", path).pipe(Effect.andThen(Effect.sync(() => storedDocuments.has(path)))),
     readObject: (path, options) =>
       Effect.gen(function* () {
+        yield* record("read", path);
         const limits = yield* validateJsonDocumentReadOptions(path, options);
         const value = storedDocuments.get(path);
         if (value === undefined) return undefined;
         return yield* cloneDocument("read", path, value, limits ?? undefined);
       }),
     writeObject: (path, document) =>
-      semaphoreFor(path).withPermit(
-        cloneDocument("write", path, document).pipe(
-          Effect.map((stored) => void storedDocuments.set(path, stored)),
+      record("write", path).pipe(
+        Effect.andThen(
+          semaphoreFor(path).withPermit(
+            cloneDocument("write", path, document).pipe(
+              Effect.map((stored) => void storedDocuments.set(path, stored)),
+            ),
+          ),
         ),
       ),
-    modifyObject,
-    updateObject,
+    modifyObject: (path, modify, options) =>
+      record("modify", path).pipe(Effect.andThen(modifyObject(path, modify, options))),
   };
   return {
     documents,
     service,
+    operations,
     layer: Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service)),
     injectBeforeNextUpdate(update) {
       beforeNextUpdate = update;
@@ -301,10 +252,7 @@ export const jsonHttpTestLayer = (
       const requestInput = encodedJsonBody === undefined ? input : { ...input, encodedJsonBody };
       // SAFETY: The typed owner constructs the request on this test-only boundary.
       const response = yield* handle(requestInput as JsonHttpTestRequest);
-      const accepted = (input.acceptStatus ?? ((status) => status >= 200 && status < 300))(
-        response.status,
-      );
-      if (!accepted) {
+      if (response.status < 200 || response.status >= 300) {
         const errorBody =
           "rawBody" in response
             ? response.rawBody
@@ -346,26 +294,10 @@ export const streamingHttpTestLayer = (
     input: StreamingHttpTestRequest,
   ) => Effect.Effect<StreamingHttpResponse, StreamingHttpError>,
 ): Layer.Layer<StreamingHttpClient> => {
-  const requestRawBytes: StreamingHttpClientContract["requestRawBytes"] = handle;
-  const requestJsonRawBytes: StreamingHttpClientContract["requestJsonRawBytes"] = (
-    input,
-    bodySchema,
-    body,
-  ) =>
-    Schema.encodeEffect(Schema.encodeTo(Schema.Json)(bodySchema))(body).pipe(
-      Effect.mapError(
-        () =>
-          new StreamingHttpError({
-            operation: "encode",
-            message: "Streaming HTTP request body did not match the expected schema.",
-          }),
-      ),
-      Effect.flatMap((encodedJsonBody) => handle({ ...input, encodedJsonBody })),
-    );
-  return Layer.succeed(
-    StreamingHttpClient,
-    StreamingHttpClient.of({ requestRawBytes, requestJsonRawBytes }),
+  const requestJsonRawBytes = withStreamingJsonBody((input, encodedJsonBody) =>
+    handle({ ...input, encodedJsonBody }),
   );
+  return Layer.succeed(StreamingHttpClient, StreamingHttpClient.of({ requestJsonRawBytes }));
 };
 
 export const jsonHttpRawResponse = (status: number, rawBody: string): JsonHttpTestResponse => ({

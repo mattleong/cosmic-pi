@@ -3,36 +3,8 @@ import { expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import type { ActivityProviderOptions } from "pi-cosmic-ui/activity";
-import { makeQuestionnaireActivity } from "../src/boundary/host-activity.ts";
-import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
+import { makeActivityFixture as fixture } from "./support/activity.ts";
 
-const fixture = () => {
-  const bridge = makeAskUserDialogBridge();
-  let current = true;
-  let provider!: ActivityProviderOptions;
-  const activity = makeQuestionnaireActivity({
-    bridge,
-    isCurrent: () => current,
-    run: (effect, signal) => Effect.runPromise(effect, { signal }),
-    register: (_events, options) => {
-      provider = options;
-      return { publish: () => {}, dispose: () => {}, isAvailable: () => true };
-    },
-  });
-  activity.activate({ emit: () => {}, on: () => () => {} }, "session");
-  const invoke = (id: string, action: string, revision: string) =>
-    Effect.tryPromise((signal) => provider.invoke(id, action, revision, signal));
-  return {
-    bridge,
-    activity,
-    provider,
-    invoke,
-    replace: () => {
-      current = false;
-    },
-  };
-};
 it.effect("publishes queued, mounted, hidden and settled questions without copying answers", () =>
   Effect.gen(function* () {
     const f = fixture();

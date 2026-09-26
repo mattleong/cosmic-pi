@@ -48,6 +48,10 @@ export const processError = (
   message: string,
 ): SubagentProcessError => new SubagentProcessError({ operation, code, message });
 
+/** Shared `InvalidSubagentRequestError` factory for failures with an explicit machine code. */
+export const invalidRequest = (code: string, message: string): InvalidSubagentRequestError =>
+  new InvalidSubagentRequestError({ code, message });
+
 /**
  * Shared `SubagentProcessError` factory for caught causes of unknown type; `fallbackMessage` is
  * used only when the cause is neither an `Error` nor a string.

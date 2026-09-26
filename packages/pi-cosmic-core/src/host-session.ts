@@ -58,25 +58,41 @@ export function isProjectTrusted(ctx: HostTrustContext): boolean {
 }
 
 /** Best-effort Pi notification boundary; a hostile or stale host UI never throws into the caller. */
-// SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
 export function notifyAtHostBoundary(
   ctx: HostNotifierContext,
   message: string,
   level: HostNotificationLevel,
 ): void {
+  // Pi documents `notify` as synchronous void; a returned thenable is contained anyway.
+  invokeBestEffort(() => ctx.ui.notify(message, level));
+}
+
+/**
+ * Attaches no-op settlement handlers to an object or callable thenable, reading `then` exactly
+ * once. Inspection failures are contained: there is no resource to manage or await.
+ */
+export function containThenable<Value>(value: Value): void {
   try {
-    const outcome: unknown = ctx.ui.notify(message, level);
-    // Pi documents `notify` as synchronous void. A runtime that returns a thenable anyway must
-    // not surface an unhandled rejection through this best-effort boundary, so any returned
-    // thenable gets a no-op rejection handler; there is no resource to manage or await.
-    if (Predicate.isPromiseLike(outcome)) {
-      outcome.then(
+    if (!Predicate.isObjectOrArray(value) && !Predicate.isFunction(value)) return;
+    // SAFETY: The value is narrowed to an object or function before its optional then is read.
+    const then = (value as { readonly then?: unknown }).then;
+    if (Predicate.isFunction(then))
+      then.call(
+        value,
         () => undefined,
         () => undefined,
       );
-    }
   } catch {
-    // Notifications are best effort at the Pi host boundary.
+    // A hostile thenable cannot escape a best-effort boundary.
+  }
+}
+
+/** Calls a best-effort host or protocol callback: a throw is swallowed, a thenable contained. */
+export function invokeBestEffort<A>(callback: () => A): void {
+  try {
+    containThenable(callback());
+  } catch {
+    // Best-effort callbacks cannot escape their boundary.
   }
 }
 

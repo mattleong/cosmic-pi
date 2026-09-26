@@ -12,7 +12,7 @@ import {
   type CompactNotice,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import { isCompactPiTool } from "../tools/mcp-evidence.ts";
+import { isCompactPiTool } from "../tools/compact-subject.ts";
 import { codeModeOutputNotice } from "./notices.ts";
 import { compactParentNotices, compactSettledOutcome } from "./compact-summary-context.ts";
 import { decodeOption, type CodeModeCallEntry } from "../tools/format.ts";
@@ -122,8 +122,7 @@ const projectCodeModeCompactSummary = (
       (call, index) =>
         call.status === "error" &&
         !visibleRows.has(children.entries[index]!) &&
-        call.compact?.version === 2 &&
-        call.compact.issues.entries.some((issue) => issue.severity === "error"),
+        call.compact?.issues.entries.some((issue) => issue.severity === "error") === true,
     ).length;
     const hiddenFailed = Math.max(0, failed - visibleFailed - representedHiddenFailed);
     if (hiddenFailed > 0)
@@ -148,14 +147,6 @@ const projectCodeModeCompactSummary = (
             : "Only part of the output was returned. Earlier changes may remain.",
         }),
       });
-    const evidence = details.mcpEvidence;
-    if (
-      details.compactAttention === undefined &&
-      phase === "settled" &&
-      evidence !== undefined &&
-      evidence.observed !== evidence.mcp
-    )
-      return undefined;
     const hasAttention = notices.some(isCompactAttention);
     if (phase !== "settled") return { ...heading, counters, children, notices };
     if (running + queued > 0) {
@@ -175,10 +166,9 @@ const projectCodeModeCompactSummary = (
       );
     }
 
-    // Legacy details have no adapter evidence or hidden-call coverage. New evidence must
+    // Pre-ledger details have no adapter evidence or hidden-call coverage. New evidence must
     // validate completely before reaching this branch; never infer outcomes from guest output.
     if (
-      evidence === undefined &&
       details.compactAttention === undefined &&
       (total !== details.toolCalls.length ||
         details.toolCalls.some((call) => !isCompactPiTool(call.tool)))
@@ -245,7 +235,7 @@ const withBodyClaims = (input: CompactSummary): CompactSummary => {
   };
 };
 
-/** The outer shell owns one issue block. V1 history keeps conservative legacy evidence. */
+/** The outer shell owns one issue block. Pre-ledger history keeps conservative legacy evidence. */
 export const codeModeCompactSummary = (
   input: Parameters<SummaryProvider>[0],
   liveElapsed?: (call: CodeModeCallEntry) => number | undefined,
@@ -256,7 +246,7 @@ export const codeModeCompactSummary = (
     const summary = projectCodeModeCompactSummary(input, details, liveElapsed);
     if (!summary || !input.result) return summary;
     const attention = details?.compactAttention;
-    if (attention?.version !== 2) return withBodyClaims(summary);
+    if (attention === undefined) return withBodyClaims(summary);
     const own = legacyCompactIssues(summary.notices?.filter(isCompactAttention), "code-mode");
     const root =
       summary.outcome !== "cancelled" && summary.failure?.cause

@@ -52,52 +52,49 @@ describe("guarded host tool updates", () => {
     expect(cancellations.every((cancel) => cancel.mock.calls.length === 1)).toBe(true);
   });
 
-  it("contains a synchronous throw from onUpdate", () => {
-    const publisher = makeGuardedToolUpdatePublisher(
+  it.each([
+    [
+      "a synchronous throw",
       () => {
         throw new Error("host update failed");
       },
-      () => true,
-    );
-
+    ],
+    [
+      "a rejecting thenable",
+      () =>
+        new Proxy(
+          {},
+          {
+            // Report `then` so thenable detection reaches the hostile implementation.
+            has: (_target, key) => key === "then",
+            get: (_target, key) =>
+              key === "then"
+                ? (_resolve: () => void, reject: (error: Error) => void) =>
+                    reject(new Error("host rejection"))
+                : undefined,
+          },
+        ),
+    ],
+    [
+      "a throwing then getter",
+      () =>
+        new Proxy(
+          {},
+          {
+            has: (_target, key) => key === "then",
+            get: (_target, key) => {
+              if (key === "then") throw new Error("then getter escaped");
+            },
+          },
+        ),
+    ],
+  ])("contains %s from onUpdate", (_name, onUpdate) => {
+    const publisher = makeGuardedToolUpdatePublisher(onUpdate, () => true);
     expect(() => {
       publisher.publish(update("leading"));
       publisher.publishNow(update("semantic"));
       publisher.settle();
     }).not.toThrow();
-  });
-
-  it("contains rejecting and throwing host thenables", () => {
-    const cases = [
-      new Proxy(
-        {},
-        {
-          get: (_target, key) =>
-            key === "then"
-              ? (_resolve: () => void, reject: (error: Error) => void) =>
-                  reject(new Error("host rejection"))
-              : undefined,
-        },
-      ),
-      new Proxy(
-        {},
-        {
-          get: (_target, key) => {
-            if (key === "then") throw new Error("then getter escaped");
-          },
-        },
-      ),
-    ];
-    for (const outcome of cases) {
-      const publisher = makeGuardedToolUpdatePublisher(
-        () => outcome,
-        () => true,
-      );
-      expect(() => {
-        publisher.publish(update("leading"));
-        publisher.settle();
-      }).not.toThrow();
-    }
   });
 
   it("falls back to immediate delivery when scheduling throws", () => {

@@ -28,25 +28,6 @@ export const aggregateUsage = (
   return `${formatTokens(tokens)} ${style === "compact" ? "tok" : "tokens"}${costPart}`;
 };
 
-/**
- * Renders known usage only. Unknown cost is omitted rather than shown as `$0`,
- * and usage with no tokens and no positive known cost renders nothing.
- */
-export const formatUsage = (
-  usage: FormatUsageInput | undefined,
-  tokensLabel = "tokens",
-): string => {
-  if (!usage) return "";
-  const hasTokens = Number.isFinite(usage.totalTokens) && usage.totalTokens > 0;
-  const hasCost = usage.cost !== undefined && Number.isFinite(usage.cost);
-  if (!hasTokens && (!hasCost || usage.cost === 0)) return "";
-  const parts = [
-    `${formatTokens(usage.totalTokens)} ${tokensLabel}`,
-    ...(hasCost ? [formatCost(usage.cost ?? 0)] : []),
-  ];
-  return parts.join(" · ");
-};
-
 export const formatRelativeAge = (milliseconds: number): string => {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
   if (seconds < 1) return "just now";

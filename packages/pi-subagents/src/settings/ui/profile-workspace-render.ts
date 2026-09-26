@@ -5,6 +5,7 @@ import {
   framedFill,
   framedScreen,
   framedStackedRows,
+  framedWideRows,
   listDetailHeading,
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
@@ -12,35 +13,32 @@ import { managerLayoutTier, renderResponsiveManagerFooter } from "pi-cosmic-ui/m
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
-import type {
-  ProfileRouteDraft,
-  ProfileSettingsInspection,
-  ProfileSettingsScope,
-  ProfileWorkspaceTarget,
+import {
+  loadProfileRouteDraft,
+  type ProfileRouteDraft,
+  type ProfileSettingsInspection,
+  type ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
 import {
   candidateEffortLabel,
   runWithLabel,
   candidateFastModeApplied,
   profileRouteOptionLabel,
-  targetProfileRouteDraft,
   type ProfileWorkspacePane,
 } from "./profile-workspace-model.ts";
 import { profileWorkspaceRows, type ProfileWorkspaceRow } from "./profile-workspace-rows.ts";
-import { focusedProfileField, profilePaneRows, profileTone } from "./profile-style.ts";
+import { focusedProfileField, profileTone } from "./profile-style.ts";
 import type { SettingsSelectKeybindingId } from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
+import { qualifiedProfileSetLabel } from "./profile-set-picker-model.ts";
 
 export interface ProfileWorkspaceConfirmation {
   readonly title: string;
   readonly detail: string;
-  readonly preview?: ReadonlyArray<string> | undefined;
 }
 export interface ProfileWorkspaceRenderState {
   readonly inspection: ProfileSettingsInspection;
   readonly target: ProfileWorkspaceTarget;
-  readonly scope: ProfileSettingsScope;
-  readonly projectTrusted: boolean;
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;
   readonly pane: ProfileWorkspacePane;
@@ -49,12 +47,10 @@ export interface ProfileWorkspaceRenderState {
   readonly candidateIndex: number;
   readonly fieldIndex: number;
   readonly draft: ProfileRouteDraft;
-  readonly advancedExpanded?: boolean | undefined;
-  readonly expandedCandidates?: ReadonlySet<number> | undefined;
+  readonly expandedCandidates: ReadonlySet<number>;
   readonly editedProfiles?: ReadonlySet<ProfileId> | undefined;
   readonly helpOpen?: boolean | undefined;
   readonly helpScroll?: number | undefined;
-  readonly backLabel?: string | undefined;
   readonly busy: boolean;
   readonly cancellableBusy: boolean;
   readonly message?:
@@ -79,7 +75,7 @@ const targetHeading = (target: ProfileWorkspaceTarget): string =>
 const destination = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session"
     ? "Changes affect later launches. Active runs are unchanged."
-    : `Saving to ${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name} · session not affected`;
+    : `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
 /** Reserve metadata first: long configured model selectors must never hide reasoning. */
 export const workspaceCandidateSummary = (
@@ -87,21 +83,17 @@ export const workspaceCandidateSummary = (
   profile: ProfileId,
   parentEffort: SubagentEffort,
   width: number,
-  parentModel?: string,
-  theme?: Theme,
+  parentModel: string | undefined,
+  theme: Theme,
 ): string => {
   const effort = candidateEffortLabel(profile, candidate, parentEffort);
   const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
-  const metadata = theme
-    ? `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`
-    : effort + fast;
+  const metadata = `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`;
   const modelWidth = Math.max(0, width - visibleWidth(metadata) - 3);
   return modelWidth > 0
-    ? `${theme ? theme.fg(profileTone.model, truncateToWidth(candidate.model, modelWidth)) : truncateToWidth(candidate.model, modelWidth)} · ${metadata}`
+    ? `${theme.fg(profileTone.model, truncateToWidth(candidate.model, modelWidth))} · ${metadata}`
     : truncateToWidth(metadata, width);
 };
-const expanded = (state: ProfileWorkspaceRenderState): ReadonlySet<number> =>
-  state.expandedCandidates ?? new Set(state.advancedExpanded ? [state.candidateIndex] : []);
 
 const profileTableLines = (
   state: ProfileWorkspaceRenderState,
@@ -112,7 +104,7 @@ const profileTableLines = (
     const selected = index === state.profileIndex;
     const draft = selected
       ? state.draft
-      : targetProfileRouteDraft(state.inspection, state.target, profile);
+      : loadProfileRouteDraft(state.inspection, state.target, profile);
     const first = draft.kind === "invalid" ? undefined : draft.candidates[0];
     return {
       profile,
@@ -217,7 +209,7 @@ const editorLines = (
     profile,
     state.parentEffort,
     state.parentModel,
-    expanded(state),
+    state.expandedCandidates,
     state.editedProfiles?.has(profile) ?? false,
   );
   const labelWidth = Math.max(
@@ -306,7 +298,7 @@ const compactLines = (
     profile,
     state.parentEffort,
     state.parentModel,
-    expanded(state),
+    state.expandedCandidates,
   )[state.fieldIndex];
   const field = selected
     ? `${selected.label}  ${state.pane !== "profiles" && !selected.fixed ? selected.value : fieldValue(state, theme, selected)}`
@@ -367,12 +359,14 @@ export const renderProfileWorkspace = (
   );
   const back =
     state.pane === "profiles"
-      ? (state.backLabel ?? (state.target.kind === "session" ? "Close" : "Saved profiles"))
+      ? state.target.kind === "session"
+        ? "Close"
+        : "Saved profiles"
       : "Profiles";
   const context =
     state.target.kind === "session"
       ? "Current Session"
-      : `${state.target.set.scope === "project" ? "Project" : "Global"}/${state.target.set.name}`;
+      : qualifiedProfileSetLabel(state.target.set);
   const bottom = state.pendingConfirmation
     ? `${keys.confirm} Confirm · ${keys.cancel} Cancel`
     : state.helpOpen
@@ -419,12 +413,9 @@ export const renderProfileWorkspace = (
         const confirmation = state.pendingConfirmation;
         return framedFill(
           frame,
-          [
-            context,
-            confirmation.title,
-            confirmation.detail,
-            ...(confirmation.preview ?? []),
-          ].flatMap((line) => wrapTextWithAnsi(theme.fg("warning", line), inner)),
+          [context, confirmation.title, confirmation.detail].flatMap((line) =>
+            wrapTextWithAnsi(theme.fg("warning", line), inner),
+          ),
           bodyHeight,
           inner,
           "list",
@@ -452,8 +443,7 @@ export const renderProfileWorkspace = (
       if (managerLayoutTier(width) === "wide") {
         const listWidth = Math.min(64, Math.floor(inner * 0.4));
         const detailWidth = inner - listWidth - 1;
-        body = profilePaneRows(theme, {
-          focused: state.pane === "profiles" ? "list" : "detail",
+        body = framedWideRows(frame, {
           left: profileLines(state, theme, listWidth, available),
           right: editorLines(state, theme, detailWidth, available),
           height: available,

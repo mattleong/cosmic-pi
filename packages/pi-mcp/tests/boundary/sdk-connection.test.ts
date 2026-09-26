@@ -5,57 +5,63 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import { afterEach, vi } from "vitest";
 import * as Core from "pi-cosmic-core";
 import { McpConnector } from "../../src/boundary/sdk-connection.ts";
 import * as Stdio from "../../src/boundary/sdk-stdio.ts";
 import * as Http from "../../src/boundary/sdk-http.ts";
-import type { McpConnection } from "../../src/client/model.ts";
-import type { McpEffectiveServer, McpSettings } from "../../src/config/model.ts";
+import type { McpServerDefinition } from "../../src/config/model.ts";
+import {
+  fakeConnection,
+  httpDefinition,
+  stdioDefinition,
+  testServer,
+  testSettings,
+} from "../fixtures/services.ts";
 
-const settings: McpSettings = {
-  enabled: true,
+const settings = testSettings({
   connectTimeoutMs: 1000,
   requestTimeoutMs: 1000,
   idleTimeoutMs: 1000,
-  maxConcurrent: 8,
-  maxPerServer: 4,
-  maxQueued: 64,
-};
-const server = (id: string): McpEffectiveServer => ({
-  id,
-  directory: "/fixture/mcp",
-  scope: "project",
-  identity: id,
-  enabled: true,
-  definition: { transport: "stdio", command: "fixture", args: [], denyTools: [], environment: {} },
 });
+type Definition<T> = Partial<Extract<McpServerDefinition, { transport: T }>>;
+const server = (id: string, definition: McpServerDefinition) =>
+  testServer(id, { identity: id, scope: "project", directory: "/fixture/mcp", definition });
+const stdioServer = (id: string, definition: Definition<"stdio"> = {}) =>
+  server(id, stdioDefinition(definition));
+const httpServer = (id: string, definition: Definition<"http"> = {}) =>
+  server(id, httpDefinition(definition));
 const makeConnector = (env: Record<string, string> = {}) =>
   McpConnector.pipe(
     Effect.provide(McpConnector.layer),
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord(env)),
   );
-const fakeConnection = (onCleanup: ((confirmed: boolean) => void) | undefined) =>
-  Effect.gen(function* () {
-    let closed = false;
-    const close = Effect.sync(() => {
-      if (closed) return;
-      closed = true;
-      onCleanup?.(true);
-    });
-    yield* Effect.addFinalizer(() => close);
-    return {
-      capabilities: { tools: true, resources: false, prompts: false },
-      changes: Stream.empty,
-      terminal: Effect.never,
-      health: Effect.sync(() => ({ closed, cleanupUnconfirmed: false })),
-      setToken: () => Effect.void,
-      request: (input) =>
-        Effect.succeed({ action: input.action, outcome: "completed", result: {} }),
-      close,
-    } satisfies McpConnection;
+const cleanupOnClose = (onCleanup: ((confirmed: boolean) => void) | undefined) =>
+  fakeConnection((terminal) => ({
+    close: Deferred.succeed(terminal, undefined).pipe(
+      Effect.map((first) => {
+        if (first) onCleanup?.(true);
+      }),
+    ),
+  }));
+
+/** Replace the stdio opener with a fake connection and record each option set it receives. */
+const spyStdio = () => {
+  const opened: Stdio.SdkStdioOptions[] = [];
+  vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
+    opened.push(options);
+    return cleanupOnClose(options.onCleanup);
   });
+  return opened;
+};
+const spyHttp = () => {
+  const opened: Http.SdkHttpOptions[] = [];
+  vi.spyOn(Http, "openSdkHttp").mockImplementation((options) => {
+    opened.push(options);
+    return cleanupOnClose(options.onCleanup);
+  });
+  return opened;
+};
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -71,27 +77,16 @@ it.effect("resolves environment interpolation at connection time using its captu
     };
     const connector = yield* makeConnector(environment);
     environment.MCP_SECRET = "rotated";
-    let captured: Stdio.SdkStdioOptions | undefined;
-    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
-      captured = options;
-      return fakeConnection(options.onCleanup);
-    });
-    const target: McpEffectiveServer = {
-      ...server("env"),
-      definition: {
-        transport: "stdio",
-        command: "fixture",
-        args: [],
-        cwd: "relative",
-        denyTools: [],
-        environment: {
-          TOKEN: "${MCP_SECRET}",
-          LITERAL: "literal",
-          ESCAPED: "$${MCP_SECRET}",
-          NONRECURSIVE: "${NESTED}",
-        },
+    const opened = spyStdio();
+    const target = stdioServer("env", {
+      cwd: "relative",
+      environment: {
+        TOKEN: "${MCP_SECRET}",
+        LITERAL: "literal",
+        ESCAPED: "$${MCP_SECRET}",
+        NONRECURSIVE: "${NESTED}",
       },
-    };
+    });
     const connection = yield* connector
       .open(target, settings)
       .pipe(
@@ -100,41 +95,28 @@ it.effect("resolves environment interpolation at connection time using its captu
           ConfigProvider.fromEnvRecord({ MCP_SECRET: "wrong-runtime" }),
         ),
       );
-    expect(captured?.environment).toEqual({
+    expect(opened[0]?.environment).toEqual({
       PATH: "/fixture/bin",
       TOKEN: "rotated",
       LITERAL: "literal",
       ESCAPED: "${MCP_SECRET}",
       NONRECURSIVE: "${OTHER}",
     });
-    expect(captured?.cwd).toBe("/fixture/mcp/relative");
+    expect(opened[0]?.cwd).toBe("/fixture/mcp/relative");
     yield* connection.close;
     const minimal = yield* makeConnector();
-    yield* minimal.open(server("minimal-env"), settings);
-    expect(captured?.environment).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+    yield* minimal.open(stdioServer("minimal-env"), settings);
+    expect(opened[1]?.environment).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
   }),
 );
 
 it.effect("rejects missing variables before connection acquisition without leaking names", () =>
   Effect.gen(function* () {
-    let opened = false;
-    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
-      opened = true;
-      return fakeConnection(options.onCleanup);
-    });
+    const opened = spyStdio();
     const connector = yield* makeConnector({ PRESENT: "ok" });
     const result = yield* connector
       .open(
-        {
-          ...server("missing-variable"),
-          definition: {
-            transport: "stdio",
-            command: "fixture",
-            args: [],
-            denyTools: [],
-            environment: { TOKEN: "prefix-${MISSING}-suffix" },
-          },
-        },
+        stdioServer("missing-variable", { environment: { TOKEN: "prefix-${MISSING}-suffix" } }),
         settings,
       )
       .pipe(Effect.result);
@@ -143,21 +125,13 @@ it.effect("rejects missing variables before connection acquisition without leaki
       failure: { kind: "config", outcome: "not-sent" },
     });
     expect(String(result)).not.toContain("MISSING");
-    expect(opened).toBe(false);
+    expect(opened).toEqual([]);
   }),
 );
 
 it.effect("rejects expanded header injection and oversized values before HTTP acquisition", () =>
   Effect.gen(function* () {
-    let opened = false;
-    vi.spyOn(Http, "openSdkHttp").mockImplementation((options) => {
-      opened = true;
-      return fakeConnection(options.onCleanup);
-    });
-    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) => {
-      opened = true;
-      return fakeConnection(options.onCleanup);
-    });
+    const opened = [spyHttp(), spyStdio()];
     const connector = yield* makeConnector({
       BAD: "safe\r\nInjected: secret",
       LONG: "x".repeat(8_193),
@@ -166,19 +140,7 @@ it.effect("rejects expanded header injection and oversized values before HTTP ac
     });
     for (const value of ["${BAD}", "${LONG}", "${HALF}${HALF}", "${NUL}"]) {
       const result = yield* connector
-        .open(
-          {
-            ...server(`unsafe-${value}`),
-            definition: {
-              transport: "http",
-              url: "https://example.test/mcp",
-              denyTools: [],
-              headers: { "x-fixture": value },
-              auth: { type: "none" },
-            },
-          },
-          settings,
-        )
+        .open(httpServer(`unsafe-${value}`, { headers: { "x-fixture": value } }), settings)
         .pipe(Effect.result);
       expect(result).toMatchObject({
         _tag: "Failure",
@@ -186,53 +148,29 @@ it.effect("rejects expanded header injection and oversized values before HTTP ac
       });
       expect(String(result)).not.toContain("BAD");
     }
-    const stdio = yield* connector
-      .open(
-        {
-          ...server("unsafe-stdio"),
-          definition: {
-            transport: "stdio",
-            command: "fixture",
-            args: [],
-            denyTools: [],
-            environment: { value: "${NUL}" },
-          },
-        },
-        settings,
-      )
-      .pipe(Effect.result);
-    expect(stdio).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "config", outcome: "not-sent" },
-    });
-    expect(opened).toBe(false);
+    expect(
+      yield* connector
+        .open(stdioServer("unsafe-stdio", { environment: { value: "${NUL}" } }), settings)
+        .pipe(Effect.flip),
+    ).toMatchObject({ kind: "config", outcome: "not-sent" });
+    expect(opened).toEqual([[], []]);
   }),
 );
 
 it.effect("resolves explicit HTTP headers and env bearer credentials without acquiring early", () =>
   Effect.gen(function* () {
-    let captured: Http.SdkHttpOptions | undefined;
-    vi.spyOn(Http, "openSdkHttp").mockImplementation((options) => {
-      captured = options;
-      return fakeConnection(options.onCleanup);
-    });
+    const opened = spyHttp();
     const connector = yield* makeConnector({ HEADER: "bound", BEARER: "private-token" });
-    expect(captured).toBeUndefined();
+    expect(opened).toEqual([]);
     yield* connector.open(
-      {
-        ...server("http-env"),
-        definition: {
-          transport: "http",
-          url: "https://example.test/mcp",
-          denyTools: [],
-          headers: { "x-fixture": "${HEADER}" },
-          auth: { type: "env", env: "BEARER" },
-        },
-      },
+      httpServer("http-env", {
+        headers: { "x-fixture": "${HEADER}" },
+        auth: { type: "env", env: "BEARER" },
+      }),
       settings,
     );
-    expect(captured?.headers).toEqual({ "x-fixture": "bound" });
-    expect(captured?.token).toBe("private-token");
+    expect(opened[0]?.headers).toEqual({ "x-fixture": "bound" });
+    expect(opened[0]?.token).toBe("private-token");
   }),
 );
 
@@ -244,16 +182,10 @@ it.effect(
       const connector = yield* makeConnector();
       const failure = yield* connector
         .open(
-          {
-            ...server("remote-bearer"),
-            definition: {
-              transport: "http",
-              url: "http://remote.test/mcp",
-              denyTools: [],
-              headers: {},
-              auth: { type: "env", env: "MISSING_SECRET" },
-            },
-          },
+          httpServer("remote-bearer", {
+            url: "http://remote.test/mcp",
+            auth: { type: "env", env: "MISSING_SECRET" },
+          }),
           settings,
         )
         .pipe(Effect.flip);
@@ -270,20 +202,15 @@ it.effect(
   "holds connection admission across connector and scope replacement until confirmed close",
   () =>
     Effect.gen(function* () {
-      vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) =>
-        fakeConnection(options.onCleanup),
-      );
+      spyStdio();
       const first = yield* makeConnector();
       const second = yield* makeConnector();
       const oldScope = yield* Scope.fork(yield* Effect.scope);
-      const target = server("scope-replacement");
+      const target = stdioServer("scope-replacement");
       yield* first.open(target, settings).pipe(Effect.provideService(Scope.Scope, oldScope));
       expect(
-        yield* second.open({ ...target, identity: "changed-target" }, settings).pipe(Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { kind: "cleanup", outcome: "not-sent" },
-      });
+        yield* second.open({ ...target, identity: "changed-target" }, settings).pipe(Effect.flip),
+      ).toMatchObject({ kind: "cleanup", outcome: "not-sent" });
       yield* Scope.close(oldScope, Exit.void);
       const replacement = yield* second.open(target, settings);
       expect(yield* replacement.health).toMatchObject({ closed: false });
@@ -320,7 +247,7 @@ it.effect.each([
       }),
     );
     const first = yield* makeConnector();
-    const target = server(`startup-interrupt-${confirmed}-${replaceScope}`);
+    const target = stdioServer(`startup-interrupt-${confirmed}-${replaceScope}`);
     const oldScope = yield* Scope.fork(yield* Effect.scope);
     const opening = yield* first
       .open(target, settings, undefined, (cleanup) => {
@@ -334,17 +261,14 @@ it.effect.each([
     ).pipe(Effect.forkChild);
     yield* Deferred.await(cleaning);
     const replacement = yield* makeConnector();
-    expect(yield* replacement.open(target, settings).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { kind: "cleanup" },
+    expect(yield* replacement.open(target, settings).pipe(Effect.flip)).toMatchObject({
+      kind: "cleanup",
     });
     yield* Deferred.succeed(release, undefined);
     yield* Fiber.join(interrupt);
     expect(observed).toEqual([confirmed]);
     expect(forwarded).toEqual([confirmed]);
-    vi.spyOn(Stdio, "openSdkStdio").mockImplementation((options) =>
-      fakeConnection(options.onCleanup),
-    );
+    spyStdio();
     const retried = yield* replacement.open(target, settings).pipe(Effect.result);
     expect(retried._tag).toBe(confirmed ? "Success" : "Failure");
   }),

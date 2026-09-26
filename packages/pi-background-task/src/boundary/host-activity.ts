@@ -1,5 +1,5 @@
 import {
-  registerActivityProvider,
+  registerRevisionedActivityProvider,
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
@@ -82,38 +82,16 @@ export function registerBackgroundTaskActivity(options: {
   readonly isCurrent: () => boolean;
   readonly stop: (id: string, signal: AbortSignal) => Promise<void>;
 }): () => void {
-  let live = true;
-  const current = () => live && options.isCurrent();
-  const lookup = (id: string, revision: string, signal: AbortSignal) => {
-    if (!current() || signal.aborted) throw new Error("Background Tasks activity is unavailable.");
-    const item = backgroundTaskActivityItems(options.bridge.get()).find(
-      (item) => item.id === id && item.revision === revision,
-    );
-    if (!item) throw new Error("Background task activity changed.");
-    return item;
-  };
-  const registration = registerActivityProvider(options.events, {
+  return registerRevisionedActivityProvider(options.events, {
     sessionId: options.sessionId,
     providerId: "pi-background-task",
-    snapshot: () => (current() ? backgroundTaskActivityItems(options.bridge.get()) : []),
-    getDetail: (id, revision, signal) =>
-      Promise.resolve().then(() => {
-        lookup(id, revision, signal);
-        return backgroundTaskActivityDetail(options.bridge.get(), id) ?? "";
-      }),
-    invoke: (id, action, revision, signal) =>
-      Promise.resolve().then(() => {
-        const item = lookup(id, revision, signal);
-        if (action !== "stop" || !item.actions?.some((allowed) => allowed.id === action))
-          throw new Error("Background task action is unavailable.");
-        return options.stop(id, signal);
-      }),
+    isCurrent: options.isCurrent,
+    items: () => backgroundTaskActivityItems(options.bridge.get()),
+    detail: (item) => backgroundTaskActivityDetail(options.bridge.get(), item.id) ?? "",
+    act: (item, action, signal) => {
+      if (action !== "stop") throw new Error("Background task action is unavailable.");
+      return options.stop(item.id, signal);
+    },
+    subscriptions: [options.bridge.subscribe],
   });
-  const unsubscribe = options.bridge.subscribe(() => registration.publish());
-  registration.publish();
-  return () => {
-    live = false;
-    unsubscribe();
-    registration.dispose();
-  };
 }

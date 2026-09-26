@@ -2,8 +2,7 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
-import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
+import { invokeHostCallback, sanitizeTerminalLine } from "pi-cosmic-core";
 import {
   captureCodePreviewPresentationPolicy,
   type CodePreviewShellOptions,
@@ -22,7 +21,6 @@ import { codeModeCompactSummaryAtHost } from "../boundary/host-render-ticker.ts"
 import { Type } from "typebox";
 import { animationFrame, syncProgressTicker } from "../boundary/host-render-ticker.ts";
 import {
-  codeModeSource,
   renderCodeModeProgramContent,
   renderCodeModeToolCall,
   renderCodeModeToolResult,
@@ -164,20 +162,54 @@ export interface CodeModeToolDefinitionInput {
   readonly startUiTicker?: ((intervalMs: number, tick: () => void) => () => void) | undefined;
 }
 
+type ExpandedContent = NonNullable<CodePreviewShellOptions["expandedContent"]>;
+type ResultSlot = NonNullable<ExpandedContent["renderResult"]>;
+
 export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) {
   const capturedExpandKeys = expandKeys();
-  const ownsExpanded = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
-  const compactSummary: typeof codeModeCompactSummaryAtHost = (input) => {
-    const summary = codeModeStatusRequest(input.args)
+  // A failed policy capture keeps default timing instead of failing the result slot.
+  const timingEnabled = () =>
+    invokeHostCallback(() => captureCodePreviewPresentationPolicy().toolCallTiming, true);
+  const compactSummary: typeof codeModeCompactSummaryAtHost = (input) =>
+    codeModeStatusRequest(input.args)
       ? codeModeStatusCompactSummary(input)
       : codeModeCompactSummaryAtHost(input);
-    return summary && ownsExpanded && codeModeSource(input.args) !== undefined
-      ? {
-          ...summary,
-          expandedResultOwnsCall: true,
-        }
-      : summary;
-  };
+  /** One result slot; the shell's content-only slot omits the heading and shared attention. */
+  const resultSlot =
+    (contentOnly: boolean): ResultSlot =>
+    (result, options, theme, context) => {
+      const isPartial = invokeHostCallback(() => options.isPartial, false);
+      const summaryInput: Parameters<typeof codeModeCompactSummary>[0] = {
+        phase: isPartial ? "running" : "settled",
+        args: context.args,
+        result,
+        context,
+      };
+      if (codeModeStatusRequest(context.args)) {
+        const summary = codeModeStatusCompactSummary(summaryInput);
+        syncProgressTicker(false, context, input.startUiTicker);
+        return renderCodeModeStatusResult(result, options, theme, context, summary, contentOnly);
+      }
+      const readRequest = codeModeReadRequest(context.args);
+      const liveElapsed = isPartial ? liveChildElapsed() : undefined;
+      const rendered = renderCodeModeToolResult(
+        result,
+        options,
+        theme,
+        context,
+        animationFrame(),
+        capturedExpandKeys,
+        {
+          contentOnly,
+          ...(readRequest && { readRequest }),
+          summary: codeModeCompactSummary(summaryInput, liveElapsed),
+          timingEnabled: timingEnabled(),
+          liveElapsed,
+        },
+      );
+      syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker);
+      return rendered.component;
+    };
   const definition = defineTool({
     name: CODE_MODE_TOOL_NAME,
     label: "Code Mode",
@@ -185,9 +217,7 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       input.includePowerShell,
       input.catalogBudget,
       input.configSnapshot,
-    )}\n\n${describeCodeModeCatalog(input.catalogBudget, {
-      includePowerShell: input.includePowerShell,
-    })}`,
+    )}\n\n${describeCodeModeCatalog(input.catalogBudget, input.includePowerShell)}`,
     promptSnippet:
       "Run one confined script over Pi built-ins, background tasks, and bounded MCP requests",
     promptGuidelines: [
@@ -233,97 +263,14 @@ export function buildCodeModeToolDefinition(input: CodeModeToolDefinitionInput) 
       codeModeStatusRequest(args)
         ? renderCodeModeStatusCall(theme)
         : renderCodeModeToolCall(args, theme, context),
-    renderResult: (result, options, theme, context) => {
-      if (codeModeStatusRequest(context.args)) {
-        const summary = codeModeStatusCompactSummary({
-          phase: options.isPartial ? "running" : "settled",
-          args: context.args,
-          result,
-          context,
-        });
-        syncProgressTicker(false, context, input.startUiTicker ?? startHostUiTicker);
-        return renderCodeModeStatusResult(result, options, theme, context, summary);
-      }
-      const presentation = (() => {
-        try {
-          const summary = codeModeCompactSummary({
-            phase: options.isPartial ? "running" : "settled",
-            args: context.args,
-            result,
-            context,
-          });
-          const readRequest = codeModeReadRequest(context.args);
-          return {
-            ...(readRequest && { readRequest }),
-            ownsCall:
-              ownsExpanded && summary !== undefined && codeModeSource(context.args) !== undefined,
-            source: context.args && "code" in context.args ? context.args.code : undefined,
-            summary,
-            timingEnabled: captureCodePreviewPresentationPolicy().toolCallTiming,
-            liveElapsed: options.isPartial ? liveChildElapsed() : undefined,
-          };
-        } catch {
-          // The compact shell may already have promised call/notice ownership. Reject the
-          // result slot so its fallback keeps the original call and all recovery notices.
-          if (ownsExpanded) throw new Error("Code Mode expanded presentation unavailable");
-          return {};
-        }
-      })();
-      const rendered = renderCodeModeToolResult(
-        result,
-        options,
-        theme,
-        context,
-        animationFrame(),
-        capturedExpandKeys,
-        presentation,
-      );
-      syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker ?? startHostUiTicker);
-      return rendered.component;
-    },
+    renderResult: resultSlot(false),
   });
-  const expandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> = {
+  const expandedContent: ExpandedContent = {
     renderCall: (args) =>
       codeModeStatusRequest(args)
         ? renderCodeModeStatusCallContent()
         : renderCodeModeProgramContent(args),
-    renderResult: (result, options, theme, context) => {
-      if (codeModeStatusRequest(context.args)) {
-        const summary = codeModeStatusCompactSummary({
-          phase: options.isPartial ? "running" : "settled",
-          args: context.args,
-          result,
-          context,
-        });
-        syncProgressTicker(false, context, input.startUiTicker ?? startHostUiTicker);
-        return renderCodeModeStatusResult(result, options, theme, context, summary, true);
-      }
-      const readRequest = codeModeReadRequest(context.args);
-      const rendered = renderCodeModeToolResult(
-        result,
-        options,
-        theme,
-        context,
-        animationFrame(),
-        capturedExpandKeys,
-        {
-          contentOnly: true,
-          ...(readRequest && { readRequest }),
-          ownsCall: false,
-          source: codeModeSource(context.args),
-          summary: codeModeCompactSummary({
-            phase: options.isPartial ? "running" : "settled",
-            args: context.args,
-            result,
-            context,
-          }),
-          timingEnabled: captureCodePreviewPresentationPolicy().toolCallTiming,
-          liveElapsed: options.isPartial ? liveChildElapsed() : undefined,
-        },
-      );
-      syncProgressTicker(rendered.shouldAnimate, context, input.startUiTicker ?? startHostUiTicker);
-      return rendered.component;
-    },
+    renderResult: resultSlot(true),
   };
   return Object.assign(definition, { compactSummary, expandedContent });
 }
@@ -363,9 +310,5 @@ export function reconcileCodeModeToolActivation(pi: ExtensionAPI, desiredActive:
 }
 
 export function observeCodeModeToolActive(pi: ExtensionAPI): boolean {
-  try {
-    return pi.getActiveTools().includes(CODE_MODE_TOOL_NAME);
-  } catch {
-    return false;
-  }
+  return invokeHostCallback(() => pi.getActiveTools().includes(CODE_MODE_TOOL_NAME), false);
 }

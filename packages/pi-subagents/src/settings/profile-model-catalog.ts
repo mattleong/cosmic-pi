@@ -2,7 +2,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import * as Effect from "effect/Effect";
-import { sanitizeTerminalLine } from "pi-cosmic-core";
+import { freezeSnapshot, sanitizeTerminalLine } from "pi-cosmic-core";
 import type { LocalCliRuntime } from "../boundary/local-cli-process.ts";
 import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
@@ -12,16 +12,12 @@ import {
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
+import { runtimeEfforts, runtimeLabel } from "./profile-route-editor.ts";
 import {
-  runtimeEfforts,
-  updateCandidateModel,
-  type CandidateUpdate,
-} from "./profile-route-editor.ts";
-import {
-  createNativeModelChoices,
-  createProfileModelChoices,
-  type ProfileModelChoice,
-  type ProfileModelPickerChoice,
+  createNativeModelOptions,
+  createPiModelOptions,
+  retainUnavailableCurrent,
+  type ProfileModelOption,
   type ProfileModelPickerContext,
 } from "./ui/model-picker.ts";
 
@@ -54,19 +50,12 @@ export interface ProfileModelRegistry {
 
 export type ProfileModelCatalogRefresh = "updated" | "failed" | "aborted";
 
-const freezeProjectedModel = (model: ProjectedPiModel): ProjectedPiModel =>
-  Object.freeze({ ...model, supportedEfforts: Object.freeze([...model.supportedEfforts]) });
-
 const freezeCatalogSnapshot = (
   revision: number,
   models: ReadonlyArray<ProjectedPiModel>,
   scopedModels: ReadonlyArray<ProjectedPiModel> = models,
 ): ProfileModelCatalogSnapshot =>
-  Object.freeze({
-    revision,
-    piModels: Object.freeze(models.map(freezeProjectedModel)),
-    scopedPiModels: Object.freeze(scopedModels.map(freezeProjectedModel)),
-  });
+  freezeSnapshot({ revision, piModels: models, scopedPiModels: scopedModels });
 
 const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
   const efforts = getSupportedThinkingLevels(model).flatMap((effort) => {
@@ -117,21 +106,19 @@ export class ProfileModelCatalog {
     return this.snapshot;
   }
 
-  refresh(signal?: AbortSignal): Effect.Effect<ProfileModelCatalogRefresh> {
+  refresh(): Effect.Effect<ProfileModelCatalogRefresh> {
     return Effect.suspend(() => {
       const generation = ++this.refreshGeneration;
+      const stale = () => generation !== this.refreshGeneration;
       const retained = this.snapshot;
-      if (signal?.aborted) return Effect.succeed("aborted" as const);
       return Effect.tryPromise({
-        try: (effectSignal) => this.registry.refresh({ signal: effectSignal }),
+        try: (signal) => this.registry.refresh({ signal }),
         catch: () => undefined,
       }).pipe(
         Effect.match({
-          onFailure: () =>
-            signal?.aborted || generation !== this.refreshGeneration ? "aborted" : "failed",
+          onFailure: () => (stale() ? "aborted" : "failed"),
           onSuccess: (refreshResult): ProfileModelCatalogRefresh => {
-            if (refreshResult.aborted || signal?.aborted || generation !== this.refreshGeneration)
-              return "aborted";
+            if (refreshResult.aborted || stale()) return "aborted";
             if (refreshResult.errors && refreshResult.errors.size > 0) return "failed";
             try {
               if (this.registry.getError()) return "failed";
@@ -143,24 +130,11 @@ export class ProfileModelCatalog {
               retained.revision + 1,
               this.scopedSelectors,
             );
-            if (!projected || signal?.aborted || generation !== this.refreshGeneration)
-              return signal?.aborted || generation !== this.refreshGeneration
-                ? "aborted"
-                : "failed";
+            if (!projected || stale()) return stale() ? "aborted" : "failed";
             this.snapshot = projected;
             return "updated";
           },
         }),
-        Effect.raceFirst(
-          signal
-            ? Effect.callback<ProfileModelCatalogRefresh>((resume) => {
-                const abort = () => resume(Effect.succeed("aborted"));
-                signal.addEventListener("abort", abort, { once: true });
-                if (signal.aborted) abort();
-                return Effect.sync(() => signal.removeEventListener("abort", abort));
-              })
-            : Effect.never,
-        ),
       );
     });
   }
@@ -177,8 +151,8 @@ export const preferredHerdrPiSelector = (
 };
 
 export interface CandidateModelPickerData {
-  readonly choices: ReadonlyArray<ProfileModelPickerChoice>;
-  readonly scopedChoices?: ReadonlyArray<ProfileModelPickerChoice> | undefined;
+  readonly choices: ReadonlyArray<ProfileModelOption>;
+  readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;
   readonly current: string;
   readonly defaultSelector?: string | undefined;
   readonly context: ProfileModelPickerContext;
@@ -199,16 +173,6 @@ export interface CandidateModelPickerInput {
   readonly signal?: AbortSignal | undefined;
 }
 
-const selectedModelEfforts = (
-  choices: ReadonlyArray<ProfileModelPickerChoice>,
-  choice: ProfileModelChoice,
-) =>
-  choices.find((entry) =>
-    choice.kind === "parent"
-      ? entry.choice.kind === "parent"
-      : entry.choice.kind === "model" && entry.choice.selector === choice.selector,
-  )?.supportedEfforts;
-
 const nativeFallbackModels = (
   runtime: LocalCliRuntime,
   current: string,
@@ -216,8 +180,7 @@ const nativeFallbackModels = (
   [...new Set([current, PROFILE_NATIVE_MODEL_DEFAULTS[runtime]])].map((selector, index) => ({
     selector,
     label: selector,
-    description:
-      index === 0 ? "Current model" : `Default ${runtime === "claude" ? "Claude" : "Codex"} model`,
+    description: index === 0 ? "Current model" : `Default ${runtimeLabel(runtime)} model`,
     supportedEfforts: runtimeEfforts(runtime),
     // Fast mode for Codex is live catalog data. Fallback selectors never infer a tier.
     supportedServiceTiers: [],
@@ -240,11 +203,7 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
   // SAFETY: The caller branches away from Pi immediately before entering this function.
   const runtime = input.candidate.runtime as LocalCliRuntime;
   return Promise.resolve()
-    .then(() =>
-      input.signal
-        ? input.listNativeModels(runtime, input.signal)
-        : input.listNativeModels(runtime),
-    )
+    .then(() => input.listNativeModels(runtime, input.signal))
     .then(
       (advertised) => {
         const models = advertised.filter((model) => isSafeNativeModelSelector(model.selector));
@@ -261,7 +220,7 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
         warning:
           error instanceof Error
             ? `${sanitizeTerminalLine(error.message)} Showing the current and default models instead.`
-            : `Could not load ${runtime === "claude" ? "Claude" : "Codex"} models. Showing the current and default models instead.`,
+            : `Could not load ${runtimeLabel(runtime)} models. Showing the current and default models instead.`,
       }),
     )
     .then(({ models, warning }) => {
@@ -269,7 +228,7 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
       for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
         if (!catalog.has(model.selector)) catalog.set(model.selector, model);
       const base = {
-        choices: createNativeModelChoices([...catalog.values()], input.candidate.model),
+        choices: createNativeModelOptions([...catalog.values()], input.candidate.model),
         current: input.candidate.model,
         defaultSelector:
           models.find((model) => model.isDefault)?.selector ??
@@ -281,47 +240,31 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
     });
 };
 
-const unavailableCurrentChoice = (
-  candidate: ProfileCandidate,
-  advertisedChoices: ReadonlyArray<ProfileModelPickerChoice>,
-): ProfileModelPickerChoice | undefined => {
-  const currentAvailable = advertisedChoices.some((choice) =>
-    candidate.model === "parent"
-      ? choice.choice.kind === "parent"
-      : choice.choice.kind === "model" && choice.choice.selector === candidate.model,
-  );
-  if (currentAvailable) return undefined;
-  return {
-    choice:
-      candidate.model === "parent"
-        ? { kind: "parent" }
-        : { kind: "model", selector: candidate.model },
-    item: {
-      value: candidate.model,
-      label: sanitizeTerminalLine(`${candidate.model} (current · unavailable)`),
-      description: sanitizeTerminalLine(
-        "Keep the configured value or choose an available replacement",
-      ),
-    },
-    searchText: sanitizeTerminalLine(`${candidate.model} current unavailable configured`),
-    enabled: false,
-    unavailableReason: "Configured model is unavailable; choose another model or cancel to keep it",
-    fastModeAvailable: advertisedChoices.some(
-      (choice) =>
-        choice.choice.kind === "model" &&
-        choice.choice.selector === candidate.model &&
-        choice.fastModeAvailable,
-    ),
-  };
-};
+type PiModelOptionsInput = Pick<
+  CandidateModelPickerInput,
+  "candidate" | "piCatalog" | "parentSelector"
+>;
 
-const retainCurrentChoice = (
-  candidate: ProfileCandidate,
-  advertisedChoices: ReadonlyArray<ProfileModelPickerChoice>,
-): ReadonlyArray<ProfileModelPickerChoice> => {
-  const unavailable = unavailableCurrentChoice(candidate, advertisedChoices);
-  return unavailable ? [unavailable, ...advertisedChoices] : advertisedChoices;
-};
+/** Pi options for a candidate, from the full catalog unless a narrower model list is given. */
+const piModelOptions = (
+  { candidate, piCatalog, parentSelector }: PiModelOptionsInput,
+  models = piCatalog.piModels,
+) =>
+  createPiModelOptions({
+    models,
+    parentModel: piCatalog.piModels.find((model) => canonicalPiSelector(model) === parentSelector),
+    currentSelector: candidate.model,
+    allowParent: candidate.host === "local",
+  });
+
+/** The efforts a Pi candidate's model offers, gated exactly as its picker gates them. */
+export const supportedPiEfforts = (
+  input: PiModelOptionsInput,
+): ReadonlyArray<SubagentEffort> | undefined =>
+  input.candidate.runtime === "pi"
+    ? piModelOptions(input).find((option) => option.selector === input.candidate.model)
+        ?.supportedEfforts
+    : undefined;
 
 /** Loads runtime-specific choices for the workspace's full-page searchable model picker. */
 export function loadCandidateModelPicker(
@@ -329,67 +272,27 @@ export function loadCandidateModelPicker(
 ): Promise<CandidateModelPickerData> {
   const candidate = input.candidate;
   if (candidate.runtime !== "pi") return loadNativeModels(input);
-
-  const snapshot = input.piCatalog;
   // The root registry already reflects project trust; local and Herdr Pi use the same catalog.
-  const availableModels = snapshot.piModels;
-  const parentModel = input.parentSelector
-    ? snapshot.piModels.find((model) => canonicalPiSelector(model) === input.parentSelector)
-    : undefined;
-  const advertisedChoices = createProfileModelChoices({
-    models: availableModels,
-    parentModel,
-    currentSelector: candidate.model,
-    allowParent: candidate.host === "local",
-  });
-  const scopedAdvertisedChoices = createProfileModelChoices({
-    models: snapshot.scopedPiModels,
-    parentModel,
-    currentSelector: candidate.model,
-    allowParent: candidate.host === "local",
-  });
-  const unavailableCurrent = unavailableCurrentChoice(candidate, advertisedChoices);
-  const choices = unavailableCurrent
-    ? [unavailableCurrent, ...advertisedChoices]
-    : advertisedChoices;
-  const scopedChoices = retainCurrentChoice(candidate, scopedAdvertisedChoices);
-  const unsafeModels = availableModels.filter(
+  const snapshot = input.piCatalog;
+  const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
+    retainUnavailableCurrent(candidate.model, piModelOptions(input, models));
+  const choices = optionsFor(snapshot.piModels);
+  const unsafeModels = snapshot.piModels.filter(
     (model) => !isSafeNativeModelSelector(canonicalPiSelector(model)),
   ).length;
   const warnings = [
-    unavailableCurrent
+    choices[0]?.available === false
       ? "The configured model is not available right now. Keep it unchanged or choose another model."
       : undefined,
     unsafeModels > 0
       ? `${unsafeModels} model${unsafeModels === 1 ? " was" : "s were"} left out because the model name could not be used safely.`
       : undefined,
-    choices.length === 0 ? "No available Pi models can be used here." : undefined,
-  ].flatMap((warning) => (warning === undefined ? [] : [sanitizeTerminalLine(warning)]));
+  ].filter((warning) => warning !== undefined);
   const base = {
     choices,
-    scopedChoices,
+    scopedChoices: optionsFor(snapshot.scopedPiModels),
     current: candidate.model,
     context: pickerContext(input),
   };
   return Promise.resolve(warnings.length > 0 ? { ...base, warning: warnings.join(" ") } : base);
-}
-
-/** Applies a full-page picker selection through the route editor's normalization rules. */
-export function updateCandidateFromModelChoice(
-  candidate: ProfileCandidate,
-  picker: CandidateModelPickerData,
-  choice: ProfileModelChoice,
-): CandidateUpdate {
-  const model = choice.kind === "parent" ? "parent" : choice.selector;
-  const selected = picker.choices.find((entry) =>
-    choice.kind === "parent"
-      ? entry.choice.kind === "parent"
-      : entry.choice.kind === "model" && entry.choice.selector === choice.selector,
-  );
-  return updateCandidateModel(
-    candidate,
-    model,
-    selectedModelEfforts(picker.choices, choice),
-    selected?.fastModeAvailable,
-  );
 }

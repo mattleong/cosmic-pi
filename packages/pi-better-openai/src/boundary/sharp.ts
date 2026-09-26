@@ -89,7 +89,6 @@ export const makeSharpAdapter = (run: SharpProcessRunner = runDecoder): SharpAda
           !cleanupConfirmed ||
           result.code !== 0 ||
           result.signal !== null ||
-          !result.dispatched ||
           result.timedOut ||
           result.overflowed ||
           result.cleanupUnconfirmed ||

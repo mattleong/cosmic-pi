@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { SelectListTheme } from "@earendil-works/pi-tui";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 
 export function appendWrapped(lines: string[], prefix: string, value: string, width: number): void {
@@ -20,6 +21,14 @@ export const padLine = padListDetailRow;
 
 export const borderLine = (width: number, theme: Theme): string =>
   theme.fg("accent", "─".repeat(Math.max(1, width)));
+
+export const selectListTheme = (theme: Theme, marker = ""): SelectListTheme => ({
+  selectedPrefix: (text) => theme.fg("accent", text),
+  selectedText: (text) => marker + theme.fg("accent", text),
+  description: (text) => theme.fg("muted", text),
+  scrollInfo: (text) => theme.fg("dim", text),
+  noMatch: (text) => theme.fg("warning", text),
+});
 
 export function joinColumns(
   left: ReadonlyArray<string>,

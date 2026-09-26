@@ -9,8 +9,8 @@ import * as Path from "effect/Path";
 import { AgentDirectory, provideBuiltLayer } from "pi-cosmic-core";
 import { jsonHttpTestLayer, makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { XaiUsageService } from "../src/usage/controller.ts";
-import type { UsageSnapshot } from "../src/usage/format.ts";
 import { makeProjection } from "../src/usage/projection.ts";
+import { usageSnapshot } from "./support/fixtures.ts";
 
 type HostModel = NonNullable<ExtensionContext["model"]>;
 
@@ -33,7 +33,7 @@ const context = (provider: HostModel["provider"]): ExtensionContext => {
     hasUI: true as const,
     model: model(provider),
     modelRegistry: {
-      getApiKeyForProvider: () => Promise.resolve(undefined),
+      getProviderAuth: () => Promise.resolve(undefined),
       isUsingOAuth: () => true,
     },
     ui: { notify() {} },
@@ -41,19 +41,6 @@ const context = (provider: HostModel["provider"]): ExtensionContext => {
   // SAFETY: This service test exercises only the context members implemented by the fixture.
   return fixture as typeof fixture & ExtensionContext;
 };
-
-const usageSnapshot = (monthlyUsed: number, weeklyUsedPercent: number): UsageSnapshot => ({
-  capturedAt: 0,
-  weeklyUsedPercent,
-  weeklyLeftPercent: 100 - weeklyUsedPercent,
-  weeklyResetInSeconds: null,
-  monthlyUsed,
-  monthlyLimit: 1_000,
-  monthlyLeftPercent: 100 - monthlyUsed / 10,
-  monthlyResetInSeconds: null,
-  onDemandCap: 500,
-  onDemandUsed: 100,
-});
 
 describe("XaiUsageService", () => {
   it.effect(

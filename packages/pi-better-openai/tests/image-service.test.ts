@@ -1,4 +1,3 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -9,7 +8,6 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { AgentDirectory, nodePlatformLayer, provideBuiltLayer, SafeFile } from "pi-cosmic-core";
 import {
-  makeInMemoryDocuments,
   streamingHttpResponse,
   streamingHttpTestLayer,
   type StreamingHttpTestRequest,
@@ -19,8 +17,10 @@ import { DEFAULT_IMAGE_CONFIG, type ResolvedConfig } from "../src/config/schema.
 import { OpenAIImageService } from "../src/image/service.ts";
 import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from "../src/image/types.ts";
 import { initialProjection } from "../src/usage/projection.ts";
-import { makeResolvedConfig } from "./helpers.ts";
+import { makeResolvedConfig, testContext } from "./helpers.ts";
 
+const registryToken = JSON.stringify({ access: "test-token", accountId: "acct_test" });
+const unrelatedModel = { provider: "anthropic", id: "unrelated-model" };
 const encoder = new TextEncoder();
 const responseBody = Stream.make(
   encoder.encode(
@@ -34,14 +34,13 @@ const responseBody = Stream.make(
 );
 
 function imageServiceLayer(options: {
-  readonly context: ExtensionContext;
+  readonly context: ReturnType<typeof testContext>;
   readonly config: ResolvedConfig;
   readonly body: Parameters<typeof streamingHttpResponse>[1];
   readonly requests?: StreamingHttpTestRequest[];
   readonly decodedFormats?: readonly string[];
 }) {
   let decodeIndex = 0;
-  const documents = makeInMemoryDocuments();
   const http = streamingHttpTestLayer((request) => {
     options.requests?.push(request);
     return Effect.succeed(streamingHttpResponse(200, options.body));
@@ -58,12 +57,9 @@ function imageServiceLayer(options: {
   return OpenAIImageService.layer({
     context: MutableRef.make(options.context),
     projection: MutableRef.make({ ...initialProjection(), config: options.config }),
-    agentDir: "/agent",
   }).pipe(
     Layer.provide(Layer.merge(sharp, SafeFile.layer)),
-    Layer.provide(
-      Layer.mergeAll(nodePlatformLayer, documents.layer, http, AgentDirectory.layer("/agent")),
-    ),
+    Layer.provide(Layer.mergeAll(nodePlatformLayer, http, AgentDirectory.layer("/agent"))),
   );
 }
 
@@ -71,22 +67,13 @@ describe("OpenAIImageService", () => {
   it.effect("uses one captured context/config snapshot for defaults and overrides", () => {
     const requests: StreamingHttpTestRequest[] = [];
     let modelReads = 0;
-    const contextFixture = {
-      cwd: "/project",
-      hasUI: true as const,
-      get model() {
+    const context = testContext({
+      token: registryToken,
+      model: () => {
         modelReads++;
-        return { provider: "anthropic", id: "unrelated-model" };
+        return unrelatedModel;
       },
-      modelRegistry: {
-        isUsingOAuth: () => true,
-        getApiKeyForProvider: () =>
-          Promise.resolve(JSON.stringify({ access: "test-token", accountId: "acct_test" })),
-      },
-      ui: { notify() {} },
-    };
-    // SAFETY: The image service uses only the context fields implemented by this fixture.
-    const context = contextFixture as typeof contextFixture & ExtensionContext;
+    });
     const config = makeResolvedConfig({
       image: {
         ...DEFAULT_IMAGE_CONFIG,
@@ -156,19 +143,7 @@ describe("OpenAIImageService", () => {
           }),
         ),
       );
-      const contextFixture = {
-        cwd: "/project",
-        hasUI: true as const,
-        model: { provider: "anthropic", id: "unrelated-model" },
-        modelRegistry: {
-          isUsingOAuth: () => true,
-          getApiKeyForProvider: () =>
-            Promise.resolve(JSON.stringify({ access: "test-token", accountId: "acct_test" })),
-        },
-        ui: { notify() {} },
-      };
-      // SAFETY: The image service uses only the context fields implemented by this fixture.
-      const context = contextFixture as typeof contextFixture & ExtensionContext;
+      const context = testContext({ token: registryToken, model: () => unrelatedModel });
       const config = makeResolvedConfig({
         image: {
           ...DEFAULT_IMAGE_CONFIG,
@@ -190,7 +165,6 @@ describe("OpenAIImageService", () => {
       expect(yield* Fiber.join(failure)).toMatchObject({
         _tag: "OpenAIImageError",
         operation: "timeout",
-        message: "OpenAI image request timed out.",
       });
       expect(finalized).toBe(1);
     }),

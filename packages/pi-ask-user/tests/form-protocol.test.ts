@@ -6,7 +6,8 @@ import {
   queryOwnedFormCapability,
   type OwnedFormCapability,
 } from "../src/protocol.ts";
-import { opaqueHostFixture } from "./support/host.ts";
+import { opaqueFixture } from "pi-cosmic-core/testing";
+import { formOwner } from "./support/questionnaire.ts";
 
 it("bounds requests and answers before walking nested fields or invoking accessors", () => {
   let touched = false;
@@ -19,38 +20,22 @@ it("bounds requests and answers before walking nested fields or invoking accesso
     }),
   ).toBeUndefined();
   expect(touched).toBe(false);
-  expect(
-    decodeOwnedFormRequest({ kind: "form", message: "", fields: Array(100000).fill({}) }),
-  ).toBeUndefined();
-  expect(
-    decodeOwnedFormRequest({
+  for (const input of [
+    { kind: "form", message: "", fields: Array(100000).fill({}) },
+    {
       kind: "form",
       message: "",
       fields: Array.from({ length: 17 }, (_, i) => ({ key: String(i), type: "boolean" })),
-    }),
-  ).toBeUndefined();
+    },
+    { kind: "form", message: "x".repeat(4097), fields: [] },
+    { kind: "url", message: "", url: "x".repeat(8193) },
+  ])
+    expect(decodeOwnedFormRequest(input)).toBeUndefined();
+  const oversized = Array.from({ length: 16 }, (_, i) => [String(i), "é".repeat(4096)]);
   expect(
-    decodeOwnedFormRequest({ kind: "form", message: "x".repeat(4097), fields: [] }),
+    decodeFormOutcome({ action: "accept", content: Object.fromEntries(oversized) }),
   ).toBeUndefined();
-  expect(
-    decodeOwnedFormRequest({ kind: "url", message: "", url: "x".repeat(8193) }),
-  ).toBeUndefined();
-  expect(
-    decodeFormOutcome({
-      action: "accept",
-      content: Object.fromEntries(
-        Array.from({ length: 16 }, (_, i) => [String(i), "é".repeat(4096)]),
-      ),
-    }),
-  ).toBeUndefined();
-  expect(
-    decodeExtensionFormOwner({
-      extensionId: "",
-      operationId: "operation",
-      requestId: "request",
-      label: "MCP",
-    }),
-  ).toBeUndefined();
+  expect(decodeExtensionFormOwner({ ...formOwner, extensionId: "" })).toBeUndefined();
 });
 
 it("detaches defaults and accepts 64-option enums and empty confirmation forms", () => {
@@ -109,7 +94,7 @@ it("accepts exactly one synchronous provider and rejects duplicate, late or host
   type Query = { respond: (value: OwnedFormCapability) => void };
   const discover = (emit: (query: Query) => void) =>
     queryOwnedFormCapability(
-      opaqueHostFixture({ emit: (_name: string, query: Query) => emit(query) }),
+      opaqueFixture({ emit: (_name: string, query: Query) => emit(query) }),
       "session",
     );
   expect(discover((query) => query.respond(capability))).toEqual(capability);

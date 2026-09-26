@@ -120,11 +120,6 @@ function makeWordCases(): WordCase[] {
       after: "  (item) => item.title",
     },
     {
-      name: "bounded internal token refinement",
-      before: "fooaabarbbbaz",
-      after: "fooxxbarzzbaz",
-    },
-    {
       name: "extended grapheme refinement",
       before: "const avatar = '👩🏽‍💻';",
       after: "const avatar = '👩🏻‍💻';",

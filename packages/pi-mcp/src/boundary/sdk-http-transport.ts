@@ -1,12 +1,8 @@
 import {
   Client,
   isJSONRPCRequest,
-  MissingRequiredClientCapabilityError,
-  UnsupportedProtocolVersionError,
-  UrlElicitationRequiredError,
   SdkError,
   SdkErrorCode,
-  ProtocolError,
   SdkHttpError,
   UnauthorizedError,
   InsufficientScopeError,
@@ -29,12 +25,12 @@ import {
   SdkFetchRedirectError,
   SdkFetchResponseLimitError,
   SDK_OPERATION_HEADER,
-  type SdkFetchOperation,
   type SdkFetchOwner,
   type SdkFetchFailure,
 } from "./sdk-fetch.ts";
 import type { SdkHttpControl } from "./sdk-http-control.ts";
-import { mapSdkProtocolError } from "./sdk-protocol-error.ts";
+import { mapSdkClientError } from "./sdk-protocol-error.ts";
+import { boundedSdkCleanup } from "./mcp-protocol/shared/bounded-cleanup.ts";
 import { isSdkNegotiationRejected } from "./mcp-protocol/shared/negotiation-error.ts";
 import {
   beginSdkHttpChallenge,
@@ -42,38 +38,12 @@ import {
   withSdkHttpChallenge,
 } from "./sdk-http-challenge.ts";
 
-export interface SdkHttpTransportOperation extends SdkFetchOperation {
-  readonly signal: AbortSignal;
-  readonly generation: number;
-  readonly tag: string;
-  readonly responseReceivedValue: boolean;
-  readonly requestStarted: boolean;
-  readonly logScope?: SdkHttpLogScope | undefined;
-  readonly isIdle: boolean;
-  readonly reserveSend: () => void;
-  readonly bindRequestId: (requestId: RequestId) => void;
-  readonly responseReceived: () => void;
-  readonly abort: () => void;
-  readonly awaitIdle: () => Effect.Effect<void>;
-  readonly failure: SdkFetchFailure | undefined;
-  readonly awaitFailure: () => Effect.Effect<never, McpBoundaryError>;
-}
-
-export interface SdkHttpTransportRegistry {
-  readonly current?: () => SdkHttpTransportOperation | undefined;
-  readonly run?: <A>(operation: SdkHttpTransportOperation, callback: () => A) => A;
-  readonly lookupTag: (tag: string) => SdkHttpTransportOperation | undefined;
-  readonly lookupRequestId: (requestId: RequestId) => SdkHttpTransportOperation | undefined;
-}
-
 export class SdkHttpTransportOperationError extends Schema.TaggedError<SdkHttpTransportOperationError>()(
   "SdkHttpTransportOperationError",
   {},
 ) {
   override readonly message = "MCP operation ownership is no longer active.";
 }
-
-const OPERATION_TAG_MAX = 128;
 
 /** Native callbacks update resource leases synchronously; Effect owns their waits. */
 export class SdkHttpTraffic implements SdkFetchOwner {
@@ -100,18 +70,9 @@ export class SdkHttpTraffic implements SdkFetchOwner {
     this.resources += 1;
   };
 
-  fetchFinished = (): void => {
-    this.releaseResource();
-  };
-
-  bodyStarted = (): void => {
-    this.started = true;
-    this.resources += 1;
-  };
-
-  bodyFinished = (): void => {
-    this.releaseResource();
-  };
+  bodyStarted = this.fetchStarted;
+  fetchFinished = (): void => this.releaseResource();
+  bodyFinished = this.fetchFinished;
 
   abort = (): void => {
     if (!this.signal.aborted) this.controller.abort();
@@ -141,8 +102,7 @@ export class SdkHttpTraffic implements SdkFetchOwner {
 }
 
 /** Failures stay correlated even when the SDK swallows or rewrites stream errors. */
-export class SdkHttpOperation extends SdkHttpTraffic implements SdkHttpTransportOperation {
-  readonly generation: number;
+export class SdkHttpOperation extends SdkHttpTraffic {
   readonly tag: string;
   logScope: SdkHttpLogScope | undefined;
   private response = false;
@@ -150,13 +110,8 @@ export class SdkHttpOperation extends SdkHttpTraffic implements SdkHttpTransport
   private readonly failureWaiters = new Set<(error: SdkFetchFailure) => void>();
   private readonly bindId: (operation: SdkHttpOperation, requestId: RequestId) => void;
 
-  constructor(
-    generation: number,
-    tag: string,
-    bindId: (operation: SdkHttpOperation, requestId: RequestId) => void,
-  ) {
+  constructor(tag: string, bindId: (operation: SdkHttpOperation, requestId: RequestId) => void) {
     super();
-    this.generation = generation;
     this.tag = tag;
     this.bindId = bindId;
   }
@@ -199,32 +154,27 @@ export class SdkHttpOperation extends SdkHttpTraffic implements SdkHttpTransport
     });
 }
 
-/** Registry scope is per connection, so a tag from an old generation cannot bind here. */
-export class SdkHttpOperationRegistry implements SdkHttpTransportRegistry {
+/** Registry scope is per connection, so a tag from another connection cannot bind here. */
+export class SdkHttpOperationRegistry {
   readonly traffic = new SdkHttpTraffic();
   private readonly byTag = new Map<string, SdkHttpOperation>();
   private readonly byRequestId = new Map<RequestId, SdkHttpOperation>();
   private nextOperation = 1;
-  private readonly generation: number;
   private admissionsOpen = true;
 
-  private readonly context: NativeContext<SdkHttpTransportOperation> | undefined;
-  constructor(generation: number, context?: NativeContext<SdkHttpTransportOperation>) {
-    this.generation = generation;
+  private readonly context: NativeContext<SdkHttpOperation> | undefined;
+  constructor(context?: NativeContext<SdkHttpOperation>) {
     this.context = context;
   }
 
-  current = (): SdkHttpTransportOperation | undefined => this.context?.current();
-  run = <A>(operation: SdkHttpTransportOperation, callback: () => A): A =>
+  current = (): SdkHttpOperation | undefined => this.context?.current();
+  run = <A>(operation: SdkHttpOperation, callback: () => A): A =>
     this.context ? this.context.run(operation, callback) : callback();
 
   begin(): SdkHttpOperation | undefined {
     if (!this.admissionsOpen) return undefined;
-    const id = this.nextOperation;
-    this.nextOperation += 1;
-    const tag = `g${this.generation}:o${id}`;
-    if (tag.length > OPERATION_TAG_MAX) return undefined;
-    const operation = new SdkHttpOperation(this.generation, tag, (owner, requestId) =>
+    const tag = `g1:o${this.nextOperation++}`;
+    const operation = new SdkHttpOperation(tag, (owner, requestId) =>
       this.bindRequestId(owner, requestId),
     );
     this.byTag.set(tag, operation);
@@ -240,7 +190,7 @@ export class SdkHttpOperationRegistry implements SdkHttpTransportRegistry {
     this.byRequestId.set(requestId, operation);
   }
 
-  remove(operation: SdkHttpTransportOperation): void {
+  remove(operation: SdkHttpOperation): void {
     if (this.byTag.get(operation.tag) === operation) this.byTag.delete(operation.tag);
     for (const [key, value] of this.byRequestId) {
       if (value === operation) this.byRequestId.delete(key);
@@ -251,19 +201,16 @@ export class SdkHttpOperationRegistry implements SdkHttpTransportRegistry {
     return [...this.byTag.values()];
   }
 
-  lookupTag = (tag: string): SdkHttpTransportOperation | undefined => this.byTag.get(tag);
+  lookupTag = (tag: string): SdkHttpOperation | undefined => this.byTag.get(tag);
 
-  lookupRequestId = (requestId: RequestId): SdkHttpTransportOperation | undefined =>
+  lookupRequestId = (requestId: RequestId): SdkHttpOperation | undefined =>
     this.byRequestId.get(requestId);
 }
 
-const requestOutcome = (operation: SdkHttpTransportOperation): McpBoundaryError["outcome"] =>
+const requestOutcome = (operation: SdkHttpOperation): McpBoundaryError["outcome"] =>
   operation.responseReceivedValue ? "completed" : operation.requestStarted ? "unknown" : "not-sent";
 
-export const mapSdkFailure = (
-  error: Error,
-  operation: SdkHttpTransportOperation,
-): McpBoundaryError => {
+export const mapSdkFailure = (error: Error, operation: SdkHttpOperation): McpBoundaryError => {
   const outcome = requestOutcome(operation);
   error = operation.failure ?? error;
   if (isSdkNegotiationRejected(error)) {
@@ -310,45 +257,22 @@ export const mapSdkFailure = (
       boundaryError("auth-required", outcome, "MCP server requires authentication."),
     );
   }
-  if (error instanceof SdkHttpError && error.status === 403) {
+  if (
+    (error instanceof SdkHttpError && error.status === 403) ||
+    (error instanceof SdkError && error.code === SdkErrorCode.ClientHttpForbidden)
+  ) {
+    // A bare 403 can be an ACL or proxy denial, not rejected credentials.
     return boundaryError("denied", outcome, "MCP server denied this operation.");
   }
-  if (
-    error instanceof UrlElicitationRequiredError ||
-    error instanceof MissingRequiredClientCapabilityError ||
-    error instanceof UnsupportedProtocolVersionError
-  ) {
-    return boundaryError(
-      "unsupported",
-      outcome,
-      "MCP server requires an unsupported interaction, capability, or protocol version.",
+  if (error instanceof SdkError && error.code === SdkErrorCode.ClientHttpAuthentication) {
+    return withSdkHttpChallenge(
+      error,
+      operation,
+      boundaryError("auth-required", outcome, "MCP server requires authentication."),
     );
   }
-  if (error instanceof ProtocolError) return mapSdkProtocolError(error, outcome);
-  if (error instanceof SdkError) {
-    switch (error.code) {
-      case SdkErrorCode.RequestTimeout:
-        return boundaryError("timeout", "unknown", "MCP request timed out.");
-      case SdkErrorCode.InvalidResult:
-      case SdkErrorCode.UnsupportedResultType:
-        return boundaryError("protocol", "completed", "MCP returned an invalid result.");
-      case SdkErrorCode.NotConnected:
-      case SdkErrorCode.NotInitialized:
-      case SdkErrorCode.AlreadyConnected:
-        return boundaryError("connection", "not-sent", "MCP connection is unavailable.");
-      case SdkErrorCode.ClientHttpAuthentication:
-        return withSdkHttpChallenge(
-          error,
-          operation,
-          boundaryError("auth-required", outcome, "MCP server requires authentication."),
-        );
-      case SdkErrorCode.ClientHttpForbidden:
-        // A bare 403 can be an ACL or proxy denial, not rejected credentials.
-        return boundaryError("denied", outcome, "MCP server denied this operation.");
-      default:
-        return boundaryError("transport", outcome, "MCP transport request failed.");
-    }
-  }
+  const mapped = mapSdkClientError(error, outcome, "MCP connection is unavailable.");
+  if (mapped !== undefined) return mapped;
   if (error.name === "AbortError") {
     return boundaryError("cancelled", "unknown", "MCP request was cancelled.");
   }
@@ -369,15 +293,8 @@ export const closeSdkTransport = (
     for (const operation of operations) operation.abort();
     const cleanupFailure = () =>
       boundaryError("cleanup", "unknown", "MCP transport cleanup failed.");
-    const bounded = (run: () => Promise<void>) =>
-      Effect.tryPromise({ try: run, catch: cleanupFailure }).pipe(
-        Effect.interruptible,
-        Effect.timeoutOrElse({
-          duration: Duration.millis(cleanupTimeoutMs),
-          orElse: () => Effect.fail(cleanupFailure()),
-        }),
-        Effect.result,
-      );
+    const bounded = <A>(run: () => PromiseLike<A>) =>
+      boundedSdkCleanup(run, cleanupTimeoutMs, cleanupFailure()).pipe(Effect.result);
 
     // DELETE needs a live transport signal. Regardless of its result, revoke all
     // fetch admission and close the client. SDK continuations arriving late then
@@ -448,38 +365,16 @@ const withoutPrivateHeader = (
   return Object.keys(result).length === 0 ? undefined : result;
 };
 
-const bindRequestIds = (
-  message: JSONRPCMessage | ReadonlyArray<JSONRPCMessage>,
-  operation: SdkHttpTransportOperation,
-): void => {
-  const messages = Array.isArray(message) ? message : [message];
-  for (const candidate of messages) {
-    if (isJSONRPCRequest(candidate)) operation.bindRequestId(candidate.id);
-  }
-};
-
-const markResponses = (
-  message: JSONRPCMessage | ReadonlyArray<JSONRPCMessage>,
-  registry: SdkHttpTransportRegistry,
-): void => {
-  const messages = Array.isArray(message) ? message : [message];
-  for (const candidate of messages) {
-    if (!isJSONRPCRequest(candidate) && "id" in candidate) {
-      registry.lookupRequestId(candidate.id)?.responseReceived();
-    }
-  }
-};
-
 /**
  * Decorate the public SDK Transport seam. Legacy SDK requests do not forward their
  * caller signal as requestSignal, so this adapter binds the private tag to the SDK's
  * request id and supplies the operation signal to every HTTP send. It never stores a
- * current request. Each request carries its own tag and generation.
+ * current request. Each request carries its own tag.
  */
 export const makeSdkHttpTransport = (
   transport: Transport,
-  registry: SdkHttpTransportRegistry,
-  acquisition: () => SdkHttpTransportOperation | undefined = () => undefined,
+  registry: SdkHttpOperationRegistry,
+  acquisition: () => SdkHttpOperation | undefined = () => undefined,
 ): Transport => {
   const decorated: Transport = {
     get sessionId() {
@@ -493,10 +388,10 @@ export const makeSdkHttpTransport = (
       // Capture ownership and reserve native send before any Promise turn can race cleanup.
       const tag = privateHeader(options?.headers);
       const operation =
-        tag === undefined ? (registry.current?.() ?? acquisition()) : registry.lookupTag(tag);
+        tag === undefined ? (registry.current() ?? acquisition()) : registry.lookupTag(tag);
       if (operation?.signal.aborted) return Promise.reject(new SdkHttpTransportOperationError());
       if (operation) {
-        bindRequestIds(message, operation);
+        if (isJSONRPCRequest(message)) operation.bindRequestId(message.id);
         operation.reserveSend();
       }
       return Promise.resolve()
@@ -514,7 +409,7 @@ export const makeSdkHttpTransport = (
                 options === undefined && requestSignal === undefined && headers === undefined
                   ? transport.send(message)
                   : transport.send(message, { ...options, requestSignal, headers });
-              return operation && registry.run ? registry.run(operation, send) : send();
+              return operation ? registry.run(operation, send) : send();
             })
             .then(
               () => settleChallenge?.(),
@@ -531,10 +426,11 @@ export const makeSdkHttpTransport = (
   transport.onclose = () => decorated.onclose?.();
   transport.onerror = (error) => decorated.onerror?.(error);
   transport.onmessage = (message: JSONRPCMessage, extra?: MessageExtraInfo) => {
-    const operation = registry.current?.();
+    const operation = registry.current();
     if (operation && !operation.signal.aborted && !operation.responseReceivedValue)
       observeHttpLog(message, operation.logScope);
-    markResponses(message, registry);
+    if (!isJSONRPCRequest(message) && "id" in message && message.id !== undefined)
+      registry.lookupRequestId(message.id)?.responseReceived();
     decorated.onmessage?.(message, extra);
   };
   if (transport.hasPerRequestStream === true) {

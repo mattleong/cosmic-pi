@@ -3,22 +3,24 @@ import type { McpActivityPhase } from "../activity/model.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpLoginUi } from "./model.ts";
 
-export type McpAuthPhase =
-  | "waiting-fence"
-  | "storage"
-  | "callback-listener"
-  | "discovery"
-  | "registration"
-  | "scope-approval"
-  | "opening-browser"
-  | "awaiting-callback"
-  | "exchange"
-  | "saving"
-  | "finalizing"
-  | "cancelling"
-  | "cancelled"
-  | "succeeded"
-  | "failed";
+const AUTH_PHASE_LABELS = {
+  "waiting-fence": "Waiting for authentication access and connection cleanup",
+  storage: "Checking secure storage",
+  "callback-listener": "Preparing the callback listener",
+  discovery: "Discovering authentication metadata",
+  registration: "Preparing the public client",
+  "scope-approval": "Waiting for permission approval",
+  "opening-browser": "Opening the browser",
+  "awaiting-callback": "Waiting for browser approval",
+  exchange: "Validating the response and exchanging the code",
+  saving: "Saving credentials",
+  finalizing: "Finalizing authentication access",
+  cancelling: "Cancelling and closing owned resources",
+  cancelled: "Sign-in cancelled",
+  succeeded: "Sign-in completed. Connect separately when ready.",
+  failed: "Sign-in did not complete",
+} as const;
+export type McpAuthPhase = keyof typeof AUTH_PHASE_LABELS;
 export type McpCredentialMutation = "idle" | "pending" | "blocked";
 
 /** SDK and storage observers carry bounded facts, never auth values or errors. */
@@ -46,69 +48,26 @@ export interface McpAuthProgress {
 }
 export const authPhaseTerminal = (phase: McpAuthPhase): boolean =>
   phase === "cancelled" || phase === "succeeded" || phase === "failed";
-export const authActivityPhase = (phase: McpAuthPhase): McpActivityPhase | undefined => {
-  switch (phase) {
-    case "waiting-fence":
-      return "waiting-for-fence";
-    case "storage":
-      return "checking-storage";
-    case "callback-listener":
-      return "preparing-callback";
-    case "discovery":
-      return "discovering";
-    case "registration":
-      return "preparing-client";
-    case "opening-browser":
-      return "opening-browser";
-    case "scope-approval":
-    case "awaiting-callback":
-      return "browser-approval";
-    case "exchange":
-      return "exchanging-code";
-    case "saving":
-      return "saving-credentials";
-    case "finalizing":
-      return "finalizing";
-    case "cancelling":
-      return "stopping";
-    default:
-      return undefined;
-  }
-};
-export const authPhaseLabel = (phase: McpAuthPhase): string => {
-  switch (phase) {
-    case "waiting-fence":
-      return "Waiting for authentication access and connection cleanup";
-    case "storage":
-      return "Checking secure storage";
-    case "callback-listener":
-      return "Preparing the callback listener";
-    case "discovery":
-      return "Discovering authentication metadata";
-    case "registration":
-      return "Preparing the public client";
-    case "scope-approval":
-      return "Waiting for permission approval";
-    case "opening-browser":
-      return "Opening the browser";
-    case "awaiting-callback":
-      return "Waiting for browser approval";
-    case "exchange":
-      return "Validating the response and exchanging the code";
-    case "saving":
-      return "Saving credentials";
-    case "finalizing":
-      return "Finalizing authentication access";
-    case "cancelling":
-      return "Cancelling and closing owned resources";
-    case "cancelled":
-      return "Sign-in cancelled";
-    case "succeeded":
-      return "Sign-in completed. Connect separately when ready.";
-    case "failed":
-      return "Sign-in did not complete";
-  }
-};
+const AUTH_ACTIVITY_PHASES = {
+  "waiting-fence": "waiting-for-fence",
+  storage: "checking-storage",
+  "callback-listener": "preparing-callback",
+  discovery: "discovering",
+  registration: "preparing-client",
+  "scope-approval": "browser-approval",
+  "opening-browser": "opening-browser",
+  "awaiting-callback": "browser-approval",
+  exchange: "exchanging-code",
+  saving: "saving-credentials",
+  finalizing: "finalizing",
+  cancelling: "stopping",
+  cancelled: undefined,
+  succeeded: undefined,
+  failed: undefined,
+} satisfies Record<McpAuthPhase, McpActivityPhase | undefined>;
+export const authActivityPhase = (phase: McpAuthPhase): McpActivityPhase | undefined =>
+  AUTH_ACTIVITY_PHASES[phase];
+export const authPhaseLabel = (phase: McpAuthPhase): string => AUTH_PHASE_LABELS[phase];
 export const authProgress = (ui: McpLoginUi, event: McpAuthProgressEvent): Effect.Effect<void> =>
   ui.progress ? ui.progress(event) : Effect.void;
 

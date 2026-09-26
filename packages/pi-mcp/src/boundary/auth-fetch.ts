@@ -127,11 +127,9 @@ const request = (
           !response.headers.location
         )
           return yield* deniedAuth();
-        const target = yield* Effect.try({
-          try: () => new URL(response.headers.location!, url).href,
-          catch: deniedAuth,
-        });
-        return yield* request(policy, { ...job, url: target }, redirects + 1);
+        const target = URL.parse(response.headers.location, url);
+        if (!target) return yield* deniedAuth();
+        return yield* request(policy, { ...job, url: target.href }, redirects + 1);
       }
       if (job.headersOnly)
         return yield* Effect.try({
@@ -158,12 +156,7 @@ const request = (
         ),
         Effect.mapError((error) => (error instanceof McpBoundaryError ? error : unavailable())),
       );
-      const content = new Uint8Array(bytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        content.set(chunk, offset);
-        offset += chunk.length;
-      }
+      const content = Buffer.concat(chunks, bytes);
       return yield* Effect.try({
         try: () =>
           new Response([204, 205, 304].includes(response.status) ? null : content, {

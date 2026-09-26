@@ -24,10 +24,6 @@ export class LogBuffer {
   droppedBytes = 0;
   nextCursor = 1;
 
-  static empty(): LogBuffer {
-    return new LogBuffer();
-  }
-
   get events(): ReadonlyArray<BackgroundLogEvent> {
     return (this.snapshot ??= this.store.slice(this.start));
   }

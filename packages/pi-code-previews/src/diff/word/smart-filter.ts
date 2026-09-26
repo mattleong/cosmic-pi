@@ -39,15 +39,11 @@ function shouldKeepSmartRange(text: string, oppositeSideHasSignal: boolean): boo
   const hasIntrinsicSignal = signalTokens.some(
     (token) => isMeaningfulOperatorToken(token) || isSymbolToken(token),
   );
-  if (
-    !oppositeSideHasSignal &&
-    !hasIntrinsicSignal &&
-    wordTokens.every((token) => LOW_SIGNAL_SYNTAX_TOKENS.has(token))
-  )
-    return false;
-  if (!oppositeSideHasSignal && !hasIntrinsicSignal && isWrapperCallNoise(text, wordTokens))
-    return false;
-  return true;
+  if (oppositeSideHasSignal || hasIntrinsicSignal) return true;
+  return (
+    !wordTokens.every((token) => LOW_SIGNAL_SYNTAX_TOKENS.has(token)) &&
+    !isWrapperCallNoise(text, wordTokens)
+  );
 }
 
 function isSmartSignalToken(token: string): boolean {

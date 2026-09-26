@@ -1,13 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
-import {
-  ACTIVITY_DISCOVER,
-  ACTIVITY_EVENT,
-  ACTIVITY_HOST,
-  type ActivityEnvelope,
-  type ActivityEvents,
-} from "pi-cosmic-ui/activity";
+import { ACTIVITY_HOST } from "pi-cosmic-ui/activity";
+import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
   registerSubagentActivity,
   subagentActivityItems,
@@ -15,38 +10,6 @@ import {
 } from "../src/boundary/host-activity.ts";
 import { makeSubagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { view } from "./tools/fixtures/tool-harness.ts";
-
-function host() {
-  const hostToken = {};
-  const listeners = new Map<string, Set<Parameters<ActivityEvents["on"]>[1]>>();
-  let envelope: ActivityEnvelope | undefined;
-  let capability: ActivityEnvelope | undefined;
-  const events: ActivityEvents = {
-    on: (name, handler) => {
-      const handlers = listeners.get(name) ?? new Set();
-      handlers.add(handler);
-      listeners.set(name, handlers);
-      return () => {
-        handlers.delete(handler);
-      };
-    },
-    emit: (name, value) => {
-      for (const handler of listeners.get(name) ?? []) handler(value);
-    },
-  };
-  events.on(ACTIVITY_DISCOVER, () =>
-    events.emit(ACTIVITY_HOST, { version: 1, sessionId: "session", hostToken, available: true }),
-  );
-  events.on(ACTIVITY_EVENT, (value) => {
-    // SAFETY: The fixture captures only envelopes emitted by the owned protocol adapter.
-    envelope = value as ActivityEnvelope;
-    if (envelope.operation === "register") {
-      capability = envelope;
-      envelope.acknowledge?.(true);
-    }
-  });
-  return { events, hostToken, get: () => envelope, capability: () => capability };
-}
 
 describe("subagent activity provider", () => {
   it("projects the selected profile independently of the run name or hierarchy", () => {
@@ -112,29 +75,6 @@ describe("subagent activity provider", () => {
     ).toBe("failed");
   });
 
-  it("keeps blocking states visible without turning parent orchestration into user questions", () => {
-    const items = subagentActivityItems({
-      revision: 1,
-      runs: [
-        view({
-          id: "waiting",
-          state: "waiting_for_parent",
-          question: { requestId: "q", message: "parent only", createdAt: 1 },
-        }),
-        view({ id: "paused", state: "paused", writeAdmissionPaused: true }),
-        view({ id: "stopping", state: "stopping" }),
-      ],
-    });
-    expect(items.map((item) => item.kind)).toEqual(["agent", "agent", "agent"]);
-    expect(
-      items.filter((item) => item.status === "needs-input" || item.status === "blocked"),
-    ).toHaveLength(2);
-    expect(
-      items.find((item) => item.id === "paused")?.actions?.some((action) => action.id === "resume"),
-    ).toBe(false);
-    expect(JSON.stringify(items)).not.toContain("parent only");
-  });
-
   it("distinguishes claim peers, containment, review and recovery without enabling unsafe actions", () => {
     const question = { requestId: "q", message: "private parent question", createdAt: 1 };
     const runs = [
@@ -163,6 +103,9 @@ describe("subagent activity provider", () => {
         writeViolationOffender: true,
         capabilities: ["resume"],
       }),
+      // Default capabilities include resume, which write admission must still suppress.
+      view({ id: "admission-paused", state: "paused", writeAdmissionPaused: true }),
+      view({ id: "stopping", state: "stopping" }),
     ];
     const items = subagentActivityItems({ revision: 1, runs });
     expect(
@@ -175,6 +118,8 @@ describe("subagent activity provider", () => {
       ["blocked", undefined, "file-access-review"],
       ["blocked", undefined, "write-containment"],
       ["blocked", undefined, "file-access-review"],
+      ["blocked", undefined, "file-access"],
+      ["stopping", undefined, undefined],
     ]);
     expect(
       items
@@ -203,7 +148,7 @@ describe("subagent activity provider", () => {
   });
 
   it("publishes launch leases as metadata before rows exist and releases overlapping requests independently", () => {
-    const transport = host();
+    const transport = fakeActivityHost();
     const bridge = makeSubagentProjectionBridge();
     const dispose = registerSubagentActivity({
       events: transport.events,
@@ -276,7 +221,7 @@ describe("subagent activity provider", () => {
 
   it.effect("revokes stale actions on projection changes, token replacement, and disposal", () =>
     Effect.gen(function* () {
-      const transport = host();
+      const transport = fakeActivityHost();
       const bridge = makeSubagentProjectionBridge();
       bridge.publish({ revision: 1, runs: [view({ id: "run" })] });
       let current = true;

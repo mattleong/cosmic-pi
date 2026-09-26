@@ -7,15 +7,20 @@ import {
   normalizeCosmicUiHostStateEvent,
 } from "../src/protocol/protocol.ts";
 
+const hostile = (message: string) => () => {
+  throw new Error(message);
+};
 const hostileVersion = () =>
-  Object.defineProperty({}, "version", {
-    get() {
-      throw new Error("hostile protocol getter");
-    },
-  });
+  Object.defineProperty({}, "version", { get: hostile("hostile protocol getter") });
+const proxyFailure = hostile("hostile protocol proxy");
+const hostileProxy = () =>
+  new Proxy({}, { get: proxyFailure, has: proxyFailure, ownKeys: proxyFailure });
 
 describe("Cosmic UI protocol guards", () => {
-  it("contains hostile getters instead of throwing through the event boundary", () => {
+  it.each([
+    ["getters", hostileVersion],
+    ["proxies", hostileProxy],
+  ])("contains hostile %s instead of throwing through the event boundary", (_kind, input) => {
     for (const normalize of [
       normalizeCosmicUiHostQuery,
       normalizeCosmicUiHostStateEvent,
@@ -23,38 +28,8 @@ describe("Cosmic UI protocol guards", () => {
       normalizeCosmicFooterRemoveEvent,
       normalizeCosmicFooterInvalidateEvent,
     ]) {
-      const input = hostileVersion();
-      expect(() => normalize(input)).not.toThrow();
-      expect(normalize(input)).toBeUndefined();
-    }
-  });
-
-  it("contains hostile proxies outside schema decoding", () => {
-    const hostileProxy = () =>
-      new Proxy(
-        {},
-        {
-          get() {
-            throw new Error("hostile protocol proxy");
-          },
-          has() {
-            throw new Error("hostile protocol proxy");
-          },
-          ownKeys() {
-            throw new Error("hostile protocol proxy");
-          },
-        },
-      );
-
-    for (const normalize of [
-      normalizeCosmicUiHostQuery,
-      normalizeCosmicUiHostStateEvent,
-      normalizeCosmicFooterUpsertEvent,
-      normalizeCosmicFooterRemoveEvent,
-      normalizeCosmicFooterInvalidateEvent,
-    ]) {
-      expect(() => normalize(hostileProxy())).not.toThrow();
-      expect(normalize(hostileProxy())).toBeUndefined();
+      expect(() => normalize(input())).not.toThrow();
+      expect(normalize(input())).toBeUndefined();
     }
   });
 });

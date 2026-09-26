@@ -19,8 +19,9 @@ import {
 } from "./profile-workspace-model.ts";
 import {
   profileWorkspaceActionChoices,
-  type ProfileWorkspaceDraftAction,
+  type CandidateMenuAction,
 } from "./profile-workspace-actions.ts";
+import { qualifiedProfileSetLabel } from "./profile-set-picker-model.ts";
 import {
   SearchableSelectPage,
   type SearchableSelectHostOptions,
@@ -30,15 +31,13 @@ interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
 }
 
-const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session"
-    ? "Session"
-    : `${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name}`;
+export const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
+  target.kind === "session" ? "Session" : qualifiedProfileSetLabel(target.set);
 
 const targetLabel = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session"
     ? "Editing Current Session"
-    : `${target.set.scope === "project" ? "Project" : "Global"}/${target.set.name} · session not affected`;
+    : `${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
 export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
@@ -52,8 +51,8 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly notice?: string | undefined;
-  readonly select: (update: CandidateUpdate, description: string, value: string) => void;
-  readonly cancel: (label: string) => void;
+  readonly select: (update: CandidateUpdate) => void;
+  readonly cancel: () => void;
 }
 
 const currentFieldValue = (
@@ -85,7 +84,7 @@ export const makeCandidateFieldSelector = (
     profile: options.profile,
     parentEffort: options.parentEffort,
   };
-  const pageOptions = {
+  return new SearchableSelectPage<string>({
     theme: options.theme,
     breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
     title:
@@ -106,22 +105,16 @@ export const makeCandidateFieldSelector = (
       }),
     ),
     current,
+    notice: options.notice,
     emptyText: "No matching values",
     getHeight: options.getHeight,
     requestRender: options.requestRender,
     matchesKeybinding: options.matchesKeybinding,
     keybindingLabel: options.keybindingLabel,
     select: (value: string) =>
-      options.select(
-        selectCandidateField(options.candidate, options.field, value, changeOptions),
-        `${label} changed`,
-        value,
-      ),
-    cancel: () => options.cancel(label),
-  };
-  return new SearchableSelectPage<string>(
-    options.notice ? { ...pageOptions, notice: options.notice } : pageOptions,
-  );
+      options.select(selectCandidateField(options.candidate, options.field, value, changeOptions)),
+    cancel: options.cancel,
+  });
 };
 
 export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
@@ -129,7 +122,7 @@ export interface RouteActionsSelectorOptions extends SharedSelectorOptions {
   readonly candidateIndex: number;
   readonly draft: ProfileRouteDraft;
   readonly target: ProfileWorkspaceTarget;
-  readonly select: (action: ProfileWorkspaceDraftAction, destructive: boolean) => void;
+  readonly select: (action: CandidateMenuAction) => void;
   readonly cancel: () => void;
 }
 
@@ -156,7 +149,7 @@ export const makeRouteActionsSelector = (
     keybindingLabel: options.keybindingLabel,
     select: (value: string) => {
       const choice = choices.find((entry) => entry.action === value);
-      if (choice) options.select(choice.action, choice.destructive);
+      if (choice) options.select(choice.action);
     },
     cancel: options.cancel,
   });
@@ -176,7 +169,7 @@ export interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
 export const makeProfileSearchSelector = (
   options: ProfileSearchSelectorOptions,
 ): SearchableSelectPage<string> => {
-  const pageOptions = {
+  return new SearchableSelectPage<string>({
     theme: options.theme,
     breadcrumb: targetLabel(options.target),
     title: "Search profiles",
@@ -195,8 +188,9 @@ export const makeProfileSearchSelector = (
       };
     }),
     current: options.current,
+    initialQuery: options.initialQuery,
     initialSearchMode: true,
-    cancelBehavior: "close" as const,
+    cancelBehavior: "close",
     emptyText: "No matching profiles",
     getHeight: options.getHeight,
     requestRender: options.requestRender,
@@ -207,8 +201,5 @@ export const makeProfileSearchSelector = (
       if (profile) options.select(profile);
     },
     cancel: options.cancel,
-  };
-  return new SearchableSelectPage<string>(
-    options.initialQuery ? { ...pageOptions, initialQuery: options.initialQuery } : pageOptions,
-  );
+  });
 };

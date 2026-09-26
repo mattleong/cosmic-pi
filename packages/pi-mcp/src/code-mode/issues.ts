@@ -1,19 +1,23 @@
 import {
   presentationEvidence,
   presentationArrayLength,
+  presentationValidationIdentity,
   type PresentationReader,
 } from "./presentation-evidence.ts";
 import { mcpIssueDescription } from "../ui/compact-descriptions.ts";
 import type { CompactIssue, CompactIssues } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import * as Option from "effect/Option";
 import { McpBoundaryError } from "../client/errors.ts";
 import { mcpDiagnostic } from "../client/diagnostics.ts";
-import { mcpBoundaryFailure } from "../ui/boundary-failure.ts";
-import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { mcpBoundaryView, type McpBoundaryView } from "../ui/boundary-failure.ts";
+import {
+  decodeUnknownOrUndefined,
+  sanitizeDiagnosticContent,
+  sanitizeTerminalLine,
+} from "pi-cosmic-core";
 import { classifyMcpDiscoveryNotice } from "../discovery/diagnostics.ts";
-import { isOwnedValidationNotice, validationNoticeIdentity } from "../ui/validation-notices.ts";
+import { isOwnedValidationNotice } from "../ui/validation-notices.ts";
 import type { McpPresentation } from "./presentation.ts";
 
 const FailureEvidence = Schema.Struct({
@@ -21,59 +25,51 @@ const FailureEvidence = Schema.Struct({
   reason: McpBoundaryError.fields.reason,
 });
 
-function boundaryFailureIssues<Reply, Data, Origin>(
+export interface McpIssueProjection {
+  readonly issues: CompactIssues;
+  readonly failure?: typeof FailureEvidence.Type | undefined;
+  readonly boundary?: McpBoundaryView | undefined;
+}
+
+const sanitizeNotice = (text: string) =>
+  sanitizeDiagnosticContent(sanitizeTerminalLine(text), { maximumLength: 512 });
+
+/** Every consumer shares this view. Any origin, including a malformed null, and malformed
+ * or oversized notices decline it; notices that sanitize to empty are dropped. */
+function boundaryView<Reply, Origin>(
   field: PresentationReader,
   reply: Reply,
-  data: Data,
   origin: Origin,
-  actionName: string,
+  action: string,
+  failure: typeof FailureEvidence.Type,
   presentation: Omit<McpPresentation, "issues">,
-): CompactIssues | undefined {
-  const evidence = Option.getOrUndefined(
-    Schema.decodeUnknownOption(FailureEvidence)({
-      kind: field(data, "kind").value,
-      ...(field(data, "reason").value !== undefined && { reason: field(data, "reason").value }),
-    }),
-  );
-  if (evidence && !origin && field(reply, "isError").value === true) {
-    const diagnostic = mcpDiagnostic(
-      { ...evidence, outcome: presentation.outcome },
-      { action: actionName },
-    );
-    const rawNotices = field(reply, "notices").value;
-    const count = field(rawNotices, "length").value;
-    const notices: string[] = [];
-    let noticesComplete =
-      presentationArrayLength(rawNotices) !== undefined && Predicate.isNumber(count) && count <= 32;
-    for (let index = 0; noticesComplete && index < Number(count); index++) {
-      const notice = field(rawNotices, String(index)).value;
-      if (!Predicate.isString(notice) || notice.length > 512) noticesComplete = false;
-      else
-        notices.push(
-          sanitizeDiagnosticContent(sanitizeTerminalLine(notice), { maximumLength: 512 }),
-        );
-    }
-    const boundary = mcpBoundaryFailure({
-      known: true,
-      noticesComplete,
-      displayCuts: [],
-      isError: true,
-      diagnostic,
-      failureKind: evidence.kind,
-      failureReason: evidence.reason,
-      outcome: presentation.outcome,
-      action: actionName,
-      truncated: presentation.truncated,
-      notices,
-      ...(presentation.resultId
-        ? { recoveryHint: `/mcp result ${presentation.resultId}` }
-        : diagnostic.recovery.length
-          ? { recoveryHint: "Open /mcp to inspect current server details." }
-          : {}),
-    });
-    if (boundary && notices.join("\n").length <= 2048) return boundary.issues;
+): McpBoundaryView | undefined {
+  if (origin !== undefined || field(reply, "isError").value !== true) return undefined;
+  const rawNotices = field(reply, "notices").value;
+  const count = presentationArrayLength(rawNotices);
+  if (count === undefined || count > 32) return undefined;
+  const notices: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const notice = field(rawNotices, String(index)).value;
+    if (!Predicate.isString(notice) || notice.length > 512) return undefined;
+    const text = sanitizeNotice(notice);
+    if (text) notices.push(text);
   }
-  return undefined;
+  if (notices.join("\n").length > 2048) return undefined;
+  const diagnostic = mcpDiagnostic({ ...failure, outcome: presentation.outcome }, { action });
+  return mcpBoundaryView({
+    diagnostic,
+    failure,
+    outcome: presentation.outcome,
+    action,
+    truncated: presentation.truncated,
+    notices,
+    ...(presentation.resultId
+      ? { recoveryHint: `/mcp result ${presentation.resultId}` }
+      : diagnostic.recovery.length
+        ? { recoveryHint: "Open /mcp to inspect current server details." }
+        : {}),
+  });
 }
 
 function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payload, data: Data) {
@@ -86,7 +82,7 @@ function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payl
       complete = false;
       return;
     }
-    const text = sanitizeDiagnosticContent(sanitizeTerminalLine(value), { maximumLength: 512 });
+    const text = sanitizeNotice(value);
     if (text) texts.push(text);
   };
   const content = field(payload, "content").value;
@@ -112,29 +108,27 @@ function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payl
 
 /** Additive display evidence. The v1 capability and its bounded notice projection are unchanged. */
 export function projectMcpIssues<Reply>(
-  field: <Value>(value: Value, key: string) => { readonly value: unknown },
+  field: PresentationReader,
   reply: Reply,
   presentation: Omit<McpPresentation, "issues">,
-): CompactIssues {
+): McpIssueProjection {
   const entries: CompactIssue[] = [];
   // Non-completed envelopes can carry transport-specific recovery outside the bounded
   // display fields. Classify their known facts, but keep original presentation ownership.
   let complete = !presentation.incomplete && presentation.outcome === "completed";
-  const isArray = <Value>(value: Value): boolean => {
-    try {
-      return Array.isArray(value);
-    } catch {
-      complete = false;
-      return false;
-    }
-  };
   const { action, data, origin, payload, undiscovered } = presentationEvidence(reply, field);
   const actionName =
     Predicate.isString(action) && /^[a-z][a-z.]{0,63}$/.test(action) ? action : "request";
   if (actionName !== action) complete = false;
   const operation = `mcp:${actionName}`;
-  const boundary = boundaryFailureIssues(field, reply, data, origin, actionName, presentation);
-  if (boundary) return boundary;
+  const kind = field(data, "kind").value;
+  const reason = field(data, "reason").value;
+  const failure = decodeUnknownOrUndefined(
+    FailureEvidence,
+    reason === undefined ? { kind } : { kind, reason },
+  );
+  const boundary = failure && boundaryView(field, reply, origin, actionName, failure, presentation);
+  if (boundary) return { issues: boundary.issues, failure, boundary };
   const add = (
     code: string,
     severity: CompactIssue["severity"],
@@ -160,17 +154,9 @@ export function projectMcpIssues<Reply>(
       complete = false;
       return undefined;
     }
-    return sanitizeDiagnosticContent(sanitizeTerminalLine(value), { maximumLength: 512 });
+    return sanitizeNotice(value);
   };
-  const validation = validationNoticeIdentity({
-    action,
-    outcome: field(reply, "outcome").value,
-    isError: field(reply, "isError").value,
-    originAction: field(origin, "action").value,
-    originOutcome: field(origin, "outcome").value,
-    originIsError: field(origin, "isError").value,
-    outputValidation: field(origin, "outputValidation").value,
-  });
+  const validation = presentationValidationIdentity(reply, origin, field);
   if (validation)
     add(
       `validation-${validation}`,
@@ -189,7 +175,7 @@ export function projectMcpIssues<Reply>(
     ]);
   if (presentation.outcome === "not-sent")
     add("not-sent", presentation.isError ? "error" : "warning", "The MCP operation was not sent.");
-  if (field(data, "kind").value === "cleanup")
+  if (kind === "cleanup")
     add("cleanup-unconfirmed", "warning", "MCP cleanup is unconfirmed.", [
       { code: "cleanup-gate", text: "Reconnection is not safe recovery yet." },
     ]);
@@ -247,8 +233,8 @@ export function projectMcpIssues<Reply>(
     }
   }
   const notices = field(reply, "notices").value;
-  const count = field(notices, "length").value;
-  if (isArray(notices) && Predicate.isNumber(count) && count <= 32) {
+  const count = presentationArrayLength(notices);
+  if (count !== undefined && count <= 32) {
     const unknown: string[] = [];
     for (let i = 0; i < count; i++) {
       const notice = field(notices, String(i)).value;
@@ -294,5 +280,5 @@ export function projectMcpIssues<Reply>(
     ]);
   if (!complete)
     add("evidence-incomplete", "warning", "MCP presentation evidence is incomplete.", [noReplay]);
-  return { coverage: complete ? "complete" : "unknown", entries };
+  return { issues: { coverage: complete ? "complete" : "unknown", entries }, failure };
 }

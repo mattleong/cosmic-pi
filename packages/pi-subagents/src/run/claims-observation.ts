@@ -6,18 +6,18 @@ export const MAX_OBSERVED_WRITE_PATHS = 64;
 export const MAX_WRITE_CLAIM_VIOLATIONS = 16;
 const MAX_NATIVE_CHANGE_PATHS = 256;
 
-export interface ObservedFileWrite {
-  readonly toolName: string;
-  readonly paths: ReadonlyArray<string>;
-}
+const FILE_WRITE_TOOL_NAMES = new Set(["edit", "write", "notebookedit", "applypatch"]);
 
-const asObject = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
+export const asObject = <ValueInput>(value: ValueInput): Readonly<JsonObject> | undefined => {
   if (value === null || !hasObjectRuntimeType(value) || Array.isArray(value)) return undefined;
   // SAFETY: Runtime guards established a non-null, non-array object before this shallow view.
   return value as ValueInput & Readonly<JsonObject>;
 };
 
-const stringField = (value: Readonly<JsonObject> | undefined, key: string): string | undefined => {
+export const stringField = (
+  value: Readonly<JsonObject> | undefined,
+  key: string,
+): string | undefined => {
   const field = value?.[key];
   return Predicate.isString(field) && field.trim() ? field.trim() : undefined;
 };
@@ -54,20 +54,14 @@ const collectKnownPaths = <ArgsInput>(args: ArgsInput): ReadonlyArray<string> =>
   ];
 };
 
+/** Returns the paths a native file-write tool names, or undefined for other tools. */
 export const observeFileWrite = <ArgsInput>(
   toolName: string,
   args: ArgsInput,
-): ObservedFileWrite | undefined => {
-  const normalizedName = toolName.trim().toLocaleLowerCase("en-US");
-  if (
-    normalizedName !== "edit" &&
-    normalizedName !== "write" &&
-    normalizedName !== "notebookedit" &&
-    normalizedName !== "applypatch"
-  )
-    return undefined;
-  return { toolName, paths: collectKnownPaths(args) };
-};
+): ReadonlyArray<string> | undefined =>
+  FILE_WRITE_TOOL_NAMES.has(toolName.trim().toLocaleLowerCase("en-US"))
+    ? collectKnownPaths(args)
+    : undefined;
 
 const bashMutationPatterns: ReadonlyArray<RegExp> = [
   /(^|[;&|]\s*)(rm|mv|cp|mkdir|rmdir|touch|tee|install)\b/u,

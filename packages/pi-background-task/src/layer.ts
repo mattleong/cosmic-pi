@@ -14,13 +14,9 @@ export interface BackgroundTaskSessionInput {
   readonly projectTrusted: boolean;
 }
 
-export interface BackgroundTaskLayerOptions {
-  readonly publish: (projection: BackgroundTaskProjection) => void;
-}
-
 export const makeBackgroundTaskLayer = (
   input: BackgroundTaskSessionInput,
-  options: BackgroundTaskLayerOptions,
+  publish: (projection: BackgroundTaskProjection) => void,
 ) => {
   const platform = Layer.merge(
     nodeFilePlatformLayer,
@@ -30,7 +26,7 @@ export const makeBackgroundTaskLayer = (
     cwd: input.cwd,
     projectTrusted: input.projectTrusted,
   }).pipe(Layer.provide(platform));
-  return BackgroundTaskService.layer({ publish: options.publish }).pipe(
+  return BackgroundTaskService.layer({ publish }).pipe(
     Layer.provideMerge(Layer.merge(config, Path.layer)),
     Layer.provide(LocalProcess.layer),
     Layer.merge(CodePreviewSchedulerService.layer),

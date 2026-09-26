@@ -1,4 +1,4 @@
-import { createEventBus, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -8,29 +8,16 @@ import { makeChildTimings, liveChildElapsed } from "../src/boundary/host-child-t
 import { codeModeCompactSummaryAtHost } from "../src/boundary/host-render-ticker.ts";
 import { codeModeCompactSummary } from "../src/ui/compact-summary.ts";
 import { callEntryDetails, type CodeModeToolDetails } from "../src/tools/format.ts";
-import { makeCodeModeToolExecute } from "../src/tools/execution.ts";
-import {
-  codeModeStateFixture,
-  extensionContextFixture,
-  opaqueHostFixture,
-} from "./support/host.ts";
+import { executeHarness } from "./support/execute.ts";
+import { deferredPromise, opaqueFixture } from "pi-cosmic-core/testing";
 import { nestedToolDefinitionsFixture } from "./support/tools.ts";
 
-const deferred = <A>() => {
-  let resolve!: (value: A) => void;
-  const promise = Effect.runPromise(
-    Effect.callback<A>((resume) => {
-      resolve = (value) => resume(Effect.succeed(value));
-    }),
-  );
-  return { promise, resolve };
-};
 const nativeResult = { content: [{ type: "text" as const, text: "done" }], details: {} };
 const input = <D>(details: D, phase: "running" | "settled" = "running") => ({
   phase,
   args: {},
   result: { content: [], details },
-  context: opaqueHostFixture({
+  context: opaqueFixture({
     state: {},
     isError: false,
     isPartial: phase === "running",
@@ -39,6 +26,13 @@ const input = <D>(details: D, phase: "running" | "settled" = "running") => ({
 });
 const durations = (summary: ReturnType<typeof codeModeCompactSummary>) =>
   summary?.children?.entries.map((entry) => entry.durationMs);
+const live = <D>(details: D, now: number, phase: "running" | "settled" = "running") =>
+  durations(
+    codeModeCompactSummary(
+      input(details, phase),
+      liveChildElapsed(() => now),
+    ),
+  );
 
 const json = Schema.fromJsonString(Schema.Unknown);
 const replay = <Value>(value: Value) =>
@@ -58,49 +52,14 @@ describe("live nested timing", () => {
     }));
     const details = callEntryDetails(calls);
     now = 3000;
-    expect(
-      durations(
-        codeModeCompactSummary(
-          input(details),
-          liveChildElapsed(() => now),
-        ),
-      ),
-    ).toEqual([2000, 1500]);
+    expect(live(details, now)).toEqual([2000, 1500]);
     now = 4000;
-    expect(
-      durations(
-        codeModeCompactSummary(
-          input(details),
-          liveChildElapsed(() => now),
-        ),
-      ),
-    ).toEqual([3000, 2500]);
-    expect(
-      durations(
-        codeModeCompactSummary(
-          input(replay(details)),
-          liveChildElapsed(() => now),
-        ),
-      ),
-    ).toEqual([undefined, undefined]);
+    expect(live(details, now)).toEqual([3000, 2500]);
+    expect(live(replay(details), now)).toEqual([undefined, undefined]);
     timing.stop(first);
-    expect(
-      durations(
-        codeModeCompactSummary(
-          input(details),
-          liveChildElapsed(() => now),
-        ),
-      ),
-    ).toEqual([undefined, 2500]);
+    expect(live(details, now)).toEqual([undefined, 2500]);
     timing.close();
-    expect(
-      durations(
-        codeModeCompactSummary(
-          input(details),
-          liveChildElapsed(() => now),
-        ),
-      ),
-    ).toEqual([undefined, undefined]);
+    expect(live(details, now)).toEqual([undefined, undefined]);
     expect(timing.start()).toBeUndefined();
   });
 
@@ -116,22 +75,14 @@ describe("live nested timing", () => {
     ]);
     try {
       // The settled measurement can include queue wait. Never replace it with a live estimate.
-      expect(
-        durations(
-          codeModeCompactSummary(
-            input(details),
-            liveChildElapsed(() => 6000),
-          ),
-        ),
-      ).toEqual([undefined, undefined, 1000, 9000, undefined]);
-      expect(
-        durations(
-          codeModeCompactSummary(
-            input(details, "settled"),
-            liveChildElapsed(() => 6000),
-          ),
-        ),
-      ).toEqual([undefined, undefined, undefined, 9000, undefined]);
+      expect(live(details, 6000)).toEqual([undefined, undefined, 1000, 9000, undefined]);
+      expect(live(details, 6000, "settled")).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        9000,
+        undefined,
+      ]);
       expect(
         codeModeCompactSummary(input(details))?.children?.entries.every(
           (child) => child.showTiming === undefined,
@@ -160,18 +111,13 @@ describe("live nested timing", () => {
       Effect.gen(function* () {
         let now = 1000;
         const clock = vi.spyOn(core, "synchronousNow").mockImplementation(() => now);
-        const ready = deferred<void>();
-        const firstDone = deferred<void>();
-        const waits = [deferred<typeof nativeResult>(), deferred<typeof nativeResult>()];
+        const ready = deferredPromise();
+        const firstDone = deferredPromise();
+        const waits = [1, 2].map(() => deferredPromise<typeof nativeResult>());
         let count = 0;
         let progress: AgentToolResult<CodeModeToolDetails> | undefined;
         const controller = new AbortController();
-        const state = codeModeStateFixture({});
-        const execute = makeCodeModeToolExecute({
-          isCurrent: () => true,
-          getState: () => state,
-          runInSession: (effect, signal) =>
-            Effect.runPromise(effect, signal ? { signal } : undefined),
+        const run = executeHarness({
           definitions: nestedToolDefinitionsFixture({
             bash: {
               execute: () => {
@@ -186,20 +132,15 @@ describe("live nested timing", () => {
               },
             },
           }),
-          events: createEventBus(),
-          sessionId: "live-timing",
-        });
-        const run = execute(
-          "live-timing",
+        }).run(
+          'try { await Promise.all([1,2].map(() => tools.pi.bash({command:"same"}))); } catch {} return 1',
           {
-            code: 'try { await Promise.all([1,2].map(() => tools.pi.bash({command:"same"}))); } catch {} return 1',
+            signal: controller.signal,
+            onUpdate: (value) => {
+              progress = value;
+              if (value.details?.toolCalls[0]?.status === "completed") firstDone.resolve();
+            },
           },
-          controller.signal,
-          (value) => {
-            progress = value;
-            if (value.details?.toolCalls[0]?.status === "completed") firstDone.resolve();
-          },
-          extensionContextFixture({}),
         );
         try {
           yield* Effect.promise(() => ready.promise);

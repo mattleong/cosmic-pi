@@ -73,68 +73,15 @@ export interface ProfileResolutionFailure {
 
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
-const skip = (
-  candidate: string,
-  code: string,
-  reason: string,
-  candidateIndex: number,
-): SkippedProfileCandidate => ({ candidateIndex, candidate, code, reason });
-
-const unsupportedPiEffort = (
-  environment: ProfileResolutionEnvironment,
-  provider: string,
-  id: string,
-  effort: SubagentEffort | undefined,
-  label: string,
-  candidateIndex: number,
-): SkippedProfileCandidate | undefined => {
-  if (effort === undefined) return undefined;
-  const model = environment.availablePiModels.find(
-    (candidate) => candidate.provider === provider && candidate.id === id,
-  );
-  if (!model?.supportedEfforts || model.supportedEfforts.includes(effort)) return undefined;
-  return skip(
-    label,
-    "pi_effort_unsupported",
-    `Pi model ${provider}/${id} does not support required effort ${effort}; supported efforts: ${model.supportedEfforts.join(", ") || "none"}.`,
-    candidateIndex,
-  );
-};
-
-type UnscopedProfileCandidateAttempt = Omit<ProfileCandidateAttempt, "routeSource">;
+type UnscopedProfileCandidateAttempt = Omit<
+  ProfileCandidateAttempt,
+  "routeSource" | "reason" | "skippedBefore"
+>;
 
 interface CandidateResult {
   readonly attempt?: UnscopedProfileCandidateAttempt | undefined;
   readonly skipped?: SkippedProfileCandidate | undefined;
 }
-
-const softEffort = (
-  profileDefault: SubagentEffort | undefined,
-  parent: ParentProfileModel | undefined,
-): SubagentEffort => profileDefault ?? parent?.effort ?? "high";
-
-const baseAttempt = (
-  profile: ProfileId,
-  candidate: ProfileCandidate,
-  candidateIndex: number,
-  effort: SubagentEffort,
-  effortWasExplicit: boolean,
-  model = candidate.model,
-): UnscopedProfileCandidateAttempt => ({
-  profile,
-  source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
-  candidateIndex,
-  host: candidate.host,
-  runtime: candidate.runtime,
-  model,
-  effectiveContext: candidate.context,
-  writeIntent: candidate.writeIntent,
-  openaiFastMode: candidate.openaiFastMode ?? false,
-  closeOnReport: candidate.closeOnReport,
-  effort,
-  effortWasExplicit,
-  reason: `Profile ${profile} selected ${candidate.host}/${candidate.runtime} candidate ${candidateIndex + 1}.`,
-});
 
 /** Exact skip codes and message fragments distinguishing parent from explicit local-Pi selectors. */
 type PiModelSkips = typeof PARENT_MODEL_SKIPS | typeof LOCAL_PI_MODEL_SKIPS;
@@ -153,20 +100,36 @@ const LOCAL_PI_MODEL_SKIPS = {
   unresolvedPredicate: "is unknown or unauthenticated",
 } as const;
 
-/** Shared tail for parent and explicit local-Pi model selection: resolve, effort, fast mode. */
-const piModelTail = (
+const resolveCandidate = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   candidateIndex: number,
   environment: ProfileResolutionEnvironment,
-  selectedEffort: SubagentEffort,
-  hardEffort: SubagentEffort | undefined,
-) => {
+  profileDefaultEffort: SubagentEffort | undefined,
+): CandidateResult => {
   const label = profileCandidateLabel(candidate);
+  const hardEffort = candidate.effort === "default" ? undefined : candidate.effort;
   const skipCandidate = (code: string, reason: string): CandidateResult => ({
-    skipped: skip(label, code, reason, candidateIndex),
+    skipped: { candidateIndex, candidate: label, code, reason },
   });
-  return (selector: string, skips: PiModelSkips): CandidateResult => {
+  const accept = (model = candidate.model): CandidateResult => ({
+    attempt: {
+      profile,
+      source: candidate.model === "parent" ? "profile-parent-candidate" : "profile-candidate",
+      candidateIndex,
+      host: candidate.host,
+      runtime: candidate.runtime,
+      model,
+      effectiveContext: candidate.context,
+      writeIntent: candidate.writeIntent,
+      openaiFastMode: candidate.openaiFastMode ?? false,
+      closeOnReport: candidate.closeOnReport,
+      effort: hardEffort ?? profileDefaultEffort ?? environment.parentModel?.effort ?? "high",
+      effortWasExplicit: hardEffort !== undefined,
+    },
+  });
+  /** Shared tail for parent and explicit local-Pi model selection: resolve, effort, fast mode. */
+  const resolvePiModel = (selector: string, skips: PiModelSkips): CandidateResult => {
     const resolved = resolvePiModelSelector(selector, environment.availablePiModels);
     if (resolved.kind !== "resolved")
       return skipCandidate(
@@ -179,55 +142,22 @@ const piModelTail = (
                 : ""
             }.`,
       );
-    const effortSkip = unsupportedPiEffort(
-      environment,
-      resolved.provider,
-      resolved.id,
-      hardEffort,
-      label,
-      candidateIndex,
-    );
-    if (effortSkip) return { skipped: effortSkip };
     const resolvedModel = `${resolved.provider}/${resolved.id}`;
+    const supportedEfforts = environment.availablePiModels.find(
+      (model) => model.provider === resolved.provider && model.id === resolved.id,
+    )?.supportedEfforts;
+    if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
+      return skipCandidate(
+        "pi_effort_unsupported",
+        `Pi model ${resolvedModel} does not support required effort ${hardEffort}; supported efforts: ${supportedEfforts.join(", ") || "none"}.`,
+      );
     if (candidate.openaiFastMode && !supportsSubagentFastMode("pi", resolvedModel))
       return skipCandidate(
         "fast_mode_unsupported",
         `Pi model ${resolvedModel} does not support fast mode.`,
       );
-    return {
-      attempt: baseAttempt(
-        profile,
-        candidate,
-        candidateIndex,
-        selectedEffort,
-        hardEffort !== undefined,
-        resolvedModel,
-      ),
-    };
+    return accept(resolvedModel);
   };
-};
-
-const resolveCandidate = (
-  profile: ProfileId,
-  candidate: ProfileCandidate,
-  candidateIndex: number,
-  environment: ProfileResolutionEnvironment,
-  profileDefaultEffort: SubagentEffort | undefined,
-): CandidateResult => {
-  const label = profileCandidateLabel(candidate);
-  const hardEffort = candidate.effort === "default" ? undefined : candidate.effort;
-  const selectedEffort = hardEffort ?? softEffort(profileDefaultEffort, environment.parentModel);
-  const skipCandidate = (code: string, reason: string): CandidateResult => ({
-    skipped: skip(label, code, reason, candidateIndex),
-  });
-  const resolvePiModel = piModelTail(
-    profile,
-    candidate,
-    candidateIndex,
-    environment,
-    selectedEffort,
-    hardEffort,
-  );
 
   if (candidate.context === "fork" && !environment.forkAvailable)
     return skipCandidate(
@@ -237,16 +167,7 @@ const resolveCandidate = (
 
   // Unsupported adapters remain syntactically and statically representable. Host resolution
   // dynamically classifies them so ordered fallback is visible in launch provenance.
-  if (!isLocalPiProfileCandidate(candidate))
-    return {
-      attempt: baseAttempt(
-        profile,
-        candidate,
-        candidateIndex,
-        selectedEffort,
-        hardEffort !== undefined,
-      ),
-    };
+  if (!isLocalPiProfileCandidate(candidate)) return accept();
 
   if (candidate.model === "parent") {
     const parent = environment.parentModel;
@@ -286,8 +207,8 @@ const resolveKnownProfileRoute = (
     if (result.attempt) {
       attempts.push({
         ...result.attempt,
-        routeSource,
         reason: `Profile ${profile} selected ${routeLabel} candidate ${result.attempt.candidateIndex + 1} (${result.attempt.host}/${result.attempt.runtime}).`,
+        routeSource,
         skippedBefore: pendingSkipped,
       });
       pendingSkipped = [];

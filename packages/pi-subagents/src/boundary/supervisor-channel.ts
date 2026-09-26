@@ -40,6 +40,7 @@ import {
 } from "./harness-shared.ts";
 import { makeSupervisorRpcServerProtocol } from "./supervisor-rpc-protocol.ts";
 import {
+  channelError,
   makeSupervisorChannelSession,
   SupervisorChannelError,
   type SupervisorChannelControls,
@@ -69,15 +70,10 @@ export interface ClaudeSupervisorMcpMetadata {
 }
 
 export interface CodexSupervisorMcpMetadata {
-  readonly serverName: typeof SUPERVISOR_MCP_REGISTRATION;
-  readonly command: string;
-  readonly args: ReadonlyArray<string>;
-  readonly enabledTools: ReadonlyArray<string>;
   readonly tomlFragment: string;
 }
 
 export interface SupervisorConnectionMetadata {
-  readonly runId: string;
   readonly host: typeof LOOPBACK_HOST;
   readonly port: number;
   readonly stateDirectory: string;
@@ -88,7 +84,6 @@ export interface SupervisorConnectionMetadata {
 }
 
 export interface SupervisorChannelHandle extends SupervisorChannelControls {
-  readonly runId: string;
   readonly metadata: SupervisorConnectionMetadata;
   readonly events: Queue.Dequeue<SupervisorEvent, Cause.Done>;
   readonly close: Effect.Effect<void, SupervisorChannelError>;
@@ -117,8 +112,6 @@ export interface SupervisorChannelLayerOptions {
   readonly authTimeoutMillis?: number | undefined;
 }
 
-const channelError = (operation: string, code: string, message: string) =>
-  new SupervisorChannelError({ operation, code, message });
 const configWriteError = () =>
   channelError(
     "write channel config",
@@ -127,7 +120,6 @@ const configWriteError = () =>
   );
 
 const makeMetadata = (
-  runId: SupervisorRunId,
   port: number,
   stateDirectory: string,
   connectionConfigPath: string,
@@ -135,9 +127,7 @@ const makeMetadata = (
   const helperPath = fileURLToPath(new URL("./supervisor-mcp-helper.mjs", import.meta.url));
   const command = process.execPath;
   const args = [helperPath, "--config", connectionConfigPath] as const;
-  const enabledTools = SUPERVISOR_MCP_TOOL_NAMES;
   return {
-    runId,
     host: LOOPBACK_HOST,
     port,
     stateDirectory,
@@ -154,16 +144,12 @@ const makeMetadata = (
       },
     },
     codexMcp: {
-      serverName: SUPERVISOR_MCP_REGISTRATION,
-      command,
-      args,
-      enabledTools,
       tomlFragment: [
         `[mcp_servers.${SUPERVISOR_MCP_REGISTRATION}]`,
         `command = ${tomlString(command)}`,
         `args = [${args.map(tomlString).join(", ")}]`,
         "required = true",
-        `enabled_tools = [${enabledTools.map(tomlString).join(", ")}]`,
+        `enabled_tools = [${SUPERVISOR_MCP_TOOL_NAMES.map(tomlString).join(", ")}]`,
         'default_tools_approval_mode = "approve"',
       ].join("\n"),
     },
@@ -298,10 +284,6 @@ const acquireNodeChannelEffect = (
         internalScope: undefined,
         handle: undefined,
       };
-      const requestedAuthTimeout = options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS;
-      const authTimeoutMillis = Number.isFinite(requestedAuthTimeout)
-        ? Math.max(1, Math.min(60_000, Math.floor(requestedAuthTimeout)))
-        : AUTH_TIMEOUT_MILLIS;
 
       const cleanupPartial = Effect.gen(function* () {
         if (acquisition.handle)
@@ -338,7 +320,6 @@ const acquireNodeChannelEffect = (
             ),
           ),
         );
-        acquisition.prepared = prepared;
         const internalScope = yield* Scope.make();
         acquisition.internalScope = internalScope;
         const baseServer = yield* restore(
@@ -356,7 +337,6 @@ const acquireNodeChannelEffect = (
             "The supervisor listener address is invalid.",
           );
         const metadata = makeMetadata(
-          runId,
           baseServer.address.port,
           prepared.stateDirectory,
           prepared.connectionConfigPath,
@@ -386,20 +366,14 @@ const acquireNodeChannelEffect = (
             }),
           ),
         );
-        const handle: SupervisorChannelHandle = {
-          runId,
-          metadata,
-          events,
-          ...session.controls,
-          close,
-        };
+        const handle: SupervisorChannelHandle = { metadata, events, ...session.controls, close };
         acquisition.handle = handle;
         const serialization = RpcSerialization.makeNdjson({
           maxBufferSize: MAX_SUPERVISOR_CHANNEL_LINE_BYTES,
         });
         const protocol = yield* makeSupervisorRpcServerProtocol({
           server: baseServer,
-          authTimeoutMillis,
+          authTimeoutMillis: options.authTimeoutMillis ?? AUTH_TIMEOUT_MILLIS,
           maxConnections: MAX_CONNECTIONS,
           openSessionTag: SupervisorOpenSessionRpc._tag,
           onDisconnect: session.disconnect,

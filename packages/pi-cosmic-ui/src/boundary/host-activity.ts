@@ -1,9 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle, TUI } from "@earendil-works/pi-tui";
 import * as Effect from "effect/Effect";
-import * as MutableRef from "effect/MutableRef";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { invokeHostCallback } from "pi-cosmic-core";
 import {
   ActivityComponent,
   makeActivityPresentation,
@@ -14,9 +12,9 @@ import {
   ACTIVITY_DISCOVER,
   ACTIVITY_EVENT,
   ACTIVITY_HOST,
+  ActivityEnvelopeSchema,
   type ActivityEnvelope,
   type ActivityEvents,
-  type ActivityProviderOptions,
 } from "../activity/protocol.ts";
 import {
   ActivityError,
@@ -24,49 +22,18 @@ import {
   type ActivityServiceContract,
 } from "../activity/service.ts";
 import { renderActivityWidget } from "../activity/widget.ts";
-import { fullScreenKeybindingLabel } from "../manager/key-labels.ts";
-import { createScreenViewport } from "./host-viewport.ts";
+import { fullScreenKeybindingOptions } from "../manager/key-labels.ts";
+import { openOwnedSurface } from "./host-surface.ts";
 
-const EnvelopeSchema = Schema.Struct({
-  version: Schema.Literal(1),
-  sessionId: Schema.String,
-  providerId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
-  operation: Schema.Literals(["register", "publish", "revoke"]),
-  token: Schema.ObjectKeyword,
-  hostToken: Schema.ObjectKeyword,
-  items: Schema.optional(Schema.Unknown),
-  starting: Schema.optional(Schema.Unknown),
-  invoke: Schema.optional(
-    Schema.declare<ActivityProviderOptions["invoke"]>(
-      (value): value is ActivityProviderOptions["invoke"] => Predicate.isFunction(value),
-    ),
-  ),
-  getDetail: Schema.optional(
-    Schema.declare<NonNullable<ActivityProviderOptions["getDetail"]>>(
-      (value): value is NonNullable<ActivityProviderOptions["getDetail"]> =>
-        Predicate.isFunction(value),
-    ),
-  ),
-  acknowledge: Schema.optional(
-    Schema.declare<(available: boolean) => void>((value): value is (available: boolean) => void =>
-      Predicate.isFunction(value),
-    ),
-  ),
-});
 const DiscoverySchema = Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String });
-const safe = (run: () => void): void => {
-  try {
-    run();
-  } catch {
-    /* Host callbacks are best effort. */
-  }
-};
+/** Host callbacks are best effort. */
+const safe = (run: () => void): void => invokeHostCallback(run, undefined);
 const neutral = () => ({ render: () => [], invalidate() {} });
 interface Binding {
   readonly service: ActivityServiceContract;
-  readonly rows: MutableRef.MutableRef<readonly ActivityRow[]>;
-  readonly now: MutableRef.MutableRef<number>;
-  readonly starting: MutableRef.MutableRef<number>;
+  rows: readonly ActivityRow[];
+  now: number;
+  starting: number;
   readonly presentation: ActivityPresentation;
   readonly nonce: object;
   readonly cleanups: Array<() => void>;
@@ -123,9 +90,9 @@ export function makeActivityHost(
     bind(service) {
       const binding: Binding = {
         service,
-        rows: MutableRef.make([]),
-        starting: MutableRef.make(0),
-        now: MutableRef.make(0),
+        rows: [],
+        starting: 0,
+        now: 0,
         presentation: makeActivityPresentation(),
         nonce: {},
         cleanups: [],
@@ -144,19 +111,15 @@ export function makeActivityHost(
     publish(service, rows, starting = 0) {
       const binding = bindings.get(service);
       if (!binding) return;
-      MutableRef.set(binding.rows, rows);
-      MutableRef.set(binding.starting, starting);
+      binding.rows = rows;
+      binding.starting = starting;
       if (binding.active) safe(binding.render);
     },
     tick(service, now) {
       const binding = bindings.get(service);
       if (!binding) return;
-      MutableRef.set(binding.now, now);
-      if (
-        binding.active &&
-        (MutableRef.get(binding.rows).length || MutableRef.get(binding.starting) > 0)
-      )
-        safe(binding.render);
+      binding.now = now;
+      if (binding.active && (binding.rows.length || binding.starting > 0)) safe(binding.render);
     },
     activate(ctx, service) {
       const binding = bindings.get(service);
@@ -172,7 +135,7 @@ export function makeActivityHost(
             !binding.active ||
             !binding.installed ||
             current !== binding ||
-            !Schema.is(EnvelopeSchema)(data) ||
+            !Schema.is(ActivityEnvelopeSchema)(data) ||
             data.sessionId !== binding.sessionId ||
             data.hostToken !== binding.nonce
           )
@@ -240,10 +203,10 @@ export function makeActivityHost(
             return {
               render: (width) =>
                 binding.active && binding.installed
-                  ? renderActivityWidget(MutableRef.get(binding.rows), width, 8, {
-                      starting: MutableRef.get(binding.starting),
+                  ? renderActivityWidget(binding.rows, width, 8, {
+                      starting: binding.starting,
                       theme,
-                      now: MutableRef.get(binding.now),
+                      now: binding.now,
                       collapsed: binding.presentation.collapsed,
                     })
                   : [],
@@ -282,134 +245,65 @@ export function makeActivityHost(
         )
           return;
         const owner = {};
-        const viewport = createScreenViewport();
         binding.manager = owner;
         const previousRender = binding.render;
         let closing = false;
-        let factoryInvoked = false;
-        let doneInvoked = false;
-        let requested: { readonly action: ActivityActionRequest | undefined } | undefined;
-        let hostDone: ((action: ActivityActionRequest | undefined) => void) | undefined;
-        let hostTui: TUI | undefined;
-        let overlay: OverlayHandle | undefined;
-        let rejectCompletion: (() => void) | undefined;
         let detailController: AbortController | undefined;
-        const finish = (action?: ActivityActionRequest) => {
-          requested ??= { action };
-          if (doneInvoked || !hostDone || !hostTui || !overlay) return;
-          doneInvoked = true;
-          try {
-            // Pi 0.85 done pops globally. The owned guard protects a newer questionnaire overlay.
-            overlay.hide();
-            const guard = hostTui.showOverlay(neutral(), { nonCapturing: true });
-            try {
-              hostDone(requested.action);
-            } finally {
-              guard.hide();
-            }
-          } catch {
-            rejectCompletion?.();
-          }
-        };
-        const close = () => {
-          closing = true;
-          safe(() => detailController?.abort());
-          finish();
-        };
-        binding.close = close;
-        const action = yield* Effect.callback<ActivityActionRequest | undefined, ActivityError>(
-          (resume) => {
-            const fail = () => resume(Effect.fail(new ActivityError({ reason: "failed" })));
-            rejectCompletion = fail;
-            try {
-              ctx.ui
-                .custom<ActivityActionRequest | undefined>(
-                  (tui, theme, keybindings, done) => {
-                    if (factoryInvoked) {
-                      close();
-                      return neutral();
-                    }
-                    factoryInvoked = true;
-                    hostDone = done;
-                    hostTui = tui;
-                    if (
-                      closing ||
-                      !binding.active ||
-                      current !== binding ||
-                      binding.manager !== owner
-                    ) {
-                      close();
-                      return neutral();
-                    }
-                    viewport.attach(() => tui.terminal);
-                    binding.render = () => {
-                      previousRender();
-                      tui.requestRender();
-                    };
-                    return new ActivityComponent({
-                      snapshot: () => MutableRef.get(binding.rows),
-                      starting: () => MutableRef.get(binding.starting),
-                      presentation: binding.presentation,
-                      theme,
-                      now: () => MutableRef.get(binding.now),
-                      height: viewport.getHeight,
-                      close: (result) => {
-                        if (!closing) finish(result);
-                      },
-                      requestRender: () => tui.requestRender(),
-                      matchesKeybinding: (data, id) => keybindings.matches(data, id),
-                      keybindingLabel: (id, fallback) =>
-                        fullScreenKeybindingLabel(
-                          id,
-                          fallback,
-                          Predicate.isFunction(keybindings.getKeys)
-                            ? (key) => keybindings.getKeys(key)
-                            : undefined,
-                        ),
-                      loadDetail: (request, deliver) => {
-                        safe(() => detailController?.abort());
-                        if (closing) return;
-                        const controller = new AbortController();
-                        detailController = controller;
-                        submit(
-                          serviceDetail(binding.service, request, (text) => {
-                            if (
-                              !controller.signal.aborted &&
-                              !closing &&
-                              current === binding &&
-                              binding.manager === owner
-                            )
-                              deliver(text);
-                          }),
-                          controller.signal,
-                        );
-                      },
-                    });
-                  },
-                  {
-                    overlay: true,
-                    overlayOptions: viewport.overlayOptions,
-                    onHandle: (handle) => {
-                      overlay = handle;
-                      if (closing || requested) finish(requested?.action);
-                    },
-                  },
-                )
-                .then((result) => resume(Effect.succeed(result)), fail);
-            } catch {
-              fail();
-            }
+        const action = yield* openOwnedSurface<ActivityActionRequest | undefined>(ctx, {
+          placement: "screen",
+          closedValue: undefined,
+          isCurrent: () => binding.active && current === binding && binding.manager === owner,
+          onControl: (close) => {
+            binding.close = close;
           },
-        ).pipe(
+          onClose: () => {
+            closing = true;
+            safe(() => detailController?.abort());
+          },
+          create: ({ tui, theme, keybindings, getHeight, finish }) => {
+            binding.render = () => {
+              previousRender();
+              tui.requestRender();
+            };
+            return new ActivityComponent({
+              snapshot: () => binding.rows,
+              starting: () => binding.starting,
+              presentation: binding.presentation,
+              theme,
+              now: () => binding.now,
+              height: getHeight,
+              close: finish,
+              requestRender: () => tui.requestRender(),
+              ...fullScreenKeybindingOptions(keybindings),
+              loadDetail: (request, deliver) => {
+                safe(() => detailController?.abort());
+                if (closing) return;
+                const controller = new AbortController();
+                detailController = controller;
+                submit(
+                  serviceDetail(binding.service, request, (text) => {
+                    if (
+                      !controller.signal.aborted &&
+                      !closing &&
+                      current === binding &&
+                      binding.manager === owner
+                    )
+                      deliver(text);
+                  }),
+                  controller.signal,
+                );
+              },
+            });
+          },
+        }).pipe(
+          Effect.mapError(() => new ActivityError({ reason: "failed" })),
           Effect.ensuring(
             Effect.sync(() => {
-              close();
-              if (binding.manager === owner) {
-                binding.manager = undefined;
-                binding.close = () => undefined;
-                binding.render = previousRender;
-                if (binding.active) safe(binding.render);
-              }
+              if (binding.manager !== owner) return;
+              binding.manager = undefined;
+              binding.close = () => undefined;
+              binding.render = previousRender;
+              if (binding.active) safe(binding.render);
             }),
           ),
         );

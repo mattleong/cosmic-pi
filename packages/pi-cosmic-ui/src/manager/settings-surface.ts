@@ -18,7 +18,7 @@ import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 import { focusedField, managerTone } from "./style.ts";
 import type { FullScreenKeymapOptions } from "./keymap.ts";
 import {
-  settingsHintRenderer,
+  fullScreenSettingsHint,
   settingsSurfaceBridge,
   VimSettingsAdapter,
   type SettingsSurfaceBridgeOptions,
@@ -97,7 +97,6 @@ export interface SettingsGroupSubmenuOptions {
   readonly done: (summary?: string) => void;
   readonly summary?: (() => string) | undefined;
   readonly listTheme: SettingsListTheme;
-  readonly maxVisible?: number | undefined;
 }
 
 class SettingsGroupSubmenu extends Container {
@@ -111,7 +110,7 @@ class SettingsGroupSubmenu extends Container {
     const notifyChange = withoutGroupRowChanges(items, (id, value) => this.change(id, value));
     this.list = new SettingsList(
       items,
-      options.maxVisible ?? Math.min(items.length + 2, 12),
+      Math.min(items.length + 2, 12),
       options.listTheme,
       notifyChange,
       () => options.done(options.summary?.()),
@@ -153,7 +152,6 @@ export interface SettingsListSurfaceOptions {
   /** Value-change callback for setting rows; group rows are filtered out by the surface. */
   readonly onChange: (id: string, value: string, list: SettingsList) => void;
   readonly onCancel: () => void;
-  readonly search?: boolean | undefined;
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
   /** Caller-owned (host-guarded) render request used by the Vim adapter. */
   readonly requestRender?: (() => void) | undefined;
@@ -171,7 +169,6 @@ export interface SettingsListSurface {
 export const createSettingsListSurface = (
   options: SettingsListSurfaceOptions,
 ): SettingsListSurface => {
-  const search = options.search ?? true;
   const container = new Container();
   container.addChild(options.header);
   const list: SettingsList = new SettingsList(
@@ -180,13 +177,13 @@ export const createSettingsListSurface = (
     options.listTheme,
     withoutGroupRowChanges(options.items, (id, value) => options.onChange(id, value, list)),
     options.onCancel,
-    { enableSearch: search },
+    { enableSearch: true },
   );
   const adapter = new VimSettingsAdapter(list, {
-    search,
     matchesKeybinding: options.matchesKeybinding,
     requestRender: options.requestRender,
-    renderHint: settingsHintRenderer({ search, dim: options.dim }),
+    renderHint: (mode, helpExpanded) =>
+      options.dim(` ${fullScreenSettingsHint({ searching: mode === "search", helpExpanded })} `),
   });
   container.addChild(adapter);
   return { list, surface: settingsSurfaceBridge(adapter, container, options.bridge ?? {}) };

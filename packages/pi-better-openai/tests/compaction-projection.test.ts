@@ -1,43 +1,15 @@
-import { type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { projectOpenAIResponseInput } from "../src/compaction/projection.ts";
+import { assistantMessage, testModel } from "./helpers.ts";
 
-const model: Model<"openai-responses"> = {
-  id: "target-model",
-  name: "target-model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://example.invalid",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-};
-const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
-  role: "assistant",
-  content,
-  api: model.api,
-  provider: model.provider,
-  model: model.id,
-  usage: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  },
-  stopReason: "stop",
-  timestamp: 1,
-});
+const model = testModel();
 
 describe("OpenAI compaction transcript projection", () => {
   it("accepts ordinary assistant text without an optional phase", () => {
     const manager = SessionManager.inMemory("/virtual/projection");
     manager.appendMessage({ role: "user", content: "question", timestamp: 0 });
-    manager.appendMessage(assistant([{ type: "text", text: "ordinary answer" }]));
+    manager.appendMessage(assistantMessage([{ type: "text", text: "ordinary answer" }]));
     const input = projectOpenAIResponseInput(model, manager.buildContextEntries());
     expect(input).toHaveLength(2);
     expect(JSON.stringify(input)).toContain("ordinary answer");
@@ -65,7 +37,7 @@ describe("OpenAI compaction transcript projection", () => {
         ],
       });
       manager.appendMessage(
-        assistant([
+        assistantMessage([
           {
             type: "toolCall",
             id: "grammar-call",
@@ -97,7 +69,7 @@ describe("OpenAI compaction transcript projection", () => {
     for (const id of ["bare-call", "call|fc_item"]) {
       it(`preserves tool calls and results with ${id}, cross-model=${crossModel}`, () => {
         const manager = SessionManager.inMemory("/virtual/projection");
-        const message = assistant([
+        const message = assistantMessage([
           { type: "toolCall", id, name: "read", arguments: { path: "file" } },
         ]);
         manager.appendMessage({ ...message, model: crossModel ? "other-model" : model.id });

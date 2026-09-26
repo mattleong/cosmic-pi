@@ -15,7 +15,7 @@ export function formatDebug(
     currentModel: currentModelKey(ctx),
     eligible: state.eligible,
     requiresSubscriptionModel: cfg?.usage.showOnlyOnSubscriptionModels ?? true,
-    auth: state.authFound ? `found (${state.authSource ?? "unknown"})` : "missing",
+    auth: state.authFound ? "found" : "missing",
     identityLabel: "Account ID",
     identityValue: state.accountId,
     lastFetchAt: state.lastFetchAt,

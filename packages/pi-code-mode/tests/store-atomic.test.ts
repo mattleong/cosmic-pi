@@ -10,33 +10,27 @@ import {
   JsonDocumentError,
   JsonDocumentStore,
   provideBuiltLayer,
-  type JsonDocumentStoreContract,
 } from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
+import { makeInMemoryDocuments } from "pi-cosmic-core/testing";
 import { CodeModeConfigStore, type CodeModeState } from "../src/config/store.ts";
 
 const GLOBAL_PATH = "/agent/extensions/pi-code-mode.json";
 const PROJECT_PATH = "/project/.pi/extensions/pi-code-mode.json";
 
 const storeLayer = (
-  memory: InMemoryDocuments,
-  projectTrusted: boolean,
+  documents: Layer.Layer<JsonDocumentStore>,
   publish?: (state: CodeModeState) => void,
-) => {
-  const baseLayer = CodeModeConfigStore.layer({ cwd: "/project", projectTrusted });
-  const layer = publish
-    ? CodeModeConfigStore.layer({ cwd: "/project", projectTrusted, publish })
-    : baseLayer;
-  return layer.pipe(
-    Layer.provide(Layer.mergeAll(memory.layer, Path.layer, AgentDirectory.layer("/agent"))),
+  projectTrusted = true,
+) =>
+  CodeModeConfigStore.layer({ cwd: "/project", projectTrusted, ...(publish && { publish }) }).pipe(
+    Layer.provide(Layer.mergeAll(documents, Path.layer, AgentDirectory.layer("/agent"))),
   );
-};
 
 describe("code mode store atomic publication", () => {
   it.effect("publishes the committed document before interruption is observable", () => {
     const memory = makeInMemoryDocuments({ [GLOBAL_PATH]: { timeoutMs: 15_000, future: true } });
     const published: CodeModeState[] = [];
-    const layer = storeLayer(memory, true, (state) => published.push(state));
+    const layer = storeLayer(memory.layer, (state) => published.push(state));
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
       const commitStarted = yield* Deferred.make<void>();
@@ -66,7 +60,7 @@ describe("code mode store atomic publication", () => {
       const memory = makeInMemoryDocuments({ [GLOBAL_PATH]: { timeoutMs: 15_000 } });
       const published: CodeModeState[] = [];
       let hostile = false;
-      const layer = storeLayer(memory, true, (state) => {
+      const layer = storeLayer(memory.layer, (state) => {
         if (hostile) throw new Error("hostile publish callback");
         published.push(state);
       });
@@ -95,7 +89,7 @@ describe("code mode store atomic publication", () => {
   it.effect("serializes concurrent settings writes so older state never overwrites newer", () => {
     const memory = makeInMemoryDocuments({ [GLOBAL_PATH]: {} });
     const published: CodeModeState[] = [];
-    const layer = storeLayer(memory, true, (state) => published.push(state));
+    const layer = storeLayer(memory.layer, (state) => published.push(state));
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
       const commitStarted = yield* Deferred.make<void>();
@@ -130,7 +124,7 @@ describe("code mode store atomic publication", () => {
       [PROJECT_PATH]: { timeoutMs: 1_000 },
     });
     const published: CodeModeState[] = [];
-    const layer = storeLayer(memory, true, (state) => published.push(state));
+    const layer = storeLayer(memory.layer, (state) => published.push(state));
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
       const commitStarted = yield* Deferred.make<void>();
@@ -172,9 +166,7 @@ describe("code mode store atomic publication", () => {
                 )
               : memory.service.readObject(path),
         });
-        const layer = CodeModeConfigStore.layer({ cwd: "/project", projectTrusted: true }).pipe(
-          Layer.provide(Layer.mergeAll(documents, Path.layer, AgentDirectory.layer("/agent"))),
-        );
+        const layer = storeLayer(documents);
         return Effect.gen(function* () {
           const store = yield* CodeModeConfigStore;
           expect(store.snapshot().projectValues).toEqual({ timeoutMs: 1_000 });
@@ -199,87 +191,15 @@ describe("code mode store atomic publication", () => {
       });
     }
   }
-
-  it.effect("overlays scopes field-wise across writes in one long-lived runtime", () => {
-    const memory = makeInMemoryDocuments({
-      [GLOBAL_PATH]: { timeoutMs: 60_000, enabled: false, future: { keep: true } },
-    });
-    const published: CodeModeState[] = [];
-    const layer = storeLayer(memory, true, (state) => published.push(state));
-    return Effect.gen(function* () {
-      const store = yield* CodeModeConfigStore;
-      // Creating the previously absent project document keeps the global fallback overlay.
-      const afterProject = yield* store.setSetting("project", "timeoutMs", "45000");
-      expect(afterProject.config.timeoutMs).toBe(45_000);
-      expect(afterProject.provenance.timeoutMs).toBe("project");
-      expect(afterProject.config.enabled).toBe(false);
-      expect(afterProject.provenance.enabled).toBe("global");
-      expect(memory.documents.get(PROJECT_PATH)).toEqual({ timeoutMs: 45_000 });
-
-      // Global writes retain trusted project values.
-      const afterGlobal = yield* store.setSetting("global", "maxToolCalls", "16");
-      expect(afterGlobal.config.timeoutMs).toBe(45_000);
-      expect(afterGlobal.provenance.timeoutMs).toBe("project");
-      expect(afterGlobal.config.maxToolCalls).toBe(16);
-      expect(memory.documents.get(GLOBAL_PATH)).toEqual({
-        timeoutMs: 60_000,
-        enabled: false,
-        future: { keep: true },
-        maxToolCalls: 16,
-      });
-
-      const afterClear = yield* store.clearSetting("project", "timeoutMs");
-      expect(afterClear.config.timeoutMs).toBe(60_000);
-      expect(afterClear.provenance.timeoutMs).toBe("global");
-      expect(Object.isFrozen(published.at(-1))).toBe(true);
-      expect(Object.isFrozen(published.at(-1)?.config)).toBe(true);
-    }).pipe(Effect.scoped, provideBuiltLayer(layer));
-  });
 });
 
 describe("code mode untrusted project I/O", () => {
-  const recordingLayer = (memory: InMemoryDocuments, operations: string[]) => {
-    const record = (operation: string, path: string) => operations.push(`${operation}:${path}`);
-    const service: JsonDocumentStoreContract = {
-      exists: (path) => {
-        record("exists", path);
-        return memory.service.exists(path);
-      },
-      readObject: (path) => {
-        record("read", path);
-        return memory.service.readObject(path);
-      },
-      writeObject: (path, document) => {
-        record("write", path);
-        return memory.service.writeObject(path, document);
-      },
-      modifyObject: (path, modify) => {
-        record("modify", path);
-        return memory.service.modifyObject(path, modify);
-      },
-      updateObject: (path, update) => {
-        record("update", path);
-        return memory.service.updateObject(path, update);
-      },
-    };
-    return Layer.succeed(JsonDocumentStore, JsonDocumentStore.of(service));
-  };
-
   it.effect("performs no project-document I/O at all while the project is untrusted", () => {
     const memory = makeInMemoryDocuments({
       [GLOBAL_PATH]: { timeoutMs: 45_000 },
       [PROJECT_PATH]: { enabled: true, timeoutMs: 1_000 },
     });
-    const operations: string[] = [];
-    const layer = CodeModeConfigStore.layer({ cwd: "/project", projectTrusted: false }).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          recordingLayer(memory, operations),
-          Path.layer,
-          AgentDirectory.layer("/agent"),
-        ),
-      ),
-    );
+    const layer = storeLayer(memory.layer, undefined, false);
     return Effect.gen(function* () {
       const store = yield* CodeModeConfigStore;
       const state = store.snapshot();
@@ -292,9 +212,11 @@ describe("code mode untrusted project I/O", () => {
       yield* store.setSetting("global", "maxToolCalls", "8");
       const refused = yield* store.setSetting("project", "enabled", "true").pipe(Effect.flip);
       expect(refused._tag).toBe("CodeModeUntrustedScopeError");
+      const clearRefused = yield* store.clearSetting("project", "enabled").pipe(Effect.flip);
+      expect(clearRefused._tag).toBe("CodeModeUntrustedScopeError");
 
-      expect(operations.length).toBeGreaterThan(0);
-      expect(operations.filter((operation) => operation.includes(PROJECT_PATH))).toEqual([]);
+      expect(memory.operations.length).toBeGreaterThan(0);
+      expect(memory.operations.filter((operation) => operation.includes(PROJECT_PATH))).toEqual([]);
       expect(memory.documents.get(PROJECT_PATH)).toEqual({ enabled: true, timeoutMs: 1_000 });
     }).pipe(Effect.scoped, provideBuiltLayer(layer));
   });

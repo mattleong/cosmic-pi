@@ -37,6 +37,13 @@ const notification = projection(
   }),
 );
 const fallback = <Content>(content: Content): string => fallbackText(content, true);
+const rawResult = <Content>(content: Content) =>
+  fallback(content) ? ["Raw result", fallback(content)] : [];
+const requestLine = (row: NonNullable<ReturnType<typeof decodeExpandedAsyncRows>>[number]) =>
+  `Request ${stripTerminalControls(row.requestId)} · delivery ${stripTerminalControls(row.deliveryId)} · ${row.status} · delivery status ${row.delivery}`;
+const notificationLine = (details: NonNullable<ReturnType<typeof notification>>) =>
+  `Request ${stripTerminalControls(details.requestId)} · delivery ${stripTerminalControls(details.deliveryId)} · generation ${stripTerminalControls(details.generation)}`;
+const repeatWarning = "Do not immediately ask the same questions again.";
 
 function outcomeLines(outcome: typeof asyncOutcome.Type | undefined, theme: Theme): string[] {
   if (outcome?.outcome !== "submitted") return [];
@@ -114,14 +121,7 @@ export function renderAsyncResult<Input>(
   ]);
   if (rows?.length === 0) lines?.push("No questionnaires to show.");
   if (options.expanded && rows) {
-    for (const row of rows) {
-      lines?.push(
-        theme.fg(
-          "dim",
-          `Request ${stripTerminalControls(row.requestId)} · delivery ${stripTerminalControls(row.deliveryId)} · ${row.status} · delivery status ${row.delivery}`,
-        ),
-      );
-    }
+    for (const row of rows) lines?.push(theme.fg("dim", requestLine(row)));
     lines?.push(
       fallback(result?.content),
       theme.fg(
@@ -151,7 +151,7 @@ export function renderAsyncContent<Input>(
     rows
       .flatMap((row) => [
         ...outcomeLines(row.outcome, theme),
-        `Request ${stripTerminalControls(row.requestId)} · delivery ${stripTerminalControls(row.deliveryId)} · ${row.status} · delivery status ${row.delivery}`,
+        requestLine(row),
         ...(row.independentWork
           ? [`Independent work: ${stripTerminalControls(row.independentWork)}`]
           : []),
@@ -161,12 +161,10 @@ export function renderAsyncContent<Input>(
         ...(row.presentation
           ? [`Presentation: ${row.presentation}. Queued admission is not a mount or an answer.`]
           : []),
-        ...(row.outcome?.outcome === "cancelled"
-          ? ["Do not immediately ask the same questions again."]
-          : []),
+        ...(row.outcome?.outcome === "cancelled" ? [repeatWarning] : []),
         "Treat repeated delivery IDs as the same result. Sent means the host call returned, not model acknowledgement.",
       ])
-      .concat(fallback(result?.content) ? ["Raw result", fallback(result?.content)] : [])
+      .concat(rawResult(result?.content))
       .join("\n"),
     0,
     0,
@@ -221,12 +219,10 @@ export function renderAsyncMessage<Input>(
               inner,
             ),
             ...outcomeLines(outcome, theme),
-            `Request ${stripTerminalControls(details.requestId)} · delivery ${stripTerminalControls(details.deliveryId)} · generation ${stripTerminalControls(details.generation)}`,
-            ...(outcome?.outcome === "cancelled"
-              ? ["Do not immediately ask the same questions again."]
-              : []),
+            notificationLine(details),
+            ...(outcome?.outcome === "cancelled" ? [repeatWarning] : []),
             "This notification does not confirm model acknowledgement of the answers.",
-            ...(fallback(message?.content) ? ["Raw result", fallback(message?.content)] : []),
+            ...rawResult(message?.content),
           );
         return new Text(lines.join("\n"), options.outputPad, 0).render(width);
       },
@@ -236,10 +232,7 @@ export function renderAsyncMessage<Input>(
   const lines = summary(details.outcome.outcome, details.outcome, theme);
   if (options.expanded) {
     lines.push(
-      theme.fg(
-        "dim",
-        `Request ${stripTerminalControls(details.requestId)} · delivery ${stripTerminalControls(details.deliveryId)} · generation ${stripTerminalControls(details.generation)}`,
-      ),
+      theme.fg("dim", notificationLine(details)),
       fallback(message?.content),
       theme.fg("dim", "This notification does not confirm model acknowledgement of the answers."),
     );

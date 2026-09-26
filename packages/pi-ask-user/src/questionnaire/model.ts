@@ -1,13 +1,7 @@
+import type { AskUserOutcome } from "./protocol.ts";
 import type { AskUserRequest } from "./schema.ts";
 
-type AnswerContent =
-  | {
-      readonly kind: "choices";
-      readonly values: ReadonlyArray<string>;
-      readonly labels: ReadonlyArray<string>;
-    }
-  | { readonly kind: "custom"; readonly text: string }
-  | { readonly kind: "text"; readonly text: string };
+export type { AskUserOutcome } from "./protocol.ts";
 
 type DraftAnswerContent =
   | { readonly kind: "choices"; readonly values: ReadonlyArray<string> }
@@ -19,14 +13,7 @@ export type AskUserAnswerDraft = DraftAnswerContent & {
   readonly note?: string;
 };
 
-export type AskUserAnswer = AnswerContent & {
-  readonly key: string;
-  readonly note?: string;
-};
-
-export type AskUserOutcome =
-  | { readonly outcome: "submitted"; readonly answers: ReadonlyArray<AskUserAnswer> }
-  | { readonly outcome: "cancelled"; readonly answers: readonly [] };
+export type AskUserAnswer = Extract<AskUserOutcome, { outcome: "submitted" }>["answers"][number];
 
 export interface QuestionDraft {
   readonly cursor: number;

@@ -2,81 +2,14 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { AskUserService, type AskUserHost } from "../src/questionnaire/service.ts";
-import type { AskUserOutcome, FormOutcome } from "../src/protocol.ts";
-import { defaultQuestion } from "./support/questionnaire.ts";
-import { ActivitySnapshotSchema, type ActivityProviderOptions } from "pi-cosmic-ui/activity";
+import { AskUserService } from "../src/questionnaire/service.ts";
+import type { FormOutcome } from "../src/protocol.ts";
+import { defaultQuestion, emptyForm as form, formOwner as owner } from "./support/questionnaire.ts";
+import { ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
 import * as Schema from "effect/Schema";
-import { makeQuestionnaireActivity } from "../src/boundary/host-activity.ts";
-import { makeAskUserDialogBridge } from "../src/boundary/host-ui.ts";
+import { makeActivityFixture } from "./support/activity.ts";
 
-const owner = {
-  extensionId: "pi-mcp",
-  operationId: "operation",
-  requestId: "request",
-  label: "MCP",
-};
-const form = { kind: "form", message: "private", fields: [] } as const;
 const ordinary = { questions: [defaultQuestion] };
-
-it.effect(
-  "shares FIFO across async, ordinary and extension forms without steering form answers",
-  () =>
-    Effect.gen(function* () {
-      const release = yield* Deferred.make<AskUserOutcome>();
-      const calls: string[] = [];
-      let deliveries = 0;
-      const host: AskUserHost = (_request, opened) =>
-        Effect.gen(function* () {
-          calls.push(opened ? "async" : "ordinary");
-          if (opened) {
-            yield* Deferred.succeed(opened, undefined);
-            return yield* Deferred.await(release);
-          }
-          return { outcome: "cancelled", answers: [] } as const;
-        });
-      yield* Effect.gen(function* () {
-        const service = yield* AskUserService;
-        const async = yield* service.startAsync({
-          ...ordinary,
-          independentWork: "Inspect",
-          blockedWork: "Choose",
-        });
-        const cancelled = yield* Effect.forkChild(service.askForm(form, owner), {
-          startImmediately: true,
-        });
-        const regular = yield* Effect.forkChild(service.ask(ordinary), { startImmediately: true });
-        const pending = yield* Effect.forkChild(
-          service.askForm(form, { ...owner, requestId: "next" }),
-          { startImmediately: true },
-        );
-        yield* Fiber.interrupt(cancelled);
-        expect(calls).toEqual(["async"]);
-        yield* service.controlAsync({ action: "cancel", requestId: async.requestId });
-        yield* Fiber.join(regular);
-        expect(yield* Fiber.join(pending)).toEqual({ action: "accept", content: {} });
-        expect(calls).toEqual(["async", "ordinary", "form"]);
-        expect(deliveries).toBe(0);
-      }).pipe(
-        Effect.provide(
-          AskUserService.layer(
-            host,
-            () =>
-              Effect.sync(() => {
-                deliveries++;
-              }),
-            "test",
-            undefined,
-            () =>
-              Effect.sync(() => {
-                calls.push("form");
-                return { action: "accept", content: {} } as const;
-              }),
-          ),
-        ),
-      );
-    }),
-);
 
 it.effect("keeps the shared permit until active form cleanup completes", () =>
   Effect.gen(function* () {
@@ -153,22 +86,50 @@ it.effect("validates host answers and bounds forms within the existing 16 pendin
   }),
 );
 
+it.effect("settles invalid form answers as failed Activity rows with separate form ids", () =>
+  Effect.gen(function* () {
+    const settled: string[] = [];
+    const answers: FormOutcome[] = [
+      { action: "accept", content: { unexpected: true } },
+      { action: "accept", content: {} },
+    ];
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      yield* service.ask(ordinary);
+      expect(yield* Effect.flip(service.askForm(form, owner))).toMatchObject({
+        _tag: "AskUserValidationError",
+      });
+      expect(yield* service.askForm(form, owner)).toEqual({ action: "accept", content: {} });
+    }).pipe(
+      Effect.provide(
+        AskUserService.layer(
+          () => Effect.succeed({ outcome: "cancelled", answers: [] }),
+          undefined,
+          "test",
+          {
+            admitted: () => Effect.void,
+            presenting: () => Effect.void,
+            settled: (id, outcome) => Effect.sync(() => settled.push(`${id}:${outcome}`)),
+            removed: () => Effect.void,
+          },
+          () => Effect.sync(() => answers.shift()!),
+        ),
+      ),
+    );
+    expect(settled).toEqual([
+      "test-blocking-1:cancelled",
+      "test-form-1:failed",
+      "test-form-2:submitted",
+    ]);
+  }),
+);
+
 it.effect(
   "attributes private forms to the extension operation without exposing messages or answers",
   () =>
     Effect.gen(function* () {
-      let provider: ActivityProviderOptions | undefined;
-      const activity = makeQuestionnaireActivity({
-        bridge: makeAskUserDialogBridge(),
-        isCurrent: () => true,
-        run: (effect, signal) => Effect.runPromise(effect, { signal }),
-        register: (_events, options) => {
-          provider = options;
-          return { publish: () => {}, dispose: () => {}, isAvailable: () => true };
-        },
-      });
-      activity.activate({ emit: () => {}, on: () => () => {} }, "session");
-      yield* activity.observer.admittedForm!(
+      const { activity, provider } = makeActivityFixture();
+      yield* activity.observer.admitted(
         "form",
         {
           kind: "form",
@@ -178,17 +139,17 @@ it.effect(
         Effect.void,
         owner,
       );
-      expect(provider?.snapshot()[0]?.parent).toEqual({
+      expect(provider.snapshot()[0]?.parent).toEqual({
         providerId: "pi-mcp",
         itemId: "operation",
       });
       const serialized = Schema.encodeSync(Schema.fromJsonString(ActivitySnapshotSchema))(
-        provider?.snapshot() ?? [],
+        provider.snapshot(),
       );
       expect(serialized).not.toContain("private-payload");
       expect(serialized).not.toContain("private-answer");
       yield* activity.observer.settled("form", "submitted");
-      expect(provider?.snapshot()[0]).toMatchObject({ status: "done", actions: [] });
+      expect(provider.snapshot()[0]).toMatchObject({ status: "done", actions: [] });
       activity.dispose();
     }),
 );

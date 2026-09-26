@@ -8,7 +8,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { makeLocalCodexBackendDriver } from "../src/backend/local-codex.ts";
 import type { LocalCliHandle, LocalCliWireEvent } from "../src/boundary/local-cli-transport.ts";
 import type { SupervisorEvent } from "../src/supervisor/protocol.ts";
-import { backendSupervisor, supervisorMetadata } from "./fixtures/backend-supervisor.ts";
+import {
+  backendLaunch,
+  backendSupervisor,
+  supervisorMetadata,
+} from "./fixtures/backend-supervisor.ts";
 
 it.effect("Codex preserves an accepted report behind a full queue and delayed consumer", () =>
   Effect.scoped(
@@ -51,7 +55,7 @@ it.effect("Codex preserves an accepted report behind a full queue and delayed co
           }),
       };
       const supervisor = backendSupervisor(
-        supervisorMetadata(report.runId, { enabledTools: [], tomlFragment: "" }),
+        supervisorMetadata({ tomlFragment: "" }),
         supervisorEvents,
         {
           acceptedReportForEpoch: () => Effect.succeed(report),
@@ -62,21 +66,7 @@ it.effect("Codex preserves an accepted report behind a full queue and delayed co
       const backend = yield* makeLocalCodexBackendDriver(
         { preflight: () => Effect.void, spawn: () => Effect.succeed(child) },
         { open: () => Effect.succeed(supervisor) },
-      ).spawn({
-        runId: report.runId,
-        name: "fixture",
-        closeOnReport: true,
-        cwd: process.cwd(),
-        context: "fresh",
-        writeIntent: "read-only",
-        openaiFastMode: false,
-        model: "fixture",
-        effort: "high",
-        activeTools: [],
-        projectTrusted: false,
-        parentSessionId: "parent",
-        systemPrompt: "Report",
-      });
+      ).spawn(backendLaunch({ runId: report.runId }));
       yield* backend.controls.initialize;
       yield* backend.controls.start("Start", 1);
       yield* Queue.take(backend.events);

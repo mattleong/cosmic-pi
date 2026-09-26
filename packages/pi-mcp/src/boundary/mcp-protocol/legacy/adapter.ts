@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import { boundaryError } from "../../../client/errors.ts";
 import type { McpProtocolAdapter } from "../contract.ts";
+import { boundedSdkCleanup } from "../shared/bounded-cleanup.ts";
 import { mapSubscriptionFailure } from "../shared/subscription-failure.ts";
 
 /** Legacy list notifications use the connection's unsolicited channel. */
@@ -57,8 +58,8 @@ export const legacyProtocol: McpProtocolAdapter = {
           Effect.uninterruptible(
             Effect.gen(function* () {
               if (!(yield* events.health).closed)
-                yield* Effect.tryPromise({
-                  try: (signal) =>
+                yield* boundedSdkCleanup(
+                  (signal) =>
                     client.request(
                       { method: "resources/unsubscribe", params: { uri } },
                       {
@@ -70,21 +71,13 @@ export const legacyProtocol: McpProtocolAdapter = {
                         maxTotalTimeout: cleanupTimeout,
                       },
                     ),
-                  catch: () =>
-                    boundaryError("cleanup", "unknown", "MCP resource unsubscribe cleanup failed."),
-                }).pipe(
-                  Effect.interruptible,
-                  Effect.timeoutOrElse({
-                    duration: cleanupTimeout,
-                    orElse: () =>
-                      Effect.fail(
-                        boundaryError(
-                          "cleanup",
-                          "unknown",
-                          "MCP resource unsubscribe cleanup timed out.",
-                        ),
-                      ),
-                  }),
+                  cleanupTimeout,
+                  boundaryError("cleanup", "unknown", "MCP resource unsubscribe cleanup failed."),
+                  boundaryError(
+                    "cleanup",
+                    "unknown",
+                    "MCP resource unsubscribe cleanup timed out.",
+                  ),
                 );
               yield* Deferred.succeed(ended, undefined);
             }).pipe(

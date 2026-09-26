@@ -45,15 +45,13 @@ const MAX_BACKGROUND_TASK_PROTOCOL_OUTPUT_BYTES = 16 * 1_024 * 1_024;
 export const cancelledResult = (
   details: ReturnType<typeof callEntryDetails>,
   maxOutputBytes: number,
-): AgentToolResult<CodeModeToolDetails> => ({
-  content: [{ type: "text", text: clampModelVisibleText("Execution cancelled.", maxOutputBytes) }],
-  details: {
-    ...details,
-    cancelled: true,
-    truncated:
-      clampModelVisibleText("Execution cancelled.", maxOutputBytes) !== "Execution cancelled.",
-  },
-});
+): AgentToolResult<CodeModeToolDetails> => {
+  const text = clampModelVisibleText("Execution cancelled.", maxOutputBytes);
+  return {
+    content: [{ type: "text", text }],
+    details: { ...details, cancelled: true, truncated: text !== "Execution cancelled." },
+  };
+};
 
 export function runCodeModeExecution(
   environment: CodeModeExecutionEnvironment,
@@ -71,10 +69,6 @@ export function runCodeModeExecution(
   const calls = new Map<number, MutableCallEntry>();
   const childTimings = makeChildTimings();
   const presentationCwd = invokeHostCallback(() => ctx.cwd, undefined);
-  // `/reload` refreshes this TypeScript extension but Node can retain the already-imported
-  // runtime JS module. Older runtime instances emit only the legacy start/end hooks. Their
-  // indices are unique within an execution; their negative IDs stay disjoint from modern
-  // non-negative lifecycle IDs, so settled entries can retain the same map key.
   const counts = emptyCounts();
   const compact = makeCompactEvidence((id, receipt) => {
     const call = calls.get(id);
@@ -124,6 +118,12 @@ export function runCodeModeExecution(
   };
   const aborted = () => invokeHostCallback(() => signal?.aborted === true, true);
   if (aborted()) return cancelledResult(callEntryDetails([], counts), config.maxOutputBytes);
+  const gated =
+    <Args extends ReadonlyArray<unknown>, A, E>(run: (...args: Args) => Effect.Effect<A, E>) =>
+    (...args: Args) =>
+      Effect.suspend(() =>
+        environment.isCurrent() && !aborted() ? run(...args) : Effect.interrupt,
+      );
 
   const sourceRefusal = checkSourceSize(params.code, config.maxSourceBytes);
   if (sourceRefusal !== undefined) {
@@ -187,6 +187,7 @@ export function runCodeModeExecution(
           receipts.observe(id, observation.outcome, observation.resultId, observation.isError);
           compact.observe(id, () => {
             if (observation.incomplete) compact.missing();
+            const notices = observation.notices.map((text) => ({ kind: "warning" as const, text }));
             const projected =
               reply === undefined
                 ? undefined
@@ -201,14 +202,7 @@ export function runCodeModeExecution(
             if (projected !== undefined && !observation.incomplete) {
               return projected.issues?.coverage !== "unknown"
                 ? projected
-                : {
-                    ...projected,
-                    issues: observation.issues,
-                    notices: observation.notices.map((text) => ({
-                      kind: "warning" as const,
-                      text,
-                    })),
-                  };
+                : { ...projected, issues: observation.issues, notices };
             }
             // Heading-only projection does not claim operation success.
             const heading = projectMcpCompactSummary({
@@ -227,7 +221,7 @@ export function runCodeModeExecution(
                     ? "error"
                     : "warning",
               issues: observation.issues,
-              notices: observation.notices.map((text) => ({ kind: "warning" as const, text })),
+              notices,
             };
           });
         },
@@ -239,20 +233,9 @@ export function runCodeModeExecution(
           if (acceptingCapture && environment.isCurrent()) capture = captureResult(result);
         },
         tools: makeExecutionGuestTools(
-          (...args) =>
-            Effect.suspend(() =>
-              environment.isCurrent() && !aborted() ? dispatch(...args) : Effect.interrupt,
-            ),
-          (...args) =>
-            Effect.suspend(() =>
-              environment.isCurrent() && !aborted()
-                ? dispatchBackgroundTask(...args)
-                : Effect.interrupt,
-            ),
-          (...args) =>
-            Effect.suspend(() =>
-              environment.isCurrent() && !aborted() ? dispatchMcp(...args) : Effect.interrupt,
-            ),
+          gated(dispatch),
+          gated(dispatchBackgroundTask),
+          gated(dispatchMcp),
           budget,
           {
             includePowerShell: environment.definitions.powershell !== undefined,
@@ -317,25 +300,13 @@ export function runCodeModeExecution(
               else publish();
             }),
           ),
-        onToolCallStart: ({ index, lifecycleId, name, input }) =>
+        onToolCallStart: ({ lifecycleId: id, name, input }) =>
           Effect.flatMap(Effect.fiberId, (fiber) =>
             Effect.sync(() => {
-              const id = lifecycleId ?? -(index + 1);
+              if (id === undefined) return;
               compact.start(fiber, id);
-              let current = calls.get(id);
-              if (current === undefined && lifecycleId === undefined) {
-                compact.admit(name);
-                receipts.admit(id, name);
-                counts.total += 1;
-                counts.running += 1;
-                current = {
-                  tool: name,
-                  status: "running",
-                };
-                trackQueued(id, current);
-              } else if (current !== undefined) {
-                transitionCall(current, "running", counts);
-              }
+              const current = calls.get(id);
+              if (current !== undefined) transitionCall(current, "running", counts);
               receipts.start(id, name);
               const subject =
                 presentationCwd === undefined
@@ -343,7 +314,7 @@ export function runCodeModeExecution(
                   : describeNestedSubject(name, input, presentationCwd);
               receipts.target(id, subject);
               if (current !== undefined) {
-                if (calls.has(id) && current.liveTiming === undefined) {
+                if (current.liveTiming === undefined) {
                   const timing = childTimings.start();
                   if (timing !== undefined) current.liveTiming = timing;
                 }
@@ -355,36 +326,13 @@ export function runCodeModeExecution(
               publishNow();
             }),
           ),
-        onToolCallEnd: ({ index, lifecycleId, outcome, durationMs }) =>
-          Effect.flatMap(Effect.fiberId, (fiber) =>
-            Effect.sync(() => {
-              // Modern runtimes emit one authoritative terminal lifecycle event immediately after
-              // this compatibility hook. Avoid publishing and rebuilding the same settled row twice.
-              if (lifecycleId !== undefined) return;
-              endDelivery(fiber, outcome !== "success");
-              const id = -(index + 1);
-              const current = calls.get(id);
-              const nextStatus = outcome === "success" ? "completed" : "error";
-              if (current !== undefined) {
-                transitionCall(current, nextStatus, counts);
-                childTimings.stop(current.liveTiming);
-                delete current.liveTiming;
-                current.durationMs = durationMs;
-              } else {
-                // The legacy call was counted but its row exceeded the bounded host-side cap.
-                counts.running -= 1;
-                counts[statusCountKey(nextStatus)] += 1;
-              }
-              publish();
-            }),
-          ),
       });
     });
 
     const settleProgress = (): CodeModeToolDetails => {
       acceptingCapture = false;
       childTimings.close();
-      // Legacy hooks cannot prove delivery for interrupted calls that never emit an end.
+      // Interrupted calls that never emit a terminal lifecycle event cannot prove delivery.
       for (const id of returnedOutputs) recordDeliveryFailure(id);
       returnedOutputs.clear();
       for (const call of calls.values()) delete call.liveTiming;

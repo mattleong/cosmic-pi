@@ -1,6 +1,4 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 
 interface ProcessLock {
@@ -16,7 +14,8 @@ interface ProcessLock {
  */
 const processLocks = new Map<string, ProcessLock>();
 
-const withProcessLock = <A, E, R>(
+/** Serializes keyed effects across independently built Layers and runtimes in this process. */
+export const withProcessLock = <A, E, R>(
   key: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
@@ -35,23 +34,3 @@ const withProcessLock = <A, E, R>(
       ),
     );
   });
-
-export interface ProcessCoordinatorContract {
-  readonly withLock: <A, E, R>(
-    key: string,
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R>;
-}
-
-/** Coordinates keyed effects across independently built Layers in this process. */
-export class ProcessCoordinator extends Context.Service<
-  ProcessCoordinator,
-  ProcessCoordinatorContract
->()("pi-cosmic-core/platform/process-coordinator/ProcessCoordinator") {
-  static readonly layer = Layer.succeed(
-    this,
-    this.of({
-      withLock: withProcessLock,
-    }),
-  );
-}

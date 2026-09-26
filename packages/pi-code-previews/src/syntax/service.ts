@@ -58,7 +58,6 @@ export interface CodePreviewSyntaxServiceContract {
 
 const syntaxSnapshot = (current: SyntaxState): CodePreviewSyntaxSnapshot =>
   Object.freeze({
-    generation: current.generation,
     theme: current.theme,
     highlighter: current.highlighter,
     loadedLanguages: Object.freeze([...current.loadedLanguages]),
@@ -181,7 +180,9 @@ export class CodePreviewSyntaxService extends Context.Service<
             }
 
             const { flight } = decision;
-            const clearInterruptedFlight = modify((current) =>
+            // Replacement is transactional: a failed or interrupted candidate only clears its
+            // flight. The working highlighter and renderer projection remain installed.
+            const clearFlight = modify((current) =>
               Effect.succeed([
                 undefined,
                 current.initialization === flight
@@ -192,24 +193,11 @@ export class CodePreviewSyntaxService extends Context.Service<
                     }
                   : current,
               ] as const),
-            ).pipe(Effect.andThen(Deferred.succeed(flight.done, "Interrupted")), Effect.asVoid);
+            );
             return yield* restore(adapter.create(theme, PRELOADED_SHIKI_LANGUAGES)).pipe(
               Effect.matchEffect({
                 onFailure: () =>
-                  modify((current) => {
-                    if (current.initialization !== flight)
-                      return Effect.succeed([undefined, current] as const);
-                    // Replacement is transactional: a failed candidate only clears its flight.
-                    // The working highlighter and renderer projection remain installed.
-                    return Effect.succeed([
-                      undefined,
-                      {
-                        ...current,
-                        initialization: undefined,
-                        statusVersion: current.statusVersion + 1,
-                      },
-                    ] as const);
-                  }).pipe(
+                  clearFlight.pipe(
                     Effect.andThen(
                       Effect.logWarning(
                         "Shiki failed to initialize; code previews will use plain text.",
@@ -241,7 +229,12 @@ export class CodePreviewSyntaxService extends Context.Service<
                     }),
                   ),
               }),
-              Effect.onInterrupt(() => clearInterruptedFlight),
+              Effect.onInterrupt(() =>
+                clearFlight.pipe(
+                  Effect.andThen(Deferred.succeed(flight.done, "Interrupted")),
+                  Effect.asVoid,
+                ),
+              ),
               Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
               Effect.withSpan("pi-code-previews.shiki.initialize", {
                 attributes: { operation: "initialize" },
@@ -279,11 +272,7 @@ export class CodePreviewSyntaxService extends Context.Service<
             ),
           ),
         );
-        return yield* loadCurrentGeneration.pipe(
-          Effect.match({
-            onFailure: () => false,
-            onSuccess: () => true,
-          }),
+        return yield* Effect.isSuccess(loadCurrentGeneration).pipe(
           Effect.flatMap((succeeded) =>
             modifyPure((current) => {
               if (current.generation !== decision.generation) return [undefined, current] as const;

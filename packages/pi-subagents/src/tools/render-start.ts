@@ -84,14 +84,7 @@ const selectedRoute = (entry: SubagentStartEntry): entry is SelectedStartEntry =
   entry.routeStatus === "selected";
 
 const routeLabel = (entry: SubagentStartEntry): string => {
-  if (selectedRoute(entry))
-    return formatRunRoute(
-      entry.host,
-      entry.runtime,
-      entry.model,
-      entry.effort,
-      entry.openaiFastMode,
-    );
+  if (selectedRoute(entry)) return formatRunRoute(entry);
   return entry.status === "pending" ? "resolving route/model" : "no eligible route/model";
 };
 
@@ -198,12 +191,12 @@ const receiptHeader = (
   );
 };
 
-const startReceiptComponent = (
+export const renderStartReceiptComponent = (
   failures: ReadonlyArray<SubagentStartFailure>,
   entries: ReadonlyArray<SubagentStartEntry>,
-  partial: boolean,
   expanded: boolean,
   theme: Theme,
+  partial = false,
   contentOnly = false,
 ): Component =>
   renderComponent((width) => {
@@ -296,19 +289,3 @@ const startReceiptComponent = (
         : []),
     ];
   });
-
-export const renderStartProgressComponent = (
-  failures: ReadonlyArray<SubagentStartFailure>,
-  entries: ReadonlyArray<SubagentStartEntry>,
-  expanded: boolean,
-  theme: Theme,
-  contentOnly = false,
-): Component => startReceiptComponent(failures, entries, true, expanded, theme, contentOnly);
-
-export const renderStartReceiptComponent = (
-  failures: ReadonlyArray<SubagentStartFailure>,
-  entries: ReadonlyArray<SubagentStartEntry>,
-  expanded: boolean,
-  theme: Theme,
-  contentOnly = false,
-): Component => startReceiptComponent(failures, entries, false, expanded, theme, contentOnly);

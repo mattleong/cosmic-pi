@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { expect } from "vitest";
-import { type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
+import { type HerdrPane, type HerdrStartSideSessionInput } from "../src/boundary/herdr-client.ts";
 import {
   HERDR_BTW_LINK_ENTRY_TYPE,
   restoreHerdrBtwLink,
@@ -12,11 +12,11 @@ import {
 } from "../src/btw/link.ts";
 import {
   makeServiceFixture,
+  operationCount,
   operationInputs,
   operationNames,
   withShellReadiness as withReadiness,
   type HerdrBtwFixtureOptions,
-  type HerdrBtwSnapshotAgent,
   aliasIdentity,
 } from "./fixtures/herdr-btw-harness.ts";
 
@@ -40,7 +40,7 @@ const LINK: HerdrBtwLink = {
   terminalId: "term-btw",
 };
 
-const liveChildAgent = (overrides: Partial<HerdrBtwSnapshotAgent> = {}) => ({
+const liveChildAgent = (overrides: Partial<HerdrPane> = {}) => ({
   pane_id: "w1:p2",
   terminal_id: "term-btw",
   workspace_id: "w1",
@@ -116,12 +116,7 @@ describe("herdr-btw reuse workflow", () => {
     Effect.gen(function* () {
       const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
       const result = yield* test.open("continue please");
-      expect(result).toMatchObject({
-        mode: "focused",
-        agentName: LINK.agentName,
-        paneId: "w1:p2",
-        prompted: true,
-      });
+      expect(result).toMatchObject({ mode: "focused", agentName: LINK.agentName, paneId: "w1:p2" });
       expect(operationNames(test.calls)).toEqual([
         "inspect protocol",
         "inspect live agents",
@@ -140,8 +135,7 @@ describe("herdr-btw reuse workflow", () => {
   it.effect("focuses without prompting when no prompt is supplied", () =>
     Effect.gen(function* () {
       const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()] });
-      const result = yield* test.open();
-      expect(result.prompted).toBe(false);
+      yield* test.open();
       expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
     }),
   );
@@ -170,21 +164,6 @@ describe("herdr-btw reuse workflow", () => {
       }),
     );
   }
-
-  it.effect("validates the child file before focusing a live agent", () =>
-    Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        liveAgents: [liveChildAgent()],
-        probes: { [CHILD_FILE]: { _tag: "invalid" } },
-      });
-      const result = yield* Effect.result(test.open());
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure.code).toBe("herdr_btw_link_child_invalid");
-      expect(test.calls).toEqual([]);
-    }),
-  );
 
   const unavailablePath = "/sessions/missing-child.jsonl";
   for (const [name, options] of [
@@ -243,13 +222,10 @@ describe("herdr-btw reuse workflow", () => {
     it.effect(`refuses focus or duplicate startup for ${name}`, () =>
       Effect.gen(function* () {
         const test = fixture({ initialLinks: [LINK], ...options });
-        const result = yield* Effect.result(test.open());
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure")
-          expect(result.failure).toMatchObject({
-            code: "herdr_btw_live_agent_ambiguous",
-            outcome: "confirmed",
-          });
+        expect(yield* Effect.flip(test.open())).toMatchObject({
+          code: "herdr_btw_live_agent_ambiguous",
+          outcome: "confirmed",
+        });
         expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
         expect(operationNames(test.calls)).not.toContain("split BTW pane");
       }),
@@ -260,7 +236,7 @@ describe("herdr-btw reuse workflow", () => {
     Effect.gen(function* () {
       const test = fixture({ initialLinks: [LINK], startedSession: CHILD_FILE });
       const result = yield* withReadiness(test.open("resume work"));
-      expect(result).toMatchObject({ mode: "resumed", paneId: "w1:p2", prompted: true });
+      expect(result).toMatchObject({ mode: "resumed", paneId: "w1:p2" });
       expect(
         operationInputs<HerdrStartSideSessionInput>(test.calls, "start side-session Pi")[0],
       ).toEqual({
@@ -300,84 +276,57 @@ describe("herdr-btw reuse workflow", () => {
     it.effect(`the second pre-start snapshot rejects ${name}`, () =>
       Effect.gen(function* () {
         const test = fixture({ initialLinks: [LINK], liveAgentSnapshots: [[], [live]] });
-        const result = yield* Effect.result(withReadiness(test.open()));
-
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure")
-          expect(result.failure).toMatchObject({
-            code: "herdr_btw_live_agent_race",
-            outcome: "confirmed",
-            paneId: "w1:p2",
-          });
-        expect(
-          operationNames(test.calls).filter((name) => name === "inspect live agents"),
-        ).toHaveLength(2);
+        expect(yield* Effect.flip(withReadiness(test.open()))).toMatchObject({
+          code: "herdr_btw_live_agent_race",
+          outcome: "confirmed",
+          paneId: "w1:p2",
+        });
+        expect(operationCount(test.calls, "inspect live agents")).toBe(2);
         expect(operationNames(test.calls)).not.toContain("start side-session Pi");
       }),
     );
   }
 
-  it.effect("rejects a linked child that aliases its parent before Herdr inspection", () =>
+  it.effect("fails closed before any Herdr call on an invalid, reparented or aliased child", () =>
     Effect.gen(function* () {
-      const test = fixture({
-        initialLinks: [LINK],
-        compareSessionFileIdentity: aliasIdentity([CHILD_FILE, SESSION_FILE]),
-      });
-      const result = yield* Effect.result(test.open());
-
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure.code).toBe("herdr_btw_link_child_invalid");
-      expect(test.calls).toEqual([]);
-    }),
-  );
-
-  it.effect("fails closed when the linked child is missing, replaced, or reparented", () =>
-    Effect.gen(function* () {
-      const cases = [
-        { _tag: "invalid" as const },
-        { _tag: "valid" as const, header: { id: "different-id" } },
+      for (const options of [
+        { probes: { [CHILD_FILE]: { _tag: "invalid" } } },
+        { probes: { [CHILD_FILE]: { _tag: "valid", header: { id: "different-id" } } } },
         {
-          _tag: "valid" as const,
-          header: { id: CHILD_ID, parentSession: "/sessions/other-parent.jsonl" },
+          probes: {
+            [CHILD_FILE]: {
+              _tag: "valid",
+              header: { id: CHILD_ID, parentSession: "/sessions/other-parent.jsonl" },
+            },
+          },
         },
-      ];
-      for (const probe of cases) {
-        const test = fixture({ initialLinks: [LINK], probes: { [CHILD_FILE]: probe } });
-        const result = yield* Effect.result(test.open());
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure")
-          expect(result.failure).toMatchObject({
-            code: "herdr_btw_link_child_invalid",
-            outcome: "confirmed",
-          });
-        expect(operationNames(test.calls)).not.toContain("split BTW pane");
+        { compareSessionFileIdentity: aliasIdentity([CHILD_FILE, SESSION_FILE]) },
+      ] satisfies HerdrBtwFixtureOptions[]) {
+        const test = fixture({ initialLinks: [LINK], liveAgents: [liveChildAgent()], ...options });
+        expect(yield* Effect.flip(test.open())).toMatchObject({
+          code: "herdr_btw_link_child_invalid",
+          outcome: "confirmed",
+        });
+        expect(test.calls).toEqual([]);
       }
     }),
   );
 
-  it.effect("rejects malformed parent and child IDs before any client call", () =>
+  it.effect("rejects a malformed parent ID before any client call", () =>
     Effect.gen(function* () {
       const invalidParent = fixture({ sessionId: "bad session id" });
-      expect((yield* Effect.result(invalidParent.open()))._tag).toBe("Failure");
+      yield* Effect.flip(invalidParent.open());
       expect(invalidParent.calls).toEqual([]);
-
-      const invalidChild = fixture({ createdChildId: "bad child id" });
-      expect((yield* Effect.result(invalidChild.open()))._tag).toBe("Failure");
-      expect(invalidChild.calls).toEqual([]);
     }),
   );
 
   it.effect("fails closed before client calls when the recorded link is malformed", () =>
     Effect.gen(function* () {
       const test = fixture({ restoreOverride: { _tag: "malformed" } });
-      const result = yield* Effect.result(test.open());
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "herdr_btw_link_malformed",
-          outcome: "confirmed",
-        });
+      expect(yield* Effect.flip(test.open())).toMatchObject({
+        code: "herdr_btw_link_malformed",
+        outcome: "confirmed",
+      });
       expect(test.calls).toEqual([]);
     }),
   );
@@ -418,13 +367,10 @@ describe("herdr-btw reuse workflow", () => {
   it.effect("a failed openNew keeps the prior link authoritative", () =>
     Effect.gen(function* () {
       const test = fixture({ initialLinks: [LINK], failOperation: "start side-session Pi" });
-      const result = yield* Effect.result(withReadiness(test.openNew()));
-      expect(result._tag).toBe("Failure");
+      yield* Effect.flip(withReadiness(test.openNew()));
       expect(test.recordedLinks).toEqual([LINK]);
       expect(test.linkStore.restore()).toEqual({ _tag: "restored", link: LINK });
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
+      expect(operationCount(test.calls, "start side-session Pi")).toBe(1);
     }),
   );
 
@@ -433,9 +379,9 @@ describe("herdr-btw reuse workflow", () => {
       for (const failure of ["prompt side-session Pi", "focus side-session Pi"]) {
         const test = fixture({ initialLinks: [LINK], failOperation: failure });
         const prompt = failure === "prompt side-session Pi" ? "question" : undefined;
-        const result = yield* Effect.result(withReadiness(test.openNew(prompt)));
+        const error = yield* Effect.flip(withReadiness(test.openNew(prompt)));
 
-        expect(result._tag).toBe("Failure");
+        expect(error).toMatchObject({ outcome: "uncertain", paneId: "w1:p2" });
         expect(test.recordedLinks.at(-1)).toMatchObject({
           parentSessionId: SESSION_ID,
           childSessionId: NEW_CHILD_ID,
@@ -452,8 +398,7 @@ describe("herdr-btw reuse workflow", () => {
         liveAgents: [liveChildAgent()],
         failOperation: "prompt side-session Pi",
       });
-      const result = yield* Effect.result(test.open("question"));
-      expect(result._tag).toBe("Failure");
+      yield* Effect.flip(test.open("question"));
       expect(operationNames(test.calls).slice(-2)).toEqual([
         "prompt side-session Pi",
         "focus side-session Pi",
@@ -473,19 +418,14 @@ describe("herdr-btw reuse workflow", () => {
     it.effect(`does not reread, retry or hand off after a ${recordResult} link record`, () =>
       Effect.gen(function* () {
         const test = fixture({ recordResult });
-        const result = yield* Effect.result(withReadiness(test.openNew("do not deliver")));
-        expect(result._tag).toBe("Failure");
-        if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({ code, outcome, paneId: "w1:p2" });
-          expect(result.failure.message).toContain(message);
-        }
+        const error = yield* Effect.flip(withReadiness(test.openNew("do not deliver")));
+        expect(error).toMatchObject({ code, outcome, paneId: "w1:p2" });
+        expect(error.message).toContain(message);
         expect(test.recordAttempts).toHaveLength(1);
         expect(test.restoreCount()).toBe(0);
         expect(operationNames(test.calls)).not.toContain("prompt side-session Pi");
         expect(operationNames(test.calls)).not.toContain("focus side-session Pi");
-        expect(
-          operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-        ).toHaveLength(1);
+        expect(operationCount(test.calls, "start side-session Pi")).toBe(1);
       }),
     );
   }
@@ -508,12 +448,8 @@ describe("herdr-btw reuse workflow", () => {
       const secondResult = yield* Fiber.join(second);
       expect(firstResult.mode).toBe("created");
       expect(secondResult.mode).toBe("focused");
-      expect(
-        operationNames(test.calls).filter((name) => name === "start side-session Pi"),
-      ).toHaveLength(1);
-      expect(operationNames(test.calls).filter((name) => name === "split BTW pane")).toHaveLength(
-        1,
-      );
+      expect(operationCount(test.calls, "start side-session Pi")).toBe(1);
+      expect(operationCount(test.calls, "split BTW pane")).toBe(1);
       expect(test.recordedLinks).toHaveLength(1);
     }),
   );

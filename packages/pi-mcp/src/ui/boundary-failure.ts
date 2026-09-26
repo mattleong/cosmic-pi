@@ -1,92 +1,77 @@
 import { mcpBoundaryDescriptions } from "./compact-descriptions.ts";
 import type { CompactIssue, CompactIssues, CompactSummary } from "pi-code-previews";
-import type { McpCardDetails } from "./tool-render-details.ts";
+import type { McpDiagnostic } from "../client/diagnostics.ts";
+import type { McpBoundaryError } from "../client/errors.ts";
+
+export interface McpBoundaryView {
+  readonly outcome: NonNullable<CompactSummary["outcome"]>;
+  readonly status: string;
+  readonly issues: CompactIssues;
+}
+
+export const credentialMutationBlocked = (reason: McpBoundaryError["reason"]): boolean =>
+  reason === "oauth-mutation-unresolved" ||
+  reason === "oauth-finalization-failed" ||
+  reason === "oauth-deletion-failed";
 
 /** Only fixed, validated boundary diagnostics enter this view. Remote messages stay
- * in the original raw details; unclassified notices keep their own attention. */
-export function mcpBoundaryFailure(
-  card: Pick<
-    McpCardDetails,
-    | "known"
-    | "noticesComplete"
-    | "displayCuts"
-    | "isError"
-    | "diagnostic"
-    | "failureKind"
-    | "failureReason"
-    | "origin"
-    | "outcome"
-    | "action"
-    | "truncated"
-    | "recoveryHint"
-    | "notices"
-  >,
-):
-  | {
-      readonly outcome: NonNullable<CompactSummary["outcome"]>;
-      readonly status: string;
-      readonly issues: CompactIssues;
-    }
-  | undefined {
-  if (
-    !card.known ||
-    !card.noticesComplete ||
-    card.displayCuts.length > 0 ||
-    !card.isError ||
-    !card.diagnostic ||
-    !card.failureKind ||
-    card.origin
-  )
-    return undefined;
-  const uncertain = card.outcome === "unknown";
-  const blocked =
-    card.failureKind === "cleanup" ||
-    card.failureReason === "oauth-mutation-unresolved" ||
-    card.failureReason === "oauth-finalization-failed" ||
-    card.failureReason === "oauth-deletion-failed";
+ * in the original raw details; unclassified notices keep their own attention.
+ * Callers own the gates that decide whether it replaces the legacy layout. */
+export function mcpBoundaryView(input: {
+  readonly diagnostic: McpDiagnostic;
+  readonly failure: Pick<McpBoundaryError, "kind" | "reason">;
+  readonly outcome: "completed" | "unknown" | "not-sent";
+  readonly action: string;
+  readonly truncated: boolean;
+  readonly notices: readonly string[];
+  readonly recoveryHint?: string;
+}): McpBoundaryView {
+  const { kind, reason } = input.failure;
+  const uncertain = input.outcome === "unknown";
+  const blocked = kind === "cleanup" || credentialMutationBlocked(reason);
+  const retainedMissing =
+    input.action === "result.read" && (kind === "stale" || kind === "not-found");
   const recovery: Array<{ code: string; text: string }> = [];
   const diagnostics: string[] = [];
   // Uncertainty and resource/credential blockers must remain visible collapsed.
   // Routine explanations and navigation are available on expansion.
   if (uncertain || blocked)
-    recovery.push({ code: "boundary-recovery", text: card.diagnostic.explanation });
-  else diagnostics.push(card.diagnostic.explanation);
-  if (uncertain && card.failureKind === "cleanup")
+    recovery.push({ code: "boundary-recovery", text: input.diagnostic.explanation });
+  else diagnostics.push(input.diagnostic.explanation);
+  if (uncertain && kind === "cleanup")
     recovery.push({
       code: "cleanup-gate",
       text: "Cleanup is unconfirmed. Reconnection is not safe recovery yet.",
     });
-  if (card.truncated)
+  if (input.truncated)
     recovery.push({
       code: "output-loss",
       text: "Output is unavailable or truncated. Do not replay to recover output.",
     });
-  if (card.recoveryHint) diagnostics.push(card.recoveryHint);
+  if (input.recoveryHint) diagnostics.push(input.recoveryHint);
   const entries: CompactIssue[] = [
     {
       operation: "mcp",
       code: "boundary-failure",
       // A validated boundary failure is separate from dispatch certainty.
-      severity: !uncertain && card.failureKind === "cancelled" ? "warning" : "error",
+      severity: !uncertain && kind === "cancelled" ? "warning" : "error",
       cause: uncertain
         ? ""
-        : card.action === "result.read" &&
-            (card.failureKind === "stale" || card.failureKind === "not-found")
+        : retainedMissing
           ? "Retained result unavailable."
-          : card.diagnostic.title,
+          : input.diagnostic.title,
       description: [
         uncertain
           ? "Could not confirm the operation's outcome."
-          : card.action === "result.read" &&
-              (card.failureKind === "stale" || card.failureKind === "not-found")
+          : retainedMissing
             ? "Saved output is not available."
-            : mcpBoundaryDescriptions[card.failureKind],
-        card.failureKind === "cleanup"
+            : mcpBoundaryDescriptions[kind],
+        kind === "cleanup"
           ? "The connection may still be active."
           : blocked
             ? "Credential changes are not confirmed."
             : "",
-        card.truncated ? "Some output is unavailable." : "",
+        input.truncated ? "Some output is unavailable." : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -94,20 +79,20 @@ export function mcpBoundaryFailure(
       diagnostics,
     },
   ];
-  if (card.notices.length)
+  if (input.notices.length)
     entries.push({
       operation: "mcp",
       code: "unclassified-notices",
       severity: "warning",
-      cause: card.notices.join("\n"),
+      cause: input.notices.join("\n"),
       description: "The server reported additional warnings.",
       recovery: [],
     });
   return {
-    outcome: uncertain ? "uncertain" : card.failureKind === "cancelled" ? "cancelled" : "error",
+    outcome: uncertain ? "uncertain" : kind === "cancelled" ? "cancelled" : "error",
     status: uncertain
       ? "Outcome unknown"
-      : card.outcome === "not-sent"
+      : input.outcome === "not-sent"
         ? "Not sent"
         : "Completed with a problem",
     issues: { coverage: "unknown", entries },

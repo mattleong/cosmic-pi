@@ -1,8 +1,8 @@
 /**
  * Pure, closed list/detail primitives shared by full-screen extension managers
- * (`/subagents`, `/tasks`): selection clamping/reconciliation, the shared modeless motion
- * reducer, bounded detail windows with the standardized position label, pane geometry, row
- * windowing, width padding, and reserved-shortcut confirmation resolution. The module has no
+ * (`/subagents`, `/tasks`): index clamping, the shared modeless motion reducer, bounded
+ * detail windows with the standardized position label, pane geometry, row windowing, width
+ * padding, and reserved-shortcut confirmation resolution. The module has no
  * domain imports and takes no host callbacks; callers own row rendering, actions, prompts,
  * and follow policy.
  */
@@ -29,45 +29,15 @@ export const padListDetailRow = (text: string, width: number): string => {
   return `${clipped}${" ".repeat(Math.max(0, width - visibleWidth(clipped)))}`;
 };
 
-export interface ListSelection {
+export interface ListSelectionChange {
   readonly selected: number;
   readonly selectedId: string | undefined;
-}
-
-export interface ListSelectionChange extends ListSelection {
   /** True when the selected row identity changed; callers reset row-scoped state on it. */
   readonly changed: boolean;
 }
 
 export const clampListIndex = (index: number, count: number): number =>
   Math.max(0, Math.min(Math.max(0, count - 1), index));
-
-/** Moves the selection to a clamped index over the current row identities. */
-export const selectListIndex = (
-  current: ListSelection,
-  index: number,
-  ids: ReadonlyArray<string>,
-): ListSelectionChange => {
-  const selected = clampListIndex(index, ids.length);
-  const selectedId = ids[selected];
-  return { selected, selectedId, changed: current.selectedId !== selectedId };
-};
-
-/** Re-finds the selected row after a projection update, keeping the index when it vanished. */
-export const reconcileListSelection = (
-  current: ListSelection,
-  ids: ReadonlyArray<string>,
-): ListSelectionChange => {
-  const existing = current.selectedId === undefined ? -1 : ids.indexOf(current.selectedId);
-  return selectListIndex(current, existing >= 0 ? existing : current.selected, ids);
-};
-
-/** True when motions target the detail pane (focused detail or expanded narrow inspector). */
-export const browsingListDetail = (
-  pane: ListDetailPane,
-  details: boolean,
-  layout: ManagerLayoutTier,
-): boolean => pane === "detail" || (layout === "narrow" && details);
 
 export type ListDetailMotion = ListMotion | "cancel" | "quit" | "back" | "forward";
 
@@ -123,7 +93,8 @@ export const listDetailMotion = (
   motion: ListDetailMotion,
   context: ListDetailMotionContext,
 ): ListDetailMotionResult => {
-  const browsingDetail = browsingListDetail(state.pane, state.details, context.layout);
+  // Motions target the detail pane when it is focused or the narrow inspector is expanded.
+  const browsingDetail = state.pane === "detail" || (context.layout === "narrow" && state.details);
   const update = (
     next: Partial<ListDetailMotionState>,
     flags?: Partial<{ resetChord: boolean; scrolledDetail: boolean; movedSelection: boolean }>,

@@ -28,28 +28,6 @@ export interface HostHerdrBtwLinkStoreOptions {
   readonly probeSessionHeader?: ((path: string) => SessionHeaderProbe) | undefined;
 }
 
-const readOwner = (ctx: ExtensionContext): HerdrBtwLinkOwner | undefined => {
-  const sessionId = ctx.sessionManager.getSessionId();
-  const sessionPath = ctx.sessionManager.getSessionFile();
-  return sessionId && sessionPath ? { sessionId, sessionPath } : undefined;
-};
-
-const isSameOwner = (
-  captured: HerdrBtwLinkOwner,
-  current: HerdrBtwLinkOwner | undefined,
-): boolean =>
-  current !== undefined &&
-  captured.sessionId === current.sessionId &&
-  captured.sessionPath === current.sessionPath;
-
-const hasOwnerHeader = (
-  captured: HerdrBtwLinkOwner,
-  probe: (path: string) => SessionHeaderProbe,
-): boolean => {
-  const result = probe(captured.sessionPath);
-  return result._tag === "valid" && result.header.id === captured.sessionId;
-};
-
 /**
  * Uses the owner captured by application startup, then revalidates the live
  * session ID, path, and bounded no-follow header before every read or append.
@@ -68,7 +46,14 @@ export const makeHostHerdrBtwLinkStore = (
   // match the live extension context and carry the owner header before either operation proceeds.
   const revalidateOwner = (): boolean => {
     try {
-      return isSameOwner(capturedOwner, readOwner(ctx)) && hasOwnerHeader(capturedOwner, probe);
+      if (
+        ctx.sessionManager.getSessionId() !== capturedOwner.sessionId ||
+        ctx.sessionManager.getSessionFile() !== capturedOwner.sessionPath
+      )
+        return false;
+      // An empty captured owner still fails: probe("") is invalid and header IDs are non-empty.
+      const header = probe(capturedOwner.sessionPath);
+      return header._tag === "valid" && header.header.id === capturedOwner.sessionId;
     } catch {
       return false;
     }

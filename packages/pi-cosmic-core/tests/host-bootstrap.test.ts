@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { bestEffortHostBootstrap } from "../src/runtime/host-bootstrap.ts";
+import { deferredPromise } from "../testing.ts";
 
 it.effect("contains rejected and synchronously throwing host prerequisites", () =>
   Effect.gen(function* () {
@@ -45,21 +46,19 @@ it.effect("waits for a successful host startup prerequisite", () =>
 
 it.effect("detaches a non-cancellable Promise when startup is interrupted", () =>
   Effect.gen(function* () {
-    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
     const started = yield* Deferred.make<void>();
-    const lateGate = yield* Deferred.make<void>();
     // A non-cancellable host Promise that only settles after the interruption assertion.
-    const lateSettlement = runPromise(Deferred.await(lateGate));
+    const lateSettlement = deferredPromise();
     let cancellationSignal: AbortSignal | undefined;
     const bootstrap = yield* bestEffortHostBootstrap("preview-settings", (signal) => {
       cancellationSignal = signal;
       Deferred.doneUnsafe(started, Effect.void);
-      return lateSettlement;
+      return lateSettlement.promise;
     }).pipe(Effect.forkChild({ startImmediately: true }));
 
     yield* Deferred.await(started);
     yield* Fiber.interrupt(bootstrap);
     expect(cancellationSignal?.aborted).toBe(true);
-    Deferred.doneUnsafe(lateGate, Effect.void);
+    lateSettlement.resolve();
   }),
 );

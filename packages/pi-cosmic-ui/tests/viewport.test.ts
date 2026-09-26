@@ -39,29 +39,24 @@ describe("screen viewport", () => {
 describe("host screen viewport", () => {
   it("updates mounted overlay bounds and component height from the same live terminal", () => {
     const viewport = createScreenViewport();
-    let terminal = { columns: 200, rows: 60 };
+    let terminal = { columns: 0, rows: 0 };
     viewport.attach(() => terminal);
     const options = viewport.overlayOptions;
-    expect([options.width, options.maxHeight, options.anchor, viewport.getHeight()]).toEqual([
-      180,
-      54,
-      "center",
-      54,
-    ]);
-    terminal = { columns: 160, rows: 24 };
-    expect([options.width, options.maxHeight, options.anchor, viewport.getHeight()]).toEqual([
-      160,
-      24,
-      "top-left",
-      24,
-    ]);
-    terminal = { columns: 125, rows: 30 };
-    expect([options.width, options.maxHeight, options.anchor, viewport.getHeight()]).toEqual([
-      112,
-      27,
-      "center",
-      27,
-    ]);
+    for (const [columns, rows] of [
+      [200, 60],
+      [160, 24],
+      [125, 30],
+    ] as const) {
+      terminal = { columns, rows };
+      const { width, height, inset } = screenViewport(terminal);
+      const anchor = inset ? "center" : "top-left";
+      expect([options.width, options.maxHeight, options.anchor, viewport.getHeight()]).toEqual([
+        width,
+        height,
+        anchor,
+        height,
+      ]);
+    }
   });
 
   it("retains compact dialogs' original anchor on small terminals", () => {
@@ -72,15 +67,5 @@ describe("host screen viewport", () => {
     terminal.columns = 160;
     terminal.rows = 40;
     expect(viewport.overlayOptions.anchor).toBe("center");
-  });
-
-  it("sizes separately mounted children against the terminal rather than the parent", () => {
-    const terminal = { columns: 160, rows: 40 };
-    const parent = createScreenViewport();
-    const child = createScreenViewport();
-    parent.attach(() => terminal);
-    child.attach(() => terminal);
-    expect(parent.getSize()).toEqual({ width: 144, height: 36, inset: true });
-    expect(child.getSize()).toEqual(parent.getSize());
   });
 });

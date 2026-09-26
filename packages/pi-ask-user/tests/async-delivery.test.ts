@@ -10,9 +10,8 @@ import {
   makeAsyncDelivery,
 } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
+import { opaqueFixture as opaque } from "pi-cosmic-core/testing";
 
-// SAFETY: These fixtures provide exactly the opaque Pi/TUI members exercised by this boundary.
-const opaque = <A>(value: A): never => value as never;
 const message = (generation: string, deliveryId: string) => ({
   role: "custom",
   customType: ASYNC_MESSAGE_TYPE,

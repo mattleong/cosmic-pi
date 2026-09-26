@@ -12,34 +12,26 @@ import {
 type MetricPartKind = "input" | "output" | "cache" | "other";
 type MetricPart = { readonly text: string; readonly kind: MetricPartKind };
 
-function lowercaseCacheLabel(text: string): string {
-  return text.replace(/^[RW](?=\S)/u, (label) => label.toLowerCase());
-}
+const CACHE_IDS: readonly string[] = ["metrics.cacheRead", "metrics.cacheWrite"];
 
-function cacheText(
-  entry: CosmicFooterTextContribution | undefined,
-  compact: boolean,
-): string | undefined {
-  if (!entry) return undefined;
-  const text = contributionText(entry, compact);
-  return text ? lowercaseCacheLabel(text) : undefined;
-}
-
+/** Groups cache read before write; the caller has already dropped entries with empty text. */
 function metricCacheGroup(
-  cacheRead: CosmicFooterTextContribution | undefined,
-  cacheWrite: CosmicFooterTextContribution | undefined,
+  entries: readonly CosmicFooterTextContribution[],
   compact: boolean,
   theme: CosmicFooterTheme,
 ): string {
-  const values: string[] = [];
-  const read = cacheText(cacheRead, compact);
-  const write = cacheText(cacheWrite, compact);
-  if (read) values.push(theme.fg("syntaxType", read));
-  if (write) values.push(theme.fg("syntaxType", write));
-  if (values.length === 0) return "";
+  const values = CACHE_IDS.flatMap((id) => {
+    const entry = entries.find((candidate) => candidate.id === id);
+    if (!entry) return [];
+    const text = contributionText(entry, compact).replace(/^[RW](?=\S)/u, (label) =>
+      label.toLowerCase(),
+    );
+    return [theme.fg("syntaxType", text)];
+  });
   return `${theme.fg("syntaxType", "⇄")} ${values.join(theme.fg("dim", " / "))}`;
 }
 
+/** Expects the non-empty, left-aligned, non-cost entries that renderMetricsLines passes. */
 function metricParts(
   entries: readonly CosmicFooterTextContribution[],
   compact: boolean,
@@ -47,22 +39,15 @@ function metricParts(
 ): MetricPart[] {
   const parts: MetricPart[] = [];
   let cacheAdded = false;
-  const cacheRead = entries.find((entry) => entry.id === "metrics.cacheRead");
-  const cacheWrite = entries.find((entry) => entry.id === "metrics.cacheWrite");
   for (const entry of ranked(entries)) {
-    if (entry.id === "metrics.cost" || entry.align === "right") continue;
-    if (entry.id === "metrics.cacheRead" || entry.id === "metrics.cacheWrite") {
-      if (!cacheAdded) {
-        const cache = metricCacheGroup(cacheRead, cacheWrite, compact, theme);
-        if (cache) parts.push({ text: cache, kind: "cache" });
-        cacheAdded = true;
-      }
+    if (CACHE_IDS.includes(entry.id)) {
+      if (!cacheAdded)
+        parts.push({ text: metricCacheGroup(entries, compact, theme), kind: "cache" });
+      cacheAdded = true;
       continue;
     }
-    const text = contributionText(entry, compact);
-    if (!text) continue;
     parts.push({
-      text: tone(theme, entry, text),
+      text: tone(theme, entry, contributionText(entry, compact)),
       kind:
         entry.id === "metrics.input" ? "input" : entry.id === "metrics.output" ? "output" : "other",
     });

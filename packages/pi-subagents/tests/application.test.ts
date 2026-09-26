@@ -4,20 +4,20 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionHandler,
-  Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, type Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { resolveSubagentConfig } from "../src/config/options.ts";
 import { decodeSubagentConfig } from "../src/config/schema.ts";
 import { makeSubagentProfileService } from "../src/profiles/service.ts";
-import { extensionApiFixture, extensionContextFixture } from "./fixtures/pi-host.ts";
-import * as subagentTools from "../src/tools/subagent.ts";
+import { extensionApiFixture, mountingCustomUi } from "./fixtures/pi-host.ts";
+import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
 
@@ -59,41 +59,62 @@ const applicationFixture = <Overrides extends object>(
   return { handlers, pi };
 };
 
-const deferred = <A>() => {
-  const cell = Deferred.makeUnsafe<A>();
+const rpcContext = (
+  overrides: {
+    readonly cwd?: string;
+    readonly signal?: AbortSignal | undefined;
+    readonly isProjectTrusted?: () => boolean;
+  } = {},
+) =>
+  extensionContextFixture({
+    cwd: process.cwd(),
+    signal: undefined,
+    isProjectTrusted: () => true,
+    hasUI: false,
+    mode: "rpc" as const,
+    ...overrides,
+  });
+
+/** Host active-tool state that registration extends and activation replaces. */
+const activeToolTracker = <Tool extends { readonly name: string }>(
+  onRegister?: (tool: Tool) => void,
+) => {
+  let active: ReadonlyArray<string> = ["read"];
+  const registered: string[] = [];
+  const setActive = (names: ReadonlyArray<string>) => {
+    active = [...names];
+  };
   return {
-    promise: Effect.runPromise(Deferred.await(cell)),
-    resolve: (value: A) => Deferred.doneUnsafe(cell, Effect.succeed(value)),
+    active: () => [...active],
+    setActive,
+    registered,
+    overrides: {
+      registerTool: vi.fn((tool: Tool) => {
+        registered.push(tool.name);
+        active = [...new Set([...active, tool.name])];
+        onRegister?.(tool);
+      }),
+      getActiveTools: vi.fn(() => [...active]),
+      setActiveTools: vi.fn(setActive),
+    },
   };
 };
 
-describe("subagent Pi registration", () => {
-  effectTest("revokes compact animation ownership on replacement and shutdown", function* () {
-    const registration = vi.spyOn(subagentTools, "registerSubagentTools");
-    const { handlers } = applicationFixture({});
-    const ctx = extensionContextFixture({ cwd: process.cwd(), signal: undefined, hasUI: false });
-    const shutdown = () => handlers.get("session_shutdown")?.({}, ctx);
-    try {
-      yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      const first = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
-      let oldTicks = 0;
-      expect(first?.(1, () => oldTicks++)).toBeTypeOf("function");
-      yield* step(() => vi.waitFor(() => expect(oldTicks).toBeGreaterThan(0)));
-      yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      const retiredTicks = oldTicks;
-      expect(first?.(1, () => oldTicks++)).toBeUndefined();
-      const second = registration.mock.calls.at(-1)?.[1].scheduleAnimation;
-      let newTicks = 0;
-      expect(second?.(1, () => newTicks++)).toBeTypeOf("function");
-      yield* step(() => vi.waitFor(() => expect(newTicks).toBeGreaterThan(0)));
-      expect(oldTicks).toBe(retiredTicks);
-      yield* settle(shutdown);
-      expect(second?.(1, () => newTicks++)).toBeUndefined();
-    } finally {
-      yield* settle(shutdown);
-      registration.mockRestore();
-    }
+describeActivationLifecycle("root application", (loadSettings = () => Promise.resolve()) => {
+  const tools = activeToolTracker();
+  const { handlers } = applicationFixture(tools.overrides, {
+    getAgentDirectory: testAgentDirectory,
+    loadSettings,
   });
+  return {
+    start: () => Promise.resolve(handlers.get("session_start")?.({}, rpcContext())),
+    shutdown: () => Promise.resolve(handlers.get("session_shutdown")?.({}, rpcContext())),
+    registeredToolCount: () => tools.registered.length,
+    activeTools: tools.active,
+  };
+});
+
+describe("subagent Pi registration", () => {
   for (const cancellation of ["editor", "shutdown", "replacement"] as const) {
     effectTest(`owns pending settings refresh through ${cancellation} cancellation`, function* () {
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
@@ -108,8 +129,8 @@ describe("subagent Pi registration", () => {
         ),
         getActiveTools: () => [],
       });
-      const closed = deferred<boolean>();
-      const pending = deferred<{ aborted: boolean }>();
+      const closed = deferredPromise<boolean>();
+      const pending = deferredPromise<{ aborted: boolean }>();
       let refreshSignal: AbortSignal | undefined;
       const notify = vi.fn();
       const ctx = extensionContextFixture({
@@ -155,8 +176,6 @@ describe("subagent Pi registration", () => {
       globalConfigPath: "/agent/pi-subagents.json",
       projectConfigPath: "/repo/.pi/pi-subagents.json",
       projectTrusted: false,
-      globalConfigExists: false,
-      projectConfigExists: false,
       global,
     });
     const service = yield* makeSubagentProfileService(config);
@@ -205,8 +224,8 @@ describe("subagent Pi registration", () => {
   effectTest(
     "aborts superseded preview loading and never registers the stale activation",
     function* () {
-      const first = deferred<void>();
-      const second = deferred<void>();
+      const first = deferredPromise();
+      const second = deferredPromise();
       const loads: Array<readonly [string, boolean]> = [];
       const signals: AbortSignal[] = [];
       const tools: string[] = [];
@@ -224,7 +243,6 @@ describe("subagent Pi registration", () => {
 
       let firstCwdReads = 0;
       let firstTrustReads = 0;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const firstContext = extensionContextFixture({
         get cwd() {
           firstCwdReads += 1;
@@ -238,13 +256,9 @@ describe("subagent Pi registration", () => {
         hasUI: false,
         mode: "rpc",
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const secondContext = extensionContextFixture({
+      const secondContext = rpcContext({
         cwd: `${process.cwd()}/second`,
-        signal: undefined,
         isProjectTrusted: () => false,
-        hasUI: false,
-        mode: "rpc",
       });
 
       const firstStart = Promise.resolve(handlers.get("session_start")?.({}, firstContext));
@@ -275,111 +289,30 @@ describe("subagent Pi registration", () => {
     },
   );
 
-  effectTest("aborts preview loading on shutdown before tools can register", function* () {
-    const settings = deferred<void>();
-    let loaderSignal: AbortSignal | undefined;
-    const registerTool = vi.fn();
-    const { handlers } = applicationFixture(
-      { registerTool },
-      {
-        getAgentDirectory: testAgentDirectory,
-        loadSettings: (_cwd, _trusted, signal) => {
-          loaderSignal = signal;
-          return settings.promise;
-        },
-      },
-    );
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-    const ctx = extensionContextFixture({
-      cwd: process.cwd(),
-      signal: undefined,
-      isProjectTrusted: () => true,
-      hasUI: false,
-      mode: "rpc",
-    });
-
-    const starting = Promise.resolve(handlers.get("session_start")?.({}, ctx));
-    yield* step(() => vi.waitFor(() => expect(loaderSignal).toBeDefined()));
-    yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
-    expect(loaderSignal?.aborted).toBe(true);
-    yield* step(() => starting);
-    expect(registerTool).not.toHaveBeenCalled();
-
-    settings.resolve();
-    yield* step(() => settings.promise);
-    expect(registerTool).not.toHaveBeenCalled();
-  });
-
-  effectTest("activates when preview settings loading fails", function* () {
-    const failures: ReadonlyArray<() => Promise<void>> = [
-      () => Promise.reject(new Error("preview settings rejected")),
-      () => {
-        throw new Error("preview settings threw");
-      },
-    ];
-
-    for (const loadSettings of failures) {
-      const registerTool = vi.fn();
-      const { handlers } = applicationFixture(
-        { registerTool },
-        { getAgentDirectory: testAgentDirectory, loadSettings },
-      );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        isProjectTrusted: () => true,
-        hasUI: false,
-        mode: "rpc",
-      });
-
-      yield* settle(() => handlers.get("session_start")?.({}, ctx));
-      expect(registerTool).toHaveBeenCalled();
-      yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
-    }
-  });
-
   effectTest(
     "accumulates partially disabled tool names across failures and clears after success",
     function* () {
-      let active = ["read"];
-      const registeredNames: string[] = [];
       let callInActivation = 0;
       let throwAt = 2;
-      const setActiveTools = vi.fn((names: ReadonlyArray<string>) => {
-        active = [...names];
+      const tools = activeToolTracker(() => {
+        callInActivation += 1;
+        if (callInActivation === throwAt) throw new Error("partial registration");
       });
-      const { handlers } = applicationFixture({
-        registerTool: vi.fn((tool: { name: string }) => {
-          registeredNames.push(tool.name);
-          callInActivation += 1;
-          active = [...new Set([...active, tool.name])];
-          if (callInActivation === throwAt) throw new Error("partial registration");
-        }),
-        getActiveTools: vi.fn(() => [...active]),
-        setActiveTools,
-      });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        isProjectTrusted: () => true,
-        hasUI: false,
-        mode: "rpc",
-      });
+      const { handlers } = applicationFixture(tools.overrides);
+      const ctx = rpcContext();
       const start = handlers.get("session_start");
 
       yield* settle(() => start?.({}, ctx));
-      expect(active).toEqual(["read"]);
+      expect(tools.active()).toEqual(["read"]);
       callInActivation = 0;
       throwAt = 3;
       yield* settle(() => start?.({}, ctx));
-      expect(active).toEqual(["read"]);
+      expect(tools.active()).toEqual(["read"]);
 
       callInActivation = 0;
       throwAt = Number.POSITIVE_INFINITY;
       yield* settle(() => start?.({}, ctx));
-      expect(active).toEqual(["read", ...new Set(registeredNames)]);
+      expect(tools.active()).toEqual(["read", ...new Set(tools.registered)]);
       yield* settle(() => handlers.get("session_shutdown")?.({}, ctx));
     },
   );
@@ -387,54 +320,33 @@ describe("subagent Pi registration", () => {
   effectTest(
     "deactivates tools during replacement/abort and restores only the prior active subset",
     function* () {
-      let active = ["read"];
-      const registeredNames: string[] = [];
-      const replacementSettings = deferred<void>();
+      const tools = activeToolTracker();
+      const replacementSettings = deferredPromise();
       let settingsLoads = 0;
-      const { handlers } = applicationFixture(
-        {
-          registerTool: vi.fn((tool: { readonly name: string }) => {
-            registeredNames.push(tool.name);
-            active = [...new Set([...active, tool.name])];
-          }),
-          getActiveTools: vi.fn(() => [...active]),
-          setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-            active = [...names];
-          }),
+      const { handlers } = applicationFixture(tools.overrides, {
+        getAgentDirectory: testAgentDirectory,
+        loadSettings: () => {
+          settingsLoads += 1;
+          return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();
         },
-        {
-          getAgentDirectory: testAgentDirectory,
-          loadSettings: () => {
-            settingsLoads += 1;
-            return settingsLoads === 2 ? replacementSettings.promise : Promise.resolve();
-          },
-        },
-      );
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const context = (signal?: AbortSignal) =>
-        extensionContextFixture({
-          cwd: process.cwd(),
-          signal,
-          isProjectTrusted: () => true,
-          hasUI: false,
-          mode: "rpc",
-        });
+      });
+      const context = (signal?: AbortSignal) => rpcContext({ signal });
 
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(registeredNames.length).toBeGreaterThan(1);
-      const disabledName = registeredNames[0]!;
+      expect(tools.registered.length).toBeGreaterThan(1);
+      const disabledName = tools.registered[0]!;
       const expectedActive = () => [
         "read",
-        ...new Set(registeredNames.filter((name) => name !== disabledName)),
+        ...new Set(tools.registered.filter((name) => name !== disabledName)),
       ];
-      active = active.filter((name) => name !== disabledName);
+      tools.setActive(tools.active().filter((name) => name !== disabledName));
 
       const replacing = Promise.resolve(handlers.get("session_tree")?.({}, context()));
       yield* step(() => Promise.resolve());
-      expect(active).toEqual(["read"]);
+      expect(tools.active()).toEqual(["read"]);
       replacementSettings.resolve();
       yield* step(() => replacing);
-      expect(active).toEqual(expectedActive());
+      expect(tools.active()).toEqual(expectedActive());
 
       const failedCapture = context();
       Object.defineProperty(failedCapture, "cwd", {
@@ -442,23 +354,20 @@ describe("subagent Pi registration", () => {
           throw new Error("capture failed");
         },
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      yield* settle(() =>
-        handlers.get("session_tree")?.({}, extensionContextFixture(failedCapture)),
-      );
-      expect(active).toEqual(["read"]);
+      yield* settle(() => handlers.get("session_tree")?.({}, failedCapture));
+      expect(tools.active()).toEqual(["read"]);
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(active).toEqual(expectedActive());
+      expect(tools.active()).toEqual(expectedActive());
 
       const aborted = new AbortController();
       aborted.abort();
       yield* settle(() => handlers.get("session_tree")?.({}, context(aborted.signal)));
-      expect(active).toEqual(["read"]);
+      expect(tools.active()).toEqual(["read"]);
 
       yield* settle(() => handlers.get("session_start")?.({}, context()));
-      expect(active).toEqual(expectedActive());
+      expect(tools.active()).toEqual(expectedActive());
       yield* settle(() => handlers.get("session_shutdown")?.({}, context()));
-      expect(active).toEqual(["read"]);
+      expect(tools.active()).toEqual(["read"]);
     },
   );
 
@@ -468,15 +377,13 @@ describe("subagent Pi registration", () => {
       let handlers = new Map<string, Handler>();
       let tools = new Map<string, CapturedApplicationTool>();
       let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
-      let active = ["read"];
+      const activeTools = activeToolTracker((tool: CapturedApplicationTool) => {
+        tools.set(tool.name, tool);
+      });
       const registerFreshApplication = (): void => {
-        const nextTools = new Map<string, CapturedApplicationTool>();
-        tools = nextTools;
+        tools = new Map<string, CapturedApplicationTool>();
         const { handlers: nextHandlers } = applicationFixture({
-          registerTool: vi.fn((tool: CapturedApplicationTool) => {
-            nextTools.set(tool.name, tool);
-            active = [...new Set([...active, tool.name])];
-          }),
+          ...activeTools.overrides,
           registerCommand: vi.fn(
             (
               _name: string,
@@ -487,10 +394,6 @@ describe("subagent Pi registration", () => {
               command = definition.handler;
             },
           ),
-          getActiveTools: vi.fn(() => [...active]),
-          setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-            active = [...names];
-          }),
           getThinkingLevel: vi.fn(() => "high"),
         });
         handlers = nextHandlers;
@@ -498,34 +401,15 @@ describe("subagent Pi registration", () => {
       registerFreshApplication();
 
       let component: Component | undefined;
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
-      const theme = {
-        fg: (_color: string, text: string) => text,
-        bold: (text: string) => text,
-      } as Theme;
       const ui = {
         notify: vi.fn(),
         confirm: vi.fn().mockResolvedValue(false),
-        custom: vi.fn((factory: (...args: unknown[]) => Component) => {
-          const closed = deferred<boolean>();
-          component = factory(
-            { terminal: { rows: 24 }, requestRender: vi.fn() },
-            theme,
-            {
-              matches: (data: string, id: string) =>
-                id === "tui.select.confirm"
-                  ? matchesKey(data, Key.enter)
-                  : id === "tui.select.cancel"
-                    ? matchesKey(data, Key.escape)
-                    : false,
-              getKeys: () => [],
-            },
-            closed.resolve,
-          );
-          return closed.promise;
-        }),
+        custom: vi.fn(
+          mountingCustomUi(plainTheme, (created) => {
+            component = created;
+          }).custom,
+        ),
       };
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       const ctx = extensionContextFixture({
         cwd: process.cwd(),
         signal: undefined,
@@ -603,7 +487,6 @@ describe("subagent Pi registration", () => {
           throw new Error("tree capture failed");
         },
       });
-      // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
       yield* settle(() =>
         handlers.get("session_tree")?.({}, extensionContextFixture(failedTreeContext)),
       );
@@ -612,7 +495,7 @@ describe("subagent Pi registration", () => {
       expect(yield* hasSessionOverride(ctx)).toBe(true);
 
       yield* settle(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
-      // SAFETY: A new host session has a distinct session identity even when it uses the same project.
+      // A new host session has a distinct session identity even when it uses the same project.
       const newSessionContext = extensionContextFixture({
         ...ctx,
         sessionManager: {
@@ -629,18 +512,9 @@ describe("subagent Pi registration", () => {
   );
 
   effectTest("owns the activity widget across activation, turns, and shutdown", function* () {
-    let active = ["read"];
     const setWidget = vi.fn();
     const setStatus = vi.fn();
-    const { handlers } = applicationFixture({
-      registerTool: vi.fn((tool: { readonly name: string }) => {
-        active = [...new Set([...active, tool.name])];
-      }),
-      getActiveTools: vi.fn(() => [...active]),
-      setActiveTools: vi.fn((names: ReadonlyArray<string>) => {
-        active = [...names];
-      }),
-    });
+    const { handlers } = applicationFixture(activeToolTracker().overrides);
     const ctx = extensionContextFixture({
       cwd: process.cwd(),
       signal: undefined,
@@ -676,7 +550,6 @@ describe("subagent Pi registration", () => {
 
     const sessionStart = handlers.get("session_start");
     expect(sessionStart).toBeTypeOf("function");
-    // SAFETY: This locally constructed test fixture satisfies the declared contract used by this assertion.
     yield* settle(() =>
       sessionStart?.(
         {},

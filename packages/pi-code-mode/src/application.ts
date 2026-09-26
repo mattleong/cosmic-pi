@@ -90,14 +90,11 @@ export interface CodeModeApplicationBoundaries {
 const LIVE_APPLICATION_BOUNDARIES: CodeModeApplicationBoundaries = {
   loadSettings: loadCodePreviewSettings,
   wrapTool: (tool, scheduleAnimation) =>
-    Object.assign(
-      withCodePreviewShell(tool, {
-        compactSummary: tool.compactSummary,
-        expandedContent: tool.expandedContent,
-        scheduleAnimation,
-      }),
-      { compactSummary: tool.compactSummary, expandedContent: tool.expandedContent },
-    ),
+    withCodePreviewShell(tool, {
+      compactSummary: tool.compactSummary,
+      expandedContent: tool.expandedContent,
+      scheduleAnimation,
+    }),
   makeNestedDefinitions: makeNestedPiToolDefinitions,
 };
 
@@ -139,11 +136,6 @@ export function registerCodeModeApplication(
     else if (expectedActive) userDeactivated = true;
   };
 
-  const publishUserIntent = (): void => {
-    if (userDeactivated) publishCodeModeDeactivation(currentSessionKey);
-    currentSessionKey = undefined;
-  };
-
   const slot = makePiSessionRuntimeSlot<
     CodeModeSessionInput,
     CodeModeApplication,
@@ -178,8 +170,7 @@ export function registerCodeModeApplication(
         ),
       ),
     onActivated: (input, token, { scheduler, results }) => {
-      const ownsPublication = () => MutableRef.get(input.publicationOwner);
-      const isCurrent = () => ownsPublication() && slot.isCurrent(token);
+      const isCurrent = () => MutableRef.get(input.publicationOwner) && slot.isCurrent(token);
       if (!isCurrent()) return;
       const state = MutableRef.get(stateRef);
       if (state === undefined || !state.available) return;
@@ -195,10 +186,7 @@ export function registerCodeModeApplication(
               results,
               isCurrent: () => isCurrent() && input.executionOwner.current(),
               getState: () => MutableRef.get(stateRef),
-              runInSession: (effect, signal) =>
-                input.executionOwner.run(effect, signal, (owned, linked) =>
-                  slot.run(owned, linked),
-                ),
+              runInSession: (effect, signal) => input.executionOwner.run(effect, signal, slot.run),
               definitions,
               events: pi.events,
               sessionId: input.sessionId,
@@ -235,11 +223,8 @@ export function registerCodeModeApplication(
     },
   });
 
-  const run = <A, E>(effect: Effect.Effect<A, E, CodeModeApplication>, signal?: AbortSignal) =>
-    slot.run(effect, signal);
-
   registerCodeModeSettingsController(pi, {
-    run,
+    run: slot.run,
     snapshot: () => MutableRef.get(stateRef),
     captureSignal: captureHostSignal,
   });
@@ -287,7 +272,8 @@ export function registerCodeModeApplication(
   pi.on("session_shutdown", () => {
     observeUserIntent();
     // Publish against the key captured at start, never a possibly different shutdown context.
-    publishUserIntent();
+    if (userDeactivated) publishCodeModeDeactivation(currentSessionKey);
+    currentSessionKey = undefined;
     tearDownTool();
     return slot.shutdown();
   });
