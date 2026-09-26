@@ -8,6 +8,7 @@ import type { SubagentSelectionProvenance } from "../profiles/model.ts";
 import {
   isParentActionRequiredRun,
   isTerminalRunState,
+  hasUnresolvedSteeringDelivery,
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
@@ -18,6 +19,7 @@ import { formatRunRoute, formatSessionAge } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import type { SubagentActionFailure, SubagentStartFailure } from "./model.ts";
 import type { SubagentToolAction } from "./schema.ts";
+import { steeringDeliveryEvidence } from "./outcome.ts";
 
 export const selectionSourceLabel = (
   run: Pick<SubagentRunView, "selection"> | { readonly selection: SubagentSelectionProvenance },
@@ -186,7 +188,8 @@ const formatRunHeader = (run: SubagentRunView, route: string): string => {
   const workspace = run.writerWorkspaceMode
     ? ` · workspace=${run.writerWorkspaceMode}${run.workspaceId ? `:${sanitizeTerminalLine(run.workspaceId)}` : ""}`
     : "";
-  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}`;
+  const steering = run.steeringDelivery ? ` · steeringDelivery=${run.steeringDelivery}` : "";
+  return `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)} · ${runStateLabel(run.state)} · ${run.writeIntent}${profile} · ${route}${tree}${native}${workspace}${steering}`;
 };
 
 const identityStatusFields = (
@@ -216,6 +219,11 @@ const identityStatusFields = (
 };
 
 const routeRetryStatus = (run: SubagentRunView): string | undefined => {
+  if (hasUnresolvedSteeringDelivery(run))
+    return statusField(
+      "Route retry",
+      "blocked by unresolved guidance delivery; do not retry or launch a replacement automatically",
+    );
   if (run.retryBlocked)
     return statusField(
       "Route retry",
@@ -298,6 +306,12 @@ const activityStatusFields = (run: SubagentRunView): ReadonlyArray<string | unde
       ? statusField(
           "Native",
           `${native.active} active · ${native.total} total${native.latest ? ` · latest ${native.latest.kind} ${native.latest.state}` : ""}`,
+        )
+      : undefined,
+    run.steeringDelivery
+      ? statusField(
+          "Steering",
+          `steeringDelivery=${run.steeringDelivery}. ${steeringDeliveryEvidence[run.steeringDelivery].detail}`,
         )
       : undefined,
     optionalStatusField("Current tool", run.currentTool),

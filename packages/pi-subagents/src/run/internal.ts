@@ -149,6 +149,9 @@ export interface RunRecord {
   /** Monotonic allocator; rolled-back attempts are never reused. */
   nextAssignmentEpoch: number;
   lastBackendReport?: BackendReportWatermark | undefined;
+  steeringDeliveryOwner?: { readonly epoch: number; readonly sequence: number } | undefined;
+  /** Primary failure survives later generic process-exit evidence. */
+  backendFailure?: SubagentError | undefined;
 }
 
 export const clearRunNativeActivity = (record: RunRecord): void => {

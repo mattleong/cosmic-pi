@@ -77,6 +77,29 @@ const awaitReceipt = (
 };
 
 describe("subagent compact semantic policy", () => {
+  it("treats pending and unresolved steering as delivery uncertainty, not worker failure", () => {
+    for (const steeringDelivery of ["pending", "unresolved"] as const) {
+      for (const state of ["running", "reported", "completed"] as const) {
+        const run = view({ steeringDelivery, state });
+        const status = makeCompactToolDetails({ action: "status", runs: [run] });
+        const summary = summarize("status", status);
+        expect(summary?.outcome).toBe("uncertain");
+        expect(compactIssueSeverity(summary?.issues)).toBe("warning");
+        expect(details(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
+        expect(details(summary?.issues)).toContain("Do not resend");
+        expect(messages(summary?.issues)).not.toContain("failed");
+      }
+    }
+    for (const steeringDelivery of ["confirmed", "not-sent", "report-unconfirmed"] as const) {
+      const summary = summarize(
+        "status",
+        makeCompactToolDetails({ action: "status", runs: [view({ steeringDelivery })] }),
+      );
+      expect(summary?.outcome).toBe(steeringDelivery === "confirmed" ? "success" : "warning");
+      expect(details(summary?.issues)).toContain(`steeringDelivery=${steeringDelivery}`);
+    }
+  });
+
   it("attributes issues to each run and keeps raw warning prose on expansion", () => {
     const summary = summarize(
       "list",
@@ -348,6 +371,78 @@ describe("subagent compact semantic policy", () => {
       ).toBe(true);
     },
   );
+
+  it.each(["send", "reply", "resume", "stop"] as const)(
+    "keeps uncertain %s failures distinct from definite errors, even with Pi isError",
+    (action) => {
+      for (const code of ["claude_steering_outcome_uncertain", "stop_cleanup_unconfirmed"]) {
+        for (const confirmed of [0, 1]) {
+          const projected = makeCompactToolDetails({
+            action,
+            runs: confirmed ? [view({ id: "confirmed" })] : [],
+            actionFailures: [{ id: "uncertain", code, message: "Native evidence. Do not resend." }],
+          });
+          const tool = action === "resume" || action === "stop" ? "lifecycle" : action;
+          const summary = summarize(tool, projected, "settled", { action }, true);
+          expect(summary?.outcome).toBe("uncertain");
+          expect(compactIssueSeverity(summary?.issues)).toBe("warning");
+          expect(details(summary?.issues)).toContain(code);
+          expect(details(summary?.issues)).toContain("Do not resend");
+          expect(messages(summary?.issues)).not.toContain("Do not resend");
+          if (action === "send" || action === "reply")
+            expect(summary?.counters?.join(" ")).toContain(`${confirmed} confirmed`);
+          const mixed = makeCompactToolDetails({
+            action,
+            runs: [],
+            actionFailures: [
+              { id: "uncertain", code, message: "Native evidence" },
+              { id: "definite", code: "not_running", message: "Worker is not running" },
+            ],
+          });
+          const errors = summarize(tool, mixed, "settled", { action }, true);
+          expect(errors?.outcome).toBe("error");
+          expect(compactIssueSeverity(errors?.issues)).toBe("error");
+        }
+      }
+    },
+  );
+
+  it("accepts only matching typed failure details when Pi reports an error", () => {
+    const failedWorker = makeCompactToolDetails({
+      action: "status",
+      runs: [view({ state: "failed" })],
+    });
+    expect(summarize("status", failedWorker, "settled", {}, true)).toBeUndefined();
+    const missing = makeCompactToolDetails({
+      action: "status",
+      runs: [],
+      actionFailures: [{ id: "missing", message: "Worker not found" }],
+    });
+    expect(summarize("status", missing, "settled", {}, true)?.outcome).toBe("error");
+    expect(summarize("send", missing, "settled", {}, true)).toBeUndefined();
+    expect(
+      summarize(
+        "workspace",
+        { version: 1, action: "workspace", operation: "list", workspaceCount: 0 },
+        "settled",
+        { action: "list" },
+        true,
+      ),
+    ).toBeUndefined();
+    for (const code of ["start_outcome_uncertain", "start_cleanup_unconfirmed"]) {
+      const launch = {
+        version: 2,
+        action: "start",
+        startEntries: [{ ...pending, status: "failed", routeStatus: "unavailable" }],
+        startFailures: [{ index: 0, code, message: "Unconfirmed launch evidence" }],
+      };
+      const summary = summarize("start", launch, "settled", {}, true);
+      expect(summary?.outcome).toBe("uncertain");
+      expect(compactIssueSeverity(summary?.issues)).toBe("warning");
+      expect(details(summary?.issues)).toContain(code);
+      expect(details(summary?.issues)).toContain("Do not retry");
+    }
+  });
 
   it("classifies action failures and keeps their target IDs on expansion", () => {
     const projected = makeCompactToolDetails({

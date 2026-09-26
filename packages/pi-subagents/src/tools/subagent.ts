@@ -4,10 +4,12 @@ import {
   type ExtensionAPI,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { withCodePreviewShell } from "pi-code-previews";
+import { expandedSection, withCodePreviewShell } from "pi-code-previews";
+import { Container } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
+import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
 import {
   SUBAGENT_TOOL_NAME,
   SUBAGENT_TOOL_NAMES,
@@ -25,6 +27,7 @@ import {
 import { renderSubagentStartCall } from "./render-start.ts";
 import {
   prepareSubagentStartArguments,
+  subagentToolAction,
   SUBAGENT_TOOL_SCHEMAS,
   type SubagentToolInput,
   type SubagentToolParameters,
@@ -195,7 +198,11 @@ const TOOL_SPECS: SubagentToolSpecs = {
   },
 };
 
-export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRuntime): void {
+export function registerSubagentTools(
+  pi: ExtensionAPI,
+  runtime: SubagentToolRuntime,
+  receiptOwner?: SubagentErrorReceiptOwner,
+): void {
   const startUiTicker = runtime.startUiTicker ?? startHostUiTicker;
   const settlePresentation = <A>(release: () => void, operation: () => Promise<A>): Promise<A> => {
     const releaseSafely = () => {
@@ -249,44 +256,72 @@ export function registerSubagentTools(pi: ExtensionAPI, runtime: SubagentToolRun
         }),
     });
     const project = createSubagentCompactSummary(tool.name);
-    pi.registerTool(
-      withCodePreviewShell(tool, {
-        ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
-        expandedContent: {
-          renderCall: (args, theme) =>
-            tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
-              ? renderSubagentStartCall(args.agents, theme, true, true)
-              : renderSubagentInputContent(args, theme),
-          renderResult: (result, options, theme, context) => {
-            const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
-            const summary = project({
-              phase: options.isPartial ? "running" : "settled",
-              args: context.args,
-              result,
-              context,
-            });
-            if (!summary)
-              return renderSubagentResult(
-                { content: result.content },
-                options.isPartial,
-                true,
-                theme,
-              );
-            return renderSubagentExpandedContent(result, options.isPartial, theme, {
-              panelOwnsLiveHierarchy,
-            });
-          },
+    const wrapped = withCodePreviewShell(tool, {
+      ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
+      expandedContent: {
+        renderCall: (args, theme) =>
+          tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Array.isArray(args.agents)
+            ? renderSubagentStartCall(args.agents, theme, true, true)
+            : renderSubagentInputContent(args, theme),
+        renderResult: (result, options, theme, context) => {
+          const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
+          const summary = project({
+            phase: options.isPartial ? "running" : "settled",
+            args: context.args,
+            result,
+            context,
+          });
+          if (!summary)
+            return renderSubagentResult(
+              { content: result.content },
+              options.isPartial,
+              true,
+              theme,
+            );
+          const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
+            panelOwnsLiveHierarchy,
+          });
+          if (!context.isError) return content;
+          // The typed projection is bounded; keep all returned recovery evidence and earlier
+          // content middleware accessible even when a classified error can use the shell.
+          const container = new Container();
+          container.addChild(content);
+          container.addChild(
+            expandedSection(
+              theme,
+              "Output",
+              renderSubagentResult({ content: result.content }, options.isPartial, true, theme),
+            ),
+          );
+          return container;
         },
-        compactSummary: (input) => {
-          const summary = project(input);
-          // Compact mode owns every collapsed row, even when projection declines.
-          // Hidden original renderers cannot retire a ticker started while expanded.
-          if (!input.context.isPartial || !input.context.expanded)
-            syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
-          return summary;
-        },
-      }),
-    );
+      },
+      compactSummary: (input) => {
+        const summary = project(input);
+        // Compact mode owns every collapsed row, even when projection declines.
+        // Hidden original renderers cannot retire a ticker started while expanded.
+        if (!input.context.isPartial || !input.context.expanded)
+          syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
+        return summary;
+      },
+    });
+    pi.registerTool({
+      ...wrapped,
+      execute: (id, args, ...rest) =>
+        wrapped.execute(id, args, ...rest).then((result) => {
+          // Retain only the FINAL registered result, including decoded local proxy details.
+          // SAFETY: Pi validated this correlated name/args pair with the catalog schema.
+          const input = { tool: name, args } as SubagentToolInput;
+          receiptOwner?.receipts.retain(
+            receiptOwner.owner,
+            name,
+            id,
+            subagentToolAction(input),
+            result.details,
+          );
+          return result;
+        }),
+    });
   };
   for (const name of SUBAGENT_TOOL_NAMES) register(name);
 }

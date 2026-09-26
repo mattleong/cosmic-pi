@@ -38,7 +38,12 @@ export class UnsupportedSafeWriterOwnershipError extends Schema.TaggedError<Unsu
 
 export class SubagentProcessError extends Schema.TaggedError<SubagentProcessError>()(
   "SubagentProcessError",
-  { operation: Schema.String, message: Schema.String, code: Schema.optional(Schema.String) },
+  {
+    operation: Schema.String,
+    message: Schema.String,
+    code: Schema.optional(Schema.String),
+    pendingDelivery: Schema.optional(Schema.Boolean),
+  },
 ) {}
 
 /** Shared `SubagentProcessError` factory for failures with an explicit machine code. */

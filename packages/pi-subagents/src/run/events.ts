@@ -223,28 +223,29 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     event: Extract<BackendEvent, { readonly type: "exit" }>,
   ) => {
-    const processFailure = new SubagentProcessError({
-      operation: "run",
-      message: sanitizeDiagnosticText(
-        event.diagnostic.trim() ||
-          `Subagent process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`}.`,
-        MAX_ERROR_CHARS,
-      ),
-    });
+    const processFailure =
+      record.backendFailure ??
+      event.failure ??
+      new SubagentProcessError({
+        operation: "run",
+        message: sanitizeDiagnosticText(
+          event.diagnostic.trim() ||
+            `Subagent process exited${event.exitCode === null ? "" : ` with code ${event.exitCode}`}.`,
+          MAX_ERROR_CHARS,
+        ),
+      });
     record.process?.cancelPending(processFailure);
     return isInactiveRunRecord(record)
       ? Effect.void
-      : settle(record, "failed", processFailure.message);
+      : event.failure
+        ? failRun(record, processFailure.message, processFailure)
+        : settle(record, "failed", sanitizeDiagnosticText(processFailure.message, MAX_ERROR_CHARS));
   };
 
   const handleEvent = (
     record: RunRecord,
-    event: BackendEvent,
-    source: BackendHandle | undefined,
+    event: Exclude<BackendEvent, { readonly type: "usage" | "proxy_request" | "proxy_cancel" }>,
   ): Effect.Effect<unknown, SubagentError> => {
-    if (event.type === "usage") return mergeProcessUsage(record, source, event.usage);
-    if (event.type === "proxy_request" || event.type === "proxy_cancel")
-      return onProxyEvent(record, event);
     if (event.type !== "exit" && isInactiveRunRecord(record))
       // A backend may report final cumulative usage/cost only at its native result, after the
       // accepted report settled the run. That exact epoch's usage still merges into the outcome.
@@ -252,6 +253,28 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
         ? mergeLateUsage(record, event.assignmentEpoch, event.usage)
         : Effect.void;
     switch (event.type) {
+      case "input_delivery":
+        return mutateAt(record, event.assignmentEpoch, (current, now) => {
+          const owner = record.steeringDeliveryOwner;
+          if (
+            owner?.epoch === event.assignmentEpoch &&
+            (event.sequence < owner.sequence ||
+              (event.sequence === owner.sequence && current.steeringDelivery !== "pending"))
+          )
+            return undefined;
+          record.steeringDeliveryOwner = { epoch: event.assignmentEpoch, sequence: event.sequence };
+          const warning =
+            event.state === "report-unconfirmed"
+              ? "The supervisor report was accepted, but pending guidance acknowledgement and incorporation remain unconfirmed. Do not resend the guidance."
+              : undefined;
+          return {
+            ...current,
+            steeringDelivery: event.state,
+            ...(warning && recordRunWarning(record, current.sessionEvents, "system", warning, now)),
+          };
+        });
+      case "backend_failure":
+        return failRun(record, event.error.message, event.error);
       case "run_started":
         return runStarted(record, event.assignmentEpoch);
       case "run_settled":
@@ -345,8 +368,13 @@ export function makeRunEventHandler(dependencies: RunEventDependencies) {
     }
   };
 
-  return (record: RunRecord, event: BackendEvent, source?: BackendHandle) =>
-    handleEvent(record, event, source).pipe(Effect.asVoid);
+  return (record: RunRecord, event: BackendEvent, source?: BackendHandle) => {
+    if (event.type === "usage")
+      return mergeProcessUsage(record, source, event.usage).pipe(Effect.asVoid);
+    if (event.type === "proxy_request" || event.type === "proxy_cancel")
+      return onProxyEvent(record, event).pipe(Effect.asVoid);
+    return handleEvent(record, event).pipe(Effect.asVoid);
+  };
 }
 
 export type RunEventHandler = ReturnType<typeof makeRunEventHandler>;

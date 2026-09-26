@@ -262,7 +262,9 @@ export function makeRunControls(dependencies: RunControlDependencies) {
         (admitted) =>
           steerBackend(admitted, normalized).pipe(
             Effect.tapError((error) =>
-              error._tag === "SubagentProcessError" && isOutcomeUncertain(error)
+              error._tag === "SubagentProcessError" &&
+              isOutcomeUncertain(error) &&
+              !error.pendingDelivery
                 ? retainControlWarning(admitted, error.message)
                 : Effect.void,
             ),

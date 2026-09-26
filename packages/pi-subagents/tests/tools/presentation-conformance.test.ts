@@ -189,6 +189,46 @@ effectTest("preserves preparation paths omitted from bounded metadata", function
   expect(result).toEqual(original);
 });
 
+it("preserves host-flagged uncertainty, exact input and full output through compact expansion", () => {
+  const tool = registered().find((entry) => entry.name === "subagent_send")!;
+  const details = makeCompactToolDetails({
+    action: "send",
+    runs: [],
+    actionFailures: [
+      {
+        id: "target",
+        code: "claude_steering_outcome_uncertain",
+        message: "Native input may already have arrived. Do not resend.",
+      },
+    ],
+  });
+  const result = {
+    content: [
+      { type: "text" as const, text: "full output beyond bounded projection; middleware evidence" },
+    ],
+    details,
+  };
+  const original = structuredClone(result);
+  const harness = createToolPresentationHarness(tool);
+  for (const expanded of [false, true, false, true]) {
+    harness.call(
+      { runIds: ["target"], message: "exact unique guidance input" },
+      { expanded, isError: true },
+    );
+    harness.result(result, { expanded, isError: true });
+    const text = harness.render(160).join("\n");
+    expect(text).toContain("0 confirmed sent");
+    expect(text).toContain("The action could not be confirmed");
+    expect(text.includes("claude_steering_outcome_uncertain")).toBe(expanded);
+    expect(text.includes("Do not resend")).toBe(expanded);
+    expect(text.includes("exact unique guidance input")).toBe(expanded);
+    expect(text.includes("full output beyond bounded projection; middleware evidence")).toBe(
+      expanded,
+    );
+  }
+  expect(result).toEqual(original);
+});
+
 it("retains unique guidance input when expansion replaces the original call heading", () => {
   const tool = registered().find((entry) => entry.name === "subagent_send")!;
   const harness = createToolPresentationHarness(tool);

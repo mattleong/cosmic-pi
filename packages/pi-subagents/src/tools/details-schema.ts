@@ -32,6 +32,7 @@ import {
   FAILED_START_RETRY_DISPOSITIONS,
   PI_SUBAGENT_CAPABILITIES,
   SUBAGENT_RUN_STATES,
+  STEERING_DELIVERY_STATES,
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 
@@ -158,6 +159,7 @@ export const SubagentRunCardSchema = Schema.Struct({
   id: boundedString(MAX_PROTOCOL_ID_CHARS, 1),
   name: boundedString(MAX_NAME_CHARS, 1),
   state: Schema.Literals(SUBAGENT_RUN_STATES),
+  steeringDelivery: Schema.optionalKey(Schema.Literals(STEERING_DELIVERY_STATES)),
   profile: Schema.optionalKey(ProfileIdSchema),
   host: HostSchema,
   runtime: RuntimeSchema,

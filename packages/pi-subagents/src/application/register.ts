@@ -21,6 +21,7 @@ import {
 import { registerSubagentActivity } from "../boundary/host-activity.ts";
 import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
 import { makeHostNotifier } from "../boundary/host-notifier.ts";
+import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { makeSubagentProjectionBridge } from "../boundary/host-ui.ts";
 import type { BackendProxyRequest } from "../backend/model.ts";
 import { NativeModelCatalog } from "../boundary/native-model-catalog.ts";
@@ -107,6 +108,7 @@ export function registerSubagentApplication(
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
   registerSubagentMessageRenderers(pi);
+  const receipts = registerSubagentErrorReceipts(pi);
   const bridge = makeSubagentProjectionBridge(pi.events);
   const notify = makeHostNotifier(pi);
   let releaseActivity: (() => void) | undefined;
@@ -222,11 +224,15 @@ export function registerSubagentApplication(
       onActivated: (activation, token, prepared) => {
         if (!slot.isCurrent(token)) return;
         try {
-          registerSubagentTools(pi, {
-            ...prepared.toolRuntime,
-            scheduleAnimation: (interval, tick) =>
-              slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
-          });
+          registerSubagentTools(
+            pi,
+            {
+              ...prepared.toolRuntime,
+              scheduleAnimation: (interval, tick) =>
+                slot.isCurrent(token) ? prepared.scheduler.schedule(interval, tick) : undefined,
+            },
+            { receipts, owner: receipts.activate() },
+          );
           const activatedByRegistration = deactivateSubagentTools(pi);
           if (!hasRegisteredTools) rememberDisabledTools(activatedByRegistration);
           hasRegisteredTools = true;
@@ -271,6 +277,7 @@ export function registerSubagentApplication(
         }
       },
       onDeactivated: () => {
+        receipts.deactivate();
         revokeActivity();
         rememberDisabledTools(deactivateSubagentTools(pi));
         currentActivation = undefined;
@@ -436,6 +443,7 @@ export function registerSubagentApplication(
     preserveSessionOverrides: boolean,
     restoreReloadHandoff: boolean,
   ): Promise<void> => {
+    receipts.deactivate();
     revokeActivity();
     bridge.clear();
     // No registered Subagents tool may target the inactive slot while capture or replacement is
@@ -478,6 +486,7 @@ export function registerSubagentApplication(
   pi.on("session_tree", (_event, ctx) => prepareActivation(ctx, true, false));
 
   pi.on("session_shutdown", (event, ctx) => {
+    receipts.deactivate();
     revokeActivity();
     activeProfileGeneration = -1;
     const sessionKey = profileReloadSessionKey(ctx) ?? currentActivation?.sessionKey;

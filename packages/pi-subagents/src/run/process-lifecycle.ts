@@ -173,7 +173,7 @@ export function makeRunProcessInitializer(dependencies: RunProcessInitializerDep
             ),
           ),
         ),
-        Effect.catch((error) => failRun(record, error.message).pipe(Effect.asVoid)),
+        Effect.catch((error) => failRun(record, error.message, error).pipe(Effect.asVoid)),
         Effect.ensuring(
           closeExitedScope(record, scope).pipe(
             Effect.forkIn(ownerScope, { startImmediately: true }),

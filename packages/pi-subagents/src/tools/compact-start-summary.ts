@@ -1,7 +1,8 @@
 import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
-import type { SubagentStartDetails } from "./details-schema.ts";
+import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
+import { isUncertainToolFailure } from "./outcome.ts";
 
 /** Progress counter; a sole named target needs no count. */
 export function progressDetail(
@@ -23,6 +24,17 @@ const retryMessages = {
   exhausted: "The profile route is exhausted",
   unavailable: "The launch has no route to retry",
 } satisfies Record<AdmittedRun["retryDisposition"], string>;
+
+const launchFailureIssue = (
+  failure: SubagentCardFailure,
+  label: string,
+  uncertain: boolean,
+): CompactIssue => ({
+  severity: uncertain ? "warning" : "error",
+  code: `launch:${failure.index}:start-failed`,
+  message: `${label}: ${uncertain ? "Could not confirm startup or cleanup; work may have started" : "Startup reported an error"}`,
+  detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
+});
 
 /** Launch receipts own start counters, launch-slot issues, and start outcome. */
 export function summarizeStart(
@@ -57,20 +69,17 @@ export function summarizeStart(
   }
   for (const failure of details.startFailures ?? []) {
     const label = (failure.name ?? `Launch ${failure.index + 1}`).slice(0, 60);
-    issues.push({
-      severity: "error",
-      code: `launch:${failure.index}:start-failed`,
-      message: `${label}: ${failure.code === "get_state_outcome_uncertain" ? "Could not confirm startup; work may have started" : "Startup reported an error"}`,
-      detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-    });
+    const uncertain = isUncertainToolFailure(failure);
+    issues.push(launchFailureIssue(failure, label, uncertain));
     const recovery = failure.admittedRun;
     if (!recovery) {
       issues.push({
         severity: "warning",
         code: `launch:${failure.index}:recovery-unknown`,
         message: `${label}: Worker ownership and cleanup status are unknown`,
-        detail:
-          "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
+        detail: uncertain
+          ? "Do not retry or launch a replacement while outcome or cleanup is unconfirmed. Inspect full launch details and status before recovery. Missing retry data does not establish eligibility."
+          : "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
       });
       continue;
     }

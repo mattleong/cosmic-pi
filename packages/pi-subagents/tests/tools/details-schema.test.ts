@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { makeCompactToolDetails } from "../../src/tools/details.ts";
+import {
+  makeCompactToolDetails,
+  makeAwaitDetails,
+  projectSubagentRunCard,
+} from "../../src/tools/details.ts";
+import { STEERING_DELIVERY_STATES } from "../../src/run/model.ts";
 import {
   decodeCompactToolDetails,
   decodeStartAwaitCardDetails,
@@ -8,6 +13,35 @@ import { containedWriter } from "../fixtures/run-view.ts";
 import { view } from "./fixtures/tool-harness.ts";
 
 describe("subagent detail evidence", () => {
+  it("preserves native delivery evidence at every density without changing historical v2 cards", () => {
+    const historical = makeCompactToolDetails({ action: "status", runs: [view()] });
+    expect(decodeCompactToolDetails(historical)).toEqual(historical);
+    expect(historical).not.toHaveProperty("cards.0.steeringDelivery");
+    for (const steeringDelivery of STEERING_DELIVERY_STATES) {
+      const run = view({ steeringDelivery, state: "running" });
+      for (const density of ["full", "compact", "minimal"] as const) {
+        const card = projectSubagentRunCard(run, density);
+        expect(card.steeringDelivery).toBe(steeringDelivery);
+        expect(card.state).toBe("running");
+      }
+      const status = makeCompactToolDetails({ action: "status", runs: [run] });
+      const awaited = makeAwaitDetails({
+        runs: [run],
+        awaitedRunIds: [run.id],
+        awaitUntil: "all_finished",
+      });
+      expect(decodeCompactToolDetails(status)).toMatchObject({ cards: [{ steeringDelivery }] });
+      expect(decodeStartAwaitCardDetails(awaited)).toMatchObject({ cards: [{ steeringDelivery }] });
+    }
+    if (historical.action === "models") throw new Error("Expected cards");
+    expect(
+      decodeCompactToolDetails({
+        ...historical,
+        cards: historical.cards.map((card) => ({ ...card, steeringDelivery: "invented" })),
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not let report-only provenance hide failures or missing evidence", () => {
     const details = makeCompactToolDetails({
       action: "list",

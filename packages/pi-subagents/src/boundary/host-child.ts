@@ -39,6 +39,7 @@ import {
   createParentExpandedContent,
 } from "../tools/compact-parent-summary.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
+import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import { consumeRuntimeApiCredentials, registerChildPiFastModeHook } from "./host-child-pi.ts";
 import { isSubagentChildProcess, subagentChildRunId } from "./host-environment.ts";
 import {
@@ -113,6 +114,7 @@ export function registerSubagentChildBridge(
   boundaries: SubagentChildBridgeBoundaries = LIVE_CHILD_BRIDGE_BOUNDARIES,
 ): void {
   registerSubagentMessageRenderers(pi);
+  const receipts = registerSubagentErrorReceipts(pi);
   pi.registerFlag("pi-subagents-fast-mode", {
     description: "Private OpenAI fast-mode request for this subagent",
     type: "boolean",
@@ -183,6 +185,7 @@ export function registerSubagentChildBridge(
     );
 
   const deactivate = (input: ChildSessionInput | undefined): void => {
+    receipts.deactivate();
     if (input) {
       input.token = undefined;
       input.detachRelay?.();
@@ -485,13 +488,17 @@ export function registerSubagentChildBridge(
             () => isActivationCurrent(input, token),
             (request, signal) => proxyCall(input, token, request, signal),
           );
-        registerSubagentTools(pi, {
-          scheduleAnimation: (interval, tick) =>
-            isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
-          environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
-          proxyCall: call,
-          run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
-        });
+        registerSubagentTools(
+          pi,
+          {
+            scheduleAnimation: (interval, tick) =>
+              isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
+            environment: { cwd: input.cwd, projectTrusted: input.projectTrusted },
+            proxyCall: call,
+            run: () => Promise.reject(new Error("Nested Pi uses the root coordinator proxy.")),
+          },
+          { receipts, owner: receipts.activate() },
+        );
         registerContactParent(input, token, (interval, tick) =>
           isActivationCurrent(input, token) ? scheduler.schedule(interval, tick) : undefined,
         );

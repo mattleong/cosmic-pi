@@ -1,14 +1,18 @@
 import { compactIssueSeverity, firstLineMessage } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
+import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import {
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
   type SubagentRunCard,
   type SubagentStartDetails,
   type SubagentAwaitDetails,
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
+import {
+  decodeSubagentOutcomeDetails,
+  hasSubagentToolFailure,
+  isUncertainToolFailure,
+} from "./outcome.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { progressDetail, summarizeStart } from "./compact-start-summary.ts";
@@ -141,7 +145,11 @@ function applyArgumentLanes(
   if (phase === "settled" && (details.action === "send" || details.action === "reply")) {
     // runCount counts accepted operations, not failures or only the bounded visible cards.
     const receipt = details.action === "send" ? "sent" : "replied";
-    const count = details.runCount === 1 ? receipt : `${details.runCount} ${receipt}`;
+    const count = details.actionFailures?.some(isUncertainToolFailure)
+      ? `${details.runCount} confirmed ${receipt}`
+      : details.runCount === 1
+        ? receipt
+        : `${details.runCount} ${receipt}`;
     summary.counters = [
       details.runCount > details.cards.length
         ? `${count}, ${details.cards.length}/${details.runCount} shown`
@@ -158,19 +166,20 @@ export function createSubagentCompactSummary(
   toolName: string,
 ): CompactSummaryProvider<unknown, unknown, unknown> {
   return ({ phase, args, result, context }) => {
-    if (context.isError) return undefined;
     const action = toolName.replace(/^subagent_/, "");
     if (!Predicate.isObject(args)) return undefined;
     // SAFETY: Pi owns partial arguments; display fields are narrowed before use.
     const input = args as SummaryArguments;
     const operation = Predicate.isString(input.action) ? input.action : action;
     const lanes = argumentSummary(input, action, operation);
-    if (!result) return phase === "settled" ? undefined : lanes;
-    if (action === "workspace") return compactWorkspaceSummary(result.details, operation);
-    const details =
-      decodeStartAwaitCardDetails(result.details) ?? decodeCompactToolDetails(result.details);
-    if (!details || details.action !== (action === "claims" ? "claims" : operation))
-      return undefined;
+    if (!result) return context.isError || phase === "settled" ? undefined : lanes;
+    if (action === "workspace")
+      return context.isError ? undefined : compactWorkspaceSummary(result.details, operation);
+    const details = decodeSubagentOutcomeDetails(
+      action === "claims" ? "claims" : operation,
+      result.details,
+    );
+    if (!details || (context.isError && !hasSubagentToolFailure(details))) return undefined;
     const requestedTargets = requestedRunIds(input);
     const targets =
       details.action === "await" ? (requestedTargets ?? details.awaitedRunIds) : undefined;
@@ -283,13 +292,16 @@ function runIssues(
   for (const failure of details.actionFailures ?? []) {
     // Failed targets are usually absent from the visible cards; raw text keeps their identity.
     const name = details.cards.find((card) => card.id === failure.id)?.name.slice(0, 60);
-    const message =
-      failure.code === "SubagentNotFoundError"
+    const uncertain = isUncertainToolFailure(failure);
+    if (uncertain) summary.outcome = "uncertain";
+    const message = uncertain
+      ? "The action could not be confirmed"
+      : failure.code === "SubagentNotFoundError"
         ? "A requested worker was not found"
         : firstLineMessage(failure.message, "The action failed");
     issues.push(
       {
-        severity: "error",
+        severity: uncertain ? "warning" : "error",
         code: `run:${failure.id}:action-failed`,
         message: name ? `${name}: ${message}` : message,
         detail: `${failure.id}: ${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
@@ -297,9 +309,12 @@ function runIssues(
       {
         severity: "info",
         code: `run:${failure.id}:action-recovery`,
-        message: "Check status before retrying or replacing the worker",
-        detail:
-          "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
+        message: uncertain
+          ? "The action may already have taken effect"
+          : "Recovery details are available",
+        detail: uncertain
+          ? "Do not resend, retry, or launch a replacement while the outcome or cleanup is unconfirmed. Inspect expanded failure details and full subagent_status before recovery."
+          : "Inspect expanded failure details and full subagent_status for safe recovery and cleanup disposition before retrying or replacing a run.",
       },
     );
   }
@@ -378,7 +393,8 @@ function summarizeDetails(
   const cards = targets ? details.cards.filter((card) => targets.includes(card.id)) : details.cards;
   summary.counters = cardCounters(cards, isSingleRequestedRun(details, cards, requested));
   if (summary.outcome === "success") {
-    if (cards.some((card) => card.state === "stopping")) summary.outcome = "uncertain";
+    if (cards.some((card) => card.state === "stopping" || hasUnresolvedSteeringDelivery(card)))
+      summary.outcome = "uncertain";
     else if (
       cards.some(
         (card) =>

@@ -42,6 +42,7 @@ import { registerSubagentProxyManagerCommand } from "../settings/proxy-controlle
 import { decodeSubagentProxyResult, encodeSubagentProxyInput } from "../tools/proxy-protocol.ts";
 import { observeAwaitInterruption } from "../tools/execute-await.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
+import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
 import {
   createParentCompactSummary,
   createParentExpandedContent,
@@ -129,6 +130,7 @@ export default function registerPiSubagentSupervisorBridge(
   dependencies: PiSupervisorBridgeExtensionDependencies = { openBridge: openPiSupervisorBridge },
 ): void {
   registerSubagentMessageRenderers(pi);
+  const receipts = registerSubagentErrorReceipts(pi);
   pi.registerFlag("pi-subagents-supervisor-config", {
     description: "Private pi-subagents supervisor channel configuration",
     type: "string",
@@ -167,6 +169,7 @@ export default function registerPiSubagentSupervisorBridge(
         ),
       ).pipe(Effect.andThen(CodePreviewSchedulerService)),
     onActivated: ({ ctx }, token, scheduler) => activateTools(ctx, token, scheduler),
+    onDeactivated: () => receipts.deactivate(),
   });
   let started = false;
   let shuttingDown = false;
@@ -331,12 +334,16 @@ export default function registerPiSubagentSupervisorBridge(
     } catch {
       /* Missing session discovery disables only the optional questionnaire relay. */
     }
-    registerSubagentTools(pi, {
-      scheduleAnimation,
-      environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
-      proxyCall,
-      run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
-    });
+    registerSubagentTools(
+      pi,
+      {
+        scheduleAnimation,
+        environment: { cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted() },
+        proxyCall,
+        run: () => Promise.reject(new Error("Delegated Pi uses the root coordinator proxy.")),
+      },
+      { receipts, owner: receipts.activate() },
+    );
     const runId = subagentChildRunId();
     if (runId) registerSubagentProxyManagerCommand(pi, runId, proxyCall);
 
@@ -449,6 +456,7 @@ export default function registerPiSubagentSupervisorBridge(
   });
 
   pi.on("session_shutdown", () => {
+    receipts.deactivate();
     shuttingDown = true;
     detachRelay?.();
     detachRelay = undefined;

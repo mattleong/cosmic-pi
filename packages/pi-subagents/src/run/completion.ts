@@ -3,6 +3,7 @@ import type {
   SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import type { CompletionGenerationRecord, RunRecord } from "./internal.ts";
+import { hasUnresolvedSteeringDelivery } from "./model.ts";
 import {
   MAX_COMPLETION_DELIVERY_BATCH,
   MAX_UNRESOLVED_REPORT_GENERATIONS,
@@ -58,7 +59,8 @@ const completionNotification = (
     record.view.retryExhausted !== true &&
     record.view.retryBlocked !== true &&
     record.view.supersededByRunId === undefined &&
-    !record.assignment.outcomeUncertain;
+    !record.assignment.outcomeUncertain &&
+    !hasUnresolvedSteeringDelivery(record.view);
   return {
     id: record.view.id,
     name: record.view.name,

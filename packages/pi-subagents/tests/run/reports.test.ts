@@ -5,6 +5,13 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { MAX_COMPLETION_DELIVERY_BATCH } from "../../src/run/limits.ts";
+import { processError } from "../../src/run/errors.ts";
+import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
+import { makeRunSettlement } from "../../src/run/settlement.ts";
+import type { RunRecord } from "../../src/run/internal.ts";
+import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
+import { makeRunContext } from "./fixtures/run-context.ts";
+import { view } from "../tools/fixtures/tool-harness.ts";
 import { emptyUsage } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -190,7 +197,167 @@ describe("local Pi terminal evidence", () => {
   }
 });
 
+describe("primary failure privacy", () => {
+  const rawPrimary = () =>
+    processError(
+      "steer",
+      "steer_outcome_uncertain",
+      `Primary acknowledgement failure token=secret-credential \u001b[31m${"x".repeat(9000)}`,
+    );
+  const expectSanitized = (text: string | undefined) => {
+    expect(text).toContain("Primary acknowledgement failure");
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain("secret-credential");
+    expect(text).not.toContain("\u001b");
+    expect(text?.length).toBeLessThanOrEqual(MAX_ERROR_CHARS);
+  };
+
+  it.effect(
+    "retains typed initialization cause privately but only queues bounded redacted settlement",
+    () =>
+      Effect.gen(function* () {
+        const fields = {
+          view: view({ state: "starting" }),
+          stoppedByParent: false,
+          initializationPending: true,
+        } satisfies Pick<RunRecord, "view" | "stoppedByParent" | "initializationPending">;
+        // SAFETY: Deferred initialization failure uses only these fields and writes cleanup/failure/pending-settlement facts.
+        const record = fields as RunRecord;
+        // SAFETY: Deferred initialization settlement does not allocate or notify a completion.
+        const delivery = {} as RunNotificationDelivery;
+        const settlement = makeRunSettlement({
+          ...(yield* makeRunContext()),
+          delivery,
+          closeRecordScope: () => Effect.void,
+        });
+        const primary = rawPrimary();
+        yield* settlement.failRun(record, primary.message, primary);
+        expect(record.backendFailure).toBe(primary);
+        expectSanitized(record.pendingInitializationSettlement?.error);
+      }),
+  );
+
+  for (const source of ["backend", "exit"] as const)
+    it.effect(`redacts and bounds the primary ${source} error before public run projection`, () => {
+      const { backend, projections, layer } = retainedServiceFixture();
+      return withService(layer, function* (service) {
+        const run = yield* service.start(retainedRequest({ closeOnReport: true }));
+        const primary = rawPrimary();
+        backend.controls[0]!.offer(
+          source === "backend"
+            ? { type: "backend_failure", error: primary }
+            : { type: "exit", exitCode: null, diagnostic: "generic exit", failure: primary },
+        );
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+        expectSanitized((yield* service.status(run.id)).error);
+        for (const projection of projections) {
+          const error = projection.runs[0]?.error;
+          if (error) expectSanitized(error);
+        }
+      });
+    });
+});
+
 describe("SubagentService", () => {
+  it.effect(
+    "accepted report keeps guidance-unconfirmed warning and ignores late delivery state",
+    () => {
+      const { backend, projections, layer } = retainedServiceFixture();
+      return withService(layer, function* (service) {
+        const run = yield* service.start(retainedRequest({ closeOnReport: true }));
+        const control = backend.controls[0]!;
+        control.offer({
+          type: "input_delivery",
+          assignmentEpoch: 1,
+          sequence: 2,
+          state: "pending",
+        });
+        control.offer({
+          type: "input_delivery",
+          assignmentEpoch: 1,
+          sequence: 2,
+          state: "report-unconfirmed",
+        });
+        control.report(
+          run.id,
+          1,
+          "accepted-final",
+          "Completed assignment, not a guidance acknowledgement.",
+        );
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        const completed = yield* service.status(run.id);
+        expect(completed).toMatchObject({
+          state: "completed",
+          steeringDelivery: "report-unconfirmed",
+          reportGeneration: 1,
+        });
+        expect(completed.warning).toContain("incorporation remain unconfirmed");
+        control.offer({
+          type: "input_delivery",
+          assignmentEpoch: 1,
+          sequence: 2,
+          state: "confirmed",
+        });
+        control.offer({
+          type: "input_delivery",
+          assignmentEpoch: 2,
+          sequence: 3,
+          state: "pending",
+        });
+        yield* Effect.yieldNow;
+        expect(yield* service.status(run.id)).toMatchObject({
+          state: "completed",
+          steeringDelivery: "report-unconfirmed",
+          reportGeneration: 1,
+        });
+      });
+    },
+  );
+
+  it.effect("stale guidance acknowledgements cannot resolve a newer same-epoch delivery", () => {
+    const { backend, projections, layer } = retainedServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(retainedRequest());
+      const control = backend.controls[0]!;
+      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 1, state: "pending" });
+      control.offer({
+        type: "input_delivery",
+        assignmentEpoch: 1,
+        sequence: 1,
+        state: "confirmed",
+      });
+      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 2, state: "pending" });
+      control.offer({
+        type: "input_delivery",
+        assignmentEpoch: 1,
+        sequence: 1,
+        state: "confirmed",
+      });
+      control.offer({
+        type: "input_delivery",
+        assignmentEpoch: 2,
+        sequence: 3,
+        state: "confirmed",
+      });
+      control.offer({
+        type: "supervisor_contact",
+        assignmentEpoch: 1,
+        requestId: "after-stale",
+        kind: "progress",
+        message: "After stale evidence",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.progress === "After stale evidence");
+      expect((yield* service.status(run.id)).steeringDelivery).toBe("pending");
+      control.offer({
+        type: "input_delivery",
+        assignmentEpoch: 1,
+        sequence: 2,
+        state: "confirmed",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
+      expect((yield* service.status(run.id)).state).toBe("running");
+    });
+  });
   it.effect(
     "keeps a report arriving during start admission queued for exact-once await delivery",
     () => {

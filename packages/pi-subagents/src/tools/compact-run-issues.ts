@@ -1,5 +1,6 @@
 import { firstLineMessage, type CompactIssue } from "pi-code-previews";
 import type { SubagentRunCard } from "./details-schema.ts";
+import { steeringDeliveryEvidence } from "./outcome.ts";
 
 /** Card-scoped issue: the message names the worker; its expanded detail keeps the run ID. */
 type AddIssue = (
@@ -39,6 +40,15 @@ export function compactRunIssues(
         ...(detail && { detail: `${card.id}: ${detail}` }),
       });
     attentionIssues(card, add);
+    if (card.steeringDelivery) {
+      const evidence = steeringDeliveryEvidence[card.steeringDelivery];
+      add(
+        card.steeringDelivery === "confirmed" ? "info" : "warning",
+        "steering-delivery",
+        evidence.message,
+        `steeringDelivery=${card.steeringDelivery}. ${evidence.detail}`,
+      );
+    }
     evidenceIssues(card, add, reportsOnlyOmitted);
     const skipped = card.selection.skippedCandidates;
     if (!skipped.length) continue;

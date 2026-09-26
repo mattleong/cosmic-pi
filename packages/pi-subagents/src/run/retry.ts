@@ -3,7 +3,11 @@ import * as Effect from "effect/Effect";
 import type { ProfileRouteContinuation } from "../profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "./errors.ts";
 import type { RunContext, RunRecord } from "./internal.ts";
-import type { FailedStartRecovery, SubagentRunView } from "./model.ts";
+import {
+  hasUnresolvedSteeringDelivery,
+  type FailedStartRecovery,
+  type SubagentRunView,
+} from "./model.ts";
 import { snapshotView } from "./state.ts";
 
 export interface SubagentRetryClaim {
@@ -33,7 +37,9 @@ export const failedStartRecoveryForRecord = (record: RunRecord): FailedStartReco
     ? "unavailable"
     : record.retryExhausted || !hasRemainingCandidate
       ? "exhausted"
-      : record.view.supersededByRunId !== undefined || record.assignment.outcomeUncertain
+      : record.view.supersededByRunId !== undefined ||
+          record.assignment.outcomeUncertain ||
+          hasUnresolvedSteeringDelivery(record.view)
         ? "blocked"
         : record.cleanupDisposition === "quarantined" || record.view.retryBlocked === true
           ? "blocked"
@@ -98,7 +104,7 @@ export function makeRunRetry(
               "retry_already_superseded",
               `Subagent ${id} was already continued as ${record.view.supersededByRunId}.`,
             );
-          if (record.assignment.outcomeUncertain)
+          if (record.assignment.outcomeUncertain || hasUnresolvedSteeringDelivery(record.view))
             return yield* invalid(
               "retry_outcome_uncertain",
               `Subagent ${id} may have accepted or executed its task; automatic next-candidate continuation is blocked. Inspect the run before deciding how to recover.`,

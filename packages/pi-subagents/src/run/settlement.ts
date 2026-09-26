@@ -95,6 +95,10 @@ const viewForSettlement = (
     lastActivityAt: now,
     currentTool: undefined,
     question: undefined,
+    ...(record.view.steeringDelivery === "pending" && {
+      steeringDelivery:
+        state === "completed" ? ("report-unconfirmed" as const) : ("unresolved" as const),
+    }),
     ...(state === "completed" && { reportGeneration: record.completionGeneration }),
   };
   const completed =
@@ -275,6 +279,14 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
       Effect.sync(() => {
         if (isInactiveRunRecord(record)) return false;
         record.cleanupPending = true;
+        record.backendFailure ??=
+          pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic });
+        if (
+          pendingError?._tag === "SubagentProcessError" &&
+          pendingError.code === "steer_outcome_uncertain" &&
+          !pendingError.pendingDelivery
+        )
+          record.view = { ...record.view, steeringDelivery: "unresolved" };
         record.process?.cancelPending(
           pendingError ?? new SubagentProcessError({ operation: "run", message: diagnostic }),
         );
@@ -283,12 +295,14 @@ export function makeRunSettlement(dependencies: RunSettlementDependencies) {
     ).pipe(
       Effect.flatMap((shouldFail) => {
         if (!shouldFail) return Effect.succeed(snapshotView(record.view));
-        if (record.initializationPending) return settle(record, "failed", diagnostic);
+        const primaryDiagnostic = sanitizeDiagnosticText(
+          record.backendFailure?.message ?? diagnostic,
+          MAX_ERROR_CHARS,
+        );
+        if (record.initializationPending) return settle(record, "failed", primaryDiagnostic);
         return (
-          record.process
-            ? record.process.terminate("force").pipe(Effect.catch(() => Effect.void))
-            : Effect.void
-        ).pipe(Effect.andThen(settle(record, "failed", diagnostic)));
+          record.process ? record.process.terminate("force").pipe(Effect.ignore) : Effect.void
+        ).pipe(Effect.andThen(settle(record, "failed", primaryDiagnostic)));
       }),
     );
   };

@@ -7,7 +7,11 @@ import { beforeAll, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { InvalidSubagentRequestError, SubagentNotFoundError } from "../../src/run/errors.ts";
-import type { SubagentRunView } from "../../src/run/model.ts";
+import {
+  STEERING_DELIVERY_STATES,
+  hasUnresolvedSteeringDelivery,
+  type SubagentRunView,
+} from "../../src/run/model.ts";
 import { type SubagentServiceContract } from "../../src/run/service.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
@@ -44,6 +48,45 @@ const expectInOrder = (text: string, needles: ReadonlyArray<string>, last: strin
 
 describe("subagent tool", () => {
   beforeAll(() => initTheme("dark", false));
+
+  effectTest(
+    "keeps native steering evidence in status/list/await without authorizing an uncertain retry",
+    function* () {
+      for (const steeringDelivery of STEERING_DELIVERY_STATES) {
+        const run = view({
+          state: "failed",
+          steeringDelivery,
+          remainingCandidateCount: 2,
+          retryExhausted: true,
+        });
+        const tools = captureSubagentTools(
+          subagentServiceDouble({
+            list: Effect.succeed([run]),
+            status: () => Effect.succeed(run),
+            withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use([{ run }]),
+          }),
+        );
+        for (const toolName of ["subagent_status", "subagent_list", "subagent_await"]) {
+          const response = yield* step(() =>
+            executeTool(tools.get(toolName)!, { runIds: [run.id], until: "all_finished" }),
+          );
+          expect(response.details).toMatchObject({
+            cards: [{ steeringDelivery, state: "failed" }],
+          });
+          const text = resultText(response);
+          expect(text).toContain(`steeringDelivery=${steeringDelivery}`);
+          if (toolName === "subagent_list") continue;
+          if (hasUnresolvedSteeringDelivery(run)) {
+            expect(text).toContain("Do not resend");
+            expect(text).not.toContain("action=retry");
+            expect(text).not.toContain("consider a generalist replacement");
+          }
+          if (steeringDelivery === "confirmed")
+            expect(text).toContain("does not prove the model incorporated");
+        }
+      }
+    },
+  );
 
   effectTest(
     "returns formatted status metadata and one final report without activity duplication",

@@ -82,6 +82,13 @@ export interface BackendAssistantTerminal {
 }
 
 export type BackendEvent =
+  | {
+      readonly type: "input_delivery";
+      readonly assignmentEpoch: number;
+      readonly sequence: number;
+      readonly state: import("../run/model.ts").SteeringDeliveryState;
+    }
+  | { readonly type: "backend_failure"; readonly error: SubagentProcessError }
   | { readonly type: "run_started"; readonly assignmentEpoch: number }
   | {
       readonly type: "run_settled";
@@ -150,6 +157,8 @@ export type BackendEvent =
       readonly exitCode: number | null;
       readonly signal?: string | undefined;
       readonly diagnostic: string;
+      /** Primary backend cause, latched before a termination request. */
+      readonly failure?: SubagentProcessError | undefined;
     };
 
 export type BackendExit = Extract<BackendEvent, { readonly type: "exit" }>;

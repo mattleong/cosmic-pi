@@ -81,6 +81,7 @@ const SystemInit = Schema.Struct({
     }),
   ),
   mcp_server_errors: Schema.optional(Schema.Array(Schema.Unknown)),
+  claude_code_version: Schema.optional(Name),
 });
 const SystemEvent = Schema.Struct({
   type: Schema.Literal("system"),
@@ -151,6 +152,7 @@ export type ClaudeProtocolEvent =
       readonly sessionId: string;
       readonly model: string;
       readonly hasMcpServerErrors: boolean;
+      readonly cliVersion?: string | undefined;
     }
   | {
       readonly type: "user";
@@ -316,6 +318,7 @@ export const decodeClaudeProtocolEvent = <ValueInput>(
           sessionId: event.session_id,
           model: event.model,
           hasMcpServerErrors: (event.mcp_server_errors?.length ?? 0) > 0,
+          cliVersion: event.claude_code_version,
         };
       }
       case "user": {

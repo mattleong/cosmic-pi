@@ -107,7 +107,23 @@ export interface SubagentWriteAudit {
   readonly bashWriteHints: number;
 }
 
+/** Native guidance delivery only; never evidence that the model incorporated it. */
+export const STEERING_DELIVERY_STATES = [
+  "pending",
+  "confirmed",
+  "not-sent",
+  "report-unconfirmed",
+  "unresolved",
+] as const;
+export type SteeringDeliveryState = (typeof STEERING_DELIVERY_STATES)[number];
+
+/** Delivery uncertainty blocks replacement even after process cleanup is confirmed. */
+export const hasUnresolvedSteeringDelivery = (run: {
+  readonly steeringDelivery?: SteeringDeliveryState | undefined;
+}): boolean => run.steeringDelivery === "pending" || run.steeringDelivery === "unresolved";
+
 export interface SubagentRunView {
+  readonly steeringDelivery?: SteeringDeliveryState | undefined;
   readonly id: string;
   readonly name: string;
   readonly task: string;

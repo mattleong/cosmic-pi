@@ -282,6 +282,7 @@ const projectOptionalCardFields = (
       warningSource: run.warningSource,
     }),
     ...(systemWarning !== undefined && { systemWarning }),
+    ...(run.steeringDelivery !== undefined && { steeringDelivery: run.steeringDelivery }),
     ...(endedAt !== undefined && { endedAt }),
     ...(question !== undefined && { question: { message: question } }),
   };

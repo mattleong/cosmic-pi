@@ -3,6 +3,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+import { SubagentBackendRegistry, makeSubagentBackendRegistry } from "../../src/backend/service.ts";
+import { processError } from "../../src/run/errors.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import type { ProfileRouteContinuation } from "../../src/profiles/model.ts";
 import { getFailedStartRecovery } from "../../src/run/launch.ts";
@@ -10,6 +14,9 @@ import type { StartSubagentRequest } from "../../src/run/model.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
   fakeChildLayer,
+  fakeRetainedBackendLayer,
+  retainedServiceFixture,
+  retainedRequest,
   request,
   localServiceFixture,
   withService,
@@ -50,6 +57,168 @@ const startFailedReviewer = (
   });
 
 describe("explicit profile-route retry", () => {
+  for (const cleanupFailure of [false, true])
+    it.effect(
+      `terminal unresolved steering blocks retry and notifications with ${cleanupFailure ? "quarantined" : "confirmed"} cleanup`,
+      () => {
+        const backend = fakeRetainedBackendLayer();
+        const registry = cleanupFailure
+          ? Layer.effect(
+              SubagentBackendRegistry,
+              SubagentBackendRegistry.use((registry) =>
+                registry.resolve({ host: "herdr", runtime: "claude", context: "fresh" }).pipe(
+                  Effect.map((driver) =>
+                    makeSubagentBackendRegistry([
+                      {
+                        ...driver,
+                        spawn: (launch) =>
+                          driver
+                            .spawn(launch)
+                            .pipe(
+                              Effect.tap(() =>
+                                Effect.addFinalizer(() =>
+                                  Effect.die(
+                                    processError(
+                                      "close",
+                                      "process_cleanup_unconfirmed",
+                                      "Fixture cleanup could not be confirmed.",
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                      },
+                    ]),
+                  ),
+                  Effect.orDie,
+                ),
+              ),
+            ).pipe(Layer.provide(backend.layer))
+          : backend.layer;
+        const { layer, projections, notifications } = retainedServiceFixture({
+          ...backend,
+          layer: registry,
+        });
+        return withService(layer, function* (service) {
+          const run = yield* service.start(
+            retainedRequest({
+              closeOnReport: true,
+              profile: "reviewer",
+              routeContinuation: continuation(0),
+            }),
+          );
+          const control = backend.controls[0]!;
+          control.offer({
+            type: "input_delivery",
+            assignmentEpoch: 1,
+            sequence: 1,
+            state: "pending",
+          });
+          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "pending");
+          const failure = processError(
+            "steer",
+            "steer_outcome_uncertain",
+            "Primary acknowledgement watchdog failure.",
+          );
+          control.offer({ type: "backend_failure", error: failure });
+          control.offer({
+            type: "exit",
+            exitCode: null,
+            diagnostic: "Generic exit must not replace the primary cause.",
+          });
+          yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+          yield* TestClock.adjust("100 millis");
+          yield* yieldUntil(() =>
+            notifications.some((notification) => notification.type === "completed"),
+          );
+          yield* service.stop(run.id);
+          expect(yield* service.status(run.id)).toMatchObject({
+            state: "failed",
+            steeringDelivery: "unresolved",
+            error: "Primary acknowledgement watchdog failure.",
+          });
+          expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
+            code: "retry_outcome_uncertain",
+          });
+          if (cleanupFailure)
+            expect((yield* service.status(run.id)).warning).toContain("quarantined");
+          else expect(control.released()).toBe(1);
+          expect(
+            notifications.some(
+              (notification) =>
+                notification.type === "completed" &&
+                notification.runs.some((entry) => entry.retryAvailable),
+            ),
+          ).toBe(false);
+        });
+      },
+    );
+
+  it.effect(
+    "typed exit uncertainty blocks retry even when pending delivery metadata never drained",
+    () => {
+      const { backend, layer, projections } = retainedServiceFixture();
+      return withService(layer, function* (service) {
+        const run = yield* service.start(
+          retainedRequest({
+            closeOnReport: true,
+            profile: "reviewer",
+            routeContinuation: continuation(0),
+          }),
+        );
+        backend.controls[0]!.offer({
+          type: "exit",
+          exitCode: null,
+          diagnostic: "generic exit",
+          failure: processError(
+            "steer",
+            "steer_outcome_uncertain",
+            "Native write acknowledgement unknown.",
+          ),
+        });
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+        yield* service.stop(run.id);
+        expect(yield* service.status(run.id)).toMatchObject({
+          steeringDelivery: "unresolved",
+          error: "Native write acknowledgement unknown.",
+        });
+        expect(yield* Effect.flip(service.claimRetryContinuation(run.id))).toMatchObject({
+          code: "retry_outcome_uncertain",
+        });
+      });
+    },
+  );
+
+  it.effect("resolved transient steering does not poison assignment retry eligibility", () => {
+    const { backend, layer, projections } = retainedServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(
+        retainedRequest({
+          closeOnReport: true,
+          profile: "reviewer",
+          routeContinuation: continuation(0),
+        }),
+      );
+      const control = backend.controls[0]!;
+      control.offer({ type: "input_delivery", assignmentEpoch: 1, sequence: 1, state: "pending" });
+      control.offer({
+        type: "input_delivery",
+        assignmentEpoch: 1,
+        sequence: 1,
+        state: "confirmed",
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.steeringDelivery === "confirmed");
+      control.offer({
+        type: "backend_failure",
+        error: processError("run", "unrelated_failure", "Unrelated failure."),
+      });
+      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
+      yield* service.stop(run.id);
+      expect((yield* service.claimRetryContinuation(run.id)).source.steeringDelivery).toBe(
+        "confirmed",
+      );
+    });
+  });
   it.effect("acknowledges retry ownership without making its waiter uncancellable", () => {
     const promptGate = Deferred.makeUnsafe<void>();
     const owned = Deferred.makeUnsafe<void>();
