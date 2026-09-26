@@ -38,6 +38,14 @@ export type WorkspaceMessage = {
   readonly text: string;
 };
 
+export interface ModelPickerOpening {
+  /** Start on the runtime's advertised default instead of the configured model. */
+  readonly preferAdvertisedDefault?: boolean | undefined;
+  readonly priorNotices?: ReadonlyArray<string> | undefined;
+  /** Claude or Codex route that takes its model from this picker's live catalog. */
+  readonly nativeSwitch?: Pick<ProfileCandidate, "host" | "runtime"> | undefined;
+}
+
 /** The fixed-target editor's synchronous state. The dashboard owns its lifetime. */
 export abstract class ProfileWorkspaceState {
   protected inspection: ProfileSettingsInspection;
@@ -291,7 +299,6 @@ export abstract class ProfileWorkspaceState {
   }
   protected abstract openModelPicker(
     candidate: ProfileCandidate,
-    preferAdvertisedDefault?: boolean,
-    priorNotices?: ReadonlyArray<string>,
+    opening?: ModelPickerOpening,
   ): void;
 }

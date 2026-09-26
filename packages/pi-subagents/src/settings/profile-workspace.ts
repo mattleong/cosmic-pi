@@ -67,6 +67,7 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
     candidateIndex: number,
     candidate: ProfileCandidate,
     signal?: AbortSignal,
+    modelPending?: boolean,
   ) => Promise<CandidateModelPickerData>;
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,

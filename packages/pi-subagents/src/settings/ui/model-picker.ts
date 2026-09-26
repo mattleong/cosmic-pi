@@ -58,7 +58,10 @@ export function createPiModelOptions(input: {
   ];
 }
 
-const nativeModelStatus = (model: NativeRuntimeModel, currentSelector: string): string => {
+const nativeModelStatus = (
+  model: NativeRuntimeModel,
+  currentSelector: string | undefined,
+): string => {
   const labels = [
     model.isDefault ? "default" : undefined,
     model.selector === currentSelector ? "current" : undefined,
@@ -68,7 +71,7 @@ const nativeModelStatus = (model: NativeRuntimeModel, currentSelector: string): 
 
 export const createNativeModelOptions = (
   models: ReadonlyArray<NativeRuntimeModel>,
-  currentSelector: string,
+  currentSelector: string | undefined,
 ): ProfileModelOption[] =>
   models
     .filter((model) => isSafeNativeModelSelector(model.selector))

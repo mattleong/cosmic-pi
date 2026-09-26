@@ -188,6 +188,63 @@ describe("candidate menu actions", () => {
   );
 });
 
+describe("runtime switches", () => {
+  const liveCatalogEditor = () => {
+    const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
+      (profile, candidateIndex, candidate) =>
+        Promise.resolve({
+          choices: ["live-older", "live-default"].map((selector) => ({
+            provider: candidate.runtime,
+            id: selector,
+            selector,
+            fastModeAvailable: false,
+          })),
+          current: candidate.model,
+          defaultSelector: "live-default",
+          context: { profile, candidateIndex, host: candidate.host, runtime: candidate.runtime },
+        }),
+    );
+    const editor = workspaceHarness({ loadModelPicker }, [profileCandidate("test/first")]);
+    const chooseRunWith = (value: string): void => {
+      editor.component.handleInput("r");
+      editor.component.handleInput("/");
+      for (const key of value) editor.component.handleInput(key);
+      editor.component.handleInput("\r");
+    };
+    return { ...editor, loadModelPicker, chooseRunWith };
+  };
+
+  effectTest("takes a Codex model from the live catalog, not the previous runtime", function* () {
+    const editor = liveCatalogEditor();
+    editor.chooseRunWith("local/codex");
+    yield* step(settleTurn);
+    expect(editor.loadModelPicker).toHaveBeenCalledWith(
+      "generalist",
+      0,
+      expect.objectContaining({ host: "local", runtime: "codex" }),
+      expect.anything(),
+      true,
+    );
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+
+    editor.component.handleInput("\r");
+    yield* step(settleTurn);
+    expect(editor.candidates()).toEqual([
+      expect.objectContaining({ host: "local", runtime: "codex", model: "live-default" }),
+    ]);
+  });
+
+  effectTest("leaves the route unchanged when the model choice is cancelled", function* () {
+    const editor = liveCatalogEditor();
+    editor.chooseRunWith("local/claude");
+    yield* step(settleTurn);
+    editor.component.handleInput("\u001b");
+    yield* step(settleTurn);
+    expect(editor.saveDraft).not.toHaveBeenCalled();
+    expect(editor.candidates()).toEqual([profileCandidate("test/first")]);
+  });
+});
+
 describe("profile workspace navigation", () => {
   effectTest(
     "honors configured confirmation and cancellation without bypassing the warning",

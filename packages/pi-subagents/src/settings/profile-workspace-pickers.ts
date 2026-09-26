@@ -2,15 +2,16 @@
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
-import { updateCandidateModel } from "./profile-route-editor.ts";
+import { updateCandidateControls, updateCandidateModel } from "./profile-route-editor.ts";
 import { makeProfileModelPickerPage } from "./ui/model-picker.ts";
-import type { SelectableCandidateField } from "./ui/profile-workspace-model.ts";
+import { runWithChoice, type SelectableCandidateField } from "./ui/profile-workspace-model.ts";
 import {
   makeCandidateFieldSelector,
   makeProfileSearchSelector,
   shortTargetLabel,
 } from "./ui/profile-workspace-selectors.ts";
 import { ProfileWorkspaceSave } from "./profile-workspace-save.ts";
+import type { ModelPickerOpening } from "./profile-workspace-state.ts";
 export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
   protected beginCatalogLoad(message: string): AbortController {
     const controller = new AbortController();
@@ -80,15 +81,19 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         supportedEfforts,
         fastModeAvailable,
         notice,
-        select: (update) => {
+        select: (update, value) => {
           this.selectPage = undefined;
           this.candidateIndex = candidateIndex;
-          if (
-            field === "runWith" &&
-            update.candidate &&
-            update.candidate.runtime !== candidate.runtime
-          ) {
-            this.openModelPicker(update.candidate, true, update.notices);
+          const runWith = field === "runWith" ? runWithChoice(value) : undefined;
+          if (runWith && runWith.runtime !== candidate.runtime && runWith.runtime !== "pi") {
+            this.openModelPicker(candidate, { nativeSwitch: runWith });
+            return;
+          }
+          if (runWith && update.candidate && update.candidate.runtime !== candidate.runtime) {
+            this.openModelPicker(update.candidate, {
+              preferAdvertisedDefault: true,
+              priorNotices: update.notices,
+            });
             return;
           }
           this.applyCandidateUpdate(update);
@@ -137,11 +142,8 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       });
   }
 
-  protected openModelPicker(
-    candidate: ProfileCandidate,
-    preferAdvertisedDefault = false,
-    priorNotices: ReadonlyArray<string> = [],
-  ): void {
+  protected openModelPicker(candidate: ProfileCandidate, opening: ModelPickerOpening = {}): void {
+    const { nativeSwitch, priorNotices = [] } = opening;
     const candidateIndex = this.addingCandidate
       ? this.draft().candidates.length
       : this.candidateIndex;
@@ -149,7 +151,13 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
       this.addingCandidate ? "Choose a model for the new fallback…" : "Loading models…",
     );
     void this.options
-      .loadModelPicker(this.profile(), candidateIndex, candidate, controller.signal)
+      .loadModelPicker(
+        this.profile(),
+        candidateIndex,
+        nativeSwitch ? { ...candidate, ...nativeSwitch } : candidate,
+        controller.signal,
+        nativeSwitch !== undefined,
+      )
       .then((picker) => {
         if (!this.finishCatalogLoad(controller)) return;
         if (picker.choices.length === 0) {
@@ -165,22 +173,37 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           ...this.selectorHost(),
           choices: picker.choices,
           scopedChoices: picker.scopedChoices,
-          initialSelection: preferAdvertisedDefault
-            ? (picker.defaultSelector ?? picker.current)
-            : picker.current,
+          initialSelection:
+            opening.preferAdvertisedDefault || nativeSwitch
+              ? (picker.defaultSelector ?? picker.current)
+              : picker.current,
           context: picker.context,
           targetLabel: shortTargetLabel(this.options.target),
           notice: picker.warning,
           select: (option) => {
             this.modelPicker = undefined;
             if (!this.addingCandidate) this.candidateIndex = candidateIndex;
+            // Runtime and model commit together, so a native switch applies only on selection.
+            const switched = nativeSwitch
+              ? updateCandidateControls(candidate, nativeSwitch, {
+                  piModel: this.options.preferredPiModel(),
+                  nativeModel: option.selector,
+                })
+              : { candidate, notices: [] };
+            if (!switched.candidate) {
+              this.applyCandidateUpdate(switched);
+              return;
+            }
             const update = updateCandidateModel(
-              candidate,
+              switched.candidate,
               option.selector,
               option.supportedEfforts,
               option.fastModeAvailable,
             );
-            this.applyCandidateUpdate({ ...update, notices: [...priorNotices, ...update.notices] });
+            this.applyCandidateUpdate({
+              ...update,
+              notices: [...priorNotices, ...switched.notices, ...update.notices],
+            });
           },
           cancel: () => {
             this.modelPicker = undefined;

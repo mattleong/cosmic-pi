@@ -51,7 +51,7 @@ export interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly notice?: string | undefined;
-  readonly select: (update: CandidateUpdate) => void;
+  readonly select: (update: CandidateUpdate, value: string) => void;
   readonly cancel: () => void;
 }
 
@@ -112,7 +112,10 @@ export const makeCandidateFieldSelector = (
     matchesKeybinding: options.matchesKeybinding,
     keybindingLabel: options.keybindingLabel,
     select: (value: string) =>
-      options.select(selectCandidateField(options.candidate, options.field, value, changeOptions)),
+      options.select(
+        selectCandidateField(options.candidate, options.field, value, changeOptions),
+        value,
+      ),
     cancel: options.cancel,
   });
 };

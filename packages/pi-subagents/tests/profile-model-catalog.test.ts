@@ -272,6 +272,20 @@ describe("profile model catalog", () => {
         });
         expect(fastModeFor(fallback)).toBe(false);
         expect(hasTerminalControls(fallback.warning ?? "")).toBe(false);
+
+        // A runtime switch offers only live models, never the previous runtime's model.
+        const switching = profileCandidate("openai-codex/gpt-5.6-sol", { runtime: "codex" });
+        const pending = yield* loadPicker(catalog, switching, {
+          listNativeModels: () => Promise.resolve([advertised]),
+          modelPending: true,
+        });
+        expect(pending.choices.map((option) => option.selector)).toEqual([advertised.selector]);
+        expect(pending.defaultSelector).toBe(advertised.selector);
+        const offline = yield* loadPicker(catalog, switching, {
+          listNativeModels: () => Promise.reject(new Error("catalog failed")),
+          modelPending: true,
+        });
+        expect(offline.choices).toEqual([]);
       }),
   );
 });

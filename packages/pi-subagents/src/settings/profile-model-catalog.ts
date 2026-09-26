@@ -8,7 +8,6 @@ import type { NativeRuntimeModel } from "../boundary/native-model-catalog.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import {
   isSafeNativeModelSelector,
-  PROFILE_NATIVE_MODEL_DEFAULTS,
   type ProfileCandidate,
   type ProfileId,
 } from "../profiles/model.ts";
@@ -171,21 +170,20 @@ export interface CandidateModelPickerInput {
   readonly piCatalog: ProfileModelCatalogSnapshot;
   readonly parentSelector?: string | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** A runtime switch: the candidate's model belongs to its previous runtime and is not offered. */
+  readonly modelPending?: boolean | undefined;
 }
 
-const nativeFallbackModels = (
-  runtime: LocalCliRuntime,
-  current: string,
-): ReadonlyArray<NativeRuntimeModel> =>
-  [...new Set([current, PROFILE_NATIVE_MODEL_DEFAULTS[runtime]])].map((selector, index) => ({
-    selector,
-    label: selector,
-    description: index === 0 ? "Current model" : `Default ${runtimeLabel(runtime)} model`,
-    supportedEfforts: runtimeEfforts(runtime),
-    // Fast mode for Codex is live catalog data. Fallback selectors never infer a tier.
-    supportedServiceTiers: [],
-    isDefault: selector === PROFILE_NATIVE_MODEL_DEFAULTS[runtime],
-  }));
+/** Keeps the configured model selectable when the live catalog omits it or cannot load. */
+const configuredNativeModel = (runtime: LocalCliRuntime, current: string): NativeRuntimeModel => ({
+  selector: current,
+  label: current,
+  description: "Current model",
+  supportedEfforts: runtimeEfforts(runtime),
+  // Fast mode for Codex is live catalog data. Fallback selectors never infer a tier.
+  supportedServiceTiers: [],
+  isDefault: false,
+});
 
 const pickerContext = (input: CandidateModelPickerInput): ProfileModelPickerContext => ({
   profile: input.profile,
@@ -217,18 +215,23 @@ const loadNativeModels = (input: CandidateModelPickerInput): Promise<CandidateMo
       },
       (error): NativeModelLoadFailure => ({
         models: [],
-        warning:
+        warning: `${
           error instanceof Error
-            ? `${sanitizeTerminalLine(error.message)} Showing the current and default models instead.`
-            : `Could not load ${runtimeLabel(runtime)} models. Showing the current and default models instead.`,
+            ? sanitizeTerminalLine(error.message)
+            : `Could not load ${runtimeLabel(runtime)} models.`
+        }${input.modelPending ? "" : " Showing the current model instead."}`,
       }),
     )
     .then(({ models, warning }) => {
+      const current = input.modelPending ? undefined : input.candidate.model;
       const catalog = new Map<string, NativeRuntimeModel>();
-      for (const model of [...models, ...nativeFallbackModels(runtime, input.candidate.model)])
+      for (const model of [
+        ...models,
+        ...(current ? [configuredNativeModel(runtime, current)] : []),
+      ])
         if (!catalog.has(model.selector)) catalog.set(model.selector, model);
       const base = {
-        choices: createNativeModelOptions([...catalog.values()], input.candidate.model),
+        choices: createNativeModelOptions([...catalog.values()], current),
         current: input.candidate.model,
         defaultSelector:
           models.find((model) => model.isDefault)?.selector ??

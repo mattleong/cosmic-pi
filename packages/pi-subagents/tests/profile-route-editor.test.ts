@@ -248,13 +248,17 @@ describe("ordered profile-route editor state", () => {
 describe("profile candidate normalization and validation", () => {
   it("adds all six host/runtime combinations with product-valid defaults", () => {
     let draft: ProfileRouteDraft = disableRouteDraft();
+    const nativeModels = { claude: "live-claude", codex: "live-codex" } as const;
     for (const host of ["local", "herdr"] as const) {
       for (const runtime of ["pi", "claude", "codex"] as const) {
         let current = candidate("parent", { effort: "default" });
         const runtimeUpdate = updateCandidateControls(
           current,
           { runtime },
-          { piModel: "openai-codex/gpt-5.6-sol" },
+          {
+            piModel: "openai-codex/gpt-5.6-sol",
+            nativeModel: runtime === "pi" ? undefined : nativeModels[runtime],
+          },
         );
         expect(runtimeUpdate.error).toBeUndefined();
         current = runtimeUpdate.candidate!;
@@ -268,8 +272,7 @@ describe("profile candidate normalization and validation", () => {
         expect(candidateValidationError(current), `${host}/${runtime}`).toBeUndefined();
         if (host === "herdr" && runtime === "pi")
           expect(current.model).toBe("openai-codex/gpt-5.6-sol");
-        if (runtime === "claude") expect(current.model).toBe("opus");
-        if (runtime === "codex") expect(current.model).toBe("gpt-5.6-codex");
+        if (runtime !== "pi") expect(current.model).toBe(nativeModels[runtime]);
         draft = addRouteCandidate(draft, current)!;
       }
     }
@@ -300,14 +303,30 @@ describe("profile candidate normalization and validation", () => {
     expect(local.candidate).toMatchObject({ host: "local", closeOnReport: true });
     expect(local.notices.join(" ")).toContain("stay open after reporting");
 
+    const forked = candidate("parent", {
+      context: "fork",
+      effort: "minimal",
+      openaiFastMode: true,
+    });
+    // Claude and Codex have no built-in model; the switch waits for one from the live catalog.
+    for (const runtime of ["claude", "codex"] as const) {
+      const pending = updateCandidateControls(
+        forked,
+        { runtime },
+        { piModel: "openai-codex/gpt-5.6-sol" },
+      );
+      expect(pending.candidate).toBeUndefined();
+      expect(pending.error).toBeDefined();
+    }
+
     const claude = updateCandidateControls(
-      candidate("parent", { context: "fork", effort: "minimal", openaiFastMode: true }),
+      forked,
       { runtime: "claude" },
-      { piModel: "openai-codex/gpt-5.6-sol" },
+      { piModel: "openai-codex/gpt-5.6-sol", nativeModel: "live-claude" },
     );
     expect(claude.candidate).toMatchObject({
       runtime: "claude",
-      model: "opus",
+      model: "live-claude",
       context: "fresh",
       effort: "default",
       openaiFastMode: false,

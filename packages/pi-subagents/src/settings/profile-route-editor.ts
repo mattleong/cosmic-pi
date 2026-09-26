@@ -7,7 +7,6 @@ import {
   MAX_PROFILE_CANDIDATES,
   normalizeProfileCandidate as cloneCandidate,
   normalizeDeclaredProfileRoute,
-  PROFILE_NATIVE_MODEL_DEFAULTS,
   profileCandidateValidationIssues,
   supportsSubagentFastMode,
   type DeclaredProfileRoute,
@@ -51,6 +50,8 @@ export interface ProfileRouteDraft {
 export interface CandidateControlDefaults {
   /** First authenticated canonical Pi model, used when `parent` becomes unavailable. */
   readonly piModel?: string | undefined;
+  /** Claude or Codex model picked from that runtime's live catalog; neither has a built-in default. */
+  readonly nativeModel?: string | undefined;
 }
 
 export interface CandidateUpdate {
@@ -275,13 +276,14 @@ export function updateCandidateControls(
 
   if (patch.runtime !== undefined && patch.runtime !== candidate.runtime) {
     const model =
-      patch.runtime === "pi"
-        ? replacementPiModel(next.host, defaults)
-        : PROFILE_NATIVE_MODEL_DEFAULTS[patch.runtime];
+      patch.runtime === "pi" ? replacementPiModel(next.host, defaults) : defaults.nativeModel;
     if (!model)
       return {
         notices,
-        error: "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in.",
+        error:
+          patch.runtime === "pi"
+            ? "Herdr Pi needs a Pi model, but none is available. Check that Pi is signed in."
+            : `Choose a ${runtimeLabel(patch.runtime)} model.`,
       };
     next = { ...next, model };
     notices.push(`Model changed to ${model} for ${runtimeLabel(patch.runtime)}.`);

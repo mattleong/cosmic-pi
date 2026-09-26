@@ -210,7 +210,7 @@ export function openProfileDashboard(
             ...fullScreenKeybindingOptions(keybindings),
             close: () => finish(undefined),
             saveDraft,
-            loadModelPicker: (profile, candidateIndex, candidate, signal) =>
+            loadModelPicker: (profile, candidateIndex, candidate, signal, modelPending) =>
               loadCandidateModelPicker({
                 profile,
                 candidateIndex,
@@ -219,6 +219,7 @@ export function openProfileDashboard(
                 piCatalog: modelCatalog.capture(),
                 parentSelector: parentModel,
                 signal,
+                modelPending,
               }),
             supportedPiEfforts: (candidate) =>
               supportedPiEfforts({

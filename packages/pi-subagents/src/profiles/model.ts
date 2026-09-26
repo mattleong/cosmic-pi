@@ -40,11 +40,6 @@ export const PROFILE_CANDIDATE_RUNTIMES = ["pi", "claude", "codex"] as const;
 export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
 export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
 export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
-export const PROFILE_NATIVE_MODEL_DEFAULTS = {
-  // An alias, so the Claude CLI decides which Opus model it names.
-  claude: "opus",
-  codex: "gpt-5.6-codex",
-} as const;
 export type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 
 const SAFE_NATIVE_MODEL_SELECTOR = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*(?:\[[1-9][0-9]*[kKmM]\])?$/;

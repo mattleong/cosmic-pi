@@ -238,6 +238,13 @@ const RUN_WITH_CHOICES = (["local", "herdr"] as const).flatMap((host) =>
   })),
 );
 
+export const runWithChoice = (
+  value: string,
+): Pick<ProfileCandidate, "host" | "runtime"> | undefined => {
+  const choice = RUN_WITH_CHOICES.find((entry) => entry.value === value);
+  return choice && { host: choice.host, runtime: choice.runtime };
+};
+
 export const candidateFieldChoices = (
   candidate: ProfileCandidate,
   field: SelectableCandidateField,
@@ -330,7 +337,7 @@ export function selectCandidateField(
   if (!candidateFieldChoices(candidate, field, options).some((choice) => choice.value === value))
     return { error: `Invalid ${field} selection.`, notices: [] };
   if (field === "runWith") {
-    const choice = RUN_WITH_CHOICES.find((entry) => entry.value === value);
+    const choice = runWithChoice(value);
     return choice
       ? updateCandidateControls(
           candidate,
