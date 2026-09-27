@@ -1,5 +1,6 @@
 import type {
   BackgroundLogMetadataSchema,
+  BackgroundTaskDetailsSnapshotSchema,
   BackgroundTaskSnapshotSchema,
   BackgroundTaskStateSchema,
   BackgroundTaskWaitResultSchema,
@@ -7,6 +8,8 @@ import type {
 
 export type BackgroundTaskState = typeof BackgroundTaskStateSchema.Type;
 export type BackgroundTaskSnapshot = typeof BackgroundTaskSnapshotSchema.Type;
+/** The service's snapshot: the v1 member plus the details-only `failureLine`. */
+export type BackgroundTaskDetailsSnapshot = typeof BackgroundTaskDetailsSnapshotSchema.Type;
 export type BackgroundLogMetadata = typeof BackgroundLogMetadataSchema.Type;
 export type BackgroundTaskWaitResult = typeof BackgroundTaskWaitResultSchema.Type;
 

@@ -67,17 +67,31 @@ export const BackgroundTaskWaitResultSchema = Schema.Struct({
 });
 
 /**
- * Persisted `background_task` result details: metadata only, never command output. Older `logs`
- * details also carried `events: []` and Pi's full TruncationResult; decoding ignores those extras.
+ * A details snapshot: the frozen v1 member plus `failureLine`, the one exception to metadata-only
+ * details. It is the first line of a failed task's output that names the failure, captured once at
+ * exit, redacted and bounded, so the transcript can say why without storing output. It never
+ * enters the Code Mode contract, whose decoder drops it.
+ */
+export const BackgroundTaskDetailsSnapshotSchema = Schema.Struct({
+  ...BackgroundTaskSnapshotSchema.fields,
+  failureLine: Schema.optionalKey(MaxChars(BOUNDS.maxFailureLineChars)),
+});
+
+/**
+ * Persisted `background_task` result details: metadata only, never command output, apart from a
+ * snapshot's bounded `failureLine`. Older `logs` details also carried `events: []` and Pi's full
+ * TruncationResult; decoding ignores those extras.
  */
 export const BackgroundTaskDetailsSchema = Schema.Union([
   Schema.Struct({
     action: Schema.Literals(["start", "status", "stop"]),
-    snapshot: BackgroundTaskSnapshotSchema,
+    snapshot: BackgroundTaskDetailsSnapshotSchema,
   }),
   Schema.Struct({
     action: Schema.Literals(["list", "stop_all"]),
-    tasks: BackgroundTaskSnapshotsSchema,
+    tasks: Schema.Array(BackgroundTaskDetailsSnapshotSchema).check(
+      Schema.isMaxLength(BOUNDS.maxSnapshots),
+    ),
   }),
   Schema.Struct({
     action: Schema.Literal("logs"),
@@ -92,6 +106,12 @@ export const BackgroundTaskDetailsSchema = Schema.Union([
       }),
     ),
   }),
-  Schema.Struct({ action: Schema.Literal("wait"), wait: BackgroundTaskWaitResultSchema }),
+  Schema.Struct({
+    action: Schema.Literal("wait"),
+    wait: Schema.Struct({
+      ...BackgroundTaskWaitResultSchema.fields,
+      snapshot: BackgroundTaskDetailsSnapshotSchema,
+    }),
+  }),
   Schema.Struct({ action: Schema.Literal("clear"), removed: Schema.Natural }),
 ]);

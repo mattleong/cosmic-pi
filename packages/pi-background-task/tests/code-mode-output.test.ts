@@ -91,7 +91,8 @@ describe("Background Tasks Code Mode output projection", () => {
   });
 
   it("returns frozen detached snapshots without undeclared producer fields", () => {
-    const producerSnapshot = { ...snapshot, internalOnly: "remove me" };
+    // The details-only failure line never enters the frozen Code Mode contract.
+    const producerSnapshot = { ...snapshot, internalOnly: "remove me", failureLine: "FAIL x" };
     const result: BackgroundTaskCommandResult = {
       text: "bg-1 running",
       details: { action: "list", tasks: [producerSnapshot] },
@@ -101,6 +102,7 @@ describe("Background Tasks Code Mode output projection", () => {
     if (projection._tag !== "Accepted" || projection.output.action !== "list") return;
     expect(projection.output.tasks).toEqual([snapshot]);
     expect(projection.output.tasks[0]).not.toHaveProperty("internalOnly");
+    expect(projection.output.tasks[0]).not.toHaveProperty("failureLine");
     expect(projection.output.tasks[0]).not.toBe(producerSnapshot);
     expect(Object.isFrozen(producerSnapshot)).toBe(false);
     expect(Object.isFrozen(projection.output.tasks[0])).toBe(true);

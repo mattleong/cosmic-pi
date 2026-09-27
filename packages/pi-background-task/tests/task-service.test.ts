@@ -23,6 +23,7 @@ import { normalizeConfig } from "../src/config/options.ts";
 import { BackgroundTaskConfigStore } from "../src/config/store.ts";
 import type { BackgroundTaskConfig } from "../src/config/schema.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
+import type { BackgroundTaskDetailsSnapshot } from "../src/task/model.ts";
 import type {
   BackgroundTaskState,
   BackgroundTaskProjection,
@@ -465,6 +466,37 @@ describe("BackgroundTaskService", () => {
         outcome: "completed",
         snapshot: { state: "failed", exitCode: 1 },
       });
+    });
+  });
+
+  it.effect("keeps one redacted, bounded line of a failed task's output", () => {
+    const harness = serviceHarness();
+    return harness.run(function* (service) {
+      const started = yield* service.start(taskInput({ command: "check" }));
+      yield* emitAndRead(service, harness.controls[0], started.id, 0, "building\n> vitest run\n");
+      yield* emitAndRead(
+        service,
+        harness.controls[0],
+        started.id,
+        1,
+        `FAIL tests/auth.test.ts token=hunter2secret ${"x".repeat(200)}\nnpm ERR! code 1\n`,
+        "stderr",
+      );
+      const waiting = yield* service.wait(exitWait(started.id)).pipe(forkNow);
+      harness.controls[0]?.complete({ exitCode: 1 });
+      const failed: BackgroundTaskDetailsSnapshot = (yield* Fiber.join(waiting)).snapshot;
+      expect(failed).toMatchObject({ state: "failed", exitCode: 1 });
+      const line = failed.failureLine ?? "";
+      expect(line).toMatch(/^FAIL tests\/auth\.test\.ts/u);
+      expect(line).not.toContain("hunter2secret");
+      expect(line.length).toBeLessThanOrEqual(BACKGROUND_TASK_FIELD_BOUNDS.maxFailureLineChars);
+
+      // A clean exit keeps metadata only, even when its output mentions errors.
+      const clean = yield* service.start(taskInput({ command: "check" }));
+      yield* emitAndRead(service, harness.controls[1], clean.id, 0, "error handling tests ok\n");
+      const exiting = yield* service.wait(exitWait(clean.id)).pipe(forkNow);
+      harness.controls[1]?.complete({ exitCode: 0 });
+      expect((yield* Fiber.join(exiting)).snapshot).not.toHaveProperty("failureLine");
     });
   });
 

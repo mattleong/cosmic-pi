@@ -17,6 +17,7 @@ import {
   type LocalProcessExit,
   type LocalProcessHandle,
 } from "../boundary/local-process.ts";
+import { outputFailureLine } from "pi-code-previews";
 import { BackgroundTaskConfigStore } from "../config/store.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import {
@@ -33,6 +34,7 @@ import { LogBuffer, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveTaskState,
   sortTasksByActivity,
+  type BackgroundTaskDetailsSnapshot,
   type BackgroundTaskSnapshot,
   type BackgroundTaskState,
   type BackgroundLogSlice,
@@ -44,8 +46,15 @@ import {
   type WaitForBackgroundTask,
 } from "./model.ts";
 
+/** The task's latest retained output, as lines. */
+const recentOutputLines = (record: TaskRecord): string[] =>
+  readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
+    .events.map((event) => event.text)
+    .join("")
+    .split(/\r?\n/u);
+
 interface TaskRecord {
-  snapshot: BackgroundTaskSnapshot;
+  snapshot: BackgroundTaskDetailsSnapshot;
   readonly logs: LogBuffer;
   wake: Deferred.Deferred<void>;
   completion: Deferred.Deferred<BackgroundTaskSnapshot>;
@@ -224,12 +233,18 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       : exit.exitCode !== 0
         ? "failed"
         : "exited";
+    // The output that says why is only here now; keep one redacted, bounded line of it.
+    const failureLine =
+      state === "failed" ? outputFailureLine(recentOutputLines(record)) : undefined;
     record.snapshot = {
       ...record.snapshot,
       state,
       endedAt,
       exitCode: exit.exitCode,
       ...(exit.signal && { signal: exit.signal }),
+      ...(failureLine && {
+        failureLine: failureLine.slice(0, BACKGROUND_TASK_FIELD_BOUNDS.maxFailureLineChars),
+      }),
       logCursor: record.logs.nextCursor - 1,
       droppedLogBytes: record.logs.droppedBytes,
     };

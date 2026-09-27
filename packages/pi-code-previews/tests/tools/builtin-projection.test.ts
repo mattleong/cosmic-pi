@@ -94,6 +94,17 @@ describe("builtin failure classification", () => {
       const message = failed("bash", `${output}\nCommand exited with code 1`)?.issues?.[0]?.message;
       expect(message).toBe(cause ? `Exited with code 1: ${cause}` : "Exited with code 1");
     }
+    // Without a failure line, a conventional exit code says what happened; an output line wins.
+    expect(failed("bash", "Command exited with code 127")?.issues?.[0]?.message).toBe(
+      "Exited with code 127: command not found",
+    );
+    expect(
+      failed("bash", "sh: foo: command not found\nCommand exited with code 127")?.issues?.[0]
+        ?.message,
+    ).toBe("Exited with code 127: command not found");
+    expect(
+      failed("bash", "Error: out of heap\nCommand exited with code 137")?.issues?.[0]?.message,
+    ).toBe("Exited with code 137: out of heap");
     const secret = failed("bash", "error: token=hunter2secret\nCommand exited with code 1");
     expect(secret?.issues?.[0]?.message).not.toContain("hunter2secret");
     expect(secret?.issues?.[0]?.message).toContain("[REDACTED]");

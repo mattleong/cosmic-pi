@@ -1,4 +1,4 @@
-import { firstLineMessage } from "pi-code-previews";
+import { exitStatusMeaning, firstLineMessage } from "pi-code-previews";
 import type {
   CompactIssue,
   CompactOutcome,
@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type {
   BackgroundLogMetadata,
+  BackgroundTaskDetailsSnapshot,
   BackgroundTaskSnapshot,
   BackgroundTaskState,
 } from "../task/model.ts";
@@ -67,7 +68,7 @@ type TaskSummary = CompactSummary & {
   readonly issues: readonly CompactIssue[];
 };
 
-function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
+function taskSummary(value: BackgroundTaskDetailsSnapshot): TaskSummary {
   const issues: CompactIssue[] = [];
   const nonZeroExit = value.exitCode != null && value.exitCode !== 0;
   let outcome: CompactOutcome = "success";
@@ -80,28 +81,42 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   if (value.state === "stopping") issues.push(cleanupUnconfirmedIssue(value.id));
   if (value.state === "timed_out") issues.push(runtimeTimeoutIssue(value.id));
   if (outcome === "error") {
+    // The captured output line says why; a conventional exit status stands in when none did.
+    const exitCause = value.failureLine ?? exitStatusMeaning(value.exitCode);
     if (nonZeroExit)
       issues.push(
-        issue("error", `${value.id}:exit-code`, `The task exited with code ${value.exitCode}`),
+        issue(
+          "error",
+          `${value.id}:exit-code`,
+          `The task exited with code ${value.exitCode}${exitCause ? `: ${exitCause}` : ""}`,
+        ),
       );
-    if (value.signal)
+    if (value.signal) {
+      const meaning = exitStatusMeaning(undefined, value.signal);
       issues.push(
         issue(
           "error",
           `${value.id}:signal`,
           firstLineMessage(
-            `The task received signal ${sanitizeTerminalLine(value.signal)}`,
+            `The task received signal ${sanitizeTerminalLine(value.signal)}${meaning ? `: ${meaning}` : ""}`,
             "The task received a signal",
           ),
         ),
       );
+    }
     if (
       value.state === "failed" &&
       !value.error &&
       !issues.some((entry) => entry.severity === "error")
     )
       issues.push(
-        issue("error", `${value.id}:failed`, "The task failed without reporting a cause"),
+        issue(
+          "error",
+          `${value.id}:failed`,
+          value.failureLine
+            ? `The task failed: ${value.failureLine}`
+            : "The task failed without reporting a cause",
+        ),
       );
   }
   if (value.state === "exited" && value.exitCode == null)
