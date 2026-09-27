@@ -118,10 +118,17 @@ evidence remain separate.
   projects each retained call into a child row with its receipt's issues; calls still queued or
   running when the run ends say so on their own row, and delivery failure overrides a successful
   operation status. `program-issues.ts` owns the run's own issues and outcome: cancellation, the
-  program failure named from the runtime's diagnostic envelope ("Program stopped: bash pnpm lint
-  failed" only when exactly one retained failed call of that tool exists, otherwise the tool name;
-  "Syntax error (line 4): …" and similar per diagnostic kind), saved-output continuation (info),
-  output truncation, and unrecorded call details. Failed or warning calls the program handled make
+  program failure, saved-output continuation (info), output truncation, and unrecorded call
+  details. `tools/diagnostic-messages.ts` writes one human line per diagnostic kind from the
+  runtime's envelope (`No tool named pi.x`, `Timed out after 100 ms (line 1)`). A call refused
+  before its tool ran (unknown tool, invalid input, over the call limit, expired deadline) gets a
+  `not-sent:<kind>` receipt from the diagnostic on its terminal lifecycle event (`Not sent:
+unexpected field "file"`), even when the program catches it; past the limit only the first
+  refused call is listed. An unhandled failure is explained on that call's own row (`Exited with
+code 1; stopped the program`) when it is the only matching row and the collapsed tree shows it;
+  otherwise the run names the call or just the tool. Expanded views split the returned text at the
+  `notesOffset` detail into the program's output or diagnostic and the recovery text appended for
+  the agent, shown as "Agent notes". Failed or warning calls the program handled make
   the run a warning; only unsettled calls make it uncertain. Counters show `done/total calls`
   while running and `total calls · N failed` after settlement; the parent opts into measured
   timing beside that count. Child timing uses standalone visibility and formatting rules without

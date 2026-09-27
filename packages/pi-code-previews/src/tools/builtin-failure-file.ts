@@ -1,6 +1,6 @@
 import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
-import { firstLineMessage } from "./compact-issues";
+import { firstLineMessage } from "./issue-message";
 
 // The raw error line, with its code and path, stays in the expanded result.
 const filesystemFailures = [

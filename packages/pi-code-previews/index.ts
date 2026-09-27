@@ -40,11 +40,11 @@ export {
 /** One issue shape for every compact card: a human message plus expanded-only detail. */
 export {
   compactIssueSeverity,
-  firstLineMessage,
   mergeCompactIssues,
   type CompactIssue,
   type CompactIssueSeverity,
 } from "./src/tools/compact-issues";
+export { failureMessage, firstLineMessage, isAgentGuidance } from "./src/tools/issue-message";
 export { renderCompactIssues } from "./src/preview/compact-issues";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";

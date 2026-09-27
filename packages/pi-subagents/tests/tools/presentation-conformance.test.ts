@@ -19,6 +19,7 @@ import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { makeAwaitDetails, makeCompactToolDetails } from "../../src/tools/details.ts";
 import { view } from "./fixtures/tool-harness.ts";
+import { containedWriter } from "../fixtures/run-view.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -79,9 +80,9 @@ it("keeps parent recovery visible when a live panel hides partial hierarchy", ()
     harness.call({ runIds: ["target"], until: "all_finished" }, { expanded, isPartial: true });
     harness.result({ content: [], details }, { expanded, isPartial: true });
     const text = harness.render(100).join("\n");
-    expect(text.includes("grant the reviewed file")).toBe(expanded);
+    // The question itself is the attention; the reply procedure is agent detail.
+    expect(text).toContain("grant the reviewed file");
     expect(text.includes("subagent_reply")).toBe(expanded);
-    if (!expanded) expect(text).toMatch(/needs a reply/i);
     expect(text.match(/subagent_await/g)?.length).toBeGreaterThan(0);
   }
 });
@@ -336,6 +337,37 @@ it("retains unique guidance input when expansion replaces the original call head
   expect(harness.render(100).join("\n")).toContain("unique guidance evidence");
 });
 
+it("keeps agent recovery steps out of the collapsed preview style", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  const tool = registered().find((entry) => entry.name === "subagent_await")!;
+  for (const [run, human] of [
+    [view({ state: "paused" }), "is paused"],
+    [
+      view({
+        state: "waiting_for_parent",
+        question: { requestId: "q", message: "May I edit db/0007.sql?", createdAt: 1 },
+      }),
+      "May I edit db/0007.sql?",
+    ],
+    [containedWriter({ state: "running" }), "src/b.ts"],
+  ] as const) {
+    const details = makeAwaitDetails({
+      runs: [run],
+      awaitUntil: "all_finished",
+      attentionRequired: true,
+    });
+    const harness = createToolPresentationHarness(tool);
+    for (const expanded of [false, true, false]) {
+      harness.call({ runIds: [run.id], until: "all_finished" }, { expanded });
+      harness.result({ content: [], details }, { expanded });
+      const text = harness.render(120).join("\n");
+      expect(text).toContain(human);
+      // The procedure is agent detail: present only once expanded.
+      expect(/subagent_\w+\(/u.test(text)).toBe(expanded);
+    }
+  }
+});
+
 it("retains failures, cancelled waits and uncertain cleanup across expansion toggles", () => {
   const tool = registered().find((entry) => entry.name === "subagent_await")!;
   for (const scenario of [
@@ -365,7 +397,7 @@ it("retains failures, cancelled waits and uncertain cleanup across expansion tog
         // An unrecognised worker error explains itself with its first line.
         if (scenario.error) expect(text).toContain(scenario.error);
         if (scenario.cancelled) expect(text).toMatch(/workers were not stopped/i);
-        if (scenario.state === "stopping") expect(text).toMatch(/cleanup is not yet confirmed/i);
+        if (scenario.state === "stopping") expect(text).toMatch(/stopping.*cleanup/i);
       }
       if (expanded && scenario.error) expect(text.split(scenario.error)).toHaveLength(2);
       if (scenario.cancelled) expect(text.includes("completion_claim_conflict")).toBe(expanded);

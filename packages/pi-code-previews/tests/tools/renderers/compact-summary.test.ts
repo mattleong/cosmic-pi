@@ -168,7 +168,7 @@ describe("builtin compact lifecycle", () => {
       executionStarted: false,
     });
     expect(value?.outcome).toBe("error");
-    expect(value?.issues?.[0]).toMatchObject({ severity: "error", message: "Failed." });
+    expect(value?.issues?.[0]).toMatchObject({ severity: "error", message: "Failed" });
     expect(JSON.stringify(value)).not.toMatch(/Retry later|applied|new file/iu);
     expect(summary(tool, {}, result("Operation aborted"), "settled", { isError: true })).toEqual(
       expect.objectContaining({ outcome: "cancelled", issues: [] }),

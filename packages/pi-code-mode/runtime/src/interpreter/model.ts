@@ -317,7 +317,7 @@ export class InterpreterRuntimeError extends Data.TaggedError(
 
 export const unsupportedSyntax = (kind: string, node: AstNode): InterpreterRuntimeError =>
   new InterpreterRuntimeError(
-    `Syntax '${kind}' is not supported in CodeMode. ${supportedSyntaxMessage}`,
+    `Syntax '${kind}' is not supported in CodeMode.`,
     node,
     "UnsupportedSyntax",
     [supportedSyntaxMessage],

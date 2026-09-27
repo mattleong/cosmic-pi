@@ -25,6 +25,8 @@ export type CodeModeToolCallLifecycleEvent =
       readonly status: "succeeded" | "failed" | "cancelled";
       readonly started: boolean;
       readonly durationMs: number;
+      /** A failed call's normalized diagnostic, as the program would see it. */
+      readonly failure?: { readonly kind: string; readonly message: string };
     };
 
 export interface CodeModeDiagnostic {

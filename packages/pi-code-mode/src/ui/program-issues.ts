@@ -2,90 +2,144 @@
 import {
   compactIssueSeverity,
   firstLineMessage,
+  selectCompactChildren,
   type CompactChild,
   type CompactIssue,
   type CompactOutcome,
 } from "pi-code-previews";
 import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
+import {
+  describeProgramFailure,
+  nestedToolName,
+  parseProgramDiagnostic,
+} from "../tools/diagnostic-messages.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
 export const TRUNCATED_OUTPUT_NOTICE =
   "Output exceeded the output limit; prior operations may already have taken effect.";
 
-/** The runtime's diagnostic envelope: `[Kind] (line L, column C) message`. */
-const ENVELOPE = /^\[([A-Za-z]+)\](?: \(line (\d+), column \d+\))? ([^\n]*)/u;
-const KIND_LABELS = new Map([
-  ["ParseError", "Syntax error"],
-  ["UnsupportedSyntax", "Unsupported syntax"],
-  ["UnknownTool", "Unknown tool"],
-  ["InvalidToolInput", "Invalid tool input"],
-  ["InvalidToolOutput", "Invalid tool output"],
-  ["InvalidDataValue", "Invalid value"],
-  ["ToolCallLimitExceeded", "Tool call limit reached"],
-  ["TimeoutExceeded", "Timed out"],
-  ["ExecutionFailure", "Program error"],
-]);
+const STOPPED = "stopped the program";
+
+/** The run's failure issue, unless a call row explains it, and the rows that may. */
+interface ProgramFailure {
+  readonly issue?: CompactIssue;
+  readonly rows: readonly CompactChild[];
+}
+
+/** The run's own issues, and its call rows with any row that explains the run's failure. */
+export interface ProgramIssues {
+  readonly issues: CompactIssue[];
+  readonly rows: readonly CompactChild[];
+}
+
+/** The row's collapsed reason says it also stopped the program. */
+const markStopped = (row: CompactChild): CompactChild => {
+  const issues = row.issues ?? [];
+  const primary =
+    issues.find((issue) => issue.severity === "error") ??
+    issues.find((issue) => issue.severity === "warning");
+  return {
+    ...row,
+    issues: primary
+      ? issues.map((issue) =>
+          issue === primary
+            ? { ...issue, message: firstLineMessage(`${issue.message}; ${STOPPED}`, issue.message) }
+            : issue,
+        )
+      : [
+          { severity: "error", code: "stopped-program", message: `Failed and ${STOPPED}` },
+          ...issues,
+        ],
+  };
+};
 
 /**
- * Name the nested call that stopped the program only when exactly one failed call of that tool
- * is retained; otherwise name just the tool rather than guess.
+ * An unhandled failure of one call is explained on that call's row when it is the only
+ * matching row and the collapsed tree shows it: a nested tool that failed, or a call refused
+ * before it ran. Otherwise the program's own issue names the call, or just the tool rather
+ * than guess.
  */
 const programFailure = (
   text: string,
   details: CodeModeRenderDetails,
   rows: readonly CompactChild[],
-): CompactIssue => {
-  const envelope = ENVELOPE.exec(text);
-  const [, kind = "", line, message = ""] = envelope ?? [];
-  const nested = kind === "ToolFailure" ? /^Nested tool '([^']+)' failed:/u.exec(message) : null;
-  if (nested?.[1]) {
-    const tool = nested[1];
-    const failed = details.toolCalls.flatMap((call, index) =>
-      call.status === "error" && (call.tool === tool || call.tool === `pi.${tool}`)
-        ? [rows[index]]
-        : [],
-    );
-    const culprit = failed.length === 1 ? failed[0] : undefined;
-    const label = culprit?.label ?? tool;
-    const subject = culprit?.compactSubject ?? culprit?.subject;
+): ProgramFailure => {
+  const diagnostic = parseProgramDiagnostic(text);
+  if (diagnostic === undefined)
     return {
+      rows,
+      issue: {
+        severity: "error",
+        code: "program-failure",
+        message: firstLineMessage(text, "The program failed"),
+      },
+    };
+  const nested =
+    diagnostic.kind === "ToolFailure"
+      ? /^Nested tool '([^']+)' failed:/u.exec(diagnostic.message)?.[1]
+      : undefined;
+  const refusal = `not-sent:${diagnostic.kind}`;
+  const matches =
+    nested === undefined
+      ? rows.flatMap((row, index) =>
+          row.issues?.some((issue) => issue.code === refusal) ? [index] : [],
+        )
+      : details.toolCalls.flatMap((call, index) =>
+          call.status === "error" && (call.tool === nested || call.tool === `pi.${nested}`)
+            ? [index]
+            : [],
+        );
+  const index = matches.length === 1 ? matches[0] : undefined;
+  const culprit = index === undefined ? undefined : rows[index];
+  if (
+    culprit !== undefined &&
+    selectCompactChildren({ total: details.counts.total, entries: rows }).entries.includes(culprit)
+  )
+    return { rows: rows.map((row, position) => (position === index ? markStopped(row) : row)) };
+  if (nested === undefined)
+    return {
+      rows,
+      issue: {
+        severity: "error",
+        code: "program-failure",
+        message: describeProgramFailure(diagnostic),
+      },
+    };
+  const subject = culprit?.compactSubject ?? culprit?.subject;
+  return {
+    rows,
+    issue: {
       severity: "error",
       code: "program-stopped",
       message: firstLineMessage(
         culprit
-          ? `Program stopped: ${label}${subject ? ` ${subject}` : ""} failed`
-          : `Program stopped: a ${label} call failed`,
-        "Program stopped",
+          ? `Stopped after ${culprit.label}${subject ? ` ${subject}` : ""} failed`
+          : `Stopped after a ${nestedToolName(nested)} call failed`,
+        "The program stopped",
       ),
-    };
-  }
-  const label = KIND_LABELS.get(kind);
-  return {
-    severity: "error",
-    code: "program-failure",
-    message: label
-      ? firstLineMessage(
-          `${label}${line ? ` (line ${line})` : ""}: ${message.replace(/^Uncaught: /u, "")}`,
-          label,
-        )
-      : firstLineMessage(text, "The program failed"),
+    },
   };
 };
 
 export const programIssues = (
   details: CodeModeRenderDetails,
-  rows: readonly CompactChild[],
+  callRows: readonly CompactChild[],
   text: string,
   isError: boolean,
-): CompactIssue[] => {
+): ProgramIssues => {
   const issues: CompactIssue[] = [];
+  let rows = callRows;
   if (details.cancelled)
     issues.push({
       severity: "warning",
       code: "cancelled",
       message: "Cancelled; earlier changes may remain",
     });
-  else if (isError) issues.push(programFailure(text, details, rows));
+  else if (isError) {
+    const failure = programFailure(text, details, callRows);
+    rows = failure.rows;
+    if (failure.issue) issues.push(failure.issue);
+  }
   const preview = details.initialPreview;
   if (preview?.next != null)
     issues.push({
@@ -133,7 +187,7 @@ export const programIssues = (
       message: "Some call details were not recorded",
       detail: INCOMPLETE_ATTENTION,
     });
-  return issues;
+  return { issues, rows };
 };
 
 const hasUnsettledCalls = (details: CodeModeRenderDetails) =>

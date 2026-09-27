@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-import { escapeControlChars } from "../shared/terminal-text";
 
 /** Longest collapsed message. Longer producer text is clipped at render time. */
 export const COMPACT_ISSUE_MESSAGE_LIMIT = 240;
@@ -46,13 +45,4 @@ export function compactIssueSeverity(
 ): "error" | "warning" | undefined {
   if (issues?.some((issue) => issue.severity === "error")) return "error";
   return issues?.some((issue) => issue.severity === "warning") ? "warning" : undefined;
-}
-
-/** The first nonblank line of unrecognised text, bounded for one row. */
-export function firstLineMessage(text: string, fallback: string): string {
-  const line = text
-    .split(/\r?\n/u)
-    .map((value) => escapeControlChars(value).replace(/\s+/gu, " ").trim())
-    .find(Boolean);
-  return (line ?? fallback).slice(0, COMPACT_ISSUE_MESSAGE_LIMIT);
 }

@@ -283,13 +283,16 @@ describe("compact semantic evidence through the real runtime", () => {
           expect(yield* encode(details)).not.toMatch(/SOURCE_MARKER|stack-marker/u);
           const compact = summarize(details, { isError: true, text });
           expect(compact?.outcome).toBe("error");
-          expect(compact?.issues).toEqual([
-            expect.objectContaining({
-              severity: "error",
-              message: `Program stopped: ${name} ${subject} failed`,
-            }),
-          ]);
-          expect(compact?.children?.entries[0]).toMatchObject({ label: name, status: "error" });
+          // The failed call's own row explains the stop; the run adds no second line.
+          expect(compact?.issues).toEqual([]);
+          expect(previews.resolveCompactSummary(compact, "settled", true, text)?.issues).toEqual(
+            [],
+          );
+          const row = compact?.children?.entries[0];
+          expect(row).toMatchObject({ label: name, subject, status: "error" });
+          expect(row?.issues?.find((issue) => issue.severity === "error")?.message).toMatch(
+            /stopped the program/u,
+          );
           // A failure the program handled leaves the call failed and the run a warning.
           const caught = yield* Effect.promise(() => h.run(`try { ${code}; } catch {} return 1;`));
           expect(caught.details?.toolCalls[0]?.compact?.deliveryFailed).toBe(false);
@@ -297,6 +300,10 @@ describe("compact semantic evidence through the real runtime", () => {
           expect(handled?.outcome).toBe("warning");
           expect(handled?.issues).toEqual([]);
           expect(handled?.children?.entries[0]?.status).toBe("error");
+          const handledMessages = handled?.children?.entries.flatMap((child) =>
+            (child.issues ?? []).map((issue) => issue.message),
+          );
+          expect(handledMessages?.join("\n")).not.toMatch(/stopped the program/u);
         }
       }),
   );
@@ -400,7 +407,7 @@ describe("compact semantic evidence through the real runtime", () => {
     }),
   );
 
-  it.effect("does not invent observations for invalid arguments", () =>
+  it.effect("records invalid arguments as a refusal, never as an observation", () =>
     Effect.gen(function* () {
       const native = vi.fn(() => Promise.resolve(result()));
       const h = harness(nestedToolDefinitionsFixture({ read: { execute: native } }));
@@ -409,8 +416,15 @@ describe("compact semantic evidence through the real runtime", () => {
       );
       expect(native).not.toHaveBeenCalled();
       const retained = h.retention.consume("call");
-      expect(retained?.compactAttention).toEqual(COMPLETE_LEDGER);
-      expect(retained?.toolCalls[0]?.compact).toBeUndefined();
+      expect(retained?.compactAttention).toEqual({ ...COMPLETE_LEDGER, errors: 1 });
+      const receipt = retained?.toolCalls[0]?.compact;
+      expect(receipt).toMatchObject({ outcome: "error", deliveryFailed: false });
+      expect(receipt?.issues.map((issue) => issue.code)).toEqual(["not-sent:InvalidToolInput"]);
+      // A caught refusal still explains its own row.
+      const caught = yield* Effect.promise(() =>
+        h.run('try { await tools.pi.read({path:"file",offset:0}); } catch {} return 1;'),
+      );
+      expect(caught.details?.toolCalls[0]?.compact?.issues[0]?.message).toMatch(/^Not sent: /u);
     }),
   );
 
@@ -691,7 +705,7 @@ describe("compact semantic evidence through the real runtime", () => {
       const summary = summarize(h.retention.consume("call")!, { isError: true, text });
       expect(summary?.outcome).toBe("error");
       expect(summary?.issues).toEqual([
-        expect.objectContaining({ severity: "error", message: "Program error: outer failure" }),
+        expect.objectContaining({ severity: "error", message: "outer failure" }),
       ]);
       const childIssues = summary?.children?.entries.flatMap((child) => child.issues ?? []) ?? [];
       expect(

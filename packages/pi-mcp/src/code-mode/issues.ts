@@ -163,7 +163,9 @@ function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payl
 function remoteDetail(text: string, message: string): string {
   const lines = text.split("\n");
   const first = lines.findIndex((line) => line.trim());
-  const rest = lines[first]?.trim() === message ? lines.slice(first + 1) : lines;
+  // The message may drop the line's final period; it still restates that line.
+  const rest =
+    lines[first]?.trim().replace(/(?<!\.)\.$/u, "") === message ? lines.slice(first + 1) : lines;
   return [rest.join("\n").trim(), NO_REPLAY].filter(Boolean).join("\n");
 }
 

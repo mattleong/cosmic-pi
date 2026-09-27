@@ -3,10 +3,11 @@ import * as Schema from "effect/Schema";
 import {
   COMPACT_ISSUE_MESSAGE_LIMIT,
   compactIssueSeverity,
-  firstLineMessage,
   mergeCompactIssues,
   type CompactIssue,
 } from "../../src/tools/compact-issues";
+import { failureMessage, firstLineMessage, isAgentGuidance } from "../../src/tools/issue-message";
+import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 import { createBoundedCompactIssuesSchema } from "../../src/tools/compact-issues-schema";
 import {
   compactStatus,
@@ -64,6 +65,80 @@ test("first-line messages are one bounded, inert, nonblank line", () => {
   expect(hostile).not.toContain("\u001b");
   expect(hostile).toMatch(/^bad.*escape$/u);
   expect(firstLineMessage("x".repeat(1000), "fallback")).toHaveLength(COMPACT_ISSUE_MESSAGE_LIMIT);
+});
+
+test("first-line messages drop error-class wrappers and trailing agent advice", () => {
+  for (const [text, expected] of [
+    ["Error: 429 Too Many Requests", "429 Too Many Requests"],
+    ["Uncaught TypeError: value is undefined", "value is undefined"],
+    ["[ToolFailure] Nested tool 'bash' failed: gone", "Nested tool 'bash' failed: gone"],
+    ["SchemaError(Expected no excess property", "Expected no excess property"],
+    ["Found 2 matches in a.ts. Please provide more context.", "Found 2 matches in a.ts"],
+    ["Guidance was accepted. Do not resend it.", "Guidance was accepted"],
+    // Informative later sentences and one-hump bracketed content are kept.
+    [
+      "Protocol 21 is unsupported. Fell back to local/pi.",
+      "Protocol 21 is unsupported. Fell back to local/pi",
+    ],
+    ["[REDACTED] token was rejected", "[REDACTED] token was rejected"],
+  ] as const)
+    expect(firstLineMessage(text, "fallback")).toBe(expected);
+  expect(firstLineMessage("Error: ", "fallback")).toBe("fallback");
+  const clipped = firstLineMessage("word ".repeat(40), "fallback", 30);
+  expect(clipped.length).toBeLessThanOrEqual(30);
+  expect(clipped.endsWith("…")).toBe(true);
+});
+
+test("guidance is recognised by its opening instruction, not by later sentences", () => {
+  expect(isAgentGuidance("Review external ownership before retrying.")).toBe(true);
+  expect(isAgentGuidance("Error: Do not resend the guidance")).toBe(true);
+  expect(isAgentGuidance("Docker is unavailable. Retry later.")).toBe(false);
+  expect(isAgentGuidance("Reviewed 3 files")).toBe(false);
+});
+
+test("failure messages name common service and network failures from the first line only", () => {
+  for (const [text, pattern] of [
+    ["Error: 429 Too Many Requests: rate limit exceeded for model-x", /^Rate limited \(429\)$/u],
+    ["Request failed with status code 503", /^Server error \(503\)$/u],
+    ["HTTP 401 Unauthorized", /^Authentication failed \(401\)$/u],
+    ["overloaded_error: Overloaded", /^Service overloaded$/u],
+    ["connect ECONNREFUSED 127.0.0.1:443", /^Connection refused$/u],
+    ["prompt is too long: 210000 tokens > 200000 maximum", /context/u],
+  ] as const)
+    expect(failureMessage(text, "fallback")).toMatch(pattern);
+  // Numbers in prose and failures below the first line are not status codes.
+  expect(failureMessage("Offset 401 is beyond end of file", "fallback")).toBe(
+    "Offset 401 is beyond end of file",
+  );
+  expect(failureMessage("Build failed\nstatus 503", "fallback")).toBe("Build failed");
+  expect(failureMessage("", "fallback")).toBe("fallback");
+});
+
+test("the style guard flags machine text and accepts human messages", () => {
+  for (const message of [
+    "Unknown tool: Unknown tool 'pi.grepp'",
+    "Invalid input: SchemaError(Expected string",
+    "[ExecutionFailure] boom",
+    "Program error (line 3): x (line 3, col 8)",
+    'Reply with subagent_reply({ runId: "a" })',
+    "Paused. Inspect status before retrying",
+    "Worker failed.",
+    "Worker agent-7 failed",
+  ])
+    expect({
+      message,
+      flagged: issueMessageStyleProblems(message, { forbidden: ["agent-7"] }).length > 0,
+    }).toEqual({ message, flagged: true });
+  for (const message of [
+    "No tool named pi.grepp",
+    "auth-review asks: Should I update the migration?",
+    "Timed out after 100 ms (line 1)",
+    'read: unexpected field "file"',
+  ])
+    expect({ message, problems: issueMessageStyleProblems(message) }).toEqual({
+      message,
+      problems: [],
+    });
 });
 
 test("bounded retained issues accept valid evidence and reject every overflow", () => {
@@ -152,6 +227,28 @@ describe("summary resolution", () => {
     expect(unexplained.issues).toHaveLength(1);
     expect(unexplained.issues?.[0]?.severity).toBe("error");
     expect(unexplained.issues?.[0]?.message.trim()).not.toBe("");
+  });
+
+  test("a child's error explains a Pi error only when the summary classifies an error", () => {
+    const children = {
+      total: 1,
+      entries: [{ label: "bash", status: "error" as const, issues: [issue()] }],
+    };
+    const explained = resolveCompactSummary(
+      { ...base, outcome: "error", children },
+      "settled",
+      true,
+      "Host error text",
+    )!;
+    expect(explained.issues ?? []).toEqual([]);
+    const claimedSuccess = resolveCompactSummary(
+      { ...base, children },
+      "settled",
+      true,
+      "Host error text",
+    )!;
+    expect(claimedSuccess.outcome).toBe("error");
+    expect(claimedSuccess.issues?.[0]?.message).toBe("Host error text");
   });
 
   test("a producer's own error issue already explains a Pi error", () => {

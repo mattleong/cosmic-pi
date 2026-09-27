@@ -27,6 +27,7 @@ import { makeGuardedToolUpdatePublisher } from "../boundary/host-tool-update.ts"
 import type { CodeModeState } from "../config/store.ts";
 import { makeExecutionGuestTools } from "./catalog.ts";
 import { describeNestedSubject } from "./compact-subject.ts";
+import { describeRefusal } from "./diagnostic-messages.ts";
 import {
   callEntryDetails,
   formatForeignRejection,
@@ -67,6 +68,8 @@ export function runCodeModeExecution(
   let acceptingCapture = true;
 
   const calls = new Map<number, MutableCallEntry>();
+  // Calls whose tool began; a failed call outside this set was refused before it ran.
+  const sent = new Set<number>();
   const childTimings = makeChildTimings();
   const presentationCwd = invokeHostCallback(() => ctx.cwd, undefined);
   const counts = emptyCounts();
@@ -103,7 +106,8 @@ export function runCodeModeExecution(
   const publish = () => publisher.publish(progress());
   const publishNow = () => publisher.publishNow(progress());
   const trackQueued = (id: number, entry: MutableCallEntry): boolean => {
-    if (counts.total > config.maxToolCalls) return false;
+    // Past the limit, only the first refused call gets a row; it explains the refusal.
+    if (counts.total > config.maxToolCalls + 1) return false;
     if (calls.size >= MAX_TRACKED_CALL_ENTRIES) {
       for (const [key, call] of calls) {
         if (call.status !== "queued" && call.status !== "running") {
@@ -259,6 +263,21 @@ export function runCodeModeExecution(
                 };
                 if (!trackQueued(event.id, entry)) return;
               } else {
+                if (event.status !== "running") {
+                  // Only a listed row can explain its refusal; untracked calls stay counted only.
+                  if (
+                    event.status === "failed" &&
+                    event.failure &&
+                    !sent.has(event.id) &&
+                    calls.has(event.id)
+                  )
+                    compact.refused(event.id, {
+                      severity: "error",
+                      code: `not-sent:${event.failure.kind}`,
+                      message: describeRefusal(event.failure),
+                    });
+                  sent.delete(event.id);
+                }
                 const entry = calls.get(event.id);
                 const nextStatus =
                   event.status === "running"
@@ -296,6 +315,7 @@ export function runCodeModeExecution(
           Effect.flatMap(Effect.fiberId, (fiber) =>
             Effect.sync(() => {
               if (id === undefined) return;
+              sent.add(id);
               compact.start(fiber, id);
               const current = calls.get(id);
               if (current !== undefined) transitionCall(current, "running", counts);

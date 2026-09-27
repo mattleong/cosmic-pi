@@ -88,7 +88,7 @@ describe("image compact summary", () => {
     const summary = imageCompactSummary(call);
     expect(summary?.outcome).toBe("error");
     expect(summary?.issues).toEqual([
-      expect.objectContaining({ severity: "error", message: "Save failed." }),
+      expect.objectContaining({ severity: "error", message: "Save failed" }),
     ]);
     call.result.content.push(image);
     expect(imageCompactSummary(call)).toBeUndefined();

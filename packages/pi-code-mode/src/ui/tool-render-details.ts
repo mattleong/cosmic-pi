@@ -40,6 +40,8 @@ export interface CodeModeRenderDetails {
   readonly outputKind?: "text" | "structured";
   readonly cancelled: boolean;
   readonly truncated: boolean;
+  /** Where agent-facing recovery notes begin in the result text. */
+  readonly notesOffset?: number;
 }
 
 const SubjectSchema = Schema.String.check(Schema.isMaxLength(MAX_NESTED_SUBJECT_LENGTH * 2));
@@ -62,6 +64,7 @@ const RenderDetailsInputSchema = Schema.Struct({
   outputKind: Schema.optional(Schema.Unknown),
   cancelled: Schema.optional(Schema.Unknown),
   truncated: Schema.optional(Schema.Unknown),
+  notesOffset: Schema.optional(Schema.Unknown),
 });
 const validInitialPreview = (
   preview: typeof InitialPreviewPresentationSchema.Type | undefined,
@@ -179,8 +182,10 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     record.truncated === true,
     outputKind,
   );
+  const notesOffset = decodeOption(Schema.Natural, record.notesOffset);
   const normalized: CodeModeRenderDetails = {
     ...(compactAttention !== undefined && { compactAttention }),
+    ...(notesOffset !== undefined && { notesOffset }),
     ...(initialPreview !== undefined && { initialPreview }),
     receiptsReadOnly,
     toolCalls,
@@ -199,5 +204,6 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     cancelled: record.cancelled === true,
     truncated: record.truncated === true,
   };
+
   return outputKind === undefined ? normalized : { ...normalized, outputKind };
 };

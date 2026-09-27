@@ -116,9 +116,10 @@ describe("MCP compact summaries", () => {
     expect(summary?.issues?.[0]).toMatchObject({
       code: "remote-failure",
       severity: "error",
-      message: "Element detached.",
+      message: "Element detached",
     });
     expect(summary?.issues?.[0]?.detail).toContain("Inspect the document before retrying.");
+    expect(summary?.issues?.[0]?.detail).not.toContain("Element detached");
     expect(details).toEqual(before);
     // Oversized parts keep the error and disclose the missing evidence.
     const oversized = summarize(

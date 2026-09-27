@@ -309,17 +309,21 @@ export function createToolCallPromise<R>(
       const exit = yield* Effect.exit(restore(invoked));
       const endedAt = yield* Clock.currentTimeMillis;
       const queueDurationMs = Math.max(0, startedAt - queuedAt);
+      // The same diagnostic the program would see, so hosts can explain calls that never ran.
+      const failure =
+        Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+          ? normalizeError(Cause.squash(exit.cause))
+          : undefined;
       yield* emit({
         id,
         name,
-        status: Exit.isSuccess(exit)
-          ? "succeeded"
-          : Cause.hasInterruptsOnly(exit.cause)
-            ? "cancelled"
-            : "failed",
+        status: Exit.isSuccess(exit) ? "succeeded" : failure === undefined ? "cancelled" : "failed",
         started,
         durationMs: Math.max(0, endedAt - queuedAt),
         queueDurationMs: started ? queueDurationMs : Math.max(0, endedAt - queuedAt),
+        ...(failure !== undefined && {
+          failure: { kind: failure.kind, message: failure.message },
+        }),
       });
       if (Exit.isSuccess(exit)) return exit.value;
       return yield* Effect.failCause(exit.cause);

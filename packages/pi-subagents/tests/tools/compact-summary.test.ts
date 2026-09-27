@@ -1,5 +1,5 @@
 import { compactIssueSeverity, type CompactIssue } from "pi-code-previews";
-import { renderContextFixture } from "pi-code-previews/testing";
+import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { makeCompactToolDetails } from "../../src/tools/details.ts";
@@ -40,6 +40,9 @@ const details = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.detail ?? "").join("\n");
 const messages = (issues: readonly CompactIssue[] | undefined) =>
   (issues ?? []).map((issue) => issue.message).join("\n");
+/** Everything an issue retains: a quoted line may be the message alone. */
+const evidence = (issues: readonly CompactIssue[] | undefined) =>
+  `${messages(issues)}\n${details(issues)}`;
 
 /** Launch entries before and after route selection. */
 const pending = {
@@ -238,24 +241,36 @@ describe("subagent compact semantic policy", () => {
     }
   });
 
-  it("keeps attention visible while moving agent procedures and IDs to expansion", () => {
-    for (const overrides of [
-      {
-        state: "waiting_for_parent" as const,
-        question: { message: "May I edit another file?", requestId: "q-1", createdAt: 1 },
-      },
-      { state: "paused" as const },
-      { state: "failed" as const, error: "Cleanup uncertain" },
-      { writeIntent: "writer" as const, writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
-      { warning: "Fallback changed runtime" },
-    ]) {
+  it("keeps attention visible in the worker's own words, never procedures or IDs", () => {
+    for (const [overrides, quoted] of [
+      [
+        {
+          state: "waiting_for_parent" as const,
+          question: { message: "May I edit another file?", requestId: "q-1", createdAt: 1 },
+        },
+        "May I edit another file?",
+      ],
+      [{ state: "paused" as const }, undefined],
+      [{ state: "failed" as const, error: "Cleanup uncertain" }, "Cleanup uncertain"],
+      [
+        { writeIntent: "writer" as const, writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
+        undefined,
+      ],
+      [{ warning: "Fallback changed runtime" }, "Fallback changed runtime"],
+    ] as const) {
       const card = view({ id: "PRIVATE-RUN", ...overrides });
       const projected = makeCompactToolDetails({ action: "status", runs: [card] });
       for (const phase of ["running", "settled"] as const) {
         const issues = summarize("status", projected, phase)?.issues;
         expect(compactIssueSeverity(issues)).toBeDefined();
-        expect(messages(issues)).not.toMatch(/PRIVATE-RUN|subagent_|May I edit|Fallback/);
-        expect(details(issues)).toContain("PRIVATE-RUN");
+        // The worker's own words are the attention; procedures and IDs are not.
+        if (quoted) expect(messages(issues)).toContain(quoted);
+        expect(messages(issues)).not.toMatch(/PRIVATE-RUN|subagent_/);
+        for (const issue of issues ?? [])
+          expect(
+            issueMessageStyleProblems(issue.message, { forbidden: ["PRIVATE-RUN"] }),
+            issue.message,
+          ).toEqual([]);
       }
     }
   });
@@ -852,7 +867,7 @@ describe("subagent compact semantic policy", () => {
       });
       const summary = summarize("status", projected);
       expect(
-        summary?.issues?.filter((issue) => issue.detail?.includes("Same warning words")),
+        summary?.issues?.filter((issue) => evidence([issue]).includes("Same warning words")),
       ).toHaveLength(source === "child" ? 2 : 1);
     }
     const inconsistent = summarize(
@@ -882,7 +897,7 @@ describe("subagent compact semantic policy", () => {
       ]) {
         const run = view({ warning: "Child advisory", warningSource: "child", ...extra });
         const summary = summarize("await", awaitReceipt([run], { awaitedRunIds: [run.id] }), phase);
-        const text = details(summary?.issues);
+        const text = evidence(summary?.issues);
         expect(text).toContain("Child advisory");
         if ("systemWarning" in extra) expect(text).toContain(extra.systemWarning);
         if ("selection" in extra) expect(text).toContain("Route recovery");
@@ -890,7 +905,7 @@ describe("subagent compact semantic policy", () => {
         const projected = makeCompactToolDetails({ action: "status", runs: [run] });
         for (const action of ["status", "list"] as const) {
           const other = summarize(action, { ...projected, action }, phase);
-          expect(details(other?.issues)).toContain("Child advisory");
+          expect(evidence(other?.issues)).toContain("Child advisory");
         }
       }
     }
@@ -919,7 +934,7 @@ describe("subagent compact semantic policy", () => {
     expect(first?.counters).toEqual(["1/2 finished"]);
     expect(first?.metadata).toEqual([]);
     expect(next?.counters).toEqual(first?.counters);
-    expect(details(next?.issues)).toContain("new warning");
+    expect(evidence(next?.issues)).toContain("new warning");
     const completed = snapshot(false);
     const finalProgress = summarize(
       "await",
@@ -937,7 +952,7 @@ describe("subagent compact semantic policy", () => {
     ).toEqual(["3 targets"]);
   });
 
-  it("only cautions about report integration for isolated writers", () => {
+  it("marks isolated writers' reports as ready for review without warning", () => {
     for (const overrides of [
       { writeIntent: "read-only" as const },
       { writeIntent: "writer" as const, writerWorkspaceMode: "shared-checkout" as const },
@@ -948,10 +963,15 @@ describe("subagent compact semantic policy", () => {
         runs: [view({ ...overrides, state: "reported", finalText: "report" })],
       });
       const summary = summarize("status", projected);
-      expect(summary?.metadata).toEqual([]);
-      expect(summary?.issues?.some((issue) => issue.code.endsWith(":workspace-approval"))).toBe(
-        overrides.writerWorkspaceMode === "worktree",
-      );
+      const isolated = overrides.writerWorkspaceMode === "worktree";
+      // Review is the normal next step: a heading label and expanded note, never a warning.
+      expect(summary?.outcome).toBe("success");
+      // The label joins the counter, with the bare counter as the narrow-row fallback.
+      expect(summary?.counters).toHaveLength(isolated ? 2 : 1);
+      if (isolated) expect(summary?.counters?.[0]?.startsWith(summary.counters[1]!)).toBe(true);
+      expect(
+        summary?.issues?.find((issue) => issue.code.endsWith(":workspace-approval"))?.severity,
+      ).toBe(isolated ? "info" : undefined);
     }
     const details = makeCompactToolDetails({
       action: "status",
@@ -1097,5 +1117,98 @@ describe("subagent compact semantic policy", () => {
     });
     expect(failed?.outcome).toBe("error");
     expect(failed?.issues?.map((issue) => issue.severity)).toEqual(["error", "warning"]);
+  });
+
+  it("writes every issue message in the shared style, without run IDs", () => {
+    const id = "run-7f3a";
+    const audit = {
+      observedFileWrites: ["src/b.ts"],
+      violations: [{ path: "src/b.ts", toolName: "edit", observedAt: 2 }],
+      bashWriteHints: 0,
+    };
+    const runs: Partial<SubagentRunView>[] = [
+      { state: "failed", error: "Error: 429 Too Many Requests: rate limit exceeded\n  at stack" },
+      { state: "failed", error: "Inspect subagent status before retrying." },
+      { state: "failed" },
+      { state: "stopped" },
+      { state: "stopping" },
+      { state: "paused" },
+      {
+        state: "waiting_for_parent",
+        question: { message: "Should I update db/0007.sql?", requestId: "q", createdAt: 1 },
+      },
+      { state: "waiting_for_parent" },
+      ...(["running", "paused", "stopped"] as const).map((state) => ({
+        state,
+        writeIntent: "writer" as const,
+        writeClaims: ["src/a.ts"],
+        writeAdmissionPaused: true,
+        writeViolationOffender: true,
+        writeAudit: audit,
+      })),
+      { writeIntent: "writer", writeClaims: ["src/a.ts"], writeAdmissionPaused: true },
+      { writeIntent: "writer", writeClaims: ["src/a.ts"], writeAudit: audit, state: "completed" },
+      { warning: "Could not run the integration tests: docker is not available" },
+      { warning: "Context window 91% full", warningSource: "system", systemWarning: "Other" },
+      { selection: { ...view().selection, warning: "Protocol 21 is unsupported. Fell back." } },
+      {
+        selection: {
+          ...view().selection,
+          skippedCandidates: [{ candidate: "alt", code: "pi_model_unknown", reason: "Missing" }],
+        },
+      },
+      ...(["pending", "confirmed", "not-sent", "report-unconfirmed", "unresolved"] as const).map(
+        (steeringDelivery) => ({ steeringDelivery }),
+      ),
+      {
+        state: "reported",
+        finalText: "Done",
+        writeIntent: "writer",
+        writerWorkspaceMode: "worktree",
+      },
+    ];
+    const issues = runs.flatMap((overrides) => {
+      const run = view({ id, ...overrides });
+      return [
+        ...(summarize("status", makeCompactToolDetails({ action: "status", runs: [run] }))
+          ?.issues ?? []),
+        ...(summarize("await", awaitReceipt([run], { awaitedRunIds: [id], timedOut: true }))
+          ?.issues ?? []),
+      ];
+    });
+    for (const [message, cleanupDisposition] of [
+      ["Prompt rejected: 400 invalid_request_error", "confirmed"],
+      ["Start failed", "quarantined"],
+    ] as const)
+      issues.push(
+        ...(summarize("start", {
+          version: 2,
+          action: "start",
+          startEntries: [
+            { ...selected, status: "failed" },
+            { ...selected, index: 1, warning: "Protocol 21 is unsupported. Fell back." },
+          ],
+          startFailures: [
+            {
+              index: 0,
+              code: "prompt_rejected",
+              message,
+              admittedRun: {
+                runId: id,
+                cleanupDisposition,
+                retryDisposition: "eligible",
+                hasRemainingCandidate: true,
+                remainingCandidateCount: 1,
+              },
+            },
+          ],
+        })?.issues ?? []),
+      );
+    expect(issues.length).toBeGreaterThan(runs.length);
+    for (const issue of issues)
+      expect(
+        issueMessageStyleProblems(issue.message, { forbidden: [id], maxLength: 160 }),
+        issue.message,
+      ).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { firstLineMessage } from "./compact-issues";
+import { failureMessage } from "./issue-message";
 import { resolveCompactSummary, type CompactPhase, type CompactSummary } from "./compact-summary";
 
 /**
@@ -29,7 +29,7 @@ export function planCompactPresentation(input: {
           {
             severity: "error",
             code: "tool-error",
-            message: firstLineMessage(input.errorText ?? "", "The tool reported an error"),
+            message: failureMessage(input.errorText ?? "", "The tool reported an error"),
           },
         ],
       }

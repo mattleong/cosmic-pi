@@ -30,6 +30,13 @@ export {
 export { ToolRuntimeError } from "./tool-runtime-error.js";
 
 const estimateTokens = (input: string) => Math.max(0, Math.round(input.length / 4));
+/** A schema failure on one line; multi-line issue text would split the diagnostic. */
+const schemaFailureLine = (cause: unknown): string =>
+  (cause instanceof Error ? cause.message : String(cause))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
 const compareText = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 /**
@@ -87,6 +94,8 @@ export type ToolCallLifecycleEvent =
       /** Wall-clock time from queue admission through terminal settlement. */
       readonly durationMs: number;
       readonly queueDurationMs: number;
+      /** The failed call's normalized, model-safe diagnostic; absent otherwise. */
+      readonly failure?: { readonly kind: string; readonly message: string };
     };
 
 /** Decoded tool call observed immediately before tool execution. */
@@ -785,7 +794,7 @@ export const make = <R>(
             catch: (cause) =>
               new ToolRuntimeError(
                 "InvalidToolInput",
-                `Invalid input for tool '${name}': ${String(cause)}`,
+                `Invalid input for tool '${name}': ${schemaFailureLine(cause)}`,
               ),
           });
         }

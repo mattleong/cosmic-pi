@@ -166,6 +166,9 @@ export function makeResultResponse(input: {
         ...(resultId && { resultId, ...(initialPreview && { initialPreview }) }),
         ...((truncated || composed.truncated) && { truncated: true }),
         ...(cancelled && { cancelled: true }),
+        ...("notesOffset" in composed &&
+          composed.notesOffset !== undefined &&
+          text === composed.text && { notesOffset: composed.notesOffset }),
         ...(!cancelled &&
           result?.ok && { outputKind: Predicate.isString(result.value) ? "text" : "structured" }),
       };

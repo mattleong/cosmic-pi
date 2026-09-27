@@ -54,9 +54,10 @@ export function renderCompactChildren(
       }
     : selectCompactChildren(children);
   const rows: string[] = [];
+  // Omitted calls may be older rows that were evicted or calls never tracked, so say neither.
   if (flat && omitted > 0)
     rows.push(
-      truncateToWidth(theme.fg("dim", `… ${omitted} earlier ${calls(omitted)}`), width, ""),
+      truncateToWidth(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, ""),
     );
   entries.forEach((entry, index) => {
     const branch = index === entries.length - 1 && (flat || omitted === 0) ? "╰─" : "├─";

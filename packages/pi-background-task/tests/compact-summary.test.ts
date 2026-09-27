@@ -103,10 +103,16 @@ describe("background task compact semantics", () => {
       snapshot: { ...snapshot, state: "failed", error: "Custom failure. Inspect state." },
     });
     expect(single?.outcome).toBe("error");
+    // Trailing guidance is agent detail: the message keeps the failure, the detail the full text.
     expect(single?.issues).toEqual([
-      expect.objectContaining({ severity: "error", message: "Custom failure. Inspect state." }),
+      expect.objectContaining({ severity: "error", message: "Custom failure" }),
     ]);
-    expect(single?.issues?.[0]?.detail).toBeUndefined();
+    expect(single?.issues?.[0]?.detail).toBe("Custom failure. Inspect state.");
+    const plain = project({
+      action: "status",
+      snapshot: { ...snapshot, state: "failed", error: "Custom failure" },
+    });
+    expect(plain?.issues?.[0]?.detail).toBeUndefined();
 
     const error = "\u001b[31mSpawn failed\u001b[0m\nENOENT: no such file\n  at spawn";
     const multi = project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });
@@ -229,7 +235,11 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe("error");
     expect(find(result, "task-1:cleanup-unconfirmed")?.severity).toBe("warning");
     expect(find(result, "task-1:cleanup-unconfirmed")?.detail).toBeTruthy();
-    expect(result?.issues?.some((issue) => issue.message === error)).toBe(true);
+    expect(
+      result?.issues?.some(
+        (issue) => issue.message === "Termination failed" && issue.detail === error,
+      ),
+    ).toBe(true);
   });
 
   it("reports wait timeout without claiming task timeout or completion", () => {

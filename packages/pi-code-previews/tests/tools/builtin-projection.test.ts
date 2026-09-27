@@ -4,6 +4,7 @@ import {
   type BuiltinCompactProjectionInput,
 } from "../../src/tools/builtin-projection";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
+import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 
 const base: BuiltinCompactProjectionInput = {
   phase: "settled",
@@ -30,6 +31,42 @@ function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeo
 }
 const codes = (tool: BuiltinCompactTool, input: Partial<BuiltinCompactProjectionInput>) =>
   projectBuiltinCompactSummary(tool, { ...base, ...input })?.issues?.map(({ code }) => code);
+
+describe("builtin issue style", () => {
+  it("writes every failure and argument warning in the shared style", () => {
+    const summaries = [
+      failed("bash", "output\nCommand exited with code 1"),
+      failed("bash", "output\nCommand timed out after 30 seconds"),
+      failed("read", "ENOENT: no such file or directory, open '/workspace/a.ts'"),
+      failed("read", "EACCES: permission denied, open '/workspace/a.ts'"),
+      failed("read", "Offset 401 is beyond end of file (20 lines total)"),
+      failed(
+        "edit",
+        "Could not find the exact text in /workspace/a.ts. The old text must match exactly including all whitespace and newlines.",
+      ),
+      failed(
+        "edit",
+        "Found 2 occurrences of the text in /workspace/a.ts. The text must be unique. Please provide more context to make it unique.",
+      ),
+      failed("write", "Error: Could not write file.\n  at stack"),
+      projectBuiltinCompactSummary("bash", { ...base, args: { command: "rm -rf build" } }),
+      projectBuiltinCompactSummary("write", {
+        ...base,
+        args: {
+          path: "a.env",
+          content: "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        },
+      }),
+    ];
+    const issues = summaries.flatMap((summary) => summary?.issues ?? []);
+    expect(issues.length).toBeGreaterThanOrEqual(summaries.length);
+    for (const { message } of issues)
+      expect({ message, problems: issueMessageStyleProblems(message) }).toEqual({
+        message,
+        problems: [],
+      });
+  });
+});
 
 describe("builtin failure classification", () => {
   it("classifies only the terminal shell status and never repeats output", () => {
@@ -123,7 +160,7 @@ describe("builtin failure classification", () => {
   it("describes unrecognised errors by their first line only", () => {
     const value = failed("write", "Write failed.\nInspect filesystem state.");
     expect(value?.issues).toEqual([
-      { severity: "error", code: "failure", message: "Write failed." },
+      { severity: "error", code: "failure", message: "Write failed" },
     ]);
     const empty = failed("read", "");
     expect(empty?.outcome).toBe("error");

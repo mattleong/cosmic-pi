@@ -65,6 +65,8 @@ const expectCollapsedMessages = <Result>(result: Result) => {
 describe("MCP card projections", () => {
   it("keeps remote error text visible in the collapsed fallback without changing the reply", () => {
     const text = "The element is no longer attached to the page.";
+    // Collapsed messages drop the final period; the reply keeps the exact text.
+    const message = text.slice(0, -1);
     const result = {
       details: {
         ...reply().details,
@@ -74,11 +76,11 @@ describe("MCP card projections", () => {
       content: [],
     };
     const before = structuredClone(result);
-    expect(display(result)).toContain(text);
-    expect(display(result, true)).toContain(text);
-    expect(display(result, false, true)).not.toContain(text);
+    expect(display(result)).toContain(message);
+    expect(display(result, true)).toContain(message);
+    expect(display(result, false, true)).not.toContain(message);
     expect(display({ ...result, details: { ...result.details, isError: false } })).not.toContain(
-      text,
+      message,
     );
     expect(result).toEqual(before);
   });

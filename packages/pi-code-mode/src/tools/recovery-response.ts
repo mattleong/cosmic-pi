@@ -8,7 +8,14 @@ interface RecoveryResponse {
   readonly text: string;
   readonly truncated: boolean;
   readonly outputTruncated: boolean;
+  /** Where the agent-facing recovery notes begin, after the leading output or diagnostic. */
+  readonly notesOffset?: number;
 }
+
+const notesAfter = (lead: string, text: string) =>
+  lead.length > 0 && text.length > lead.length + 2 && text.startsWith(`${lead}\n\n`)
+    ? { notesOffset: lead.length }
+    : {};
 
 /** Bounded prose only. Saved artifacts and successful JSON pages retain their own contracts. */
 export const composeRecoveryResponse = (input: {
@@ -56,7 +63,7 @@ export const composeRecoveryResponse = (input: {
   const join = (parts: readonly string[]) => parts.filter(Boolean).join("\n\n");
   const full = join([raw, priority, rows(calls.length)]);
   if (utf8ByteLength(full) <= maxBytes)
-    return { text: full, truncated: false, outputTruncated: false };
+    return { text: full, truncated: false, outputTruncated: false, ...notesAfter(raw, full) };
 
   const omission = "Some diagnostic text or receipt rows are omitted from this response.";
   const mandatory = join([priority, omission]);
@@ -84,9 +91,11 @@ export const composeRecoveryResponse = (input: {
       low = middle + 1;
     } else high = middle - 1;
   }
+  const text = clampModelVisibleText(join([base, rows(shown)]), maxBytes);
   return {
-    text: clampModelVisibleText(join([base, rows(shown)]), maxBytes),
+    text,
     truncated: true,
     outputTruncated: boundedRaw !== raw,
+    ...notesAfter(boundedRaw, text),
   };
 };

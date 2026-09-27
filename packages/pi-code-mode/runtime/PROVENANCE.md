@@ -66,7 +66,9 @@ Deviations 1-7 and 10 are mechanical (behavioral semantics unchanged). Deviation
 add confinement and observation. Deviations 11-17 add JavaScript compatibility and correct
 mutation and async semantics; their behavior and remaining limits are documented below.
 Deviation 18 adds host-only pre-truncation result observation. Deviation 19 aligns successful
-string accounting with the runtime's verbatim host representation.
+string accounting with the runtime's verbatim host representation. Deviation 20 makes three
+diagnostic messages one specific line and reports a failed call's diagnostic to its lifecycle
+observer; diagnostic kinds and failure semantics are unchanged.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
@@ -406,6 +408,18 @@ string accounting with the runtime's verbatim host representation.
     in-budget marker are unchanged, as are diagnostic and log confinement and pre-truncation
     `onResult` observation. Runtime output-budget tests and the extension integration test
     `../tests/string-output-budget.test.ts` cover exact-fit, escape-heavy and Unicode strings.
+
+20. **Specific one-line diagnostics.** Three messages lead with the fact a reader needs, on one
+    line. A property access on `null`, `undefined` or another primitive names the value and, for a
+    literal property name only, the property (`Cannot access property 'map' of undefined.`);
+    computed keys stay unnamed because they may carry program data. `UnsupportedSyntax` names the
+    syntax in its message and carries the supported-syntax summary only as its suggestion, which
+    hosts already append on its own line. `InvalidToolInput` joins the schema issue and its path
+    into one line. A failed call's terminal `onToolCallLifecycle` event also carries the
+    normalized diagnostic the program sees (`failure: { kind, message }`), so hosts can explain
+    calls refused before their tool ran. Kinds, locations, suggestions, lifecycle order and
+    control flow are unchanged. The extension's `../tests/compact-summary.test.ts` covers the
+    presented messages.
 
 ## Selective v2 upgrade and extraction map
 

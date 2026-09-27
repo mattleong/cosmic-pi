@@ -1,5 +1,6 @@
 import type { CompactIssue } from "./compact-issues";
-import { compactIssueSeverity, firstLineMessage } from "./compact-issues";
+import { compactIssueSeverity } from "./compact-issues";
+import { failureMessage } from "./issue-message";
 import { isSafeCompactSummary } from "./compact-summary-schema";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { RendererState, ToolRenderContext } from "./renderers/shared/types";
@@ -67,6 +68,8 @@ export type CompactSummaryProvider<
 /**
  * Validate provider output. A settled summary must classify its outcome. Pi's error flag
  * wins over a summary that claims success: the first line of the error text explains it.
+ * An error is already explained by the summary's own error issue, or, when the summary
+ * classifies its outcome as an error, by a child row's error issue.
  */
 export function resolveCompactSummary(
   summary: CompactSummary | undefined,
@@ -78,7 +81,12 @@ export function resolveCompactSummary(
   if (phase === "settled" && summary.outcome === undefined) return undefined;
   if (!isError || summary.outcome === "cancelled" || summary.outcome === "uncertain")
     return summary;
-  if (compactIssueSeverity(summary.issues) === "error") return { ...summary, outcome: "error" };
+  const explainedByChild =
+    summary.outcome === "error" &&
+    (summary.children?.entries.some((child) => compactIssueSeverity(child.issues) === "error") ??
+      false);
+  if (compactIssueSeverity(summary.issues) === "error" || explainedByChild)
+    return { ...summary, outcome: "error" };
   return {
     ...summary,
     outcome: "error",
@@ -86,7 +94,7 @@ export function resolveCompactSummary(
       {
         severity: "error",
         code: "tool-error",
-        message: firstLineMessage(errorText, "The tool reported an error"),
+        message: failureMessage(errorText, "The tool reported an error"),
       },
       ...(summary.issues ?? []),
     ],

@@ -328,8 +328,16 @@ export function getMemberReference<R>(
     }
 
     if (!hasObjectRuntimeType(objectValue) || objectValue === null) {
+      // Only a literal property name is named; computed keys may carry program data.
+      const property = !computed && Predicate.isString(key) ? ` '${key}'` : "";
+      const base =
+        objectValue === null || objectValue === undefined
+          ? String(objectValue)
+          : Predicate.isBoolean(objectValue)
+            ? "a boolean"
+            : "a primitive value";
       const error = new InterpreterRuntimeError(
-        "Cannot access a property on a non-object value.",
+        `Cannot access property${property} of ${base}.`,
         objectNode,
       ).as("TypeError");
       if (!deferInvalidBase) throw error;

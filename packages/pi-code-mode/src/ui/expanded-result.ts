@@ -35,8 +35,20 @@ export const renderProgramSection = (source: string | undefined, theme: Theme): 
   );
 
 /**
- * Fixed order: the run's issues, Program, Calls with each call's issues beneath it, then the
- * labeled output or error. Content-only slots omit what the shell already shows.
+ * The program's output or diagnostic, and the recovery notes Code Mode appended for the agent.
+ * An offset that does not land on the notes separator leaves the whole text as output.
+ */
+const splitAgentNotes = (raw: string, offset: number | undefined) => {
+  const valid = offset !== undefined && offset > 0 && raw.startsWith("\n\n", offset);
+  return {
+    output: (valid ? raw.slice(0, offset) : raw).replace(/\s+$/u, ""),
+    notes: valid ? raw.slice(offset).trim() : "",
+  };
+};
+
+/**
+ * Fixed order: the run's issues, Program, Calls with each call's issues beneath it, the labeled
+ * output or error, then agent notes. Content-only slots omit what the shell already shows.
  */
 export const renderExpandedCodeModeResult = (input: {
   readonly details: CodeModeRenderDetails;
@@ -79,7 +91,7 @@ export const renderExpandedCodeModeResult = (input: {
       ),
     );
   // Trailing blank lines carry no information and would pad the frame.
-  const output = raw.replace(/\s+$/u, "");
+  const { output, notes } = splitAgentNotes(raw, details.notesOffset);
   if (!isPartial && output.length > 0) {
     const structured =
       !isError && !details.cancelled && !details.truncated && details.outputKind === "structured"
@@ -97,6 +109,14 @@ export const renderExpandedCodeModeResult = (input: {
       ),
     );
   }
+  if (!isPartial && notes.length > 0)
+    sections.push(
+      expandedSection(
+        theme,
+        "Agent notes",
+        new Text(theme.fg("dim", codeModeOutputText(notes)), 0, 0),
+      ),
+    );
   return {
     render: (width) => sections.flatMap((section) => section.render(width)),
     invalidate: () => {

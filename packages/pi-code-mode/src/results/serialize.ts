@@ -1,5 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import type { CodeModeResult } from "../boundary/codemode-runtime.ts";
+import { codeModeDiagnosticMessage } from "../tools/format.ts";
 import { RESULT_MAX_BYTES, RESULT_MAX_VISITS, type ResultCapture } from "./model.ts";
 
 /** Bounded traversal over validated plain data. Never keeps the guest graph or invokes toJSON. */
@@ -61,10 +62,11 @@ export function captureResult(result: CodeModeResult): ResultCapture {
       const { error } = result;
       append(`[${error.kind}]`);
       if (error.location) append(` (line ${error.location.line}, column ${error.location.column})`);
-      append(` ${error.message}`);
+      const message = codeModeDiagnosticMessage(error);
+      append(` ${message}`);
       for (const hint of error.suggestions ?? []) {
         if (++visits > RESULT_MAX_VISITS) throw new RangeError("capture-limit");
-        if (!error.message.includes(hint)) append(`\n${hint}`);
+        if (!message.includes(hint)) append(`\n${hint}`);
       }
     }
     if (result.logs?.length) {

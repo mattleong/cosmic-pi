@@ -97,6 +97,8 @@ export interface CodeModeToolDetails {
   readonly outputKind?: "text" | "structured";
   readonly truncated?: boolean;
   readonly cancelled?: boolean;
+  /** Where agent-facing recovery notes begin in the returned text; display only. */
+  readonly notesOffset?: number;
 }
 
 /** Progress entries stay bounded no matter how many nested calls a program admits. */
@@ -202,6 +204,15 @@ export const formatCodeModeSuccess = (result: CodeModeSuccess): string => {
 };
 
 /**
+ * The runtime also appends `(line L, col C)` to located messages; the envelope already states the
+ * location once, so the repeat is dropped.
+ */
+export const codeModeDiagnosticMessage = (error: CodeModeFailure["error"]): string =>
+  error.location === undefined
+    ? error.message
+    : error.message.replace(/ \(line \d+, col \d+\)$/u, "");
+
+/**
  * Normalized diagnostic rendering: stable kind, message, source location, and any
  * suggestions the runtime attached, with runtime logs preserved.
  */
@@ -211,9 +222,7 @@ export const formatCodeModeFailure = (result: CodeModeFailure): string => {
     error.location === undefined
       ? ""
       : ` (line ${error.location.line}, column ${error.location.column})`;
-  const hints = (error.suggestions ?? []).filter((hint) => !error.message.includes(hint));
-  return withLogs(
-    [`[${error.kind}]${location} ${error.message}`, ...hints].join("\n"),
-    result.logs,
-  );
+  const message = codeModeDiagnosticMessage(error);
+  const hints = (error.suggestions ?? []).filter((hint) => !message.includes(hint));
+  return withLogs([`[${error.kind}]${location} ${message}`, ...hints].join("\n"), result.logs);
 };

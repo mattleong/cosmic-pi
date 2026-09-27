@@ -1,4 +1,4 @@
-import { compactIssueSeverity, firstLineMessage } from "pi-code-previews";
+import { compactIssueSeverity, failureMessage } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import { hasUnresolvedSteeringDelivery } from "../run/model.ts";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
@@ -18,7 +18,7 @@ import {
   unconfirmedActionRecovery,
   type ActionFailureDisposition,
 } from "./outcome.ts";
-import { compactRunIssues } from "./compact-run-issues.ts";
+import { cardLabel, compactRunIssues, hasChangesToReview } from "./compact-run-issues.ts";
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { progressDetail, summarizeStart } from "./compact-start-summary.ts";
 
@@ -218,9 +218,10 @@ function awaitIssues(
   cards: readonly SubagentRunCard[],
   targets: readonly string[],
 ): void {
-  const finished = cards.filter((card) =>
-    ["reported", "completed", "failed", "stopped"].includes(card.state),
-  ).length;
+  const unfinished = cards.filter(
+    (card) => !["reported", "completed", "failed", "stopped"].includes(card.state),
+  );
+  const finished = cards.length - unfinished.length;
   summary.counters = [progressDetail(finished, targets.length, "finished", summary.subject)];
   if (cards.length < targets.length) {
     issues.push({
@@ -259,7 +260,12 @@ function awaitIssues(
     issues.push({
       severity: "warning",
       code: "await-timeout",
-      message: "Timed out waiting; unfinished workers continue running",
+      message:
+        unfinished.length === 1
+          ? `Timed out waiting; ${cardLabel(unfinished[0]!)} hasn't finished`
+          : unfinished.length > 1
+            ? `Timed out waiting; ${unfinished.length} workers haven't finished`
+            : "Timed out waiting; unfinished workers continue running",
       detail: "Await timed out; unfinished children continue. Inspect status or await again.",
     });
   }
@@ -312,7 +318,7 @@ const ACTION_FAILURE_ISSUES = {
     message:
       failure.code === "SubagentNotFoundError"
         ? "A requested worker was not found"
-        : firstLineMessage(failure.message, "The action failed"),
+        : failureMessage(failure.message, "The action failed"),
     recovery: {
       message: "Recovery details are available",
       detail:
@@ -380,7 +386,7 @@ function summarizeModels(
       issues.push({
         severity: "warning",
         code: `profile:${profile.id}:unavailable`,
-        message: `${profile.id}: ${invalid ? "The worker profile has invalid settings" : "The worker profile has no eligible options"}`,
+        message: `${profile.id} profile has ${invalid ? "invalid settings" : "no eligible options"}`,
         detail: `${invalid ? "Invalid profile configuration" : "No statically eligible candidates"}; inspect expanded discovery.`,
       });
     } else if (profile.candidates.length === 0) disabled++;
@@ -404,6 +410,20 @@ function isSingleRequestedRun(
   return requested?.length
     ? requested.length === 1 && cards[0]?.id === requested[0]
     : details.action === "list" || details.action === "status";
+}
+
+/** Reported changes awaiting review are routine: a heading label, never a warning. */
+function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentRunCard[]): void {
+  const reviewable = cards.filter(hasChangesToReview).length;
+  if (reviewable === 0) return;
+  const label =
+    reviewable === 1 && cards.length === 1
+      ? "changes ready for review"
+      : `${reviewable} with changes to review`;
+  // Collapsed rows show one routine detail, so the label joins the counter while it fits.
+  const [counter, ...fallbacks] = summary.counters ?? [];
+  if (counter === undefined) summary.metadata = [...(summary.metadata ?? []), label];
+  else summary.counters = [`${counter} · ${label}`, counter, ...fallbacks];
 }
 
 function summarizeDetails(
@@ -449,6 +469,7 @@ function summarizeDetails(
   else runIssues(details, summary, issues, cards);
   const quietHistory = phase === "settled" && summary.outcome === "success" && issues.length === 0;
   issues.push(...compactRunIssues(cards, details.reportsOnlyOmitted === true, quietHistory));
+  labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";
   else if (summary.outcome === "success" && severity === "warning") summary.outcome = "warning";

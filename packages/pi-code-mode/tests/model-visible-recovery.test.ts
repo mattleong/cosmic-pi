@@ -122,6 +122,8 @@ describe("diagnostic and receipt byte allocation", () => {
     });
     expectSafety(result.text);
     expect(result.text).toContain("ROOT_DIAGNOSTIC");
+    // Display separates the diagnostic from the agent notes even when the response is bounded.
+    expect(result.text.slice(0, result.notesOffset)).toBe("ROOT_DIAGNOSTIC");
     expect(result.text).toContain('"total":300');
     expect(result.text).toContain('"unknown":1');
     expect(result.text).toContain('"omitted":44');

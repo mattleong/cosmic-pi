@@ -1,5 +1,6 @@
-import { compactIssueSeverity } from "pi-code-previews";
+import { compactIssueSeverity, failureMessage } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
+import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
 import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
 import { failedStartRecoveryAction, formatFailedStartRecovery } from "./format.ts";
 import { isUncertainToolFailure } from "./outcome.ts";
@@ -18,11 +19,11 @@ type AdmittedRun = NonNullable<
   NonNullable<SubagentStartDetails["startFailures"]>[number]["admittedRun"]
 >;
 const retryMessages = {
-  eligible: "The launch can be retried",
-  pending: "Retry must wait until cleanup settles",
-  blocked: "Automatic retry is blocked",
-  exhausted: "The profile route is exhausted",
-  unavailable: "The launch has no route to retry",
+  eligible: "the launch can be retried",
+  pending: "retry waits for cleanup to settle",
+  blocked: "automatic retry is blocked",
+  exhausted: "no profile options remain to retry",
+  unavailable: "no route is left to retry",
 } satisfies Record<AdmittedRun["retryDisposition"], string>;
 
 const launchFailureIssue = (
@@ -32,7 +33,9 @@ const launchFailureIssue = (
 ): CompactIssue => ({
   severity: uncertain ? "warning" : "error",
   code: `launch:${failure.index}:start-failed`,
-  message: `${label}: ${uncertain ? "Could not confirm startup or cleanup; work may have started" : "Startup reported an error"}`,
+  message: uncertain
+    ? `${label} may have started; startup and cleanup couldn't be confirmed`
+    : `${label} couldn't start: ${failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT)}`,
   detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
 });
 
@@ -53,8 +56,7 @@ export function summarizeStart(
       issues.push({
         severity: "warning",
         code: `launch:${entry.index}:warning`,
-        message: `${label}: A worker option produced a warning`,
-        detail: entry.warning,
+        ...quoted(label, entry.warning, "has a launch option warning"),
       });
     if (
       entry.status === "failed" &&
@@ -63,7 +65,7 @@ export function summarizeStart(
       issues.push({
         severity: "error",
         code: `launch:${entry.index}:failed`,
-        message: `${label}: Launch failed`,
+        message: `${label} couldn't start`,
         detail: "Inspect expanded launch evidence.",
       });
   }
@@ -76,7 +78,7 @@ export function summarizeStart(
       issues.push({
         severity: "warning",
         code: `launch:${failure.index}:recovery-unknown`,
-        message: `${label}: Worker ownership and cleanup status are unknown`,
+        message: `${label}: ownership and cleanup are unknown`,
         detail: uncertain
           ? "Do not retry or launch a replacement while outcome or cleanup is unconfirmed. Inspect full launch details and status before recovery. Missing retry data does not establish eligibility."
           : "Inspect full launch details and status for ownership and cleanup before recovery. Missing retry data does not establish eligibility.",
@@ -89,13 +91,13 @@ export function summarizeStart(
         // Confirmed cleanup is a recovery fact, not a problem; the start error already warns.
         severity: confirmed ? "info" : "warning",
         code: `run:${recovery.runId}:cleanup-receipt`,
-        message: `${label}: ${confirmed ? "Worker cleanup is confirmed" : "Worker cleanup is not confirmed; processes may still be running"}`,
+        message: `${label}: ${confirmed ? "cleanup is confirmed" : "cleanup isn't confirmed; processes may still be running"}`,
         detail: formatFailedStartRecovery(recovery),
       },
       {
         severity: "info",
         code: `run:${recovery.runId}:retry-gate`,
-        message: `${label}: ${confirmed ? retryMessages[recovery.retryDisposition] : "Do not retry until cleanup is confirmed"}`,
+        message: `${label}: ${confirmed ? retryMessages[recovery.retryDisposition] : "retry waits for confirmed cleanup"}`,
         detail: confirmed
           ? failedStartRecoveryAction(recovery)
           : "Do not retry or launch a replacement while cleanup is pending or quarantined. Inspect full subagent_status and confirm process and writer cleanup before recovery.",

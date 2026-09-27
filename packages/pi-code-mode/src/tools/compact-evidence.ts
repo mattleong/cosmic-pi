@@ -144,6 +144,21 @@ export const makeCompactEvidence = (publish: (id: number, receipt: CompactReceip
         receipts.set(id, receipt);
         publish(id, receipt);
       }),
+    /** A call refused before its tool ran has no producer summary, only the refusal. */
+    refused: (id: number, issue: CompactIssue) =>
+      guard(() => {
+        if (receipts.has(id)) return;
+        const receipt = freezeSnapshot<CompactReceipt>({
+          version: 3,
+          subject: "",
+          outcome: "error",
+          issues: retainIssues([issue]).issues,
+          deliveryFailed: false,
+        });
+        errors++;
+        receipts.set(id, receipt);
+        publish(id, receipt);
+      }),
     deliveryFailure: (id: number | undefined) =>
       guard(() => {
         if (id === undefined) {

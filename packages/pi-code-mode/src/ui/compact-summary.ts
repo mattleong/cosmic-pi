@@ -70,13 +70,13 @@ export const codeModeCompactSummary = (
     const text = (decodeOption(TextContentSchema, result.content) ?? [])
       .map((part) => part.text)
       .join("\n");
-    const issues = programIssues(details, children.entries, text, isError);
+    const { issues, rows } = programIssues(details, children.entries, text, isError);
     const summary: CompactSummary = {
       ...heading,
       counters,
-      children,
+      children: { ...children, entries: [...rows] },
       issues,
-      outcome: programOutcome(details, children.entries, issues, isError),
+      outcome: programOutcome(details, rows, issues, isError),
     };
     return summary;
   } catch {

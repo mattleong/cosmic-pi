@@ -111,18 +111,18 @@ describe("registered expanded Code Mode views", () => {
           const text = render(expanded);
           const at = (marker: string) => text.indexOf(marker);
           const order = [
-            at("Program stopped: bash npm test failed"),
             ...(expanded ? [at('tools.pi.read({path:"notes.md"})')] : []),
             at("read notes.md"),
-            at("Exited with code 1"),
-            ...(expanded ? [at("[ToolFailure]")] : []),
+            at("Exited with code 1; stopped the program"),
+            // Recovery text for the agent follows the diagnostic under its own label.
+            ...(expanded ? [at("[ToolFailure]"), at("Agent notes"), at("Do not replay")] : []),
           ];
           expect(
             order.every((index) => index >= 0),
             `${style} ${expanded}`,
           ).toBe(true);
           expect(order, `${style} ${expanded}`).toEqual(order.toSorted((a, b) => a - b));
-          expect(text.split("Program stopped: bash npm test failed")).toHaveLength(2);
+          expect(text).not.toMatch(/Program stopped|Stopped after/u);
           expect(text.split("Exited with code 1")).toHaveLength(2);
         }
       }

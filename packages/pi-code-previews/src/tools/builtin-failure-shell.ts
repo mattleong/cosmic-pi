@@ -1,5 +1,5 @@
 import type { CompactIssue } from "./compact-issues";
-import { firstLineMessage } from "./compact-issues";
+import { firstLineMessage } from "./issue-message";
 
 /** Classify only the terminal status appended by the builtin, never stdout alone. */
 export function shellFailure(details: string, lines: string[]) {

@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import { resolveCompactSummary, withCodePreviewShell } from "pi-code-previews";
-import { createToolPresentationHarness, withPresentationSettings } from "pi-code-previews/testing";
+import {
+  createToolPresentationHarness,
+  issueMessageStyleProblems,
+  withPresentationSettings,
+} from "pi-code-previews/testing";
 import { opaqueFixture } from "pi-cosmic-core/testing";
 import { INCOMPLETE_ATTENTION } from "../src/tools/compact-evidence.ts";
 import { buildCodeModeToolDefinition } from "../src/tools/controller.ts";
@@ -37,29 +41,26 @@ describe("Code Mode program issues", () => {
           execute: () => Promise.resolve({ content: [{ type: "text", text: "x" }], details: {} }),
         },
       });
-      for (const [code, config, expected] of [
-        ["return (", {}, /^Syntax error: /u],
-        ["class A {}", {}, /^Unsupported syntax \(line 1\): /u],
-        ["const x = 1;\nnull.foo;", {}, /^Program error \(line 2\): /u],
-        ['throw new Error("boom");', {}, /^Program error: boom$/u],
-        ["await tools.pi.nope({});", {}, /^Unknown tool: /u],
-        ["await tools.pi.read({});", {}, /^Invalid tool input: /u],
-        ["return () => 1;", {}, /^Invalid value: /u],
+      // Each message names the specific fact a reader needs, in the shared issue style.
+      for (const [code, config, facts] of [
+        ["return (", {}, [/syntax/iu]],
+        ["class A {}", {}, [/class declaration/u, /line 1\b/u]],
+        ["const x = 1;\nnull.foo;", {}, [/'foo'/u, /null/u, /line 2\b/u]],
+        ['throw new Error("boom");', {}, [/^boom$/u]],
+        ["await tools.pi.nope({});", {}, [/no such tool/u]],
+        ["await tools.pi.read({});", {}, [/"path"/u]],
+        ["await tools.pi.read({path:'a', file:'b'});", {}, [/"file"/u]],
+        ["return () => 1;", {}, [/plain data/u]],
         [
           "await tools.pi.read({path:'a'}); await tools.pi.read({path:'b'});",
           { maxToolCalls: 1 },
-          /^Tool call limit reached: /u,
+          [/\b1-call\b/u],
         ],
-        ["while (true) {}", { timeoutMs: 100 }, /^Timed out \(line 1\): /u],
-        [
-          "await tools.pi.bash({command:'npm test'});",
-          {},
-          /^Program stopped: bash npm test failed$/u,
-        ],
+        ["while (true) {}", { timeoutMs: 100 }, [/100 ms/u, /line 1\b/u]],
         [
           "await Promise.allSettled([tools.pi.bash({command:'a'}), tools.pi.bash({command:'b'})]); await tools.pi.bash({command:'c'});",
           {},
-          /^Program stopped: a bash call failed$/u,
+          [/\bbash\b/u],
         ],
       ] as const) {
         const h = executeHarness({
@@ -76,14 +77,53 @@ describe("Code Mode program issues", () => {
         );
         const summary = summarize(h.retention.consume("call"), { isError: true, text });
         expect(summary?.outcome, code).toBe("error");
-        expect(summary?.issues, code).toHaveLength(1);
-        expect(summary?.issues?.[0]?.severity, code).toBe("error");
-        expect(summary?.issues?.[0]?.message, code).toMatch(expected);
+        // Exactly one line explains the stop: the run's own, or the row of the call that caused it.
+        const explained = [
+          ...(summary?.issues ?? []),
+          ...(summary?.children?.entries.flatMap((child) =>
+            (child.issues ?? []).filter((issue) => issue.message.endsWith("stopped the program")),
+          ) ?? []),
+        ];
+        expect(explained, code).toHaveLength(1);
+        const issue = explained[0]!;
+        expect(issue.severity, code).toBe("error");
+        for (const fact of facts) expect(issue.message, code).toMatch(fact);
+        expect(issueMessageStyleProblems(issue.message), `${code}: ${issue.message}`).toEqual([]);
         // Pi's error flag adds nothing once the producer has explained the failure.
         expect(resolveCompactSummary(summary, "settled", true, text)?.issues).toEqual(
           summary?.issues,
         );
       }
+      // An unhandled failure of one visible call is explained on that call's row.
+      const h = executeHarness({ definitions, cwd: "/project", retainFailureDetails: true });
+      const text = yield* Effect.promise(() =>
+        h.run("await tools.pi.bash({command:'npm test'});").then(
+          () => expect.unreachable(),
+          (error: Error) => error.message,
+        ),
+      );
+      const summary = summarize(h.retention.consume("call"), { isError: true, text });
+      expect(summary?.outcome).toBe("error");
+      expect(summary?.issues).toEqual([]);
+      const row = summary?.children?.entries[0]?.issues?.[0]?.message ?? "";
+      expect(row).toMatch(/code 1.*stopped the program/u);
+      expect(issueMessageStyleProblems(row)).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps the supported-syntax summary out of the message but in the agent text", () =>
+    Effect.gen(function* () {
+      const h = executeHarness({ cwd: "/project", retainFailureDetails: true });
+      const text = yield* Effect.promise(() =>
+        h.run("class A {}").then(
+          () => expect.unreachable(),
+          (error: Error) => error.message,
+        ),
+      );
+      expect(text).toMatch(/\nSupported orchestration syntax: /u);
+      expect(text).not.toMatch(/\(line 1, col 1\)/u);
+      const summary = summarize(h.retention.consume("call"), { isError: true, text });
+      expect(summary?.issues?.[0]?.message).not.toMatch(/Supported/u);
     }),
   );
 
@@ -91,7 +131,7 @@ describe("Code Mode program issues", () => {
     for (const [text, expected] of [
       ["Execution failed\nDo not retry before checking side effects.", "Execution failed"],
       ["\n  \n[Unknown] odd\u001b[2J failure\nmore", "[Unknown] odd"],
-      ["[ToolFailure] Nested tool 'bash' failed: gone", "Program stopped: a bash call failed"],
+      ["[ToolFailure] Nested tool 'bash' failed: gone", "Stopped after a bash call failed"],
       ["", "The program failed"],
     ] as const) {
       const issues = summarize(success, { isError: true, text })?.issues;
@@ -207,6 +247,32 @@ describe("Code Mode program issues", () => {
       ),
     );
     expect(interrupted?.issues?.some((issue) => issue.code === "incomplete")).toBe(false);
+  });
+});
+
+describe("Code Mode issue style", () => {
+  it("writes every program and call issue in the shared style", () => {
+    const listed = { tool: "pi.read", status: "completed" as const, compact: receipt("warning") };
+    const delivered = ledgerDetails(
+      [{ tool: "pi.read", summary: { subject: "a.ts", outcome: "success" } }],
+      { deliveryFailures: 1 },
+    ).details;
+    const summaries = [
+      summarize({ ...success, cancelled: true }, { isError: true, text: "Execution cancelled." }),
+      summarize({ ...success, truncated: true }),
+      summarize(calls([listed], { warnings: 3 })),
+      summarize(calls([{ tool: "pi.read", status: "completed" }], { incomplete: true })),
+      summarize(calls([{ tool: "pi.read", status: "running" }], { incomplete: true })),
+      summarize(calls([{ tool: "pi.read", status: "queued" }], { incomplete: true })),
+      summarize(delivered),
+    ];
+    const messages = summaries.flatMap((summary) => [
+      ...(summary?.issues ?? []),
+      ...(summary?.children?.entries.flatMap((child) => child.issues ?? []) ?? []),
+    ]);
+    expect(messages.length).toBeGreaterThanOrEqual(summaries.length);
+    for (const { message } of messages)
+      expect(issueMessageStyleProblems(message), message).toEqual([]);
   });
 });
 
