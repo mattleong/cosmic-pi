@@ -9,7 +9,12 @@ import {
   mcpIssueMessages,
   mcpNoticesIssue,
 } from "../ui/compact-descriptions.ts";
-import { firstLineMessage, mergeCompactIssues, type CompactIssue } from "pi-code-previews";
+import {
+  firstLineMessage,
+  mergeCompactIssues,
+  restatesText,
+  type CompactIssue,
+} from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { McpBoundaryError } from "../client/errors.ts";
@@ -167,9 +172,7 @@ function remoteErrorText<Payload, Data>(field: PresentationReader, payload: Payl
 function remoteDetail(text: string, message: string): string {
   const lines = text.split("\n");
   const first = lines.findIndex((line) => line.trim());
-  // The message may drop the line's final period; it still restates that line.
-  const rest =
-    lines[first]?.trim().replace(/(?<!\.)\.$/u, "") === message ? lines.slice(first + 1) : lines;
+  const rest = restatesText(lines[first] ?? "", message) ? lines.slice(first + 1) : lines;
   return [rest.join("\n").trim(), NO_REPLAY].filter(Boolean).join("\n");
 }
 

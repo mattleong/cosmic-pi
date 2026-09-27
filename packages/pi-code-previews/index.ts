@@ -44,7 +44,14 @@ export {
   type CompactIssue,
   type CompactIssueSeverity,
 } from "./src/tools/compact-issues";
-export { failureMessage, firstLineMessage, isAgentGuidance } from "./src/tools/issue-message";
+export {
+  failureMessage,
+  firstLineMessage,
+  isAgentGuidance,
+  quoteText,
+  restatesText,
+  type QuotedText,
+} from "./src/tools/issue-message";
 export {
   exitStatusMeaning,
   outputFailureLine,

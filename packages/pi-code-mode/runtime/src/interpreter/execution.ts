@@ -322,7 +322,11 @@ export function createToolCallPromise<R>(
         durationMs: Math.max(0, endedAt - queuedAt),
         queueDurationMs: started ? queueDurationMs : Math.max(0, endedAt - queuedAt),
         ...(failure !== undefined && {
-          failure: { kind: failure.kind, message: failure.message },
+          failure: {
+            kind: failure.kind,
+            message: failure.message,
+            ...(failure.facts !== undefined && { facts: failure.facts }),
+          },
         }),
       });
       if (Exit.isSuccess(exit)) return exit.value;

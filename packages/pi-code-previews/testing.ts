@@ -15,3 +15,11 @@ export {
   issueMessageStyleProblems,
   type IssueMessageStyleOptions,
 } from "./src/testing/issue-messages";
+export {
+  GALLERY_VIEWS,
+  galleryDirectory,
+  galleryFrames,
+  writeGallerySection,
+  type GalleryScenario,
+  type GalleryView,
+} from "./src/testing/gallery";

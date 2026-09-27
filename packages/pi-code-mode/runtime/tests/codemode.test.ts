@@ -33,6 +33,7 @@ describe("CodeMode host failure boundary", () => {
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "ToolFailure",
         message: "Authorized request was refused",
+        facts: { tool: "host.call" },
       });
     }),
   );
@@ -55,6 +56,7 @@ describe("CodeMode host failure boundary", () => {
         expect(result.ok ? undefined : result.error).toStrictEqual({
           kind: "ToolFailure",
           message: "Tool execution failed",
+          facts: { tool: "host.call" },
         });
         expect(encodeResult(result)).not.toMatch(
           /typed-secret|defect-secret|Authorization: Bearer/,
@@ -86,6 +88,7 @@ describe("CodeMode host failure boundary", () => {
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "InvalidToolOutput",
         message: "Invalid output from tool 'host.call'.",
+        facts: { tool: "host.call" },
       });
       expect(encodeResult(result)).not.toMatch(/invalid-output-secret/);
     }),
@@ -115,6 +118,7 @@ describe("CodeMode host failure boundary", () => {
       expect(result.ok ? undefined : result.error).toStrictEqual({
         kind: "InvalidToolOutput",
         message: "Invalid output from tool 'host.call'.",
+        facts: { tool: "host.call" },
       });
       expect(encodeResult(result)).not.toMatch(/host-output-secret/);
     }),

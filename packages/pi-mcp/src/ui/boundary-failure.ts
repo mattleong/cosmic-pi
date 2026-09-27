@@ -15,6 +15,23 @@ export interface McpBoundaryView {
   readonly signIn: boolean;
 }
 
+/**
+ * Sign-in is the user's own action, so a boundary failure it fixes names the command. Every view
+ * of the call uses this, since only the call's arguments know the server.
+ */
+export const withSignInCommand = (
+  issues: readonly CompactIssue[],
+  boundary: Pick<McpBoundaryView, "signIn"> | undefined,
+  server: string | undefined,
+): readonly CompactIssue[] =>
+  boundary?.signIn && server
+    ? issues.map((issue) =>
+        issue.code === "boundary-failure"
+          ? { ...issue, message: `Sign-in required: /mcp auth ${server}` }
+          : issue,
+      )
+    : issues;
+
 export const credentialMutationBlocked = (reason: McpBoundaryError["reason"]): boolean =>
   reason === "oauth-mutation-unresolved" ||
   reason === "oauth-finalization-failed" ||

@@ -19,6 +19,7 @@ import {
 import { isDefinition as isToolDefinition, type Definition } from "./tool.js";
 import { copyArguments, copyIn, isBlockedMember } from "./tool-runtime-data.js";
 import { ToolRuntimeError } from "./tool-runtime-error.js";
+import { schemaFailureFacts, type DiagnosticFacts } from "./diagnostic-facts.js";
 export {
   copyIn,
   copyOut,
@@ -30,6 +31,21 @@ export {
 export { ToolRuntimeError } from "./tool-runtime-error.js";
 
 const estimateTokens = (input: string) => Math.max(0, Math.round(input.length / 4));
+/** A tool refusal names the tool the runtime invoked, unless the host already did. */
+const attribute = <A, R>(
+  effect: Effect.Effect<A, ToolError, R>,
+  tool: string,
+): Effect.Effect<A, ToolError, R> =>
+  Effect.mapError(effect, (error) =>
+    error.tool !== undefined
+      ? error
+      : new ToolError({
+          message: error.message,
+          tool,
+          ...(error.cause !== undefined && { cause: error.cause }),
+        }),
+  );
+
 /** A schema failure on one line; multi-line issue text would split the diagnostic. */
 const schemaFailureLine = (cause: unknown): string =>
   (cause instanceof Error ? cause.message : String(cause))
@@ -95,7 +111,11 @@ export type ToolCallLifecycleEvent =
       readonly durationMs: number;
       readonly queueDurationMs: number;
       /** The failed call's normalized, model-safe diagnostic; absent otherwise. */
-      readonly failure?: { readonly kind: string; readonly message: string };
+      readonly failure?: {
+        readonly kind: string;
+        readonly message: string;
+        readonly facts?: DiagnosticFacts;
+      };
     };
 
 /** Decoded tool call observed immediately before tool execution. */
@@ -644,9 +664,14 @@ const namespaceKeys = <R>(
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
-      throw new ToolRuntimeError("UnknownTool", `Unknown tool namespace '${path.join(".")}'.`, [
-        "Object.keys(tools) lists the available namespaces; tools.$codemode.search({ query }) finds described tools.",
-      ]);
+      throw new ToolRuntimeError(
+        "UnknownTool",
+        `Unknown tool namespace '${path.join(".")}'.`,
+        [
+          "Object.keys(tools) lists the available namespaces; tools.$codemode.search({ query }) finds described tools.",
+        ],
+        { tool: path.join("."), toolIssue: "namespace" },
+      );
     }
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     value = value[segment] as HostTool<R> | Definition<R> | HostTools<R>;
@@ -668,9 +693,12 @@ const resolve = <R>(
       isDefinition(value) ||
       !Object.hasOwn(value, segment)
     ) {
-      throw new ToolRuntimeError("UnknownTool", `Unknown tool '${path.join(".")}'.`, [
-        "Use tools.$codemode.search({ query }) to find available described tools.",
-      ]);
+      throw new ToolRuntimeError(
+        "UnknownTool",
+        `Unknown tool '${path.join(".")}'.`,
+        ["Use tools.$codemode.search({ query }) to find available described tools."],
+        { tool: path.join("."), toolIssue: "unknown" },
+      );
     }
     // SAFETY: The value is constructed by the typed owner on this path and satisfies the asserted domain contract.
     value = value[segment] as HostTool<R> | Definition<R> | HostTools<R>;
@@ -681,7 +709,10 @@ const resolve = <R>(
     // SAFETY: HostTools permits callable leaves only as HostTool values.
     return value as HostTool<R>;
   }
-  throw new ToolRuntimeError("UnknownTool", `Tool '${path.join(".")}' is not callable.`);
+  throw new ToolRuntimeError("UnknownTool", `Tool '${path.join(".")}' is not callable.`, [], {
+    tool: path.join("."),
+    toolIssue: "not-callable",
+  });
 };
 
 export type ToolRuntime<R = never> = {
@@ -745,7 +776,10 @@ export const make = <R>(
   const decodeOutput = <Value>(value: Value, name: string) =>
     Effect.try({
       try: () => copyIn(value, `Result from tool '${name}'`),
-      catch: () => new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
+      catch: () =>
+        new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`, [], {
+          tool: name,
+        }),
     });
 
   const recordCall = (call: ToolCall): void => {
@@ -753,6 +787,8 @@ export const make = <R>(
       throw new ToolRuntimeError(
         "ToolCallLimitExceeded",
         `Execution exceeded its tool-call limit of ${maxToolCalls}.`,
+        [],
+        { limit: maxToolCalls },
       );
     }
     calls.push(call);
@@ -788,6 +824,8 @@ export const make = <R>(
             throw new ToolRuntimeError(
               "InvalidToolInput",
               `Tool '${name}' expects exactly one input object.`,
+              [],
+              { tool: name, toolIssue: "arity" },
             );
           describedInput = yield* Effect.try({
             try: () => decodeToolInput(tool, externalArgs[0]),
@@ -795,6 +833,8 @@ export const make = <R>(
               new ToolRuntimeError(
                 "InvalidToolInput",
                 `Invalid input for tool '${name}': ${schemaFailureLine(cause)}`,
+                [],
+                { tool: name, toolIssue: "schema", ...schemaFailureFacts(cause) },
               ),
           });
         }
@@ -805,11 +845,21 @@ export const make = <R>(
         if (isDefinition(tool)) {
           return yield* observeEnd(
             Effect.gen(function* () {
-              const raw = yield* runHost(Effect.suspend(() => tool.run(describedInput)));
+              const raw = yield* attribute(
+                runHost(Effect.suspend(() => tool.run(describedInput))),
+                name,
+              );
               const result = yield* Effect.try({
                 try: () => decodeToolOutput(tool, raw),
                 catch: () =>
-                  new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
+                  new ToolRuntimeError(
+                    "InvalidToolOutput",
+                    `Invalid output from tool '${name}'.`,
+                    [],
+                    {
+                      tool: name,
+                    },
+                  ),
               });
               return yield* decodeOutput(result, name);
             }),
@@ -819,7 +869,7 @@ export const make = <R>(
         return yield* observeEnd(
           Effect.gen(function* () {
             return yield* decodeOutput(
-              yield* runHost(Effect.suspend(() => tool(...externalArgs))),
+              yield* attribute(runHost(Effect.suspend(() => tool(...externalArgs))), name),
               name,
             );
           }),

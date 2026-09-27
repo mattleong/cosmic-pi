@@ -22,6 +22,19 @@ const tools = new Map<string, BuiltinCompactTool>([
   ["pi.ls", "ls"],
 ]);
 export const isCompactPiTool = (name: string): boolean => tools.has(name);
+
+/**
+ * A nested tool's name as rows and messages show it: `pi.read` is `read`. Adapter names map to
+ * their tool's name only when `adapterNames` holds, as for rows with a presentation receipt.
+ */
+export const nestedToolLabel = (name: string, adapterNames = true): string =>
+  isCompactPiTool(name)
+    ? name.slice(3)
+    : adapterNames && name === "mcp.request"
+      ? "mcp"
+      : adapterNames && name === "session.backgroundTask"
+        ? "background_task"
+        : name;
 const InputSchema = Schema.Struct({
   path: Schema.optional(Schema.Unknown),
   command: Schema.optional(Schema.Unknown),

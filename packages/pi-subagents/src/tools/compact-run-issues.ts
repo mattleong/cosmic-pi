@@ -1,9 +1,5 @@
-import {
-  failureMessage,
-  firstLineMessage,
-  isAgentGuidance,
-  type CompactIssue,
-} from "pi-code-previews";
+import { firstLineMessage, quoteText, type CompactIssue } from "pi-code-previews";
+import { runAttention } from "./attention.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { steeringDeliveryEvidence } from "./outcome.ts";
 
@@ -46,6 +42,18 @@ export const hasChangesToReview = (card: SubagentRunCard): boolean =>
   card.writeIntent === "writer" &&
   (card.writerWorkspaceMode === "worktree" || Boolean(card.workspaceId));
 
+const cardIssueAdder =
+  (issues: CompactIssue[], card: SubagentRunCard): AddIssue =>
+  (severity, code, message, detail) =>
+    issues.push({ severity, code: `${card.id}:${code}`, message, ...(detail && { detail }) });
+
+/** Only what each run needs from its parent, as the other views' issue lines. */
+export function runAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
+  const issues: CompactIssue[] = [];
+  for (const card of cards) attentionIssues(card, cardLabel(card), cardIssueAdder(issues, card));
+  return issues;
+}
+
 /** Card audits are bounded projections, never authority for granting paths. */
 export function compactRunIssues(
   cards: readonly SubagentRunCard[],
@@ -56,13 +64,7 @@ export function compactRunIssues(
   for (const card of cards) {
     const issueStart = issues.length;
     const label = cardLabel(card);
-    const add: AddIssue = (severity, code, message, detail) =>
-      issues.push({
-        severity,
-        code: `${card.id}:${code}`,
-        message,
-        ...(detail && { detail }),
-      });
+    const add = cardIssueAdder(issues, card);
     attentionIssues(card, label, add);
     if (card.steeringDelivery) {
       const evidence = steeringDeliveryEvidence[card.steeringDelivery];
@@ -94,22 +96,20 @@ export function compactRunIssues(
   return issues;
 }
 
-/** Whether a quoted message already says all of `text`, bar its final period. */
-const restates = (text: string, said: string) => text.trim().replace(/(?<!\.)\.$/u, "") === said;
-
 /**
- * Worker or system text quoted by its first line. Text that opens with an instruction is agent
- * guidance, so the message says only that it exists. The full text stays expanded.
+ * Worker or system text quoted by its first line, after the worker's name. Text that opens with
+ * an instruction is agent guidance, so the message says only that it exists.
  */
 export function quoted(
   label: string,
   text: string,
   fallback: string,
-): { readonly message: string; readonly detail?: string } {
-  const said = isAgentGuidance(text) ? "" : firstLineMessage(text, "", QUOTED_TEXT_LIMIT);
-  return said
-    ? { message: `${label}: ${said}`, ...(!restates(text, said) && { detail: text }) }
-    : { message: `${label} ${fallback}`, detail: text };
+): Pick<CompactIssue, "message" | "detail"> {
+  const { line, detail } = quoteText(text, { limit: QUOTED_TEXT_LIMIT });
+  return {
+    message: line ? `${label}: ${line}` : `${label} ${fallback}`,
+    ...(detail && { detail }),
+  };
 }
 
 function quote(add: AddIssue, label: string, code: string, text: string, fallback: string): void {
@@ -128,66 +128,77 @@ function outsideClaims(card: SubagentRunCard): string {
 
 function attentionIssues(card: SubagentRunCard, label: string, add: AddIssue): void {
   const id = JSON.stringify(card.id);
-  if (card.writeViolationOffender) {
-    const terminal = ["completed", "failed", "stopped"].includes(card.state);
-    const pausing = card.state !== "paused" && !terminal;
-    add(
-      "warning",
-      "containment-audit",
-      `${label} wrote to ${outsideClaims(card)}${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
-      [
-        "Claim containment. Review the full audit and shared tree with subagent_status; projected paths may be omitted. Do not use subagent_reply for containment.",
-        ...(pausing
-          ? [
-              "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
-            ]
-          : []),
-      ].join("\n"),
-    );
-    if (!terminal && card.capabilities.includes("resume"))
+  const attention = runAttention(card);
+  switch (attention?.kind) {
+    case "containment": {
+      const terminal = ["completed", "failed", "stopped"].includes(card.state);
+      const pausing = card.state !== "paused" && !terminal;
       add(
-        "info",
-        "containment-resume",
-        `${label} can resume once its claims are reviewed`,
-        `Once confirmed paused, if the full audit proves all writes workspace-relative, grant only reviewed, intended, conflict-free missing claims with subagent_claims. Then subagent_claims({ action: "resume_admission", runId: ${id} }), then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue only within the authoritative claims returned by subagent_claims." }), then subagent_await. If containment instead reaches terminal, confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement. If any write is outside the workspace, stop and confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement with exact safe claims.`,
+        "warning",
+        "containment-audit",
+        `${label} wrote to ${outsideClaims(card)}${card.state === "paused" ? "; paused" : pausing ? "; waiting for it to pause" : ""}`,
+        [
+          "Claim containment. Review the full audit and shared tree with subagent_status; projected paths may be omitted. Do not use subagent_reply for containment.",
+          ...(pausing
+            ? [
+                "Wait for containment to reach paused or terminal, then inspect status. If still active, check again; do not issue a duplicate stop solely because pause has not published.",
+              ]
+            : []),
+        ].join("\n"),
       );
-    else
+      if (!terminal && card.capabilities.includes("resume"))
+        add(
+          "info",
+          "containment-resume",
+          `${label} can resume once its claims are reviewed`,
+          `Once confirmed paused, if the full audit proves all writes workspace-relative, grant only reviewed, intended, conflict-free missing claims with subagent_claims. Then subagent_claims({ action: "resume_admission", runId: ${id} }), then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue only within the authoritative claims returned by subagent_claims." }), then subagent_await. If containment instead reaches terminal, confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement. If any write is outside the workspace, stop and confirm process and writer cleanup before reopening admission and launching and awaiting a corrected replacement with exact safe claims.`,
+        );
+      else
+        add(
+          "info",
+          "containment-stop",
+          `${label} must be stopped and replaced`,
+          `Once containment reaches paused or terminal, if paused, stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }). Confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }); then launch a corrected replacement with reviewed exact workspace-relative claims and await its run ID.`,
+        );
+      return;
+    }
+    case "admission-paused":
       add(
-        "info",
-        "containment-stop",
-        `${label} must be stopped and replaced`,
-        `Once containment reaches paused or terminal, if paused, stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }). Confirm process and writer cleanup before subagent_claims({ action: "resume_admission", runId: ${id} }); then launch a corrected replacement with reviewed exact workspace-relative claims and await its run ID.`,
+        "warning",
+        "peer-admission-paused",
+        `${label}: new writes are paused while another worker's file access is reviewed`,
+        "Writer admission paused. Inspect subagent_list and the recorded offender's full subagent_status audit. Do not change this peer's claims. Contain or clean up every offender first; reopen admission only after confirmed pause or terminal cleanup, then continue or await this peer.",
       );
-  } else if (card.writeAdmissionPaused)
-    add(
-      "warning",
-      "peer-admission-paused",
-      `${label}: new writes are paused while another worker's file access is reviewed`,
-      "Writer admission paused. Inspect subagent_list and the recorded offender's full subagent_status audit. Do not change this peer's claims. Contain or clean up every offender first; reopen admission only after confirmed pause or terminal cleanup, then continue or await this peer.",
-    );
-  else if (card.state === "paused")
-    add(
-      "warning",
-      "paused-recovery",
-      `${label} is paused`,
-      card.capabilities.includes("resume")
-        ? `Paused. Review subagent_status, then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with reviewed guidance." }), then subagent_await again.`
-        : `Paused; this backend cannot resume. Stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }), confirm cleanup, then launch a corrected replacement and await its run ID.`,
-    );
-  else if (card.question)
-    add(
-      "warning",
-      "parent-question",
-      `${label} asks: ${firstLineMessage(card.question.message, "a question", QUOTED_TEXT_LIMIT)}`,
-      `Question: ${card.question.message}\nRead the full question in expanded details if omitted. If this is a writer's request for additional file claims, review and grant only intended, conflict-free workspace-relative claims with subagent_claims before replying. Reply with subagent_reply({ runId: ${id}, message: "..." }), then subagent_await again.`,
-    );
-  else if (card.state === "waiting_for_parent")
-    add(
-      "warning",
-      "question-unavailable",
-      `${label} is waiting for a reply, but its question is unavailable`,
-      "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
-    );
+      return;
+    case "paused":
+      add(
+        "warning",
+        "paused-recovery",
+        `${label} is paused`,
+        attention.canResume
+          ? `Paused. Review subagent_status, then subagent_lifecycle({ action: "resume", runIds: [${id}], message: "Continue with reviewed guidance." }), then subagent_await again.`
+          : `Paused; this backend cannot resume. Stop with subagent_lifecycle({ action: "stop", runIds: [${id}] }), confirm cleanup, then launch a corrected replacement and await its run ID.`,
+      );
+      return;
+    case "question":
+      add(
+        "warning",
+        "parent-question",
+        `${label} asks: ${firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
+        `Question: ${attention.message}\nRead the full question in expanded details if omitted. If this is a writer's request for additional file claims, review and grant only intended, conflict-free workspace-relative claims with subagent_claims before replying. Reply with subagent_reply({ runId: ${id}, message: "..." }), then subagent_await again.`,
+      );
+      return;
+    case "question-unavailable":
+      add(
+        "warning",
+        "question-unavailable",
+        `${label} is waiting for a reply, but its question is unavailable`,
+        "Waiting for parent, but no question is projected. Inspect full subagent_status before choosing recovery; do not invent a reply.",
+      );
+      return;
+    default:
+      return;
+  }
 }
 
 function evidenceIssues(
@@ -201,16 +212,12 @@ function evidenceIssues(
     "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
   if (card.error) {
     // Unrecognised worker prose: common service failures get a short name; the full text stays.
-    const said = isAgentGuidance(card.error)
-      ? ""
-      : failureMessage(card.error, "", QUOTED_TEXT_LIMIT);
+    const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
     add(
       "error",
       "error",
-      said ? `${label}: ${said}` : `${label} reported an error`,
-      [said && restates(card.error, said) ? "" : card.error, retryGuidance]
-        .filter(Boolean)
-        .join("\n"),
+      line ? `${label}: ${line}` : `${label} reported an error`,
+      [detail, retryGuidance].filter(Boolean).join("\n"),
     );
   } else if (card.state === "failed")
     add(

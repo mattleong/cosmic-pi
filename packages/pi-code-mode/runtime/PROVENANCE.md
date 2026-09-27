@@ -36,6 +36,7 @@ copy or the file layout of upstream v2:
 - `src/tool-schema.ts`
 - `src/values.ts`
 - `src/runtime-values.ts` (local type-narrowing support; see deviation 10)
+- `src/diagnostic-facts.ts` (local structured diagnostic facts; see deviation 20)
 - `src/failure.ts` (local closed Effect failure union; see deviation 6)
 - `src/interpreter/model.ts`
 - `src/interpreter/runtime.ts`
@@ -67,8 +68,8 @@ add confinement and observation. Deviations 11-17 add JavaScript compatibility a
 mutation and async semantics; their behavior and remaining limits are documented below.
 Deviation 18 adds host-only pre-truncation result observation. Deviation 19 aligns successful
 string accounting with the runtime's verbatim host representation. Deviation 20 makes three
-diagnostic messages one specific line and reports a failed call's diagnostic to its lifecycle
-observer; diagnostic kinds and failure semantics are unchanged.
+diagnostic messages one specific line, adds structured diagnostic facts, and reports a failed
+call's diagnostic to its lifecycle observer; diagnostic kinds and failure semantics are unchanged.
 
 1. `src/index.ts` no longer exports `OpenAPI` (excluded subsystem).
 2. Tests import from `@effect/vitest` instead of `bun:test` and live under
@@ -418,7 +419,14 @@ observer; diagnostic kinds and failure semantics are unchanged.
     into one line. A failed call's terminal `onToolCallLifecycle` event also carries the
     normalized diagnostic the program sees (`failure: { kind, message }`), so hosts can explain
     calls refused before their tool ran. `ParseError` diagnostics carry the program line and
-    column of the TypeScript diagnostic, clamped to the program's own lines. Kinds, locations, suggestions, lifecycle order and
+    column of the TypeScript diagnostic, clamped to the program's own lines. Diagnostics also
+    carry optional structured `facts` (`src/diagnostic-facts.ts`) so hosts can present them
+    without reading their wording: the tool path and issue for unknown tools, invalid input and
+    output, and tool refusals (the runtime names the tool it invoked on a `ToolError` that lacks
+    one); the schema field path, issue, and expectation for invalid input, rebuilt without the
+    rejected value; the unsupported syntax node; the parser's reason; the plain-data owner; the
+    call limit; and the timeout. Messages are unchanged; local `tests/diagnostic-facts.test.ts`
+    covers the facts. Kinds, locations, suggestions, lifecycle order and
     control flow are unchanged. The extension's `../tests/compact-summary.test.ts` covers the
     presented messages.
 

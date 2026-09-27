@@ -8,11 +8,7 @@ import {
   type CompactOutcome,
 } from "pi-code-previews";
 import { INCOMPLETE_ATTENTION } from "../tools/compact-evidence.ts";
-import {
-  describeProgramFailure,
-  nestedToolName,
-  parseProgramDiagnostic,
-} from "../tools/diagnostic-messages.ts";
+import { describeProgramFailure } from "../tools/diagnostic-messages.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
 export const TRUNCATED_OUTPUT_NOTICE =
@@ -57,15 +53,15 @@ const markStopped = (row: CompactChild): CompactChild => {
  * An unhandled failure of one call is explained on that call's row when it is the only
  * matching row and the collapsed tree shows it: a nested tool that failed, or a call refused
  * before it ran. Otherwise the program's own issue names the call, or just the tool rather
- * than guess.
+ * than guess. Results without recorded failure evidence show their first line.
  */
 const programFailure = (
   text: string,
   details: CodeModeRenderDetails,
   rows: readonly CompactChild[],
 ): ProgramFailure => {
-  const diagnostic = parseProgramDiagnostic(text);
-  if (diagnostic === undefined)
+  const failure = details.failure;
+  if (failure === undefined)
     return {
       rows,
       issue: {
@@ -74,20 +70,15 @@ const programFailure = (
         message: firstLineMessage(text, "The program failed"),
       },
     };
-  const nested =
-    diagnostic.kind === "ToolFailure"
-      ? /^Nested tool '([^']+)' failed:/u.exec(diagnostic.message)?.[1]
-      : undefined;
-  const refusal = `not-sent:${diagnostic.kind}`;
+  const tool = failure.kind === "ToolFailure" ? failure.facts?.tool : undefined;
+  const refusal = `not-sent:${failure.kind}`;
   const matches =
-    nested === undefined
+    tool === undefined
       ? rows.flatMap((row, index) =>
           row.issues?.some((issue) => issue.code === refusal) ? [index] : [],
         )
       : details.toolCalls.flatMap((call, index) =>
-          call.status === "error" && (call.tool === nested || call.tool === `pi.${nested}`)
-            ? [index]
-            : [],
+          call.status === "error" && call.tool === tool ? [index] : [],
         );
   const index = matches.length === 1 ? matches[0] : undefined;
   const culprit = index === undefined ? undefined : rows[index];
@@ -96,27 +87,18 @@ const programFailure = (
     selectCompactChildren({ total: details.counts.total, entries: rows }).entries.includes(culprit)
   )
     return { rows: rows.map((row, position) => (position === index ? markStopped(row) : row)) };
-  if (nested === undefined)
-    return {
-      rows,
-      issue: {
-        severity: "error",
-        code: "program-failure",
-        message: describeProgramFailure(diagnostic),
-      },
-    };
   const subject = culprit?.compactSubject ?? culprit?.subject;
   return {
     rows,
     issue: {
       severity: "error",
-      code: "program-stopped",
-      message: firstLineMessage(
-        culprit
-          ? `Stopped after ${culprit.label}${subject ? ` ${subject}` : ""} failed`
-          : `Stopped after a ${nestedToolName(nested)} call failed`,
-        "The program stopped",
-      ),
+      code: culprit ? "program-stopped" : "program-failure",
+      message: culprit
+        ? firstLineMessage(
+            `Stopped after ${culprit.label}${subject ? ` ${subject}` : ""} failed`,
+            "The program stopped",
+          )
+        : describeProgramFailure(failure, text),
     },
   };
 };

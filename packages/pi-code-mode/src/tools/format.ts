@@ -12,6 +12,7 @@ import type {
   ResultReadPresentation,
 } from "../results/read-presentation.ts";
 import type { CompactAttention, CompactReceipt } from "./compact-evidence.ts";
+import type { FailureEvidence } from "./failure-evidence.ts";
 import type { CodeModeFailure, CodeModeSuccess } from "../boundary/codemode-runtime.ts";
 
 /** Schema and display bound (code points) for the human-readable `intent` parameter. */
@@ -99,6 +100,8 @@ export interface CodeModeToolDetails {
   readonly cancelled?: boolean;
   /** Where agent-facing recovery notes begin in the returned text; display only. */
   readonly notesOffset?: number;
+  /** Why the program failed, as structured evidence for presentation. */
+  readonly failure?: FailureEvidence;
 }
 
 /** Progress entries stay bounded no matter how many nested calls a program admits. */
@@ -218,11 +221,17 @@ export const codeModeDiagnosticMessage = (error: CodeModeFailure["error"]): stri
  */
 export const formatCodeModeFailure = (result: CodeModeFailure): string => {
   const { error } = result;
-  const location =
-    error.location === undefined
-      ? ""
-      : ` (line ${error.location.line}, column ${error.location.column})`;
   const message = codeModeDiagnosticMessage(error);
   const hints = (error.suggestions ?? []).filter((hint) => !message.includes(hint));
-  return withLogs([`[${error.kind}]${location} ${message}`, ...hints].join("\n"), result.logs);
+  return withLogs([`${diagnosticPrefix(error)}${message}`, ...hints].join("\n"), result.logs);
+};
+
+/** `[Kind] (line L, column C) `, the envelope before a diagnostic's message. */
+const diagnosticPrefix = (error: CodeModeFailure["error"]) =>
+  `[${error.kind}]${error.location === undefined ? "" : ` (line ${error.location.line}, column ${error.location.column})`} `;
+
+/** Where the diagnostic message's first line sits in `formatCodeModeFailure` text. */
+export const codeModeMessageSpan = (error: CodeModeFailure["error"]) => {
+  const start = diagnosticPrefix(error).length;
+  return { start, end: start + (codeModeDiagnosticMessage(error).split("\n")[0] ?? "").length };
 };

@@ -235,11 +235,12 @@ export class ExecutionDeadline {
 
   check(node?: AstNode): void {
     if (this.expired()) {
-      throw new InterpreterRuntimeError(
+      const error = new InterpreterRuntimeError(
         `Execution timed out after ${this.timeoutMs}ms.`,
         node,
         "TimeoutExceeded",
       );
+      throw this.timeoutMs === undefined ? error : error.withFacts({ timeoutMs: this.timeoutMs });
     }
   }
 }

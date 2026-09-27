@@ -6,6 +6,8 @@ import * as Schema from "effect/Schema";
 export class ToolError extends Schema.TaggedError<ToolError>()("ToolError", {
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
+  /** The tool path that refused, attached by the runtime that invoked it. */
+  tool: Schema.optionalKey(Schema.String),
 }) {}
 
 /** Creates a tool refusal whose message is safe to include in an execution diagnostic. */

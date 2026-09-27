@@ -101,6 +101,7 @@ export const executeWithLimits = <const Tools extends object>(
               error: {
                 kind: "TimeoutExceeded",
                 message: `Execution timed out after ${timeoutMs}ms.`,
+                facts: { timeoutMs },
               },
               ...logged(),
               toolCalls: tools.calls,

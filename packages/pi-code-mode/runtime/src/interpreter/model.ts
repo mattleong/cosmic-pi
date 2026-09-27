@@ -1,3 +1,4 @@
+import type { DiagnosticFacts } from "../diagnostic-facts.js";
 import * as Data from "effect/Data";
 import * as Predicate from "effect/Predicate";
 import { hasObjectRuntimeType } from "../runtime-values.js";
@@ -296,6 +297,8 @@ export class InterpreterRuntimeError extends Data.TaggedError(
   "InterpreterRuntimeError",
 )<InterpreterRuntimeErrorProps> {
   errorName: string = "Error";
+  /** Structured facts for hosts; the message stays the model-facing wording. */
+  facts: DiagnosticFacts | undefined = undefined;
 
   constructor(
     message: string,
@@ -318,6 +321,11 @@ export class InterpreterRuntimeError extends Data.TaggedError(
     this.errorName = errorName;
     return this;
   }
+
+  withFacts(facts: DiagnosticFacts): this {
+    this.facts = facts;
+    return this;
+  }
 }
 
 export const unsupportedSyntax = (kind: string, node: AstNode): InterpreterRuntimeError =>
@@ -326,7 +334,7 @@ export const unsupportedSyntax = (kind: string, node: AstNode): InterpreterRunti
     node,
     "UnsupportedSyntax",
     [supportedSyntaxMessage],
-  );
+  ).withFacts({ syntax: kind });
 
 export const isRecord = (value: AstPropertyValue): value is AstPropertyRecord =>
   hasObjectRuntimeType(value) && value !== null;

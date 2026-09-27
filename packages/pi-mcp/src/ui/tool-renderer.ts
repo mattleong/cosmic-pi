@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { renderCompactIssues } from "pi-code-previews";
+import { withSignInCommand } from "./boundary-failure.ts";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -47,14 +48,22 @@ export const renderMcpCall = <Args>(args: Args, theme: CardTheme, expanded = fal
 /** The detailed card renders its own issues: the shared shell shows none alongside it. */
 export const renderMcpResult = <Result>(
   result: Result,
-  options: { readonly expanded: boolean; readonly isPartial: boolean; readonly isError?: boolean },
+  options: {
+    readonly expanded: boolean;
+    readonly isPartial: boolean;
+    readonly isError?: boolean;
+    /** The call's server, which names the sign-in command when signing in is the remedy. */
+    readonly server?: string | undefined;
+  },
   theme: Theme,
   expandHint = "",
 ): Component => {
   const details = decodeMcpCardDetails(result);
   const boundary = options.expanded && !options.isPartial ? details.boundary : undefined;
   // Progress updates are not settled; their provisional uncertainty is not an issue yet.
-  const issues = options.isPartial ? [] : details.presentation.issues;
+  const issues = options.isPartial
+    ? []
+    : withSignInCommand(details.presentation.issues, details.boundary, options.server);
   const issueDetails = issues.flatMap((issue) => issue.detail?.split("\n") ?? []);
   const repeated = (text: string) => issueDetails.includes(text);
   // A boundary issue carries the diagnostic title, explanation, and navigation in its detail.

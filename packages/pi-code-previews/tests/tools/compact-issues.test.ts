@@ -6,7 +6,12 @@ import {
   mergeCompactIssues,
   type CompactIssue,
 } from "../../src/tools/compact-issues";
-import { failureMessage, firstLineMessage, isAgentGuidance } from "../../src/tools/issue-message";
+import {
+  failureMessage,
+  firstLineMessage,
+  isAgentGuidance,
+  quoteText,
+} from "../../src/tools/issue-message";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 import { createBoundedCompactIssuesSchema } from "../../src/tools/compact-issues-schema";
 import {
@@ -87,6 +92,20 @@ test("first-line messages drop error-class wrappers and trailing agent advice", 
   const clipped = firstLineMessage("word ".repeat(40), "fallback", 30);
   expect(clipped.length).toBeLessThanOrEqual(30);
   expect(clipped.endsWith("…")).toBe(true);
+});
+
+test("quoted text keeps its full form as detail only when the line leaves something out", () => {
+  expect(quoteText("Spawn failed.")).toEqual({ line: "Spawn failed" });
+  expect(quoteText("Spawn  failed")).toEqual({ line: "Spawn failed" });
+  expect(quoteText("Spawn failed\n  at spawn")).toEqual({
+    line: "Spawn failed",
+    detail: "Spawn failed\n  at spawn",
+  });
+  expect(quoteText("Review the server first.")).toEqual({ detail: "Review the server first." });
+  expect(quoteText("Error: 429 Too Many Requests", { failure: true }).line).toBe(
+    "Rate limited (429)",
+  );
+  expect(quoteText("  ")).toEqual({});
 });
 
 test("guidance is recognised by its opening instruction, not by later sentences", () => {

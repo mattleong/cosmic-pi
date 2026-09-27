@@ -1,3 +1,4 @@
+import { runAttention, type AttentionRun } from "./attention.ts";
 import {
   sanitizeTerminalLine,
   stripTerminalControls as sanitizeTerminalText,
@@ -46,19 +47,6 @@ export const boundToolOutput = (text: string): string =>
 
 export const joinBoundedToolText = (parts: ReadonlyArray<string>): string =>
   boundToolOutput(parts.filter(Boolean).join("\n\n"));
-
-interface AttentionRun {
-  readonly id: string;
-  readonly name: string;
-  readonly state: SubagentRunView["state"];
-  readonly question?: { readonly message: string } | undefined;
-  readonly writeIntent: SubagentRunView["writeIntent"];
-  readonly writeClaims?: ReadonlyArray<string> | undefined;
-  readonly writeAudit?: SubagentRunView["writeAudit"] | undefined;
-  readonly writeAdmissionPaused?: boolean | undefined;
-  readonly writeViolationOffender?: boolean | undefined;
-  readonly capabilities: SubagentRunView["capabilities"];
-}
 
 const runTarget = (run: AttentionRun): string =>
   `${sanitizeTerminalLine(run.name)} (${sanitizeTerminalLine(run.id)})`;
@@ -161,15 +149,25 @@ export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string
       ? "Parent action required; other unfinished subagents continue independently."
       : "Write-claim containment is still in progress; other unfinished subagents continue independently.",
     ...attention.flatMap((run) => {
-      if (run.writeViolationOffender === true) return claimContainmentRecovery(run);
-      if (run.writeAdmissionPaused === true) return pausedAdmissionPeerRecovery(run);
-      if (run.state === "paused") return ordinaryPauseRecovery(run);
-      const question = sanitizeTerminalLine(run.question?.message ?? "");
-      const bounded = clipWithMarker(question, 512, "… [truncated]");
-      return [
-        `Question from ${sanitizeTerminalLine(run.name)}: ${bounded}`,
-        `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
-      ];
+      const state = runAttention(run);
+      switch (state?.kind) {
+        case "containment":
+          return claimContainmentRecovery(run);
+        case "admission-paused":
+          return pausedAdmissionPeerRecovery(run);
+        case "paused":
+          return ordinaryPauseRecovery(run);
+        case "question": {
+          const question = sanitizeTerminalLine(state.message);
+          const bounded = clipWithMarker(question, 512, "… [truncated]");
+          return [
+            `Question from ${sanitizeTerminalLine(run.name)}: ${bounded}`,
+            `Reply with subagent_reply({ runId: ${JSON.stringify(run.id)}, message: "..." }), then call subagent_await again.`,
+          ];
+        }
+        default:
+          return [];
+      }
     }),
   ].join("\n");
 };

@@ -132,7 +132,8 @@ describe("Code Mode program issues", () => {
     for (const [text, expected] of [
       ["Execution failed\nDo not retry before checking side effects.", "Execution failed"],
       ["\n  \n[Unknown] odd\u001b[2J failure\nmore", "[Unknown] odd"],
-      ["[ToolFailure] Nested tool 'bash' failed: gone", "Stopped after a bash call failed"],
+      // Without recorded failure evidence the text is never parsed, only tidied.
+      ["[ToolFailure] Nested tool 'bash' failed: gone", "Nested tool 'bash' failed: gone"],
       ["", "The program failed"],
     ] as const) {
       const issues = summarize(success, { isError: true, text })?.issues;

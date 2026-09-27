@@ -1,4 +1,4 @@
-import { firstLineMessage, isAgentGuidance, type CompactIssue } from "pi-code-previews";
+import { quoteText, type CompactIssue } from "pi-code-previews";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpDiscoveryNoticePolicy } from "../discovery/diagnostics.ts";
 
@@ -51,13 +51,13 @@ export const mcpNoticesIssue = (
   notices: readonly string[],
 ): Pick<CompactIssue, "message" | "detail"> => {
   const [first = ""] = notices;
-  const said = isAgentGuidance(first) ? "" : firstLineMessage(first, "", 100);
-  const restated = notices.length === 1 && first.trim().replace(/(?<!\.)\.$/u, "") === said;
+  const { line, detail } = quoteText(first, { limit: 100 });
+  const more = notices.length > 1;
   return {
-    message: said
-      ? `${said}${notices.length > 1 ? ` (+${notices.length - 1} more)` : ""}`
+    message: line
+      ? `${line}${more ? ` (+${notices.length - 1} more)` : ""}`
       : mcpIssueMessages["unclassified-notices"],
-    ...(!restated && { detail: notices.join("\n") }),
+    ...((more || detail) && { detail: notices.join("\n") }),
   };
 };
 

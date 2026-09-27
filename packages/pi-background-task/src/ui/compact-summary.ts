@@ -1,4 +1,4 @@
-import { exitStatusMeaning, firstLineMessage } from "pi-code-previews";
+import { exitStatusMeaning, firstLineMessage, quoteText } from "pi-code-previews";
 import type {
   CompactIssue,
   CompactOutcome,
@@ -52,14 +52,8 @@ const runtimeTimeoutIssue = (id: string) =>
 
 /** Unclassified task errors keep their full text on expansion when the message is only a part. */
 function taskErrorIssue(id: string, error: string): CompactIssue {
-  const text = stripTerminalControls(error).trim();
-  const message = firstLineMessage(text, "The task reported an error");
-  return issue(
-    "error",
-    `${id}:error`,
-    message,
-    sanitizeTerminalLine(text) === message ? undefined : text,
-  );
+  const { line, detail } = quoteText(stripTerminalControls(error).trim());
+  return issue("error", `${id}:error`, line ?? "The task reported an error", detail);
 }
 
 type TaskSummary = CompactSummary & {

@@ -51,13 +51,14 @@ export const parseProgram = (code: string): ProgramNode => {
   );
 
   if (diagnostic) {
+    const reason = flattenDiagnosticMessageText(diagnostic.messageText, "\n");
     throw new InterpreterRuntimeError(
-      `Failed to parse TypeScript: ${flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`,
+      `Failed to parse TypeScript: ${reason}`,
       undefined,
       "ParseError",
       undefined,
       diagnostic.start === undefined ? undefined : programPosition(wrapped, diagnostic.start, code),
-    );
+    ).withFacts({ reason });
   }
 
   const bodyStart = transpiled.outputText.indexOf("{") + 1;
@@ -90,18 +91,28 @@ export const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
     };
     const location = error.node?.loc !== undefined ? sourceLocation(error.node) : error.location;
     const withLocation = location !== undefined ? { ...base, location } : base;
-    return error.suggestions !== undefined
-      ? { ...withLocation, suggestions: error.suggestions }
-      : withLocation;
+    return {
+      ...withLocation,
+      ...(error.suggestions !== undefined && { suggestions: error.suggestions }),
+      ...(error.facts !== undefined && { facts: error.facts }),
+    };
   }
 
   if (error instanceof ToolRuntimeError) {
-    const base = { kind: error.kind, message: error.message };
-    return error.suggestions.length > 0 ? { ...base, suggestions: error.suggestions } : base;
+    return {
+      kind: error.kind,
+      message: error.message,
+      ...(error.suggestions.length > 0 && { suggestions: error.suggestions }),
+      ...(error.facts !== undefined && { facts: error.facts }),
+    };
   }
 
   if (error instanceof ToolError) {
-    return { kind: "ToolFailure", message: publicErrorMessage(error.message) };
+    return {
+      kind: "ToolFailure",
+      message: publicErrorMessage(error.message),
+      ...(error.tool !== undefined && { facts: { tool: error.tool } }),
+    };
   }
 
   if (error instanceof ProgramThrow) {

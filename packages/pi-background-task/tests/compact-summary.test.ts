@@ -110,11 +110,14 @@ describe("background task compact semantics", () => {
       expect.objectContaining({ severity: "error", message: "Custom failure" }),
     ]);
     expect(single?.issues?.[0]?.detail).toBe("Custom failure. Inspect state.");
-    const plain = project({
-      action: "status",
-      snapshot: { ...snapshot, state: "failed", error: "Custom failure" },
-    });
-    expect(plain?.issues?.[0]?.detail).toBeUndefined();
+    // A one-line error the message restates, final period aside, keeps no duplicate detail.
+    for (const error of ["Custom failure", "Custom failure."]) {
+      const plain = project({
+        action: "status",
+        snapshot: { ...snapshot, state: "failed", error },
+      });
+      expect(plain?.issues?.[0]?.detail).toBeUndefined();
+    }
 
     const error = "\u001b[31mSpawn failed\u001b[0m\nENOENT: no such file\n  at spawn";
     const multi = project({ action: "status", snapshot: { ...snapshot, state: "failed", error } });

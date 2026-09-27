@@ -375,7 +375,14 @@ const copyBounded = <Value>(
 
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
-      throw new ToolRuntimeError("InvalidDataValue", `${label} must contain plain objects only.`);
+      throw new ToolRuntimeError(
+        "InvalidDataValue",
+        `${label} must contain plain objects only.`,
+        [],
+        {
+          owner: label,
+        },
+      );
     }
 
     budget.inspectAccessors(value);

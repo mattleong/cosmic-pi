@@ -1,5 +1,6 @@
 import { compactIssueSeverity, compactStatus } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
@@ -10,6 +11,7 @@ import {
   mcpNoticesIssue,
 } from "../../src/ui/compact-descriptions.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
+import { renderMcpResult } from "../../src/ui/tool-renderer.ts";
 import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
 import { projectReply } from "../fixtures/results.ts";
 
@@ -514,6 +516,22 @@ describe("MCP compact summaries", () => {
       )?.issues?.find((issue) => issue.code === "boundary-failure")?.message;
     expect(failed("auth-oauth-required")).toContain("/mcp auth browser");
     expect(failed("auth-env-required")).not.toContain("/mcp auth");
+    // The preview-style card says the same.
+    const card = (reason: string) =>
+      renderMcpResult(
+        {
+          details: reply(
+            { kind: "auth-required", reason },
+            { action: "tools.call", isError: true },
+          ),
+        },
+        { expanded: false, isPartial: false, isError: true, server: "browser" },
+        plainTheme,
+      )
+        .render(120)
+        .join("\n");
+    expect(card("auth-oauth-required")).toContain("/mcp auth browser");
+    expect(card("auth-env-required")).not.toContain("/mcp auth");
   });
 
   it("writes every fixed message and quoted notice in the shared style", () => {

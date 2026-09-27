@@ -1,5 +1,6 @@
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { DiagnosticFacts } from "./diagnostic-facts.js";
 import { executeWithLimits } from "./interpreter/runtime.js";
 import {
   type HostTools,
@@ -104,6 +105,7 @@ export const Diagnostic = Schema.Struct({
   message: Schema.String,
   location: Schema.optionalKey(Schema.Struct({ line: Schema.Number, column: Schema.Number })),
   suggestions: Schema.optionalKey(Schema.Array(Schema.String)),
+  facts: Schema.optionalKey(DiagnosticFacts),
 });
 /** A normalized program diagnostic safe to return across an agent tool boundary. */
 export type Diagnostic = typeof Diagnostic.Type;

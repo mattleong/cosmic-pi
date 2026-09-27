@@ -5,6 +5,7 @@ import {
 } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core";
+import { withSignInCommand } from "./boundary-failure.ts";
 import { decodeMcpCardDetails, mcpCallSummary } from "./tool-render-details.ts";
 import { ownPresentationField } from "../code-mode/presentation-evidence.ts";
 
@@ -50,15 +51,7 @@ export const projectMcpCompactSummary = ({
       ...heading,
       outcome: boundary.outcome,
       counters: [boundary.status.toLowerCase()],
-      // Sign-in is the user's own action, so the message says how to take it.
-      issues:
-        boundary.signIn && call.server
-          ? issues.map((issue) =>
-              issue.code === "boundary-failure"
-                ? { ...issue, message: `Sign-in required: /mcp auth ${call.server}` }
-                : issue,
-            )
-          : issues,
+      issues: [...withSignInCommand(issues, boundary, call.server)],
     };
   // Unknown envelopes, incomplete evidence, and unviewed adapter failures keep the detailed card.
   if (

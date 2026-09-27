@@ -1,3 +1,4 @@
+import { mcpCallSummary } from "../ui/tool-render-details.ts";
 import { keyText, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { renderMcpCallContent } from "../ui/call-content.ts";
@@ -168,6 +169,7 @@ export const buildMcpTool = (options: McpToolControllerOptions): McpToolDefiniti
           expanded: renderOptions.expanded,
           isPartial: renderOptions.isPartial,
           isError: invokeHostCallback(() => context.isError, false),
+          server: mcpCallSummary(context.args).server,
         },
         theme,
         expandHint,

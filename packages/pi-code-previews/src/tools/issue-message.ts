@@ -46,6 +46,41 @@ export function firstLineMessage(
   return clip(message || fallback, Math.min(limit, COMPACT_ISSUE_MESSAGE_LIMIT));
 }
 
+/** Whether `message` already says all of `text`: one line, bar spacing and its final period. */
+export function restatesText(text: string, message: string): boolean {
+  return (
+    message !== "" &&
+    text
+      .trim()
+      .replace(/\s+/gu, " ")
+      .replace(/(?<!\.)\.$/u, "") === message
+  );
+}
+
+/** A quoted line in people's terms, and the full text when the line does not say all of it. */
+export interface QuotedText {
+  /** Absent when the text opens with agent guidance or has nothing to quote. */
+  readonly line?: string;
+  readonly detail?: string;
+}
+
+/**
+ * Quote producer, worker, or server text: its first line, unless the text opens with agent
+ * guidance, and the full text as detail unless that line already says all of it. `failure`
+ * names common service failures rather than quoting them.
+ */
+export function quoteText(
+  text: string,
+  options: { readonly limit?: number; readonly failure?: boolean } = {},
+): QuotedText {
+  const quote = options.failure ? failureMessage : firstLineMessage;
+  const line = isAgentGuidance(text) ? "" : quote(text, "", options.limit);
+  return {
+    ...(line && { line }),
+    ...(text.trim() && !restatesText(text, line) && { detail: text }),
+  };
+}
+
 /** Text that opens by telling its reader what to do is agent guidance, not a fact to quote. */
 export function isAgentGuidance(text: string): boolean {
   return ADVICE.test(firstLineMessage(text, ""));

@@ -18,6 +18,7 @@ import {
   type CodeModeToolDetails,
 } from "./format.ts";
 import { clampModelVisibleText, utf8ByteLength } from "./limits.ts";
+import { failureEvidence } from "./failure-evidence.ts";
 import { composeRecoveryResponse } from "./recovery-response.ts";
 
 export function makeResultResponse(input: {
@@ -160,12 +161,15 @@ export function makeResultResponse(input: {
           };
         }
       }
+      const failure =
+        !cancelled && result && !result.ok ? failureEvidence(result.error, text) : undefined;
       const finalDetails: CodeModeToolDetails = {
         ...details,
         ...(publishReceipt && { executionReceipts: receipts }),
         ...(resultId && { resultId, ...(initialPreview && { initialPreview }) }),
         ...((truncated || composed.truncated) && { truncated: true }),
         ...(cancelled && { cancelled: true }),
+        ...(failure !== undefined && { failure }),
         ...("notesOffset" in composed &&
           composed.notesOffset !== undefined &&
           text === composed.text && { notesOffset: composed.notesOffset }),

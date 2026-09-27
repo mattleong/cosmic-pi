@@ -15,8 +15,8 @@ import {
   stripTerminalControls as sanitizeTerminalText,
 } from "pi-cosmic-core";
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
-import { isAssignmentFinishedRunState, isParentActionRequiredRun } from "../run/model.ts";
-import { compactRunIssues } from "./compact-run-issues.ts";
+import { isAssignmentFinishedRunState } from "../run/model.ts";
+import { runAttentionIssues } from "./compact-run-issues.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { clipWithMarker } from "../run/state.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
@@ -287,31 +287,9 @@ interface RunOverviewOptions {
   readonly contentOnly?: boolean | undefined;
 }
 
-const ATTENTION_CODES = new Set([
-  "containment-audit",
-  "peer-admission-paused",
-  "paused-recovery",
-  "parent-question",
-  "question-unavailable",
-]);
-
-/** Collapsed attention in people's terms; the agent's recovery steps wait for expansion. */
-const collapsedAttention = (
-  runs: ReadonlyArray<SubagentRunCard>,
-  theme: Theme,
-  width: number,
-): string[] =>
-  renderCompactIssues(
-    compactRunIssues(
-      runs.filter((run) => isParentActionRequiredRun(run) || run.writeViolationOffender === true),
-      false,
-      false,
-    ).filter((issue) => ATTENTION_CODES.has(issue.code.slice(issue.code.lastIndexOf(":") + 1))),
-    theme,
-    width,
-    false,
-    "",
-  );
+/** What runs need from their parent, as the same lines the compact style shows. */
+const attentionLines = (runs: ReadonlyArray<SubagentRunCard>, theme: Theme, width: number) =>
+  renderCompactIssues(runAttentionIssues(runs), theme, width, false, "");
 
 /** Next steps in people's terms when collapsed; the agent's recovery steps once expanded. */
 const nextStepLines = (
@@ -332,22 +310,11 @@ const nextStepLines = (
       ),
     );
   if (options.contentOnly) return ready;
-  if (!options.expanded) return [...ready, ...collapsedAttention(runs, theme, width)];
+  const attention = attentionLines(runs, theme, width);
+  if (!options.expanded) return [...ready, ...attention];
   return [
     ...ready,
-    ...runs
-      .filter((run) => run.state === "paused")
-      .map((run) =>
-        truncateToWidth(
-          theme.fg(
-            "warning",
-            run.capabilities.includes("resume")
-              ? `${sanitizeTerminalLine(run.name)} is paused · resume or stop it with subagent_lifecycle.`
-              : `${sanitizeTerminalLine(run.name)} cannot resume · stop it and start a replacement.`,
-          ),
-          width,
-        ),
-      ),
+    ...attention,
     ...attentionRecoveryText(runs)
       .split("\n")
       .filter(Boolean)

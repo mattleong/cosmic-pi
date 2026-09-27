@@ -8,6 +8,7 @@ yarn.lock
 .pi-subagents/
 *.tgz
 *.log
+presentation-gallery.txt
 .DS_Store
 
 # Editor / tool swap leftovers (e.g. empty `.file.ts.XXXXXX/` dirs)

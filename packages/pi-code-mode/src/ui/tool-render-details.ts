@@ -8,6 +8,7 @@ import {
   type CompactAttention,
 } from "../tools/compact-evidence.ts";
 import { MAX_NESTED_SUBJECT_LENGTH, normalizeNestedSubject } from "../tools/compact-subject.ts";
+import { FailureEvidenceSchema, type FailureEvidence } from "../tools/failure-evidence.ts";
 import {
   ExecutionReceiptsSchema,
   hasCompleteReadOnlyReceipts,
@@ -42,6 +43,8 @@ export interface CodeModeRenderDetails {
   readonly truncated: boolean;
   /** Where agent-facing recovery notes begin in the result text. */
   readonly notesOffset?: number;
+  /** Why the program failed; absent for results written before failures were recorded. */
+  readonly failure?: FailureEvidence;
 }
 
 const SubjectSchema = Schema.String.check(Schema.isMaxLength(MAX_NESTED_SUBJECT_LENGTH * 2));
@@ -65,6 +68,7 @@ const RenderDetailsInputSchema = Schema.Struct({
   cancelled: Schema.optional(Schema.Unknown),
   truncated: Schema.optional(Schema.Unknown),
   notesOffset: Schema.optional(Schema.Unknown),
+  failure: Schema.optional(Schema.Unknown),
 });
 const validInitialPreview = (
   preview: typeof InitialPreviewPresentationSchema.Type | undefined,
@@ -183,9 +187,11 @@ export const decodeCodeModeRenderDetails = <Details>(details: Details): CodeMode
     outputKind,
   );
   const notesOffset = decodeOption(Schema.Natural, record.notesOffset);
+  const failure = decodeOption(FailureEvidenceSchema, record.failure);
   const normalized: CodeModeRenderDetails = {
     ...(compactAttention !== undefined && { compactAttention }),
     ...(notesOffset !== undefined && { notesOffset }),
+    ...(failure !== undefined && { failure }),
     ...(initialPreview !== undefined && { initialPreview }),
     receiptsReadOnly,
     toolCalls,

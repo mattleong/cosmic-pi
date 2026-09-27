@@ -1,17 +1,11 @@
 /** Shared receipt projection for collapsed and expanded nested calls. */
 import type { CompactChild, CompactIssue, CompactPhase } from "pi-code-previews";
-import { isCompactPiTool } from "../tools/compact-subject.ts";
+import { isCompactPiTool, nestedToolLabel } from "../tools/compact-subject.ts";
 import type { CodeModeCallEntry } from "../tools/format.ts";
 import type { CodeModeRenderDetails } from "./tool-render-details.ts";
 
 const label = (call: CodeModeCallEntry): string =>
-  isCompactPiTool(call.tool)
-    ? call.tool.slice(3)
-    : call.compact !== undefined && call.tool === "mcp.request"
-      ? "mcp"
-      : call.compact !== undefined && call.tool === "session.backgroundTask"
-        ? "background_task"
-        : call.tool;
+  nestedToolLabel(call.tool, call.compact !== undefined);
 
 const status = (
   call: CodeModeCallEntry,

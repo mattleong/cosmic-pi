@@ -120,7 +120,11 @@ evidence remain separate.
   operation status. `program-issues.ts` owns the run's own issues and outcome: cancellation, the
   program failure, saved-output continuation (info), output truncation, and unrecorded call
   details. `tools/diagnostic-messages.ts` writes one human line per diagnostic kind from the
-  runtime's envelope (`No tool named pi.x`, `Timed out after 100 ms (line 1)`). A call refused
+  runtime's structured facts, never its wording (`No tool named pi.x`, `Timed out after 100 ms
+  (line 1)`). Failed results keep `tools/failure-evidence.ts` evidence in their details: the kind,
+  line, bounded redacted facts, and a span to the message's first line in the result text, which
+  may hold tool output and is therefore never copied into details. Results without that evidence
+  show their tidied first line. A call refused
   before its tool ran (unknown tool, invalid input, over the call limit, expired deadline) gets a
   `not-sent:<kind>` receipt from the diagnostic on its terminal lifecycle event (`Not sent:
 unexpected field "file"`), even when the program catches it; past the limit only the first

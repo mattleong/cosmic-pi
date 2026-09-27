@@ -26,14 +26,33 @@ export type CodeModeToolCallLifecycleEvent =
       readonly started: boolean;
       readonly durationMs: number;
       /** A failed call's normalized diagnostic, as the program would see it. */
-      readonly failure?: { readonly kind: string; readonly message: string };
+      readonly failure?: {
+        readonly kind: string;
+        readonly message: string;
+        readonly facts?: CodeModeDiagnosticFacts;
+      };
     };
+
+/** Structured facts behind a diagnostic; every field is optional. */
+export interface CodeModeDiagnosticFacts {
+  readonly tool?: string;
+  readonly toolIssue?: "unknown" | "namespace" | "not-callable" | "arity" | "schema";
+  readonly field?: ReadonlyArray<string | number>;
+  readonly fieldIssue?: "unexpected" | "missing" | "invalid";
+  readonly expected?: string;
+  readonly reason?: string;
+  readonly syntax?: string;
+  readonly limit?: number;
+  readonly timeoutMs?: number;
+  readonly owner?: string;
+}
 
 export interface CodeModeDiagnostic {
   readonly kind: string;
   readonly message: string;
   readonly location?: { readonly line: number; readonly column: number };
   readonly suggestions?: ReadonlyArray<string>;
+  readonly facts?: CodeModeDiagnosticFacts;
 }
 
 export interface CodeModeSuccess {

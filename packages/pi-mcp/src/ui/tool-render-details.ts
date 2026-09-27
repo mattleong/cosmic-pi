@@ -97,6 +97,10 @@ const legacyDetails = <Result>(result: Result): McpRenderField => {
   }
 };
 
+/** Counter nouns are regular plurals; one of a thing reads singular. */
+const counterLabel = (plural: string, count: number) =>
+  count === 1 ? plural.replace(/s$/u, "") : plural;
+
 export const mcpCallSummary = <Args>(args: Args) => {
   const action = safeText(own(args, "action").value, 64) || "status";
   const server = safeText(own(args, "server").value, 128);
@@ -184,7 +188,7 @@ export const decodeMcpCardDetails = <Result>(result: Result): McpCardDetails => 
   for (const key of counterKeys) {
     const length = arrayLength(own(payload, key).value);
     if (length !== undefined)
-      counts.push(`${length} ${key === "content" ? "content blocks" : key}`);
+      counts.push(`${length} ${counterLabel(key === "content" ? "content blocks" : key, length)}`);
   }
   const returned = arrayLength(own(rawPage, "items").value);
   const rawTotal = natural(own(rawPage, "total").value);
