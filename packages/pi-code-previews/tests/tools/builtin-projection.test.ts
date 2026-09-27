@@ -69,15 +69,38 @@ describe("builtin issue style", () => {
 });
 
 describe("builtin failure classification", () => {
-  it("classifies only the terminal shell status and never repeats output", () => {
+  it("classifies only the terminal shell status and adds one bounded cause line", () => {
     const exit = failed(
       "bash",
       "SOURCE_SNIPPET\nError: diagnostic\n  at stack\nCommand exited with code 7",
     );
     expect(exit?.outcome).toBe("error");
+    // The first failure line says why; other output and stack frames stay expanded-only.
     expect(exit?.issues).toEqual([
-      { severity: "error", code: "shell-exit", message: "Exited with code 7" },
+      { severity: "error", code: "shell-exit", message: "Exited with code 7: diagnostic" },
     ]);
+    for (const [output, cause] of [
+      [" FAIL  tests/a.test.ts > adds\n Test Files  1 failed (1)", "FAIL tests/a.test.ts > adds"],
+      ["Traceback (most recent call last):\nValueError: bad input", "bad input"],
+      [
+        "src/auth/token.ts(42,7): error TS2322: Type 'x' is not assignable",
+        "token.ts:42 Type 'x' is not assignable",
+      ],
+      ["error[E0308]: mismatched types", "mismatched types"],
+      ["npm ERR! code ELIFECYCLE\n ELIFECYCLE  Test failed.", undefined],
+      ["Found 0 errors. Watching for file changes.", undefined],
+      ["building…\ndone", undefined],
+    ] as const) {
+      const message = failed("bash", `${output}\nCommand exited with code 1`)?.issues?.[0]?.message;
+      expect(message).toBe(cause ? `Exited with code 1: ${cause}` : "Exited with code 1");
+    }
+    const secret = failed("bash", "error: token=hunter2secret\nCommand exited with code 1");
+    expect(secret?.issues?.[0]?.message).not.toContain("hunter2secret");
+    expect(secret?.issues?.[0]?.message).toContain("[REDACTED]");
+    expect(
+      failed("bash", `error: ${"x".repeat(200)}\nCommand exited with code 1`)?.issues?.[0]?.message
+        .length,
+    ).toBeLessThanOrEqual(70);
     expect(failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues).toEqual([
       { severity: "error", code: "shell-timeout", message: "Timed out after 30 seconds" },
     ]);

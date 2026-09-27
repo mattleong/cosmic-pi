@@ -50,7 +50,15 @@ export const projectMcpCompactSummary = ({
       ...heading,
       outcome: boundary.outcome,
       counters: [boundary.status.toLowerCase()],
-      issues,
+      // Sign-in is the user's own action, so the message says how to take it.
+      issues:
+        boundary.signIn && call.server
+          ? issues.map((issue) =>
+              issue.code === "boundary-failure"
+                ? { ...issue, message: `Sign-in required: /mcp auth ${call.server}` }
+                : issue,
+            )
+          : issues,
     };
   // Unknown envelopes, incomplete evidence, and unviewed adapter failures keep the detailed card.
   if (

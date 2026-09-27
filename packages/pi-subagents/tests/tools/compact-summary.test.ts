@@ -637,7 +637,8 @@ describe("subagent compact semantic policy", () => {
       ],
     });
     expect(summary?.outcome).toBe("error");
-    expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["error", "info", "info"]);
+    // Cleanup and the retry it allows share one expanded-only line.
+    expect(summary?.issues?.map((issue) => issue.severity)).toEqual(["error", "info"]);
     expect(details(summary?.issues)).toContain('action: "retry"');
   });
 

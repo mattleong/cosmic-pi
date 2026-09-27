@@ -90,10 +90,13 @@ const AWAIT_ANSWERS =
 const RETRIEVE_DELIVERY =
   "Retrieve the retained result with ask_user_async_control status or await; delivery IDs identify the same result.";
 
-/** One fact, one issue: every pending request shares the same wait and await guidance. */
+/**
+ * One fact, one issue: every pending request shares the same wait and await guidance. Waiting
+ * is a questionnaire's normal state, so the issue is informational.
+ */
 function answersPending(count: number): CompactIssue {
   return {
-    severity: "warning",
+    severity: "info",
     code: "answers-pending",
     message:
       count === 1 ? "Waiting for answers" : `${count} questionnaires are waiting for answers`,
@@ -158,7 +161,8 @@ export const asyncAskUserCompactSummary: CompactSummaryProvider = ({
         ? "Questionnaire queued"
         : "Awaiting answers",
       ...identity,
-      outcome: "warning",
+      // Opening the questionnaire succeeded; the counter says it is awaiting answers.
+      outcome: "success",
       counters: [statuses.join(", ")],
       issues: [answersPending(rows.length)],
     };

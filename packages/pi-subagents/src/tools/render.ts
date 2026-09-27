@@ -28,7 +28,7 @@ import {
   type SubagentRunCard,
   type SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
-import { attentionRecoveryText, boundToolOutput, selectionSourceLabel } from "./format.ts";
+import { attentionRecoveryText, boundToolOutput } from "./format.ts";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
@@ -122,14 +122,45 @@ const reportAffordance = (
   return renderExpansionAffordance(label, expanded, theme);
 };
 
-const runRetentionLabel = (run: SubagentRunCard): string =>
-  run.closeOnReport === false
-    ? `retain backend · assignment ${run.reportGeneration || 1}`
-    : `close after report · assignment ${run.reportGeneration || 1}`;
+const runRetentionLabel = (run: SubagentRunCard): string => {
+  const assignment = (run.reportGeneration || 1) > 1 ? ` · assignment ${run.reportGeneration}` : "";
+  return `${run.closeOnReport === false ? "stays open after its report" : "closes after its report"}${assignment}`;
+};
 
+// Generic reasons restate the source; only a specific reason, such as a fallback, adds a fact.
+const GENERIC_SELECTION_REASON = /^Profile (?:model|route) selection\.?$/u;
+
+/** How the route was chosen; empty when it would only restate the default. */
 const runSelectionSummary = (run: SubagentRunCard): string => {
-  const profile = run.profile ? `${sanitizeTerminalLine(run.profile)} · ` : "";
-  return sanitizeTerminalLine(`${profile}${selectionSourceLabel(run)} · ${run.selection.reason}`);
+  const { source, candidateIndex, reason } = run.selection;
+  const parts = [
+    run.profile ? `${run.profile} profile` : undefined,
+    source === "profile-parent-candidate"
+      ? "parent's model"
+      : candidateIndex === undefined
+        ? undefined
+        : `option ${candidateIndex + 1}`,
+    GENERIC_SELECTION_REASON.test(reason) ? undefined : reason,
+  ].filter(Boolean);
+  return sanitizeTerminalLine(parts.join(" · "));
+};
+
+const CAPABILITY_LABELS = new Map<string, string>([
+  ["rename-display", "rename"],
+  ["parent-contact", "ask the parent"],
+  ["peer-notice", "notify peers"],
+  ["native-fork", "fork"],
+]);
+
+/** The actions this worker's backend supports, as a reader would name them. */
+const runControls = (run: SubagentRunCard): string => {
+  const labels = run.capabilities.map(
+    (capability) => CAPABILITY_LABELS.get(capability) ?? capability,
+  );
+  const last = labels.pop();
+  return last === undefined
+    ? "no live controls"
+    : `can ${labels.length ? `${labels.join(", ")} and ${last}` : last}`;
 };
 
 const runWriterSummary = (run: SubagentRunCard): string | undefined => {
@@ -147,10 +178,10 @@ const routineRunDiagnostics = (
   selection: string,
   retention: string,
 ): ReadonlyArray<string> => {
-  const details = `context=${run.context} · ${retention} · capabilities=${run.capabilities.join(", ") || "none"}`;
+  const details = `${run.context === "fork" ? "Forked context" : "Fresh context"} · ${retention} · ${runControls(run)}`;
   return [
     ...wrapTextWithAnsi(theme.fg("dim", `ID: ${sanitizeTerminalLine(run.id)}`), width),
-    ...wrapTextWithAnsi(theme.fg("dim", selection), width),
+    ...(selection ? wrapTextWithAnsi(theme.fg("dim", selection), width) : []),
     ...wrapTextWithAnsi(theme.fg("dim", details), width),
   ];
 };
@@ -166,7 +197,7 @@ const exceptionalRunDiagnostics = (
     (run.selection.candidateIndex ?? 0) > 0 || run.selection.skippedCandidates.length > 0;
   const writer = runWriterSummary(run);
   return [
-    ...(fallbackSelected ? wrapTextWithAnsi(theme.fg("dim", selection), width) : []),
+    ...(fallbackSelected && selection ? wrapTextWithAnsi(theme.fg("dim", selection), width) : []),
     ...(run.closeOnReport === false ? wrapTextWithAnsi(theme.fg("dim", retention), width) : []),
     ...(writer ? wrapTextWithAnsi(theme.fg("warning", writer), width) : []),
     ...(run.writeAdmissionPaused

@@ -22,7 +22,8 @@ Producers write their own messages in one style:
 - Prefer content to category. Quote a worker's warning or question rather than saying one exists, unless the text opens with an instruction to the agent.
 - Never prefix a label the message repeats (`Unknown tool: Unknown tool …`). No `Error:`, `Uncaught:`, or `[Kind]` prefixes, internal type names, tool-call syntax, IDs, or trailing period. State a location once, as `(line N)`.
 - Choose severity by what the reader must do. Routine states, such as a stop the status already shows or changes awaiting normal review, are metadata or `info`, not warnings.
-- Aim for about 70 characters; wrapped lines are allowed, clipped ones are not.
+- A status that says only that something failed, such as an exit code, may add the one output line that says why, redacted and clipped short. Never add more than one.
+- Aim for about 70 characters. The renderer wraps a longer message rather than cutting it off, so producers shorten their own quoted text.
 
 When no classification exists, use `failureMessage(text, fallback)` for failures or `firstLineMessage(text, fallback)` for other text. Both take the first nonblank line, escape control characters, drop error-class prefixes and wrappers, drop trailing sentences that instruct the reader, and clip to one bounded row. `failureMessage` first names common service and network failures (rate limits, authentication, server errors, connection loss, context overflow) from that line alone. `isAgentGuidance(text)` tells producers when quoted text opens with an instruction. Full raw text stays in the agent-facing result and the expanded view. `compactSubject` replaces opaque targets only in compact headings.
 

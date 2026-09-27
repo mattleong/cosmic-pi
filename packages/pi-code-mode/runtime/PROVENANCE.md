@@ -417,7 +417,8 @@ observer; diagnostic kinds and failure semantics are unchanged.
     hosts already append on its own line. `InvalidToolInput` joins the schema issue and its path
     into one line. A failed call's terminal `onToolCallLifecycle` event also carries the
     normalized diagnostic the program sees (`failure: { kind, message }`), so hosts can explain
-    calls refused before their tool ran. Kinds, locations, suggestions, lifecycle order and
+    calls refused before their tool ran. `ParseError` diagnostics carry the program line and
+    column of the TypeScript diagnostic, clamped to the program's own lines. Kinds, locations, suggestions, lifecycle order and
     control flow are unchanged. The extension's `../tests/compact-summary.test.ts` covers the
     presented messages.
 

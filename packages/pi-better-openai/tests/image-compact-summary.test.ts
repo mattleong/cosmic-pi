@@ -1,4 +1,5 @@
 import { compactIssueSeverity } from "pi-code-previews";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
 import { imageCompactSummary } from "../src/image/compact-summary.ts";
 
@@ -90,6 +91,8 @@ describe("image compact summary", () => {
     expect(summary?.issues).toEqual([
       expect.objectContaining({ severity: "error", message: "Save failed" }),
     ]);
+    for (const issue of summary?.issues ?? [])
+      expect(issueMessageStyleProblems(issue.message)).toEqual([]);
     call.result.content.push(image);
     expect(imageCompactSummary(call)).toBeUndefined();
     expect(call.result.content[1]).toBe(image);

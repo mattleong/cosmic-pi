@@ -22,8 +22,24 @@ import {
 } from "./model.js";
 import { containsRuntimeReference } from "./references.js";
 
+/**
+ * A wrapper offset as a program position. The wrapper adds one header line, so its line index is
+ * the program's line number; positions in the wrapper's own lines clamp to the program.
+ */
+const programPosition = (wrapped: string, offset: number, code: string) => {
+  const before = wrapped.slice(0, offset).split("\n");
+  const lines = Math.max(1, code.split("\n").length);
+  const line = before.length - 1;
+  return line < 1
+    ? { line: 1, column: 1 }
+    : line > lines
+      ? { line: lines, column: 1 }
+      : { line, column: before.at(-1)!.length + 1 };
+};
+
 export const parseProgram = (code: string): ProgramNode => {
-  const transpiled = transpileModule(`async function __codemode__() {\n${code}\n}`, {
+  const wrapped = `async function __codemode__() {\n${code}\n}`;
+  const transpiled = transpileModule(wrapped, {
     reportDiagnostics: true,
     compilerOptions: {
       target: ScriptTarget.ESNext,
@@ -39,6 +55,8 @@ export const parseProgram = (code: string): ProgramNode => {
       `Failed to parse TypeScript: ${flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`,
       undefined,
       "ParseError",
+      undefined,
+      diagnostic.start === undefined ? undefined : programPosition(wrapped, diagnostic.start, code),
     );
   }
 
@@ -70,8 +88,8 @@ export const normalizeError = <ErrorInput>(error: ErrorInput): Diagnostic => {
       kind: error.kind,
       message: `${error.message}${formatLocation(error.node)}`,
     };
-    const withLocation =
-      error.node?.loc !== undefined ? { ...base, location: sourceLocation(error.node) } : base;
+    const location = error.node?.loc !== undefined ? sourceLocation(error.node) : error.location;
+    const withLocation = location !== undefined ? { ...base, location } : base;
     return error.suggestions !== undefined
       ? { ...withLocation, suggestions: error.suggestions }
       : withLocation;

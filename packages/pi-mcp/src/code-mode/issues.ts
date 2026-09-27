@@ -4,7 +4,11 @@ import {
   presentationValidationIdentity,
   type PresentationReader,
 } from "./presentation-evidence.ts";
-import { mcpDiscoveryMessage, mcpIssueMessages } from "../ui/compact-descriptions.ts";
+import {
+  mcpDiscoveryMessage,
+  mcpIssueMessages,
+  mcpNoticesIssue,
+} from "../ui/compact-descriptions.ts";
 import { firstLineMessage, mergeCompactIssues, type CompactIssue } from "pi-code-previews";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -254,15 +258,18 @@ export function projectMcpIssues<Reply>(
   }
   if (notices.attention.length) {
     // Keep whole notices only. The detailed card still lists any that do not fit.
-    let detail = notices.attention[0]!;
+    const kept = [notices.attention[0]!];
+    let length = kept[0]!.length;
     for (const text of notices.attention.slice(1)) {
-      if (detail.length + 1 + text.length > MAX_DETAIL) {
+      if (length + 1 + text.length > MAX_DETAIL) {
         lost = true;
         break;
       }
-      detail += `\n${text}`;
+      kept.push(text);
+      length += 1 + text.length;
     }
-    add("unclassified-notices", "warning", detail);
+    const { message, detail } = mcpNoticesIssue(notices.attention);
+    add("unclassified-notices", "warning", detail && kept.join("\n"), message);
   }
   for (const issue of notices.information) push(issue);
   const undiscoveredCount = presentationArrayLength(undiscovered);

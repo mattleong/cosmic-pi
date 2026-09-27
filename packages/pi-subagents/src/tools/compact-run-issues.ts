@@ -196,6 +196,9 @@ function evidenceIssues(
   add: AddIssue,
   reportsOnlyOmitted: boolean,
 ): void {
+  // Retry guidance belongs with the failure it follows, not on a line of its own.
+  const retryGuidance =
+    "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.";
   if (card.error) {
     // Unrecognised worker prose: common service failures get a short name; the full text stays.
     const said = isAgentGuidance(card.error)
@@ -205,16 +208,16 @@ function evidenceIssues(
       "error",
       "error",
       said ? `${label}: ${said}` : `${label} reported an error`,
-      said && restates(card.error, said) ? undefined : card.error,
+      [said && restates(card.error, said) ? "" : card.error, retryGuidance]
+        .filter(Boolean)
+        .join("\n"),
     );
   } else if (card.state === "failed")
-    add("error", "run-failed", `${label} failed`, "Run failed; inspect full status.");
-  if (card.error || card.state === "failed")
     add(
-      "info",
-      "failure-recovery",
-      `${label}: retry only after cleanup is confirmed`,
-      "Inspect expanded details and full subagent_status for cleanup and retry disposition. Do not retry when execution is uncertain or cleanup is unconfirmed; missing projected retry data does not establish eligibility.",
+      "error",
+      "run-failed",
+      `${label} failed`,
+      `Run failed; inspect full status.\n${retryGuidance}`,
     );
   if (card.state === "stopping")
     add(

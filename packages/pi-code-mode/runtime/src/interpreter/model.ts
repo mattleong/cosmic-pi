@@ -280,6 +280,8 @@ type InterpreterRuntimeErrorProps = {
   readonly kind: DiagnosticKind;
   readonly node?: AstNode;
   readonly suggestions?: ReadonlyArray<string>;
+  /** Source position for failures raised before an AST exists, such as parse errors. */
+  readonly location?: SourcePosition;
 };
 
 type InterpreterRuntimeErrorInit = {
@@ -287,6 +289,7 @@ type InterpreterRuntimeErrorInit = {
   kind: DiagnosticKind;
   node?: AstNode;
   suggestions?: ReadonlyArray<string>;
+  location?: SourcePosition;
 };
 
 export class InterpreterRuntimeError extends Data.TaggedError(
@@ -299,6 +302,7 @@ export class InterpreterRuntimeError extends Data.TaggedError(
     node?: AstNode,
     kind: DiagnosticKind = "ExecutionFailure",
     suggestions?: ReadonlyArray<string>,
+    location?: SourcePosition,
   ) {
     const props: InterpreterRuntimeErrorInit = {
       message,
@@ -306,6 +310,7 @@ export class InterpreterRuntimeError extends Data.TaggedError(
     };
     if (node !== undefined) props.node = node;
     if (suggestions !== undefined) props.suggestions = suggestions;
+    if (location !== undefined) props.location = location;
     super(props);
   }
 

@@ -289,6 +289,10 @@ const failureDiagnostic = (error: Evidence, actions: DiagnosticActions): McpDiag
   return diagnostic(title, explanation, recovery === "sign-in" ? signIn : recovery, severity);
 };
 
+/** Whether an explicit user sign-in is this failure's remedy, whatever the host can offer now. */
+export const mcpSignInRemedy = (error: Pick<Evidence, "kind" | "reason">): boolean =>
+  (own(REASONS, error.reason) ?? own(KINDS, error.kind))?.[2] === "sign-in";
+
 /** Fixed reasons only. Neither completion nor a failure diagnostic proves output was retained. */
 export const mcpDiagnostic = (error: Evidence, actions: DiagnosticActions = {}): McpDiagnostic => {
   if (error.outcome === "unknown") {

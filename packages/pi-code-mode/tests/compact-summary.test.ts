@@ -43,7 +43,8 @@ describe("Code Mode program issues", () => {
       });
       // Each message names the specific fact a reader needs, in the shared issue style.
       for (const [code, config, facts] of [
-        ["return (", {}, [/syntax/iu]],
+        ["return (", {}, [/syntax/iu, /line 1\b/u]],
+        ["const a = 1;\nconst b = ;", {}, [/syntax/iu, /line 2\b/u]],
         ["class A {}", {}, [/class declaration/u, /line 1\b/u]],
         ["const x = 1;\nnull.foo;", {}, [/'foo'/u, /null/u, /line 2\b/u]],
         ['throw new Error("boom");', {}, [/^boom$/u]],

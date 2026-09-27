@@ -216,10 +216,7 @@ export const renderStartReceiptComponent = (
             ...(failure
               ? [
                   ...wrapTextWithAnsi(
-                    theme.fg(
-                      "error",
-                      `Failure — ${sanitizeTerminalLine(entry.name)}${failure.code ? ` [${sanitizeTerminalLine(failure.code)}]` : ""}`,
-                    ),
+                    theme.fg("error", `${sanitizeTerminalLine(entry.name)} couldn't start`),
                     safeWidth,
                   ),
                   ...wrapTextWithAnsi(

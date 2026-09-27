@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
-import { renderContextFixture } from "pi-code-previews/testing";
+import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
 
 const submitted = {
@@ -61,7 +61,8 @@ describe("questionnaire compact outcome projection", () => {
       });
       for (const details of [pending, { requests: [pending] }]) {
         const summary = summarize(asyncAskUserCompactSummary, details);
-        expect(summary?.outcome).toBe("warning");
+        // Waiting is a questionnaire's normal state: success, with guidance kept for expansion.
+        expect(summary?.outcome).toBe("success");
         expect(summary?.subject).toBe(pending.requestId);
         expect(summary?.counters).toHaveLength(1);
         expect(summary?.counters?.join(" ")).toContain(
@@ -69,7 +70,7 @@ describe("questionnaire compact outcome projection", () => {
         );
         expect(summary?.issues).toEqual([
           expect.objectContaining({
-            severity: "warning",
+            severity: "info",
             code: "answers-pending",
             detail: expect.stringContaining("ask_user_async_control await"),
           }),
@@ -87,13 +88,13 @@ describe("questionnaire compact outcome projection", () => {
         { ...pending, requestId: "open-1", presentation: "open" },
       ],
     });
-    expect(summary?.outcome).toBe("warning");
+    expect(summary?.outcome).toBe("success");
     expect(summary?.counters).toHaveLength(1);
     expect(summary?.counters?.join(" ")).toContain("2 queued");
     expect(summary?.counters?.join(" ")).toContain("1 awaiting answers");
     // Every pending request shares one wait fact.
     expect(summary?.issues).toEqual([
-      expect.objectContaining({ severity: "warning", code: "answers-pending" }),
+      expect.objectContaining({ severity: "info", code: "answers-pending" }),
     ]);
   });
 
@@ -277,5 +278,32 @@ describe("questionnaire compact outcome projection", () => {
     });
     expect(summarize(asyncAskUserCompactSummary, hostileId)).toBeUndefined();
     expect(summarize(asyncAskUserCompactSummary, { requests: [hostileId] })).toBeUndefined();
+  });
+
+  it("writes every questionnaire issue message in the shared style", () => {
+    const pending = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const failed = row({ delivery: "failed" });
+    const summaries = [
+      summarize(asyncAskUserCompactSummary, pending),
+      summarize(asyncAskUserCompactSummary, {
+        requests: [pending, { ...pending, requestId: "request-2" }],
+      }),
+      summarize(asyncAskUserCompactSummary, failed),
+      summarize(asyncAskUserCompactSummary, {
+        requests: [failed, { ...failed, requestId: "request-2" }],
+      }),
+    ];
+    const messages = summaries
+      .flatMap((summary) => summary?.issues ?? [])
+      .map((issue) => issue.message);
+    expect(messages.length).toBe(summaries.length);
+    for (const message of messages)
+      expect({
+        message,
+        problems: issueMessageStyleProblems(message, { forbidden: ["request-1"] }),
+      }).toEqual({
+        message,
+        problems: [],
+      });
   });
 });

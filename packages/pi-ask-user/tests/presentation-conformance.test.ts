@@ -177,12 +177,18 @@ describe("registered questionnaire presentation", () => {
       const tool = register("compact", mode).tools.find(
         (entry) => entry.name === "ask_user_async_control",
       )!;
-      for (const [rows, message, procedure] of [
-        [pending, "3 questionnaires are waiting for answers", "Continue only independent work"],
+      for (const [rows, message, procedure, routine] of [
+        [
+          pending,
+          "3 questionnaires are waiting for answers",
+          "Continue only independent work",
+          true,
+        ],
         [
           failures,
           "Automatic delivery failed for 2 saved questionnaire results",
           "Retrieve the retained result",
+          false,
         ],
       ] as const) {
         const result = {
@@ -195,8 +201,8 @@ describe("registered questionnaire presentation", () => {
           harness.call({ action: "status" }, { expanded });
           harness.result(result, { expanded });
           const text = harness.render().join("\n");
-          // One grouped fact in both views; its procedure only on expansion.
-          expect(text.split(message)).toHaveLength(2);
+          // One grouped fact; routine waiting shows it only on expansion, like its procedure.
+          expect(text.split(message)).toHaveLength(!routine || expanded ? 2 : 1);
           expect(text.split(procedure)).toHaveLength(expanded ? 2 : 1);
           expect(text.includes("Independent raw result marker")).toBe(expanded);
           for (const row of rows) expect(text.includes(row.requestId)).toBe(expanded);

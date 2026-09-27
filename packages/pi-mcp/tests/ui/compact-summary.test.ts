@@ -1,8 +1,14 @@
 import { compactIssueSeverity, compactStatus } from "pi-code-previews";
-import { renderContextFixture } from "pi-code-previews/testing";
+import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { McpGatewayReply } from "../../src/tools/model.ts";
+import {
+  mcpBoundaryDescriptions,
+  mcpDiscoveryMessage,
+  mcpIssueMessages,
+  mcpNoticesIssue,
+} from "../../src/ui/compact-descriptions.ts";
 import { mcpCompactSummary } from "../../src/ui/compact-summary.ts";
 import { decodeMcpCardDetails } from "../../src/ui/tool-render-details.ts";
 import { projectReply } from "../fixtures/results.ts";
@@ -75,6 +81,9 @@ const codes = (summary: ReturnType<typeof summarize>) =>
   summary?.issues?.map((issue) => issue.code) ?? [];
 const issueDetails = (summary: ReturnType<typeof summarize>) =>
   summary?.issues?.map((issue) => issue.detail ?? "").join("\n") ?? "";
+/** Everything an issue retains: a quoted single notice may be the message alone. */
+const issueEvidence = (summary: ReturnType<typeof summarize>) =>
+  summary?.issues?.flatMap((issue) => [issue.message, issue.detail ?? ""]).join("\n") ?? "";
 
 describe("MCP compact summaries", () => {
   it.each(["status", "connect", "disconnect"])(
@@ -326,7 +335,7 @@ describe("MCP compact summaries", () => {
       expect.objectContaining({
         code: "unclassified-notices",
         severity: "warning",
-        detail: "Remote notice",
+        message: "Remote notice",
       }),
     );
     expect(JSON.stringify(summary)).not.toContain("retained-1");
@@ -485,11 +494,42 @@ describe("MCP compact summaries", () => {
     expect(codes(summary)).toEqual(
       expect.arrayContaining(["output-truncated", "validation-unavailable", "retained-output"]),
     );
-    for (const notice of card.notices) expect(issueDetails(summary)).toContain(notice);
+    for (const notice of card.notices)
+      expect(issueEvidence(summary)).toContain(notice.replace(/\.$/u, ""));
     expect(card.resultId).toBe("retained-1");
     expect(JSON.stringify(summary)).not.toContain(card.recoveryHint);
     expect(summary?.issues?.find((issue) => issue.code === "retained-output")?.severity).toBe(
       "info",
     );
+  });
+
+  it("names the sign-in command only when signing in is the remedy", () => {
+    const args = { action: "tools.call", server: "browser", tool: "click" };
+    const failed = (reason: string) =>
+      summarize(
+        reply({ kind: "auth-required", reason }, { action: "tools.call", isError: true }),
+        "settled",
+        true,
+        args,
+      )?.issues?.find((issue) => issue.code === "boundary-failure")?.message;
+    expect(failed("auth-oauth-required")).toContain("/mcp auth browser");
+    expect(failed("auth-env-required")).not.toContain("/mcp auth");
+  });
+
+  it("writes every fixed message and quoted notice in the shared style", () => {
+    const messages = [
+      ...Object.values(mcpBoundaryDescriptions),
+      ...Object.values(mcpIssueMessages),
+      ...(["templates", "resources"] as const).map((scope) =>
+        mcpDiscoveryMessage({ reason: "optional-catalog", scope, visibility: "expanded-only" }),
+      ),
+      mcpNoticesIssue(["Rate limit is close.", "Another warning"]).message,
+      mcpNoticesIssue(["Review the server before retrying."]).message,
+    ];
+    for (const message of messages)
+      expect({ message, problems: issueMessageStyleProblems(message) }).toEqual({
+        message,
+        problems: [],
+      });
   });
 });

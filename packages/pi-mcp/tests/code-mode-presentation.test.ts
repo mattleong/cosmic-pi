@@ -21,6 +21,9 @@ const issue = (presentation: McpPresentation, code: string) =>
   presentation.issues.find((entry) => entry.code === code);
 const details = (presentation: McpPresentation) =>
   presentation.issues.map((entry) => entry.detail ?? "").join("\n");
+/** Everything an issue retains: a quoted single notice may be the message alone. */
+const evidence = (presentation: McpPresentation) =>
+  presentation.issues.flatMap((entry) => [entry.message, entry.detail ?? ""]).join("\n");
 describe("producer MCP presentation", () => {
   it("keeps retained origin failure, read failure, uncertainty and cleanup independently", () => {
     const presentation = projectMcpPresentation(
@@ -79,7 +82,7 @@ describe("producer MCP presentation", () => {
       const validation = issue(retained, `validation-${outputValidation}`);
       expect(validation?.severity).toBe(outputValidation === "failed" ? "error" : "warning");
       expect(validation?.detail).toMatch(/do not replay/iu);
-      expect(issue(retained, "unclassified-notices")?.detail).toBe("Other warning");
+      expect(issue(retained, "unclassified-notices")?.message).toBe("Other warning");
       const receipt = projectMcpPresentation(
         reply({ origin }, { action: "result.read", resultId: "retained-1" }),
       );
@@ -91,7 +94,8 @@ describe("producer MCP presentation", () => {
       );
       expect(spoofed.incomplete).toBe(true);
       expect(codes(spoofed)).not.toContain(`validation-${outputValidation}`);
-      expect(issue(spoofed, "unclassified-notices")?.detail).toBe(notice);
+      const quoted = issue(spoofed, "unclassified-notices");
+      expect(`${quoted?.message}\n${quoted?.detail ?? ""}`).toContain(notice.replace(/\.$/u, ""));
     },
   );
   it.each([
@@ -209,8 +213,8 @@ describe("producer MCP presentation", () => {
       reply({}, { notices: [`token=${"private".repeat(200)}`] }),
     );
     expect(receipt.incomplete).toBe(false);
-    expect(details(receipt)).not.toContain("private");
-    expect(details(receipt)).toContain("[REDACTED]");
+    expect(evidence(receipt)).not.toContain("private");
+    expect(evidence(receipt)).toContain("[REDACTED]");
   });
   it("bounds notices, marks incomplete evidence, and never silently succeeds on overflow", () => {
     const receipt = projectMcpPresentation(

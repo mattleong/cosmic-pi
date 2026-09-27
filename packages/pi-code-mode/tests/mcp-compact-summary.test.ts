@@ -323,7 +323,9 @@ describe("MCP execution evidence in compact Code Mode results", () => {
       expect(projected?.outcome).toBe("error");
       expect(
         projected?.children?.entries.some((child) =>
-          child.issues?.some((issue) => issue.detail?.includes("Keep this")),
+          child.issues?.some((issue) =>
+            `${issue.message}\n${issue.detail ?? ""}`.includes("Keep this"),
+          ),
         ),
       ).toBe(true);
     }),

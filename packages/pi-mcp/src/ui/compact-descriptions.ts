@@ -1,3 +1,4 @@
+import { firstLineMessage, isAgentGuidance, type CompactIssue } from "pi-code-previews";
 import type { McpBoundaryError } from "../client/errors.ts";
 import type { McpDiscoveryNoticePolicy } from "../discovery/diagnostics.ts";
 
@@ -41,6 +42,24 @@ export const mcpIssueMessages = {
   "evidence-incomplete": "Some operation details are unavailable",
   "evidence-overflow": "Some operation details are unavailable",
 } as const;
+
+/**
+ * Server warnings are quoted by their first line unless they open with agent guidance. The
+ * detail lists every notice, unless the message already says all of a single one.
+ */
+export const mcpNoticesIssue = (
+  notices: readonly string[],
+): Pick<CompactIssue, "message" | "detail"> => {
+  const [first = ""] = notices;
+  const said = isAgentGuidance(first) ? "" : firstLineMessage(first, "", 100);
+  const restated = notices.length === 1 && first.trim().replace(/(?<!\.)\.$/u, "") === said;
+  return {
+    message: said
+      ? `${said}${notices.length > 1 ? ` (+${notices.length - 1} more)` : ""}`
+      : mcpIssueMessages["unclassified-notices"],
+    ...(!restated && { detail: notices.join("\n") }),
+  };
+};
 
 /** Routine discovery notices are informational; the raw notice stays in the detail. */
 export const mcpDiscoveryMessage = (policy: McpDiscoveryNoticePolicy): string =>

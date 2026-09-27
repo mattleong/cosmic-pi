@@ -231,8 +231,10 @@ describe("MCP card projections", () => {
     );
     expectCollapsedMessages(result);
     expect(display(result)).not.toMatch(/retry/i);
-    expect(display(result)).not.toContain("not recoverable");
-    expect(display(result, true)).toContain("not recoverable");
+    // The server's own warning is the collapsed message.
+    expect(display(result)).toContain(
+      "Output was not retained and is not recoverable by result ID",
+    );
   });
 
   it.each(["completed", "unknown"] as const)(
@@ -441,9 +443,13 @@ describe("MCP card projections", () => {
         throw new Error("not presentation input");
       },
     };
-    expect(mcpCallSummary(args)).toEqual({ action: "tools.call", target: "docs / lookup" });
+    expect(mcpCallSummary(args)).toEqual({
+      action: "tools.call",
+      server: "docs",
+      target: "docs / lookup",
+    });
     expect(renderMcpCall(args, theme).render(40).join(" ")).toContain("lookup");
-    expect(mcpCallSummary({})).toEqual({ action: "status", target: "" });
+    expect(mcpCallSummary({})).toEqual({ action: "status", server: undefined, target: "" });
     expect(args.server).toContain("\x1b");
   });
 });

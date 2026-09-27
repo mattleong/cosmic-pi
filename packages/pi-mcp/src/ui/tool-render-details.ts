@@ -103,7 +103,7 @@ export const mcpCallSummary = <Args>(args: Args) => {
   const target = ["tool", "prompt", "uri", "id"]
     .map((key) => safeText(own(args, key).value, 160))
     .find(Boolean);
-  return { action, target: [server, target].filter(Boolean).join(" / ") };
+  return { action, server, target: [server, target].filter(Boolean).join(" / ") };
 };
 
 const natural = <Value>(value: Value): number | undefined =>

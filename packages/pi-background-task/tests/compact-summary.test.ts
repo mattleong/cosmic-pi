@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 
@@ -337,5 +338,39 @@ describe("background task compact semantics", () => {
     expect(result?.outcome).toBe("warning");
     expect(severities(result, "warning")).toHaveLength(1);
     expect(result?.issues?.some((issue) => issue.code.endsWith("exit-code"))).toBe(false);
+  });
+
+  it("writes every issue message in the shared style, without task IDs", () => {
+    const snapshots = [
+      { ...snapshot, state: "failed", error: "Error: spawn ENOENT\n  at spawn" },
+      { ...snapshot, state: "failed" },
+      { ...snapshot, state: "exited", exitCode: 2 },
+      { ...snapshot, state: "exited", exitCode: null },
+      { ...snapshot, state: "stopped", signal: "SIGTERM" },
+      { ...snapshot, state: "timed_out" },
+      { ...snapshot, state: "stopping", droppedLogBytes: 20 },
+    ];
+    const summaries = [
+      ...snapshots.map((value) => project({ action: "status", snapshot: value })),
+      project(
+        {
+          action: "list",
+          tasks: snapshots.map((value, index) => ({ ...value, id: `task-${index}` })),
+        },
+        "list",
+      ),
+      project(logs("failed", {}, true), "logs"),
+      project(logs("timed_out"), "logs"),
+    ];
+    const issues = summaries.flatMap((summary) => summary?.issues ?? []);
+    expect(issues.length).toBeGreaterThan(snapshots.length);
+    for (const { message } of issues)
+      expect({
+        message,
+        problems: issueMessageStyleProblems(message, { forbidden: ["task-1"] }),
+      }).toEqual({
+        message,
+        problems: [],
+      });
   });
 });

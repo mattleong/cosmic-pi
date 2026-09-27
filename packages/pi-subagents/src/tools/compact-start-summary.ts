@@ -86,23 +86,19 @@ export function summarizeStart(
       continue;
     }
     const confirmed = recovery.cleanupDisposition === "confirmed";
-    issues.push(
-      {
-        // Confirmed cleanup is a recovery fact, not a problem; the start error already warns.
-        severity: confirmed ? "info" : "warning",
-        code: `run:${recovery.runId}:cleanup-receipt`,
-        message: `${label}: ${confirmed ? "cleanup is confirmed" : "cleanup isn't confirmed; processes may still be running"}`,
-        detail: formatFailedStartRecovery(recovery),
-      },
-      {
-        severity: "info",
-        code: `run:${recovery.runId}:retry-gate`,
-        message: `${label}: ${confirmed ? retryMessages[recovery.retryDisposition] : "retry waits for confirmed cleanup"}`,
-        detail: confirmed
+    // One line per launch: cleanup and what it allows next.
+    issues.push({
+      // Confirmed cleanup is a recovery fact, not a problem; the start error already warns.
+      severity: confirmed ? "info" : "warning",
+      code: `run:${recovery.runId}:cleanup-receipt`,
+      message: `${label}: ${confirmed ? `cleanup is confirmed; ${retryMessages[recovery.retryDisposition]}` : "cleanup isn't confirmed; processes may still be running"}`,
+      detail: [
+        formatFailedStartRecovery(recovery),
+        confirmed
           ? failedStartRecoveryAction(recovery)
           : "Do not retry or launch a replacement while cleanup is pending or quarantined. Inspect full subagent_status and confirm process and writer cleanup before recovery.",
-      },
-    );
+      ].join("\n"),
+    });
   }
   if (compactIssueSeverity(issues) === "error") summary.outcome = "error";
   else if (phase === "settled" && started !== details.startEntries.length)

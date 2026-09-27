@@ -1,12 +1,18 @@
-import { mcpBoundaryDescriptions, mcpIssueMessages } from "./compact-descriptions.ts";
+import {
+  mcpBoundaryDescriptions,
+  mcpIssueMessages,
+  mcpNoticesIssue,
+} from "./compact-descriptions.ts";
 import type { CompactIssue, CompactSummary } from "pi-code-previews";
-import type { McpDiagnostic } from "../client/diagnostics.ts";
+import { mcpSignInRemedy, type McpDiagnostic } from "../client/diagnostics.ts";
 import type { McpBoundaryError } from "../client/errors.ts";
 
 export interface McpBoundaryView {
   readonly outcome: NonNullable<CompactSummary["outcome"]>;
   readonly status: string;
   readonly issues: readonly CompactIssue[];
+  /** The user can resolve this failure by signing in to the server. */
+  readonly signIn: boolean;
 }
 
 export const credentialMutationBlocked = (reason: McpBoundaryError["reason"]): boolean =>
@@ -74,10 +80,10 @@ export function mcpBoundaryView(input: {
     issues.push({
       severity: "warning",
       code: "unclassified-notices",
-      message: mcpIssueMessages["unclassified-notices"],
-      detail: input.notices.join("\n"),
+      ...mcpNoticesIssue(input.notices),
     });
   return {
+    signIn: !uncertain && mcpSignInRemedy(input.failure),
     outcome: uncertain ? "uncertain" : kind === "cancelled" ? "cancelled" : "error",
     status: uncertain
       ? "Outcome unknown"
