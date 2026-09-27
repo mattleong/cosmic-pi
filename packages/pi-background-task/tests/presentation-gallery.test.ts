@@ -9,7 +9,7 @@ import {
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { describe, it } from "@effect/vitest";
-import { BackgroundTaskNotFoundError, InvalidBackgroundCwdError } from "../src/task/errors.ts";
+import { backgroundTaskNotFound, InvalidBackgroundCwdError } from "../src/task/errors.ts";
 import type {
   BackgroundLogEvent,
   BackgroundLogSlice,
@@ -193,11 +193,7 @@ const service: BackgroundTaskServiceContract = {
   list: () => Effect.succeed([running, failed, killed]),
   status: (id) => {
     const task = byId.get(id);
-    return task
-      ? Effect.succeed(task)
-      : Effect.fail(
-          new BackgroundTaskNotFoundError({ id, message: `Background task not found: ${id}` }),
-        );
+    return task ? Effect.succeed(task) : Effect.fail(backgroundTaskNotFound(id));
   },
   logs: unexpected,
   wait: unexpected,

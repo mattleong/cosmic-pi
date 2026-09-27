@@ -11,6 +11,7 @@ import { escapeControlChars } from "../../shared/terminal-text";
 import { getFirstShellCommandName } from "../../tools/shell-command";
 import { renderHighlightedText } from "../../syntax/render";
 import { getTextContent } from "../data/results";
+import { withoutShellStatus } from "../builtin-failure-shell";
 import { renderCodePreviewToolTitle } from "../presentation";
 import { createCodePreviewToolDefinition } from "../renderer-adapter";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
@@ -64,7 +65,9 @@ export function createBashPreviewTool(cwd: string, options?: BashToolOptions) {
       if (!expanded && !renderContext.isError && shouldHideBashResult(renderContext.args))
         return renderHiddenPreviewExpandHint(renderContext.state, theme);
       const output = trimSingleTrailingNewline(getTextContent(result.content));
-      const rawLines = output ? output.split("\n") : [];
+      const lines = output ? output.split("\n") : [];
+      // The shell's issue line states a failed command's closing status; show only its output.
+      const rawLines = renderContext.isError ? withoutShellStatus(lines) : lines;
       const limit = expanded ? rawLines.length : 8;
       const preview = renderSelectedOutputLines(rawLines, limit, theme, (chunk) =>
         chunk.map((line) =>

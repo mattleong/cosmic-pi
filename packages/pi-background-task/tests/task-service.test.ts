@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { provideBuiltLayer } from "pi-cosmic-core";
 import {
   LocalProcess,
@@ -792,9 +793,12 @@ describe("BackgroundTaskService", () => {
         outcome: "completed",
         snapshot: { state: "exited" },
       });
-      expect(yield* service.status(first.id).pipe(Effect.flip)).toMatchObject({
-        _tag: "BackgroundTaskNotFoundError",
-      });
+      const missing = yield* service.status(first.id).pipe(Effect.flip);
+      expect(missing).toMatchObject({ _tag: "BackgroundTaskNotFoundError" });
+      // People see the first line, without the ID; the agent's copy still names it.
+      const [headline = ""] = missing.message.split("\n");
+      expect(issueMessageStyleProblems(headline, { forbidden: [first.id] })).toEqual([]);
+      expect(missing.message).toContain(first.id);
 
       const [logs, waited] = yield* Effect.all([
         Fiber.join(readingLogs),

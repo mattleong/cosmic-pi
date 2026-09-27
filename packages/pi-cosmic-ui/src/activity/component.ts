@@ -37,7 +37,7 @@ import {
   activityType,
 } from "./widget.ts";
 
-const shortcuts = new Set(["a", "n", "r", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+const shortcuts = new Set(["a", "r", "w", "z", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
 export interface ActivityPresentation {
   readonly shell: ListDetailShell;
   readonly collapsed: Set<string>;
@@ -179,7 +179,7 @@ export class ActivityComponent {
     });
     if (!result) return;
     if (result._tag === "Shortcut") {
-      if (result.key === "n") {
+      if (result.key === "w") {
         const waiting = needsYou(this.options.snapshot());
         const index = waiting.findIndex((row) => row.key === selected?.row.key);
         const urgent = waiting[(index + 1) % waiting.length];
@@ -298,18 +298,18 @@ export class ActivityComponent {
           ? [
               [
                 "C-u/d Half-page · PgUp/PgDn Page · gg/G Ends",
-                "z Zoom · n Next needing you",
+                "z Zoom · w Next needing you",
                 actions,
                 `r Refresh · ? Back · ${cancel}/q Close`,
               ],
-              ["z Zoom · n Next needing you", "a More actions", `? Back · ${cancel}/q`],
-              ["z · n · a · r", `? Back · ${cancel}/q`],
+              ["z Zoom · w Next needing you", "a More actions", `? Back · ${cancel}/q`],
+              ["z · w · a · r", `? Back · ${cancel}/q`],
             ]
           : [
               [
                 navigation,
                 actions,
-                `z Zoom · n Next needing you · r Refresh · ? More · ${cancel}/q Close`,
+                `z Zoom · w Next needing you · r Refresh · ? More · ${cancel}/q Close`,
               ],
               [navigation, actions, `? More · ${cancel}/q`],
               [listFocused ? `j/k · ${confirm} Inspect` : `j/k · h Back`, `? More · ${cancel}/q`],

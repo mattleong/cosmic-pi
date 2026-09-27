@@ -97,6 +97,8 @@ export class McpManagerComponent implements Component, Focusable {
   private unavailable = false;
   private disposed = false;
   private moreHelp = false;
+  /** An action that asks first, shown in place of the list until confirmed or cancelled. */
+  private confirmation: McpManagerClose | undefined;
 
   constructor(options: McpManagerComponentOptions) {
     this.options = options;
@@ -118,6 +120,7 @@ export class McpManagerComponent implements Component, Focusable {
     if (this.disposed) return;
     this.disposed = true;
     this.menu = undefined;
+    this.confirmation = undefined;
     this.generation += 1;
     this.page = undefined;
     this.detail = undefined;
@@ -275,7 +278,12 @@ export class McpManagerComponent implements Component, Focusable {
           };
           this.input.setValue("");
           this.restartBrowse();
-        } else this.options.finish({ action, row, selection: this.selection });
+        } else {
+          const warning = row.actions.find((choice) => choice.action === action)?.confirmation;
+          const close = { action, row, selection: this.selection, confirmed: warning };
+          if (warning === undefined) this.options.finish(close);
+          else this.confirmation = close;
+        }
         this.requestRender();
       },
     });
@@ -331,6 +339,21 @@ export class McpManagerComponent implements Component, Focusable {
     if (this.disposed) return;
     if (this.menu) {
       this.menu.handleInput?.(data);
+      return;
+    }
+    if (this.confirmation) {
+      const answer = this.shell.keymap.resolve(data, {
+        mode: "confirmation",
+        matchesKeybinding: this.options.matchesKeybinding,
+      });
+      if (answer?._tag === "Action" && answer.action === "confirm")
+        this.options.finish(this.confirmation);
+      else if (
+        answer?._tag === "Action" &&
+        (answer.action === "cancel" || answer.action === "quit")
+      )
+        this.confirmation = undefined;
+      this.requestRender();
       return;
     }
     const resolution = this.shell.keymap.resolve(data, {
@@ -479,6 +502,26 @@ export class McpManagerComponent implements Component, Focusable {
           : this.selection.screen === "browse"
             ? "/ Search · s Server"
             : "b Browse · / Search";
+    const confirming = this.confirmation;
+    const warning = confirming?.confirmed;
+    if (confirming && warning !== undefined)
+      return framedScreen(frame, {
+        width,
+        height: Math.max(3, this.options.height()),
+        top: clipToWidth(` /mcp · ${sanitizeTerminalLine(confirming.row.id)} `, inner, ""),
+        bottom: renderResponsiveManagerFooter(inner, [[`${enter} Confirm`, `${cancel} Cancel`]]),
+        body: (height) =>
+          framedFill(
+            frame,
+            [
+              theme.bold(sanitizeTerminalLine(confirming.row.id)),
+              "",
+              ...wrapTextWithAnsi(warning, Math.max(1, inner)),
+            ],
+            height,
+            inner,
+          ),
+      });
     const footer = renderResponsiveManagerFooter(
       inner,
       this.moreHelp

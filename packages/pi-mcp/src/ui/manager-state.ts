@@ -26,4 +26,6 @@ export interface McpManagerClose {
   readonly selection: McpManagerSelection;
   readonly row: McpManagerServer;
   readonly action: McpManagerAction;
+  /** The warning the person accepted on the screen, for actions that ask first. */
+  readonly confirmed?: string | undefined;
 }

@@ -313,6 +313,30 @@ it("an open action menu returns its displayed row rather than a replacement snap
   expect(h.finishes[0]?.row).toBe(snapshot.servers[0]);
   expect(h.finishes[0]?.row).not.toBe(replacement);
 });
+it("asks on the screen before a risky action and returns only the warning it showed", () => {
+  const row = managerRow({ authType: "oauth", auth: "ready" });
+  const risky = { ...snapshot, servers: [{ ...row, actions: serverActions(row, true, true) }] };
+  const warning = risky.servers[0]!.actions.find(
+    (choice) => choice.action === "logout",
+  )?.confirmation;
+  expect(warning).toBeDefined();
+  const h = managerHarness(() => risky);
+  const chooseLogout = () => {
+    h.component.handleInput("a");
+    h.component.handleInput("G");
+    h.component.handleInput("\r");
+  };
+  chooseLogout();
+  expect(h.finishes).toEqual([]);
+  expect(h.component.render(200).join("\n")).toContain(warning);
+  h.component.handleInput("\u001b");
+  expect(h.finishes).toEqual([]);
+  expect(h.component.render(200).join("\n")).not.toContain(warning);
+  chooseLogout();
+  h.component.handleInput("\r");
+  expect(h.finishes).toHaveLength(1);
+  expect(h.finishes[0]).toMatchObject({ action: "logout", confirmed: warning });
+});
 it("empty all-server browsing can select a server before explicit discovery", () => {
   const h = harness("browse");
   const cached = requestOf(h.requests, "cached", 0);

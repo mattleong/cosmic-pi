@@ -15,6 +15,13 @@ export class BackgroundTaskNotFoundError extends Schema.TaggedError<BackgroundTa
   { id: Schema.String, message: Schema.String },
 ) {}
 
+/** People see the first line; the agent also gets the ID it asked for on the next. */
+export const backgroundTaskNotFound = (id: string) =>
+  new BackgroundTaskNotFoundError({
+    id,
+    message: `Background task not found\nNo task has ID ${id}; it may have been cleared.`,
+  });
+
 export class BackgroundTaskCapacityError extends Schema.TaggedError<BackgroundTaskCapacityError>()(
   "BackgroundTaskCapacityError",
   { limit: Schema.Number, message: Schema.String },

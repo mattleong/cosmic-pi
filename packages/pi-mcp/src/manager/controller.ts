@@ -12,7 +12,7 @@ import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import { McpAuthFlow } from "../auth/flow.ts";
 import { makeMcpLoginUi } from "../boundary/host-auth.ts";
 import { presentMcpAuthPanel } from "../boundary/host-auth-panel.ts";
-import { confirmMcpAction, openMcpOverlay } from "../boundary/host-ui.ts";
+import { openMcpOverlay } from "../boundary/host-ui.ts";
 import { mcpDiagnostic, type McpDiagnostic } from "../client/diagnostics.ts";
 import { boundaryError, McpBoundaryError } from "../client/errors.ts";
 import { McpManagerComponent, type McpViewRequest } from "../ui/manager.ts";
@@ -161,10 +161,8 @@ export const runMcpManager = (
           const result = yield* Effect.result(
             Effect.gen(function* () {
               const ticket = yield* manager.capture(chosen.row, chosen.action);
-              if (
-                ticket.confirmation &&
-                !(yield* confirmMcpAction(ctx, ticket.confirmation, current))
-              )
+              // The screen asks before risky actions; run one only with the warning it accepted.
+              if (ticket.confirmation !== undefined && ticket.confirmation !== chosen.confirmed)
                 return;
               yield* manager.check(ticket);
               let metadata: McpMetadataSummary | undefined;

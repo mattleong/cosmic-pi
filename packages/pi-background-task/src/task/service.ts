@@ -23,6 +23,7 @@ import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import {
   BackgroundTaskCapacityError,
   BackgroundTaskNotFoundError,
+  backgroundTaskNotFound,
   BackgroundRuntimeClosedError,
   BackgroundSpawnError,
   BackgroundTerminationError,
@@ -107,8 +108,6 @@ export interface BackgroundTaskServiceOptions {
   readonly publish?: (projection: BackgroundTaskProjection) => void;
 }
 
-const notFound = (id: string) =>
-  new BackgroundTaskNotFoundError({ id, message: `Background task not found: ${id}` });
 const invalidCommand = (message: string) => new InvalidBackgroundCommandError({ message });
 
 const waitResult = (
@@ -304,7 +303,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const prepared = yield* withLock(
           Effect.suspend((): Effect.Effect<StopPreparation, BackgroundTaskNotFoundError> => {
             const record = tasks.get(id);
-            if (!record) return Effect.fail(notFound(id));
+            if (!record) return Effect.fail(backgroundTaskNotFound(id));
             if (!isActiveTaskState(record.snapshot.state)) {
               return Effect.succeed({
                 record,
@@ -588,7 +587,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     withLock(
       Effect.suspend(() => {
         const record = tasks.get(id);
-        return record ? Effect.succeed(record) : Effect.fail(notFound(id));
+        return record ? Effect.succeed(record) : Effect.fail(backgroundTaskNotFound(id));
       }),
     );
 

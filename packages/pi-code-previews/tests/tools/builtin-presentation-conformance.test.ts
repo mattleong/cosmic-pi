@@ -222,6 +222,25 @@ describe("registered builtin presentation", () => {
     expect(failed[1]).toContain("Operation failed: disk full");
   });
 
+  test("preview style states a failed command's closing status once, keeping its output", () => {
+    const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    const failure = result("OUTPUT_LINE\n\nCommand exited with code 127");
+    const before = structuredClone(failure);
+    for (const expanded of [false, true]) {
+      bash.call({ command: "pnpx tsx build.ts" }, { expanded });
+      bash.result(failure, { expanded, isError: true });
+      const text = plain(bash.render(160));
+      expect(count(text, "127")).toBe(1);
+      expect(text).toContain("OUTPUT_LINE");
+    }
+    expect(failure).toEqual(before);
+    // Only Pi's status on a failed call is folded into the issue; ordinary output stays.
+    const printed = createToolPresentationHarness(registered("off", "preview").get("bash")!);
+    printed.call({ command: "cat status.txt" });
+    printed.result(result("Command exited with code 3"));
+    expect(plain(printed.render(160))).toContain("code 3");
+  });
+
   test("preview style flags risky commands and secrets before any result exists", () => {
     const bash = createToolPresentationHarness(registered("off", "preview").get("bash")!);
     bash.call({ command: "sudo rm -rf /tmp/x" });

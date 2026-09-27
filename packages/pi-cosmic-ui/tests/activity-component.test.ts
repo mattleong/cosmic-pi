@@ -183,7 +183,7 @@ describe("activity presentation", () => {
   it("jumps from a typed deep hierarchy to the question that needs you", () => {
     const { component } = mountActivity(() => hierarchy, { height: 20 });
     component.render(100);
-    component.handleInput("n");
+    component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(hierarchy[15]!.key);
   });
   it("keeps selection identity when live rows reorder and dispatches only explicit actions", () => {
@@ -274,7 +274,7 @@ describe("activity presentation", () => {
     component.handleInput("h");
     component.handleInput("j");
     expect(component.shell.state.selectedId).toBe(other.key);
-    component.handleInput("n");
+    component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(child.key);
     expect(component.presentation.collapsed.has(other.key)).toBe(true);
     component.handleInput("z");
@@ -292,7 +292,7 @@ describe("activity presentation", () => {
     const { component } = mountActivity(() => rows);
     component.render(80);
     component.handleInput("h");
-    component.handleInput("n");
+    component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(human.key);
     expect(component.presentation.collapsed.has(owner.key)).toBe(false);
     rows = [owner, parent, blocked];
@@ -301,7 +301,7 @@ describe("activity presentation", () => {
     const selected = component.shell.state.selectedId;
     const focus = component.presentation.focus;
     const collapsed = [...component.presentation.collapsed];
-    component.handleInput("n");
+    component.handleInput("w");
     expect(component.shell.state.selectedId).toBe(selected);
     expect(component.presentation.focus).toBe(focus);
     expect([...component.presentation.collapsed]).toEqual(collapsed);
