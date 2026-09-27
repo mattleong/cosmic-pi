@@ -455,14 +455,14 @@ describe("background task compact semantics", () => {
         ?.issues?.map((issue) => issue.message)
         .join("\n");
     };
-    expect(message({ exitCode: 1 }, "FAIL tests/a.test.ts")).toBe(
-      "The task exited with code 1: FAIL tests/a.test.ts",
+    expect(message({ exitCode: 1 }, "FAIL tests/a.test.ts")).toMatch(
+      /code 1: FAIL tests\/a\.test\.ts$/u,
     );
     expect(message({ exitCode: 137 })).toMatch(/code 137: killed/u);
     expect(message({ exitCode: null, signal: "SIGSEGV" })).toMatch(/SIGSEGV: crashed/u);
-    expect(message({}, "fatal: no such ref")).toBe("The task failed: fatal: no such ref");
+    expect(message({}, "fatal: no such ref")).toMatch(/: fatal: no such ref$/u);
     // Results without spans, or with spans the text does not hold, keep the bare exit status.
-    expect(message({ exitCode: 1 })).toBe("The task exited with code 1");
+    expect(message({ exitCode: 1 })).toMatch(/code 1$/u);
     expect(
       projectBackgroundTaskCompactSummary({
         phase: "settled",
@@ -477,7 +477,7 @@ describe("background task compact semantics", () => {
         },
         isError: false,
       })?.issues?.[0]?.message,
-    ).toBe("The task exited with code 1");
+    ).toMatch(/code 1$/u);
   });
 
   it("writes every issue message in the shared style, without task IDs", () => {

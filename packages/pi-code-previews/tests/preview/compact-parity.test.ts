@@ -42,7 +42,7 @@ describe("shared semantic row", () => {
 
   it("uses standalone live timing thresholds, settings, and detail priority", () => {
     for (const name of ["bash", "read", "mcp", "background_task"])
-      for (const elapsedMs of [900, 9999, 10000, 12500])
+      for (const elapsedMs of [900, 1000, 12500])
         for (const timingEnabled of [false, true])
           for (const detail of [undefined, "counter", "metadata"]) {
             const summary: CompactSummary = {
@@ -71,7 +71,7 @@ describe("shared semantic row", () => {
             )[0]!;
             expect(stripAnsi(child).slice(5)).toBe(stripAnsi(standalone));
             expect(child.includes(duration)).toBe(
-              timingEnabled && detail === undefined && (name === "bash" || elapsedMs >= 10000),
+              timingEnabled && detail === undefined && elapsedMs >= 1000,
             );
           }
   });

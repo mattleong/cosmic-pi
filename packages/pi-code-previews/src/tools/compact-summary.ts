@@ -44,7 +44,7 @@ export interface CompactSummary {
   counters?: readonly string[];
   /** First nonblank label is used only when no counter is present. */
   metadata?: readonly string[];
-  /** Show measured timing beside the routine detail, including short calls, when enabled. */
+  /** Keep measured timing beside the routine detail instead of only when there is none. */
   showTiming?: true;
   /** Required once settled. Children never change their parent's outcome. */
   outcome?: CompactOutcome;

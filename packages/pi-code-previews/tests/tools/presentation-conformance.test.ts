@@ -206,13 +206,13 @@ test.each(modes)("parent timing has one owner across expansion and fallback in %
     for (const timing of [true, false]) {
       withPresentationSettings({ toolCallTiming: timing }, () => {
         const h = createToolPresentationHarness(tool, {
-          state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+          state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 3379 },
         });
         for (const expanded of [false, true, false, true]) {
           h.call({ path: "file" }, { expanded, isPartial: false });
           h.result(result, { expanded, isError: failure });
           const occurrences = (width: number) =>
-            h.render(width).join("\n").match(/379ms/g)?.length ?? 0;
+            h.render(width).join("\n").match(/2\.4s/g)?.length ?? 0;
           expect(occurrences(120), `${path}, timing=${timing}, expanded=${expanded}`).toBe(
             timing ? 1 : 0,
           );
@@ -221,6 +221,28 @@ test.each(modes)("parent timing has one owner across expansion and fallback in %
       });
     }
   }
+});
+
+test("quick calls show no duration in any style or frame, bash included", () => {
+  for (const style of ["compact", "preview"] as const)
+    for (const mode of ["off", "on", "border"] as const)
+      withPresentationSettings({ toolCallTiming: true, toolCallCollapsedStyle: style }, () => {
+        const tool = withCodePreviewShell(
+          {
+            ...createReadToolDefinition("/project"),
+            name: "bash",
+            renderCall: () => new Text("arguments", 0, 0),
+            renderResult: () => new Text("output", 0, 0),
+          },
+          { mode, compactSummary: () => ({ subject: "file", outcome: "success" }) },
+        );
+        const h = createToolPresentationHarness(tool, {
+          state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+        });
+        h.call({ path: "file" }, { isPartial: false });
+        h.result(textResult("output"));
+        expect(stripAnsi(h.render(120).join("\n")), `${style} ${mode}`).not.toContain("379ms");
+      });
 });
 
 test("partial content hooks retain the other slot and malformed-to-valid switches keep slot caches separate", () => {

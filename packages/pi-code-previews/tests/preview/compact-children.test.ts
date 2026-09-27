@@ -269,9 +269,10 @@ describe("compact child rows", () => {
     "shows measured %s durations only when timing is enabled",
     (layout) => {
       const statuses = ["pending", "running", "success", "error", "cancelled"] as const;
-      // Bash always shows its duration; other calls show only long ones.
+      // Every call, bash included, shows its duration only from one second.
       for (const [label, measured, shown] of [
-        ["bash", 123, "123ms"],
+        ["bash", 1_230, "1.2s"],
+        ["bash", 123, undefined],
         ["read", 12_300, "12.3s"],
         ["read", 123, undefined],
       ] as const)

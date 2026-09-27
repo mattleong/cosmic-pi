@@ -433,7 +433,7 @@ test("the timing preference gates overall and nested measured durations together
         showTiming: true,
         counters: ["3 tools"],
         children: {
-          // Nested durations of at least ten seconds are shown beside their call.
+          // Nested durations of at least one second are shown beside their call.
           entries: [{ label: "nested-read", status: "success", durationMs: 12_500 }],
           total: 1,
         },
@@ -442,12 +442,12 @@ test("the timing preference gates overall and nested measured durations together
       { timing },
     );
     h.state.codePreviewTimingStartedAt = 100;
-    h.state.codePreviewTimingEndedAt = 350;
+    h.state.codePreviewTimingEndedAt = 1_600;
     h.call({ isPartial: false });
     h.result(result("done"), { isPartial: false });
     const rendered = h.rows().join("\n");
     assert.ok(rendered.includes("3 tools"));
-    assert.equal(rendered.includes("250ms"), timing);
+    assert.equal(rendered.includes("1.5s"), timing);
     assert.equal(rendered.includes("12.5s"), timing);
   }
 });

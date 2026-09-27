@@ -127,14 +127,14 @@ const runtimeTimeoutIssue = (id: string, ranMs: number | undefined, detail?: str
   issue(
     "error",
     `${id}:runtime-timeout`,
-    ranMs === undefined ? "The task timed out" : `Timed out after ${formatDuration(ranMs)}`,
+    ranMs === undefined ? "Timed out" : `Timed out after ${formatDuration(ranMs)}`,
     detail,
   );
 
 /** Unclassified task errors keep their full text on expansion when the message is only a part. */
 function taskErrorIssue(id: string, error: string): CompactIssue {
   const { line, detail } = quoteText(stripTerminalControls(error).trim());
-  return issue("error", `${id}:error`, line ?? "The task reported an error", detail);
+  return issue("error", `${id}:error`, line ?? "Reported an error", detail);
 }
 
 type TaskSummary = CompactSummary & {
@@ -151,7 +151,10 @@ function stateDetail(value: BackgroundTaskSnapshot): string {
     : label;
 }
 
-/** Why a failed task failed: its exit code or signal, with the captured cause or its meaning. */
+/**
+ * Why a failed task failed: its exit code or signal, with the captured cause or its meaning. The
+ * row names the task, so messages start with what happened, as bash's do.
+ */
 function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined): CompactIssue[] {
   const issues: CompactIssue[] = [];
   if (value.exitCode != null && value.exitCode !== 0) {
@@ -161,7 +164,7 @@ function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined)
       issue(
         "error",
         `${value.id}:exit-code`,
-        `The task exited with code ${value.exitCode}${exitCause ? `: ${exitCause}` : ""}`,
+        `Exited with code ${value.exitCode}${exitCause ? `: ${exitCause}` : ""}`,
       ),
     );
   }
@@ -172,8 +175,8 @@ function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined)
         "error",
         `${value.id}:signal`,
         firstLineMessage(
-          `The task received signal ${sanitizeTerminalLine(value.signal)}${meaning ? `: ${meaning}` : ""}`,
-          "The task received a signal",
+          `Received signal ${sanitizeTerminalLine(value.signal)}${meaning ? `: ${meaning}` : ""}`,
+          "Received a signal",
         ),
       ),
     );
@@ -183,7 +186,7 @@ function failureIssues(value: BackgroundTaskSnapshot, cause: string | undefined)
       issue(
         "error",
         `${value.id}:failed`,
-        cause ? `The task failed: ${cause}` : "The task failed without reporting a cause",
+        cause ? `Failed: ${cause}` : "Failed without reporting a cause",
       ),
     );
   return issues;
@@ -214,7 +217,7 @@ function taskSummary(value: BackgroundTaskSnapshot, cause?: string): TaskSummary
       issue(
         "warning",
         `${value.id}:exit-unknown`,
-        "The task exited, but its outcome is unknown",
+        "Exited, but its outcome is unknown",
         "Process exited, but its exit code is unknown; inspect task status.",
       ),
     );
@@ -391,7 +394,7 @@ export const projectBackgroundTaskCompactSummary = ({
           issue(
             "error",
             `${logs.id}:failed`,
-            "The task failed",
+            "Failed",
             "Read task status for the exit code and failure cause.",
           ),
         );

@@ -8,6 +8,7 @@ import {
 } from "../tools/compact-summary";
 import { layoutCompactHeader } from "./compact-header";
 import { compactStatusIcon } from "./compact-status";
+import { TIMING_VISIBLE_MS } from "./tool-timing";
 
 /** Subjects and metadata are plain, single-line text. ANSI input is displayed inertly. */
 export function compactSingleLine(value: string): string {
@@ -47,7 +48,7 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
   const duration =
     input.timingEnabled !== false &&
     phase !== "pending" &&
-    (summary.showTiming || input.name === "bash" || (input.elapsedMs ?? 0) >= 10_000)
+    (input.elapsedMs ?? 0) >= TIMING_VISIBLE_MS
       ? compactSingleLine(input.duration ?? "")
       : undefined;
   const metadata =

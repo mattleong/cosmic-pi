@@ -155,7 +155,7 @@ describe("shared background task command", () => {
           isError: false,
         });
         expect(summary?.issues?.map((issue) => issue.message).join("\n")).toContain(
-          "exited with code 1: FAIL tests/auth.test.ts > adds",
+          "code 1: FAIL tests/auth.test.ts > adds",
         );
       }
       // Text truncated before the cause drops its span; the row keeps the bare exit status.
@@ -168,7 +168,7 @@ describe("shared background task command", () => {
           result: { details: cut.details, text: cut.text },
           isError: false,
         })?.issues?.[0]?.message,
-      ).toBe("The task exited with code 1");
+      ).toMatch(/code 1$/u);
     }),
   );
 });

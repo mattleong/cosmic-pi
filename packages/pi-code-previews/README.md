@@ -177,7 +177,7 @@ In `preview` style, when content/result/diff previews are disabled, collapsed su
 
 For expanded calls and noncompact fallbacks, `CODE_PREVIEW_TOOL_CALL_BACKGROUND=off` removes Pi's default colored tool box background for code-preview-owned tools. `CODE_PREVIEW_TOOL_CALL_BACKGROUND=border` replaces the background with a border-only frame. This setting changes the tool render shell, so it takes effect after `/reload`.
 
-`CODE_PREVIEW_TOOL_CALL_TIMING=false` hides tool durations, including measured durations in nested compact call trees. When enabled, measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
+`CODE_PREVIEW_TOOL_CALL_TIMING=false` hides tool durations, including measured durations in nested compact call trees. When enabled, every tool shows its duration once a call has taken at least one second; quicker calls show none. Measured durations appear inline in compact summaries. Detailed rendering uses the result footer unless `toolCallBackground` is `border`; in border mode durations appear in the top-right border corner.
 
 ## Extension author integration
 

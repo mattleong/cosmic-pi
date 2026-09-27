@@ -342,7 +342,7 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
       { mode },
     );
     const h = createToolPresentationHarness(tool, {
-      state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 1379 },
+      state: { codePreviewTimingStartedAt: 1000, codePreviewTimingEndedAt: 3379 },
     });
     const args = { path: "file" };
     const value = textResult("output");
@@ -354,7 +354,7 @@ test("preview timing toggles preserve producer caches and mouse actions", () => 
       const callRows = call.render(80);
       const rows = output.render(80);
       assert.equal(
-        rows.some((row) => row.includes("379ms")),
+        rows.some((row) => row.includes("2.4s")),
         timing,
       );
       const event: TuiMouseEvent = {

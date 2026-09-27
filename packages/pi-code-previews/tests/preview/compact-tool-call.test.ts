@@ -15,7 +15,7 @@ test("explicit measured timing accompanies counts without overriding disabled ti
           phase: "settled",
           timingEnabled,
           duration,
-          elapsedMs: 12,
+          elapsedMs: 1_200,
           summary: {
             subject: "inspect",
             counters: ["3 tools"],
