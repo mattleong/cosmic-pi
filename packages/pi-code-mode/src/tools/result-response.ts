@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import type { CodeModeResult } from "../boundary/codemode-runtime.ts";
+import { commitPreparedResult } from "../boundary/host-result-commit.ts";
 import type { ResultCapture, ExecutionOutcome } from "../results/model.ts";
 import { projectResultPage } from "../results/projection.ts";
 import type { ResultsContract } from "../results/service.ts";
@@ -74,11 +75,12 @@ export function makeResultResponse(input: {
           ? capture.text
           : undefined
         : `${receiptText}\n\n${capture.status === "captured" ? capture.text : `Full output unavailable (${capture.reason}).\n${clampModelVisibleText(raw, input.maxBytes)}`}`;
-    const put =
-      needsRetainedOutput && retainedText !== undefined && input.current() && input.results
+    // A cancelled response never publishes an ID, so it must not spend retention capacity.
+    const prepared =
+      needsRetainedOutput && retainedText !== undefined && !initiallyCancelled && input.results
         ? input
             .run(
-              input.results.put(
+              input.results.prepare(
                 retainedText,
                 outcome,
                 outcome === "succeeded" ? "output" : "failure-receipt",
@@ -86,13 +88,16 @@ export function makeResultResponse(input: {
             )
             .catch(() => undefined)
         : Promise.resolve(undefined);
-    return put.then((id) => {
-      // Retention runs on the session, outside the already-settled execution fiber.
+    return prepared.then((artifact) => {
+      // Preparation runs on the session, outside the already-settled execution fiber.
       // Its Promise may settle after caller cancellation or session revocation.
       const current = input.current();
       const cancelled = initiallyCancelled || input.aborted() || !current;
       const publishReceipt = needsRetainedOutput || needsSafetyBackstop || cancelled;
-      const resultId = !cancelled ? id : undefined;
+      // Commit in this turn, after the final recheck. An uncommitted artifact was never stored,
+      // so dropping it leaves saved results and their eviction order untouched.
+      const resultId =
+        cancelled || artifact === undefined ? undefined : commitPreparedResult(artifact);
       const readOnly = hasCompleteReadOnlyReceipts(receipts);
       const replayCaution = readOnly
         ? "Do not rerun the program to recover output."

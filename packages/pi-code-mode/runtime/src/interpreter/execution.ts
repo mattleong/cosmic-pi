@@ -287,6 +287,10 @@ export function createToolCallPromise<R>(
       let started = false;
       const invoked = this.callPermits.withPermit(
         Effect.gen({ self: this }, function* () {
+          // Confinement: a queued call can wait for a permit past the cooperative deadline
+          // while no guest step runs. Recheck after admission so expired work settles as a
+          // failed, never-started call before running observation or host dispatch.
+          this.deadline.check();
           startedAt = yield* Clock.currentTimeMillis;
           started = true;
           yield* emit({

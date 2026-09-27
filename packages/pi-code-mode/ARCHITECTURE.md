@@ -36,8 +36,11 @@ Compact expansion supplies only page content; the common shell owns the heading 
 
 `src/results/service.ts` owns a scoped Effect Ref of settled artifacts. Limits are fixed at
 8 MiB UTF-8 per artifact, 64 MiB conservatively charged session storage, and 32 entries. Charges
-include UTF-16 text, UTF-8 projection and fixed metadata overhead. Eviction removes oldest settled
-entries; reads do not refresh order. There is no persistence. Runtime replacement, successful
+include UTF-16 text, UTF-8 projection and fixed metadata overhead. `prepare` validates and prices
+an artifact without changing the store. Its single-use `commit` is the only transition that
+assigns an ID, charges storage and evicts, so eviction follows publication order. Commit checks
+its latch and the open store inside one `Ref.modify`; `put` is prepare plus commit. Eviction
+removes the oldest published entries; reads do not refresh order. There is no persistence. Runtime replacement, successful
 `session_tree`, and shutdown close the old store. Disabling also revokes the activation's execution
 and result-access owner until reload. Late callbacks cannot advertise old artifacts.
 
@@ -79,10 +82,14 @@ before optional receipt rows. Risky rows take priority; omitted text or rows are
 aggregate counts do not depend on displayed rows. The final code-point-safe clamp remains
 mandatory, including at tiny or zero budgets. Artifact contents and ordinary page contracts stay
 unchanged.
-Retention runs in the session after the execution fiber settles. Before final publication,
-the response rechecks cancellation, session currency and availability, suppressing revoked
-output, recovery IDs and failure-detail handoffs. Settled execution outcomes and nested receipts
-remain separate from delivery cancellation. It never replays an operation or rolls back a mutation.
+Retention preparation runs in the session after the execution fiber settles; a response already
+cancelled or revoked prepares nothing. The Promise continuation rechecks cancellation, session
+currency and availability, suppressing revoked output, recovery IDs and failure-detail handoffs.
+Only after that check, in the same synchronous turn, does `boundary/host-result-commit.ts` commit
+the prepared artifact. Cancellation that wins while preparation settles drops an artifact that was
+never stored, so earlier saved results and concurrent publications are untouched without rollback.
+Settled execution outcomes and nested receipts remain separate from delivery cancellation. It
+never replays an operation or rolls back a mutation.
 `tools/execution-progress.ts` owns the unchanged progress/count transitions; display and operation
 evidence remain separate.
 
@@ -147,8 +154,8 @@ evidence remain separate.
   versioned, schema-validated evidence, never guest return values or Promise fulfillment.
 - `src/boundary/` contains the runtime import, fresh Pi built-in adapters including conditional
   Windows PowerShell, explicit Background Tasks and MCP protocol clients, the guarded progress
-  publisher, the hostile renderer-ticker adapter, Pi dialog adapters, and the process-memory
-  deactivation handoff. Foreign Promise
+  publisher, the synchronous retained-output commit runner, the hostile renderer-ticker adapter,
+  Pi dialog adapters, and the process-memory deactivation handoff. Foreign Promise
   adapters use function-form `Effect.tryPromise`; they format `Cause.UnknownError.cause` through
   the hostile-safe rejection formatter before returning a model-visible tool failure.
 - `tests/` covers configuration, atomic commits, lifecycle races, dialogs, adapters, limits,
@@ -283,7 +290,9 @@ tools or returning them. `subarray` may share owned storage, while `slice` copie
 
 The catalog contains seven core `tools.pi` leaves, conditional Windows PowerShell, the fixed
 `tools.session.backgroundTask` and `tools.mcp.request` adapters, and runtime-owned search. Inputs pass Effect Schema before
-dispatch. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
+dispatch. Built-in, read and Background Tasks guest inputs are closed: an unknown key at any depth
+is a catchable input failure before native dispatch or provider discovery, never stripped. MCP
+keeps its own closed request union. Read offsets and limits are positive safe integers, as are grep, find, and ls limits.
 Native read returns at most 2,000 lines or 51,200 bytes. Its optional structured form reports
 `complete`, `partial`, or conservative `unknown` completeness with bounded reason, truncation, and
 continuation metadata. `requireComplete` rejects every explicit limit and offsets above 1; it does
@@ -301,7 +310,9 @@ discovery, the Background Tasks adapter caps `wait` and explicit log long polls 
 time minus a one-second settlement reserve, clamped at zero. Shorter requested waits and the
 provider's configured maximum still apply; omitted log waits stay nonblocking. This is a
 best-effort delivery margin, not a replacement for outer timeout or cancellation, and it never
-changes the background process lifetime or the versioned provider protocol.
+changes the background process lifetime or the versioned provider protocol. Independently, the
+runtime rechecks its execution deadline when a queued call acquires a concurrency permit, so a
+call that waited past the deadline fails unstarted without any host dispatch.
 
 `boundary/host-mcp.ts` queries exactly one active stable-session provider per request through
 `pi-mcp/code-mode`. That import loads codecs, not an extension or runtime. The provider owns

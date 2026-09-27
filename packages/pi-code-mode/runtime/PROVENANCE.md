@@ -231,6 +231,13 @@ string accounting with the runtime's verbatim host representation.
      Construction delay does not consume the deadline; sequential and concurrent reuse do
      not share call budgets or logs. Public validation and discovery remain unchanged.
      Local `tests/execution-isolation.test.ts` covers reuse and delayed evaluation.
+     A tool call queued behind the fixed concurrency-8 permits can wait past the deadline
+     while no guest step runs, so `execution.ts` rechecks the deadline immediately after
+     permit acquisition. An expired call then settles as `failed` with `started: false`,
+     with no `running` observation, call-budget record, `onToolCallStart` or host dispatch.
+     Interruption while queued still reports `cancelled`; timeout teardown still cancels
+     held calls. Local `tests/queued-deadline.test.ts` covers expiry, teardown, normal
+     queued dispatch and host cancellation.
    - **Final output bound.** `boundOutput` now reserves its truncation markers
      _inside_ `maxOutputBytes` for both the value and the diagnostic message (a
      hostile thrown string is bounded too), so the runtime's model-facing content

@@ -24,12 +24,16 @@ import type { BackgroundTaskDispatch } from "../boundary/host-background-task.ts
 import type { NestedPiToolDispatch, PiGuestToolName } from "../boundary/host-builtin-tools.ts";
 import type { CumulativeOutputBudget } from "./limits.ts";
 import {
+  CLOSED_GUEST_INPUT,
   ReadGuestInputSchema,
   StructuredReadResultSchema,
   type StructuredReadResult,
 } from "./read-result.ts";
 
-/** Input contracts validated by the runtime before any nested dispatch happens. */
+/**
+ * Input contracts validated by the runtime before any nested dispatch happens. Every root is
+ * closed, so an unknown key (including one inside an `edits` entry) is a catchable refusal.
+ */
 const SafeInteger = Schema.Number.check(Schema.isFinite(), Schema.isInt());
 const PositiveSafeInteger = SafeInteger.check(Schema.isGreaterThan(0));
 const NonNegativeSafeInteger = SafeInteger.check(Schema.isGreaterThanOrEqualTo(0));
@@ -38,7 +42,7 @@ const PositiveFiniteNumber = Schema.Number.check(Schema.isFinite(), Schema.isGre
 const ShellInput = Schema.Struct({
   command: Schema.String,
   timeout: Schema.optionalKey(PositiveFiniteNumber),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const EditInput = Schema.Struct({
   path: Schema.String,
   edits: Schema.Array(
@@ -47,11 +51,11 @@ const EditInput = Schema.Struct({
       newText: Schema.String,
     }),
   ).check(Schema.isMinLength(1)),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const WriteInput = Schema.Struct({
   path: Schema.String,
   content: Schema.String,
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const GrepInput = Schema.Struct({
   pattern: Schema.String,
   path: Schema.optionalKey(Schema.String),
@@ -60,16 +64,16 @@ const GrepInput = Schema.Struct({
   literal: Schema.optionalKey(Schema.Boolean),
   context: Schema.optionalKey(NonNegativeSafeInteger),
   limit: Schema.optionalKey(PositiveSafeInteger),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const FindInput = Schema.Struct({
   pattern: Schema.String,
   path: Schema.optionalKey(Schema.String),
   limit: Schema.optionalKey(PositiveSafeInteger),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const LsInput = Schema.Struct({
   path: Schema.optionalKey(Schema.String),
   limit: Schema.optionalKey(PositiveSafeInteger),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 const GUEST_TOOL_DESCRIPTIONS = {
   read:
     "Read text files only; images are refused. Paths have the same unrestricted filesystem " +
@@ -140,13 +144,17 @@ const guestTool = (name: StringPiGuestToolName, invoke: NestedPiToolDispatch) =>
     run: (input) => stringPiOutput(name, invoke(name, input)),
   });
 
+// The producer owns the v1 shape; the consumer only closes it so unknown keys refuse before
+// provider discovery instead of being stripped from the request.
+const BackgroundTaskGuestInput = BackgroundTaskCodeModeInputSchema.annotate(CLOSED_GUEST_INPUT);
+
 const backgroundTaskTool = (invoke: BackgroundTaskDispatch) =>
   Tool.make({
     description:
       "Start and manage session-scoped local background commands through the explicit " +
       "pi-background-task adapter. Tasks may outlive this Code Mode call but are terminated " +
       "when the Pi session closes. Use wait once at a dependency barrier instead of polling.",
-    input: BackgroundTaskCodeModeInputSchema,
+    input: BackgroundTaskGuestInput,
     output: BackgroundTaskCodeModeOutputSchema,
     run: (input) => invoke(input satisfies BackgroundTaskCodeModeInput),
   });

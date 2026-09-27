@@ -35,13 +35,20 @@ const NativeReadResultSchema = Schema.Struct({
   details: Schema.optionalKey(Schema.Unknown),
 });
 
+/**
+ * Guest tool inputs are closed. Root parse options also reach nested structs, so an unknown key
+ * at any depth fails decoding before dispatch instead of being stripped into a different request.
+ * Diagnostics name the key but not its value. Only inputs are closed; native results stay tolerant.
+ */
+export const CLOSED_GUEST_INPUT = { parseOptions: { onExcessProperty: "error" } } as const;
+
 export const ReadGuestInputSchema = Schema.Struct({
   path: Schema.String,
   offset: Schema.optionalKey(PositiveSafeInteger),
   limit: Schema.optionalKey(PositiveSafeInteger),
   format: Schema.optionalKey(Schema.Literals(["text", "structured"])),
   requireComplete: Schema.optionalKey(Schema.Boolean),
-});
+}).annotate(CLOSED_GUEST_INPUT);
 
 export const StructuredReadResultSchema = Schema.Struct({
   text: Schema.String,

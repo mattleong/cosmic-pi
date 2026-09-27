@@ -126,6 +126,13 @@ nested read omitted.
 region of the original file. Combine nearby changes without overlapping edits and preserve the
 source evidence needed to validate the replacement.
 
+Nested tool inputs are closed. `tools.pi.*` and `tools.session.backgroundTask` refuse any key
+their input type does not declare, including keys inside `edits` entries, before the native tool
+runs or the Background Tasks provider is queried. A typo such as `requireCompleteness`, or an
+unsupported option such as `cwd` for Bash or `append` for write, is a catchable input failure that
+names the key's path. It is never silently dropped into a different operation. `tools.mcp.request`
+keeps its closed request union and not-sent repair guidance.
+
 For literal file searches, use `tools.pi.grep({ pattern: "describe(", literal: true, path: "tests" })`
 rather than adding unnecessary regex escaping. For literal log markers, use string predicates:
 

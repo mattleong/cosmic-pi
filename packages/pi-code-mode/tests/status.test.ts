@@ -41,6 +41,10 @@ function statusHarness(states: ReadonlyArray<ReturnType<typeof codeModeStateFixt
   let stateIndex = 0;
   let resultStoreTouches = 0;
   const results: ResultsContract = {
+    prepare: () => {
+      resultStoreTouches += 1;
+      return Effect.die("status must not prepare retained results");
+    },
     put: () => {
       resultStoreTouches += 1;
       return Effect.die("status must not write retained results");

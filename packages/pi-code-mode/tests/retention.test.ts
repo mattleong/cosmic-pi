@@ -35,8 +35,14 @@ describe("failure details retention", () => {
           let aborted = false;
           const entered = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
+          let committed = false;
+          const commit = Effect.sync(() => {
+            committed = true;
+            return "cm-held";
+          });
           const results: ResultsContract = {
-            put: () => Effect.succeed("cm-held"),
+            prepare: () => Effect.succeed({ commit }),
+            put: () => commit,
             get: () => Effect.void.pipe(Effect.as(undefined)),
           };
           const response = resultResponseFixture({
@@ -68,6 +74,8 @@ describe("failure details retention", () => {
           if (mode === "revoked") current = false;
           yield* Deferred.succeed(release, undefined);
           const result = yield* Fiber.join(pending);
+          // Late cancellation must not store an artifact whose ID it will never publish.
+          expect(committed, mode).toBe(mode === "retained");
           if (mode === "retained") {
             expect(result.details.resultId).toBe("cm-held");
             expect(result.details.initialPreview).toMatchObject({ id: "cm-held", status: "page" });

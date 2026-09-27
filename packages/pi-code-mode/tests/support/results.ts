@@ -14,16 +14,27 @@ export const EMPTY_RECEIPTS: ExecutionReceipts = {
   calls: [],
 };
 
-/** A results store that keeps each put under `id`, or refuses every put when `id` is absent. */
+/** A results store that keeps each commit under `id`, or refuses every artifact when `id` is absent. */
 export const recordingResults = (id?: string) => {
   let stored: ResultArtifact | undefined;
+  const prepare: ResultsContract["prepare"] = (text, outcome, kind = "output") =>
+    Effect.sync(() =>
+      id === undefined
+        ? undefined
+        : {
+            commit: Effect.sync(() => {
+              stored = { id, text, outcome, kind, cost: 0 };
+              return id;
+            }),
+          },
+    );
   const results: ResultsContract = {
-    put: (text, outcome, kind = "output") =>
-      Effect.sync(() => {
-        if (id === undefined) return undefined;
-        stored = { id, text, outcome, kind, cost: 0 };
-        return id;
-      }),
+    prepare,
+    put: (text, outcome, kind) =>
+      Effect.flatMap(
+        prepare(text, outcome, kind),
+        (prepared) => prepared?.commit ?? Effect.succeed(undefined),
+      ),
     get: () => Effect.succeed(stored),
   };
   return { results, stored: () => stored };

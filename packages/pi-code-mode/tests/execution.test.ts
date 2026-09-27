@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import { RESULT_MAX_ENTRIES } from "../src/results/model.ts";
 import { CodeModeResults, type ResultsContract } from "../src/results/service.ts";
 import type { CodeModeToolDetails } from "../src/tools/format.ts";
 import { opaqueFixture } from "pi-cosmic-core/testing";
@@ -81,6 +82,10 @@ describe("output recovery without replay", () => {
     () =>
       Effect.gen(function* () {
         const results = yield* CodeModeResults;
+        // A full store: any artifact stored for a revoked delivery would evict a seed.
+        const seeds: Array<string | undefined> = [];
+        for (let index = 0; index < RESULT_MAX_ENTRIES; index++)
+          seeds.push(yield* results.put(`SEED-${index}`, "succeeded"));
         for (const failed of [false, true]) {
           for (const revoke of ["abort", "replacement", "unavailable"] as const) {
             for (const refuseRetention of [false, true]) {
@@ -92,12 +97,12 @@ describe("output recovery without replay", () => {
               const h = harness(
                 {
                   ...results,
-                  put: (text, outcome, kind) =>
+                  prepare: (text, outcome, kind) =>
                     Effect.gen(function* () {
                       yield* Deferred.succeed(entered, undefined);
                       yield* Deferred.await(release);
                       if (refuseRetention) return yield* Effect.die("store unavailable");
-                      return yield* results.put(text, outcome, kind);
+                      return yield* results.prepare(text, outcome, kind);
                     }),
                 },
                 {
@@ -145,6 +150,8 @@ describe("output recovery without replay", () => {
             }
           }
         }
+        for (const [index, id] of seeds.entries())
+          expect((yield* results.get(id!))?.text).toBe(`SEED-${index}`);
       }).pipe(Effect.provide(CodeModeResults.layer)),
   );
   it.effect("mutates once and continues the initial page exactly with original outcome", () =>

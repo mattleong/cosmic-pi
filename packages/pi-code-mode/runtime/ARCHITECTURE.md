@@ -263,9 +263,10 @@ Confinement bounds every such operation up front:
 - **Deadline** - a shared `ExecutionDeadline` checked between interpreter steps,
   after the run, after final copying and after serialization before success
   observation normalizes a synchronous overrun to `TimeoutExceeded` without
-  a multi-second event-loop block. It is cooperative - it cannot interrupt a
-  native call that already started - which is why the two guards above bound
-  every admitted native operation up front.
+  a multi-second event-loop block. A queued tool call rechecks it after acquiring
+  its concurrency permit and, once expired, fails unstarted without host dispatch.
+  It is cooperative - it cannot interrupt a native call that already started -
+  which is why the two guards above bound every admitted native operation up front.
 
 `boundOutput` charges top-level strings by the UTF-8 bytes in their verbatim host
 representation and non-string values by compact JSON. It reserves truncation markers
